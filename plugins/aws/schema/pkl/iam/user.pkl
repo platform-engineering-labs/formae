@@ -1,0 +1,59 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.iam.user
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::IAM::User"
+
+@aws.SubResourceHint
+open class UserLoginProfile extends formae.SubResource {
+    @aws.FieldHint{writeOnly = true}
+    password: (String|formae.Value)?
+    passwordResetRequired: Boolean?
+}
+
+@aws.SubResourceHint
+open class UserPolicy extends formae.SubResource {
+    policyDocument: Dynamic
+    policyName: String
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "UserName"
+    tags = "Tags"
+    discoverable = false
+    extractable = false
+}
+open class User extends formae.Resource {
+
+    @aws.FieldHint
+    groups: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    loginProfile: UserLoginProfile?
+
+    @aws.FieldHint
+    managedPolicyArns: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    path: String?
+
+    @aws.FieldHint
+    permissionsBoundary: String?
+
+    @aws.FieldHint
+    policies: Listing<UserPolicy>?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    userName: String?
+}

@@ -1,0 +1,176 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "example-app-tg",
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "HealthCheckEnabled": true,
+        "HealthCheckIntervalSeconds": 30,
+        "HealthCheckPath": "/health",
+        "HealthCheckPort": "traffic-port",
+        "HealthCheckProtocol": "HTTP",
+        "HealthCheckTimeoutSeconds": 5,
+        "HealthyThresholdCount": 5,
+        "IpAddressType": "ipv4",
+        "Matcher": {
+          "HttpCode": "200"
+        },
+        "Name": "example-app-tg",
+        "Port": 80,
+        "Protocol": "HTTP",
+        "ProtocolVersion": "HTTP1",
+        "Tags": [
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "example-tg"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "example-app-stack"
+          },
+          {
+            "Key": "Name",
+            "Value": "example-app-tg"
+          }
+        ],
+        "TargetGroupArn": "arn:aws:elasticloadbalancing:us-west-1:123456789012:targetgroup/example-app-tg/1234567890abcdef",
+        "TargetGroupAttributes": [
+          {
+            "Key": "stickiness.type",
+            "Value": "lb_cookie"
+          },
+          {
+            "Key": "stickiness.app_cookie.duration_seconds",
+            "Value": "86400"
+          },
+          {
+            "Key": "target_group_health.dns_failover.minimum_healthy_targets.count",
+            "Value": "1"
+          },
+          {
+            "Key": "load_balancing.cross_zone.enabled",
+            "Value": "use_load_balancer_configuration"
+          },
+          {
+            "Key": "stickiness.lb_cookie.duration_seconds",
+            "Value": "86400"
+          },
+          {
+            "Key": "target_group_health.dns_failover.minimum_healthy_targets.percentage",
+            "Value": "off"
+          },
+          {
+            "Key": "stickiness.enabled",
+            "Value": "false"
+          },
+          {
+            "Key": "target_group_health.unhealthy_state_routing.minimum_healthy_targets.percentage",
+            "Value": "off"
+          },
+          {
+            "Key": "slow_start.duration_seconds",
+            "Value": "0"
+          },
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "300"
+          },
+          {
+            "Key": "target_group_health.unhealthy_state_routing.minimum_healthy_targets.count",
+            "Value": "1"
+          },
+          {
+            "Key": "load_balancing.algorithm.anomaly_mitigation",
+            "Value": "off"
+          },
+          {
+            "Key": "stickiness.app_cookie.cookie_name",
+            "Value": ""
+          },
+          {
+            "Key": "load_balancing.algorithm.type",
+            "Value": "round_robin"
+          }
+        ],
+        "TargetGroupName": "example-app-tg",
+        "TargetType": "ip",
+        "Targets": [],
+        "UnhealthyThresholdCount": 2,
+        "VpcId": "vpc-01234567"
+      },
+      "ReadOnlyProperties": {
+        "LoadBalancerArns": [],
+        "TargetGroupArn": "arn:aws:elasticloadbalancing:us-west-1:123456789012:targetgroup/example-app-tg/1234567890abcdef",
+        "TargetGroupFullName": "targetgroup/example-app-tg/1234567890abcdef",
+        "TargetGroupName": "example-app-tg"
+      },
+      "NativeId": "arn:aws:elasticloadbalancing:us-west-1:123456789012:targetgroup/example-app-tg/1234567890abcdef"
+    },
+    {
+      "Label": "backend-service-tg",
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "HealthCheckEnabled": true,
+        "HealthCheckIntervalSeconds": 15,
+        "HealthCheckPath": "/api/health",
+        "HealthCheckPort": "traffic-port",
+        "HealthCheckProtocol": "HTTP",
+        "HealthCheckTimeoutSeconds": 10,
+        "HealthyThresholdCount": 3,
+        "IpAddressType": "ipv4",
+        "Matcher": {
+          "HttpCode": "200,202"
+        },
+        "Name": "backend-service-tg",
+        "Port": 8080,
+        "Protocol": "HTTP",
+        "ProtocolVersion": "HTTP1",
+        "TargetType": "ip",
+        "UnhealthyThresholdCount": 3,
+        "VpcId": "vpc-01234567"
+      },
+      "NativeId": "arn:aws:elasticloadbalancing:us-west-1:123456789012:targetgroup/backend-service-tg/2345678901bcdefg"
+    },
+    {
+      "Label": "api-gateway-tg",
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "HealthCheckEnabled": true,
+        "HealthCheckIntervalSeconds": 30,
+        "HealthCheckPath": "/status",
+        "HealthCheckPort": "traffic-port",
+        "HealthCheckProtocol": "HTTPS",
+        "HealthCheckTimeoutSeconds": 5,
+        "HealthyThresholdCount": 2,
+        "IpAddressType": "ipv4",
+        "Matcher": {
+          "HttpCode": "200"
+        },
+        "Name": "api-gateway-tg",
+        "Port": 443,
+        "Protocol": "HTTPS",
+        "ProtocolVersion": "HTTP1",
+        "TargetType": "ip",
+        "UnhealthyThresholdCount": 5,
+        "VpcId": "vpc-01234567"
+      },
+      "NativeId": "arn:aws:elasticloadbalancing:us-west-1:123456789012:targetgroup/api-gateway-tg/3456789012cdefgh"
+    }
+  ]
+}

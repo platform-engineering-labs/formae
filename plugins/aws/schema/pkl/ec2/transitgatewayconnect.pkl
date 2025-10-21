@@ -1,0 +1,34 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.transitgatewayconnect
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::TransitGatewayConnect"
+
+@aws.SubResourceHint
+open class TransitGatewayConnectTransitGatewayConnectOptions extends formae.SubResource {
+    protocol: String?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "TransitGatewayAttachmentId"
+    tags = "Tags"
+}
+open class TransitGatewayConnect extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    options: TransitGatewayConnectTransitGatewayConnectOptions
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    transportTransitGatewayAttachmentId: String
+}

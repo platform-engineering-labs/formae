@@ -1,0 +1,63 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/sqs/queue.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+import "@aws/ec2/vpc.pkl"
+
+properties {
+    name = new formae.Prop {
+        flag = "name"
+        default = "sg-example"
+    }
+}
+
+forma {
+    local stack = new formae.Stack {
+        label = "\(properties.name.value)-Stack"
+        description = "Stack for security group"
+    }
+    stack
+
+    local target = new formae.Target {
+        label = "default-aws-sg-target"
+        config = new aws.Config {
+            region = "eu-central-1"
+        }
+    }
+    target
+
+    local v = new vpc.VPC {
+        label = "\(properties.name.value)-vpc"
+        cidrBlock = "10.0.0.0/16"
+        enableDnsHostnames = true
+        enableDnsSupport = true
+        tags { new { key = "Name"; value = properties.name.value + "-vpc" } }
+    }
+    v
+
+    local sg = new securitygroup.SecurityGroup {
+        label = properties.name.value
+        groupDescription = "Some SG group"
+        vpcId = v.res.id
+        tags { new { key = "Name"; value = properties.name.value + "-default-sg" } }
+    }
+    sg
+
+    local sgIngress = new securitygroupingress.SecurityGroupIngress {
+        label = "sg-ingress"
+        ipProtocol = "tcp"
+        fromPort = 80
+        toPort = 80
+        cidrIp = "0.0.0.0/0"
+        groupId = sg.res.groupId
+    }
+    sgIngress
+}

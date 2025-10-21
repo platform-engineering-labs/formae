@@ -1,0 +1,60 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.efs.mounttarget
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EFS::MountTarget"
+
+open class MountTargetResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: MountTargetResolvable = (this) {
+        property = "Id"
+    }
+
+    hidden ipAddress: MountTargetResolvable = (this) {
+        property = "IpAddress"
+    }
+
+    hidden fileSystemId: MountTargetResolvable = (this) {
+        property = "fileSystemId"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    parent = "AWS::EFS::FileSystem"
+    listParam = new formae.ListProperty {
+        parentProperty = "FileSystemId"
+        listParameter = "FileSystemId"
+    }
+    discoverable = true
+}
+open class MountTarget extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    fileSystemId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    ipAddress: String?
+
+    @aws.FieldHint
+    securityGroups: Listing<String|formae.Resolvable>
+
+    @aws.FieldHint{createOnly = true}
+    subnetId: String|formae.Resolvable
+
+    local parent = this
+
+    hidden res: MountTargetResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

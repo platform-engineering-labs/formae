@@ -1,0 +1,191 @@
+name: formae-package
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  pkg_pkl:
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: package-pkl
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.29.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::897722706215:role/github-pel
+          role-session-name: PublishSession
+
+      - name: Resolve Pkl
+        run: make gen-pkl
+
+      - name: Package Pkl
+        run: make pkg-pkl
+
+      - name: Publish PKL Packages to S3
+        run: make publish-pkl
+
+      - name: Publish Setup Script to S3
+        run: make publish-setup
+
+  pkg_linux_x8664:
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: package-bin
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.29.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::897722706215:role/github-pel
+          role-session-name: PublishSession
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.1'
+
+      - name: Build and Publish
+        run: make publish-bin
+
+# Save for when Linux Arm is available for private repositories
+#
+#  pkg_linux_arm64:
+#    runs-on: ubuntu-24.04-arm
+#
+#    concurrency:
+#      group: package-bin
+#      cancel-in-progress: false
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          fetch-depth: 0
+#          fetch-tags: true
+#
+#      - name: Configure AWS Credentials
+#        uses: aws-actions/configure-aws-credentials@v4
+#        with:
+#          aws-region: us-west-2
+#          role-to-assume: arn:aws:iam::897722706215:role/github-pel
+#          role-session-name: PublishSession
+#
+#      - name: Set up Go
+#        uses: actions/setup-go@v4
+#        with:
+#          go-version: '1.25.1'
+#
+#      - name: Build and Publish
+#        run: make publish-bin
+  
+  pkg_macos_arm64:
+    runs-on: macos-latest
+
+    concurrency:
+      group: package-bin
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.29.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::897722706215:role/github-pel
+          role-session-name: PublishSession
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.1'
+
+      - name: Build and Publish
+        run: make publish-bin
+
+  container_linux_x8664:
+    runs-on: ubuntu-latest
+
+    needs:
+      - pkg_pkl
+      - pkg_linux_x8664
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push container image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./packaging/container
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}

@@ -1,0 +1,197 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module generator
+
+amends "pkl:test"
+import "../gen.pkl" as gen
+import "@formae/formae.pkl"
+import "pkl:reflect" as reflect
+
+
+@formae.ResourceHint
+local class SimpleFoo extends formae.Resource{
+    x: Int
+    name: String
+}
+
+@formae.ResourceHint
+local class ComplexBar extends formae.Resource {
+    items: Listing<String>
+    metadata: Mapping<String, Any>
+    optional: String?
+}
+
+@formae.ResourceHint
+local class TestResource extends formae.Resource {
+    type = "FakeAWS::Suckets::TestResource"
+
+    @formae.FieldHint
+    size: Int?
+
+    @formae.FieldHint
+    tags: Listing<formae.Tag>
+
+    @formae.FieldHint
+    bucketName: String
+}
+
+// Test data
+local simpleProperties: Dynamic = new Dynamic {
+   x = 42
+   name = "test"
+   label = "simple"
+}
+
+local complexProperties: Dynamic = new Dynamic {
+    items = new Listing { "item1"; "item2"; "item3" }
+    //metadata = new Mapping {
+    //    ["key1"] = "value1"
+    //    ["key2"] = 123
+    //}
+    optional = "optional value"
+    label = "complex"
+}
+
+local resourceProperties: Dynamic = new Dynamic {
+    bucketName = "my-test-bucket"
+    size = 1024
+    tags = new Listing {
+        new Dynamic {
+            key = "Environment"
+            value = "test"
+        }
+        new Dynamic {
+            key = "Owner"
+            value = "team-a"
+        }
+    }
+    label = "my-bucket"
+}
+
+examples {
+    ["Apply simple class"] {
+        gen.apply(SimpleFoo, simpleProperties)
+    }
+
+    ["Apply complex class with collections"] {
+        gen.apply(ComplexBar, complexProperties)
+    }
+
+    //["ApplyResource for Simple class fails when it is no resource"] {
+    //    gen.applyResource(SimpleFoo, simpleProperties)
+    //}
+    //
+    //["ApplyResource for Complex class fails when it is no resource"] {
+    //    gen.applyResource(ComplexBar, complexProperties)
+    //}
+    //
+    //["Apply resource class"] {
+    //    gen.applyResource(TestResource, resourceProperties)
+    //}
+
+    ["Convert to map with types - simple"] {
+        gen.genPklToMapWithTypes(new SimpleFoo { x = 42; name = "test"; label = "simple" }.toDynamic())
+    }
+
+    ["Convert to map with types - complex"] {
+        gen.genPklToMap(new TestResource {
+            bucketName = "my-test-bucket"
+            label = "my-bucket"
+        }.toDynamic())
+    }
+
+    ["Generate import statements"] {
+        gen.generateImportStatements(new Mapping {
+                ["__import_statement__"] = "@aws/s3.pkl"
+                ["__type__"] = "Bucket"
+        }.toMap())
+    }
+
+    ["Collect imports when there are no imports"] {
+        gen.generateImportStatements(new Mapping {
+                ["__import_statement__"] = "@aws/s3.pkl"
+                ["__type__"] = "Bucket"
+        }.toMap())
+    }
+}
+
+facts {
+    ["Simple class application preserves values"] {
+        let (result = gen.apply(SimpleFoo, simpleProperties))
+        result.x == 42 && result.name == "test"
+    }
+
+    ["Complex class handles collections"] {
+        let (result = gen.apply(ComplexBar, complexProperties))
+        result.items.length == 3 &&
+        result.optional == "optional value"
+    }
+
+    ["Resource class inherits from formae.Resource"] {
+        let (result = gen.apply(TestResource, resourceProperties))
+        result.bucketName == "my-test-bucket"
+    }
+
+    ["Map conversion includes type information"] {
+        let (testObj = new TestResource { bucketName = "my-test-bucket"; size = 1024; label = "my-bucket" }.toDynamic())
+        let (result = gen.genPklToMapWithTypes(testObj))
+        //result["__type__"] == "FakeAWS::Suckets::TestResource" &&
+        result["bucketName"] == "my-test-bucket" &&
+        result["label"] == "my-bucket"
+    }
+
+    ["Import statement generation filters base types"] {
+        let (parsedData = new Mapping {
+            ["resource"] = new Mapping {
+                ["__import__"] = "pkl:base"
+                ["__type__"] = "String"
+            }
+        })
+        let (imports = gen.generateImportStatements(parsedData.toMap()))
+        !imports.contains("pkl:base")
+    }
+
+    ["Type conversion handles nullable types"] {
+        let (result = gen.attemptApply(ComplexBar, new Dynamic {
+            items = new Listing { "test" }
+            optional = null
+        }))
+        !(result is gen.GenerationFailure) && (result as ComplexBar).optional == null
+    }
+
+    ["Should skip properties starting with double underscore"] {
+        gen.shouldSkipPropertyName("__type__") == true &&
+        gen.shouldSkipPropertyName("__import__") == true &&
+        gen.shouldSkipPropertyName("__fullType__") == true &&
+        gen.shouldSkipPropertyName("__metadata__") == true
+    }
+
+    ["Should skip system properties"] {
+        gen.shouldSkipPropertyName("Properties") == true &&
+        gen.shouldSkipPropertyName("Schema") == true &&
+        gen.shouldSkipPropertyName("Fields") == true &&
+        gen.shouldSkipPropertyName("output") == true
+    }
+
+    ["Should not skip regular properties"] {
+        gen.shouldSkipPropertyName("bucketName") == false &&
+        gen.shouldSkipPropertyName("label") == false &&
+        gen.shouldSkipPropertyName("stack") == false &&
+        gen.shouldSkipPropertyName("target") == false &&
+        gen.shouldSkipPropertyName("size") == false &&
+        gen.shouldSkipPropertyName("tags") == false &&
+        gen.shouldSkipPropertyName("myCustomProperty") == false
+    }
+
+    ["Should handle edge cases"] {
+        gen.shouldSkipPropertyName("") == false &&
+        gen.shouldSkipPropertyName("_singleUnderscore") == false &&
+        gen.shouldSkipPropertyName("property__") == false &&
+        gen.shouldSkipPropertyName("PropertiesExtended") == false
+    }
+
+}

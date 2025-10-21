@@ -1,0 +1,102 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ecs.cluster
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ECS::Cluster"
+
+@aws.SubResourceHint
+open class CapacityProviderStrategy extends formae.SubResource {
+    base: Int?
+    capacityProvider: String?
+    weight: Int?
+}
+
+@aws.SubResourceHint
+open class ClusterClusterConfiguration extends formae.SubResource {
+    executeCommandConfiguration: ExecuteCommandConfiguration?
+    managedStorageConfiguration: ManagedStorageConfiguration?
+}
+
+@aws.SubResourceHint
+open class ClusterClusterSettings extends formae.SubResource {
+    name: String?
+    value: String?
+}
+
+@aws.SubResourceHint
+open class ExecuteCommandConfiguration extends formae.SubResource {
+    kmsKeyId: String?
+    logConfiguration: ClusterExecuteCommandLogConfiguration?
+    logging: String?
+}
+
+@aws.SubResourceHint
+open class ClusterExecuteCommandLogConfiguration extends formae.SubResource {
+    cloudWatchEncryptionEnabled: Boolean?
+    cloudWatchLogGroupName: String?
+    s3BucketName: String?
+    s3EncryptionEnabled: Boolean?
+    s3KeyPrefix: String?
+}
+
+@aws.SubResourceHint
+open class ManagedStorageConfiguration extends formae.SubResource {
+    fargateEphemeralStorageKmsKeyId: (String|formae.Resolvable)?
+    kmsKeyId: (String|formae.Resolvable)?
+}
+
+@aws.SubResourceHint
+open class ServiceConnectDefaults extends formae.SubResource {
+    namespace: String?
+}
+
+open class ClusterResolvable extends formae.Resolvable {
+    type = module.type
+
+    hidden arn: ClusterResolvable = (this) {
+        property = "Arn"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+}
+open class Cluster extends formae.Resource {
+
+    @aws.FieldHint
+    capacityProviders: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint{createOnly = true}
+    clusterName: String?
+
+    @aws.FieldHint
+    clusterSettings: Listing<ClusterClusterSettings>?
+
+    @aws.FieldHint
+    configuration: ClusterClusterConfiguration?
+
+    @aws.FieldHint
+    defaultCapacityProviderStrategy: Listing<CapacityProviderStrategy>?
+
+    @aws.FieldHint{writeOnly = true}
+    serviceConnectDefaults: ServiceConnectDefaults?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    hidden parent = this
+
+    hidden res: ClusterResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

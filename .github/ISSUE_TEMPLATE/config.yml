@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Feature requests or questions
+    url: https://github.com/platform-engineering-labs/formae/discussions/categories/ideas
+    about: Please discuss features or ask questions in Discussions first

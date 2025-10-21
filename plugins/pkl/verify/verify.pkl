@@ -1,0 +1,151 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module Generator
+
+import "pkl:reflect"
+
+awsImports = import*("@aws/*/*.pkl")
+
+open class ResourceType {
+    Type: String
+    ModuleName: String
+    ClassName: String
+    ImportName: String = ModuleName.replaceAll(".pkl", "").split("/").last
+    ReflectedClass: reflect.Class
+    Clazz: Class
+}
+
+open class DuplicateFileError {
+    FileName: String
+    Modules: Listing<String>
+    Count: Int = Modules.length
+}
+
+function GetAllResourceTypes() = new Listing<ResourceType> {
+    for (moduleName, moduleValue in awsImports.toMap()) {
+        when(reflect.Module(moduleValue).classes.length > 0) {
+            for (className, v in reflect.Module(moduleValue).classes) {
+                when(v.annotations.length > 0 && v.annotations[0].getClass().simpleName == "ResourceHint") {
+                    new ResourceType {
+                        Type = v.annotations[0].getProperty("type")
+                        ModuleName = "\(moduleName)"
+                        ClassName = "\(className)"
+                        ReflectedClass = reflect.Module(awsImports[ModuleName]).classes[ClassName]
+                        Clazz = v.reflectee
+                    }
+                }
+            }
+        }
+    }
+}
+
+function ExtractFileName(modulePath: String): String =
+    modulePath.split("/").last
+
+function VerifyNoDuplicateFiles(): Listing<DuplicateFileError> =
+    // Group modules by their filename using fold
+    let (modulesByFileName = awsImports.toMap().keys.fold(Map(),
+        (acc: Map<String, List<String>>, moduleName: String) ->
+            let (fileName = ExtractFileName(moduleName))
+            if(acc.getOrNull(fileName) == null)
+                acc.put(fileName, List(moduleName))
+            else
+                let (existingModules = acc.getOrNull(fileName))
+                acc.put(fileName, existingModules.add(moduleName))
+    ))
+
+    // Find files that appear more than once
+    new Listing {
+        for (fileName, modules in modulesByFileName) {
+            when (modules.length > 1) {
+                new DuplicateFileError {
+                    FileName = fileName
+                    Modules = modules.toListing()
+                }
+            }
+        }
+    }
+
+function VerifyUniqueResourceTypes(): Listing<String> =
+    let (resourceTypes = GetAllResourceTypes())
+    let (typeGroups = resourceTypes.fold(Map(),
+        (acc: Map<String, List<ResourceType>>, rt: ResourceType) ->
+            if (acc.getOrNull(rt.Type) == null)
+                acc.put(rt.Type, List(rt))
+            else
+                let (existing = acc.getOrNull(rt.Type))
+                acc.put(rt.Type, existing.add(rt))
+    ))
+
+    new Listing {
+        for (type, resources in typeGroups) {
+            when (resources.length > 1) {
+                "Duplicate resource type '\(type)' found in: \(resources.map((r) -> r.ModuleName).join(", "))"
+            }
+        }
+    }
+
+function RunVerification(): Map<String, Any> =
+    let (duplicateFiles = VerifyNoDuplicateFiles())
+    let (duplicateTypes = VerifyUniqueResourceTypes())
+    let (hasErrors = !duplicateFiles.isEmpty || !duplicateTypes.isEmpty)
+
+    new Mapping {
+        ["hasErrors"] = hasErrors
+        ["duplicateFiles"] = duplicateFiles
+        ["duplicateTypes"] = duplicateTypes
+        ["summary"] = new Mapping {
+            ["totalModules"] = awsImports.length
+            ["totalResourceTypes"] = GetAllResourceTypes().length
+            ["duplicateFileCount"] = duplicateFiles.length
+            ["duplicateTypeCount"] = duplicateTypes.length
+        }.toMap()
+        ["status"] = if (hasErrors) "FAILED" else "PASSED"
+    }.toMap()
+
+
+output {
+    // Human-readable report
+    text =
+        let (result = RunVerification())
+        let (duplicateFiles = result["duplicateFiles"] as Listing<DuplicateFileError>)
+        let (duplicateTypes = result["duplicateTypes"] as Listing<String>)
+        let (summary = result["summary"] as Map<String, Any>)
+            """
+            AWS PKL Schema Verification Report
+            ===================================
+
+            Status: \(result["status"])
+
+            Summary:
+            - Total modules: \(summary["totalModules"])
+            - Total resource types: \(summary["totalResourceTypes"])
+            - Duplicate files found: \(summary["duplicateFileCount"])
+            - Duplicate types found: \(summary["duplicateTypeCount"])
+
+            \(if (!duplicateFiles.isEmpty)
+                "DUPLICATE FILES DETECTED:\n" +
+                duplicateFiles.fold("", (acc: String, err: DuplicateFileError) ->
+                    acc + "❌ File '\(err.FileName)' appears \(err.Count) times:\n" +
+                    err.Modules.fold("", (moduleAcc: String, mod: String) ->
+                        moduleAcc + "   - \(mod)\n"
+                    ) + "\n"
+                )
+            else "✅ No duplicate files found")
+
+            \(if (!duplicateTypes.isEmpty)
+                "\nDUPLICATE RESOURCE TYPES DETECTED:\n" +
+                duplicateTypes.fold("", (acc: String, err: String) ->
+                    acc + "❌ \(err)\n"
+                )
+            else "\n✅ No duplicate resource types found")
+
+            \(if (result["status"] == "FAILED")
+                "\n⚠️  VERIFICATION FAILED - Please resolve duplicate files/types before proceeding"
+            else "\n✅ VERIFICATION PASSED - Schema is valid")
+            """
+}

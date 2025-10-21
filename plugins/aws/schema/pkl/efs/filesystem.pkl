@@ -1,0 +1,115 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.efs.filesystem
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EFS::FileSystem"
+
+typealias BackupPolicyStatus = "DISABLED"|"ENABLED"
+
+@aws.SubResourceHint
+open class BackupPolicy extends formae.SubResource {
+    status: BackupPolicyStatus
+}
+
+typealias ReplicationOverwriteProtection = "DISABLED"|"ENABLED"
+
+@aws.SubResourceHint
+open class FileSystemProtection extends formae.SubResource {
+    replicationOverwriteProtection: ReplicationOverwriteProtection?
+}
+
+@aws.SubResourceHint
+open class LifecyclePolicy extends formae.SubResource {
+    transitionToArchive: String?
+    transitionToIA: String?
+    transitionToPrimaryStorageClass: String?
+}
+
+@aws.SubResourceHint
+open class ReplicationConfiguration extends formae.SubResource {
+    destinations: Listing<Destination>?
+}
+
+@aws.SubResourceHint
+open class Destination extends formae.SubResource {
+    availabilityZoneName: String?
+    fileSystemId: (String(matches(Regex(#"^(arn:aws[-a-z]*:elasticfilesystem:[0-9a-z-:]+:file-system/fs-[0-9a-f]{8,40}|fs-[0-9a-f]{8,40})$"#))))?
+    kmsKeyId: String?
+    region: String?
+    roleArn: String?
+    status: String?
+    statusMessage: String?
+}
+
+open class FileSystemResolvable extends formae.Resolvable {
+    type = module.type
+
+    hidden arn: FileSystemResolvable = (this) {
+        property = "Arn"
+    }
+
+    hidden fileSystemId: FileSystemResolvable = (this) {
+        property = "FileSystemId"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "FileSystemId"
+    tags = "FileSystemTags"
+}
+open class FileSystem extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    availabilityZoneName: String?
+
+    @aws.FieldHint
+    backupPolicy: BackupPolicy?
+
+    @aws.FieldHint
+    bypassPolicyLockoutSafetyCheck: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    encrypted: Boolean?
+
+    @aws.FieldHint
+    fileSystemPolicy: Dynamic?
+
+    @aws.FieldHint
+    fileSystemProtection: FileSystemProtection?
+
+    @aws.FieldHint
+    fileSystemTags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    kmsKeyId: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    lifecyclePolicies: Listing<LifecyclePolicy>?
+
+    @aws.FieldHint{createOnly = true}
+    performanceMode: String?
+
+    @aws.FieldHint
+    provisionedThroughputInMibps: Number?
+
+    @aws.FieldHint
+    replicationConfiguration: ReplicationConfiguration?
+
+    @aws.FieldHint
+    throughputMode: String?
+
+    local parent = this
+
+    hidden res: FileSystemResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

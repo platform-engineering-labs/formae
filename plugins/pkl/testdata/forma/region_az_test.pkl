@@ -1,0 +1,46 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+
+forma {
+    new formae.Stack {
+        label = "pel-vpc-group-stack"
+        description = "Stack for vpc"
+    }
+
+    new formae.Target {
+        label = "default-aws-target"
+        config = new aws.Config {
+            region = "us-east-1"
+        }
+    }
+
+    local myVpc = new vpc.VPC {
+        label = "pel-group-vpc"
+        cidrBlock = "10.0.0.0/16"
+        enableDnsHostnames = false
+        tags {
+            new {
+                key = "Name"
+                value = "snarf"
+            }
+        }
+    }
+    myVpc
+
+    new subnet.Subnet {
+        label = "pel-subnet-1"
+        group = "pel-group-vpc"
+        availabilityZone = "us-east-1b"
+        cidrBlock = "10.0.0.0/19"
+        vpcId = myVpc.res.id
+    }
+}

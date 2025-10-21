@@ -1,0 +1,171 @@
+{
+  "Label": "WebsiteRecord",
+  "Type": "AWS::Route53::RecordSet",
+  "Stack": "static-website-stack",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "",
+    "Fields": [
+      "AliasTarget",
+      "CidrRoutingConfig",
+      "Comment",
+      "Failover",
+      "GeoLocation",
+      "GeoProximityLocation",
+      "HealthCheckId",
+      "HostedZoneId",
+      "HostedZoneName",
+      "MultiValueAnswer",
+      "Name",
+      "ResourceRecords",
+      "SetIdentifier",
+      "TTL",
+      "Type",
+      "Weight"
+    ],
+    "Nonprovisionable": true,
+    "Hints": {
+      "AliasTarget": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "CidrRoutingConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Comment": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Failover": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GeoLocation": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GeoProximityLocation": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HealthCheckId": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HostedZoneId": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HostedZoneName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "MultiValueAnswer": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Name": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "ResourceRecords": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SetIdentifier": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "TTL": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Type": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "Weight": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "AliasTarget": {
+      "DNSName": {
+        "$label": "WebsiteDistribution",
+        "$property": "DomainName",
+        "$res": true,
+        "$stack": "static-website-stack",
+        "$type": "AWS::CloudFront::Distribution",
+        "$value": "d33jmfuq86ehga.cloudfront.net."
+      },
+      "EvaluateTargetHealth": false,
+      "HostedZoneId": "Z2FDTNDATAQYW2"
+    },
+    "HostedZoneId": {
+      "$label": "StaticWebsiteHostedZone",
+      "$property": "Id",
+      "$res": true,
+      "$stack": "static-website-stack",
+      "$type": "AWS::Route53::HostedZone",
+      "$value": "Z024628284WFBI5TNEVW"
+    },
+    "Name": "test.platform.engineering",
+    "Type": "A"
+  },
+  "NativeID": "Z024628284WFBI5TNEVW|test.platform.engineering.|A",
+  "Managed": true,
+  "Ksuid": "34OGKhzdpWO9mptsQkT8hzMLwUE"
+}

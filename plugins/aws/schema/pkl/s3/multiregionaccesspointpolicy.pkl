@@ -1,0 +1,26 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.s3.multiregionaccesspointpolicy
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::S3::MultiRegionAccessPointPolicy"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "MrapName"
+    discoverable = false
+}
+open class MultiRegionAccessPointPolicy extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    mrapName: String(matches(Regex(#"^[a-z0-9][-a-z0-9]{1,48}[a-z0-9]$"#)))
+
+    @aws.FieldHint
+    policy: Dynamic
+}

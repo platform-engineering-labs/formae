@@ -1,0 +1,25 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.vpngatewayroutepropagation
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VPNGatewayRoutePropagation"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    discoverable = false
+}
+open class VPNGatewayRoutePropagation extends formae.Resource {
+    @aws.FieldHint
+    routeTableIds: Listing<String|formae.Resolvable>
+
+    @aws.FieldHint
+    vpnGatewayId: String|formae.Resolvable
+}

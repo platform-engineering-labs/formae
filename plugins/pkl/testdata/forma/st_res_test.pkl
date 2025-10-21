@@ -1,0 +1,53 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/route53/hostedzone.pkl"
+import "@aws/route53/recordset.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name"
+    default = "snarf.platform.engineering"
+  }
+}
+
+forma {
+  new formae.StackResolvable {
+    label = "pel-dns"
+  }
+
+  new formae.TargetResolvable {
+    label = "default-aws-target"
+  }
+
+  local zone = new hostedzone.HostedZone {
+    label = "pel-zone"
+    name = properties.name.value
+  }
+  zone
+
+  new recordset.RecordSet {
+    label = "1-pel-record-fruitbat"
+    name = "fruitbat.\(properties.name.value)"
+    type = "A"
+    hostedZoneId = zone.res.id
+    resourceRecords {
+      "192.168.55.1"
+    }
+  }
+
+  new recordset.RecordSet {
+    label = "2-pel-record-nacho"
+    name = "nacho.\(properties.name.value)"
+    type = "A"
+    hostedZoneId = zone.res.id
+    resourceRecords {
+      "192.168.55.2"
+    }
+  }
+}

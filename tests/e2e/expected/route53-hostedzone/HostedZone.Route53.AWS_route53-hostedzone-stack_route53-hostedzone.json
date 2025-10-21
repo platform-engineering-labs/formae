@@ -1,0 +1,83 @@
+{
+  "Label": "route53-hostedzone",
+  "Type": "AWS::Route53::HostedZone",
+  "Stack": "route53-hostedzone-stack",
+  "Target": "aws-target-hostedzone",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "HostedZoneTags",
+    "Fields": [
+      "HostedZoneConfig",
+      "Name",
+      "QueryLoggingConfig",
+      "HostedZoneTags",
+      "VPCs"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "HostedZoneConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HostedZoneTags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Name": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "QueryLoggingConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VPCs": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "HostedZoneConfig": {},
+    "HostedZoneTags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "route53-hostedzone"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "route53-hostedzone-stack"
+      }
+    ],
+    "Name": "snarf.platform.engineering.",
+    "VPCs": []
+  },
+  "ReadOnlyProperties": {
+    "Id": "Z08319482R1FS4JELMROD",
+    "NameServers": [
+      "ns-1924.awsdns-48.co.uk",
+      "ns-1230.awsdns-25.org",
+      "ns-957.awsdns-55.net",
+      "ns-290.awsdns-36.com"
+    ]
+  },
+  "NativeID": "Z08319482R1FS4JELMROD",
+  "Managed": true,
+  "Ksuid": "34OZSJdq8LHELnkgtmgCzH4JpNh"
+}

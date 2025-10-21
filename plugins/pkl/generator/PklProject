@@ -1,0 +1,6 @@
+amends "pkl:Project"
+
+dependencies {
+  ["formae"] = import("../schema/PklProject")
+  ["aws"] = import("../../aws/schema/pkl/PklProject")
+}

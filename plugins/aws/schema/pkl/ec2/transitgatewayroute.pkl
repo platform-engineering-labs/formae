@@ -1,0 +1,33 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.transitgatewayroute
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::TransitGatewayRoute"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "TransitGatewayRouteTableId"
+    parent = "AWS::EC2::TransitGatewayRouteTable"
+    listParam = new formae.ListProperty { parentProperty = "TransitGatewayRouteTableId" listParameter = "TransitGatewayRouteTableId" }
+}
+open class TransitGatewayRoute extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    blackhole: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    destinationCidrBlock: String
+
+    @aws.FieldHint{createOnly = true}
+    transitGatewayAttachmentId: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    transitGatewayRouteTableId: String|formae.Resolvable
+}

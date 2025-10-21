@@ -1,0 +1,21 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/ec2/vpc.pkl"
+
+import "../vars.pkl"
+
+function nvpc(properties: Dynamic?): vpc.VPC = new vpc.VPC {
+    label = vars.vpcLabel
+    cidrBlock = properties.vpcCidr.value
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    
+    tags { 
+        new { key = "Name"; value = properties.name.value + "-vpc" }
+        new { key = "kubernetes.io/cluster/\(properties.name.value)"; value = "shared" }
+    }
+}

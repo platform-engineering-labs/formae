@@ -1,0 +1,59 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/route53/hostedzone.pkl"
+import "@aws/route53/recordset.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name"
+    default = "snarf.platform.engineering"
+  }
+}
+
+local zone = new hostedzone.HostedZoneResolvable {
+  label = "pel-zone"
+  stack = "pel-dns"
+}
+
+forma {
+  local stack = new formae.Stack {
+    label = "pel-subservice"
+    description = "Stack for PEL Subservice DNS records"
+  }
+  stack
+
+  local target = new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+  target
+
+  new recordset.RecordSet {
+    label = "1-pel-record-external"
+    name = "external-1.\(properties.name.value)"
+    type = "A"
+    hostedZoneId = zone.id
+    resourceRecords {
+      "192.168.55.5"
+    }
+  }
+
+  new recordset.RecordSet {
+    label = "2-pel-record-external"
+    name = "external-2.\(properties.name.value)"
+    type = "A"
+    hostedZoneId = zone.id
+    resourceRecords {
+      "192.168.55.5"
+    }
+  }
+}

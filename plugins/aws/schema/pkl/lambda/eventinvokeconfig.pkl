@@ -1,0 +1,53 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.lambda.eventinvokeconfig
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::Lambda::EventInvokeConfig"
+
+@aws.SubResourceHint
+open class DestinationConfig extends formae.SubResource {
+    onFailure: OnFailure?
+    onSuccess: OnSuccess?
+}
+
+@aws.SubResourceHint
+open class OnFailure extends formae.SubResource {
+    destination: String(matches(Regex(#"^$|arn:(aws[a-zA-Z0-9-]*):([a-zA-Z0-9\-])+:([a-z]{2}(-gov)?(-iso([a-z])?)?-[a-z]+-\d{1})?:(\d{12})?:(.*)"#)))|formae.Resolvable
+}
+
+@aws.SubResourceHint
+open class OnSuccess extends formae.SubResource {
+    destination: String(matches(Regex(#"^$|arn:(aws[a-zA-Z0-9-]*):([a-zA-Z0-9\-])+:([a-z]{2}(-gov)?(-iso([a-z])?)?-[a-z]+-\d{1})?:(\d{12})?:(.*)"#)))|formae.Resolvable
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    parent = "AWS::Lambda::Function"
+    listParam = new formae.ListProperty { parentProperty = "FunctionName" listParameter = "FunctionName" }
+}
+open class EventInvokeConfig extends formae.Resource {
+
+    @aws.FieldHint
+    destinationConfig: DestinationConfig?
+
+    @aws.FieldHint{createOnly = true}
+    functionName: String(matches(Regex(#"^(arn:(aws[a-zA-Z-]*)?:lambda:)?([a-z]{2}(-gov)?(-iso([a-z])?)?-[a-z]+-\d{1}:)?(\d{12}:)?(function:)?([a-zA-Z0-9-_]+)(:(\$LATEST|[a-zA-Z0-9-_]+))?$"#)))|formae.Resolvable
+
+    @aws.FieldHint
+    maximumEventAgeInSeconds: Int?
+
+    @aws.FieldHint
+    maximumRetryAttempts: Int?
+
+    @aws.FieldHint{createOnly = true}
+    qualifier: String(matches(Regex(#"^(|[a-zA-Z0-9$_-]{1,129})$"#)))
+
+}

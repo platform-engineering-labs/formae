@@ -1,0 +1,84 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/route53/hostedzone.pkl"
+import "@aws/route53/recordset.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name"
+    default = "res.platform.engineering"
+  }
+}
+
+forma {
+  // Will be rendered, so it will be created
+  local defaultStack = new formae.Stack {
+    label = "pel-dns"
+    description = "Stack for PEL DNS records"
+  }
+  defaultStack
+
+  // Will NOT be rendered, will NOT be created
+  local resStack = new formae.StackResolvable {
+    label = "snarf-stack"
+  }
+  resStack
+
+  // Will be rendered, so it will be created
+  local defaultTarget = new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+  defaultTarget
+
+  // Will NOT be rendered, will NOT be created
+  local resTarget = new formae.TargetResolvable {
+    label = "snarf-target"
+  }
+  resTarget
+
+  local zone = new hostedzone.HostedZone {
+    label = "pel-zone"
+    name = properties.name.value
+    stack = defaultStack.res
+    target = defaultTarget.res
+  }
+  zone
+
+  local snarfZone = new hostedzone.HostedZone {
+    label = "snarf-zone"
+    name = "snarf.com"
+    stack = resStack
+    target = resTarget
+  }
+  snarfZone
+
+  new recordset.RecordSet {
+    label = "1-pel-record-fruitbat"
+    name = "fruitbat.res.platform.engineering"
+    type = "A"
+    hostedZoneId = zone.res.id
+    resourceRecords {
+      "192.168.55.1"
+    }
+  }
+
+  new recordset.RecordSet {
+    label = "1-pel-record-snarfinton"
+    name = "snarfington.snarf.com"
+    type = "A"
+    hostedZoneId = snarfZone.res.id
+    resourceRecords {
+      "192.168.55.1"
+    }
+  }
+}

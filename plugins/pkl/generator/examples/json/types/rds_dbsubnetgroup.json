@@ -1,0 +1,24 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "default",
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "DBSubnetGroupName": "default"
+      },
+      "NativeId": "default"
+    }
+  ]
+}

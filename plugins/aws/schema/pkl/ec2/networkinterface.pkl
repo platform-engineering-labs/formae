@@ -1,0 +1,99 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.networkinterface
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::NetworkInterface"
+
+@aws.SubResourceHint
+open class ConnectionTrackingSpecification extends formae.SubResource {
+    tcpEstablishedTimeout: Int?
+    udpStreamTimeout: Int?
+    udpTimeout: Int?
+}
+
+@aws.SubResourceHint
+open class Ipv6Address extends formae.SubResource {
+    ipv6Address: String
+}
+
+@aws.SubResourceHint
+open class Ipv4PrefixSpecification extends formae.SubResource {
+    ipv4Prefix: String
+}
+
+@aws.SubResourceHint
+open class Ipv6PrefixSpecification extends formae.SubResource {
+    ipv6Prefix: String
+}
+
+@aws.SubResourceHint
+open class PrivateIpAddressSpecification extends formae.SubResource {
+    primary: Boolean
+    privateIpAddress: String
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    tags = "Tags"
+}
+open class NetworkInterface extends formae.Resource {
+
+    @aws.FieldHint
+    connectionTrackingSpecification: ConnectionTrackingSpecification?
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    enablePrimaryIpv6: Boolean?
+
+    @aws.FieldHint
+    groupSet: Listing<String>?
+
+    @aws.FieldHint{createOnly = true}
+    interfaceType: String?
+
+    @aws.FieldHint
+    ipv4PrefixCount: Int?
+
+    @aws.FieldHint
+    ipv4Prefixes: Listing<Ipv4PrefixSpecification>?
+
+    @aws.FieldHint
+    ipv6AddressCount: Int?
+
+    @aws.FieldHint
+    ipv6Addresses: Listing<Ipv6Address>?
+
+    @aws.FieldHint
+    ipv6PrefixCount: Int?
+
+    @aws.FieldHint
+    ipv6Prefixes: Listing<Ipv6PrefixSpecification>?
+
+    @aws.FieldHint{createOnly = true}
+    privateIpAddress: String?
+
+    @aws.FieldHint
+    privateIpAddresses: Listing<PrivateIpAddressSpecification>?
+
+    @aws.FieldHint
+    secondaryPrivateIpAddressCount: Int?
+
+    @aws.FieldHint
+    sourceDestCheck: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    subnetId: String|formae.Resolvable
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

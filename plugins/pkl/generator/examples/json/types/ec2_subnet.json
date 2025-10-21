@@ -1,0 +1,1287 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    },
+    {
+      "Label": "us-west-2",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-2",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "ml-platform-private-subnet-1",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "SubnetId",
+        "Tags": "Tags",
+        "Fields": [
+          "AssignIpv6AddressOnCreation",
+          "AvailabilityZone",
+          "AvailabilityZoneId",
+          "CidrBlock",
+          "EnableDns64",
+          "EnableLniAtDeviceIndex",
+          "Ipv4IpamPoolId",
+          "Ipv4NetmaskLength",
+          "Ipv6CidrBlock",
+          "Ipv6IpamPoolId",
+          "Ipv6Native",
+          "Ipv6NetmaskLength",
+          "MapPublicIpOnLaunch",
+          "OutpostArn",
+          "PrivateDnsNameOptionsOnLaunch",
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "AssignIpv6AddressOnCreation": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZone": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZoneId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableDns64": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableLniAtDeviceIndex": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6Native": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "MapPublicIpOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "OutpostArn": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateDnsNameOptionsOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-2a",
+        "AvailabilityZoneId": "usw2-az2",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.0.0.0/24",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": false,
+        "NetworkAclAssociationId": "aclassoc-070e664896cfeb8ab",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-0e3748d472e552acc",
+        "Tags": [
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "PrivateSubnet1"
+          },
+          {
+            "Key": "Name",
+            "Value": "ml-platform-private-subnet-1"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "ml-platform"
+          }
+        ],
+        "VpcId": "vpc-0b8acd158b7d588f2"
+      },
+      "ReadOnlyProperties": {
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "NetworkAclAssociationId": "aclassoc-070e664896cfeb8ab",
+        "SubnetId": "subnet-0e3748d472e552acc"
+      },
+      "NativeId": "subnet-0e3748d472e552acc",
+      "Ksuid": "33jxkQ8kAytfMcIJL43hsm73rls"
+    },
+    {
+      "Label": "ml-platform-private-subnet-2",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "SubnetId",
+        "Tags": "Tags",
+        "Fields": [
+          "AssignIpv6AddressOnCreation",
+          "AvailabilityZone",
+          "AvailabilityZoneId",
+          "CidrBlock",
+          "EnableDns64",
+          "EnableLniAtDeviceIndex",
+          "Ipv4IpamPoolId",
+          "Ipv4NetmaskLength",
+          "Ipv6CidrBlock",
+          "Ipv6IpamPoolId",
+          "Ipv6Native",
+          "Ipv6NetmaskLength",
+          "MapPublicIpOnLaunch",
+          "OutpostArn",
+          "PrivateDnsNameOptionsOnLaunch",
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "AssignIpv6AddressOnCreation": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZone": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZoneId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableDns64": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableLniAtDeviceIndex": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6Native": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "MapPublicIpOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "OutpostArn": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateDnsNameOptionsOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-2b",
+        "AvailabilityZoneId": "usw2-az1",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.0.1.0/24",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": false,
+        "NetworkAclAssociationId": "aclassoc-070e664896cfeb8ab",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-071e785c76895db79",
+        "Tags": [
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "PrivateSubnet2"
+          },
+          {
+            "Key": "Name",
+            "Value": "ml-platform-private-subnet-2"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "ml-platform"
+          }
+        ],
+        "VpcId": "vpc-0b8acd158b7d588f2"
+      },
+      "ReadOnlyProperties": {
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "NetworkAclAssociationId": "aclassoc-070e664896cfeb8ab",
+        "SubnetId": "subnet-071e785c76895db79"
+      },
+      "NativeId": "subnet-071e785c76895db79",
+      "Ksuid": "33jxkMtJCMS02oRjM1SU2UHCJPa"
+    },
+    {
+      "Label": "pel-infra-private-b",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "SubnetId",
+        "Tags": "Tags",
+        "Fields": [
+          "AssignIpv6AddressOnCreation",
+          "AvailabilityZone",
+          "AvailabilityZoneId",
+          "CidrBlock",
+          "EnableDns64",
+          "EnableLniAtDeviceIndex",
+          "Ipv4IpamPoolId",
+          "Ipv4NetmaskLength",
+          "Ipv6CidrBlock",
+          "Ipv6IpamPoolId",
+          "Ipv6Native",
+          "Ipv6NetmaskLength",
+          "MapPublicIpOnLaunch",
+          "OutpostArn",
+          "PrivateDnsNameOptionsOnLaunch",
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "AssignIpv6AddressOnCreation": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZone": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZoneId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableDns64": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableLniAtDeviceIndex": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6Native": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "MapPublicIpOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "OutpostArn": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateDnsNameOptionsOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-2b",
+        "AvailabilityZoneId": "usw2-az1",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.1.96.0/19",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": false,
+        "NetworkAclAssociationId": "aclassoc-07fc3fd988179296d",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-09ae9c8cf9a87f440",
+        "Tags": [
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "pel-infra-private-b"
+          },
+          {
+            "Key": "Name",
+            "Value": "pel-infra-private-b"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "pel-infra"
+          }
+        ],
+        "VpcId": "vpc-0b0b9599aff98d83d"
+      },
+      "ReadOnlyProperties": {
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "NetworkAclAssociationId": "aclassoc-07fc3fd988179296d",
+        "SubnetId": "subnet-09ae9c8cf9a87f440"
+      },
+      "NativeId": "subnet-09ae9c8cf9a87f440",
+      "Ksuid": "33jxkMBok3HHxsCrAtdmoyWoHvL"
+    },
+    {
+      "Label": "pel-infra-public-a",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "SubnetId",
+        "Tags": "Tags",
+        "Fields": [
+          "AssignIpv6AddressOnCreation",
+          "AvailabilityZone",
+          "AvailabilityZoneId",
+          "CidrBlock",
+          "EnableDns64",
+          "EnableLniAtDeviceIndex",
+          "Ipv4IpamPoolId",
+          "Ipv4NetmaskLength",
+          "Ipv6CidrBlock",
+          "Ipv6IpamPoolId",
+          "Ipv6Native",
+          "Ipv6NetmaskLength",
+          "MapPublicIpOnLaunch",
+          "OutpostArn",
+          "PrivateDnsNameOptionsOnLaunch",
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "AssignIpv6AddressOnCreation": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZone": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZoneId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableDns64": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableLniAtDeviceIndex": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6Native": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "MapPublicIpOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "OutpostArn": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateDnsNameOptionsOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-2a",
+        "AvailabilityZoneId": "usw2-az2",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.1.0.0/19",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": true,
+        "NetworkAclAssociationId": "aclassoc-07fc3fd988179296d",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-0372eb6e14fab4b04",
+        "Tags": [
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "pel-infra-public-a"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "pel-infra"
+          },
+          {
+            "Key": "Name",
+            "Value": "pel-infra-public-a"
+          }
+        ],
+        "VpcId": "vpc-0b0b9599aff98d83d"
+      },
+      "ReadOnlyProperties": {
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "NetworkAclAssociationId": "aclassoc-07fc3fd988179296d",
+        "SubnetId": "subnet-0372eb6e14fab4b04"
+      },
+      "NativeId": "subnet-0372eb6e14fab4b04",
+      "Ksuid": "33jxkOqLHfrBSRNpvU7zLEHx6xo"
+    },
+    {
+      "Label": "pel-infra-public-b",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "SubnetId",
+        "Tags": "Tags",
+        "Fields": [
+          "AssignIpv6AddressOnCreation",
+          "AvailabilityZone",
+          "AvailabilityZoneId",
+          "CidrBlock",
+          "EnableDns64",
+          "EnableLniAtDeviceIndex",
+          "Ipv4IpamPoolId",
+          "Ipv4NetmaskLength",
+          "Ipv6CidrBlock",
+          "Ipv6IpamPoolId",
+          "Ipv6Native",
+          "Ipv6NetmaskLength",
+          "MapPublicIpOnLaunch",
+          "OutpostArn",
+          "PrivateDnsNameOptionsOnLaunch",
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "AssignIpv6AddressOnCreation": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZone": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZoneId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableDns64": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableLniAtDeviceIndex": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6Native": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "MapPublicIpOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "OutpostArn": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateDnsNameOptionsOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-2b",
+        "AvailabilityZoneId": "usw2-az1",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.1.64.0/19",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": true,
+        "NetworkAclAssociationId": "aclassoc-07fc3fd988179296d",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-0c3bba9d2e474574b",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "pel-infra-public-b"
+          },
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "pel-infra-public-b"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "pel-infra"
+          }
+        ],
+        "VpcId": "vpc-0b0b9599aff98d83d"
+      },
+      "ReadOnlyProperties": {
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "NetworkAclAssociationId": "aclassoc-07fc3fd988179296d",
+        "SubnetId": "subnet-0c3bba9d2e474574b"
+      },
+      "NativeId": "subnet-0c3bba9d2e474574b",
+      "Ksuid": "33jxkSDv9x8qg30auOwkrXGU6Bk"
+    },
+    {
+      "Label": "subnet-025c88d82a9e5348c",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "SubnetId",
+        "Tags": "Tags",
+        "Fields": [
+          "AssignIpv6AddressOnCreation",
+          "AvailabilityZone",
+          "AvailabilityZoneId",
+          "CidrBlock",
+          "EnableDns64",
+          "EnableLniAtDeviceIndex",
+          "Ipv4IpamPoolId",
+          "Ipv4NetmaskLength",
+          "Ipv6CidrBlock",
+          "Ipv6IpamPoolId",
+          "Ipv6Native",
+          "Ipv6NetmaskLength",
+          "MapPublicIpOnLaunch",
+          "OutpostArn",
+          "PrivateDnsNameOptionsOnLaunch",
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "AssignIpv6AddressOnCreation": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZone": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZoneId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableDns64": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableLniAtDeviceIndex": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6Native": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "MapPublicIpOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "OutpostArn": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateDnsNameOptionsOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-2a",
+        "AvailabilityZoneId": "usw2-az2",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.0.1.0/24",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": false,
+        "NetworkAclAssociationId": "aclassoc-05d3e4566ab960933",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-025c88d82a9e5348c",
+        "Tags": [
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "Subnet1"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "res-secret-test"
+          }
+        ],
+        "VpcId": "vpc-0a1b225921496c4c4"
+      },
+      "ReadOnlyProperties": {
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "NetworkAclAssociationId": "aclassoc-05d3e4566ab960933",
+        "SubnetId": "subnet-025c88d82a9e5348c"
+      },
+      "NativeId": "subnet-025c88d82a9e5348c",
+      "Ksuid": "33jxkMqgsGFARoaiEexsWtoS038"
+    },
+    {
+      "Label": "subnet-09960cc04ee35ce46",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "SubnetId",
+        "Tags": "Tags",
+        "Fields": [
+          "AssignIpv6AddressOnCreation",
+          "AvailabilityZone",
+          "AvailabilityZoneId",
+          "CidrBlock",
+          "EnableDns64",
+          "EnableLniAtDeviceIndex",
+          "Ipv4IpamPoolId",
+          "Ipv4NetmaskLength",
+          "Ipv6CidrBlock",
+          "Ipv6IpamPoolId",
+          "Ipv6Native",
+          "Ipv6NetmaskLength",
+          "MapPublicIpOnLaunch",
+          "OutpostArn",
+          "PrivateDnsNameOptionsOnLaunch",
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "AssignIpv6AddressOnCreation": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZone": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "AvailabilityZoneId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableDns64": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnableLniAtDeviceIndex": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv4NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6CidrBlock": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6IpamPoolId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "Ipv6Native": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6NetmaskLength": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": true,
+            "Required": false
+          },
+          "MapPublicIpOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "OutpostArn": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateDnsNameOptionsOnLaunch": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-2b",
+        "AvailabilityZoneId": "usw2-az1",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.0.2.0/24",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": false,
+        "NetworkAclAssociationId": "aclassoc-05d3e4566ab960933",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-09960cc04ee35ce46",
+        "Tags": [
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "Subnet2"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "res-secret-test"
+          }
+        ],
+        "VpcId": "vpc-0a1b225921496c4c4"
+      },
+      "ReadOnlyProperties": {
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "NetworkAclAssociationId": "aclassoc-05d3e4566ab960933",
+        "SubnetId": "subnet-09960cc04ee35ce46"
+      },
+      "NativeId": "subnet-09960cc04ee35ce46",
+      "Ksuid": "33jxkNL2I8Zw9OrJnIxtDGlbv8L"
+    },
+     {
+      "Label": "subnet-03456789",
+      "Type": "AWS::EC2::Subnet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "AssignIpv6AddressOnCreation": false,
+        "AvailabilityZone": "us-west-1c",
+        "AvailabilityZoneId": "usw1-az3",
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "CidrBlock": "10.0.32.0/20",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "MapPublicIpOnLaunch": true,
+        "NetworkAclAssociationId": "aclassoc-01234567",
+        "PrivateDnsNameOptionsOnLaunch": {
+          "EnableResourceNameDnsAAAARecord": false,
+          "EnableResourceNameDnsARecord": false,
+          "HostnameType": "ip-name"
+        },
+        "SubnetId": "subnet-03456789",
+        "VpcId": "vpc-01234567"
+      },
+      "NativeId": "subnet-03456789"
+    }
+  ]
+}

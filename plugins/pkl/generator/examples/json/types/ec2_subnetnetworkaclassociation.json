@@ -1,0 +1,294 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-2",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-2",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "aclassoc-04144f519ea275789",
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "AssociationId",
+        "Tags": "",
+        "Fields": [
+          "NetworkAclId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "NetworkAclId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssociationId": "aclassoc-04144f519ea275789",
+        "NetworkAclId": "acl-010d1e4509c568d40",
+        "SubnetId": "subnet-09ae9c8cf9a87f440"
+      },
+      "ReadOnlyProperties": {
+        "AssociationId": "aclassoc-04144f519ea275789"
+      },
+      "NativeId": "aclassoc-04144f519ea275789",
+      "Ksuid": "33jxmFiwZCzcsO81Ddyz7gZEfnu"
+    },
+    {
+      "Label": "aclassoc-04996b1df3307dfa8",
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "AssociationId",
+        "Tags": "",
+        "Fields": [
+          "NetworkAclId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "NetworkAclId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssociationId": "aclassoc-04996b1df3307dfa8",
+        "NetworkAclId": "acl-00586717644ae5358",
+        "SubnetId": "subnet-0e3748d472e552acc"
+      },
+      "ReadOnlyProperties": {
+        "AssociationId": "aclassoc-04996b1df3307dfa8"
+      },
+      "NativeId": "aclassoc-04996b1df3307dfa8",
+      "Ksuid": "33jxmHeqevTn9vKWsZFiN00Kqv3"
+    },
+    {
+      "Label": "aclassoc-05d3e4566ab960933",
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "AssociationId",
+        "Tags": "",
+        "Fields": [
+          "NetworkAclId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "NetworkAclId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssociationId": "aclassoc-05d3e4566ab960933",
+        "NetworkAclId": "acl-0f73dc7eeefbb519b",
+        "SubnetId": "subnet-025c88d82a9e5348c"
+      },
+      "ReadOnlyProperties": {
+        "AssociationId": "aclassoc-05d3e4566ab960933"
+      },
+      "NativeId": "aclassoc-05d3e4566ab960933",
+      "Ksuid": "33jxmIOltVVowUSXqHmFx9vNDdD"
+    },
+    {
+      "Label": "aclassoc-070e664896cfeb8ab",
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "AssociationId",
+        "Tags": "",
+        "Fields": [
+          "NetworkAclId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "NetworkAclId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssociationId": "aclassoc-070e664896cfeb8ab",
+        "NetworkAclId": "acl-00586717644ae5358",
+        "SubnetId": "subnet-071e785c76895db79"
+      },
+      "ReadOnlyProperties": {
+        "AssociationId": "aclassoc-070e664896cfeb8ab"
+      },
+      "NativeId": "aclassoc-070e664896cfeb8ab",
+      "Ksuid": "33jxmFThHkhBmbVyi6zXTUenh8y"
+    },
+    {
+      "Label": "aclassoc-0711a4755f6aa4204",
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "AssociationId",
+        "Tags": "",
+        "Fields": [
+          "NetworkAclId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "NetworkAclId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssociationId": "aclassoc-0711a4755f6aa4204",
+        "NetworkAclId": "acl-010d1e4509c568d40",
+        "SubnetId": "subnet-0372eb6e14fab4b04"
+      },
+      "ReadOnlyProperties": {
+        "AssociationId": "aclassoc-0711a4755f6aa4204"
+      },
+      "NativeId": "aclassoc-0711a4755f6aa4204",
+      "Ksuid": "33jxmI96LvLSbOxXtvL90Neu1Cj"
+    },
+    {
+      "Label": "aclassoc-07fc3fd988179296d",
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "AssociationId",
+        "Tags": "",
+        "Fields": [
+          "NetworkAclId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "NetworkAclId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssociationId": "aclassoc-07fc3fd988179296d",
+        "NetworkAclId": "acl-010d1e4509c568d40",
+        "SubnetId": "subnet-0c3bba9d2e474574b"
+      },
+      "ReadOnlyProperties": {
+        "AssociationId": "aclassoc-07fc3fd988179296d"
+      },
+      "NativeId": "aclassoc-07fc3fd988179296d",
+      "Ksuid": "33jxmI6cYJFH3dPjfV17DCa7r28"
+    },
+    {
+      "Label": "aclassoc-0f743688b67c0757c",
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "AssociationId",
+        "Tags": "",
+        "Fields": [
+          "NetworkAclId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "NetworkAclId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AssociationId": "aclassoc-0f743688b67c0757c",
+        "NetworkAclId": "acl-0f73dc7eeefbb519b",
+        "SubnetId": "subnet-09960cc04ee35ce46"
+      },
+      "ReadOnlyProperties": {
+        "AssociationId": "aclassoc-0f743688b67c0757c"
+      },
+      "NativeId": "aclassoc-0f743688b67c0757c",
+      "Ksuid": "33jxmG2XAmiwdF1YWLH5S1Be29D"
+    }
+  ]
+}

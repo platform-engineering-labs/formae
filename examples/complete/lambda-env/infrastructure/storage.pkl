@@ -1,0 +1,66 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/s3/bucket.pkl"
+import "@aws/rds/dbinstance.pkl"
+import "@aws/rds/dbsubnetgroup.pkl"
+
+import "./network.pkl"
+import "./security.pkl"
+
+import "../vars.pkl"
+
+function dataBucket(properties: Dynamic?): bucket.Bucket = new bucket.Bucket {
+    label = "DataBucket"
+    stack = vars.stack.res
+    bucketName = properties.name.value + "-data-" + properties.region.value
+    tags {
+        new { key = "Name"; value = properties.name.value + "-data" }
+    }
+}
+
+function deploymentBucket(properties: Dynamic?): bucket.Bucket = new bucket.Bucket {
+    label = "DeploymentBucket"
+    stack = vars.stack.res
+    bucketName = properties.name.value + "-deployment-" + properties.region.value
+    tags {
+        new { key = "Name"; value = properties.name.value + "-deployment" }
+    }
+}
+
+function dbSubnetGroup(properties: Dynamic?): dbsubnetgroup.DBSubnetGroup = new dbsubnetgroup.DBSubnetGroup {
+    label = "DBSubnetGroup"
+    dbSubnetGroupDescription = "Subnet group for RDS database"
+    subnetIds {
+        network.privateSubnets(properties)[0].res.subnetId
+        network.privateSubnets(properties)[1].res.subnetId
+    }
+    tags {
+      new { key = "Name"; value = properties.name.value + "-db-subnet-group" }
+    }
+}
+
+function postgres(properties: Dynamic?): dbinstance.DBInstance = new dbinstance.DBInstance {
+    label = "Database"
+    stack = vars.stack.res
+    dbInstanceIdentifier = properties.name.value + "-db"
+    dbInstanceClass = "db.t3.micro"
+    engine = "postgres"
+    engineVersion = "13"
+    allocatedStorage = 20
+    dbName = "lambdadb"
+    masterUsername = "dbadmin"
+    masterUserPassword = "changeme123!"
+    vpcSecurityGroups {
+        security.securityGroups(properties)[0].res.groupId // DatabaseSecurityGroup
+    }
+    dbSubnetGroupName = dbSubnetGroup(properties).res.dbSubnetGroupName
+    publiclyAccessible = false
+    deletionProtection = false // Prevents destroy when true
+    tags {
+        new { key = "Name"; value = properties.name.value + "-db" }
+    }
+}

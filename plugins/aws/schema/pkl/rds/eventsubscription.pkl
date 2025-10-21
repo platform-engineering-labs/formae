@@ -1,0 +1,41 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.rds.eventsubscription
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::RDS::EventSubscription"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "SubscriptionName"
+    tags = "Tags"
+}
+open class EventSubscription extends formae.Resource {
+
+    @aws.FieldHint
+    enabled: Boolean?
+
+    @aws.FieldHint
+    eventCategories: Listing<String>?
+
+    @aws.FieldHint{createOnly = true}
+    snsTopicArn: String
+
+    @aws.FieldHint
+    sourceIds: (Listing<String|formae.Resolvable>)?
+
+    @aws.FieldHint
+    sourceType: String?
+
+    @aws.FieldHint{createOnly = true}
+    subscriptionName: String?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

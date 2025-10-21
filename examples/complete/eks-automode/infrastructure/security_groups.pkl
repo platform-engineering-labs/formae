@@ -1,0 +1,49 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+
+import "./nvpc.pkl"
+
+import "../vars.pkl"
+
+function securityGroups(properties: Dynamic?): Listing = new Listing {
+    local clusterSg = new securitygroup.SecurityGroup {
+        label = "eks-cluster-sg"
+        groupDescription = "Security group for EKS cluster control plane"
+        vpcId = nvpc.nvpc(properties).res.id
+        tags { new { key = "Name"; value = properties.name.value + "-cluster-sg" } }
+    }
+    clusterSg
+
+    local eksNodeSg =new securitygroup.SecurityGroup {
+        label = "eks-node-sg"
+        groupDescription = "Security group for EKS data plane"
+        vpcId = nvpc.nvpc(properties).res.id
+        tags { new { key = "Name"; value = properties.name.value + "-node-sg" } }
+    }
+
+    eksNodeSg
+
+    new securitygroupingress.SecurityGroupIngress {
+        label = "eks-cluster-sg-ingress"
+        ipProtocol = "tcp"
+        fromPort = 443
+        toPort = 443
+        cidrIp = "0.0.0.0/0"
+        groupId = clusterSg.res.groupId
+    }
+
+   new securitygroupingress.SecurityGroupIngress {
+        label = "eks-node-sg-ingress"
+        ipProtocol = "tcp"
+        fromPort = 0
+        toPort = 65535
+        sourceSecurityGroupId = clusterSg.res.groupId
+        groupId = eksNodeSg.res.groupId
+    }
+}

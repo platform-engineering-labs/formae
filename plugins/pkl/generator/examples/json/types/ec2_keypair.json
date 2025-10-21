@@ -1,0 +1,28 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "deadpool@platformengineeringlabs.com",
+      "Type": "AWS::EC2::KeyPair",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "KeyFingerprint": "9a:48:b9:f3:9b:6e:c4:e6:2e:a9:ac:5f:f1:bd:b7:e7",
+        "KeyName": "deadpool@platformengineeringlabs.com",
+        "KeyPairId": "key-01234567890abcdef",
+        "KeyType": "rsa",
+        "PublicKeyMaterial": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDFakePublicKeyDataHereForTestingPurposes1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyz test-key@example.com\n"
+      },
+      "NativeId": "deadpool@platformengineeringlabs.com"
+    }
+  ]
+}

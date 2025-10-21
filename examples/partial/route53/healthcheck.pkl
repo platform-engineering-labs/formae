@@ -1,0 +1,47 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/route53/healthcheck.pkl"
+
+properties {
+    name = new formae.Prop {
+        flag = "name"
+        default = "example-healthcheck"
+    }
+}
+
+forma {
+    local stack = new formae.Stack {
+        label = "pel-healthcheck"
+        description = "Stack for Route53 Health Check"
+    }
+    stack
+
+    local target = new formae.Target {
+        label = "default-aws-target"
+        config = new aws.Config {
+            region = "us-west-2"
+        }
+    }
+    target
+
+    new healthcheck.HealthCheck {
+        label = "ExampleHealthCheck"
+
+        healthCheckConfig = new {
+            ipAddress = "192.55.1.1"
+            port = 80
+            type = "HTTP"
+            resourcePath = "/example/index.html"
+            fullyQualifiedDomainName = "example.com"
+            requestInterval = 30
+            failureThreshold = 3
+        }
+    }
+}

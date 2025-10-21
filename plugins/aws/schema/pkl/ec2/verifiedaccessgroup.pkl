@@ -1,0 +1,44 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.verifiedaccessgroup
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VerifiedAccessGroup"
+
+@aws.SubResourceHint
+open class SSESpecification extends formae.SubResource {
+    customerManagedKeyEnabled: Boolean?
+    kmsKeyArn: (String|formae.Resolvable)?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "VerifiedAccessGroupId"
+    tags = "Tags"
+}
+open class VerifiedAccessGroup extends formae.Resource {
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    policyDocument: String?
+
+    @aws.FieldHint
+    policyEnabled: Boolean?
+
+    @aws.FieldHint
+    sseSpecification: SSESpecification?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    verifiedAccessInstanceId: String|formae.Resolvable
+}

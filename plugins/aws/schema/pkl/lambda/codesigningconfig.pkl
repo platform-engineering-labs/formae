@@ -1,0 +1,43 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.lambda.codesigningconfig
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::Lambda::CodeSigningConfig"
+
+typealias CodeSigningPoliciesUntrustedArtifactOnDeployment = "Warn"|"Enforce"
+
+@aws.SubResourceHint
+open class AllowedPublishers extends formae.SubResource {
+    signingProfileVersionArns: Listing<String|formae.Resolvable>
+}
+
+@aws.SubResourceHint
+open class CodeSigningPolicies extends formae.SubResource {
+    untrustedArtifactOnDeployment: CodeSigningPoliciesUntrustedArtifactOnDeployment
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "CodeSigningConfigArn"
+    tags = "Tags"
+}
+open class CodeSigningConfig extends formae.Resource {
+    @aws.FieldHint
+    allowedPublishers: AllowedPublishers
+
+    @aws.FieldHint
+    codeSigningPolicies: CodeSigningPolicies?
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

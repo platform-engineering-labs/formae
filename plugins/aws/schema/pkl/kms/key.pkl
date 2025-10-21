@@ -1,0 +1,79 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.kms.key
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::KMS::Key"
+
+typealias KeySpec = "SYMMETRIC_DEFAULT"|"RSA_2048"|"RSA_3072"|"RSA_4096"|"ECC_NIST_P256"|"ECC_NIST_P384"|"ECC_NIST_P521"|"ECC_SECG_P256K1"|"HMAC_224"|"HMAC_256"|"HMAC_384"|"HMAC_512"|"SM2"
+
+typealias KeyUsage = "ENCRYPT_DECRYPT"|"SIGN_VERIFY"|"GENERATE_VERIFY_MAC"|"KEY_AGREEMENT"
+
+typealias Origin = "AWS_KMS"|"EXTERNAL"
+
+open class KeyResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden arn: KeyResolvable = (this) {
+        property = "Arn"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+    discoverable = false
+    extractable = false
+}
+open class Key extends formae.Resource {
+
+    @aws.FieldHint{writeOnly = true}
+    bypassPolicyLockoutSafetyCheck: Boolean?
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    enableKeyRotation: Boolean?
+
+    @aws.FieldHint
+    enabled: Boolean?
+
+    @aws.FieldHint
+    keyPolicy: Dynamic?
+
+    @aws.FieldHint{createOnly = true}
+    keySpec: KeySpec?
+
+    @aws.FieldHint{createOnly = true}
+    keyUsage: KeyUsage?
+
+    @aws.FieldHint{createOnly = true}
+    multiRegion: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    origin: Origin?
+
+    @aws.FieldHint{writeOnly = true}
+    pendingWindowInDays: Int?
+
+    @aws.FieldHint{writeOnly = true}
+    rotationPeriodInDays: Int?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    hidden parent = this
+
+    hidden res: KeyResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

@@ -1,0 +1,163 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.elasticloadbalancingv2.listenerrule
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ElasticLoadBalancingV2::ListenerRule"
+
+@aws.SubResourceHint
+open class Action extends formae.SubResource {
+    authenticateCognitoConfig: AuthenticateCognitoConfig?
+    authenticateOidcConfig: AuthenticateOidcConfig?
+    fixedResponseConfig: FixedResponseConfig?
+    forwardConfig: ForwardConfig?
+    order: Int?
+    redirectConfig: RedirectConfig?
+    targetGroupArn: (String|formae.Resolvable)?
+    type: String
+}
+
+@aws.SubResourceHint
+open class AuthenticateCognitoConfig extends formae.SubResource {
+    authenticationRequestExtraParams: Mapping<String, Any>?
+    onUnauthenticatedRequest: String?
+    scope: String?
+    sessionCookieName: String?
+    sessionTimeout: Int?
+    userPoolArn: String
+    userPoolClientId: String
+    userPoolDomain: String
+}
+
+@aws.SubResourceHint
+open class AuthenticateOidcConfig extends formae.SubResource {
+    authenticationRequestExtraParams: Mapping<String, Any>?
+    authorizationEndpoint: String
+    clientId: String
+    @aws.FieldHint{writeOnly = true}
+    clientSecret: String?
+    issuer: String
+    onUnauthenticatedRequest: String?
+    scope: String?
+    sessionCookieName: String?
+    sessionTimeout: Int?
+    tokenEndpoint: String
+    useExistingClientSecret: Boolean?
+    userInfoEndpoint: String
+}
+
+@aws.SubResourceHint
+open class FixedResponseConfig extends formae.SubResource {
+    contentType: String?
+    messageBody: String?
+    statusCode: String
+}
+
+@aws.SubResourceHint
+open class ForwardConfig extends formae.SubResource {
+    targetGroupStickinessConfig: TargetGroupStickinessConfig?
+    targetGroups: Listing<TargetGroupTuple>?
+}
+
+@aws.SubResourceHint
+open class HostHeaderConfig extends formae.SubResource {
+    values: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class HttpHeaderConfig extends formae.SubResource {
+    httpHeaderName: String?
+    values: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class HttpRequestMethodConfig extends formae.SubResource {
+    values: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class PathPatternConfig extends formae.SubResource {
+    values: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class QueryStringConfig extends formae.SubResource {
+    values: Listing<QueryStringKeyValue>?
+}
+
+@aws.SubResourceHint
+open class QueryStringKeyValue extends formae.SubResource {
+    key: String?
+    value: String?
+}
+
+
+@aws.SubResourceHint
+open class RedirectConfig extends formae.SubResource {
+    host: String?
+    path: String?
+    port: String?
+    protocol: String?
+    query: String?
+    statusCode: String
+}
+
+@aws.SubResourceHint
+open class Condition extends formae.SubResource {
+    field: String?
+    hostHeaderConfig: HostHeaderConfig?
+    httpHeaderConfig: HttpHeaderConfig?
+    httpRequestMethodConfig: HttpRequestMethodConfig?
+    pathPatternConfig: PathPatternConfig?
+    queryStringConfig: QueryStringConfig?
+    sourceIpConfig: SourceIpConfig?
+    values: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class SourceIpConfig extends formae.SubResource {
+    values: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class TargetGroupStickinessConfig extends formae.SubResource {
+    durationSeconds: Int?
+    enabled: Boolean?
+}
+
+@aws.SubResourceHint
+open class TargetGroupTuple extends formae.SubResource {
+    targetGroupArn: (String|formae.Resolvable)?
+    weight: Int?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "RuleArn"
+    parent = "AWS::ElasticLoadBalancingV2::Listener"
+    listParam = new formae.ListProperty { parentProperty = "ListenerArn" listParameter = "ListenerArn" }
+    discoverable = false
+}
+open class ListenerRule extends formae.Resource {
+
+    @aws.FieldHint
+    actions: Listing<Action>
+
+    @aws.FieldHint
+    conditions: Listing<Condition>
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    listenerArn: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    priority: Int
+}

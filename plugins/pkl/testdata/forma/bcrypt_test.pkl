@@ -1,0 +1,32 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/debug/debug.pkl"
+import "@formae/ext/bcrypt.pkl"
+import "@aws/aws.pkl"
+
+forma {
+  new formae.Stack {
+    label = "pel-bcrypt"
+    description = "Stack for PEL hashes"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  when (formae.cmd() == "eval") {
+    new debug.Consumer {
+      label = "my-consumer"
+      value = bcrypt.hashPassword("mySecretPass")
+    }
+  }
+}

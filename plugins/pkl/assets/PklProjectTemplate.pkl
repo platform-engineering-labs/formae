@@ -1,0 +1,37 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "pkl:semver"
+
+local class Pkg {
+  plugin: String
+  name: String
+  version: semver.Version
+
+  function uri(): String = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(name)@\(version.toString())"
+}
+
+local packages = read("prop:packages").split(",").map((p) -> new Pkg {
+  plugin = p.split(".")[0]
+  name = p.split(".")[1].split("@")[0]
+  version = semver.Version(p.split("@")[1])
+})
+
+dependencies {
+  for (pkg in packages) {
+    [pkg.name] {
+      uri = pkg.uri()
+    }
+  }
+}
+
+output {
+  text = """
+    amends "pkl:Project"
+
+    \(new PcfRenderer {}.renderDocument(module))
+    """
+}

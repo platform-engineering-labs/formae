@@ -1,0 +1,128 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.apigateway.method
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ApiGateway::Method"
+
+typealias IntegrationConnectionType = "INTERNET"|"VPC_LINK"
+
+typealias IntegrationContentHandling = "CONVERT_TO_BINARY"|"CONVERT_TO_TEXT"
+
+typealias IntegrationPassthroughBehavior = "WHEN_NO_MATCH"|"WHEN_NO_TEMPLATES"|"NEVER"
+
+typealias IntegrationType = "AWS"|"AWS_PROXY"|"HTTP"|"HTTP_PROXY"|"MOCK"
+
+typealias IntegrationResponseContentHandling = "CONVERT_TO_BINARY"|"CONVERT_TO_TEXT"
+
+@aws.SubResourceHint
+open class Integration extends formae.SubResource {
+    cacheKeyParameters: Listing<String>?
+    cacheNamespace: String?
+    connectionId: String?
+    connectionType: IntegrationConnectionType?
+    contentHandling: IntegrationContentHandling?
+    credentials: String?
+    integrationHttpMethod: String?
+    integrationResponses: Listing<MethodIntegrationResponse>?
+    passthroughBehavior: IntegrationPassthroughBehavior?
+    requestParameters: Mapping<String, Any>?
+    requestTemplates: Mapping<String, Any>?
+    timeoutInMillis: Int?
+    type: IntegrationType
+
+    // For Lambda integrations - the handler will convert this to Uri
+    lambdaFunctionArn: (String|formae.Resolvable)?
+
+    // For non-Lambda integrations
+    uri: String?
+}
+
+@aws.SubResourceHint
+open class MethodIntegrationResponse extends formae.SubResource {
+    contentHandling: IntegrationResponseContentHandling?
+    responseParameters: Mapping<String, Any>?
+    responseTemplates: Mapping<String, Any>?
+    selectionPattern: String?
+    statusCode: String
+}
+
+@aws.SubResourceHint
+open class MethodResponse extends formae.SubResource {
+    responseModels: Mapping<String, Any>?
+    responseParameters: Mapping<String, Any>?
+    statusCode: String
+}
+
+open class MethodResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: MethodResolvable = (this) {
+        property = "ResourceId"
+    }
+
+    hidden resourceId: MethodResolvable = (this) {
+        property = "ResourceId"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "ResourceId" //identifier = "RestApiId|ResourceId|HttpMethod"
+    tags = ""
+    discoverable = false
+}
+open class Method extends formae.Resource {
+
+    @aws.FieldHint
+    apiKeyRequired: Boolean?
+
+    @aws.FieldHint
+    authorizationScopes: Listing<String>?
+
+    @aws.FieldHint
+    authorizationType: String?
+
+    @aws.FieldHint
+    authorizerId: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    httpMethod: String
+
+    @aws.FieldHint
+    integration: Integration?
+
+    @aws.FieldHint
+    methodResponses: Listing<MethodResponse>?
+
+    @aws.FieldHint
+    operationName: String?
+
+    @aws.FieldHint
+    requestModels: Mapping<String, Any>?
+
+    @aws.FieldHint
+    requestParameters: Mapping<String, Any>?
+
+    @aws.FieldHint
+    requestValidatorId: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    resourceId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    restApiId: String|formae.Resolvable
+
+    local parent = this
+
+    hidden res: MethodResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

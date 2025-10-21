@@ -1,0 +1,32 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module generator
+
+amends "pkl:test"
+import "../gen.pkl" as t
+
+
+local class Foo {
+    x: Int
+}
+
+
+local dynamic: Dynamic = new Dynamic {
+   x = 1
+}
+
+examples {
+    ["Basic Class"] {
+        t.apply(Foo, dynamic).toDynamic()
+    }
+}
+
+facts {
+    ["Basic Class"]  {
+        new Foo { x = 1 } == new Foo { x = 1 }
+    }
+}

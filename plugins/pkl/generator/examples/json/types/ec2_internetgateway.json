@@ -1,0 +1,24 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "igw-123456",
+      "Type": "AWS::EC2::InternetGateway",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "InternetGatewayId": "igw-123456"
+      },
+      "NativeId": "igw-123456"
+    }
+  ]
+}

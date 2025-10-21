@@ -1,0 +1,33 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.route53.keysigningkey
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::Route53::KeySigningKey"
+
+typealias KeyStatus = "ACTIVE"|"INACTIVE"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+}
+open class KeySigningKey extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    hostedZoneId: String(matches(Regex(#"^[A-Z0-9]{1,32}$"#)))|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    keyManagementServiceArn: String
+
+    @aws.FieldHint{createOnly = true}
+    name: String(matches(Regex(#"^[a-zA-Z0-9_]{3,128}$"#)))
+
+    @aws.FieldHint
+    status: KeyStatus
+}

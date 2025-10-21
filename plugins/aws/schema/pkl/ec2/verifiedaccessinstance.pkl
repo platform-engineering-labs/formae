@@ -1,0 +1,56 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.verifiedaccessinstance
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VerifiedAccessInstance"
+
+@aws.SubResourceHint
+open class LoggingConfiguration extends formae.SubResource {
+    cloudWatchLogs: Dynamic?
+    includeTrustContext: Boolean?
+    kinesisDataFirehose: Dynamic?
+    logVersion: String?
+    s3: Dynamic?
+}
+
+@aws.SubResourceHint
+open class VerifiedAccessTrustProvider extends formae.SubResource {
+    description: String?
+    deviceTrustProviderType: String?
+    trustProviderType: String?
+    userTrustProviderType: String?
+    verifiedAccessTrustProviderId: (String|formae.Resolvable)?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "VerifiedAccessInstanceId"
+    tags = "Tags"
+}
+open class VerifiedAccessInstance extends formae.Resource {
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    fipsEnabled: Boolean?
+
+    @aws.FieldHint
+    loggingConfigurations: LoggingConfiguration?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    verifiedAccessTrustProviderIds: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    verifiedAccessTrustProviders: Listing<VerifiedAccessTrustProvider>?
+}

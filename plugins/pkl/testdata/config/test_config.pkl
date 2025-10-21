@@ -1,0 +1,76 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "formae:/Config.pkl"
+
+agent {
+    server {
+        nodename = "formae"
+        hostname = "formae.example.com"
+        port = 1234
+        secret = "secret"
+    }
+    datastore {
+        datastoreType = "sqlite"
+        sqlite {
+            filePath = "formae.db"
+        }
+
+        postgres {
+            host = "db.example.com"
+            port = 5432
+            user = "formae_user"
+            password = "formae_password"
+            database = "formae_db"
+            schema = "public"
+            connectionParams = ""
+        }
+    }
+    retry {
+        statusCheckInterval = 5.s
+        maxRetries = 3
+        retryDelay = 9.s
+    }
+    synchronization {
+        enabled = false
+        interval = 10.min
+    }
+    discovery {
+        enabled = true
+        scanTargets = new Listing<Target> {
+            new {
+                label = "default-aws-target"
+                config {
+                    type = "AWS"
+                    region = "us-east-1"
+                }
+            }
+            new {
+                label = "aws-target"
+                config {
+                    type = "AWS"
+                    region = "us-west-2"
+                }
+            }
+        }
+        labelTagKeys = new Listing<String> {
+            "Name"
+            "Environment"
+        }
+        interval = 20.min
+    }
+    logging {
+        filePath = "/var/log/formae.log"
+    }
+}
+
+plugins {
+    network {
+        type = "tailscale"
+        tls = false
+        authKey = "someAuthKey"
+    }
+}

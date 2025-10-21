@@ -1,0 +1,714 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "This API allows you to programatically interact with Formae without the CLI.",
+        "title": "Formae REST API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api/v1",
+    "paths": {
+        "/admin/discover": {
+            "post": {
+                "description": "Initiates an immediate discovery process to identify resources in the infrastructure.",
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Force resource discovery",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/synchronize": {
+            "post": {
+                "description": "Triggers an immediate synchronization of the resource state with the actual infrastructure.",
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Force resource synchronization",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/command/{id}/status": {
+            "get": {
+                "description": "Retrieves the status of a previously submitted Forma command using its ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "commands"
+                ],
+                "summary": "Get the status of a Forma command",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Unique identifier for the client.",
+                        "name": "Client-ID",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The ID of the command.",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: The command's execution status.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ListCommandStatusResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request: Missing or invalid parameters.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/commands": {
+            "post": {
+                "description": "Submits a Forma command to the agent. The command is executed asynchronously.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "commands"
+                ],
+                "summary": "Submit a Forma command",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Unique identifier for the client.",
+                        "name": "Client-ID",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The command to execute, either apply or destroy.",
+                        "name": "command",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only applies to the apply command. The desired command mode, either reconcile or patch.",
+                        "name": "mode",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "If true, simulates command execution without actual changes to the infrastructure (defaults to false).",
+                        "name": "simulate",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only applies to the apply command in reconcile mode. If true, any changes made to the infrastructure since the last reconcile, either by patches or outside of Formae, will be overwritten.",
+                        "name": "force",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only applies to destroy commands. A query string to select the resources to be destroyed.",
+                        "name": "query",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "file",
+                        "description": "A valid Forma file.",
+                        "name": "file",
+                        "in": "formData"
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted: The command is validated and stored and queued for execution.",
+                        "schema": {
+                            "$ref": "#/definitions/model.SubmitCommandResponse"
+                        },
+                        "headers": {
+                            "string Location": {
+                                "type": "string",
+                                "description": "The URL to poll for the command's execution status (e.g., /api/v1/commands/{command_id}/status)."
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/commands/status": {
+            "get": {
+                "description": "Retrieves the statuses of multiple Forma commands based on a query string.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "commands"
+                ],
+                "summary": "Get the status of multiple Forma commands",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Unique identifier for the client.",
+                        "name": "Client-ID",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The query string to select the commands. If empty, retrieves the status of the most recent command.",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "The maximum number of command statuses to return (default is 10).",
+                        "name": "max_results",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: The commands' execution statuses.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ListCommandStatusResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request: Missing or invalid parameters.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "A simple health check endpoint to verify that the API server is running.",
+                "tags": [
+                    "health"
+                ],
+                "summary": "Health Check",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/resources": {
+            "get": {
+                "description": "Extracts and lists resources based on a provided query string.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "resources"
+                ],
+                "summary": "List resources",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Unique identifier for the client.",
+                        "name": "Client-ID",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The query string to select the resources.",
+                        "name": "query",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": ": OK: The extracted resources.",
+                        "schema": {
+                            "$ref": "#/definitions/model.Forma"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request: Invalid query.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No resources found matching the query.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "406": {
+                        "description": "Not Acceptable: The request is not supported.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats": {
+            "get": {
+                "description": "Retrieves usage statistics of the Formae agent.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stats"
+                ],
+                "summary": "Get usage statistics",
+                "responses": {
+                    "200": {
+                        "description": ": OK: The usage statistics.",
+                        "schema": {
+                            "$ref": "#/definitions/model.Stats"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "github_com_platform-engineering-labs_formae_internal_api_model.Command": {
+            "type": "object",
+            "properties": {
+                "Command": {
+                    "type": "string"
+                },
+                "CommandId": {
+                    "type": "string"
+                },
+                "EndTs": {
+                    "type": "string"
+                },
+                "ResourceUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResourceUpdate"
+                    }
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_platform-engineering-labs_formae_internal_api_model.Description": {
+            "type": "object",
+            "properties": {
+                "Confirm": {
+                    "type": "boolean"
+                },
+                "Text": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_platform-engineering-labs_formae_pkg_model.Description": {
+            "type": "object",
+            "properties": {
+                "Confirm": {
+                    "type": "boolean"
+                },
+                "Text": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.FieldHint": {
+            "type": "object",
+            "properties": {
+                "createOnly": {
+                    "type": "boolean"
+                },
+                "persist": {
+                    "type": "boolean"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "requiredOnCreate": {
+                    "type": "boolean"
+                },
+                "writeOnly": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "model.Forma": {
+            "type": "object",
+            "properties": {
+                "Description": {
+                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description"
+                },
+                "Properties": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/model.Prop"
+                    }
+                },
+                "Resources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Resource"
+                    }
+                },
+                "Stacks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Stack"
+                    }
+                },
+                "Targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Target"
+                    }
+                }
+            }
+        },
+        "model.ListCommandStatusResponse": {
+            "type": "object",
+            "properties": {
+                "Commands": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command"
+                    }
+                }
+            }
+        },
+        "model.Prop": {
+            "type": "object",
+            "properties": {
+                "Default": {},
+                "Flag": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                },
+                "Value": {}
+            }
+        },
+        "model.Resource": {
+            "type": "object",
+            "properties": {
+                "Group": {
+                    "type": "string"
+                },
+                "Ksuid": {
+                    "type": "string"
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "Managed": {
+                    "description": "Whether the resource is managed by Formae or not",
+                    "type": "boolean"
+                },
+                "NativeID": {
+                    "type": "string"
+                },
+                "PatchDocument": {
+                    "description": "Need this for CLI patch display",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Properties": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "ReadOnlyProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Schema": {
+                    "$ref": "#/definitions/model.Schema"
+                },
+                "Stack": {
+                    "type": "string"
+                },
+                "Target": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.ResourceUpdate": {
+            "type": "object",
+            "properties": {
+                "CurrentAttempt": {
+                    "type": "integer"
+                },
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "GroupId": {
+                    "type": "string"
+                },
+                "MaxAttempts": {
+                    "type": "integer"
+                },
+                "OldProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "OldStackName": {
+                    "type": "string"
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "PatchDocument": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Properties": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "ReferenceLabels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "ResourceId": {
+                    "type": "string"
+                },
+                "ResourceLabel": {
+                    "type": "string"
+                },
+                "ResourceType": {
+                    "type": "string"
+                },
+                "StackName": {
+                    "type": "string"
+                },
+                "State": {
+                    "type": "string"
+                },
+                "StateMessage": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.Schema": {
+            "type": "object",
+            "properties": {
+                "discoverable": {
+                    "type": "boolean"
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "hints": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/model.FieldHint"
+                    }
+                },
+                "identifier": {
+                    "type": "string"
+                },
+                "nonprovisionable": {
+                    "type": "boolean"
+                },
+                "tags": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.Simulation": {
+            "type": "object",
+            "properties": {
+                "ChangesRequired": {
+                    "type": "boolean"
+                },
+                "Command": {
+                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command"
+                }
+            }
+        },
+        "model.Stack": {
+            "type": "object",
+            "properties": {
+                "Description": {
+                    "type": "string"
+                },
+                "Label": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.Stats": {
+            "type": "object",
+            "properties": {
+                "AgentId": {
+                    "type": "string"
+                },
+                "Clients": {
+                    "type": "integer"
+                },
+                "Commands": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "ResourceErrors": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "ResourceTypes": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "Resources": {
+                    "type": "integer"
+                },
+                "Stacks": {
+                    "type": "integer"
+                },
+                "States": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "Targets": {
+                    "type": "integer"
+                },
+                "UnmanagedResources": {
+                    "type": "integer"
+                },
+                "Version": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.SubmitCommandResponse": {
+            "type": "object",
+            "properties": {
+                "CommandId": {
+                    "type": "string"
+                },
+                "Description": {
+                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Description"
+                },
+                "Simulation": {
+                    "$ref": "#/definitions/model.Simulation"
+                }
+            }
+        },
+        "model.Target": {
+            "type": "object",
+            "properties": {
+                "Config": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "Namespace": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

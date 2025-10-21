@@ -1,0 +1,83 @@
+{
+  "Label": "StaticWebsiteHostedZone",
+  "Type": "AWS::Route53::HostedZone",
+  "Stack": "static-website-stack",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "HostedZoneTags",
+    "Fields": [
+      "HostedZoneConfig",
+      "Name",
+      "QueryLoggingConfig",
+      "HostedZoneTags",
+      "VPCs"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "HostedZoneConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HostedZoneTags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Name": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "QueryLoggingConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VPCs": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "HostedZoneConfig": {},
+    "HostedZoneTags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "StaticWebsiteHostedZone"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "static-website-stack"
+      }
+    ],
+    "Name": "test.platform.engineering.",
+    "VPCs": []
+  },
+  "ReadOnlyProperties": {
+    "Id": "Z024628284WFBI5TNEVW",
+    "NameServers": [
+      "ns-1478.awsdns-56.org",
+      "ns-991.awsdns-59.net",
+      "ns-172.awsdns-21.com",
+      "ns-1578.awsdns-05.co.uk"
+    ]
+  },
+  "NativeID": "Z024628284WFBI5TNEVW",
+  "Managed": true,
+  "Ksuid": "34OGKlWNguz3Wrre3yvLXwq0PTU"
+}

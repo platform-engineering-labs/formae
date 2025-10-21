@@ -1,0 +1,769 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module generator
+
+import "pkl:json"
+import "pkl:reflect"
+import "@formae/formae.pkl"
+import "./resolvables.pkl"
+import "./jsonhelper.pkl"
+
+class GenerationFailure {
+  message: String
+}
+
+function Fail(_message: String): GenerationFailure = new {
+  message = _message
+}
+
+hidden const importPlaceholder = "_import.placeholder_"
+
+function Unexpected(expected: String, actual: String): GenerationFailure =
+  Fail(#"Expected "\#(expected)" but got "\#(actual)""#)
+
+hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|GenerationFailure> = new {
+  [Int] = (_, value) ->
+    if (value is Int) value
+    else if (value is String)
+      // Try to parse string as integer
+      let (parsed = value.toIntOrNull())
+        if (parsed != null) parsed
+        else Unexpected("Int", "String('\(value)') that cannot be parsed as Int")
+    else Unexpected("Int", value.getClass().simpleName)
+
+  [String] = (_, value) ->
+    if (value is String) value.replaceAll("\"", "\\\"")
+    else if (value is Int || value is Number) value.toString()
+    else Unexpected("String", value.getClass().simpleName)
+
+  [Boolean] = (_, value) ->
+    if (value is Boolean) value
+    else if (value is String)
+      if (value == "true") true
+      else if (value == "false") false
+      else Unexpected("Boolean", "String('\(value)') that cannot be parsed as Boolean")
+    else Unexpected("Boolean", value.getClass().simpleName)
+
+  [Listing] = (typeArguments, value) ->
+    if (value is Dynamic|Collection|Listing)
+      applyListing(typeArguments.firstOrNull ?? reflect.unknownType, value.toList())
+    else
+      Unexpected("Dynamic|Collection|Listing", value.getClass().simpleName)
+
+  [List] = (typeArguments, value) ->
+    if (value is Dynamic|Collection)
+      applyList(typeArguments.firstOrNull ?? reflect.unknownType, value)
+    else
+      Unexpected("Dynamic|Collection", value.getClass().simpleName)
+
+  [Number] = (_, value) ->
+    if (value is Number) value
+    else if (value is String)
+      let (parsed = value.toFloatOrNull())
+        if (parsed != null) parsed
+        else Unexpected("Number", "String('\(value)') that cannot be parsed as Number")
+    else Unexpected("Number", value.getClass().simpleName)
+
+  [Duration] = (_, value) ->
+    if (value is Duration)
+      value
+    else if (value is Int)
+      value.toDuration("s")
+    else if (value is String)
+      let (parsed = value.toIntOrNull())
+        if (parsed != null) parsed.toDuration("s")
+        else Unexpected("Duration|Int", "String('\(value)') that cannot be parsed as Duration")
+    else
+      Unexpected("Duration|Int|String", value.getClass().simpleName)
+
+  [DataSize] = (_, value) ->
+    if (value is DataSize)
+      value
+    else if (value is Int)
+      value.toDataSize("b")
+    else if (value is String)
+      let (parsed = value.toIntOrNull())
+        if (parsed != null) parsed.toDataSize("b")
+        else Unexpected("DataSize|Int", "String('\(value)') that cannot be parsed as DataSize")
+    else
+      Unexpected("DataSize|Int|String", value.getClass().simpleName)
+
+
+  [Dynamic] = (_, value) ->
+    // Dynamic can accept any value - just pass it through
+    if (value is String)
+      parseJsonString(value)
+    else
+      value
+
+  [Mapping] = (typeArguments, value) ->
+    // Map handler similar to Mapping but returns a Map
+    if (value is Dynamic|Mapping|Map)
+      let (keyType = typeArguments.getOrNull(0) ?? reflect.unknownType)
+      let (valueType = typeArguments.getOrNull(1) ?? reflect.unknownType)
+      let (sourceMap = value.toMap())
+        sourceMap.fold(Map(), (acc: Map, key: String, val: Any) ->
+          let (convertedKey =
+            if (keyType.getClass().simpleName == "DeclaredType" &&
+                (keyType as reflect.DeclaredType).referent.reflectee == String)
+              key
+            else
+              applyType(keyType, key)
+          )
+          let (convertedValue = applyType(valueType, val))
+            if (convertedKey is GenerationFailure || convertedValue is GenerationFailure)
+              acc  // Skip problematic entries
+            else
+              acc.put(convertedKey, convertedValue)
+        ).toMapping()
+    else
+      Unexpected("Dynamic|Mapping|Map", value.getClass().simpleName)
+  [Any] = (_, value) -> value
+}
+
+
+local function applyListing(type: reflect.Type, value: Dynamic|Collection): Listing|GenerationFailure =
+  applyList(type, value).toListing()
+
+
+local function applyList(type: reflect.Type, value: Dynamic|Collection): List|GenerationFailure =
+  value.toList().foldIndexed(List(), (idx: Int, acc: List|GenerationFailure, v) -> if (acc is GenerationFailure) acc else
+    let (_v = applyType(type, v))
+      if (_v is GenerationFailure) _v.appendIndex(idx) else
+        acc.add(_v)
+  )
+
+hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|GenerationFailure> = new Mapping {
+  [reflect.NullableType] = (type, value) ->
+    if (value == null) null else applyType((type as reflect.NullableType).member, value)
+
+  [reflect.DeclaredType] = (type, value) ->
+    let(_type = type as reflect.DeclaredType)
+      let (reflectee = _type.referent.reflectee)
+          if (reflectee is Class)
+            applyClass(reflect.Class(reflectee), _type.typeArguments, value)
+          else
+            // if it is not a class then usually it is a type alias
+            applyType(reflect.TypeAlias(reflectee).referent, value)
+
+
+  [reflect.StringLiteralType] = (type, value) ->
+      let (expected = (type as reflect.StringLiteralType).value)
+        if (value is String)
+          if (value == expected)
+            value
+          else
+            Unexpected(expected, value)
+        else
+          Unexpected(expected, value.getClass().simpleName)
+
+   [reflect.UnionType] = (type, value) ->
+    (type as reflect.UnionType).members.fold(
+      Fail("No member of union type matched value '\(value)' \(type)"),
+      (acc, _type) ->
+        if (acc is GenerationFailure)
+          let (attempt = applyType(_type, value))
+            if (attempt is GenerationFailure) acc else attempt
+        else
+          acc
+    )
+
+    [reflect.UnknownType] = (_, value) ->
+      value
+  }
+
+
+function apply(type: Class|TypeAlias, value: Any): Any =
+    let (result = attemptApply(type, value))
+
+    if (result is GenerationFailure) throw(result.message) else result
+
+
+function attemptApply(type: Class|TypeAlias, value: Any): Any|GenerationFailure =
+  if(type is Class)
+    applyClass(reflect.Class(type), List(), value)
+  else
+    applyType(reflect.TypeAlias(type).referent, value)
+
+
+local function applyClass(type: reflect.Class, typeArguments: List<reflect.Type>, value: Any): Any =
+  let (clazz = type.reflectee)
+  if (classHandlers.containsKey(clazz))
+    classHandlers[clazz].apply(typeArguments, value)
+  else if (type.isSubclassOf(reflect.Class(Typed)))
+    applyTyped(type, value)
+  else if (type is Dynamic)
+    Fail("type is Dynamic")
+  else
+    Fail("applyClass - Unsupported class: \(clazz.simpleName) for type: \(type) and value: \(value)")
+
+
+local function applyTyped(type: reflect.Class, value: Any): Typed|GenerationFailure|Any =
+  if (value is Dynamic|Mapping) applyDynamicOrMapping(type, value)
+  else if (value is Typed && value.getClass() == type.reflectee) value
+  else Fail("applyTyped - Expected \(type.name), got \(value.getClass().simpleName)")
+
+
+hidden keyTransform: Function1<reflect.Property, String>?
+
+function applyProperty(valueAsMap: Map, prop: reflect.Property) =
+  //let (propName = keyTransform?.ifNonNull((it) -> (it as Function1<reflect.Property, String>).apply(prop)) ?? "nico \(prop.name)")
+  //  if (valueAsMap.containsKey(propName)) applyType(prop.type, valueAsMap[propName])
+  //  else if (!(prop.type is reflect.NullableType) && prop.defaultValue != null) (prop.defaultValue)
+  //  else null
+  if (valueAsMap.containsKey(prop.name)) applyType(prop.type, valueAsMap[prop.name])
+  else if (prop.defaultValue != null) prop.defaultValue
+  else null
+
+
+class FakeValue extends formae.Value {
+  FakeValue: String = value
+  FakeVisibility: String = visibility
+  FakeStrategy: String = strategy
+
+  value = FakeValue
+  visibility = FakeVisibility
+  strategy = FakeStrategy
+}
+
+class FakeResolvable extends formae.Resolvable {
+  FakeLabel: String = label
+  FakeStack: String = stack
+  FakeType: String
+  RealValue: String
+  FakeProperty: String
+}
+
+function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, reverseMapping: Mapping<String, String>) =
+    // First try the direct property name
+    if (valueAsMap.containsKey(prop.name))
+        applyType(prop.type, valueAsMap[prop.name])
+    else
+        // Look for the property using reverse mapping
+        let(reverseMap = reverseMapping.toMap())
+        let(matchingEntry = reverseMap.fold(null, (acc, jsonKey, pklKey) ->
+            if (acc != null)
+                acc
+            else if (pklKey == prop.name)
+                jsonKey
+            else
+                null
+        ))
+        if (matchingEntry != null && valueAsMap.containsKey(matchingEntry))
+            applyType(prop.type, valueAsMap[matchingEntry])
+        else if (prop.defaultValue != null)
+            prop.defaultValue
+        else
+            null
+
+function getResolvablePropertyMapping(typeName: String): Map<String, String> =
+    if (resolvables.MapResolvableResourceUri().containsKey(typeName))
+        let (resolvableInfo = resolvables.MapResolvableResourceUri()[typeName])
+        let (resolvableClass = reflect.Class(resolvableInfo.clazz))
+        resolvableClass.properties
+            .filter((name, prop) ->
+                // Filter for hidden resolvable properties (exclude base properties)
+                prop.modifiers.contains("hidden") &&
+                prop.type.toString().contains("Resolvable") &&
+                name != "type"  // Exclude the type property
+            )
+            .map((name, prop) ->
+                // Use defaultValue to get the property value (like "DBParameterGroupName")
+                let (propertyValue = prop.defaultValue)
+                if (propertyValue != null)
+                    Pair(propertyValue.$property, name)  // Map "DBParameterGroupName" -> "dbParameterGroupName"
+                else
+                    null
+            )
+            .toMap()
+    else
+        Map()
+
+local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping): Typed|GenerationFailure|Any =
+    let (valueAsMap = value.toMap())
+    if (valueAsMap.containsKey("$res"))
+        let (res = valueAsMap.getOrNull("$res"))
+        let (s = "\(valueAsMap.getOrNull("$stack")).label")
+        let (l = valueAsMap.getOrNull("$label"))
+        let (refType = valueAsMap.getOrNull("$type"))
+        let (typeName = valueAsMap.getOrNull("$type"))
+        let (property = valueAsMap.getOrNull("$property"))
+        let (resolvableMapping = getResolvablePropertyMapping(typeName))
+        let (mappedProperty =
+            if (property != null && resolvableMapping.containsKey(property))
+                resolvableMapping[property]
+            else if (property != null)
+               // This should not happen
+               property
+            else
+                null
+        )
+        let (r = new FakeResolvable {
+            stack = s
+            label = l
+            RealValue = valueAsMap.getOrNull("$value")
+            type = refType
+            FakeType = typeName
+            FakeProperty = mappedProperty
+        })
+
+        r
+    else if (valueAsMap.containsKey("$value") && valueAsMap.containsKey("$visibility") && valueAsMap.containsKey("$strategy"))
+
+        let (fakeValue = valueAsMap.getOrNull("$value"))
+        let (visibility = valueAsMap.getOrNull("$visibility"))
+        let (strategy = valueAsMap.getOrNull("$strategy"))
+        new FakeValue {
+            FakeValue = fakeValue
+            FakeVisibility = visibility
+            FakeStrategy = strategy
+        }
+    else
+        // Get the reverse mapping for this class
+        let (reverseMapping =
+            if (type.isSubclassOf(reflect.Class(formae.SubResource)) && !type.annotations.filterIsInstance(formae.SubResourceHint).isEmpty)
+                formae.fq.reverseSubResourceFieldMapping(type)
+            else if (type.isSubclassOf(reflect.Class(formae.Resource)) && !type.annotations.filterIsInstance(formae.ResourceHint).isEmpty)
+                formae.fq.reverseFieldMapping(type)
+            else if (type.name == "Tag")
+                // Special case for Tag class: map lowercase JSON keys to uppercase PKL properties
+                Map("key", "Key", "value", "Value").toMapping()
+            else
+                // For other classes, use empty mapping - will fall back to direct property name matching
+                Map().toMapping()
+        )
+        let (converted = getAllProperties(type)
+            .fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
+                if (acc is GenerationFailure)
+                    acc
+                else if (shouldSkipPropertyName(prop.name))
+                    acc
+                else
+                    let (result = applyPropertyWithMapping(valueAsMap, prop, reverseMapping))
+                    if (result is GenerationFailure)
+                        throw(result.message)
+                    else
+                        acc.put(name, result)
+            )
+        )
+            converted.toTyped(type.reflectee)
+
+
+local function doesNotInherit(clazz: reflect.Class) =
+  clazz.superclass == null || clazz.superclass.reflectee == Module || clazz.superclass.reflectee == Typed
+
+local function getAllProperties(clazz: reflect.Class?): Map<String, reflect.Property> =
+  if (clazz == null) Map()
+  else if (doesNotInherit(clazz)) clazz.properties
+  else getAllProperties(clazz.superclass!!) + clazz.properties //Double check what !!
+
+local function applyType(type: reflect.Type, value: Any): Any|GenerationFailure =
+  let (clazz = type.getClass())
+  if (reflectTypeHandlers.containsKey(clazz))
+    reflectTypeHandlers[clazz].apply(type, value)
+  else
+    Fail("applyType - Unsupported type in reflect handlers: \(clazz.simpleName)")
+
+
+function applyResource(res: Class, value: Dynamic) : Any =
+    let (clazz = reflect.Class(res))
+    let (valueAsMap = value.toMap())
+    if (clazz.superclass.reflectee.simpleName == "Resource")
+        let (clazzProperties = getAllProperties(clazz))
+        let (reverseMapping = formae.fq.reverseFieldMapping(clazz))
+        clazzProperties.fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
+            // Skip internal properties
+            if (shouldSkipProperty(prop))
+                acc
+            else
+                let (result = applyPropertyWithMapping(valueAsMap, prop, reverseMapping))
+                if (result is GenerationFailure)
+                    throw(result.message)
+                else if (result != null)
+                    acc.put(name, result)
+                else
+                    acc
+        )
+    else
+        Fail("applyResource - Expected a Resource class, got \(clazz)")
+
+
+local function getTypeName(value: Typed): String =
+  let (clazz = value.getClass())
+  let (reflectClass = reflect.Class(clazz))
+    // Check if it's a subclass of a known base type
+    if (reflectClass.isSubclassOf(reflect.Class(Resource)))
+      clazz.simpleName
+    else if (reflectClass.isSubclassOf(reflect.Class(Module)))
+      clazz.simpleName
+    else
+      clazz.simpleName
+
+function shouldSkipProperty(prop: Any): Boolean =
+  (prop.annotations.filterIsInstance(formae.FieldHint).isEmpty && prop.name != "label" )
+
+function shouldSkipPropertyName(propertyName: String): Boolean =
+  propertyName.startsWith("__") ||
+  propertyName == "Properties" ||
+  propertyName == "Schema" ||
+  propertyName == "Fields" ||
+  propertyName == "Managed" ||
+  propertyName == "res" ||
+  propertyName == "parent" ||
+  propertyName == "output"
+
+
+local function parseValueEnhanced(value: Any): Any =
+if (value == null)
+    null
+
+  else if (value is Mapping)
+    let (m = value.toMap())
+      m.fold(Map("__type__", "Mapping"), (acc: Map<String, Any>, k: String, v: Any) ->
+        let (parsedValue = parseValueEnhanced(v))
+        if (parsedValue != null)
+          acc.put(k, parsedValue)
+        else
+          acc
+      )
+  else if (value is Dynamic)
+    let (m = value.toMap())
+      m.fold(Map("__type__", "Dynamic"), (acc: Map<String, Any>, k: String, v: Any) ->
+        let (parsedValue = parseValueEnhanced(v))
+        if (parsedValue != null)
+          acc.put(k, parsedValue)
+        else
+          acc
+      )
+  else if (value is Typed)
+    let (m = value.toMap())
+    let (typeName = getTypeName(value))
+    let (importInfo = getImportInfoForType(value.getClass(), typeName, value))
+    let (defaultMap =
+      if (typeName == "FakeResolvable")
+        Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
+      else
+        Map("__type__", typeName, "__import__", importInfo))
+      m.fold(defaultMap, (acc: Map<String, Any>, k: String, v: Any) ->
+        // Filter out internal/system properties
+        if (shouldSkipPropertyName(k))
+          acc
+        else
+          let (parsedValue = parseValueEnhanced(v))
+          if (parsedValue != null)
+            acc.put(k, parsedValue)
+          else
+            acc
+      )
+  else if (value is Map)
+    value.fold(Map(), (acc: Map<String, Any>, k: String, v: Any) ->
+      acc.put(k, parseValueEnhanced(v))
+    )
+  else if (value is Listing)
+    value.toList().map((elem) -> parseValueEnhanced(elem))
+  else if (value is List)
+    value.map((elem) -> parseValueEnhanced(elem))
+  else
+    value
+
+
+local function getImportInfoForType(clazz: Class, typeName: String, value: Any): String =
+  // Special case for Tag type - always use formae
+  if (typeName == "Tag")
+    "formae"
+  else if (typeName == "FakeValue")
+    "formae"
+  else if (typeName == "FakeResolvable")
+    resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).importName
+  else
+    getImportInfo(clazz)
+
+local function getImportInfo(clazz: Class): String =
+  let (fullName = clazz.simpleName)
+    // Extract module path from full class name
+    // e.g., "com.example.MyClass" -> "com.example"
+    // or "file:///path/to/module.pkl#MyClass" -> "file:///path/to/module.pkl"
+    if (fullName.contains("#"))
+      // Handle file-based modules
+      fullName.split("#").first
+    else if (fullName.contains("."))
+      // Handle package-based modules
+      let (parts = fullName.split("."))
+        if (parts.length > 1)
+          parts.take(parts.length - 1).join(".")
+        else
+          importPlaceholder
+    else
+      // Built-in or no module info
+      //"pkl:base"
+      importPlaceholder
+
+
+local function parseJsonString(value: String): Dynamic|String =
+  jsonhelper.parseJsonString(value)
+
+local function escapeString(str: String): String =
+  str
+    .replaceAll("\\", "\\\\")    // Escape backslashes first
+    .replaceAll("\"", "\\\"")    // Escape quotes
+    .replaceAll("\n", "\\n")     // Escape newlines
+    .replaceAll("\r", "\\r")     // Escape carriage returns
+    .replaceAll("\t", "\\t")     // Escape tabs
+
+local function formatValueWithTypes(value: Any, indent: String): String =
+  if (value is Map)
+    // Check if this map represents a typed object (has a special type key)
+    if (value.containsKey("__type__"))
+      let (typeName = value["__type__"])
+
+      let (importInfo = value.getOrNull("__import__"))
+      let (typeDeclaration =
+        if (typeName.contains("FakeResolvable"))
+          let (resolvableInfo = resolvables.MapResolvableResourceUri().getOrNull(value.getOrNull("FakeType")))
+          "new \(resolvableInfo.importName).\(resolvableInfo.clazz.simpleName)"
+        else if (typeName == "FakeValue")
+          "new formae.Value"
+        else if (importInfo != null && importInfo != "pkl:base")
+          "new \(importInfo).\(typeName)"
+        else
+          "new " + typeName
+      )
+        if (typeName.contains("FakeResolvable"))
+          // Special handling for FakeResolvable - only show Stack and Label, comment RealValue
+          let (stack = value.getOrNull("FakeStack"))
+          let (label = value.getOrNull("FakeLabel"))
+          let (property = value.getOrNull("FakeProperty"))
+          let (realValue = if (value.getOrNull("$visibility") == "Clear") value.getOrNull("RealValue") else "Secret")
+          let (comment = if (realValue != null) "\n" + indent + "  // RealValue: \(realValue)" else "")
+            typeDeclaration + " {" +
+            comment + "\n" +
+            (if (stack != null) indent + "  stack = \"\(stack)\"\n" else "") +
+            (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
+             indent + "}.\(property)"
+        else if (typeName == "FakeValue")
+          // Special handling for FakeValue
+          let (fakeValue = value.getOrNull("FakeValue"))
+          let (visibility = value.getOrNull("FakeVisibility"))
+          let (strategy = value.getOrNull("FakeStrategy"))
+          let (valueComment = if (visibility == "Clear") fakeValue else "***HIDDEN***")
+          let (comment = "\n" + indent + "  // Value: \(valueComment)")
+            typeDeclaration + " {" +
+            comment + "\n" +
+            indent + "  value = \"\(fakeValue)\"\n" +
+            (if (visibility != "Clear") indent + "  visibility = \"\(visibility)\"\n" else "") +
+            (if (strategy != "Update") indent + "  strategy = \"\(strategy)\"\n" else "") +
+            indent + "}"
+        else
+          typeDeclaration + " {\n" +
+          formatNestedContentWithTypes(value, indent + "  ") +
+          "\n" + indent + "}"
+    else
+      mapToPklStringWithTypes(value, indent)
+  else if (value is List)
+    let (formattedItems = value.map((item) -> formatValueWithTypes(item, indent)).join("; "))
+      "new Listing { \(formattedItems) }"
+  else if (value is String)
+    "\"" + escapeString(value) + "\""
+  else if (value == null)
+    "null"
+  else
+    value.toString()
+
+local function formatListAsListing(list: List, indent: String, propertyName: String): String =
+  if (list.isEmpty)
+    if (propertyName == "tags")
+      "new Listing<formae.Tag> {}"
+    else
+      "new Listing {}"
+  else
+    // Filter out FormaeResourceLabel and FormaeStackLabel tags if this is  property
+    let (filteredList = if (propertyName == "tags")
+      list.filter((item) ->
+        if (item is Map && item.containsKey("__type__") && item["__type__"] == "tag")
+          let (key = item.getOrNull("key"))
+          key != "FormaeResourceLabel" && key != "FormaeStackLabel"
+        else if (item is Map && item.containsKey("key"))
+          let (key = item["key"])
+          key != "FormaeResourceLabel" && key != "FormaeStackLabel"
+        else
+          true
+      )
+    else
+      list
+    )
+
+    if (filteredList.isEmpty)
+      if (propertyName == "tags")
+        ""
+      else
+        "new Listing {}"
+    else
+      let (formattedItems = filteredList.map((item) -> formatValueWithTypes(item, indent)))
+      if (propertyName == "tags")
+        "new Listing<formae.Tag> { " + formattedItems.join("; ") + " }"
+      else
+        "new Listing { " + formattedItems.join("; ") + " }"
+
+local function isBaseType(typeName: String): Boolean =
+  typeName == "Dynamic" ||
+  typeName == "Mapping" ||
+  typeName == "Listing" ||
+  typeName == "Map" ||
+  typeName == "List" ||
+  typeName == "Set" ||
+  typeName == "String" ||
+  typeName == "Int" ||
+  typeName == "Boolean" ||
+  typeName == "Float" ||
+  typeName == "Any" ||
+  typeName == "Object" ||
+  typeName == "Typed" ||
+  typeName == "Module" ||
+  typeName == "Resource"
+
+local function getTypeDeclaration(typeName: String, importInfo: String?): String =
+  if (typeName == "Tag")
+    "new formae.Tag"
+  else if (isBaseType(typeName))
+    "new \(typeName)"
+  else if (importInfo != null && importInfo != "pkl:base")
+    "new \(importInfo).\(typeName)"
+  else
+    "new \(importPlaceholder).\(typeName)"
+
+function generateImportStatements(parsedData: Map<String, Any>): List<String> =
+  collectImports(parsedData).filter((i) -> i != "pkl:base")
+
+local function collectImports(value: Any): List<String> =
+  if (value is Map)
+    let (imports = if (value.containsKey("__import_statement__")) List(value["__import_statement__"]) else List())
+      value.fold(imports, (acc: List<String>, k: String, v: Any) ->
+        acc + collectImports(v)
+      )
+  else if (value is List)
+    value.fold(List(), (acc: List<String>, item: Any) ->
+      acc + collectImports(item)
+    )
+  else
+    List()
+
+function genPklToMapWithTypes(resource: Dynamic): Any =
+  let (resourceMap = resource.toMap())
+  let (result = resourceMap.fold(Map(), (acc: Map<String, Any>, k: String, v: Any) ->
+    acc.put(k, parseValueEnhanced(v))
+  ))
+  result
+
+function genPklToMap(resource: Dynamic): Any =
+  let (resourceMap = resource.toMap())
+  let (result = resourceMap.fold(Map(), (acc: Map<String, Any>, k: String, v: Any) ->
+    acc.put(k, parseValueEnhanced(v))
+  ))
+  result
+
+function mapToPklString(map: Map<String, Any>, indent: String): String =
+  let (lines = map.fold(List(), (acc: List<String>, entry) ->
+    let (formattedValue = formatValue(entry.second, indent + "  "))
+    let (line = (indent + "  ") + entry.first + " = " + formattedValue)
+      acc.add(line)
+  ))
+    if (lines.isEmpty())
+      "new {}"
+    else
+      "new {\n" + lines.join("\n") + "\n" + indent + "}"
+
+local function formatNestedContent(map: Map<String, Any>, indent: String): String =
+  let (lines = map.fold(List(), (acc: List<String>, entry) ->
+    let (key = entry.first)
+    let (value = entry.second)
+    let (formattedValue =
+      if (value is Map)
+        mapToPklString(value, indent)
+      else if (value is String)
+        "\"" + value + "\""
+      else if (value == null)
+        "null"
+      else
+        value.toString()
+    )
+    let (line = indent + key + " = " + formattedValue)
+      acc.add(line)
+  ))
+    lines.join("\n")
+
+local function formatNestedContentWithTypes(map: Map<String, Any>, indent: String): String =
+  let (isMapping = map.getOrNull("__type__") == "Mapping")
+  let (isTag = map.getOrNull("__type__") == "Tag")
+
+  let (lines = map.fold(List(), (acc: List<String>, key: String, value: Any) ->
+    // Skip internal metadata keys
+    if (key.startsWith("__") || value == null)
+      acc
+    else
+      let (formattedKey =
+        if (isTag && key == "Key")
+          "key"  // Convert Key to key for Tag objects
+        else if (isTag && key == "Value")
+          "value"  // Convert Value to value for Tag objects
+        else if (key.contains(":") || isMapping)
+          "[\"" + key + "\"]"
+        else
+          key
+      )
+      let (formattedValue =
+        if (value is List && key == "tags")
+          let (tagLine = formatListAsListing(value, indent, "tags"))
+            if (tagLine == "") "" else tagLine
+        else
+          formatValueWithTypes(value, indent)
+      )
+      let (line = indent + formattedKey + " = " + formattedValue)
+        if(formattedValue == "" && key == "tags")
+          acc
+        else
+          acc.add(line)
+  ))
+    lines.join("\n")
+
+local function mapToPklStringWithTypes(map: Map<String, Any>, indent: String): String =
+  let (lines = map.fold(List(), (acc: List<String>, key: String, value:Any) ->
+    let (formattedKey =
+      if (key.contains(":") || isMapping)
+        "[\"" + key + "\"]"
+      else
+        key
+    )
+    let (formattedValue = formatValueWithTypes(value, indent + "  "))
+    let (line = (indent + "  ") + formattedKey + " = " + formattedValue)
+      acc.add(line)
+  ))
+    if (lines.isEmpty)
+      "new {}"
+    else
+      "new {\n" + lines.join("\n") + "\n" + indent + "}"
+
+local function formatValue(value: Any, indent: String): String =
+  if (value is Map)
+    mapToPklString(value, indent)
+  else if (value is String)
+    "\"" + value + "\""
+  else if (value == null)
+    "null"
+  else
+    value.toString()
+
+function genMapToPklStringWithTypes(
+  rootKey: String,
+  map: Map<String, Any>,
+  replacePlaceholder: String
+  ): String =
+  let (mapWithType = map.put("__type__", rootKey)) //Adding here the rootkey
+    """
+    new \(importPlaceholder).\(rootKey) {
+    \(formatNestedContentWithTypes(mapWithType, "    "))
+      }
+    """.replaceAll(importPlaceholder, replacePlaceholder)

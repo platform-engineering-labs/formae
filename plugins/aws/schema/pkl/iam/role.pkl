@@ -1,0 +1,77 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.iam.role
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::IAM::Role"
+
+@aws.SubResourceHint
+open class RolePolicy extends formae.SubResource {
+    policyDocument: Dynamic
+    policyName: String
+}
+
+open class RoleResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden arn: RoleResolvable = (this) {
+        property = "Arn"
+    }
+
+    hidden roleId : RoleResolvable = (this) {
+        property = "RoleId"
+    }
+
+    hidden roleName: RoleResolvable = (this) {
+        property = "RoleName"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+    discoverable = true
+}
+open class Role extends formae.Resource {
+
+    @aws.FieldHint
+    assumeRolePolicyDocument: Dynamic
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    managedPolicyArns: Listing<String>?
+
+    @aws.FieldHint
+    maxSessionDuration: Int?
+
+    @aws.FieldHint{createOnly = true}
+    path: String?
+
+    @aws.FieldHint
+    permissionsBoundary: String?
+
+    @aws.FieldHint
+    policies: Listing<RolePolicy>?
+
+    @aws.FieldHint{createOnly = true}
+    roleName: String?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    hidden parent = this
+
+    hidden res: RoleResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

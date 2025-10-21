@@ -1,0 +1,62 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+
+import "./types.pkl"
+import "./vpc_resources.pkl"
+import "./database_resources.pkl"
+
+description {
+    text = """
+        This example shows how to abstract a whole database behind just a few high-level properties.
+
+        Platform team is maintaining the detail, developers only use prescribed properties to spin up a database.
+        """
+    confirm = true
+}
+
+properties {
+    team = new formae.Prop {
+        flag = "team"
+    }
+
+    size = new formae.Prop {
+        flag = "size"
+        default = "xs"
+    }
+}
+
+local _vpc = new vpc_resources.VpcResources {
+    team = properties.team.value
+}
+
+local _database = new database_resources.DatabaseResources {
+    team = properties.team.value
+    size = properties.size.value
+    vpc = _vpc.vpc
+    subnet1 = _vpc.subnet1
+    subnet2 = _vpc.subnet2
+}
+
+forma {
+    new formae.Stack {
+        label = "\(properties.team.value)-stack"
+        description = "Stack for \(properties.team.value) infrastructure"
+    }
+
+    new formae.Target {
+        label = "\(properties.team.value)-target"
+        config = new aws.Config {
+            region = types.regionFromTeam(properties.team.value)
+        }
+    }
+
+    ..._vpc.resources
+    ..._database.resources
+}

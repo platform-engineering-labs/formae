@@ -1,0 +1,47 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.iam.servercertificate
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::IAM::ServerCertificate"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "ServerCertificateName"
+    tags = "Tags"
+}
+open class ServerCertificate extends formae.Resource {
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    certificateBody: String(matches(Regex(#"[\u0009\u000A\u000D\u0020-\u00FF]+"#)))?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    certificateChain: String(matches(Regex(#"[\u0009\u000A\u000D\u0020-\u00FF]+"#)))?
+
+    @aws.FieldHint
+    path: String(matches(Regex(#"(\u002F)|(\u002F[\u0021-\u007F]+\u002F)"#)))?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    privateKey: String(matches(Regex(#"[\u0009\u000A\u000D\u0020-\u00FF]+"#)))?
+
+    @aws.FieldHint{createOnly = true}
+    serverCertificateName: String(matches(Regex(#"[\w+=,.@-]+"#)))?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

@@ -1,0 +1,30 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.ipampoolcidr
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::IPAMPoolCidr"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "IpamPoolId"
+    parent = "AWS::EC2::IPAMPool"
+    listParam = new formae.ListProperty { parentProperty = "IpamPoolId" listParameter = "IpamPoolId" }
+}
+open class IPAMPoolCidr extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    cidr: String?
+
+    @aws.FieldHint{createOnly = true}
+    ipamPoolId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    netmaskLength: Int?
+}

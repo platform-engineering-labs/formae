@@ -1,0 +1,34 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.ipamresourcediscovery
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::IPAMResourceDiscovery"
+
+@aws.SubResourceHint
+open class IPAMResourceDiscoveryIpamOperatingRegion extends formae.SubResource {
+    regionName: aws.Region
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "IpamResourceDiscoveryId"
+    tags = "Tags"
+}
+open class IPAMResourceDiscovery extends formae.Resource {
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    operatingRegions: Listing<IPAMResourceDiscoveryIpamOperatingRegion>?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

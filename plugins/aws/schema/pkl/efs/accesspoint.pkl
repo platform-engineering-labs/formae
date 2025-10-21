@@ -1,0 +1,81 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.efs.accesspoint
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EFS::AccessPoint"
+
+@aws.SubResourceHint
+open class CreationInfo extends formae.SubResource {
+    ownerGid: String
+    ownerUid: String
+    permissions: String(matches(Regex(#"^[0-7]{3,4}$"#)))
+}
+
+@aws.SubResourceHint
+open class PosixUser extends formae.SubResource {
+    gid: String
+    secondaryGids: Listing<String>?
+    uid: String
+}
+
+@aws.SubResourceHint
+open class RootDirectory extends formae.SubResource {
+    creationInfo: CreationInfo?
+    path: String?
+}
+
+open class AccessPointResolvable extends formae.Resolvable {
+    type = module.type
+
+    hidden arn: AccessPointResolvable = (this) {
+        property = "Arn"
+    }
+
+    hidden accessPointId: AccessPointResolvable = (this) {
+        property = "AccessPointId"
+    }
+
+    hidden fileSystemId: AccessPointResolvable = (this) {
+        property = "FileSystemId"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "AccessPointId"
+    tags = "AccessPointTags"
+}
+open class AccessPoint extends formae.Resource {
+
+    @aws.FieldHint
+    accessPointTags: Listing<formae.Tag>?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    clientToken: (String)?
+
+    @aws.FieldHint{createOnly = true}
+    fileSystemId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    posixUser: PosixUser?
+
+    @aws.FieldHint{createOnly = true}
+    rootDirectory: RootDirectory?
+
+    local parent = this
+
+    hidden res: AccessPointResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

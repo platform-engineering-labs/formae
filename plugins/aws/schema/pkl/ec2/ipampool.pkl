@@ -1,0 +1,85 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.ipampool
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::IPAMPool"
+
+typealias AWSService = "ec2"
+
+typealias PublicIpSource = "byoip"|"amazon"
+
+@aws.SubResourceHint
+open class ProvisionedCidr extends formae.SubResource {
+    cidr: String
+}
+
+@aws.SubResourceHint
+open class SourceResource extends formae.SubResource {
+    resourceId: String
+    resourceOwner: String
+    resourceRegion: aws.Region
+    resourceType: String
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "IpamPoolId"
+    tags = "Tags"
+}
+open class IPAMPool extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    addressFamily: String
+
+    @aws.FieldHint
+    allocationDefaultNetmaskLength: Int?
+
+    @aws.FieldHint
+    allocationMaxNetmaskLength: Int?
+
+    @aws.FieldHint
+    allocationMinNetmaskLength: Int?
+
+    @aws.FieldHint
+    allocationResourceTags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    autoImport: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    awsService: AWSService?
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint{createOnly = true}
+    ipamScopeId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    locale: String?
+
+    @aws.FieldHint
+    provisionedCidrs: Listing<ProvisionedCidr>?
+
+    @aws.FieldHint{createOnly = true}
+    publicIpSource: PublicIpSource?
+
+    @aws.FieldHint{createOnly = true}
+    publiclyAdvertisable: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    sourceIpamPoolId: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    sourceResource: SourceResource?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

@@ -1,0 +1,34 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.vpcendpointconnectionnotification
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VPCEndpointConnectionNotification"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "VPCEndpointConnectionNotificationId"
+}
+open class VPCEndpointConnectionNotification extends formae.Resource {
+
+    @aws.FieldHint
+    connectionEvents: Listing<String>
+
+    @aws.FieldHint
+    connectionNotificationArn: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    serviceId: (String|formae.Resolvable)?
+
+    @aws.FieldHint{
+        createOnly = true
+        outputField = "VPCEndpointId"
+    }
+    vpcEndpointId: (String|formae.Resolvable)?
+}

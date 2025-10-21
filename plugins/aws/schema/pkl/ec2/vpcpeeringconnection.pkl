@@ -1,0 +1,41 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.vpcpeeringconnection
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VPCPeeringConnection"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    tags = "Tags"
+}
+open class VPCPeeringConnection extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    peerOwnerId: String?
+
+    @aws.FieldHint{createOnly = true}
+    peerRegion: aws.Region?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    peerRoleArn: String?
+
+    @aws.FieldHint{createOnly = true}
+    peerVpcId: String
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    vpcId: String
+}

@@ -1,0 +1,61 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.s3.accessgrant
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::S3::AccessGrant"
+
+typealias AccessGrantPermission = "READ"|"WRITE"|"READWRITE"
+typealias AccessGrantS3PrefixType = "Object"
+typealias GranteeGranteeType = "IAM"|"DIRECTORY_USER"|"DIRECTORY_GROUP"
+
+@aws.SubResourceHint
+open class AccessGrantsLocationConfiguration extends formae.SubResource{
+    s3SubPrefix: String
+}
+
+@aws.SubResourceHint
+open class AccessGrantGrantee extends formae.SubResource {
+    granteeIdentifier: String
+    granteeType: GranteeGranteeType
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "AccessGrantId"
+    tags = "Tags"
+    discoverable = false
+}
+open class AccessGrant extends formae.Resource {
+
+    @aws.FieldHint
+    accessGrantsLocationConfiguration: AccessGrantsLocationConfiguration?
+
+    @aws.FieldHint
+    accessGrantsLocationId: String
+
+    @aws.FieldHint
+    applicationArn: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    grantee: AccessGrantGrantee
+
+    @aws.FieldHint
+    permission: AccessGrantPermission
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    s3PrefixType: AccessGrantS3PrefixType?
+
+    @aws.FieldHint{createOnly = true}
+    tags: Listing<formae.Tag>?
+
+}

@@ -1,0 +1,41 @@
+examples {
+  ["Apply simple class"] {
+    new {
+      label = "simple"
+      group = null
+      target = null
+      stack = null
+      Managed = true
+      x = 42
+      name = "test"
+    }
+  }
+  ["Apply complex class with collections"] {
+    new {
+      label = "complex"
+      group = null
+      target = null
+      stack = null
+      Managed = true
+      items {
+        "item1"
+        "item2"
+        "item3"
+      }
+      metadata {}
+      optional = "optional value"
+    }
+  }
+  ["Convert to map with types - simple"] {
+    Map("label", "simple", "group", null, "target", null, "stack", null, "Managed", true, "x", 42, "name", "test")
+  }
+  ["Convert to map with types - complex"] {
+    Map("label", "my-bucket", "group", null, "target", null, "stack", null, "tags", List(), "Managed", true, "type", "FakeAWS::Suckets::TestResource", "size", null, "bucketName", "my-test-bucket")
+  }
+  ["Generate import statements"] {
+    List("@aws/s3.pkl")
+  }
+  ["Collect imports when there are no imports"] {
+    List("@aws/s3.pkl")
+  }
+}

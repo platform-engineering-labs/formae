@@ -1,0 +1,26 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.clientvpntargetnetworkassociation
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::ClientVpnTargetNetworkAssociation"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    discoverable = false
+}
+open class ClientVpnTargetNetworkAssociation extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    clientVpnEndpointId: String
+
+    @aws.FieldHint{createOnly = true}
+    subnetId: String
+}

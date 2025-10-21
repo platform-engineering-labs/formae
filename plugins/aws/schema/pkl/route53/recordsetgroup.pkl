@@ -1,0 +1,94 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.route53.recordsetgroup
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::Route53::RecordSetGroup"
+
+@aws.SubResourceHint
+open class AliasTarget extends formae.SubResource {
+    @aws.FieldHint {
+        outputField = "DNSName"
+    }
+    dnsName: String
+    evaluateTargetHealth: Boolean?
+    hostedZoneId: String
+}
+
+@aws.SubResourceHint
+open class CidrRoutingConfig extends formae.SubResource {
+    collectionId: String
+    locationName: String
+}
+
+@aws.SubResourceHint
+open class Coordinates extends formae.SubResource {
+    latitude: String
+    longitude: String
+}
+
+@aws.SubResourceHint
+open class GeoLocation extends formae.SubResource {
+    continentCode: String?
+    countryCode: String?
+    subdivisionCode: String?
+}
+
+@aws.SubResourceHint
+open class GeoProximityLocation extends formae.SubResource {
+    @aws.FieldHint {
+        outputField = "AWSRegion"
+    }
+    awsRegion: aws.Region?
+    bias: Int?
+    coordinates: Coordinates?
+    localZoneGroup: String?
+}
+
+
+@aws.SubResourceHint
+open class RecordSet extends formae.SubResource {
+    aliasTarget: AliasTarget?
+    cidrRoutingConfig: CidrRoutingConfig?
+    failover: String?
+    geoLocation: GeoLocation?
+    geoProximityLocation: GeoProximityLocation?
+    healthCheckId: String?
+    hostedZoneId: String?
+    hostedZoneName: String?
+    multiValueAnswer: Boolean?
+    name: String
+    region: aws.Region?
+    resourceRecords: Listing<String>?
+    setIdentifier: String?
+    ttl: String?
+    type: String
+    weight: Int?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    nonprovisionable = true
+    identifier = "Id"
+    discoverable = false
+}
+open class RecordSetGroup extends formae.Resource {
+
+    @aws.FieldHint
+    comment: String?
+
+    @aws.FieldHint{createOnly = true}
+    hostedZoneId: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    hostedZoneName: String?
+
+    @aws.FieldHint
+    recordSets: (Listing<RecordSet>)?
+}

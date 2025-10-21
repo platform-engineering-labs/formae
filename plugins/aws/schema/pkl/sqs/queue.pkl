@@ -1,0 +1,121 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.sqs.queue
+
+import "../aws.pkl"
+import "@formae/formae.pkl"
+
+const type = "AWS::SQS::Queue"
+
+typealias DeduplicationScopeType = "messageGroup"|"queue"
+
+typealias FifoThroughputLimitType = "perQueue" | "perMessageGroupId"
+
+open class QueueResolvable extends formae.Resolvable {
+    type = module.type
+
+    hidden arn: QueueResolvable = (this) {
+        property = "Arn"
+    }
+    hidden queueName: QueueResolvable = (this) {
+        property = "QueueName"
+    }
+    hidden queueUrl: QueueResolvable = (this) {
+        property = "QueueUrl"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+}
+open class Queue extends formae.Resource {
+
+    @aws.FieldHint
+    contentBasedDeduplication: Boolean?
+
+    @aws.FieldHint
+    deduplicationScope: DeduplicationScopeType?
+
+    @aws.FieldHint {
+        outputTransformation = (it) -> it.toUnit("s").value
+    }
+    delaySeconds: Duration(isBetween(0.s, 900.s))? = 0.s
+
+    @aws.FieldHint {
+        createOnly = true
+        outputCondition = (_) -> parent.fifoQueue ?? false
+    }
+    fifoQueue: Boolean?
+
+    @aws.FieldHint {
+        outputCondition = (_) -> parent.fifoQueue ?? false
+    }
+    fifoThroughputLimit: FifoThroughputLimitType?
+
+    @aws.FieldHint {
+        outputTransformation = (it) -> it.toUnit("s").value
+    }
+    kmsDataKeyReusePeriodSeconds: Duration(isBetween(60.s, 86400.s))?
+
+    @aws.FieldHint
+    kmsMasterKeyId: String?
+
+    @aws.FieldHint {
+        outputTransformation = (it) -> it.toUnit("b").value
+    }
+    maximumMessageSize: DataSize(isBetween(1024.b, 262144.b))? = 256.kib
+
+    @aws.FieldHint {
+        outputTransformation = (it) -> it.toUnit("s").value
+    }
+    messageRetentionPeriod: Duration(isBetween(60.s, 1209600.s))? = 345600.s
+
+    @aws.FieldHint{
+        createOnly = true
+    }
+    // validate via constraint to give feedback to the IDE
+    queueName: String(
+        if(fifoQueue == true)
+            this.endsWith(".fifo")
+        else
+            true
+    )
+
+
+    @aws.FieldHint {
+        outputTransformation = (it) -> it.toUnit("s").value
+    }
+    receiveMessageWaitTimeSeconds: Duration(isBetween(0.s, 20.s))? = 0.s
+
+    @aws.FieldHint
+    redriveAllowPolicy: Dynamic?
+
+    @aws.FieldHint
+    redrivePolicy: Dynamic?
+
+    @aws.FieldHint
+    sqsManagedSseEnabled: Boolean? = true
+
+    @aws.FieldHint {
+        outputTransformation = formae.transform.capitalizeMemberKeys
+    }
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint {
+        outputTransformation = (it) -> it.toUnit("s").value
+    }
+    visibilityTimeout: Duration(isBetween(0.s, 43200.s))?
+
+    local parent = this
+
+    hidden res: QueueResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

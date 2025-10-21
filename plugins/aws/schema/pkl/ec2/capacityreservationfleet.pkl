@@ -1,0 +1,68 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.capacityreservationfleet
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::CapacityReservationFleet"
+
+typealias InstanceMatchCriteria = "open"
+
+typealias Tenancy = "default"
+
+@aws.SubResourceHint
+open class InstanceTypeSpecification extends formae.SubResource {
+    availabilityZone: aws.AvailabilityZone?
+    availabilityZoneId: String?
+    ebsOptimized: Boolean?
+    instancePlatform: String?
+    instanceType: String?
+    priority: Int?
+    weight: Number?
+}
+
+@aws.SubResourceHint
+open class TagSpecification extends formae.SubResource {
+    resourceType: String?
+    tags: Listing<formae.Tag>?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "CapacityReservationFleetId"
+    tags = "TagSpecifications"
+}
+open class CapacityReservationFleet extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    allocationStrategy: String?
+
+    @aws.FieldHint{createOnly = true}
+    endDate: String?
+
+    @aws.FieldHint{createOnly = true}
+    instanceMatchCriteria: InstanceMatchCriteria?
+
+    @aws.FieldHint{createOnly = true}
+    instanceTypeSpecifications: Listing<InstanceTypeSpecification>?
+
+    @aws.FieldHint
+    noRemoveEndDate: Boolean?
+
+    @aws.FieldHint
+    removeEndDate: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    tagSpecifications: Listing<TagSpecification>?
+
+    @aws.FieldHint{createOnly = true}
+    tenancy: Tenancy?
+
+    @aws.FieldHint
+    totalTargetCapacity: Int?
+}

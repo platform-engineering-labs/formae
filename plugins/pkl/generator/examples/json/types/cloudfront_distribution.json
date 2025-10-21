@@ -1,0 +1,100 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "ASDF1234ASF",
+      "Type": "AWS::CloudFront::Distribution",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "DistributionConfig": {
+          "Aliases": [
+            "www.test.pel",
+            "test.pel"
+          ],
+          "Comment": "",
+          "ContinuousDeploymentPolicyId": "",
+          "DefaultCacheBehavior": {
+            "AllowedMethods": [
+              "HEAD",
+              "GET"
+            ],
+            "CachePolicyId": "12345ab-a12a-1234-1234-asfdojui324",
+            "CachedMethods": [
+              "HEAD",
+              "GET"
+            ],
+            "Compress": true,
+            "FieldLevelEncryptionId": "",
+            "GrpcConfig": {
+              "Enabled": false
+            },
+            "SmoothStreaming": false,
+            "TargetOriginId": "testtadsfasdf",
+            "ViewerProtocolPolicy": "allow-all"
+          },
+          "DefaultRootObject": "",
+          "Enabled": true,
+          "HttpVersion": "http2",
+          "IPV6Enabled": true,
+          "Logging": {
+            "Bucket": "",
+            "IncludeCookies": false,
+            "Prefix": ""
+          },
+          "OriginGroups": {
+            "Quantity": 0
+          },
+          "Origins": [
+            {
+              "ConnectionAttempts": 3,
+              "ConnectionTimeout": 10,
+              "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "HTTPSPort": 443,
+                "OriginKeepaliveTimeout": 5,
+                "OriginProtocolPolicy": "http-only",
+                "OriginReadTimeout": 30,
+                "OriginSSLProtocols": [
+                  "TLSv1.2"
+                ]
+              },
+              "DomainName": "test.pel.s3-website-us-east-1.amazonaws.com",
+              "Id": "landingpage",
+              "OriginAccessControlId": "",
+              "OriginPath": "",
+              "OriginShield": {
+                "Enabled": false
+              }
+            }
+          ],
+          "PriceClass": "PriceClass_All",
+          "Restrictions": {
+            "GeoRestriction": {
+              "RestrictionType": "none"
+            }
+          },
+          "Staging": false,
+          "ViewerCertificate": {
+            "AcmCertificateArn": "arn:aws:acm:us-east-1:123456789:certificate/1234555-12a3-1234a-1234s-1234565as",
+            "CloudFrontDefaultCertificate": false,
+            "MinimumProtocolVersion": "TLSv1.2_2021",
+            "SslSupportMethod": "sni-only"
+          },
+          "WebACLId": ""
+        },
+        "Id": "ASDF1234ASF"
+      },
+      "NativeId": "ASDF1234ASF"
+    }
+  ]
+}

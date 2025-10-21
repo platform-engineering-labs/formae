@@ -1,0 +1,658 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-2",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-2",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "sgr-00ef80a12ef5c0a05",
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "CidrIp",
+          "CidrIpv6",
+          "Description",
+          "DestinationPrefixListId",
+          "DestinationSecurityGroupId",
+          "FromPort",
+          "GroupId",
+          "IpProtocol",
+          "ToPort"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "CidrIp": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrIpv6": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationPrefixListId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationSecurityGroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "FromPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "IpProtocol": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ToPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "CidrIp": "0.0.0.0/0",
+        "FromPort": -1,
+        "GroupId": "sg-0142b04397cdc94f0",
+        "Id": "sgr-00ef80a12ef5c0a05",
+        "IpProtocol": "-1",
+        "ToPort": -1
+      },
+      "ReadOnlyProperties": {
+        "Id": "sgr-00ef80a12ef5c0a05"
+      },
+      "NativeId": "sgr-00ef80a12ef5c0a05",
+      "Ksuid": "33jxjT8VBQN51roc5uq4GKFzhwW"
+    },
+    {
+      "Label": "sgr-0227fe679acb92960",
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "CidrIp",
+          "CidrIpv6",
+          "Description",
+          "DestinationPrefixListId",
+          "DestinationSecurityGroupId",
+          "FromPort",
+          "GroupId",
+          "IpProtocol",
+          "ToPort"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "CidrIp": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrIpv6": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationPrefixListId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationSecurityGroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "FromPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "IpProtocol": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ToPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "CidrIp": "0.0.0.0/0",
+        "FromPort": -1,
+        "GroupId": "sg-036daf0be113dd37d",
+        "Id": "sgr-0227fe679acb92960",
+        "IpProtocol": "-1",
+        "ToPort": -1
+      },
+      "ReadOnlyProperties": {
+        "Id": "sgr-0227fe679acb92960"
+      },
+      "NativeId": "sgr-0227fe679acb92960",
+      "Ksuid": "33jxjWytes78UWJGCqc0RS8bFLq"
+    },
+    {
+      "Label": "sgr-027717fbe2f6010ee",
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "CidrIp",
+          "CidrIpv6",
+          "Description",
+          "DestinationPrefixListId",
+          "DestinationSecurityGroupId",
+          "FromPort",
+          "GroupId",
+          "IpProtocol",
+          "ToPort"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "CidrIp": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrIpv6": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationPrefixListId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationSecurityGroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "FromPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "IpProtocol": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ToPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "CidrIp": "0.0.0.0/0",
+        "FromPort": -1,
+        "GroupId": "sg-01bbb17b47be77cf1",
+        "Id": "sgr-027717fbe2f6010ee",
+        "IpProtocol": "-1",
+        "ToPort": -1
+      },
+      "ReadOnlyProperties": {
+        "Id": "sgr-027717fbe2f6010ee"
+      },
+      "NativeId": "sgr-027717fbe2f6010ee",
+      "Ksuid": "33jxjUHaKJlZnnJkdVaftQ096X4"
+    },
+    {
+      "Label": "sgr-03731da1f6d553fea",
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "CidrIp",
+          "CidrIpv6",
+          "Description",
+          "DestinationPrefixListId",
+          "DestinationSecurityGroupId",
+          "FromPort",
+          "GroupId",
+          "IpProtocol",
+          "ToPort"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "CidrIp": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrIpv6": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationPrefixListId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationSecurityGroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "FromPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "IpProtocol": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ToPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "DestinationSecurityGroupId": "sg-006290e9f6c33a51b",
+        "FromPort": 2049,
+        "GroupId": "sg-09ef298b8de15d4df",
+        "Id": "sgr-03731da1f6d553fea",
+        "IpProtocol": "tcp",
+        "ToPort": 2049
+      },
+      "ReadOnlyProperties": {
+        "Id": "sgr-03731da1f6d553fea"
+      },
+      "NativeId": "sgr-03731da1f6d553fea",
+      "Ksuid": "33jxjUUWFYAFiEw6qma807tAr3V"
+    },
+    {
+      "Label": "sgr-07b599768b97bd528",
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "CidrIp",
+          "CidrIpv6",
+          "Description",
+          "DestinationPrefixListId",
+          "DestinationSecurityGroupId",
+          "FromPort",
+          "GroupId",
+          "IpProtocol",
+          "ToPort"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "CidrIp": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrIpv6": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationPrefixListId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationSecurityGroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "FromPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "IpProtocol": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ToPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "DestinationSecurityGroupId": "sg-006290e9f6c33a51b",
+        "FromPort": 1018,
+        "GroupId": "sg-09ef298b8de15d4df",
+        "Id": "sgr-07b599768b97bd528",
+        "IpProtocol": "tcp",
+        "ToPort": 1023
+      },
+      "ReadOnlyProperties": {
+        "Id": "sgr-07b599768b97bd528"
+      },
+      "NativeId": "sgr-07b599768b97bd528",
+      "Ksuid": "33jxjT8Dk3HdkjP0c2e3oW2jnsl"
+    },
+    {
+      "Label": "sgr-0896bf4792c56760c",
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "CidrIp",
+          "CidrIpv6",
+          "Description",
+          "DestinationPrefixListId",
+          "DestinationSecurityGroupId",
+          "FromPort",
+          "GroupId",
+          "IpProtocol",
+          "ToPort"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "CidrIp": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrIpv6": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationPrefixListId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationSecurityGroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "FromPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "IpProtocol": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ToPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "DestinationSecurityGroupId": "sg-006290e9f6c33a51b",
+        "FromPort": 988,
+        "GroupId": "sg-09ef298b8de15d4df",
+        "Id": "sgr-0896bf4792c56760c",
+        "IpProtocol": "tcp",
+        "ToPort": 988
+      },
+      "ReadOnlyProperties": {
+        "Id": "sgr-0896bf4792c56760c"
+      },
+      "NativeId": "sgr-0896bf4792c56760c",
+      "Ksuid": "33jxjWRtRO9rgykgvKtYI4gdtBR"
+    },
+    {
+      "Label": "sgr-093d3a948ccb2daf1",
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "CidrIp",
+          "CidrIpv6",
+          "Description",
+          "DestinationPrefixListId",
+          "DestinationSecurityGroupId",
+          "FromPort",
+          "GroupId",
+          "IpProtocol",
+          "ToPort"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "CidrIp": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "CidrIpv6": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationPrefixListId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "DestinationSecurityGroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "FromPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "IpProtocol": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ToPort": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "CidrIp": "0.0.0.0/0",
+        "FromPort": -1,
+        "GroupId": "sg-0b4fd6361045975df",
+        "Id": "sgr-093d3a948ccb2daf1",
+        "IpProtocol": "-1",
+        "ToPort": -1
+      },
+      "ReadOnlyProperties": {
+        "Id": "sgr-093d3a948ccb2daf1"
+      },
+      "NativeId": "sgr-093d3a948ccb2daf1",
+      "Ksuid": "33jxjSxQuNssBL4Gog812w2AfGs"
+    }
+  ]
+}

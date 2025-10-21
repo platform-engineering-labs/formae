@@ -1,0 +1,221 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module FormaGenerator
+
+import "./gen.pkl" as gen
+import "@formae/formae.pkl"
+import "./resources.pkl"
+import "pkl:json"
+
+resourceTypes = resources.GetAllResourceTypes()
+typeMap = resourceTypes.fold(Map(), (acc: Map<String, resources.Resource>, elem) ->
+    acc.put(elem.type, elem)
+)
+
+function headerImports(): String =
+    """
+    amends "@formae/forma.pkl"
+    import "@formae/formae.pkl"
+    """
+
+function getImports(type: String, dependencies: List<String>): String =
+    """
+    amends "@formae/forma.pkl"
+    import "@formae/formae.pkl"
+
+
+    \(dependencies.map((dep) -> "import \"\(dep)\"").join("\n"))
+    """
+
+function toCamelCase(input: String): String =
+    if (input == "$unmanaged")
+        "myStack"
+    else
+        let (parts = input.split("-"))
+        if (parts.length == 1)
+            input
+        else
+            parts.first + parts.drop(1).map((part) ->
+                if (part.isEmpty) ""
+                else part.substring(0, 1).toUpperCase() + part.substring(1, part.length)
+            ).join("")
+
+function appendProperties(parsed: json.Value): json.Value =
+    new Dynamic {
+        ...parsed.Properties
+        label = parsed.Label
+    }
+
+function importFormatting(imports: List<String>): String =
+    let (importsString = imports.map((i) -> "import \"\(i)\""))
+    importsString.join("\n")
+
+function parseStacks(stacksData: List<Map<String, Any>>): String =
+    let (stacksString = stacksData.map((stackData) ->
+        let (label = stackData["label"])
+        let (camelCaseLabel = toCamelCase(label))
+
+        let (labelLine = if (label == "$unmanaged")
+            """
+            // Please provide a stack to bring the resources in this Forma under management
+            // label = ""
+            """
+        else
+            "        label = \"\(label)\""
+        )
+
+        """
+
+      local \(camelCaseLabel) = new formae.Stack {
+        \(labelLine)
+        description = "This was generated"
+      }
+      \(camelCaseLabel)
+      """
+    ))
+    stacksString.join("\n")
+
+function parseTargets(targetsData: List<Map<String, Any>>): String =
+    let (targetsString = targetsData.map((targetData) ->
+        let (label = targetData["label"])
+        let (camelCaseLabel = toCamelCase(label))
+        let (config = targetData["config"])
+        let (namespace = targetData.getOrNull("namespace") ?? "aws")
+
+        // Generate config properties if config exists
+        let (configString = if (config != null)
+            let (configMap = config.toMap())
+            let (configLines = configMap.fold(List(), (acc: List<String>, key: String, value: Any) ->
+                let (valueString = if (value is String) "\"\(value)\"" else value.toString())
+                acc.add("      \(key) = \(valueString)")
+            ))
+            if (configLines.isEmpty) ""
+            else
+        """
+
+          config {
+        \(configLines.join("\n"))
+            }
+        """
+        else ""
+        )
+
+        """
+
+      local \(camelCaseLabel) = new formae.Target {
+        label = "\(label)"
+        namespace = "\(namespace)"\(configString)
+      }
+      \(camelCaseLabel)
+      """
+    ))
+    targetsString.join("\n")
+
+function parseResources(resources: List<String>, targetMap: Map<String, String>, stackMap: Map<String, String>): String =
+    let (resourcesString = resources.map((r) ->
+        // Replace target references in the resource string with camelCase versions
+        let (withTargets = targetMap.fold(r, (acc: String, originalLabel: String, camelCaseLabel: String) ->
+            acc.replaceAll("target = \"\(originalLabel)\"", "target = \(camelCaseLabel).res")
+        ))
+        // Replace stack references in the resource string with camelCase versions
+        stackMap.fold(withTargets, (acc: String, originalLabel: String, camelCaseLabel: String) ->
+            acc.replaceAll("stack = \"\(originalLabel)\"", "stack = \(camelCaseLabel).res").replaceAll("stack = \"\(originalLabel).Label\"", "stack = \(camelCaseLabel).res.Label")
+        )
+    ))
+    resourcesString.join("\n\n")
+
+function generateFormaFile(parsed: json.Value): String =
+    let (parsedList = parsed.Resources.toList())
+
+    let (resourceData = parsedList.map((resource) ->
+        let (stack = resource.Stack)
+        let (target = resource.Target)
+        let (resourceType = resource.Type)
+        let (resourceLabel = resource.Label)
+        let (className = typeMap[resourceType].className)
+        let (importName = typeMap[resourceType].importName)
+        let (properties = appendProperties(resource))
+        let (pklMap = gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties).toDynamic()).put("target", target).put("stack", stack))
+        let (dependencyImports = gen.generateImportStatements(pklMap))
+        let (resourceImport = typeMap[resourceType].moduleName)
+
+        let (rawPklResourceString = gen.genMapToPklStringWithTypes(className, pklMap, importName))
+
+        let (pklResourceString = rawPklResourceString)
+
+        Map(
+            "stack", stack,
+            "target", target,
+            "resourceImport", resourceImport,
+            "resourceType", resourceType,
+            "dependencyImports", dependencyImports,
+            "pklResourceString", pklResourceString
+        )
+    ))
+
+    // Extract target data from the parsed JSON
+    let (targetsFromJson = if (parsed.Targets != null)
+        parsed.Targets.toList().map((target) -> Map(
+            "label", target.Label,
+            "namespace", target.Namespace ?? "aws",
+            "config", target.Config)
+        )
+    else
+        List()
+    )
+
+    // Extract stack data from resources (assuming stacks come from resource Stack properties)
+    let (stacksFromResources = resourceData.map((r) -> r["stack"]).distinct.map((stackLabel) ->
+        Map("label", stackLabel)
+    ))
+
+    // Create mapping from original labels to camelCase labels for targets
+    let (targetLabelMap = targetsFromJson.fold(Map(), (acc: Map<String, String>, targetData) ->
+        let (originalLabel = targetData["label"])
+        let (camelCaseLabel = toCamelCase(originalLabel))
+        acc.put(originalLabel, camelCaseLabel)
+    ))
+
+    // Create mapping from original labels to camelCase labels for stacks
+    let (stackLabelMap = stacksFromResources.fold(Map(), (acc: Map<String, String>, stackData) ->
+        let (originalLabel = stackData["label"])
+        let (camelCaseLabel = toCamelCase(originalLabel))
+        acc.put(originalLabel, camelCaseLabel)
+    ))
+
+    let (imports = resourceData.map((r) -> r["resourceImport"]).distinct)
+    let (dependencyImports = resourceData.map((r) -> r["dependencyImports"]).flatten().distinct.filter((e) -> !imports.contains(e)))
+    let (resources = resourceData.map((r) -> r["pklResourceString"]))
+
+    let (dependencyImportsSection = if (dependencyImports.length > 0)
+        """
+
+        // Dependency imports
+        \(importFormatting(dependencyImports))
+        """
+    else
+        ""
+    )
+
+    """
+    \(headerImports())
+
+    // Resource imports
+    \(importFormatting(imports))\(dependencyImportsSection)
+
+    forma {
+        \(parseStacks(stacksFromResources))
+
+        \(parseTargets(targetsFromJson))
+
+        \(parseResources(resources, targetLabelMap, stackLabelMap))
+    }
+    """
+
+output {
+    text = generateFormaFile(parsed)
+}

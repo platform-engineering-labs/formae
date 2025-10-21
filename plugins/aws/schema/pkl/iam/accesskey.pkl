@@ -1,0 +1,29 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.iam.accesskey
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::IAM::AccessKey"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    discoverable = false
+}
+open class AccessKey extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    serial: Int?
+
+    @aws.FieldHint
+    status: String?
+
+    @aws.FieldHint{createOnly = true}
+    userName: String
+}

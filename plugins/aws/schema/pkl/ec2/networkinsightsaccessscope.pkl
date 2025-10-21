@@ -1,0 +1,70 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.networkinsightsaccessscope
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::NetworkInsightsAccessScope"
+
+@aws.SubResourceHint
+open class ScopeAccessScopePathRequest extends formae.SubResource {
+    destination: PathStatementRequest?
+    source: PathStatementRequest?
+    throughResources: Listing<ThroughResourcesStatementRequest>?
+}
+
+@aws.SubResourceHint
+open class PacketHeaderStatement extends formae.SubResource {
+    destinationAddresses: Listing<String>?
+    destinationPorts: Listing<String>?
+    destinationPrefixLists: Listing<String>?
+    protocols: Listing<String>?
+    sourceAddresses: Listing<String>?
+    sourcePorts: Listing<String>?
+    sourcePrefixLists: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class PathStatementRequest extends formae.SubResource {
+    packetHeaderStatement: PacketHeaderStatement?
+    resourceStatement: ResourceStatement?
+}
+
+@aws.SubResourceHint
+open class ResourceStatement extends formae.SubResource {
+    resourceTypes: Listing<String>?
+    resources: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class ThroughResourcesStatementRequest extends formae.SubResource {
+    resourceStatement: ResourceStatement?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "NetworkInsightsAccessScopeId"
+    tags = "Tags"
+}
+open class NetworkInsightsAccessScope extends formae.Resource {
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    excludePaths: Listing<ScopeAccessScopePathRequest>?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    matchPaths: Listing<ScopeAccessScopePathRequest>?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

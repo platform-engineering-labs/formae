@@ -1,0 +1,32 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.placementgroup
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::PlacementGroup"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "GroupName"
+    tags = "Tags"
+}
+open class PlacementGroup extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    partitionCount: Int?
+
+    @aws.FieldHint{createOnly = true}
+    spreadLevel: String?
+
+    @aws.FieldHint{createOnly = true}
+    strategy: String?
+
+    @aws.FieldHint{createOnly = true}
+    tags: Listing<formae.Tag>?
+}

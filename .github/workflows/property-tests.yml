@@ -1,0 +1,33 @@
+name: formae-property-tests
+
+on:
+  workflow_dispatch:
+  # Run 1x a day at midnight UTC
+  schedule:
+  - cron: '0 0 * * *'
+
+jobs:
+  property-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25.1'
+
+    - name: Install pkl
+      uses: pkl-community/setup-pkl@v0
+      with:
+        pkl-version: 0.29.0
+
+    - name: Build Project
+      run: make build
+        
+    - name: Run Property Tests
+      run: make test-property

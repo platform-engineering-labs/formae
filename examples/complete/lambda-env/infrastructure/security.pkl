@@ -1,0 +1,63 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/iam/role.pkl"
+import "@aws/ec2/securitygroup.pkl"
+
+import "./network.pkl"
+import "./storage.pkl"
+
+import "../vars.pkl"
+
+
+function lambdaRole(properties: Dynamic?): role.Role = new role.Role {
+    label = "LambdaRole"
+    stack = vars.stack.res
+    roleName = properties.name.value + "-lambda-role"
+    assumeRolePolicyDocument {
+        ["Version"] = "2012-10-17"
+        ["Statement"] {
+            new {
+                ["Effect"] = "Allow"
+                ["Principal"] {
+                    ["Service"] = "lambda.amazonaws.com"
+                }
+                ["Action"] = "sts:AssumeRole"
+            }
+        }
+    }
+    managedPolicyArns {
+        "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+    }
+    tags {
+        new { key = "Name"; value = properties.name.value + "-lambda-role" }
+    }
+}
+
+function securityGroups(properties: Dynamic?): Listing = new Listing {
+    new securitygroup.SecurityGroup {
+        label = "DatabaseSecurityGroup"
+        stack = vars.stack.res
+        groupName = properties.name.value + "-db-sg"
+        groupDescription = "Security group for RDS database"
+        vpcId = network.vpc(properties).res.id
+        tags {
+            new { key = "Name"; value = properties.name.value + "-db-sg" }
+        }
+    }
+
+    new securitygroup.SecurityGroup {
+        label = "LambdaSecurityGroup"
+        stack = vars.stack.res
+        groupName = properties.name.value + "-lambda-sg"
+        groupDescription = "Security group for Lambda functions"
+        vpcId = network.vpc(properties).res.id
+        tags {
+            new { key = "Name"; value = properties.name.value + "-lambda-sg" }
+        }
+    }
+}

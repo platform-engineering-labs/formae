@@ -1,0 +1,66 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name" // flag from --help
+    default = "snarf"
+  }
+}
+
+// Must be out of Forma scope due to type restriction of Resource|Target|Stack
+local networks = new {
+  ["a"] = "10.0.0.0/19"
+  ["b"] = "10.0.32.0/19"
+  ["c"] = "10.0.64.0/18"
+}
+
+forma {
+  new formae.Stack {
+    label = "pel-vpc-group-stack"
+    description = "Stack for vpc"
+  }
+
+
+  // Targets should be similar to stacks
+  // for create and update
+  // targets have more properties via the config
+  new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  local myVpc = new vpc.VPC {
+    label = "pel-group-vpc"
+    cidrBlock = "10.0.0.0/16"
+    enableDnsHostnames = false
+    tags {
+      new {
+        key = "Name"
+        value = properties.name.value // Grab a property from the bound node
+      }
+    }
+  }
+  myVpc
+
+  for (zone, net in networks) {
+    new subnet.Subnet {
+      label = "pel-subnet-\(zone)"
+      group = "pel-group-vpc"
+      availabilityZone = "\(target.config.region)\(zone)"
+      cidrBlock = net
+      vpcId = myVpc.res.id
+    }
+  }
+}

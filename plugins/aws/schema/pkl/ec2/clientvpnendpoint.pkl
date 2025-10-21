@@ -1,0 +1,119 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.clientvpnendpoint
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::ClientVpnEndpoint"
+
+@aws.SubResourceHint
+open class ClientVpnEndpointCertificateAuthenticationRequest extends formae.SubResource {
+    clientRootCertificateChainArn: String
+}
+
+@aws.SubResourceHint
+open class AuthenticationOption extends formae.SubResource {
+    activeDirectory: ClientVpnEndpointDirectoryServiceAuthenticationRequest?
+    federatedAuthentication: ClientVpnEndpointFederatedAuthenticationRequest?
+    mutualAuthentication: ClientVpnEndpointCertificateAuthenticationRequest?
+    type: String
+}
+
+@aws.SubResourceHint
+open class ClientConnectOptions extends formae.SubResource {
+    enabled: Boolean
+    lambdaFunctionArn: String?
+}
+
+@aws.SubResourceHint
+open class ClientLoginBannerOptions extends formae.SubResource {
+    bannerText: String?
+    enabled: Boolean
+}
+
+@aws.SubResourceHint
+open class ConnectionLogOptions extends formae.SubResource {
+    cloudwatchLogGroup: String?
+    cloudwatchLogStream: String?
+    enabled: Boolean
+}
+
+@aws.SubResourceHint
+open class ClientVpnEndpointDirectoryServiceAuthenticationRequest extends formae.SubResource {
+    directoryId: String
+}
+
+@aws.SubResourceHint
+open class ClientVpnEndpointFederatedAuthenticationRequest extends formae.SubResource {
+    sAMLProviderArn: String
+    selfServiceSAMLProviderArn: String?
+}
+
+@aws.SubResourceHint
+open class TagSpecification extends formae.SubResource {
+    resourceType: String
+    tags: Listing<formae.Tag>
+}
+
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    tags = "TagSpecifications"
+    discoverable = false
+}
+open class ClientVpnEndpoint extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    authenticationOptions: Listing<AuthenticationOption>
+
+    @aws.FieldHint{createOnly = true}
+    clientCidrBlock: String
+
+    @aws.FieldHint
+    clientConnectOptions: ClientConnectOptions?
+
+    @aws.FieldHint
+    clientLoginBannerOptions: ClientLoginBannerOptions?
+
+    @aws.FieldHint
+    connectionLogOptions: ConnectionLogOptions
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    dnsServers: Listing<String>?
+
+    @aws.FieldHint
+    securityGroupIds: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    selfServicePortal: String?
+
+    @aws.FieldHint
+    serverCertificateArn: String
+
+    @aws.FieldHint
+    sessionTimeoutHours: Int?
+
+    @aws.FieldHint
+    splitTunnel: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    tagSpecifications: Listing<TagSpecification>?
+
+    @aws.FieldHint{createOnly = true}
+    transportProtocol: String?
+
+    @aws.FieldHint
+    vpcId: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    vpnPort: Int?
+}

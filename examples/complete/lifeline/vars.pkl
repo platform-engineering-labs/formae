@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+
+projectName = "lifeline"
+stackName = "lifeline"
+region = "us-east-1"
+
+regionProp = new formae.Prop {
+    flag = "region"
+    default = region
+}
+
+stack: formae.Stack = new {
+    label = stackName
+    description = "Stack for the lifeline showcase"
+}
+
+target: formae.Target = new formae.Target {
+    label = "aws-target"
+    config = new aws.Config {
+        region = module.regionProp.value
+    }
+}
+
+vpcLabel = "lifeline-vpc"
+
+s3BucketSuffix = "-unique-bucket-id"
+
+crossCuttingTag = "cross-cutting-tag"
+crossCuttingTagValue = "cross-cutting-tag-value"

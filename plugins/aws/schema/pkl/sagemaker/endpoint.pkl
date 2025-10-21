@@ -1,0 +1,114 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.sagemaker.endpoint
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::SageMaker::Endpoint"
+
+typealias TrafficRoutingType = "ALL_AT_ONCE"|"CANARY"|"LINEAR"
+typealias CapacitySizeType = "INSTANCE_COUNT"|"CAPACITY_PERCENT"
+typealias VariantPropertyType = "DesiredInstanceCount"|"DesiredWeight"
+
+@aws.SubResourceHint
+open class Alarm extends formae.SubResource {
+    alarmName: String
+}
+
+@aws.SubResourceHint
+open class AutoRollbackConfig extends formae.SubResource {
+    alarms: Listing<Alarm>
+}
+
+@aws.SubResourceHint
+open class BlueGreenUpdatePolicy extends formae.SubResource {
+    maximumExecutionTimeoutInSeconds: Int?
+    terminationWaitInSeconds: Int?
+    trafficRoutingConfiguration: TrafficRoutingConfig
+}
+
+@aws.SubResourceHint
+open class CapacitySize extends formae.SubResource {
+    type: CapacitySizeType
+    value: Int
+}
+
+@aws.SubResourceHint
+open class DeploymentConfig extends formae.SubResource {
+    autoRollbackConfiguration: AutoRollbackConfig?
+    blueGreenUpdatePolicy: BlueGreenUpdatePolicy?
+    rollingUpdatePolicy: RollingUpdatePolicy?
+}
+
+@aws.SubResourceHint
+open class RollingUpdatePolicy extends formae.SubResource {
+    maximumBatchSize: CapacitySize
+    maximumExecutionTimeoutInSeconds: Int?
+    rollbackMaximumBatchSize: CapacitySize?
+    waitIntervalInSeconds: Int
+}
+
+@aws.SubResourceHint
+open class TrafficRoutingConfig extends formae.SubResource {
+    canarySize: CapacitySize?
+    linearStepSize: CapacitySize?
+    type: TrafficRoutingType
+    waitIntervalInSeconds: Int?
+}
+
+@aws.SubResourceHint
+open class VariantProperty extends formae.SubResource {
+    variantPropertyType: VariantPropertyType?
+}
+
+
+open class EndpointResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden endpointName: EndpointResolvable = (this) {
+        Property = "EndpointName"
+    }
+}
+
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+    discoverable = false
+}
+open class Endpoint extends formae.Resource {
+
+    @aws.FieldHint
+    deploymentConfig: DeploymentConfig?
+
+    @aws.FieldHint
+    endpointConfigName: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    endpointName: String?
+
+    @aws.FieldHint{writeOnly = true}
+    excludeRetainedVariantProperties: Listing<VariantProperty>?
+
+    @aws.FieldHint{writeOnly = true}
+    retainAllVariantProperties: Boolean?
+
+    @aws.FieldHint{writeOnly = true}
+    retainDeploymentConfig: Boolean?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    hidden parent = this
+
+    hidden res: EndpointResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

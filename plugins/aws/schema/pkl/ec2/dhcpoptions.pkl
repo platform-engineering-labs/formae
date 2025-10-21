@@ -1,0 +1,41 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.dhcpoptions
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::DHCPOptions"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "DhcpOptionsId"
+    tags = "Tags"
+}
+open class DHCPOptions extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    domainName: String?
+
+    @aws.FieldHint{createOnly = true}
+    domainNameServers: Listing<String>?
+
+    @aws.FieldHint{createOnly = true}
+    ipv6AddressPreferredLeaseTime: Int?
+
+    @aws.FieldHint{createOnly = true}
+    netbiosNameServers: Listing<String>?
+
+    @aws.FieldHint{createOnly = true}
+    netbiosNodeType: Int?
+
+    @aws.FieldHint{createOnly = true}
+    ntpServers: Listing<String>?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

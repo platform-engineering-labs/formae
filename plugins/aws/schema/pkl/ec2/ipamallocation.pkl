@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.ipamallocation
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::IPAMAllocation"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "IpamPoolId"
+    parent = "AWS::EC2::IPAMPool"
+    listParam = new formae.ListProperty { parentProperty = "IpamPoolId" listParameter = "IpamPoolId" }
+}
+open class IPAMAllocation extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    cidr: String?
+
+    @aws.FieldHint{createOnly = true}
+    description: String?
+
+    @aws.FieldHint{createOnly = true}
+    ipamPoolId: String|formae.Resolvable
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    netmaskLength: Int?
+}

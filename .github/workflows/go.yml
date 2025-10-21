@@ -1,0 +1,46 @@
+name: formae-go
+
+on:
+  push:
+    branches: [ "**" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest-m
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25.1'
+
+    - name: Install pkl
+      uses: pkl-community/setup-pkl@v0
+      with:
+        pkl-version: 0.29.0
+
+    - name: Install swag
+      run: go install github.com/swaggo/swag/cmd/swag@latest
+
+    - name: Build
+      run: make all
+
+    - name: Test
+      uses: nick-fields/retry@v2
+      with:
+        timeout_minutes: 10
+        max_attempts: 3
+        command: make test-all
+
+    - name: Setup PostgreSQL
+      uses: Harmon758/postgresql-action@v1.0.0
+      with:
+        postgresql user: postgres
+        postgresql password: admin
+
+    - name: Postgres unit tests
+      run: make test-unit-postgres

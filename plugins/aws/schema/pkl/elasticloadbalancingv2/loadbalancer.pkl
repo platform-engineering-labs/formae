@@ -1,0 +1,105 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.elasticloadbalancingv2.loadbalancer
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ElasticLoadBalancingV2::LoadBalancer"
+
+@aws.SubResourceHint
+open class LoadBalancerAttribute extends formae.SubResource {
+    key: String?
+    value: String?
+}
+
+@aws.SubResourceHint
+open class SubnetMapping extends formae.SubResource {
+    allocationId: String?
+    iPv6Address: String?
+    privateIPv4Address: String?
+    sourceNatIpv6Prefix: String?
+    subnetId: String|formae.Resolvable
+}
+
+open class LoadBalancerResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden canonicalHostedZoneID: LoadBalancerResolvable = (this) {
+        property = "CanonicalHostedZoneID"
+    }
+
+    hidden dnsName : LoadBalancerResolvable = (this) {
+        property = "DNSName"
+    }
+
+    hidden loadBalancerArn: LoadBalancerResolvable = (this) {
+        property = "LoadBalancerArn"
+    }
+
+    hidden loadBalancerFullName: LoadBalancerResolvable = (this) {
+        property = "LoadBalancerFullName"
+    }
+
+    hidden loadBalancerName: LoadBalancerResolvable = (this) {
+        property = "LoadBalancerName"
+    }
+
+    hidden securityGroups: LoadBalancerResolvable = (this) {
+        property = "SecurityGroups"
+    }
+}
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+}
+open class LoadBalancer extends formae.Resource {
+
+    @aws.FieldHint
+    enablePrefixForIpv6SourceNat: String?
+
+    @aws.FieldHint
+    enforceSecurityGroupInboundRulesOnPrivateLinkTraffic: String?
+
+    @aws.FieldHint
+    ipAddressType: String?
+
+    @aws.FieldHint
+    loadBalancerAttributes: Listing<LoadBalancerAttribute>?
+
+    @aws.FieldHint
+    minimumLoadBalancerCapacity: Dynamic?
+
+    @aws.FieldHint{createOnly = true}
+    name: String?
+
+    @aws.FieldHint{createOnly = true}
+    scheme: String?
+
+    @aws.FieldHint
+    securityGroups: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    subnetMappings: Listing<SubnetMapping>?
+
+    @aws.FieldHint
+    subnets: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    type: String?
+
+    hidden parent = this
+
+    hidden res: LoadBalancerResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

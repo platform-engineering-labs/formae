@@ -1,0 +1,83 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/lambda/func.pkl"
+
+import "./infrastructure/network.pkl"
+import "./infrastructure/security.pkl"
+import "./infrastructure/storage.pkl"
+
+import "vars.pkl"
+
+
+description {
+    text = """
+    This example demonstrates how to deploy a Lambda function that uses env variables
+    to access other AWS resources.
+
+    This file creates and configures the Lambda
+    function with:
+        - Environment variables referencing the RDS database and S3 buckets
+        - VPC configuration for secure access to private resources
+        - IAM role for Lambda execution
+        - Deployment package from S3
+
+    Notably, the Lambda function does not require hardcoded values - only references
+    to other resources in the stack.
+
+    Note: This file assumes all required infrastructure has already been provisioned,
+    including S3 Objects within the deployment bucket. See README for full details.
+    It focuses on deploying and connecting the Lambda function with the provisioned
+    resources.
+    """
+    confirm = true
+}
+
+forma {
+    vars.stack
+    vars.target
+
+    new func.Function {
+        label = "HelloFunction"
+        functionName = vars.properties.name.value + "-hello"
+        runtime = "python3.11"
+        handler = "hello.lambda_handler"
+        role = security.lambdaRole(vars.properties).res.arn
+        memorySize = 256
+        timeout = 15
+
+        code = new func.Code {
+            s3Bucket = vars.properties.name.value + "-deployment-" + vars.properties.region.value
+            s3Key = "hello.zip"
+        }
+
+        environment = new func.Environment {
+            variables {
+                ["DB_HOST"] = storage.postgres(vars.properties).res.endpointAddress
+                ["DB_PORT"] = storage.postgres(vars.properties).res.endpointPort
+                ["DATA_BUCKET"] = storage.dataBucket(vars.properties).res.bucketName
+                ["DEPLOYMENT_BUCKET"] = storage.deploymentBucket(vars.properties).res.bucketName
+            }
+        }
+
+        vpcConfig = new func.VPCConfig {
+            securityGroupIds {
+                security.securityGroups(vars.properties)[1].res.groupId
+            }
+            subnetIds {
+                network.privateSubnets(vars.properties)[0].res.subnetId
+                network.privateSubnets(vars.properties)[1].res.subnetId
+            }
+        }
+
+        tags {
+            new { key = "Name"; value = vars.properties.name.value + "-hello" }
+        }
+    }
+}

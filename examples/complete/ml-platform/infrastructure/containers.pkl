@@ -1,0 +1,70 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/ecr/repository.pkl"
+import "@aws/ecs/ecscluster.pkl"
+import "@aws/kms/key.pkl"
+
+class Containers {
+  name: String
+  kmsKey: key.Key
+
+  hidden mlWorkflowRepo: repository.Repository = new {
+    label = "\(name)-ml-workflow-repo"
+    repositoryName = "\(name)/ml-workflow"
+    local kmsKeyArn = outer.kmsKey.res.arn
+
+    encryptionConfiguration {
+      encryptionType = "KMS"
+      kmsKey = kmsKeyArn
+    }
+    imageScanningConfiguration {
+      scanOnPush = true
+    }
+    tags {
+      new { key = "Name"; value = label }
+    }
+  }
+
+  hidden featureEngRepo: repository.Repository = new {
+    label = "\(name)-feature-engineering-repo"
+    repositoryName = "\(name)/feature-engineering"
+    local kmsKeyArn = outer.kmsKey.res.arn
+
+    encryptionConfiguration {
+      encryptionType = "KMS"
+      kmsKey = kmsKeyArn
+    }
+    imageScanningConfiguration {
+      scanOnPush = true
+    }
+    tags {
+      new { key = "Name"; value = label }
+      new { key = "ManagedBy"; value = "formae" }
+    }
+  }
+
+  hidden ecsCluster: ecscluster.Cluster = new {
+    label = "\(name)-ecs-cluster"
+    clusterName = "\(name)-ml-workflow"
+    clusterSettings {
+      new {
+        name = "containerInsights"
+        value = "enabled"
+      }
+    }
+    tags {
+      new { key = "Name"; value = label }
+      new { key = "ManagedBy"; value = "formae" }
+    }
+  }
+
+  resources: Listing = new {
+    mlWorkflowRepo
+    featureEngRepo
+    ecsCluster
+  }
+}

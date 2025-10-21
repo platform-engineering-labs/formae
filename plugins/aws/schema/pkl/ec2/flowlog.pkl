@@ -1,0 +1,62 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.flowlog
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::FlowLog"
+
+typealias FlowLogLogDestinationType = "cloud-watch-logs"|"s3"|"kinesis-data-firehose"
+
+typealias FlowLogResourceType = "NetworkInterface"|"Subnet"|"VPC"|"TransitGateway"|"TransitGatewayAttachment"
+
+typealias FlowLogTrafficType = "ACCEPT"|"ALL"|"REJECT"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    tags = "Tags"
+}
+open class FlowLog extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    deliverCrossAccountRole: String?
+
+    @aws.FieldHint{createOnly = true}
+    deliverLogsPermissionArn: String?
+
+    @aws.FieldHint{createOnly = true}
+    destinationOptions: Dynamic?
+
+    @aws.FieldHint{createOnly = true}
+    logDestination: String?
+
+    @aws.FieldHint{createOnly = true}
+    logDestinationType: FlowLogLogDestinationType?
+
+    @aws.FieldHint{createOnly = true}
+    logFormat: String?
+
+    @aws.FieldHint{createOnly = true}
+    logGroupName: String?
+
+    @aws.FieldHint{createOnly = true}
+    maxAggregationInterval: Int?
+
+    @aws.FieldHint{createOnly = true}
+    resourceId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    resourceType: FlowLogResourceType
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    trafficType: FlowLogTrafficType?
+}
