@@ -1,0 +1,72 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "pkl:reflect"
+import "./types.pkl"
+import "@formae/formae.pkl"
+
+function GetAllResourceTypes() = new Listing<types.ResourceType> {
+    for (moduleName, moduleValue in import*("@aws/*/*.pkl").toMap()) {
+        when(reflect.Module(moduleValue).classes.length > 0) {
+            for (className, v in reflect.Module(moduleValue).classes) {
+                when(v.annotations.length > 0 && v.annotations[0].getClass().simpleName == "ResourceHint") {
+                    new types.ResourceType {
+                        //Type = v.properties["_MAGIC"].defaultValue.Schema.Type
+                        Type = v.annotations[0].getProperty("type")
+                        Discoverable = v.annotations[0].getProperty("discoverable")
+                        Schema = new types.Schema {
+                            Nonprovisionable = v.annotations[0].getProperty("nonprovisionable")
+                            Identifier = v.annotations[0].getProperty("identifier")
+                            Tags = v.annotations[0].getProperty("tags")
+                            Hints = new Mapping<String, types.FieldHint> {
+                                for (fieldName, fieldHint in formae.fq.hints(v)) {
+                                    [fieldName] = new types.FieldHint {
+                                        CreateOnly = fieldHint.createOnly
+                                        Persist = fieldHint.persist
+                                        WriteOnly = fieldHint.writeOnly
+                                        Required = fieldHint.required
+                                        RequiredOnCreate = fieldHint.requiredOnCreate
+                                    }
+                                }
+                            }
+                            Fields = formae.fq.fields(v)
+                        }
+                        ParentResourceTypesWithMappingProperties =
+                            let (parent = v.annotations[0].getProperty("parent"))
+                            let (listParam = v.annotations[0].getProperty("listParam"))
+                            if (parent != null && listParam != null)
+                                new Mapping<String, List<types.ListProperty>> {
+                                    [parent] = if (listParam is Listing)
+                                        // Handle Listing<formae.ListProperty>
+                                        listParam.toList().map((item) ->
+                                            new types.ListProperty {
+                                                ParentProperty = item.getProperty("parentProperty")
+                                                ListParameter = item.getProperty("listParameter")
+                                            }
+                                        )
+                                    else if (listParam is List)
+                                        // Handle List<formae.ListProperty>
+                                        listParam.map((item) ->
+                                            new types.ListProperty {
+                                                ParentProperty = item.getProperty("parentProperty")
+                                                ListParameter = item.getProperty("listParameter")
+                                            }
+                                        )
+                                    else
+                                        // Handle single formae.ListProperty
+                                        List(new types.ListProperty {
+                                            ParentProperty = listParam.getProperty("parentProperty")
+                                            ListParameter = listParam.getProperty("listParameter")
+                                        })
+                                }
+                            else
+                                new Mapping<String, List<types.ListProperty>> {}
+                    }
+                }
+            }
+        }
+    }
+}

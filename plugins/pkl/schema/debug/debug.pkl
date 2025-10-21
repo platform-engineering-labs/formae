@@ -1,0 +1,19 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "../formae.pkl"
+
+
+@formae.ResourceHint {
+  type = "Formae::Debug::Consumer"
+  identifier = "Id"
+  discoverable = true
+}
+open class Consumer extends formae.Resource {
+  
+  @formae.FieldHint
+  value: Dynamic|String|formae.Value|formae.Resolvable
+}

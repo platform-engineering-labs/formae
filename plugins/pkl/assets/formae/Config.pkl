@@ -1,0 +1,192 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module formae.Config
+
+typealias Port = Int(this >= 0 && this <= 65535)
+
+typealias CronExpression = String(matches(Regex(#"^((\*|((\d+,)*\d+)|((\d+|\*)/\d+)|(\d+-\d+))\s+){4}(\*|((\d+,)*\d+)|((\d+|\*)/\d+)|(\d+-\d+))$"#)))
+
+typealias DatastoreType = "sqlite" | "postgres"
+
+class ServerConfig {
+    nodename: String = "formae"
+
+    hostname: String = "localhost"
+
+    port: Port = 49684
+
+    secret: String = ""
+
+    observerPort: Port = 0
+
+    tlsCert: String?
+    tlsKey: String?
+}
+
+class DatastoreConfig {
+    datastoreType: DatastoreType = "sqlite"
+
+    sqlite: SqliteConfig = new SqliteConfig{}
+
+    postgres: PostgresConfig = new PostgresConfig{}
+}
+
+class SqliteConfig {
+    filePath: String = "~/.pel/formae/data/formae.db"
+}
+
+class PostgresConfig {
+    host: String = "localhost"
+
+    port: Port = 5432
+
+    user: String = "postgres"
+
+    password: String = "admin"
+
+    database: String = ""
+
+    schema: String = ""
+
+    connectionParams: String = ""
+}
+
+class RetryConfig {
+    statusCheckInterval: Duration = 10.s
+
+    maxRetries: Int = 9
+
+    retryDelay: Duration = 10.s
+}
+
+class DiscoveryConfig {
+    enabled: Boolean = false
+
+    scanTargets: Listing<Target> = new Listing<Target> {
+        new {
+            label = "us-west-2"
+            config {
+                type = "AWS"
+                region = "us-west-2"
+            }
+        }
+    }
+
+    labelTagKeys: Listing<String> = new Listing<String> {
+        "Name"
+    }
+
+    interval: Duration = 1.h
+
+    resourceTypesToDiscover: Listing<String> = new Listing<String> { }
+}
+
+class SynchronizationConfig {
+    enabled: Boolean = true
+
+    interval: Duration = 5.min
+}
+
+class Target {
+    label: String
+
+    namespace: String = config.type.toUpperCase()
+
+    hidden config: Dynamic(this.hasProperty("type"))
+    Config: Dynamic = config.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+}
+
+class User {
+    username: String
+    password: String
+}
+
+typealias LogLevel = "debug" | "info" | "warn" | "error"
+
+class LoggingConfig {
+    filePath: String = "~/.pel/formae/log/formae.log"
+
+    fileLogLevel: LogLevel = "debug"
+
+    consoleLogLevel: LogLevel = "info"
+}
+
+class OTLPConfig {
+    endpoint: String = "http://localhost:4317"
+
+    protocol: "grpc" | "http" = "grpc"
+
+    insecure: Boolean = true
+}
+
+class OTelConfig {
+    enabled: Boolean = false
+
+    serviceName: String = "formae-agent"
+
+    otlp: OTLPConfig = new OTLPConfig{}
+}
+
+class AgentConfig {
+    server: ServerConfig = new ServerConfig{}
+
+    datastore: DatastoreConfig = new DatastoreConfig{}
+
+    retry: RetryConfig = new RetryConfig{}
+
+    synchronization: SynchronizationConfig = new SynchronizationConfig{}
+
+    discovery: DiscoveryConfig = new DiscoveryConfig{}
+
+    logging: LoggingConfig = new LoggingConfig{}
+
+    oTel: OTelConfig = new OTelConfig{}
+}
+
+class ApiConfig {
+    url: String = "http://localhost"
+
+    port: Port = 49684
+}
+
+class CliConfig {
+    api: ApiConfig
+
+    disableUsageReporting: Boolean = false
+}
+
+class PluginConfig {
+    hidden authentication: Dynamic?(
+            if (this != null)
+                this.hasProperty("type")
+            else
+                true
+        )
+    Authentication: Dynamic? =
+        if (authentication != null)
+            authentication.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+        else
+            null
+
+    hidden network: Dynamic?(
+        if (this != null)
+            this.hasProperty("type")
+        else
+            true
+    )
+    Network: Dynamic? =
+        if (network != null)
+            network.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+        else
+            null
+}
+
+agent: AgentConfig = new AgentConfig{}
+
+cli: CliConfig = new CliConfig{}
+
+plugins: PluginConfig = new PluginConfig{}

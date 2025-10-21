@@ -1,0 +1,105 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "./vars.pkl"
+import "./nvpc.pkl"
+import "./network.pkl"
+import "./security_groups.pkl"
+import "@formae/ext/random.pkl"
+
+description {
+    text = """
+        This is the showcase that demonstrates how to work with formae from Day 0 to Day N.
+
+        This forma is supposed to be used to create, replace or destroy the basic infrastructure,
+        and it is intended to be applied holistically, for example in a GitOps-oriented setting.
+        'Holistically' means applying this forma in replace (default) mode. Typically, this forma will be
+        held and versioned in a Git repository, although formae can also make it obsolete to use Git.
+
+        This forma will be used by one of the core platform engineers who are responsible for providing infrastructure
+        to the development teams to prepare the foundation on which the teams will apply minimal changes with
+        minimal blast radius, for example workload deployments, changing memory and CPU requirements etc.
+
+        It is also used as foundation for enabling less experienced platform engineers with less responsibility
+        to make minimal basic infrastructure changes with minimal blast radius, for example adding a new subnet.
+
+        Apply this forma initially in the replace (default) mode to create the basic infrastructure.
+        Or run it again with a different AWS account or region to create the same basic infrastructure in a different
+        environment.
+
+        Make changes to this forma to add, change or remove resources holistically by applying it in replace (default) mode again.
+        Take into account that a resource that is missing in the new version of this forma will be destroyed in the replace
+        mode, if present.
+
+        Destroy all resources referenced by this forma using the destroy command.
+        """
+    confirm = true
+}
+
+local randomId = random.id(4).toString()
+
+properties {
+    name = new formae.Prop {
+        flag = "name"
+        default = "\(vars.projectName)-\(randomId)"
+    }
+
+    vpcLabel = new formae.Prop {
+        flag = "vpcLabel"
+        default = vars.vpcLabel
+    }
+
+    vpcCidr = new formae.Prop {
+        flag = "vpcCidr"
+        default = "10.1.0.0/16"
+    }
+
+    subnetCidr1 = new formae.Prop {
+        flag = "subnetCidr1"
+        default = "10.1.1.0/24"
+    }
+
+    subnetCidr2 = new formae.Prop {
+        flag = "subnetCidr2"
+        default = "10.1.2.0/24"
+    }
+
+    region = new formae.Prop {
+        flag = "region"
+        default = vars.region
+    }
+}
+
+forma {
+    vars.stack
+    vars.target
+
+    // VPC
+    nvpc.nvpc(properties)
+
+    // gateways
+    network.igw(properties)
+    network.attachIgw(properties)
+
+    // subnets
+    for (subnet in network.subnets(properties)) {
+        subnet
+    }
+
+    network.routeTable(properties)
+    network.publicRoute(properties)
+
+    for (subnetAssoc in network.subnetAssocs(properties)) {
+        subnetAssoc
+    }
+
+    // security groups
+    for (securityGroup in security_groups.securityGroups(properties)) {
+        securityGroup
+    }
+}

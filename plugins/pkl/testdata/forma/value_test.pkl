@@ -1,0 +1,73 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/debug/debug.pkl"
+import "@formae/ext/random.pkl"
+import "@aws/aws.pkl"
+import "@aws/secretsmanager/secret.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name" // flag from --help
+    default = "my-secret"
+  }
+  secret = new formae.Prop {
+    flag = "secret"
+    default = "asf3eriieiwowt"
+  }
+  description = new formae.Prop {
+    flag = "description"
+    default = "my best secret ever"
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "pel-secrets"
+    description = "Stack for PEL secrets"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  // SecretManager.SecretString is writeOnly via CloudControl API
+  // this isn't problematic for most infrastructure within AWS
+  // as secrets are generally referenced via Arn
+  // however, to support res.SecretString within the Formae Node
+  // we will need to enrich the resource read with a vanilla API call
+  // to the secrets manager.
+  // https://docs.aws.amazon.com/secretsmanager/latest/userguide/retrieving-secrets_cache-go.html
+  local mySecret = new secret.Secret {
+    label = properties.name.value
+    name = properties.name.value
+    description = properties.description.value
+    secretString = formae.value(properties.secret.value).opaque
+  }
+  mySecret
+
+  // A strategy of setOnce should ignore an update for this property
+  // should strategy change the property can be updated
+  new secret.Secret {
+    label = properties.name.value + "-stable"
+    name = properties.name.value + "-stable"
+    description = properties.description.value
+
+    secretString = formae.value(random.password(12, false)).opaque.setOnce
+  }
+
+  when (formae.cmd() == "eval") {
+    new debug.Consumer {
+      label = "my-consumer"
+      value = mySecret.res.arn.opaque
+    }
+  }
+}

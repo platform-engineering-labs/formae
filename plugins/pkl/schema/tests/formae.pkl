@@ -1,0 +1,263 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module Formae
+
+amends "pkl:test"
+import "pkl:reflect" as reflect
+import "../formae.pkl"
+
+// Test data
+local resolvable = new formae.Resolvable {
+    label = "bucket"
+    stack = "storage"
+    type = "namespace::resource::s3bucket"
+}
+
+local resolvableWithProperty = new formae.Resolvable {
+    label = "bucket"
+    stack = "storage"
+    type = "namespace::resource::s3bucket"
+    property = "name"
+}
+
+local stackResolvable = new formae.StackResolvable {
+    label = "test-stack"
+}
+
+local targetResolvable = new formae.TargetResolvable {
+    label = "aws-target"
+}
+
+local testValue = new formae.Value {
+    value = "secret-password"
+}
+
+local opaqueValue = testValue.opaque
+
+local setOnceValue = testValue.setOnce
+
+local testTag = new formae.Tag {
+    key = "Environment"
+    value = "production"
+}
+
+local testStack = new formae.Stack {
+    label = "my-stack"
+    description = "Test stack for unit tests"
+}
+
+local testTarget = new formae.Target {
+    label = "my-target"
+    namespace = "AWS"
+    config = new Dynamic {
+        Region = "us-east-1"
+        AccessKey = "test-key"
+    }
+}
+
+// Test base resource class
+@formae.ResourceHint {
+    type = "AWS::S3::Bucket"
+    identifier = "BucketName"
+    tags = "Tags"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestBucket extends formae.Resource {
+    @formae.FieldHint {
+        outputField = "bucketName"
+    }
+    bucketName: String
+
+    @formae.FieldHint {
+        createOnly = true
+    }
+    region: String?
+
+    @formae.FieldHint
+    tags: Listing<formae.Tag>?
+}
+
+local testBucket = new TestBucket {
+    label = "test-bucket"
+    stack = stackResolvable
+    target = targetResolvable
+    bucketName = "my-test-bucket"
+    region = "us-west-2"
+    tags = new Listing { testTag }
+}
+
+examples {
+    ["Basic Resolvable"] {
+        resolvable
+    }
+
+    ["Stack Resolvable"] {
+        stackResolvable
+    }
+
+    ["Target Resolvable"] {
+        targetResolvable
+    }
+
+    ["Clear Value"] {
+        testValue
+    }
+
+    ["Opaque Value"] {
+        opaqueValue
+    }
+
+    ["SetOnce Value"] {
+        setOnceValue
+    }
+
+    ["Tag"] {
+        testTag
+    }
+
+    ["Stack"] {
+        testStack
+    }
+
+    ["Target"] {
+        testTarget
+    }
+
+    ["Test Resource - fields()"] {
+        testBucket.fields()
+    }
+
+    ["Test Resource - hints()"] {
+        testBucket.hints()
+    }
+
+    ["Test Resource - schema()"] {
+        testBucket.schema()
+    }
+
+    ["Test Resource - type()"] {
+        testBucket.type()
+    }
+
+    ["Test Resource - render()"] {
+        testBucket.render()
+    }
+
+    ["Fq - fields"] {
+        formae.fq.fields(reflect.Class(TestBucket))
+    }
+
+    ["Fq - hints"] {
+        formae.fq.hints(reflect.Class(TestBucket))
+    }
+
+    ["Fq - schema"] {
+        formae.fq.schema(reflect.Class(TestBucket))
+    }
+
+    ["Fq - type"] {
+        formae.fq.type(reflect.Class(TestBucket))
+    }
+}
+
+facts {
+    ["Stack resolvable inherits from Resolvable"] {
+        stackResolvable is formae.Resolvable
+    }
+
+    ["Stack resolvable has correct type"] {
+        stackResolvable.type == "Formae::Stack"
+    }
+
+    ["Target resolvable inherits from Resolvable"] {
+        targetResolvable is formae.Resolvable
+    }
+
+    ["Target resolvable has correct type"] {
+        targetResolvable.type == "Formae::Target"
+    }
+
+    ["Value has correct properties"] {
+        testValue.$value == "secret-password" &&
+        testValue.$visibility == "Clear" &&
+        testValue.$strategy == "Update"
+    }
+
+    ["Opaque value changes visibility"] {
+        opaqueValue.$visibility == "Opaque" &&
+        opaqueValue.$value == "secret-password"
+    }
+
+    ["SetOnce value changes strategy"] {
+        setOnceValue.$strategy == "SetOnce" &&
+        setOnceValue.$value == "secret-password"
+    }
+
+    ["Tag has key-value structure"] {
+        testTag.key == "Environment" &&
+        testTag.value == "production"
+    }
+
+    ["Stack creates internal resolvable"] {
+        testStack.label == "my-stack" &&
+        testStack.res.label == "my-stack" &&
+        testStack.res.type == "Formae::Stack"
+    }
+
+    ["Target creates internal resolvable"] {
+        testTarget.label == "my-target" &&
+        testTarget.namespace == "AWS" &&
+        testTarget.res.label == "my-target" &&
+        testTarget.res.type == "Formae::Target"
+    }
+
+    ["Resource fields are extracted correctly"] {
+        let (fields = testBucket.fields())
+        fields.contains("bucketName") &&
+        fields.contains("Region") &&
+        fields.contains("Tags")
+    }
+
+    ["Resource hints contain field annotations"] {
+        let (hints = testBucket.hints())
+        hints.containsKey("bucketName") &&
+        hints["bucketName"].Required == true &&
+        hints.containsKey("Region") &&
+        hints["Region"].CreateOnly == true
+    }
+
+    ["Resource schema is built correctly"] {
+        let (schema = testBucket.schema())
+        schema.Identifier == "BucketName" &&
+        schema.Tags == "Tags" &&
+        schema.Nonprovisionable == false &&
+        schema.Fields.contains("bucketName")
+    }
+
+    ["Resource type matches annotation"] {
+        testBucket.type() == "AWS::S3::Bucket"
+    }
+
+    ["Resource render includes type and schema"] {
+        let (rendered = testBucket.render())
+        rendered.Type == "AWS::S3::Bucket" &&
+        rendered.Schema != null &&
+        rendered.Label == "test-bucket"
+    }
+
+    ["Fq functions work at module level"] {
+        let (fields = formae.fq.fields(reflect.Class(TestBucket)))
+        let (hints = formae.fq.hints(reflect.Class(TestBucket)))
+        let (schema = formae.fq.schema(reflect.Class(TestBucket)))
+        let (type = formae.fq.type(reflect.Class(TestBucket)))
+
+        fields.contains("bucketName") &&
+        hints.containsKey("bucketName") &&
+        schema.Identifier == "BucketName" &&
+        type == "AWS::S3::Bucket"
+    }
+}

@@ -1,0 +1,58 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.rds.dbsecuritygroup
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::RDS::DBSecurityGroup"
+
+@aws.SubResourceHint
+open class DBSecurityGroupIngress extends formae.SubResource {
+    cIDRIP: String?
+    eC2SecurityGroupId: (String|formae.Resolvable)?
+    eC2SecurityGroupName: String?
+    eC2SecurityGroupOwnerId: (String|formae.Resolvable)?
+}
+
+open class DBSecurityGroupResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden ref: DBSecurityGroupResolvable = (this) {
+        property = "Ref"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    discoverable = false
+}
+open class DBSecurityGroup extends formae.Resource {
+
+    @aws.FieldHint{
+        createOnly = true
+        outputField = "DBSecurityGroupIngress"
+    }
+    dbSecurityGroupIngress: Listing<DBSecurityGroupIngress>
+
+    @aws.FieldHint{createOnly = true}
+    eC2VpcId: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    groupDescription: String
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    hidden parent = this
+
+    hidden res: DBSecurityGroupResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

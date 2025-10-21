@@ -1,0 +1,8 @@
+amends "pkl:Project"
+
+dependencies {
+  ["go"] { uri = "package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.11.0" }
+  ["formae"] = import("../../../../pkl/schema/PklProject")
+  ["aws"] = import("../../../schema/pkl/PklProject")
+}
+

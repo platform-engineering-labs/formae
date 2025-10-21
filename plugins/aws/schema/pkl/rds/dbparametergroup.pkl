@@ -1,0 +1,52 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.rds.dbparametergroup
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::RDS::DBParameterGroup"
+
+open class DBParameterGroupResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden dbParameterGroupName: DBParameterGroupResolvable = (this) {
+        property = "DBParameterGroupName"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+}
+open class DBParameterGroup extends formae.Resource {
+
+    @aws.FieldHint{
+        createOnly = true
+        outputField = "DBParameterGroupName"
+    }
+    dbParameterGroupName: String?
+
+    @aws.FieldHint{createOnly = true}
+    description: String
+
+    @aws.FieldHint{createOnly = true}
+    family: String
+
+    @aws.FieldHint
+    parameters: Dynamic?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    hidden parent = this
+
+    hidden res: DBParameterGroupResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

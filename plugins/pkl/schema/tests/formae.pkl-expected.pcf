@@ -1,0 +1,284 @@
+examples {
+  ["Basic Resolvable"] {
+    new {
+      $label = "bucket"
+      $property = null
+      $stack = "storage"
+      $type = "namespace::resource::s3bucket"
+      $res = true
+      $visibility = "Clear"
+    }
+  }
+  ["Stack Resolvable"] {
+    new {
+      $label = "test-stack"
+      $property = null
+      $stack = null
+      $type = "Formae::Stack"
+      $res = true
+      $visibility = "Clear"
+    }
+  }
+  ["Target Resolvable"] {
+    new {
+      $label = "aws-target"
+      $property = null
+      $stack = null
+      $type = "Formae::Target"
+      $res = true
+      $visibility = "Clear"
+    }
+  }
+  ["Clear Value"] {
+    new {
+      $value = "secret-password"
+      $visibility = "Clear"
+      $strategy = "Update"
+    }
+  }
+  ["Opaque Value"] {
+    new {
+      $value = "secret-password"
+      $visibility = "Opaque"
+      $strategy = "Update"
+    }
+  }
+  ["SetOnce Value"] {
+    new {
+      $value = "secret-password"
+      $visibility = "Clear"
+      $strategy = "SetOnce"
+    }
+  }
+  ["Tag"] {
+    new {
+      Key = "Environment"
+      Value = "production"
+    }
+  }
+  ["Stack"] {
+    new {
+      Label = "my-stack"
+      Description = "Test stack for unit tests"
+    }
+  }
+  ["Target"] {
+    new {
+      Label = "my-target"
+      Namespace = "AWS"
+      Config {
+        Region = "us-east-1"
+        AccessKey = "test-key"
+      }
+    }
+  }
+  ["Test Resource - fields()"] {
+    new {
+      "bucketName"
+      "Region"
+      "Tags"
+    }
+  }
+  ["Test Resource - hints()"] {
+    new {
+      ["bucketName"] {
+        CreateOnly = false
+        Persist = false
+        WriteOnly = false
+        Required = true
+        RequiredOnCreate = false
+      }
+      ["Region"] {
+        CreateOnly = true
+        Persist = false
+        WriteOnly = false
+        Required = false
+        RequiredOnCreate = false
+      }
+      ["Tags"] {
+        CreateOnly = false
+        Persist = false
+        WriteOnly = false
+        Required = false
+        RequiredOnCreate = false
+      }
+    }
+  }
+  ["Test Resource - schema()"] {
+    new {
+      Nonprovisionable = false
+      Identifier = "BucketName"
+      Tags = "Tags"
+      Fields {
+        "bucketName"
+        "Region"
+        "Tags"
+      }
+      Hints {
+        ["bucketName"] {
+          CreateOnly = false
+          Persist = false
+          WriteOnly = false
+          Required = true
+          RequiredOnCreate = false
+        }
+        ["Region"] {
+          CreateOnly = true
+          Persist = false
+          WriteOnly = false
+          Required = false
+          RequiredOnCreate = false
+        }
+        ["Tags"] {
+          CreateOnly = false
+          Persist = false
+          WriteOnly = false
+          Required = false
+          RequiredOnCreate = false
+        }
+      }
+      Discoverable = true
+    }
+  }
+  ["Test Resource - type()"] {
+    "AWS::S3::Bucket"
+  }
+  ["Test Resource - render()"] {
+    new {
+      Label = "test-bucket"
+      Group = null
+      Target {
+        $label = "aws-target"
+        $property = null
+        $stack = null
+        $type = "Formae::Target"
+        $res = true
+        $visibility = "Clear"
+      }
+      Stack {
+        $label = "test-stack"
+        $property = null
+        $stack = null
+        $type = "Formae::Stack"
+        $res = true
+        $visibility = "Clear"
+      }
+      Type = "AWS::S3::Bucket"
+      Schema {
+        Nonprovisionable = false
+        Identifier = "BucketName"
+        Tags = "Tags"
+        Fields {
+          "bucketName"
+          "Region"
+          "Tags"
+        }
+        Hints {
+          ["bucketName"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = false
+            Required = true
+            RequiredOnCreate = false
+          }
+          ["Region"] {
+            CreateOnly = true
+            Persist = false
+            WriteOnly = false
+            Required = false
+            RequiredOnCreate = false
+          }
+          ["Tags"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = false
+            Required = false
+            RequiredOnCreate = false
+          }
+        }
+        Discoverable = true
+      }
+      Properties {
+        bucketName = "my-test-bucket"
+        Region = "us-west-2"
+        Tags {
+          new {
+            Key = "Environment"
+            Value = "production"
+          }
+        }
+      }
+    }
+  }
+  ["Fq - fields"] {
+    new {
+      "bucketName"
+      "Region"
+      "Tags"
+    }
+  }
+  ["Fq - hints"] {
+    new {
+      ["bucketName"] {
+        CreateOnly = false
+        Persist = false
+        WriteOnly = false
+        Required = true
+        RequiredOnCreate = false
+      }
+      ["Region"] {
+        CreateOnly = true
+        Persist = false
+        WriteOnly = false
+        Required = false
+        RequiredOnCreate = false
+      }
+      ["Tags"] {
+        CreateOnly = false
+        Persist = false
+        WriteOnly = false
+        Required = false
+        RequiredOnCreate = false
+      }
+    }
+  }
+  ["Fq - schema"] {
+    new {
+      Nonprovisionable = false
+      Identifier = "BucketName"
+      Tags = "Tags"
+      Fields {
+        "bucketName"
+        "Region"
+        "Tags"
+      }
+      Hints {
+        ["bucketName"] {
+          CreateOnly = false
+          Persist = false
+          WriteOnly = false
+          Required = true
+          RequiredOnCreate = false
+        }
+        ["Region"] {
+          CreateOnly = true
+          Persist = false
+          WriteOnly = false
+          Required = false
+          RequiredOnCreate = false
+        }
+        ["Tags"] {
+          CreateOnly = false
+          Persist = false
+          WriteOnly = false
+          Required = false
+          RequiredOnCreate = false
+        }
+      }
+      Discoverable = true
+    }
+  }
+  ["Fq - type"] {
+    "AWS::S3::Bucket"
+  }
+}

@@ -1,0 +1,75 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/route53/hostedzone.pkl"
+import "@aws/route53/recordset.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name" // flag from --help
+    default = "snarf.platform.engineering"
+  }
+  test = new formae.Prop {
+    flag = "test"
+  }
+  toggle = new formae.Prop {
+    flag = "toggle"
+    default = false
+  }
+  count = new formae.Prop {
+    flag = "count"
+    default = 3
+  }
+  cmd = new formae.Prop {
+    default = formae.cmd()
+  }
+  mode = new formae.Prop {
+    default = formae.mode()
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "pel-dns"
+    description = "Stack for PEL DNS records"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  local zone = new hostedzone.HostedZone {
+    label = "pel-zone"
+    name = properties.name.value+properties.test.value
+  }
+  zone
+
+  new recordset.RecordSet {
+    label = "1-pel-record-fruitbat"
+    name = "fruitbat.\(properties.name.value)"
+    type = "A"
+    hostedZoneId = zone.res.id
+    resourceRecords {
+      "192.168.55.1"
+    }
+  }
+
+  new recordset.RecordSet {
+    label = "2-pel-record-nacho"
+    name = "nacho.\(properties.name.value)"
+    type = "A"
+    hostedZoneId = zone.res.id
+    resourceRecords {
+      "192.168.55.2"
+    }
+  }
+}

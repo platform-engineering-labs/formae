@@ -1,0 +1,25 @@
+tests:
+  route53-hostedzone:
+    name: "Route53 hostedzone"
+    description: "Test route53 hostedzone"
+    source: "tests/e2e/pkl/route53_hostedzone.pkl"
+    expected_dir: "tests/e2e/expected/route53-hostedzone"
+    timeout:
+      apply: 1800
+      destroy: 1200
+  s3-bucket:
+    name: "S3 bucket"
+    description: "Test s3 bucket"
+    source: "tests/e2e/pkl/s3_bucket.pkl"
+    expected_dir: "tests/e2e/expected/e2e-s3-bucket"
+    timeout:
+      apply: 1800
+      destroy: 1200
+  legacy-record:
+    name: "Legacy Record"
+    description: "Test legacy record"
+    source: "tests/e2e/pkl/legacy_record.pkl"
+    expected_dir: "tests/e2e/expected/legacy-record"
+    timeout:
+      apply: 1800
+      destroy: 1200

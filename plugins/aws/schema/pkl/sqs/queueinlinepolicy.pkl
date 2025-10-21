@@ -1,0 +1,28 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.sqs.queueinlinepolicy
+
+import "../aws.pkl"
+import "@formae/formae.pkl"
+
+const type = "AWS::SQS::QueueInlinePolicy"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    discoverable = false
+}
+open class QueueInlinePolicy extends formae.Resource {
+
+    @aws.FieldHint
+    policyDocument: Dynamic
+
+    @aws.FieldHint {
+        createOnly = true
+    }
+    queue: String|formae.Resolvable
+}

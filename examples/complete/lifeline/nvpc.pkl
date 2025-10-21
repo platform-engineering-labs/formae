@@ -1,0 +1,16 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@formae/formae.pkl"
+import "@aws/ec2/vpc.pkl"
+
+function nvpc(properties: Dynamic?): vpc.VPC = new vpc.VPC {
+    label = properties.vpcLabel.value
+    cidrBlock = properties.vpcCidr.value
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    tags { new { key = "Name"; value = formae.value(properties.name.value + "-vpc").setOnce } }
+}

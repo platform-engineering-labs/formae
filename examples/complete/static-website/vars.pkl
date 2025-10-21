@@ -1,0 +1,21 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Base configuration - just default values
+projectName = "static-website"
+environment = "dev"
+bucketSuffix = "-uber-unique-id"
+region = "us-east-2"
+domainName = "test.platform.engineering"
+
+// CloudFront configuration
+defaultTTL = 60
+minTTL = 0
+maxTTL = 600
+
+// Fixed values
+stackName = "static-website-stack"
+cloudFrontHostedZoneId = "Z2FDTNDATAQYW2"

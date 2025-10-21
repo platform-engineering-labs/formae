@@ -1,0 +1,143 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.elasticloadbalancingv2.listener
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ElasticLoadBalancingV2::Listener"
+
+@aws.SubResourceHint
+open class Action extends formae.SubResource {
+    authenticateCognitoConfig: AuthenticateCognitoConfig?
+    authenticateOidcConfig: AuthenticateOidcConfig?
+    fixedResponseConfig: FixedResponseConfig?
+    forwardConfig: ForwardConfig?
+    order: Int?
+    redirectConfig: RedirectConfig?
+    targetGroupArn: (String|formae.Resolvable)?
+    type: String
+}
+
+@aws.SubResourceHint
+open class AuthenticateCognitoConfig extends formae.SubResource {
+    authenticationRequestExtraParams:  Mapping<String, Any>?
+    onUnauthenticatedRequest: String?
+    scope: String?
+    sessionCookieName: String?
+    sessionTimeout: String?
+    userPoolArn: String
+    userPoolClientId: String
+    userPoolDomain: String
+}
+
+@aws.SubResourceHint
+open class AuthenticateOidcConfig extends formae.SubResource {
+    authenticationRequestExtraParams: Mapping<String, Any>?
+    authorizationEndpoint: String
+    clientId: String
+    @aws.FieldHint{writeOnly = true}
+    clientSecret: String?
+    issuer: String
+    onUnauthenticatedRequest: String?
+    scope: String?
+    sessionCookieName: String?
+    sessionTimeout: String?
+    tokenEndpoint: String
+    useExistingClientSecret: Boolean?
+    userInfoEndpoint: String
+}
+
+@aws.SubResourceHint
+open class Certificate extends formae.SubResource {
+    certificateArn: String?
+}
+
+@aws.SubResourceHint
+open class FixedResponseConfig extends formae.SubResource {
+    contentType: String?
+    messageBody: String?
+    statusCode: String
+}
+
+@aws.SubResourceHint
+open class ForwardConfig extends formae.SubResource {
+    targetGroupStickinessConfig: TargetGroupStickinessConfig?
+    targetGroups: Listing<TargetGroupTuple>?
+}
+
+@aws.SubResourceHint
+open class ListenerAttribute extends formae.SubResource {
+    key: String?
+    value: String?
+}
+
+@aws.SubResourceHint
+open class MutualAuthentication extends formae.SubResource {
+    advertiseTrustStoreCaNames: String?
+    ignoreClientCertificateExpiry: Boolean?
+    mode: String?
+    trustStoreArn: String?
+}
+
+@aws.SubResourceHint
+open class RedirectConfig extends formae.SubResource {
+    host: String?
+    path: String?
+    port: String?
+    protocol: String?
+    query: String?
+    statusCode: String
+}
+
+@aws.SubResourceHint
+open class TargetGroupStickinessConfig extends formae.SubResource {
+    durationSeconds: Int?
+    enabled: Boolean?
+}
+
+@aws.SubResourceHint
+open class TargetGroupTuple extends formae.SubResource {
+    targetGroupArn: String?
+    weight: Int?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "ListenerArn"
+    parent = "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    listParam = new formae.ListProperty { parentProperty = "LoadBalancerArn" listParameter = "LoadBalancerArn" }
+}
+open class Listener extends formae.Resource {
+
+    @aws.FieldHint
+    alpnPolicy: Listing<String>?
+
+    @aws.FieldHint
+    certificates: Listing<Certificate>?
+
+    @aws.FieldHint
+    defaultActions: Listing<Action>
+
+    @aws.FieldHint
+    listenerAttributes: Listing<ListenerAttribute>?
+
+    @aws.FieldHint{createOnly = true}
+    loadBalancerArn: String|formae.Resolvable
+
+    @aws.FieldHint
+    mutualAuthentication: MutualAuthentication?
+
+    @aws.FieldHint
+    port: Int?
+
+    @aws.FieldHint
+    protocol: String?
+
+    @aws.FieldHint
+    sslPolicy: String?
+}

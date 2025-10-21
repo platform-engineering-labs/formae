@@ -1,0 +1,53 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/s3/bucket.pkl"
+import "@aws/s3/bucketpolicy.pkl"
+
+import "../vars.pkl"
+
+siteBucket = new bucket.Bucket {
+    label = "WebsiteBucket"
+    bucketName = vars.projectName + vars.bucketSuffix
+
+    websiteConfiguration = new bucket.BucketWebsiteConfiguration {
+        indexDocument = "index.html"
+    }
+
+    publicAccessBlockConfiguration = new bucket.BucketPublicAccessBlockConfiguration {
+        blockPublicAcls = false
+        blockPublicPolicy = false
+        ignorePublicAcls = false
+        restrictPublicBuckets = false
+    }
+
+    tags {
+        new {
+            key = "Environment"
+            value = vars.environment
+        }
+        new {
+            key = "Project"
+            value = vars.projectName
+        }
+    }
+}
+
+siteBucketPolicy = new bucketpolicy.BucketPolicy {
+    label = "WebsiteBucketPolicy"
+    bucket = siteBucket.bucketName
+    policyDocument  {
+        ["Version"] = "2012-10-17"
+        ["Statement"]{
+            new {
+                ["Action"] = "s3:GetObject"
+                ["Effect"] = "Allow"
+                ["Resource"] = "arn:aws:s3:::" + siteBucket.bucketName + "/*"
+                ["Principal"] = "*"
+            }
+        }
+    }
+}

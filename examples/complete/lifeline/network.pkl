@@ -1,0 +1,68 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@formae/formae.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl"
+import "./nvpc.pkl"
+
+function igw(properties: Dynamic?): internetgateway.InternetGateway = new internetgateway.InternetGateway {
+    label = "lifeline-igw"
+    tags { new { key = "Name"; value = formae.value(properties.name.value + "-igw").setOnce } }
+ }
+
+function attachIgw(properties: Dynamic?): vpcgatewayattachment.VPCGatewayAttachment = new vpcgatewayattachment.VPCGatewayAttachment {
+    label = "lifeline-igw-attachment"
+    vpcId = nvpc.nvpc(properties).res.id
+    internetGatewayId = igw(properties).res.id
+}
+
+function subnets(properties: Dynamic?): Listing = new Listing {
+    new subnet.Subnet {
+        label = "lifeline-public-subnet-1"
+        vpcId = nvpc.nvpc(properties).res.id
+        cidrBlock = properties.subnetCidr1.value
+        availabilityZone = "\(properties.region.value)a"
+        mapPublicIpOnLaunch = true
+        tags { new { key = "Name"; value = formae.value(properties.name.value + "-public-subnet-1").setOnce } }
+    }
+
+    new subnet.Subnet {
+        label = "lifeline-public-subnet-2"
+        vpcId = nvpc.nvpc(properties).res.id
+        cidrBlock = properties.subnetCidr2.value
+        availabilityZone = "\(properties.region.value)b"
+        mapPublicIpOnLaunch = true
+        tags { new { key = "Name"; value = formae.value(properties.name.value + "-public-subnet-2").setOnce } }
+    }
+}
+
+function routeTable(properties: Dynamic?): routetable.RouteTable = new routetable.RouteTable {
+    label = "lifeline-public-rt"
+    vpcId = nvpc.nvpc(properties).res.id
+    tags { new { key = "Name"; value = formae.value(properties.name.value + "-public-rt").setOnce } }
+}
+
+function publicRoute(properties: Dynamic?): route.Route = new route.Route {
+    label = "lifeline-public-route"
+    routeTableId = routeTable(properties).res.id
+    destinationCidrBlock = "0.0.0.0/0"
+    gatewayId = igw(properties).res.id
+}
+
+function subnetAssocs(properties: Dynamic?): Listing = new Listing {
+    for (subnet in subnets(properties)) {
+        new subnetroutetableassociation.SubnetRouteTableAssociation {
+            label = "lifeline-public-subnet-assoc-\(subnet.label)"
+            subnetId = subnet.res.subnetId
+            routeTableId = routeTable(properties).res.id
+        }
+    }
+}

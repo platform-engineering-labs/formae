@@ -1,0 +1,111 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.apigateway.stage
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ApiGateway::Stage"
+
+@aws.SubResourceHint
+open class AccessLogSetting extends formae.SubResource {
+    destinationArn: String?
+    format: String?
+}
+
+@aws.SubResourceHint
+open class CanarySetting extends formae.SubResource {
+    deploymentId: String?
+    percentTraffic: Number?
+    stageVariableOverrides: Mapping<String, Any>?
+    useStageCache: Boolean?
+}
+
+@aws.SubResourceHint
+open class MethodSetting extends formae.SubResource {
+    cacheDataEncrypted: Boolean?
+    cacheTtlInSeconds: Int?
+    cachingEnabled: Boolean?
+    dataTraceEnabled: Boolean?
+    httpMethod: String?
+    loggingLevel: String?
+    metricsEnabled: Boolean?
+    resourcePath: String?
+    throttlingBurstLimit: Int?
+    throttlingRateLimit: Number?
+}
+
+open class StageResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: StageResolvable = (this) {
+        property = "StageName"
+    }
+
+    hidden stageName: StageResolvable = (this) {
+        property = "StageName"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "StageName"
+    tags = "Tags"
+    parent = "AWS::ApiGateway::RestApi"
+    listParam = new formae.ListProperty { parentProperty = "RestApiId" listParameter = "RestApiId" }
+}
+open class Stage extends formae.Resource {
+
+    @aws.FieldHint
+    accessLogSetting: AccessLogSetting?
+
+    @aws.FieldHint
+    cacheClusterEnabled: Boolean?
+
+    @aws.FieldHint
+    cacheClusterSize: String?
+
+    @aws.FieldHint
+    canarySetting: CanarySetting?
+
+    @aws.FieldHint
+    clientCertificateId: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    deploymentId: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    documentationVersion: String?
+
+    @aws.FieldHint
+    methodSettings: Listing<MethodSetting>?
+
+    @aws.FieldHint{createOnly = true}
+    restApiId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    stageName: String?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    tracingEnabled: Boolean?
+
+    @aws.FieldHint
+    variables: Mapping<String, Any>?
+
+    local parent = this
+
+    hidden res: StageResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

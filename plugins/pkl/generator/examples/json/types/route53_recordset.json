@@ -1,0 +1,1945 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-2",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-2",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "Z020331534YHIUKDPEOP8|a.snarf.platform.engineering.|A",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z020331534YHIUKDPEOP8",
+        "Name": "a.snarf.platform.engineering",
+        "ResourceRecords": [
+          "192.168.55.1"
+        ],
+        "TTL": 430,
+        "Type": "A"
+      },
+      "NativeId": "Z020331534YHIUKDPEOP8|a.snarf.platform.engineering.|A",
+      "Ksuid": "33jxpbeEIvk0nE3NbaNJFudoUDj"
+    },
+    {
+      "Label": "Z020331534YHIUKDPEOP8|snarf.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z020331534YHIUKDPEOP8",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-40.awsdns-05.com.",
+          "ns-1345.awsdns-40.org.",
+          "ns-1760.awsdns-28.co.uk.",
+          "ns-930.awsdns-52.net."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z020331534YHIUKDPEOP8|snarf.platform.engineering.|NS",
+      "Ksuid": "33jxpUjgfeyO0ackrceOD3sboQt"
+    },
+    {
+      "Label": "Z020331534YHIUKDPEOP8|snarf.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z020331534YHIUKDPEOP8",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-40.awsdns-05.com. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z020331534YHIUKDPEOP8|snarf.platform.engineering.|SOA",
+      "Ksuid": "33jxpWypyDWTKfrPmRuwyioq4AS"
+    },
+    {
+      "Label": "Z03154791M7O5N8GQUL88|a.snarf.platform.engineering.|A",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z03154791M7O5N8GQUL88",
+        "Name": "a.snarf.platform.engineering",
+        "ResourceRecords": [
+          "192.168.55.1"
+        ],
+        "TTL": 430,
+        "Type": "A"
+      },
+      "NativeId": "Z03154791M7O5N8GQUL88|a.snarf.platform.engineering.|A",
+      "Ksuid": "33jxpXXBIAg5vp0ovM6S2KC3gMc"
+    },
+    {
+      "Label": "Z03154791M7O5N8GQUL88|snarf.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z03154791M7O5N8GQUL88",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-1607.awsdns-08.co.uk.",
+          "ns-415.awsdns-51.com.",
+          "ns-540.awsdns-03.net.",
+          "ns-1207.awsdns-22.org."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z03154791M7O5N8GQUL88|snarf.platform.engineering.|NS",
+      "Ksuid": "33jxpVIbrgrA2pKAAhYLV9ZCmRL"
+    },
+    {
+      "Label": "Z03154791M7O5N8GQUL88|snarf.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z03154791M7O5N8GQUL88",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-1607.awsdns-08.co.uk. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z03154791M7O5N8GQUL88|snarf.platform.engineering.|SOA",
+      "Ksuid": "33jxpVGCFyoy3RX0yEYaT5AgZa5"
+    },
+    {
+      "Label": "Z035977620103A60GLYMF|snarf.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z035977620103A60GLYMF",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-1975.awsdns-54.co.uk.",
+          "ns-36.awsdns-04.com.",
+          "ns-587.awsdns-09.net.",
+          "ns-1397.awsdns-46.org."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z035977620103A60GLYMF|snarf.platform.engineering.|NS",
+      "Ksuid": "33jxpfjDMpUAQE5tlJ5fZUVLGOc"
+    },
+    {
+      "Label": "Z035977620103A60GLYMF|snarf.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z035977620103A60GLYMF",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-1975.awsdns-54.co.uk. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z035977620103A60GLYMF|snarf.platform.engineering.|SOA",
+      "Ksuid": "33jxpdIufA4rEAP6yrWErcdU0eO"
+    },
+    {
+      "Label": "Z036189935072D9RB2WWE|test.platform.engineering.|A",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": "d1s6j3bzsse7h6.cloudfront.net.",
+          "EvaluateTargetHealth": false,
+          "HostedZoneId": "Z2FDTNDATAQYW2"
+        },
+        "HostedZoneId": "Z036189935072D9RB2WWE",
+        "Name": "test.platform.engineering",
+        "Type": "A"
+      },
+      "NativeId": "Z036189935072D9RB2WWE|test.platform.engineering.|A",
+      "Ksuid": "33jxphpGWdGVvKF5FcmswAhaGWV"
+    },
+    {
+      "Label": "Z036189935072D9RB2WWE|test.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z036189935072D9RB2WWE",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-1938.awsdns-50.co.uk.",
+          "ns-996.awsdns-60.net.",
+          "ns-73.awsdns-09.com.",
+          "ns-1422.awsdns-49.org."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z036189935072D9RB2WWE|test.platform.engineering.|NS",
+      "Ksuid": "33jxpdD0DeOrdw7XrLf9MokgUkE"
+    },
+    {
+      "Label": "Z036189935072D9RB2WWE|test.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z036189935072D9RB2WWE",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-1938.awsdns-50.co.uk. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z036189935072D9RB2WWE|test.platform.engineering.|SOA",
+      "Ksuid": "33jxpdkzU8A5v0Eu3kw4Syoofbl"
+    },
+    {
+      "Label": "Z0452885XPHU972HLG52|test.platform.engineering.|A",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": "dr86h5i1zzdqw.cloudfront.net.",
+          "EvaluateTargetHealth": false,
+          "HostedZoneId": "Z2FDTNDATAQYW2"
+        },
+        "HostedZoneId": "Z0452885XPHU972HLG52",
+        "Name": "test.platform.engineering",
+        "Type": "A"
+      },
+      "NativeId": "Z0452885XPHU972HLG52|test.platform.engineering.|A",
+      "Ksuid": "33jxpjblc8EnlS3yptmWbf6KL4L"
+    },
+    {
+      "Label": "Z0452885XPHU972HLG52|test.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z0452885XPHU972HLG52",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-1190.awsdns-20.org.",
+          "ns-605.awsdns-11.net.",
+          "ns-2021.awsdns-60.co.uk.",
+          "ns-271.awsdns-33.com."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z0452885XPHU972HLG52|test.platform.engineering.|NS",
+      "Ksuid": "33jxpqN2sE16FnSdezOiu6XWeqk"
+    },
+    {
+      "Label": "Z0452885XPHU972HLG52|test.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z0452885XPHU972HLG52",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-1190.awsdns-20.org. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z0452885XPHU972HLG52|test.platform.engineering.|SOA",
+      "Ksuid": "33jxpmgnpxBOgHmPaAzh7xU7wXA"
+    },
+    {
+      "Label": "Z04543802RLQ8R3ZE5OBH|a.snarf.platform.engineering.|A",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z04543802RLQ8R3ZE5OBH",
+        "Name": "a.snarf.platform.engineering",
+        "ResourceRecords": [
+          "192.168.55.1"
+        ],
+        "TTL": 430,
+        "Type": "A"
+      },
+      "NativeId": "Z04543802RLQ8R3ZE5OBH|a.snarf.platform.engineering.|A",
+      "Ksuid": "33jxpnqGnYs2aRp5lnVPwJX5HoN"
+    },
+    {
+      "Label": "Z04543802RLQ8R3ZE5OBH|snarf.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z04543802RLQ8R3ZE5OBH",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-23.awsdns-02.com.",
+          "ns-730.awsdns-27.net.",
+          "ns-1546.awsdns-01.co.uk.",
+          "ns-1348.awsdns-40.org."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z04543802RLQ8R3ZE5OBH|snarf.platform.engineering.|NS",
+      "Ksuid": "33jxpn5JwpTyGaqzVciWwMdzlA1"
+    },
+    {
+      "Label": "Z04543802RLQ8R3ZE5OBH|snarf.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z04543802RLQ8R3ZE5OBH",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-23.awsdns-02.com. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z04543802RLQ8R3ZE5OBH|snarf.platform.engineering.|SOA",
+      "Ksuid": "33jxpmFeeTxak3Azk9F4vSHYDjT"
+    },
+    {
+      "Label": "Z0690073196KSLLBRGDU0|snarf.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z0690073196KSLLBRGDU0",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-295.awsdns-36.com.",
+          "ns-1988.awsdns-56.co.uk.",
+          "ns-1330.awsdns-38.org.",
+          "ns-916.awsdns-50.net."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z0690073196KSLLBRGDU0|snarf.platform.engineering.|NS",
+      "Ksuid": "33jxpvccmD7r1ORSlioghkyv16W"
+    },
+    {
+      "Label": "Z0690073196KSLLBRGDU0|snarf.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z0690073196KSLLBRGDU0",
+        "Name": "snarf.platform.engineering",
+        "ResourceRecords": [
+          "ns-295.awsdns-36.com. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z0690073196KSLLBRGDU0|snarf.platform.engineering.|SOA",
+      "Ksuid": "33jxpvEkysaVigPQW0hqRq0EvAY"
+    },
+    {
+      "Label": "Z072174520D21AKP3WB0Y|test.platform.engineering.|A",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": "d2gu3jp4pb14yd.cloudfront.net.",
+          "EvaluateTargetHealth": false,
+          "HostedZoneId": "Z2FDTNDATAQYW2"
+        },
+        "HostedZoneId": "Z072174520D21AKP3WB0Y",
+        "Name": "test.platform.engineering",
+        "Type": "A"
+      },
+      "NativeId": "Z072174520D21AKP3WB0Y|test.platform.engineering.|A",
+      "Ksuid": "33jxps6fqHFi4HyytywqgQUG8Qv"
+    },
+    {
+      "Label": "Z072174520D21AKP3WB0Y|test.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z072174520D21AKP3WB0Y",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-946.awsdns-54.net.",
+          "ns-1112.awsdns-11.org.",
+          "ns-268.awsdns-33.com.",
+          "ns-1771.awsdns-29.co.uk."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z072174520D21AKP3WB0Y|test.platform.engineering.|NS",
+      "Ksuid": "33jxpvUIaCyaDhnsb2RwctFNYCD"
+    },
+    {
+      "Label": "Z072174520D21AKP3WB0Y|test.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z072174520D21AKP3WB0Y",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-946.awsdns-54.net. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z072174520D21AKP3WB0Y|test.platform.engineering.|SOA",
+      "Ksuid": "33jxpvx0KvZCScDoJLtQsl9Y86x"
+    },
+    {
+      "Label": "Z090058012R0D0OG9KBKX|test.platform.engineering.|A",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": "d2k1slvegyqfu2.cloudfront.net.",
+          "EvaluateTargetHealth": false,
+          "HostedZoneId": "Z2FDTNDATAQYW2"
+        },
+        "HostedZoneId": "Z090058012R0D0OG9KBKX",
+        "Name": "test.platform.engineering",
+        "Type": "A"
+      },
+      "NativeId": "Z090058012R0D0OG9KBKX|test.platform.engineering.|A",
+      "Ksuid": "33jxq4xDwr48n4rd6dOlvsaKjyU"
+    },
+    {
+      "Label": "Z090058012R0D0OG9KBKX|test.platform.engineering.|NS",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z090058012R0D0OG9KBKX",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-71.awsdns-08.com.",
+          "ns-1665.awsdns-16.co.uk.",
+          "ns-955.awsdns-55.net.",
+          "ns-1194.awsdns-21.org."
+        ],
+        "TTL": 172800,
+        "Type": "NS"
+      },
+      "NativeId": "Z090058012R0D0OG9KBKX|test.platform.engineering.|NS",
+      "Ksuid": "33jxq1pJ4aRThSJT3fmvuCW8RJo"
+    },
+    {
+      "Label": "Z090058012R0D0OG9KBKX|test.platform.engineering.|SOA",
+      "Type": "AWS::Route53::RecordSet",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "AliasTarget",
+          "HostedZoneId",
+          "HostedZoneName",
+          "Name",
+          "ResourceRecords",
+          "TTL",
+          "Type"
+        ],
+        "Nonprovisionable": true,
+        "Hints": {
+          "AliasTarget": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneId": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "HostedZoneName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "ResourceRecords": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "TTL": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Type": {
+            "CreateOnly": false,
+            "Persist": true,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneId": "Z090058012R0D0OG9KBKX",
+        "Name": "test.platform.engineering",
+        "ResourceRecords": [
+          "ns-71.awsdns-08.com. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
+        ],
+        "TTL": 900,
+        "Type": "SOA"
+      },
+      "NativeId": "Z090058012R0D0OG9KBKX|test.platform.engineering.|SOA",
+      "Ksuid": "33jxq0O3jn35AN1YxFjHCQJqwmi"
+    }
+  ]
+}

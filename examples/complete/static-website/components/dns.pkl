@@ -1,0 +1,28 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/route53/hostedzone.pkl"
+import "@aws/route53/recordset.pkl"
+
+import "../vars.pkl"
+import "./cloudfront.pkl" as cdn
+
+zone = new hostedzone.HostedZone {
+    label = "StaticWebsiteHostedZone"
+    name = vars.domainName
+}
+
+alias = new recordset.RecordSet {
+    label = "WebsiteRecord"
+    hostedZoneId = zone.res.id
+    name = vars.domainName
+    type = "A"
+    aliasTarget {
+        dnsName = cdn.cfdistribution.res.domainName
+        hostedZoneId = "Z2FDTNDATAQYW2"
+        evaluateTargetHealth = false
+    }
+}

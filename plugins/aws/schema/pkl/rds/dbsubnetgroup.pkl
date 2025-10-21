@@ -1,0 +1,56 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.rds.dbsubnetgroup
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::RDS::DBSubnetGroup"
+
+open class DBSubnetGroupResolvable extends formae.Resolvable {
+    type = module.type
+
+    hidden dbSubnetGroupDescription: DBSubnetGroupResolvable = (this) {
+        property = "DBSubnetGroupDescription"
+    }
+    hidden dbSubnetGroupName: DBSubnetGroupResolvable = (this) {
+        property = "DBSubnetGroupName"
+    }
+    hidden subnetIds: DBSubnetGroupResolvable = (this) {
+        property = "SubnetIds"
+    }
+    hidden tags: DBSubnetGroupResolvable = (this) {
+        property = "Tags"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "DBSubnetGroupName"
+    tags = "Tags"
+}
+open class DBSubnetGroup extends formae.Resource {
+
+    @aws.FieldHint
+    dbSubnetGroupDescription: String?
+
+    @aws.FieldHint{createOnly = true}
+    dbSubnetGroupName: String?
+
+    @aws.FieldHint
+    subnetIds: Listing<String|formae.Resolvable>
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    hidden parent = this
+
+    hidden res: DBSubnetGroupResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

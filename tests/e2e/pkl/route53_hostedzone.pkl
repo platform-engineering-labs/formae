@@ -1,0 +1,37 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+
+import "@aws/route53/hostedzone.pkl"
+import "@aws/route53/recordset.pkl"
+
+local zone = new hostedzone.HostedZone {
+  label = "route53-hostedzone"
+  name = "snarf.platform.engineering"
+}
+
+local stackName = "route53-hostedzone-stack"
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = ""
+  }
+
+  new formae.Target {
+    label = "aws-target-hostedzone"
+    config = new aws.Config {
+      region = "us-east-1" // Specify the AWS region
+    }
+  }
+
+  zone
+}
+

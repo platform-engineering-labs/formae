@@ -1,0 +1,45 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.prefixlist
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::PrefixList"
+
+typealias AddressFamily = "IPv4"|"IPv6"
+
+@aws.SubResourceHint
+open class Entry extends formae.SubResource {
+    cidr: String
+    description: String?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "PrefixListId"
+    tags = "Tags"
+    discoverable = false
+    extractable = false
+}
+open class PrefixList extends formae.Resource {
+
+    @aws.FieldHint
+    addressFamily: AddressFamily
+
+    @aws.FieldHint
+    entries: Listing<Entry>?
+
+    @aws.FieldHint
+    maxEntries: Int?
+
+    @aws.FieldHint
+    prefixListName: String
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

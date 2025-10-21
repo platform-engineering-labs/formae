@@ -1,0 +1,75 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.vpc
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VPC"
+
+open class VpcResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: VpcResolvable = (this) {
+        property = "VpcId"
+    }
+    hidden cidrBlock: VpcResolvable = (this) {
+        property = "CidrBlock"
+    }
+    hidden defaultNetworkAcl: VpcResolvable = (this) {
+        property = "DefaultNetworkAcl"
+    }
+    hidden defaultSecurityGroup: VpcResolvable = (this) {
+        property = "DefaultSecurityGroup"
+    }
+    hidden ipv6CidrBlocks: VpcResolvable = (this) {
+        property = "Ipv6CidrBlocks"
+    }
+    hidden vpcId : VpcResolvable = (this) {
+        property = "VpcId"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "VpcId"
+    tags = "Tags"
+}
+open class VPC extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    cidrBlock: String?
+
+    @aws.FieldHint
+    enableDnsHostnames: Boolean?
+
+    @aws.FieldHint
+    enableDnsSupport: Boolean?
+
+    // Updating InstanceTenancy requires no replacement only if you are updating its value from dedicated to default. Updating InstanceTenancy from default to dedicated requires replacement.
+    @aws.FieldHint{createOnly = true}
+    instanceTenancy: String?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    ipv4IpamPoolId: String?
+
+    @aws.FieldHint{writeOnly = true}
+    ipv4NetmaskLength: String?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    local parent = this
+
+    hidden res: VpcResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

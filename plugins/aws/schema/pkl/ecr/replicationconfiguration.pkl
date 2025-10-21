@@ -1,0 +1,46 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ecr.replicationconfiguration
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ECR::ReplicationConfiguration"
+
+@aws.SubResourceHint
+open class Configuration extends formae.SubResource {
+    rules: Listing<Rule>
+}
+
+@aws.SubResourceHint
+open class Destination extends formae.SubResource {
+    region: aws.Region
+    registryId: String
+}
+
+@aws.SubResourceHint
+open class Rule extends formae.SubResource {
+    destinations: Listing<Destination>
+    repositoryFilters: Listing<Filter>?
+}
+
+@aws.SubResourceHint
+open class Filter extends formae.SubResource {
+    filter: String
+    filterType: String
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "RegistryId"
+}
+open class ReplicationConfiguration extends formae.Resource {
+
+    @aws.FieldHint
+    replicationConfiguration: Configuration
+
+}

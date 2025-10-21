@@ -1,0 +1,49 @@
+{
+  "Label": "WebsiteBucketPolicy",
+  "Type": "AWS::S3::BucketPolicy",
+  "Stack": "static-website-stack",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Bucket",
+    "Tags": "Tags",
+    "Fields": [
+      "Bucket",
+      "PolicyDocument"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "Bucket": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "PolicyDocument": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "Bucket": "static-website-uber-unique-id",
+    "PolicyDocument": {
+      "Statement": [
+        {
+          "Action": "s3:GetObject",
+          "Effect": "Allow",
+          "Principal": "*",
+          "Resource": "arn:aws:s3:::static-website-uber-unique-id/*"
+        }
+      ],
+      "Version": "2012-10-17"
+    }
+  },
+  "NativeID": "static-website-uber-unique-id",
+  "Managed": true,
+  "Ksuid": "34OGKkdE6aNlIGdRuS4va0eGt5S"
+}

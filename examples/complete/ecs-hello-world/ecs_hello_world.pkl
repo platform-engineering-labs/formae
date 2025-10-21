@@ -1,0 +1,298 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// VPC and Networking
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+import "@aws/ecs/ecscluster.pkl"
+import "@aws/iam/role.pkl"
+import "@aws/ecs/taskdefinition.pkl"
+import "@aws/elasticloadbalancingv2/loadbalancer.pkl"
+import "@aws/elasticloadbalancingv2/targetgroup.pkl"
+import "@aws/elasticloadbalancingv2/listener.pkl"
+import "@aws/ecs/service.pkl"
+
+import "./vars.pkl"
+
+properties {
+    name = new formae.Prop {
+        flag = "name"
+        default = vars.projectName
+    }
+    region = vars.regionProp
+    vpcCidr = new formae.Prop {
+        flag = "vpcCidr"
+        default = "10.1.0.0/16"
+    }
+    subnetCidr1 = new formae.Prop {
+        flag = "subnetCidr1"
+        default = "10.1.1.0/24"
+    }
+    subnetCidr2 = new formae.Prop {
+        flag = "subnetCidr2"
+        default = "10.1.2.0/24"
+    }
+}
+
+forma {
+    vars.stack
+    vars.target
+
+    local vpc = new vpc.VPC {
+        label = "ecs-vpc"
+        cidrBlock = properties.vpcCidr.value
+        enableDnsHostnames = true
+        enableDnsSupport = true
+        tags { new { key = "Name"; value = properties.name.value + "-vpc" } }
+    }
+    vpc
+
+    local igw = new internetgateway.InternetGateway {
+        label = "ecs-igw"
+        tags { new { key = "Name"; value = properties.name.value + "-igw" } }
+    }
+    igw
+
+    local attachIgw = new vpcgatewayattachment.VPCGatewayAttachment {
+        label = "ecs-igw-attachment"
+        vpcId = vpc.res.id
+        internetGatewayId = igw.res.id
+    }
+    attachIgw
+
+    local subnet1 = new subnet.Subnet {
+        label = "ecs-public-subnet-1"
+        vpcId = vpc.res.id
+        cidrBlock = properties.subnetCidr1.value
+        availabilityZone = "\(properties.region.value)a"
+        mapPublicIpOnLaunch = true
+        tags { new { key = "Name"; value = properties.name.value + "-public-subnet-1" } }
+    }
+    subnet1
+
+    local subnet2 = new subnet.Subnet {
+        label = "ecs-public-subnet-2"
+        vpcId = vpc.res.id
+        cidrBlock = properties.subnetCidr2.value
+        availabilityZone = "\(properties.region.value)b"
+        mapPublicIpOnLaunch = true
+        tags { new { key = "Name"; value = properties.name.value + "-public-subnet-2" } }
+    }
+    subnet2
+
+    local routeTable = new routetable.RouteTable {
+        label = "ecs-public-rt"
+        vpcId = vpc.res.id
+        tags { new { key = "Name"; value = properties.name.value + "-public-rt" } }
+    }
+    routeTable
+
+    local publicRoute = new route.Route {
+        label = "ecs-public-route"
+        routeTableId = routeTable.res.id
+        destinationCidrBlock = "0.0.0.0/0"
+        gatewayId = igw.res.id
+    }
+    publicRoute
+
+    local subnetAssoc1 = new subnetroutetableassociation.SubnetRouteTableAssociation {
+        label = "ecs-public-subnet-1-assoc"
+        subnetId = subnet1.res.id
+        routeTableId = routeTable.res.id
+    }
+    subnetAssoc1
+
+    local subnetAssoc2 = new subnetroutetableassociation.SubnetRouteTableAssociation {
+        label = "ecs-public-subnet-2-assoc"
+        subnetId = subnet2.res.id
+        routeTableId = routeTable.res.id
+    }
+    subnetAssoc2
+
+    local albSg = new securitygroup.SecurityGroup {
+        label = "ecs-alb-sg"
+        groupDescription = "Allow HTTP traffic to ALB"
+        vpcId = vpcRes.id
+        tags { new { key = "Name"; value = properties.name.value + "-alb-sg" } }
+    }
+    albSg
+
+    local albHttpIngress = new securitygroupingress.SecurityGroupIngress {
+        label = "ecs-alb-sg-ingress"
+        ipProtocol = "tcp"
+        fromPort = 80
+        toPort = 80
+        groupId = albSg.res.groupId
+        cidrIp = "0.0.0.0/0"
+    }
+    albHttpIngress
+
+    local taskSg = new securitygroup.SecurityGroup {
+        label = "ecs-task-sg"
+        groupDescription = "Allow HTTP traffic from ALB"
+        vpcId = vpcRes.id
+        tags { new { key = "Name"; value = properties.name.value + "-task-sg" } }
+    }
+    taskSg
+
+    local ecsHttpIngress = new securitygroupingress.SecurityGroupIngress {
+        label = "ecs-task-sg-ingress"
+        ipProtocol = "tcp"
+        fromPort = 80
+        toPort = 80
+        sourceSecurityGroupId = albSg.res.groupId
+        groupId = taskSg.res.groupId
+    }
+    ecsHttpIngress
+
+    local taskExecRole = new role.Role {
+        label = "ecs-task-exec-role"
+        assumeRolePolicyDocument  {
+            ["Version"] = "2012-10-17"
+            ["Statement"] {
+                ["Effect"] = "Allow"
+                ["Principal"] {
+                    ["Service"] = "ecs-tasks.amazonaws.com"
+                    }
+                ["Action"] = "sts:AssumeRole"
+                }
+
+        }
+
+        managedPolicyArns  {
+            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+        }
+        tags { new { key = "Name"; value = properties.name.value + "-task-exec-role" } }
+    }
+    taskExecRole
+
+    // Fargate clusters often don't need specific capacity providers defined here
+    new ecscluster.Cluster {
+        label = "ecs-hello-world-cluster"
+        clusterName = "ecs-hello-world-cluster"
+        tags { new { key = "Name"; value = properties.name.value + "-cluster" } }
+    }
+
+    // ECS Task Definition (Fargate)
+    new taskdefinition.TaskDefinition {
+        label = "ecs-hello-task-def"
+        family = properties.name.value + "-hello-task"
+        requiresCompatibilities {"FARGATE"}
+        networkMode = "awsvpc" // Required for Fargate
+        cpu = "256"
+        memory =  "512" // Example: 0.5 GB RAM // 0.5.gib
+        executionRoleArn = taskExecRole.res.arn
+
+        containerDefinitions {
+            new taskdefinition.ContainerDefinition {
+                name = "hello-world-container"
+                image = "httpd:latest"
+                portMappings {
+                    new taskdefinition.PortMapping {
+                        containerPort = 80
+                        protocol = "tcp"
+                    }
+                }
+            }
+        }
+        tags { new { key = "Name"; value = properties.name.value + "-hello-task-def" } }
+    }
+
+    local vpcRes = new vpc.VpcResolvable {
+        label = "ecs-vpc"
+        stack = vars.stack.label
+    }
+
+    local subnetRes1 = new subnet.SubnetResolvable {
+        label = "ecs-public-subnet-1"
+        stack = vars.stack.label
+    }
+
+    local subnetRes2 = new subnet.SubnetResolvable {
+        label = "ecs-public-subnet-2"
+        stack = vars.stack.label
+    }
+
+    local albSgRes = new securitygroup.SecurityGroupResolvable {
+        label = "ecs-alb-sg"
+        stack = vars.stack.label
+    }
+
+    local clusterRes = new ecscluster.ClusterResolvable {
+        label = "ecs-hello-cluster"
+        stack = vars.stack.label
+    }
+
+    local taskDefRes = new taskdefinition.TaskDefinitionResolvable {
+        label = "ecs-hello-task-def"
+        stack = vars.stack.label
+    }
+    local taskSgRes = new securitygroup.SecurityGroupResolvable {
+        label = "ecs-task-sg"
+        stack = vars.stack.label
+    }
+
+    // --- Load Balancer ---
+    // Application Load Balancer
+    local alb = new loadbalancer.LoadBalancer {
+        label = "ecs-alb"
+        name = properties.name.value + "-alb"
+        subnets {subnetRes1.subnetId; subnetRes2.subnetId}
+        securityGroups  {albSgRes.groupId}
+        scheme = "internet-facing"
+        type = "application"
+        tags { new { key = "Name"; value = properties.name.value + "-alb" } }
+    }
+    alb
+
+    // Target Group for ECS Tasks
+    local targetGroup = new targetgroup.TargetGroup {
+        label = "ecs-tg"
+        name = properties.name.value + "-tg"
+        vpcId = vpcRes.id
+        port = 80
+        protocol = "HTTP"
+        targetType = "ip" // Required for Fargate awsvpc mode
+        healthCheckEnabled = true
+        healthCheckPath = "/"
+        healthCheckProtocol = "HTTP"
+        matcher = new targetgroup.Matcher { httpCode = "200" }
+        healthCheckIntervalSeconds = 30
+        tags { new { key = "Name"; value = properties.name.value + "-tg" } }
+    }
+    targetGroup
+
+    // ALB Listener
+    new listener.Listener {
+        label = "ecs-listener"
+        loadBalancerArn = alb.res.loadBalancerArn
+        port = 80
+        protocol = "HTTP"
+        defaultActions {
+            new listener.Action {
+                type = "forward"
+                targetGroupArn = targetGroup.res.targetGroupArn
+            }
+        }
+    }
+
+    // Fargate clusters often don't need specific capacity providers defined here
+    new ecscluster.Cluster {
+        label = "ecs-hello-cluster2"
+        clusterName = properties.name.value + "-cluster2"
+        tags { new { key = "Name"; value = properties.name.value + "-cluster" } }
+    }
+}

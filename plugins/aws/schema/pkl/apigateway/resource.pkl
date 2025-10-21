@@ -1,0 +1,52 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.apigateway.resource
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ApiGateway::Resource"
+
+open class ResourceResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: ResourceResolvable = (this) {
+        property = "ResourceId"
+    }
+
+    hidden resourceId: ResourceResolvable = (this) {
+        property = "ResourceId"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "ResourceId"
+    tags = ""
+    parent = "AWS::ApiGateway::RestApi"
+    listParam = new formae.ListProperty { parentProperty = "RestApiId" listParameter = "RestApiId" }
+    discoverable = false
+    extractable = true
+}
+open class Resource extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    parentId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    pathPart: String
+
+    @aws.FieldHint{createOnly = true}
+    restApiId: String|formae.Resolvable
+
+    local parent = this
+
+    hidden res: ResourceResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

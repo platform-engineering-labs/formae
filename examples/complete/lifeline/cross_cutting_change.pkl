@@ -1,0 +1,79 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl"
+import "@aws/s3/bucket.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "./vars.pkl"
+
+description {
+    text = """
+    This is the showcase that demonstrates how to work with formae from Day 0 to Day N.
+
+    This forma is supposed to be used in patch mode and demonstrate how to make minimal
+    cross-cutting changes. Typical use cases would be to harden systems, adding consistent
+    metadata, compliance, cost and performance optimizations and similar. Anyone in the team
+    should be able to apply this forma, but its sweet spot is to be used by security engineers,
+    consultants and similar roles.
+
+    Apply this forma in patch mode to add a specific tag to multiple existing resources.
+
+    One can run destroy using this forma, but it shouldn't be done.
+    """
+    confirm = true
+}
+
+properties {
+    prop = new formae.Prop {
+        flag = "region"
+        default = vars.region
+    }
+}
+
+forma {
+    vars.stack.res
+    vars.target.res
+
+    new internetgateway.InternetGateway {
+        label = "lifeline-igw"
+        tags {
+            new {
+                key = vars.crossCuttingTag
+                value = vars.crossCuttingTagValue
+            }
+        }
+    }
+
+    new securitygroup.SecurityGroup {
+        label = "lifeline-alb-sg"
+        groupDescription = "Allow HTTP traffic to ALB"
+        tags {
+            new {
+                key = vars.crossCuttingTag
+                value = vars.crossCuttingTagValue
+            }
+        }
+    }
+
+    new securitygroup.SecurityGroup {
+        label = "lifeline-task-sg"
+        groupDescription = "Allow HTTP traffic from ALB"
+        tags {
+            new {
+                key = vars.crossCuttingTag
+                value = vars.crossCuttingTagValue
+            }
+        }
+    }
+}

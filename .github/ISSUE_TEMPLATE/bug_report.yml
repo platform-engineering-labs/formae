@@ -1,0 +1,115 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in formae
+labels: ["bug", "needs-triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        # Bug Report
+
+        Thank you for taking the time to report a bug in formae. Providing detailed information will help us diagnose and fix the issue more efficiently.
+
+        ## Before submitting
+
+        - Make sure to search existing issues to avoid duplicates.
+        - Ensure you're using the latest version of formae.
+        - Include as much relevant information as possible.
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: |
+        Run `formae —version` to show the version. Note: if you are not on the latest version, try upgrading first as your issue might already be resolved.
+      placeholder: Output of `formae —version`
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Formae configuration
+      description: Please provide the relevant formae configuration.
+      render: markdown
+      value: |
+        ```pkl
+        ...your forma(e)...
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Please provide detailed steps to reproduce the issue. Be as specific as possible. Include commands run, configuration files used, etc.
+      render: markdown
+      placeholder: |
+        1. `formae project init`
+        2. `formae apply`
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what actually happens when following the steps above
+      render: markdown
+      placeholder: When I follow these steps, formae...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected to happen
+      render: markdown
+      placeholder: I expected formae to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs/output
+      description: Include relevant logs, error messages, or output from the formae command. You can enable debug logging by providing the `—console-log-level debug` to the  command. Please use code blocks (```) to format logs properly.
+      render: markdown
+      value: |
+        ```
+        ...paste logs here...
+        ```
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Add any other context about the problem here:
+        - Has this worked before? If yes, what changed?
+        - Are you using any special flags or environment variables?
+        - Did you try any workarounds? What were the results?
+        - Is this issue intermittent or consistent
+      placeholder: Any other information that might be helpful...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: How severely does this bug impact your use of formae
+      options:
+        - "Critical - Completely blocks usage"
+        - "High - Major functionality broken"
+        - "Medium - Partial functionality affected"
+        - "Low - Minor inconvenience"
+      default: 2
+    validations:
+      required: true

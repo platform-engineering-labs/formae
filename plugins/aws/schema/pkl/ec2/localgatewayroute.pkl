@@ -1,0 +1,32 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.localgatewayroute
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::LocalGatewayRoute"
+
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "DestinationCidrBlock"
+}
+open class LocalGatewayRoute extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    destinationCidrBlock: String?
+
+    @aws.FieldHint{createOnly = true}
+    localGatewayRouteTableId: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    localGatewayVirtualInterfaceGroupId: (String|formae.Resolvable)?
+
+    @aws.FieldHint
+    networkInterfaceId: (String|formae.Resolvable)?
+}

@@ -1,0 +1,260 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "example-app",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "IMMUTABLE",
+        "RepositoryName": "example-app"
+      },
+      "NativeId": "example-app"
+    },
+    {
+      "Label": "demo-service",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "IMMUTABLE",
+        "RepositoryName": "demo-service"
+      },
+      "NativeId": "demo-service"
+    },
+    {
+      "Label": "backend-service",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "backend-service"
+      },
+      "NativeId": "backend-service"
+    },
+    {
+      "Label": "web-app",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "web-app"
+      },
+      "NativeId": "web-app"
+    },
+    {
+      "Label": "api-gateway",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "api-gateway"
+      },
+      "NativeId": "api-gateway"
+    },
+    {
+      "Label": "frontend-app",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "IMMUTABLE",
+        "RepositoryName": "frontend-app",
+        "Tags": []
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:ecr:us-west-1:123456789012:repository/frontend-app",
+        "RepositoryUri": "123456789012.dkr.ecr.us-west-1.amazonaws.com/frontend-app"
+      },
+      "NativeId": "frontend-app"
+    },
+    {
+      "Label": "data-processor",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "data-processor",
+        "Tags": []
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:ecr:us-west-1:123456789012:repository/data-processor",
+        "RepositoryUri": "123456789012.dkr.ecr.us-west-1.amazonaws.com/data-processor"
+      },
+      "NativeId": "data-processor"
+    },
+    {
+      "Label": "notification-service",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "IMMUTABLE",
+        "RepositoryName": "notification-service",
+        "Tags": []
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:ecr:us-west-1:123456789012:repository/notification-service",
+        "RepositoryUri": "123456789012.dkr.ecr.us-west-1.amazonaws.com/notification-service"
+      },
+      "NativeId": "notification-service"
+    },
+    {
+      "Label": "auth-service",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "auth-service",
+        "Tags": []
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:ecr:us-west-1:123456789012:repository/auth-service",
+        "RepositoryUri": "123456789012.dkr.ecr.us-west-1.amazonaws.com/auth-service"
+      },
+      "NativeId": "auth-service"
+    },
+    {
+      "Label": "monitoring-tool",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "monitoring-tool"
+      },
+      "NativeId": "monitoring-tool"
+    },
+    {
+      "Label": "cache-service",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "IMMUTABLE",
+        "RepositoryName": "cache-service",
+        "Tags": []
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:ecr:us-west-1:123456789012:repository/cache-service",
+        "RepositoryUri": "123456789012.dkr.ecr.us-west-1.amazonaws.com/cache-service"
+      },
+      "NativeId": "cache-service"
+    },
+    {
+      "Label": "database-migration",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "database-migration"
+      },
+      "NativeId": "database-migration"
+    },
+    {
+      "Label": "logging-service",
+      "Type": "AWS::ECR::Repository",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": false
+        },
+        "ImageTagMutability": "MUTABLE",
+        "RepositoryName": "logging-service"
+      },
+      "NativeId": "logging-service"
+    }
+  ]
+}

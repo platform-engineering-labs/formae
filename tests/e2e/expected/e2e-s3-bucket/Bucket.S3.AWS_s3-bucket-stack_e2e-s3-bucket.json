@@ -1,0 +1,222 @@
+{
+  "Label": "e2e-s3-bucket",
+  "Type": "AWS::S3::Bucket",
+  "Stack": "s3-bucket-stack",
+  "Target": "aws-target-bucket",
+  "Schema": {
+    "Identifier": "BucketName",
+    "Tags": "Tags",
+    "Fields": [
+      "AccelerateConfiguration",
+      "AccessControl",
+      "AnalyticsConfigurations",
+      "BucketEncryption",
+      "BucketName",
+      "CorsConfiguration",
+      "IntelligentTieringConfigurations",
+      "InventoryConfigurations",
+      "LifecycleConfiguration",
+      "LoggingConfiguration",
+      "MetricsConfigurations",
+      "NotificationConfiguration",
+      "ObjectLockConfiguration",
+      "ObjectLockEnabled",
+      "OwnershipControls",
+      "PublicAccessBlockConfiguration",
+      "ReplicationConfiguration",
+      "Tags",
+      "VersioningConfiguration",
+      "WebsiteConfiguration"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "AccelerateConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "AccessControl": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": true,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "AnalyticsConfigurations": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "BucketEncryption": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "BucketName": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "CorsConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "IntelligentTieringConfigurations": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "InventoryConfigurations": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "LifecycleConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "LoggingConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "MetricsConfigurations": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "NotificationConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "ObjectLockConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "ObjectLockEnabled": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "OwnershipControls": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "PublicAccessBlockConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "ReplicationConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VersioningConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "WebsiteConfiguration": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "BucketEncryption": {
+      "ServerSideEncryptionConfiguration": [
+        {
+          "BucketKeyEnabled": false,
+          "ServerSideEncryptionByDefault": {
+            "SSEAlgorithm": "AES256"
+          }
+        }
+      ]
+    },
+    "BucketName": "e2e-test-bucket-1234567890-911",
+    "OwnershipControls": {
+      "Rules": [
+        {
+          "ObjectOwnership": "BucketOwnerEnforced"
+        }
+      ]
+    },
+    "PublicAccessBlockConfiguration": {
+      "BlockPublicAcls": true,
+      "BlockPublicPolicy": true,
+      "IgnorePublicAcls": true,
+      "RestrictPublicBuckets": true
+    },
+    "Tags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "e2e-s3-bucket"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "s3-bucket-stack"
+      }
+    ]
+  },
+  "ReadOnlyProperties": {
+    "Arn": "arn:aws:s3:::e2e-test-bucket-1234567890-911",
+    "DomainName": "e2e-test-bucket-1234567890-911.s3.amazonaws.com",
+    "DualStackDomainName": "e2e-test-bucket-1234567890-911.s3.dualstack.us-east-1.amazonaws.com",
+    "RegionalDomainName": "e2e-test-bucket-1234567890-911.s3.us-east-1.amazonaws.com",
+    "WebsiteURL": "http://e2e-test-bucket-1234567890-911.s3-website-us-east-1.amazonaws.com"
+  },
+  "NativeID": "e2e-test-bucket-1234567890-911",
+  "Managed": true,
+  "Ksuid": "34OEodkUQZvskXjPCFYJVOjU91T"
+}

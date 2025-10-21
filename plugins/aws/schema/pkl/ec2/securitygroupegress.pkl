@@ -1,0 +1,45 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.securitygroupegress
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::SecurityGroupEgress"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+}
+open class SecurityGroupEgress extends formae.Resource {
+    @aws.FieldHint{createOnly = true}
+    cidrIp: String?
+
+    @aws.FieldHint{createOnly = true}
+    cidrIpv6: String?
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint{createOnly = true}
+    destinationPrefixListId: String?
+
+    @aws.FieldHint{createOnly = true}
+    destinationSecurityGroupId: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    fromPort: Int?
+
+    @aws.FieldHint{createOnly = true}
+    groupId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    ipProtocol: String
+
+    @aws.FieldHint{createOnly = true}
+    toPort: Int?
+}

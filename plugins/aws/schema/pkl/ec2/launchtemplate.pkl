@@ -1,0 +1,385 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.launchtemplate
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::LaunchTemplate"
+
+@aws.SubResourceHint
+open class AcceleratorCount extends formae.SubResource {
+    max: Int?
+    min: Int?
+}
+
+@aws.SubResourceHint
+open class AcceleratorTotalMemoryMiB extends formae.SubResource {
+    max: Int?
+    min: Int?
+}
+
+@aws.SubResourceHint
+open class BaselineEbsBandwidthMbps extends formae.SubResource {
+    max: Int?
+    min: Int?
+}
+
+@aws.SubResourceHint
+open class BaselinePerformanceFactors extends formae.SubResource {
+    cpu: LaunchTemplateCpu?
+}
+
+
+@aws.SubResourceHint
+open class BlockDeviceMapping extends formae.SubResource {
+    deviceName: String?
+    ebs: EBS?
+    noDevice: String?
+    virtualName: String?
+}
+
+
+@aws.SubResourceHint
+open class CapacityReservationSpecification extends formae.SubResource {
+    capacityReservationPreference: String?
+    capacityReservationTarget: CapacityReservationTarget?
+}
+
+@aws.SubResourceHint
+open class CapacityReservationTarget extends formae.SubResource {
+    capacityReservationId: (String|formae.Resolvable)?
+    capacityReservationResourceGroupArn: String?
+}
+
+
+@aws.SubResourceHint
+open class ConnectionTrackingSpecification extends formae.SubResource {
+    tcpEstablishedTimeout: Int?
+    udpStreamTimeout: Int?
+    udpTimeout: Int?
+}
+
+
+@aws.SubResourceHint
+open class LaunchTemplateCpu extends formae.SubResource {
+    references: Listing<Reference?>?
+}
+
+typealias CpuOptionsAmdSevSnp = "enabled"|"disabled"
+
+@aws.SubResourceHint
+open class CpuOptions extends formae.SubResource {
+    amdSevSnp: CpuOptionsAmdSevSnp?
+    coreCount: Int?
+    threadsPerCore: Int?
+}
+
+@aws.SubResourceHint
+open class CreditSpecification extends formae.SubResource {
+    cpuCredits: String?
+}
+
+@aws.SubResourceHint
+open class EBS extends formae.SubResource {
+    deleteOnTermination: Boolean?
+    encrypted: Boolean?
+    iops: Int?
+    kmsKeyId: String?
+    snapshotId: String?
+    throughput: Int?
+    volumeSize: Int?
+    volumeType: String?
+}
+
+@aws.SubResourceHint
+open class ElasticGpuSpecification extends formae.SubResource {
+    type: String?
+}
+
+@aws.SubResourceHint
+open class EnaSrdSpecification extends formae.SubResource {
+    enaSrdEnabled: Boolean?
+    enaSrdUdpSpecification: EnaSrdUdpSpecification?
+}
+
+@aws.SubResourceHint
+open class EnaSrdUdpSpecification extends formae.SubResource {
+    enaSrdUdpEnabled: Boolean?
+}
+
+
+@aws.SubResourceHint
+open class EnclaveOptions extends formae.SubResource {
+    enabled: Boolean?
+}
+
+@aws.SubResourceHint
+open class HibernationOptions extends formae.SubResource {
+    configured: Boolean?
+}
+
+
+@aws.SubResourceHint
+open class IamInstanceProfile extends formae.SubResource {
+    arn: String?
+    name: String?
+}
+
+@aws.SubResourceHint
+open class InstanceMarketOptions extends formae.SubResource {
+    marketType: String?
+    spotOptions: SpotOptions?
+}
+
+
+@aws.SubResourceHint
+open class InstanceRequirements extends formae.SubResource {
+    acceleratorCount: AcceleratorCount?
+    acceleratorManufacturers: Listing<String>?
+    acceleratorNames: Listing<String>?
+    acceleratorTotalMemoryMiB: AcceleratorTotalMemoryMiB?
+    acceleratorTypes: Listing<String>?
+    allowedInstanceTypes: Listing<String>?
+    bareMetal: String?
+    baselineEbsBandwidthMbps: BaselineEbsBandwidthMbps?
+    baselinePerformanceFactors: BaselinePerformanceFactors?
+    burstablePerformance: String?
+    cpuManufacturers: Listing<String>?
+    excludedInstanceTypes: Listing<String>?
+    instanceGenerations: Listing<String>?
+    localStorage: String?
+    localStorageTypes: Listing<String>?
+    maxSpotPriceAsPercentageOfOptimalOnDemandPrice: Int?
+    memoryGiBPerVCpu: MemoryGiBPerVCpu?
+    memoryMiB: MemoryMiB?
+    networkBandwidthGbps: NetworkBandwidthGbps?
+    networkInterfaceCount: NetworkInterfaceCount?
+    onDemandMaxPricePercentageOverLowestPrice: Int?
+    requireHibernateSupport: Boolean?
+    spotMaxPricePercentageOverLowestPrice: Int?
+    totalLocalStorageGB: TotalLocalStorageGB?
+    vCpuCount: VCpuCount?
+}
+
+
+@aws.SubResourceHint
+open class Ipv4PrefixSpecification extends formae.SubResource {
+    ipv4Prefix: String?
+}
+
+
+@aws.SubResourceHint
+open class Ipv6Address extends formae.SubResource {
+    ipv6Address: String?
+}
+
+
+@aws.SubResourceHint
+open class Ipv6PrefixSpecification extends formae.SubResource {
+    ipv6Prefix: String?
+}
+
+
+@aws.SubResourceHint
+open class TagSpecification extends formae.SubResource {
+    resourceType: String?
+    tags: Listing<formae.Tag>?
+}
+
+
+@aws.SubResourceHint
+open class LaunchTemplateData extends formae.SubResource {
+    blockDeviceMappings: Listing<BlockDeviceMapping>?
+    capacityReservationSpecification: CapacityReservationSpecification?
+    cpuOptions: CpuOptions?
+    creditSpecification: CreditSpecification?
+    disableApiStop: Boolean?
+    disableApiTermination: Boolean?
+    ebsOptimized: Boolean?
+    elasticGpuSpecifications: Listing<ElasticGpuSpecification>?
+    elasticInferenceAccelerators: Listing<ElasticInferenceAccelerator>?
+    enclaveOptions: EnclaveOptions?
+    hibernationOptions: HibernationOptions?
+    iamInstanceProfile: IamInstanceProfile?
+    imageId: String?
+    instanceInitiatedShutdownBehavior: String?
+    instanceMarketOptions: InstanceMarketOptions?
+    instanceRequirements: InstanceRequirements?
+    instanceType: String?
+    kernelId: String?
+    keyName: String?
+    licenseSpecifications: Listing<LicenseSpecification>?
+    maintenanceOptions: MaintenanceOptions?
+    metadataOptions: MetadataOptions?
+    monitoring: Monitoring?
+    networkInterfaces: Listing<NetworkInterface>?
+    placement: Placement?
+    privateDnsNameOptions: PrivateDnsNameOptions?
+    ramDiskId: String?
+    securityGroupIds: Listing<String>?
+    securityGroups: Listing<String|formae.Resolvable>?
+    tagSpecifications: Listing<TagSpecification>?
+    userData: String?
+}
+
+
+@aws.SubResourceHint
+open class ElasticInferenceAccelerator extends formae.SubResource {
+    count: Int?
+    type: String?
+}
+
+@aws.SubResourceHint
+open class LicenseSpecification extends formae.SubResource {
+    licenseConfigurationArn: String?
+}
+
+@aws.SubResourceHint
+open class MaintenanceOptions extends formae.SubResource {
+    autoRecovery: String?
+}
+
+@aws.SubResourceHint
+open class MemoryGiBPerVCpu extends formae.SubResource {
+    max: Number?
+    min: Number?
+}
+
+@aws.SubResourceHint
+open class MemoryMiB extends formae.SubResource {
+    max: Int?
+    min: Int?
+}
+
+@aws.SubResourceHint
+open class MetadataOptions extends formae.SubResource {
+    httpEndpoint: String?
+    httpProtocolIpv6: String?
+    httpPutResponseHopLimit: Int?
+    httpTokens: String?
+    instanceMetadataTags: String?
+}
+
+@aws.SubResourceHint
+open class Monitoring extends formae.SubResource {
+    enabled: Boolean?
+}
+
+@aws.SubResourceHint
+open class NetworkBandwidthGbps extends formae.SubResource {
+    max: Number?
+    min: Number?
+}
+
+@aws.SubResourceHint
+open class NetworkInterface extends formae.SubResource {
+    associateCarrierIpAddress: Boolean?
+    associatePublicIpAddress: Boolean?
+    connectionTrackingSpecification: ConnectionTrackingSpecification?
+    deleteOnTermination: Boolean?
+    description: String?
+    deviceIndex: Int?
+    enaSrdSpecification: EnaSrdSpecification?
+    groups: Listing<String>?
+    interfaceType: String?
+    ipv4PrefixCount: Int?
+    ipv4Prefixes: Listing<Ipv4PrefixSpecification>?
+    ipv6AddressCount: Int?
+    ipv6Addresses: Listing<Ipv6Address>?
+    ipv6PrefixCount: Int?
+    ipv6Prefixes: Listing<Ipv6PrefixSpecification>?
+    networkCardIndex: Int?
+    networkInterfaceId: String?
+    primaryIpv6: Boolean?
+    privateIpAddress: String?
+    privateIpAddresses: Listing<PrivateIpAddress>?
+    secondaryPrivateIpAddressCount: Int?
+    subnetId: (String |formae.Resolvable)?
+}
+
+@aws.SubResourceHint
+open class NetworkInterfaceCount extends formae.SubResource {
+    max: Int?
+    min: Int?
+}
+
+open class Placement extends formae.SubResource {
+    affinity: String?
+    availabilityZone: aws.AvailabilityZone?
+    groupId: String?
+    groupName: String?
+    hostId: String?
+    hostResourceGroupArn: String?
+    partitionNumber: Int?
+    spreadDomain: String?
+    tenancy: String?
+}
+
+
+@aws.SubResourceHint
+open class PrivateDnsNameOptions extends formae.SubResource {
+    enableResourceNameDnsAAAARecord: Boolean?
+    enableResourceNameDnsARecord: Boolean?
+    hostnameType: String?
+}
+
+
+@aws.SubResourceHint
+open class PrivateIpAddress extends formae.SubResource {
+    primary: Boolean?
+    privateIpAddress: String?
+}
+
+@aws.SubResourceHint
+open class Reference extends formae.SubResource {
+    instanceFamily: String?
+}
+
+@aws.SubResourceHint
+open class SpotOptions extends formae.SubResource {
+    blockDurationMinutes: Int?
+    instanceInterruptionBehavior: String?
+    maxPrice: String?
+    spotInstanceType: String?
+    validUntil: String?
+}
+
+@aws.SubResourceHint
+open class TotalLocalStorageGB extends formae.SubResource {
+    max: Number?
+    min: Number?
+}
+
+@aws.SubResourceHint
+open class VCpuCount extends formae.SubResource {
+    max: Int?
+    min: Int?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "LaunchTemplateId"
+    tags = "TagSpecifications"
+}
+open class LaunchTemplate extends formae.Resource {
+
+    @aws.FieldHint{
+        writeOnly = true
+        requiredOnCreate = true
+    }
+    launchTemplateData: LaunchTemplateData?
+
+    @aws.FieldHint{createOnly = true}
+    launchTemplateName: String?
+
+    @aws.FieldHint{writeOnly = true}
+    tagSpecifications: Listing<TagSpecification>?
+
+    @aws.FieldHint{writeOnly = true}
+    versionDescription: String?
+}

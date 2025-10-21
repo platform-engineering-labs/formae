@@ -1,0 +1,63 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ecr.repository
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ECR::Repository"
+
+@aws.SubResourceHint
+open class EncryptionConfiguration extends formae.SubResource {
+    encryptionType: String
+    kmsKey: (String|formae.Resolvable)?
+}
+
+@aws.SubResourceHint
+open class ImageScanningConfiguration extends formae.SubResource {
+    scanOnPush: Boolean?
+}
+
+@aws.SubResourceHint
+open class LifecyclePolicy extends formae.SubResource {
+    lifecyclePolicyText: String?
+    registryId: String?
+}
+
+typealias ImageTagMutability = "MUTABLE"|"IMMUTABLE"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "RepositoryName"
+    tags = "Tags"
+}
+open class Repository extends formae.Resource {
+
+    @aws.FieldHint{writeOnly = true}
+    emptyOnDelete: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    encryptionConfiguration: EncryptionConfiguration?
+
+    @aws.FieldHint
+    imageScanningConfiguration: ImageScanningConfiguration?
+
+    @aws.FieldHint
+    imageTagMutability: ImageTagMutability?
+
+    @aws.FieldHint
+    lifecyclePolicy: LifecyclePolicy?
+
+    @aws.FieldHint{createOnly = true}
+    repositoryName: (String(matches(Regex(#"^(?=.{2,256}$)((?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*)$"#))))?
+
+    @aws.FieldHint
+    repositoryPolicyText: Dynamic?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

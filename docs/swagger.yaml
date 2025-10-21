@@ -1,0 +1,486 @@
+basePath: /api/v1
+definitions:
+  github_com_platform-engineering-labs_formae_internal_api_model.Command:
+    properties:
+      Command:
+        type: string
+      CommandId:
+        type: string
+      EndTs:
+        type: string
+      ResourceUpdates:
+        items:
+          $ref: '#/definitions/model.ResourceUpdate'
+        type: array
+      StartTs:
+        type: string
+      State:
+        type: string
+    type: object
+  github_com_platform-engineering-labs_formae_internal_api_model.Description:
+    properties:
+      Confirm:
+        type: boolean
+      Text:
+        type: string
+    type: object
+  github_com_platform-engineering-labs_formae_pkg_model.Description:
+    properties:
+      Confirm:
+        type: boolean
+      Text:
+        type: string
+    type: object
+  model.FieldHint:
+    properties:
+      createOnly:
+        type: boolean
+      persist:
+        type: boolean
+      required:
+        type: boolean
+      requiredOnCreate:
+        type: boolean
+      writeOnly:
+        type: boolean
+    type: object
+  model.Forma:
+    properties:
+      Description:
+        $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description'
+      Properties:
+        additionalProperties:
+          $ref: '#/definitions/model.Prop'
+        type: object
+      Resources:
+        items:
+          $ref: '#/definitions/model.Resource'
+        type: array
+      Stacks:
+        items:
+          $ref: '#/definitions/model.Stack'
+        type: array
+      Targets:
+        items:
+          $ref: '#/definitions/model.Target'
+        type: array
+    type: object
+  model.ListCommandStatusResponse:
+    properties:
+      Commands:
+        items:
+          $ref: '#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command'
+        type: array
+    type: object
+  model.Prop:
+    properties:
+      Default: {}
+      Flag:
+        type: string
+      Type:
+        type: string
+      Value: {}
+    type: object
+  model.Resource:
+    properties:
+      Group:
+        type: string
+      Ksuid:
+        type: string
+      Label:
+        type: string
+      Managed:
+        description: Whether the resource is managed by Formae or not
+        type: boolean
+      NativeID:
+        type: string
+      PatchDocument:
+        description: Need this for CLI patch display
+        items:
+          type: integer
+        type: array
+      Properties:
+        items:
+          type: integer
+        type: array
+      ReadOnlyProperties:
+        items:
+          type: integer
+        type: array
+      Schema:
+        $ref: '#/definitions/model.Schema'
+      Stack:
+        type: string
+      Target:
+        type: string
+      Type:
+        type: string
+    type: object
+  model.ResourceUpdate:
+    properties:
+      CurrentAttempt:
+        type: integer
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      GroupId:
+        type: string
+      MaxAttempts:
+        type: integer
+      OldProperties:
+        items:
+          type: integer
+        type: array
+      OldStackName:
+        type: string
+      Operation:
+        type: string
+      PatchDocument:
+        items:
+          type: integer
+        type: array
+      Properties:
+        items:
+          type: integer
+        type: array
+      ReferenceLabels:
+        additionalProperties:
+          type: string
+        type: object
+      ResourceId:
+        type: string
+      ResourceLabel:
+        type: string
+      ResourceType:
+        type: string
+      StackName:
+        type: string
+      State:
+        type: string
+      StateMessage:
+        type: string
+    type: object
+  model.Schema:
+    properties:
+      discoverable:
+        type: boolean
+      fields:
+        items:
+          type: string
+        type: array
+      hints:
+        additionalProperties:
+          $ref: '#/definitions/model.FieldHint'
+        type: object
+      identifier:
+        type: string
+      nonprovisionable:
+        type: boolean
+      tags:
+        type: string
+    type: object
+  model.Simulation:
+    properties:
+      ChangesRequired:
+        type: boolean
+      Command:
+        $ref: '#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command'
+    type: object
+  model.Stack:
+    properties:
+      Description:
+        type: string
+      Label:
+        type: string
+    type: object
+  model.Stats:
+    properties:
+      AgentId:
+        type: string
+      Clients:
+        type: integer
+      Commands:
+        additionalProperties:
+          type: integer
+        type: object
+      ResourceErrors:
+        additionalProperties:
+          type: integer
+        type: object
+      ResourceTypes:
+        additionalProperties:
+          type: integer
+        type: object
+      Resources:
+        type: integer
+      Stacks:
+        type: integer
+      States:
+        additionalProperties:
+          type: integer
+        type: object
+      Targets:
+        type: integer
+      UnmanagedResources:
+        type: integer
+      Version:
+        type: string
+    type: object
+  model.SubmitCommandResponse:
+    properties:
+      CommandId:
+        type: string
+      Description:
+        $ref: '#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Description'
+      Simulation:
+        $ref: '#/definitions/model.Simulation'
+    type: object
+  model.Target:
+    properties:
+      Config:
+        items:
+          type: integer
+        type: array
+      Label:
+        type: string
+      Namespace:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: This API allows you to programatically interact with Formae without
+    the CLI.
+  title: Formae REST API
+  version: "1.0"
+paths:
+  /admin/discover:
+    post:
+      description: Initiates an immediate discovery process to identify resources
+        in the infrastructure.
+      responses:
+        "200":
+          description: OK
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Force resource discovery
+      tags:
+      - admin
+  /admin/synchronize:
+    post:
+      description: Triggers an immediate synchronization of the resource state with
+        the actual infrastructure.
+      responses:
+        "200":
+          description: OK
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Force resource synchronization
+      tags:
+      - admin
+  /command/{id}/status:
+    get:
+      description: Retrieves the status of a previously submitted Forma command using
+        its ID.
+      parameters:
+      - description: Unique identifier for the client.
+        in: header
+        name: Client-ID
+        required: true
+        type: string
+      - description: The ID of the command.
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: The command''s execution status.'
+          schema:
+            $ref: '#/definitions/model.ListCommandStatusResponse'
+        "400":
+          description: 'Bad Request: Missing or invalid parameters.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Get the status of a Forma command
+      tags:
+      - commands
+  /commands:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Submits a Forma command to the agent. The command is executed asynchronously.
+      parameters:
+      - description: Unique identifier for the client.
+        in: header
+        name: Client-ID
+        required: true
+        type: string
+      - description: The command to execute, either apply or destroy.
+        in: formData
+        name: command
+        required: true
+        type: string
+      - description: Only applies to the apply command. The desired command mode,
+          either reconcile or patch.
+        in: formData
+        name: mode
+        type: string
+      - description: If true, simulates command execution without actual changes to
+          the infrastructure (defaults to false).
+        in: formData
+        name: simulate
+        type: boolean
+      - description: Only applies to the apply command in reconcile mode. If true,
+          any changes made to the infrastructure since the last reconcile, either
+          by patches or outside of Formae, will be overwritten.
+        in: formData
+        name: force
+        type: boolean
+      - description: Only applies to destroy commands. A query string to select the
+          resources to be destroyed.
+        in: formData
+        name: query
+        type: string
+      - description: A valid Forma file.
+        in: formData
+        name: file
+        type: file
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: 'Accepted: The command is validated and stored and queued for
+            execution.'
+          headers:
+            string Location:
+              description: The URL to poll for the command's execution status (e.g.,
+                /api/v1/commands/{command_id}/status).
+              type: string
+          schema:
+            $ref: '#/definitions/model.SubmitCommandResponse'
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Submit a Forma command
+      tags:
+      - commands
+  /commands/status:
+    get:
+      description: Retrieves the statuses of multiple Forma commands based on a query
+        string.
+      parameters:
+      - description: Unique identifier for the client.
+        in: header
+        name: Client-ID
+        required: true
+        type: string
+      - description: The query string to select the commands. If empty, retrieves
+          the status of the most recent command.
+        in: query
+        name: query
+        type: string
+      - description: The maximum number of command statuses to return (default is
+          10).
+        in: query
+        name: max_results
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: The commands'' execution statuses.'
+          schema:
+            $ref: '#/definitions/model.ListCommandStatusResponse'
+        "400":
+          description: 'Bad Request: Missing or invalid parameters.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Get the status of multiple Forma commands
+      tags:
+      - commands
+  /health:
+    get:
+      description: A simple health check endpoint to verify that the API server is
+        running.
+      responses:
+        "200":
+          description: OK
+      summary: Health Check
+      tags:
+      - health
+  /resources:
+    get:
+      description: Extracts and lists resources based on a provided query string.
+      parameters:
+      - description: Unique identifier for the client.
+        in: header
+        name: Client-ID
+        required: true
+        type: string
+      - description: The query string to select the resources.
+        in: query
+        name: query
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: ': OK: The extracted resources.'
+          schema:
+            $ref: '#/definitions/model.Forma'
+        "400":
+          description: 'Bad Request: Invalid query.'
+          schema:
+            type: string
+        "404":
+          description: 'Not Found: No resources found matching the query.'
+          schema:
+            type: string
+        "406":
+          description: 'Not Acceptable: The request is not supported.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List resources
+      tags:
+      - resources
+  /stats:
+    get:
+      description: Retrieves usage statistics of the Formae agent.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: ': OK: The usage statistics.'
+          schema:
+            $ref: '#/definitions/model.Stats'
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Get usage statistics
+      tags:
+      - stats
+swagger: "2.0"

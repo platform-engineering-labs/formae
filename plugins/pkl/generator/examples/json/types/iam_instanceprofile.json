@@ -1,0 +1,62 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-2",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-2",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "eks-us-west-2-eks-example-14903859267279293829",
+      "Type": "AWS::IAM::InstanceProfile",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "InstanceProfileName",
+        "Tags": "",
+        "Fields": [
+          "InstanceProfileName",
+          "Path",
+          "Roles"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "InstanceProfileName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Path": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Roles": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "Arn": "arn:aws:iam::021891619792:instance-profile/eks-us-west-2-eks-example-14903859267279293829",
+        "InstanceProfileName": "eks-us-west-2-eks-example-14903859267279293829",
+        "Path": "/",
+        "Roles": []
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:iam::021891619792:instance-profile/eks-us-west-2-eks-example-14903859267279293829"
+      },
+      "NativeId": "eks-us-west-2-eks-example-14903859267279293829",
+      "Ksuid": "33jxjKXXwEVzBqeah33ogIPRhWL"
+    }
+  ]
+}

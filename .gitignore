@@ -1,0 +1,69 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+__debug*
+
+.vscode/
+.DS_Store
+.idea/
+
+# bin
+/formae
+!*/formae
+
+# tools
+/ppm
+!*/ppm
+dist/
+
+# goflow ui. Get it locally from https://github.com/fieldryand/goflow/releases/latest/download/goflow-ui.tar.gz
+# and extract it into ui/
+ui
+
+# Ignore everything in the data folder...
+data/*
+
+# Ignore local logs
+log/*
+
+# No packages
+*.tgz
+
+# PKL ignores
+PklProject.deps.json
+.out/
+.pkl-lsp
+
+# semver files generated during build
+version.semver
+
+# e2e test node logs
+tests/e2e/formae-server.log
+tests/e2e/test-logs
+
+# Claude Code local settings
+.claude/
+CLAUDE.md

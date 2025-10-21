@@ -1,0 +1,681 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.s3.bucket
+
+import "../aws.pkl"
+import "@formae/formae.pkl"
+
+const type = "AWS::S3::Bucket"
+
+@aws.SubResourceHint
+open class BucketAbortIncompleteMultipartUpload extends formae.SubResource {
+    daysAfterInitiation: Int
+}
+
+typealias AccelerateConfigurationAccelerationStatus = "Enabled"|"Suspended"
+
+@aws.SubResourceHint
+open class BucketAccelerateConfiguration extends formae.SubResource {
+    accelerationStatus: AccelerateConfigurationAccelerationStatus
+}
+
+@aws.SubResourceHint
+open class BucketAccessControlTranslation extends formae.SubResource {
+    owner: String
+}
+
+@aws.SubResourceHint
+open class BucketAnalyticsConfiguration extends formae.SubResource {
+    id: String
+
+    prefix: String?
+
+    storageClassAnalysis: BucketStorageClassAnalysis
+
+    @aws.FieldHint {
+        outputTransformation = formae.transform.capitalizeMemberKeys
+    }
+    tagFilters: Listing<formae.Tag>?
+}
+
+typealias BucketArn = String
+
+
+@aws.SubResourceHint
+open class BucketBucketEncryption extends formae.SubResource {
+    serverSideEncryptionConfiguration: Listing<BucketServerSideEncryptionRule>
+}
+
+@aws.SubResourceHint
+open class BucketCorsConfiguration extends formae.SubResource {
+    corsRules: Listing<BucketCorsRule>
+}
+
+typealias CorsRuleAllowedMethods = "GET"|"PUT"|"HEAD"|"POST"|"DELETE"
+
+@aws.SubResourceHint
+open class BucketCorsRule extends formae.SubResource {
+    allowedHeaders: Listing<String>?
+
+    allowedMethods: Listing<CorsRuleAllowedMethods>
+
+    allowedOrigins: Listing<String>
+
+    exposedHeaders: Listing<String>?
+
+    id: String?
+
+    maxAge: Int?
+}
+
+@aws.SubResourceHint
+open class BucketDataExport extends formae.SubResource {
+    destination: BucketDestination
+
+    outputSchemaVersion: String
+}
+
+typealias DefaultRetentionMode = "COMPLIANCE"|"GOVERNANCE"
+
+@aws.SubResourceHint
+open class BucketDefaultRetention extends formae.SubResource {
+    days: Int?
+
+    mode: DefaultRetentionMode?
+
+    years: Int?
+}
+
+typealias DeleteMarkerReplicationStatus = "Disabled"|"Enabled"
+
+@aws.SubResourceHint
+open class BucketDeleteMarkerReplication extends formae.SubResource {
+    status: DeleteMarkerReplicationStatus?
+}
+
+typealias DestinationFormat = "CSV"|"ORC"|"Parquet"
+
+@aws.SubResourceHint
+open class BucketDestination extends formae.SubResource {
+    bucketAccountId: String?
+
+    bucketArn: String|formae.Resolvable
+
+    format: DestinationFormat
+
+    prefix: String?
+}
+
+@aws.SubResourceHint
+open class BucketEncryptionConfiguration extends formae.SubResource {
+    replicaKmsKeyID: String
+}
+
+@aws.SubResourceHint
+open class BucketEventBridgeConfiguration extends formae.SubResource {
+    eventBridgeEnabled: Boolean
+}
+
+@aws.SubResourceHint
+open class BucketFilterRule extends formae.SubResource {
+    name: String
+
+    value: String
+}
+
+typealias IntelligentTieringConfigurationStatus = "Disabled"|"Enabled"
+
+@aws.SubResourceHint
+open class BucketIntelligentTieringConfiguration extends formae.SubResource {
+    id: String
+
+    prefix: String?
+
+    status: IntelligentTieringConfigurationStatus
+
+    @aws.FieldHint {
+        outputTransformation = formae.transform.capitalizeMemberKeys
+    }
+    tagFilters: Listing<formae.Tag>?
+
+    tierings: Listing<BucketTiering>
+}
+
+typealias InventoryConfigurationIncludedObjectVersions = "All"|"Current"
+
+typealias InventoryConfigurationOptionalFields = "Size"|"LastModifiedDate"|"StorageClass"|"ETag"|"IsMultipartUploaded"|"ReplicationStatus"|"EncryptionStatus"|"ObjectLockRetainUntilDate"|"ObjectLockMode"|"ObjectLockLegalHoldStatus"|"IntelligentTieringAccessTier"|"BucketKeyStatus"|"ChecksumAlgorithm"|"ObjectAccessControlList"|"ObjectOwner"
+
+typealias InventoryConfigurationScheduleFrequency = "Daily"|"Weekly"
+
+@aws.SubResourceHint
+open class BucketInventoryConfiguration extends formae.SubResource {
+    destination: BucketDestination
+
+    enabled: Boolean
+
+    id: String
+
+    includedObjectVersions: InventoryConfigurationIncludedObjectVersions
+
+    optionalFields: Listing<InventoryConfigurationOptionalFields>?
+
+    prefix: String?
+
+    scheduleFrequency: InventoryConfigurationScheduleFrequency
+}
+
+@aws.SubResourceHint
+open class BucketLambdaConfiguration extends formae.SubResource {
+    event: String
+
+    filter: BucketNotificationFilter?
+
+    `function`: String
+}
+
+typealias LifecycleConfigurationTransitionDefaultMinimumObjectSize = "varies_by_storage_class"|"all_storage_classes_128K"
+
+@aws.SubResourceHint
+open class BucketLifecycleConfiguration extends formae.SubResource {
+    rules: Listing<BucketRule>
+
+    transitionDefaultMinimumObjectSize: LifecycleConfigurationTransitionDefaultMinimumObjectSize?
+}
+
+@aws.SubResourceHint
+open class BucketLoggingConfiguration extends formae.SubResource {
+    destinationBucketName: String?
+
+    logFilePrefix: String?
+
+    targetObjectKeyFormat: BucketTargetObjectKeyFormat?
+}
+
+typealias MetricsStatus = "Disabled"|"Enabled"
+
+@aws.SubResourceHint
+open class BucketMetrics extends formae.SubResource {
+    eventThreshold: BucketReplicationTimeValue?
+
+    status: MetricsStatus
+}
+
+@aws.SubResourceHint
+open class BucketMetricsConfiguration extends formae.SubResource {
+    accessPointArn: String?
+
+    id: String
+
+    prefix: String?
+
+    tagFilters: Listing<formae.Tag>?
+}
+
+@aws.SubResourceHint
+open class BucketNoncurrentVersionExpiration extends formae.SubResource {
+    newerNoncurrentVersions: Int?
+
+    noncurrentDays: Int
+}
+
+typealias NoncurrentVersionTransitionStorageClass = "DEEP_ARCHIVE"|"GLACIER"|"Glacier"|"GLACIER_IR"|"INTELLIGENT_TIERING"|"ONEZONE_IA"|"STANDARD_IA"
+
+@aws.SubResourceHint
+open class BucketNoncurrentVersionTransition extends formae.SubResource {
+    newerNoncurrentVersions: Int?
+
+    storageClass: NoncurrentVersionTransitionStorageClass
+
+    transitionInDays: Int
+}
+
+@aws.SubResourceHint
+open class BucketNotificationConfiguration extends formae.SubResource {
+    eventBridgeConfiguration: BucketEventBridgeConfiguration?
+
+    lambdaConfigurations: Listing<BucketLambdaConfiguration>?
+
+    queueConfigurations: Listing<BucketQueueConfiguration>?
+
+    topicConfigurations: Listing<BucketTopicConfiguration>?
+}
+
+@aws.SubResourceHint
+open class BucketNotificationFilter extends formae.SubResource {
+    s3Key: BucketS3KeyFilter
+}
+
+@aws.SubResourceHint
+open class BucketObjectLockConfiguration extends formae.SubResource {
+    objectLockEnabled: String?
+
+    rule: BucketObjectLockRule?
+}
+
+@aws.SubResourceHint
+open class BucketObjectLockRule extends formae.SubResource {
+    defaultRetention: BucketDefaultRetention?
+}
+
+@aws.SubResourceHint
+open class BucketOwnershipControls extends formae.SubResource {
+    rules: Listing<BucketOwnershipControlsRule>
+}
+
+typealias OwnershipControlsRuleObjectOwnership = "ObjectWriter"|"BucketOwnerPreferred"|"BucketOwnerEnforced"
+
+@aws.SubResourceHint
+open class BucketOwnershipControlsRule extends formae.SubResource {
+    objectOwnership: OwnershipControlsRuleObjectOwnership?
+}
+
+typealias PartitionedPrefixPartitionDateSource = "EventTime"|"DeliveryTime"
+
+@aws.SubResourceHint
+open class BucketPartitionedPrefix extends formae.SubResource {
+    partitionDateSource: PartitionedPrefixPartitionDateSource?
+}
+
+@aws.SubResourceHint
+open class BucketPublicAccessBlockConfiguration extends formae.SubResource {
+    blockPublicAcls: Boolean?
+
+    blockPublicPolicy: Boolean?
+
+    ignorePublicAcls: Boolean?
+
+    restrictPublicBuckets: Boolean?
+}
+
+@aws.SubResourceHint
+open class BucketQueueConfiguration extends formae.SubResource {
+    event: String
+
+    filter: BucketNotificationFilter?
+
+    queue: String
+}
+
+typealias RedirectAllRequestsToProtocol = "http"|"https"
+
+@aws.SubResourceHint
+open class BucketRedirectAllRequestsTo extends formae.SubResource {
+    hostName: String
+
+    protocol: RedirectAllRequestsToProtocol?
+}
+
+typealias RedirectRuleProtocol = "http"|"https"
+
+@aws.SubResourceHint
+open class BucketRedirectRule extends formae.SubResource {
+    hostName: String?
+
+    httpRedirectCode: String?
+
+    protocol: RedirectRuleProtocol?
+
+    replaceKeyPrefixWith: String?
+
+    replaceKeyWith: String?
+}
+
+typealias ReplicaModificationsStatus = "Enabled"|"Disabled"
+
+@aws.SubResourceHint
+open class BucketReplicaModifications extends formae.SubResource {
+    status: ReplicaModificationsStatus
+}
+
+@aws.SubResourceHint
+open class BucketReplicationConfiguration extends formae.SubResource {
+    role: String
+
+    rules: Listing<BucketReplicationRule>
+}
+
+typealias ReplicationDestinationStorageClass = "DEEP_ARCHIVE"|"GLACIER"|"GLACIER_IR"|"INTELLIGENT_TIERING"|"ONEZONE_IA"|"REDUCED_REDUNDANCY"|"STANDARD"|"STANDARD_IA"
+
+@aws.SubResourceHint
+open class BucketReplicationDestination extends formae.SubResource {
+    accessControlTranslation: BucketAccessControlTranslation?
+
+    account: String?
+
+    bucket: String
+
+    encryptionConfiguration: BucketEncryptionConfiguration?
+
+    metrics: BucketMetrics?
+
+    replicationTime: BucketReplicationTime?
+
+    storageClass: ReplicationDestinationStorageClass?
+}
+
+typealias ReplicationRuleStatus = "Disabled"|"Enabled"
+
+@aws.SubResourceHint
+open class BucketReplicationRule extends formae.SubResource {
+    deleteMarkerReplication: BucketDeleteMarkerReplication?
+
+    destination: BucketReplicationDestination
+
+    filter: BucketReplicationRuleFilter?
+
+    id: String?
+
+    prefix: String?
+
+    priority: Int?
+
+    sourceSelectionCriteria: BucketSourceSelectionCriteria?
+
+    status: ReplicationRuleStatus
+}
+
+@aws.SubResourceHint
+open class BucketReplicationRuleAndOperator extends formae.SubResource {
+    prefix: String?
+
+    tagFilters: Listing<formae.Tag>?
+}
+
+@aws.SubResourceHint
+open class BucketReplicationRuleFilter extends formae.SubResource {
+    and: BucketReplicationRuleAndOperator?
+
+    prefix: String?
+
+    tagFilter: formae.Tag?
+}
+
+typealias ReplicationTimeStatus = "Disabled"|"Enabled"
+
+@aws.SubResourceHint
+open class BucketReplicationTime extends formae.SubResource {
+    status: ReplicationTimeStatus
+
+    time: BucketReplicationTimeValue
+}
+
+@aws.SubResourceHint
+open class BucketReplicationTimeValue extends formae.SubResource {
+    minutes: Int
+}
+
+@aws.SubResourceHint
+open class BucketRoutingRule extends formae.SubResource {
+    redirectRule: BucketRedirectRule
+
+    routingRuleCondition: BucketRoutingRuleCondition?
+}
+
+@aws.SubResourceHint
+open class BucketRoutingRuleCondition extends formae.SubResource {
+    httpErrorCodeReturnedEquals: String?
+
+    keyPrefixEquals: String?
+}
+
+typealias RuleStatus = "Enabled"|"Disabled"
+
+@aws.SubResourceHint
+open class BucketRule extends formae.SubResource {
+    abortIncompleteMultipartUpload: BucketAbortIncompleteMultipartUpload?
+
+    expirationDate: Bucketiso8601UTC?
+
+    expirationInDays: Int?
+
+    expiredObjectDeleteMarker: Boolean?
+
+    id: String?
+
+    noncurrentVersionExpiration: BucketNoncurrentVersionExpiration?
+
+    noncurrentVersionExpirationInDays: Int?
+
+    @aws.FieldHint {
+        writeOnly = true
+    }
+    noncurrentVersionTransition: BucketNoncurrentVersionTransition?
+
+    noncurrentVersionTransitions: Listing<BucketNoncurrentVersionTransition>?
+
+    objectSizeGreaterThan: String(matches(Regex(#"[0-9]+"#)))?
+
+    objectSizeLessThan: String(matches(Regex(#"[0-9]+"#)))?
+
+    @aws.FieldHint {
+        writeOnly = true
+    }
+    prefix: String?
+
+    status: RuleStatus
+
+    tagFilters: Listing<formae.Tag>?
+
+    transition: BucketTransition?
+
+    transitions: Listing<BucketTransition>?
+}
+
+@aws.SubResourceHint
+open class BucketS3KeyFilter extends formae.SubResource {
+    rules: Listing<BucketFilterRule>
+}
+
+typealias ServerSideEncryptionByDefaultSSEAlgorithm = "aws:kms"|"AES256"|"aws:kms:dsse"
+
+@aws.SubResourceHint
+open class BucketServerSideEncryptionByDefault extends formae.SubResource {
+    @aws.FieldHint {
+        outputField = "KMSMasterKeyID"
+    }
+    kmsMasterKeyID: (String|formae.Resolvable)?
+
+    @aws.FieldHint {
+        outputField = "SSEAlgorithm"
+    }
+    sseAlgorithm: ServerSideEncryptionByDefaultSSEAlgorithm
+}
+
+@aws.SubResourceHint
+open class BucketServerSideEncryptionRule extends formae.SubResource {
+    bucketKeyEnabled: Boolean?
+
+    serverSideEncryptionByDefault: BucketServerSideEncryptionByDefault?
+}
+
+@aws.SubResourceHint
+open class BucketSourceSelectionCriteria extends formae.SubResource {
+    replicaModifications: BucketReplicaModifications?
+
+    sseKmsEncryptedObjects: BucketSseKmsEncryptedObjects?
+}
+
+typealias SseKmsEncryptedObjectsStatus = "Disabled"|"Enabled"
+
+@aws.SubResourceHint
+open class BucketSseKmsEncryptedObjects extends formae.SubResource {
+    status: SseKmsEncryptedObjectsStatus
+}
+
+@aws.SubResourceHint
+open class BucketStorageClassAnalysis extends formae.SubResource {
+    dataExport: BucketDataExport?
+}
+
+typealias BucketTargetObjectKeyFormat = Dynamic
+
+
+typealias TieringAccessTier = "ARCHIVE_ACCESS"|"DEEP_ARCHIVE_ACCESS"
+
+@aws.SubResourceHint
+open class BucketTiering extends formae.SubResource {
+    accessTier: TieringAccessTier
+
+    days: Int
+}
+
+@aws.SubResourceHint
+open class BucketTopicConfiguration extends formae.SubResource {
+    event: String
+
+    filter: BucketNotificationFilter?
+
+    topic: String
+}
+
+typealias TransitionStorageClass = "DEEP_ARCHIVE"|"GLACIER"|"Glacier"|"GLACIER_IR"|"INTELLIGENT_TIERING"|"ONEZONE_IA"|"STANDARD_IA"
+
+@aws.SubResourceHint
+open class BucketTransition extends formae.SubResource {
+    storageClass: TransitionStorageClass
+
+    transitionDate: Bucketiso8601UTC?
+
+    transitionInDays: Int?
+}
+
+typealias VersioningConfigurationStatus = "Enabled"|"Suspended"
+
+@aws.SubResourceHint
+open class BucketVersioningConfiguration extends formae.SubResource {
+    status: VersioningConfigurationStatus
+}
+
+@aws.SubResourceHint
+open class BucketWebsiteConfiguration extends formae.SubResource {
+    errorDocument: String?
+
+    indexDocument: String?
+
+    redirectAllRequestsTo: BucketRedirectAllRequestsTo?
+
+    routingRules: Listing<BucketRoutingRule>?
+}
+
+typealias Bucketiso8601UTC = String
+
+
+open class BucketResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden arn: BucketResolvable = (this) {
+        property = "Arn"
+    }
+
+    hidden domainName: BucketResolvable = (this) {
+        property = "DomainName"
+    }
+
+    hidden dualStackDomainName: BucketResolvable = (this) {
+        property = "DualStackDomainName"
+    }
+
+    hidden metadataTableArn: BucketResolvable = (this) {
+        property = "MetadataTableConfiguration.S3TablesDestination.TableArn"
+    }
+
+    hidden metadataTableNamespace: BucketResolvable = (this) {
+        property = "MetadataTableConfiguration.S3TablesDestination.TableNamespace"
+    }
+
+    hidden regionalDomainName: BucketResolvable = (this) {
+        property = "RegionalDomainName"
+    }
+
+    hidden websiteURL: BucketResolvable = (this) {
+        property = "WebsiteURL"
+    }
+
+    hidden bucketName: BucketResolvable = (this) {
+        property = "BucketName"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "BucketName"
+    tags = "Tags"
+}
+open class Bucket extends formae.Resource {
+    hidden parent = this
+
+    @aws.FieldHint
+    accelerateConfiguration: BucketAccelerateConfiguration?
+
+    @aws.FieldHint {
+        writeOnly = true
+    }
+    accessControl: BucketAccessControl?
+
+    @aws.FieldHint
+    analyticsConfigurations: Listing<BucketAnalyticsConfiguration>?
+
+    @aws.FieldHint
+    bucketEncryption: BucketBucketEncryption?
+
+    @aws.FieldHint
+    bucketName: String?
+
+    @aws.FieldHint
+    corsConfiguration: BucketCorsConfiguration?
+
+    @aws.FieldHint
+    intelligentTieringConfigurations: Listing<BucketIntelligentTieringConfiguration>?
+
+    @aws.FieldHint
+    inventoryConfigurations: Listing<BucketInventoryConfiguration>?
+
+    @aws.FieldHint
+    lifecycleConfiguration: BucketLifecycleConfiguration?
+
+    @aws.FieldHint
+    loggingConfiguration: BucketLoggingConfiguration?
+
+    @aws.FieldHint
+    metricsConfigurations: Listing<BucketMetricsConfiguration>?
+
+    @aws.FieldHint
+    notificationConfiguration: BucketNotificationConfiguration?
+
+    @aws.FieldHint
+    objectLockConfiguration: BucketObjectLockConfiguration?
+
+    @aws.FieldHint
+    objectLockEnabled: Boolean?
+
+    @aws.FieldHint
+    ownershipControls: BucketOwnershipControls?
+
+    @aws.FieldHint
+    publicAccessBlockConfiguration: BucketPublicAccessBlockConfiguration?
+
+    @aws.FieldHint
+    replicationConfiguration: BucketReplicationConfiguration?
+
+    @aws.FieldHint {
+        outputTransformation = formae.transform.capitalizeMemberKeys
+    }
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    versioningConfiguration: BucketVersioningConfiguration?
+
+    @aws.FieldHint
+    websiteConfiguration: BucketWebsiteConfiguration?
+
+    hidden res: BucketResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}
+
+typealias BucketAccessControl = "AuthenticatedRead"|"AwsExecRead"|"BucketOwnerFullControl"|"BucketOwnerRead"|"LogDeliveryWrite"|"Private"|"PublicRead"|"PublicReadWrite"

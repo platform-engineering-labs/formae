@@ -1,0 +1,73 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.capacityreservation
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::CapacityReservation"
+
+@aws.SubResourceHint
+open class TagSpecification extends formae.SubResource {
+    resourceType: String?
+    tags: Listing<formae.Tag>?
+}
+
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    tags = "TagSpecifications"
+}
+open class CapacityReservation extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    availabilityZone: aws.AvailabilityZone
+
+    @aws.FieldHint{createOnly = true}
+    availabilityZoneId: String
+
+    @aws.FieldHint
+    ebsOptimized: Boolean?
+
+    @aws.FieldHint
+    endDate: String?
+
+    @aws.FieldHint
+    endDateType: String?
+
+    @aws.FieldHint
+    ephemeralStorage: Boolean?
+
+    @aws.FieldHint
+    instanceCount: Int
+
+    @aws.FieldHint
+    instanceMatchCriteria: String?
+
+    @aws.FieldHint
+    instancePlatform: String
+
+    @aws.FieldHint
+    instanceType: String
+
+    @aws.FieldHint
+    outPostArn: String?
+
+    @aws.FieldHint
+    placementGroupArn: String?
+
+    //TODO need to find solution for this because it's not a regular tag format
+    @aws.FieldHint
+    tagSpecifications: Listing<TagSpecification>?
+
+    @aws.FieldHint
+    tenancy: String?
+
+    @aws.FieldHint{writeOnly = true}
+    unusedReservationBillingOwnerId: String?
+}

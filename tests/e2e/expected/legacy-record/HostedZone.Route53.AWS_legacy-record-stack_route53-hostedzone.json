@@ -1,0 +1,83 @@
+{
+  "Label": "route53-hostedzone",
+  "Type": "AWS::Route53::HostedZone",
+  "Stack": "legacy-record-stack",
+  "Target": "aws-target-hostedzone",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "HostedZoneTags",
+    "Fields": [
+      "HostedZoneConfig",
+      "Name",
+      "QueryLoggingConfig",
+      "HostedZoneTags",
+      "VPCs"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "HostedZoneConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HostedZoneTags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Name": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "QueryLoggingConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VPCs": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "HostedZoneConfig": {},
+    "HostedZoneTags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "route53-hostedzone"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "legacy-record-stack"
+      }
+    ],
+    "Name": "snarf.platform.engineering.",
+    "VPCs": []
+  },
+  "ReadOnlyProperties": {
+    "Id": "Z0330129CCZQT8EPVS62",
+    "NameServers": [
+      "ns-1611.awsdns-09.co.uk",
+      "ns-968.awsdns-57.net",
+      "ns-1518.awsdns-61.org",
+      "ns-188.awsdns-23.com"
+    ]
+  },
+  "NativeID": "Z0330129CCZQT8EPVS62",
+  "Managed": true,
+  "Ksuid": "34OG6kRRj1szVx0j22IQLW8rN2i"
+}

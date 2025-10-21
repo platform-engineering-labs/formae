@@ -1,0 +1,534 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "example-backend-store-abc123def456",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-backend-store-abc123def456",
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "NativeId": "example-backend-store-abc123def456"
+    },
+    {
+      "Label": "example-ses-forwarder-bucket",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-ses-forwarder-bucket"
+      },
+      "NativeId": "example-ses-forwarder-bucket"
+    },
+    {
+      "Label": "example-state-store-demo-ghi789jkl012",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-state-store-demo-ghi789jkl012",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "NativeId": "example-state-store-demo-ghi789jkl012"
+    },
+    {
+      "Label": "example-app-storage",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-app-storage",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-app-storage",
+        "DomainName": "example-app-storage.s3.amazonaws.com",
+        "DualStackDomainName": "example-app-storage.s3.dualstack.us-west-1.amazonaws.com",
+        "RegionalDomainName": "example-app-storage.s3.us-west-1.amazonaws.com",
+        "WebsiteURL": "http://example-app-storage.s3-website.us-west-1.amazonaws.com"
+      },
+      "NativeId": "example-app-storage"
+    },
+    {
+      "Label": "example-artifacts-demo-mno345pqr678",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-artifacts-demo-mno345pqr678",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-artifacts-demo-mno345pqr678",
+        "DomainName": "example-artifacts-demo-mno345pqr678.s3.amazonaws.com",
+        "DualStackDomainName": "example-artifacts-demo-mno345pqr678.s3.dualstack.us-east-1.amazonaws.com",
+        "RegionalDomainName": "example-artifacts-demo-mno345pqr678.s3.us-east-1.amazonaws.com",
+        "WebsiteURL": "http://example-artifacts-demo-mno345pqr678.s3-website-us-east-1.amazonaws.com"
+      },
+      "NativeId": "example-artifacts-demo-mno345pqr678"
+    },
+    {
+      "Label": "example-cdk-staging-bucket-stu901vwx234",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "aws:kms"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-cdk-staging-bucket-stu901vwx234",
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": []
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-cdk-staging-bucket-stu901vwx234",
+        "DomainName": "example-cdk-staging-bucket-stu901vwx234.s3.amazonaws.com",
+        "DualStackDomainName": "example-cdk-staging-bucket-stu901vwx234.s3.dualstack.us-east-1.amazonaws.com",
+        "RegionalDomainName": "example-cdk-staging-bucket-stu901vwx234.s3.us-east-1.amazonaws.com",
+        "WebsiteURL": "http://example-cdk-staging-bucket-stu901vwx234.s3-website-us-east-1.amazonaws.com"
+      },
+      "NativeId": "example-cdk-staging-bucket-stu901vwx234"
+    },
+    {
+      "Label": "amplify-example-app-dev-192005-deployment",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "amplify-example-app-dev-192005-deployment",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "user:Application",
+            "Value": "example-app"
+          },
+          {
+            "Key": "user:Stack",
+            "Value": "dev"
+          }
+        ]
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::amplify-example-app-dev-192005-deployment",
+        "DomainName": "amplify-example-app-dev-192005-deployment.s3.amazonaws.com",
+        "DualStackDomainName": "amplify-example-app-dev-192005-deployment.s3.dualstack.us-west-1.amazonaws.com",
+        "RegionalDomainName": "amplify-example-app-dev-192005-deployment.s3.us-west-1.amazonaws.com",
+        "WebsiteURL": "http://amplify-example-app-dev-192005-deployment.s3-website.us-west-1.amazonaws.com"
+      },
+      "NativeId": "amplify-example-app-dev-192005-deployment"
+    },
+    {
+      "Label": "example-state-store-demo-yza567bcd890",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-state-store-demo-yza567bcd890",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-state-store-demo-yza567bcd890",
+        "DomainName": "example-state-store-demo-yza567bcd890.s3.amazonaws.com",
+        "DualStackDomainName": "example-state-store-demo-yza567bcd890.s3.dualstack.us-east-1.amazonaws.com",
+        "RegionalDomainName": "example-state-store-demo-yza567bcd890.s3.us-east-1.amazonaws.com",
+        "WebsiteURL": "http://example-state-store-demo-yza567bcd890.s3-website-us-east-1.amazonaws.com"
+      },
+      "NativeId": "example-state-store-demo-yza567bcd890"
+    },
+    {
+      "Label": "example-state-bucket",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": true,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-state-bucket",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-state-bucket",
+        "DomainName": "example-state-bucket.s3.amazonaws.com",
+        "DualStackDomainName": "example-state-bucket.s3.dualstack.us-west-1.amazonaws.com",
+        "RegionalDomainName": "example-state-bucket.s3.us-west-1.amazonaws.com",
+        "WebsiteURL": "http://example-state-bucket.s3-website.us-west-1.amazonaws.com"
+      },
+      "NativeId": "example-state-bucket"
+    },
+    {
+      "Label": "example-backup-storage-bucket",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-backup-storage-bucket",
+        "ObjectLockConfiguration": {
+          "ObjectLockEnabled": "Enabled"
+        },
+        "ObjectLockEnabled": true,
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-backup-storage-bucket",
+        "DomainName": "example-backup-storage-bucket.s3.amazonaws.com",
+        "DualStackDomainName": "example-backup-storage-bucket.s3.dualstack.us-west-1.amazonaws.com",
+        "RegionalDomainName": "example-backup-storage-bucket.s3.us-west-1.amazonaws.com",
+        "WebsiteURL": "http://example-backup-storage-bucket.s3-website.us-west-1.amazonaws.com"
+      },
+      "NativeId": "example-backup-storage-bucket"
+    },
+    {
+      "Label": "example-artifacts-demo-efg123hij456",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-artifacts-demo-efg123hij456",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-artifacts-demo-efg123hij456",
+        "DomainName": "example-artifacts-demo-efg123hij456.s3.amazonaws.com",
+        "DualStackDomainName": "example-artifacts-demo-efg123hij456.s3.dualstack.us-east-1.amazonaws.com",
+        "RegionalDomainName": "example-artifacts-demo-efg123hij456.s3.us-east-1.amazonaws.com",
+        "WebsiteURL": "http://example-artifacts-demo-efg123hij456.s3-website-us-east-1.amazonaws.com"
+      },
+      "NativeId": "example-artifacts-demo-efg123hij456"
+    },
+    {
+      "Label": "example.com",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example.com",
+        "Tags": [],
+        "WebsiteConfiguration": {
+          "IndexDocument": "index.html"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example.com",
+        "DomainName": "example.com.s3.amazonaws.com",
+        "DualStackDomainName": "example.com.s3.dualstack.us-east-1.amazonaws.com",
+        "RegionalDomainName": "example.com.s3.us-east-1.amazonaws.com",
+        "WebsiteURL": "http://example.com.s3-website-us-east-1.amazonaws.com"
+      },
+      "NativeId": "example.com"
+    },
+    {
+      "Label": "example-file-storage-bucket",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-file-storage-bucket",
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "WebsiteConfiguration": {
+          "IndexDocument": "index.html"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-file-storage-bucket",
+        "DomainName": "example-file-storage-bucket.s3.amazonaws.com",
+        "DualStackDomainName": "example-file-storage-bucket.s3.dualstack.us-west-1.amazonaws.com",
+        "RegionalDomainName": "example-file-storage-bucket.s3.us-west-1.amazonaws.com",
+        "WebsiteURL": "http://example-file-storage-bucket.s3-website.us-west-1.amazonaws.com"
+      },
+      "NativeId": "example-file-storage-bucket"
+    },
+    {
+      "Label": "example-user-backup-storage",
+      "Type": "AWS::S3::Bucket",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": false,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "example-user-backup-storage",
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        }
+      },
+      "ReadOnlyProperties": {
+        "Arn": "arn:aws:s3:::example-user-backup-storage",
+        "DomainName": "example-user-backup-storage.s3.amazonaws.com",
+        "DualStackDomainName": "example-user-backup-storage.s3.dualstack.us-west-1.amazonaws.com",
+        "RegionalDomainName": "example-user-backup-storage.s3.us-west-1.amazonaws.com",
+        "WebsiteURL": "http://example-user-backup-storage.s3-website.us-west-1.amazonaws.com"
+      },
+      "NativeId": "example-user-backup-storage"
+    }
+  ]
+}

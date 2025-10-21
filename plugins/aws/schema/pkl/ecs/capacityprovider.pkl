@@ -1,0 +1,56 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ecs.capacityprovider
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ECS::CapacityProvider"
+
+typealias ManagedDraining = "DISABLED"|"ENABLED"
+
+typealias ManagedTerminationProtection = "DISABLED"|"ENABLED"
+
+@aws.SubResourceHint
+open class AutoScalingGroupProvider extends formae.SubResource {
+    autoScalingGroupArn: String|formae.Resolvable
+    managedDraining: ManagedDraining?
+    managedScaling: ManagedScaling?
+    managedTerminationProtection: ManagedTerminationProtection?
+}
+
+typealias ManagedScalingStatus = "DISABLED"|"ENABLED"
+
+
+@aws.SubResourceHint
+open class ManagedScaling extends formae.SubResource {
+    instanceWarmupPeriod: Int?
+    maximumScalingStepSize: Int?
+    minimumScalingStepSize: Int?
+    status: ManagedScalingStatus?
+    targetCapacity: Int?
+}
+
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Name"
+    tags = "Tags"
+    discoverable = false
+    extractable = true
+}
+open class CapacityProvider extends formae.Resource {
+
+    @aws.FieldHint
+    autoScalingGroupProvider: AutoScalingGroupProvider?
+
+    @aws.FieldHint{createOnly = true}
+    name: String?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+}

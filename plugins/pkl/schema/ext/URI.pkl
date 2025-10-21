@@ -1,0 +1,385 @@
+//===----------------------------------------------------------------------===//
+// Copyright © 2024 Apple Inc. and the Pkl project authors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//===----------------------------------------------------------------------===//
+/// A Uniform Resource Identifier as defined by
+/// [RFC-3986](https://datatracker.ietf.org/doc/html/rfc3986).
+///
+/// [URI]s may be constructed literally, or parsed from a string via [parse].
+@ModuleInfo { minPklVersion = "0.25.0" }
+module pkl.experimental.uri.URI
+
+import "URI.pkl"
+
+/// The scheme component.
+scheme: String?
+
+/// The user information portion of the authority component.
+userInfo: String?
+
+/// The host portion of the authority component.
+host: String?
+
+/// The port portion of the authority component.
+port: UInt16?
+
+/// The path component, URI-encoded.
+///
+/// Access the decoded form of the path via [pathSegments].
+path: UriString = ""
+
+/// The authority component of the URI.
+function authority(): String? =
+  if (hasAuthority())
+    List(
+      "//",
+      if (userInfo != null) "\(encode(userInfo))@" else "",
+      encode(host!!),
+      if (port != null) ":\(port)" else ""
+    )
+      .join("")
+  else null
+
+/// The URI path split into its segments.
+///
+/// Each segment is decoded.
+fixed pathSegments: List<String> =
+  let (parts = path.split("/").map((it) -> percentDecode(it)))
+    if (hasAbsolutePath) parts.drop(1)
+    else parts
+
+/// The query component, URI-encoded.
+query: UriString?
+
+/// The fragment component.
+fragment: String?
+
+/// The base path portion of this URI.
+///
+/// This equivalent to the current URI without its query and fragment components.
+hidden basePath: URI = (module) {
+  query = null
+  fragment = null
+}
+
+/// Tells if this URI is an [absolute URI](https://datatracker.ietf.org/doc/html/rfc3986#section-4.3).
+hidden isAbsolute: Boolean = scheme != null
+
+/// Tells if the [path] is absolute.
+hidden hasAbsolutePath: Boolean = path?.startsWith("/") ?? false
+
+/// Tells if this URI has an [authority](https://datatracker.ietf.org/doc/html/rfc3986#section-3.2).
+function hasAuthority(): Boolean = (userInfo ?? host ?? port) != null
+
+// <https://www.rfc-editor.org/rfc/rfc3986#section-5.2.4>
+local function _removeDotSegments(input: List<String>, result: List<String>): List<String> =
+  if (input.isEmpty) result
+  else
+    let (currentSegment = input.first)
+      if (currentSegment == ".")
+        _removeDotSegments(input.drop(1), result)
+      else if (currentSegment == "..")
+        _removeDotSegments(input.drop(1), result.dropLast(1))
+      else
+        _removeDotSegments(input.drop(1), result.add(currentSegment))
+
+local function removeDotSegments(input: String): String =
+  _removeDotSegments(input.split("/"), List()).join("/")
+  + if (input.endsWith("/")) "/" else ""
+
+// <https://www.rfc-editor.org/rfc/rfc3986#section-5.2.3>
+local function mergePaths(base: URI, other: URI): String =
+  if (other.hasAbsolutePath)
+    other.path
+  else if (base.hasAuthority() && base.path == "")
+    "/" + other.path
+  else
+    let (basePath = if (base.path.contains("/")) base.path.substring(0, base.path.lastIndexOf("/") + 1) else "/")
+      removeDotSegments(basePath + other.path)
+
+/// Resolves [other] as a URI reference to this URI.
+///
+/// Follows the rules described in
+/// [RFC-3986 Section 5.2](https://www.rfc-editor.org/rfc/rfc3986#section-5.2).
+function resolveUri(other: URI): URI =
+  let (self = this)
+    new {
+      when (other.scheme != null) {
+        scheme = other.scheme
+        userInfo = other.userInfo
+        host = other.host
+        port = other.port
+        path = other.path
+        query = other.query
+      } else {
+        scheme = self.scheme
+        when (other.hasAuthority()) {
+          userInfo = other.userInfo
+          host = other.host
+          port = other.port
+          path = removeDotSegments(other.path)
+        } else {
+          userInfo = self.userInfo
+          host = self.host
+          port = self.port
+          when (other.path == "") {
+            path = self.path
+            query = other.query ?? self.query
+          } else {
+            path = mergePaths(self, other)
+            query = other.query
+          }
+        }
+      }
+      fragment = other.fragment
+    }
+
+/// Resolves [other] as a URI string to this URI.
+function resolve(other: String): URI? =
+  let (parsed = parse(other))
+    if (parsed == null) null
+    else resolveUri(parsed)
+
+function toString(): String = new Listing {
+  when (scheme != null) { "\(encode(scheme)):" }
+  when (hasAuthority()) {
+    authority()
+  }
+  path
+  when (query != null) { "?\(query)" }
+  when (fragment != null) { "#\(encode(fragment))" }
+}.join("")
+
+/// Tells if [str] is a valid URI string.
+const local isUriString = (str: String) ->
+  str
+    .replaceAll(PERCENT_REGEX, "")
+    .codePoints
+    .every((it) -> isUriSafe(it))
+
+/// A string that has valid URI characters.
+typealias UriString = String(isUriString)
+
+// alphanumeric or !#$&'()*+,-./:;=?@_~
+const local function isUriSafe(codePoint: Int) =
+  isAlphaNumeric(codePoint)
+  // !
+  || codePoint == 33
+  // #$
+  || codePoint.isBetween(35, 36)
+  // &'()*+,-./
+  || codePoint.isBetween(38, 47)
+  // :;
+  || codePoint.isBetween(58, 59)
+  // =
+  || codePoint == 61
+  // ?@
+  || codePoint.isBetween(63, 64)
+  // _
+  || codePoint == 95
+  // ~
+  || codePoint == 126
+
+// alphanumeric or !'()*-._~
+local function isUriComponentSafe(codePoint: Int) =
+  isAlphaNumeric(codePoint)
+  // !
+  || codePoint == 33
+  // '()*
+  || codePoint.isBetween(39, 42)
+  // -.
+  || codePoint.isBetween(45, 46)
+  // _
+  || codePoint == 95
+  // ~
+  || codePoint == 126
+
+local function getUtf8Bytes(codePoint: Int): List<UInt8> =
+  if (codePoint <= 0x7f)
+    List(codePoint)
+  else if (codePoint <= 0x7ff)
+    List(
+      0xc0.or(codePoint.shr(6)),
+      0x80.or(codePoint.and(0x3f))
+    )
+  else if (codePoint <= 0xffff)
+    List(
+      0xe0.or(codePoint.shr(12)),
+      0x80.or(codePoint.shr(6).and(0x3f)),
+      0x80.or(codePoint.and(0x3f))
+    )
+  else
+    List(
+      0xf0.or(codePoint.shr(18)),
+      0x80.or(codePoint.shr(12).and(0x3f)),
+      0x80.or(codePoint.shr(6).and(0x3f)),
+      0x80.or(codePoint.and(0x3f))
+    )
+
+/// Encode into percent encoding into utf-8 bytes.
+///
+/// Facts:
+/// ```
+/// percentEncode(" ".codePoints.first) == "%20"
+/// percentEncode("/".codePoints.first) == "%2F"
+/// ```
+local function percentEncode(codePoint: Int) =
+  getUtf8Bytes(codePoint)
+    .map((it) -> "%" + it.toRadixString(16).toUpperCase().padStart(2, "0"))
+    .join("")
+
+local hexDigits = "0123456789ABCDEF"
+
+/// Facts:
+/// ```
+/// getBytes("%20") == List(32)
+/// getBytes("%7F") == List(127)
+/// getBytes("%20%7F") == List(32, 127)
+/// ```
+local function getBytes(str: String): List<UInt8> =
+  str
+    .split("%")
+    .drop(1)
+    .map((it) ->
+    let (msb = hexDigits.indexOf(it[0].toUpperCase()))
+      let (lsb = hexDigits.indexOf(it[1].toUpperCase()))
+        lsb + (msb * 16)
+  )
+
+const local function isAlphaNumeric(codePoint: Int) =
+  codePoint.isBetween(48, 57)     // 0-9
+  || codePoint.isBetween(65, 90)  // a-z
+  || codePoint.isBetween(97, 122) // A-Z
+
+/// Encodes [str] using percent-encoding bytes to make it safe for the literal use as a URI.
+///
+/// All characters except for alphanumeric chracters, and the chracters `!#$&'()*+,-./:;=?@_~`
+/// are percent-encoded.
+///
+/// Follows the rules for the `encodeURI` function as described by
+/// [ECMA-262](https://262.ecma-international.org/5.1/#sec-15.1.3.3).
+///
+/// Facts:
+/// ```
+/// encode("https://example.com/some path/") == "https://example.com/some%20path"
+/// ```
+///
+function encode(str: String): String =
+  str.codePoints
+    .map((codePoint) ->
+    if (isUriSafe(codePoint)) codePoint.toChar()
+    else percentEncode(codePoint)
+  )
+    .join("")
+
+/// Encodes [str] using percent-encoding to make it safe to literal use as a URI component.
+///
+/// All characters except for alphanumeric characters, and the characters `-_.!~*'()` are
+/// percent-encoded.
+///
+/// Follows the rules for the `encodeURIComponent` function as described by
+/// [ECMA-262](https://262.ecma-international.org/5.1/#sec-15.1.3.4).
+///
+/// Facts:
+/// ```
+/// encodeComponent("https://example.com/some path") == "https%3A%2F%2example.com%2Fsome%20path"
+/// ```
+function encodeComponent(str: String): String =
+  str.codePoints
+    .map((codePoint) ->
+    if (isUriComponentSafe(codePoint)) codePoint.toChar()
+    else percentEncode(codePoint)
+  )
+    .join("")
+
+const local PERCENT_REGEX = Regex(#"(?:%[\da-fA-F]{2})+"#)
+
+/// Decodes [str] given a percent-encoded string.
+function percentDecode(str: String): String =
+  str.replaceAllMapped(PERCENT_REGEX, (match) ->
+    let (bytes = getBytes(match.value))
+      doPercentDecode(bytes)
+  )
+
+local function doPercentDecode(bytes: List<UInt8>): String = _doPercentDecode(bytes, "")
+
+local function _doPercentDecode(bytes: List<UInt8>, ret: String) =
+  if (bytes.length == 0) ret
+  else if (bytes[0] < 0x80)
+    _doPercentDecode(bytes.drop(1), ret + bytes[0].toChar())
+  else if (bytes[0] < 0xE0)
+    let (b0 = bytes[0].and(0x1f).shl(6))
+      let (b1 = bytes[1].and(0x3f))
+        _doPercentDecode(bytes.drop(2), ret + b0.or(b1).toChar())
+  else if (bytes[0] < 0xF0)
+    let (b0 = bytes[0].and(0xf).shl(12))
+      let (b1 = bytes[1].and(0x3f).shl(6))
+        let (b2 = bytes[2].and(0x3f))
+          _doPercentDecode(bytes.drop(3), ret + b0.or(b1).or(b2).toChar())
+  else
+    let (b0 = bytes[0].and(0x7).shl(18))
+      let (b1 = bytes[1].and(0x3f).shl(12))
+        let (b2 = bytes[2].and(0x3f).shl(6))
+          let (b3 = bytes[3].and(0x3f))
+            _doPercentDecode(bytes.drop(4), ret + b0.or(b1).or(b2).or(b3).toChar())
+
+/// Regex to parse URI's.
+///
+/// From <https://www.rfc-editor.org/rfc/rfc3986#appendix-B>.
+// language=RegExp
+local URI_REGEX: Regex = Regex(#"""
+  ^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?
+  """#)
+
+// language=RegExp
+local AUTHORITY_REGEX: Regex = Regex(#"""
+  (?:([^@]+)@)?([^:]*)(?::(\d+))?
+  """#)
+
+// noinspection TypeMismatch
+function parseAuthority(authority: String): Dynamic =
+  let (matches = AUTHORITY_REGEX.findMatchesIn(authority))
+    let (groups = matches[0].groups)
+      new {
+        userInfo = groups.getOrNull(1)?.value?.ifNonNull((it) -> percentDecode(it))
+        host = groups.getOrNull(2)?.value?.ifNonNull((it) -> percentDecode(it))
+        port = groups.getOrNull(3)?.value?.toInt()
+      }
+
+/// Parses the input string as a [URI].
+///
+/// If the input is not valid, returns `null`.
+function parse(str: String): URI? =
+  let (matches = URI_REGEX.findMatchesIn(str))
+    if (matches.isEmpty) null
+    else
+      let (groups = matches[0].groups)
+        let (schemePart = groups.getOrNull(2)?.value)
+          let (authorityPart = groups.getOrNull(4)?.value)
+            let (pathPart = groups[5].value)
+              let (queryPart = groups.getOrNull(7)?.value)
+                let (fragmentPart = groups.getOrNull(9)?.value)
+                  new URI {
+                    when (schemePart != null) {
+                      scheme = percentDecode(schemePart)
+                    }
+                    when (authorityPart != null) {
+                      ...parseAuthority(authorityPart)
+                    }
+                    path = pathPart
+                    query = queryPart
+                    when (fragmentPart != null) {
+                      fragment = percentDecode(fragmentPart)
+                    }
+                  }

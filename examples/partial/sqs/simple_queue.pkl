@@ -1,0 +1,54 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/sqs/queue.pkl"
+
+properties {
+    name = new formae.Prop {
+        flag = "name"
+        default = "simple-queue"
+    }
+    accountId = new formae.Prop {
+        flag = "accountId"
+        default = "111122223333"
+    }
+}
+
+forma {
+    local stack = new formae.Stack {
+        label = "simple-queue"
+        description = "Stack for simple queue"
+    }
+    stack
+
+    local target = new formae.Target {
+        label = "default-aws-target"
+        config = new aws.Config {
+            region = "us-west-2"
+        }
+    }
+    target
+
+    // Standard Queue with Inline Policy
+    new queue.Queue {
+        label = properties.name.value
+        queueName = properties.name.value
+        visibilityTimeout = 300.s
+        delaySeconds = 0.s
+        maximumMessageSize = 262144.b
+        messageRetentionPeriod = 345600.s  // 4 days
+        receiveMessageWaitTimeSeconds = 0.s
+        tags {
+            new {
+                key = "Environment"
+                value = "Production"
+            }
+        }
+    }
+}

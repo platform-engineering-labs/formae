@@ -1,0 +1,37 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.iam.group
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::IAM::Group"
+
+@aws.SubResourceHint
+open class GroupPolicy extends formae.SubResource {
+    policyDocument: Dynamic
+    policyName: String
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "GroupName"
+}
+open class Group extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    groupName: String?
+
+    @aws.FieldHint
+    managedPolicyArns: Listing<String>?
+
+    @aws.FieldHint
+    path: String?
+
+    @aws.FieldHint
+    policies: Listing<GroupPolicy>?
+}

@@ -1,0 +1,35 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.transitgatewaypeeringattachment
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::TransitGatewayPeeringAttachment"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "TransitGatewayAttachmentId"
+    tags = "Tags"
+}
+open class TransitGatewayPeeringAttachment extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    peerAccountId: String
+
+    @aws.FieldHint{createOnly = true}
+    peerRegion: aws.Region
+
+    @aws.FieldHint{createOnly = true}
+    peerTransitGatewayId: String
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    transitGatewayId: String
+}

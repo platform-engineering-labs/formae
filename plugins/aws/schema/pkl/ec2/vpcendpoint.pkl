@@ -1,0 +1,73 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.vpcendpoint
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VPCEndpoint"
+
+typealias DnsRecordIpType = "ipv4"|"ipv6"|"dualstack"|"service-defined"|"not-specified"
+
+typealias PrivateDnsOnlyForInboundResolverEndpoint = "OnlyInboundResolver"|"AllResolvers"|"NotSpecified"
+
+typealias VPCEndpointIpAddressType = "ipv4"|"ipv6"|"dualstack"|"not-specified"
+
+typealias VpcEndpointType = "Interface"|"Gateway"|"GatewayLoadBalancer"|"ServiceNetwork"|"Resource"
+
+@aws.SubResourceHint
+open class DnsOptions extends formae.SubResource {
+    dnsRecordIpType: DnsRecordIpType?
+    privateDnsOnlyForInboundResolverEndpoint: PrivateDnsOnlyForInboundResolverEndpoint?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    tags = "Tags"
+}
+open class VPCEndpoint extends formae.Resource {
+
+    @aws.FieldHint
+    dnsOptions: DnsOptions?
+
+    @aws.FieldHint
+    ipAddressType: VPCEndpointIpAddressType?
+
+    @aws.FieldHint
+    policyDocument: Dynamic?
+
+    @aws.FieldHint
+    privateDnsEnabled: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    resourceConfigurationArn: String?
+
+    @aws.FieldHint
+    routeTableIds: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    securityGroupIds: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint{createOnly = true}
+    serviceName: String?
+
+    @aws.FieldHint{createOnly = true}
+    serviceNetworkArn: String?
+
+    @aws.FieldHint
+    subnetIds: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    vpcEndpointType: VpcEndpointType?
+
+    @aws.FieldHint{createOnly = true}
+    vpcId: String|formae.Resolvable
+}

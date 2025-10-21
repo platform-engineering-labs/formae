@@ -1,0 +1,42 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/ext/random.pkl"
+import "@aws/aws.pkl"
+import "@aws/route53/hostedzone.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name"
+    default = "snarf-\(random.id(8)).platform.engineering"
+  }
+
+  password = new formae.Prop {
+    flag = "password"
+    default = random.password(10, true)
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "pel-dns-random"
+    description = "Stack for PEL Random DNS records"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  new hostedzone.HostedZone {
+    label = "pel-zone"
+    name = properties.name.value
+  }
+}

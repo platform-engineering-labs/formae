@@ -1,0 +1,68 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "./infrastructure/nvpc.pkl"
+import "./infrastructure/network.pkl"
+import "./infrastructure/security_groups.pkl"
+import "./infrastructure/iam.pkl"
+import "./infrastructure/eks_cluster.pkl"
+
+import "./vars.pkl"
+
+description {
+    text = """
+    EKS Auto Mode Cluster Infrastructure.
+    
+    This forma provisions a complete Amazon EKS cluster with Auto Mode enabled. 
+    
+    This includes:
+    - EKS cluster with automated infrastructure management
+    - VPC networking with public/private subnets across multiple AZs
+    - Security groups for cluster and node communication
+    - IAM roles for both cluster service  and worker nodes with Auto Mode permissions
+    - Automated data-plane scaling using Karpenter node pools
+    - Integrated volume management via EBS
+    - Access config supporting API and ConfigMap auth modes
+
+    The resulting cluster is ready for production with minimal operational overhead.
+    """
+    confirm = true
+}
+
+properties = vars.props
+
+forma {
+    vars.stack
+    vars.target
+
+    nvpc.nvpc(properties)
+
+    network.igw(properties)
+    network.attachIgw(properties)
+    
+    for (subnet in network.subnets(properties)) {
+        subnet
+    }
+
+    network.routeTable(properties)
+    network.publicRoute(properties)
+    
+    for (subnetAssoc in network.subnetAssocs(properties)) {
+        subnetAssoc
+    }
+
+    for (securityGroup in security_groups.securityGroups(properties)) {
+        securityGroup
+    }
+
+    iam.clusterRole(properties)
+    iam.nodeRole(properties)
+
+    eks_cluster.eksCluster(properties)
+}

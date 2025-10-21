@@ -1,0 +1,42 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.networkinterfaceattachment
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::NetworkInterfaceAttachment"
+
+@aws.SubResourceHint
+open class EnaSrdSpecification extends formae.SubResource {
+    enaSrdEnabled: Boolean?
+    enaSrdUdpSpecification: Dynamic?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "AttachmentId"
+    discoverable = true
+    extractable = true
+}
+open class NetworkInterfaceAttachment extends formae.Resource {
+
+    @aws.FieldHint
+    deleteOnTermination: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    deviceIndex: String
+
+    @aws.FieldHint
+    enaSrdSpecification: EnaSrdSpecification?
+
+    @aws.FieldHint{createOnly = true}
+    instanceId: String|formae.Resolvable
+
+    @aws.FieldHint{createOnly = true}
+    networkInterfaceId: String|formae.Resolvable
+}

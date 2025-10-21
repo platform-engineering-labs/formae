@@ -1,0 +1,163 @@
+{
+  "Label": "1-pel-record-external",
+  "Type": "AWS::Route53::RecordSet",
+  "Stack": "legacy-record-stack",
+  "Target": "aws-target-hostedzone",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "",
+    "Fields": [
+      "AliasTarget",
+      "CidrRoutingConfig",
+      "Comment",
+      "Failover",
+      "GeoLocation",
+      "GeoProximityLocation",
+      "HealthCheckId",
+      "HostedZoneId",
+      "HostedZoneName",
+      "MultiValueAnswer",
+      "Name",
+      "ResourceRecords",
+      "SetIdentifier",
+      "TTL",
+      "Type",
+      "Weight"
+    ],
+    "Nonprovisionable": true,
+    "Hints": {
+      "AliasTarget": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "CidrRoutingConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Comment": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Failover": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GeoLocation": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GeoProximityLocation": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HealthCheckId": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HostedZoneId": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "HostedZoneName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "MultiValueAnswer": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Name": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "ResourceRecords": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SetIdentifier": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "TTL": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Type": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "Weight": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "HostedZoneId": {
+      "$label": "route53-hostedzone",
+      "$property": "Id",
+      "$res": true,
+      "$stack": "legacy-record-stack",
+      "$type": "AWS::Route53::HostedZone",
+      "$value": "Z08912173CC2WS8HWWRXE"
+    },
+    "Name": "a.snarf.platform.engineering",
+    "ResourceRecords": [
+      "192.168.55.1"
+    ],
+    "TTL": 430,
+    "Type": "A"
+  },
+  "NativeID": "Z08912173CC2WS8HWWRXE|a.snarf.platform.engineering.|A",
+  "Managed": true,
+  "Ksuid": "34O4MzFDHd7fPtUrrZVtpRardGC"
+}

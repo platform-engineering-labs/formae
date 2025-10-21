@@ -1,0 +1,122 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module generator
+import "pkl:json"
+
+function parseJsonString(value: String): Dynamic|String|Listing =
+  if (!isLikelyJson(value))
+    value
+  else
+    new json.Parser{}.parse(value)
+
+
+local function isLikelyJson(value: String): Boolean =
+  let (trimmed = value.trim())
+
+  if (trimmed.isEmpty)
+    false
+  // Must start and end with proper JSON delimiters
+  else if (!((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+             (trimmed.startsWith("[") && trimmed.endsWith("]"))))
+    false
+  // Basic bracket/brace matching validation
+  else if (!hasBalancedBrackets(trimmed))
+    false
+  // Check for common JSON patterns
+  else if (!hasJsonPatterns(trimmed))
+    false
+  else
+    true
+
+// Function to check if brackets and braces are balanced
+// This validates that every opening bracket/brace has a matching closing one
+// and respects string boundaries (ignores brackets inside quoted strings)
+local function hasBalancedBrackets(str: String): Boolean =
+  let (result = str.chars.fold(
+    // Initial state: counters for brackets, string tracking, and validity flag
+    Map("curly", 0, "square", 0, "inString", false, "escaped", false, "valid", true),
+    (acc, char) ->
+      // If we've already found an error, don't continue processing
+      if (!acc["valid"])
+        acc
+      // If the previous character was an escape (\), skip this character
+      else if (acc["escaped"])
+        acc.put("escaped", false)
+      // If current character is a backslash, mark next character as escaped
+      else if (char == "\\")
+        acc.put("escaped", true)
+      // If we hit a quote and it's not escaped, toggle string state
+      else if (char == "\"" && !acc["escaped"])
+        acc.put("inString", !acc["inString"])
+      // Only process brackets/braces when we're NOT inside a string
+      else if (!acc["inString"])
+        if (char == "{")
+          // Opening curly brace - increment counter
+          acc.put("curly", acc["curly"] + 1)
+        else if (char == "}")
+          // Closing curly brace - decrement counter
+          let (newCount = acc["curly"] - 1)
+          if (newCount < 0)
+            // More closing braces than opening ones - invalid
+            acc.put("valid", false)
+          else
+            acc.put("curly", newCount)
+        else if (char == "[")
+          // Opening square bracket - increment counter
+          acc.put("square", acc["square"] + 1)
+        else if (char == "]")
+          // Closing square bracket - decrement counter
+          let (newCount = acc["square"] - 1)
+          if (newCount < 0)
+            // More closing brackets than opening ones - invalid
+            acc.put("valid", false)
+          else
+            acc.put("square", newCount)
+        else
+          // Other characters - no change needed
+          acc
+      else
+        // Inside a string - ignore all bracket/brace characters
+        acc
+  ))
+  // Valid if no errors occurred AND all brackets/braces are balanced (count = 0)
+  result["valid"] && result["curly"] == 0 && result["square"] == 0
+
+// Function to check for common JSON patterns
+local function hasJsonPatterns(str: String): Boolean =
+  // Check for basic JSON patterns
+  let (hasColons = str.contains(":"))
+  let (hasQuotes = str.contains("\""))
+  let (isObject = str.trim().startsWith("{"))
+  let (isArray = str.trim().startsWith("["))
+
+  // For objects, we expect colons and usually quotes
+  if (isObject)
+    hasColons && (hasQuotes || isSimpleObject(str))
+  // For arrays, we expect either quotes, numbers, or nested structures
+  else if (isArray)
+    hasQuotes || hasNumbers(str) || hasNestedStructures(str)
+  else
+    false
+
+// Check if it's a simple object (like {"key": "value"} or {key: value})
+local function isSimpleObject(str: String): Boolean =
+  // Remove whitespace and check basic structure
+  let (cleaned = str.replaceAll(" ", "").replaceAll("\n", "").replaceAll("\t", ""))
+  // Very basic check - contains colon and reasonable characters
+  cleaned.contains(":") &&
+  !cleaned.contains("undefined") &&
+  !cleaned.contains("function")
+
+// Check if string contains numbers (for JSON arrays with numeric values)
+local function hasNumbers(str: String): Boolean =
+  str.matches(Regex(".*\\d+.*"))
+
+// Check if string has nested structures
+local function hasNestedStructures(str: String): Boolean =
+  (str.contains("{") && str.contains("}")) ||
+  (str.contains("[") && str.contains("]"))

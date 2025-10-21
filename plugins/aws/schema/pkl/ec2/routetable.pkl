@@ -1,0 +1,47 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.vpc
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::RouteTable"
+
+
+open class RouteTableResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: RouteTableResolvable = (this) {
+        property = "RouteTableId"
+    }
+
+    hidden routeTableId: RouteTableResolvable = (this) {
+        property = "RouteTableId"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+    extractable = true
+}
+open class RouteTable extends formae.Resource {
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    vpcId: (String|formae.Resolvable)
+
+    local parent = this
+
+    hidden res: RouteTableResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

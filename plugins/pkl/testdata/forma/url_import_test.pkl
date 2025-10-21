@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.15.0-alpha#/forma.pkl"
+import "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.15.0-alpha#/formae.pkl" as formae
+import "package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@0.15.0-alpha#/aws.pkl" as aws
+import "package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@0.15.0-alpha#/route53/hostedzone.pkl" as hostedzone
+
+properties {
+  name = new formae.Prop {
+    flag = "name" // flag from --help
+    default = "snarf.platform.engineering"
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "pel-dns"
+    description = "Stack for PEL DNS records"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  new hostedzone.HostedZone {
+    label = "pel-zone"
+    name = properties.name.value
+  }
+}

@@ -1,0 +1,25 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.s3.bucketpolicy
+
+import "../aws.pkl"
+import "@formae/formae.pkl"
+
+const type = "AWS::S3::BucketPolicy"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Bucket"
+    tags = "Tags"
+}
+open class BucketPolicy extends formae.Resource {
+    @aws.FieldHint { createOnly = true }
+    bucket: String|formae.Resolvable
+
+    @aws.FieldHint
+    policyDocument: Dynamic
+}

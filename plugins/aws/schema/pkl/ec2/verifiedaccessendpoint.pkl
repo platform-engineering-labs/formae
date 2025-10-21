@@ -1,0 +1,83 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.verifiedaccessendpoint
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::VerifiedAccessEndpoint"
+
+@aws.SubResourceHint
+open class LoadBalancerOptions extends formae.SubResource {
+    loadBalancerArn: (String|formae.Resolvable)?
+    port: Int?
+    protocol: String?
+    subnetIds: Listing<String|formae.Resolvable>?
+}
+
+@aws.SubResourceHint
+open class NetworkInterfaceOptions extends formae.SubResource {
+    networkInterfaceId: (String|formae.Resolvable)?
+    port: Int?
+    protocol: String?
+}
+
+@aws.SubResourceHint
+open class SSESpecification extends formae.SubResource {
+    customerManagedKeyEnabled: Boolean?
+    kmsKeyArn: (String|formae.Resolvable)?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "VerifiedAccessEndpointId"
+    tags = "Tags"
+}
+open class VerifiedAccessEndpoint extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    applicationDomain: String
+
+    @aws.FieldHint{createOnly = true}
+    attachmentType: String
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint{createOnly = true}
+    domainCertificateArn: String
+
+    @aws.FieldHint{createOnly = true}
+    endpointDomainPrefix: String
+
+    @aws.FieldHint{createOnly = true}
+    endpointType: String
+
+    @aws.FieldHint
+    loadBalancerOptions: LoadBalancerOptions?
+
+    @aws.FieldHint
+    networkInterfaceOptions: NetworkInterfaceOptions?
+
+    @aws.FieldHint
+    policyDocument: String?
+
+    @aws.FieldHint
+    policyEnabled: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    securityGroupIds: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    sseSpecification: SSESpecification?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    verifiedAccessGroupId: String
+}

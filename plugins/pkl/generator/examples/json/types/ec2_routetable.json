@@ -1,0 +1,237 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-2",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-2",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "pel-infra-private",
+      "Type": "AWS::EC2::RouteTable",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Ref",
+        "Tags": "Tags",
+        "Fields": [
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "RouteTableId": "rtb-0db78f2df77934c36",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "pel-infra-private"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "pel-infra"
+          },
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "pel-infra-private"
+          }
+        ],
+        "VpcId": "vpc-0b0b9599aff98d83d"
+      },
+      "ReadOnlyProperties": {
+        "RouteTableId": "rtb-0db78f2df77934c36"
+      },
+      "NativeId": "rtb-0db78f2df77934c36",
+      "Ksuid": "33jxndqdC9I8WTOXYigrRl5QeTa"
+    },
+    {
+      "Label": "pel-infra-public-a-4",
+      "Type": "AWS::EC2::RouteTable",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Ref",
+        "Tags": "Tags",
+        "Fields": [
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "RouteTableId": "rtb-03243753e6e79e2af",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "pel-infra-public"
+          },
+          {
+            "Key": "FormaeResourceLabel",
+            "Value": "pel-infra-public"
+          },
+          {
+            "Key": "FormaeStackLabel",
+            "Value": "pel-infra"
+          }
+        ],
+        "VpcId": "vpc-0b0b9599aff98d83d"
+      },
+      "ReadOnlyProperties": {
+        "RouteTableId": "rtb-03243753e6e79e2af"
+      },
+      "NativeId": "rtb-03243753e6e79e2af",
+      "Ksuid": "33jxncXNzWacsUcu6GgEV1hgl7b"
+    },
+    {
+      "Label": "rtb-0614f11b45a94c35a",
+      "Type": "AWS::EC2::RouteTable",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Ref",
+        "Tags": "Tags",
+        "Fields": [
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "RouteTableId": "rtb-0614f11b45a94c35a",
+        "VpcId": "vpc-0b0b9599aff98d83d"
+      },
+      "ReadOnlyProperties": {
+        "RouteTableId": "rtb-0614f11b45a94c35a"
+      },
+      "NativeId": "rtb-0614f11b45a94c35a",
+      "Ksuid": "33jxndQv0Uq7BDAIxcTSIsSwz4b"
+    },
+    {
+      "Label": "rtb-06caa1102d61847d9",
+      "Type": "AWS::EC2::RouteTable",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Ref",
+        "Tags": "Tags",
+        "Fields": [
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "RouteTableId": "rtb-06caa1102d61847d9",
+        "VpcId": "vpc-0a1b225921496c4c4"
+      },
+      "ReadOnlyProperties": {
+        "RouteTableId": "rtb-06caa1102d61847d9"
+      },
+      "NativeId": "rtb-06caa1102d61847d9",
+      "Ksuid": "33jxndpUi6uyBcoKTHg6GRPB6u0"
+    },
+    {
+      "Label": "rtb-0a412a511795d0ed2",
+      "Type": "AWS::EC2::RouteTable",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Ref",
+        "Tags": "Tags",
+        "Fields": [
+          "Tags",
+          "VpcId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "VpcId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "RouteTableId": "rtb-0a412a511795d0ed2",
+        "VpcId": "vpc-0b8acd158b7d588f2"
+      },
+      "ReadOnlyProperties": {
+        "RouteTableId": "rtb-0a412a511795d0ed2"
+      },
+      "NativeId": "rtb-0a412a511795d0ed2",
+      "Ksuid": "33jxnb2TBSuuFKrWXvFx91IltTl"
+    }
+  ]
+}

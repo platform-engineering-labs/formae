@@ -1,0 +1,110 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/securitygroup.pkl"
+
+import "@aws/secretsmanager/secret.pkl"
+import "@aws/rds/dbsubnetgroup.pkl"
+import "@aws/rds/dbinstance.pkl"
+
+
+properties {
+    name = new formae.Prop {
+        flag = "name"
+        default = "res-secret-test"
+    }
+    
+    region = new formae.Prop {
+        flag = "region"
+        default = "us-west-2"
+    }
+}
+
+forma {
+    new formae.Stack {
+        label = properties.name.value
+        description = "Res secret test"
+    }
+
+    new formae.Target {
+        label = "def-aws-target"
+        config = new aws.Config {
+            region = properties.region.Value
+        }
+    }
+
+    local vpc = new vpc.VPC {
+        label = "VPC"
+        cidrBlock = "10.0.0.0/16"
+    }
+    vpc
+
+    local subnet1 = new subnet.Subnet {
+        label = "Subnet1"
+        vpcId = vpc.res.id
+        cidrBlock = "10.0.1.0/24"
+        availabilityZone = properties.region.value + "a"
+    }
+    subnet1
+
+    local subnet2 = new subnet.Subnet {
+        label = "Subnet2"
+        vpcId = vpc.res.id
+        cidrBlock = "10.0.2.0/24"
+        availabilityZone = properties.region.value + "b"
+    }
+    subnet2
+
+    local dbSubnetGroup = new dbsubnetgroup.DBSubnetGroup {
+        label = "DBSubnetGroup"
+        dbSubnetGroupDescription = "Test subnet group"
+        dbSubnetGroupName = properties.name.value + "-subnet-group"
+        subnetIds {
+            subnet1.res.subnetId
+            subnet2.res.subnetId
+        }
+    }
+    dbSubnetGroup
+
+    local dbSecurityGroup = new securitygroup.SecurityGroup {
+        label = "DBSecurityGroup"
+        groupDescription = "Test DB security group"
+        vpcId = vpc.res.id
+    }
+    dbSecurityGroup
+
+    local mySecret = new secret.Secret {
+        label = "Secret"
+        name = properties.name.value + "-password"
+        description = "Simple test secret"
+        secretString = formae.value("super-secret-password").opaque
+    }
+    mySecret
+
+    new dbinstance.DBInstance {
+        label = "Database"
+        allocatedStorage = 20
+        dbInstanceClass = "db.t3.micro"
+        engine = "postgres"
+        engineVersion = "13.20"
+        masterUsername = "testuser"
+        
+        // THE TEST: Opaque secret resolution
+        masterUserPassword = mySecret.res.secretString
+        
+        dbSubnetGroupName = dbSubnetGroup.res.dbSubnetGroupName
+        vpcSecurityGroups { dbSecurityGroup.res.groupId }
+        storageEncrypted = true
+        deletionProtection = false
+    }
+}

@@ -1,0 +1,152 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/sqs/queue.pkl"
+import "@aws/sqs/queuepolicy.pkl"
+import "@aws/sqs/queueinlinepolicy.pkl"
+
+properties {
+    name = new formae.Prop {
+        flag = "name"
+        default = "pel-sqs-queue"
+    }
+    accountId = new formae.Prop {
+        flag = "accountId"
+        default = "111122223333"
+    }
+}
+
+forma {
+    local stack = new formae.Stack {
+        label = "pel-queue"
+        description = "Stack for SQS queues and policies"
+    }
+    stack
+
+    local target = new formae.Target {
+        label = "default-aws-target"
+        config = new aws.Config {
+            region = "us-west-2"
+        }
+    }
+    target
+
+    // Standard Queue with Inline Policy
+    local standardQueue = new queue.Queue {
+        label = "standard-queue"
+        queueName = properties.name.value
+        visibilityTimeout = 200.s
+        delaySeconds = 0.s
+        maximumMessageSize = 262144.b
+        messageRetentionPeriod = 345600.s  // 4 days
+        receiveMessageWaitTimeSeconds = 0.s
+        tags {
+            new {
+                key = "Environment"
+                value = "Production"
+            }
+        }
+    }
+    standardQueue
+
+    // FIFO Queue with throughput limits and content-based deduplication
+    new queue.Queue {
+        label = "fifo-queue"
+        queueName = properties.name.value + ".fifo"
+        fifoQueue = true
+        fifoThroughputLimit = "perQueue"
+        contentBasedDeduplication = true
+        deduplicationScope = "messageGroup"
+        visibilityTimeout = 3.s
+        tags {
+            new {
+                key = "Type"
+                value = "FIFO"
+            }
+        }
+    }
+
+    // Dead Letter Queue
+    local dlq = new queue.Queue {
+        label = "dead-letter-queue"
+        queueName = properties.name.value + "-dlq"
+        visibilityTimeout = 300.s
+        tags {
+            new {
+                key = "Purpose"
+                value = "DeadLetter"
+            }
+        }
+    }
+    dlq
+
+    // Queue with DLQ Configuration
+    new queue.Queue {
+        label = "queue-with-dlq"
+        queueName = properties.name.value + "-with-dlq"
+        visibilityTimeout = 300.s
+        redrivePolicy = new {
+            deadLetterTargetArn = dlq.res.arn
+            maxReceiveCount = 3
+        }
+    }
+
+    // Queue Policy (standalone)
+    new queuepolicy.QueuePolicy {
+        label = "standard-queue-policy"
+        queues = new Listing {
+            standardQueue.res.queueUrl
+        }
+        // NOTE we are not going to attempt to case correct json style encodings for the upstream
+        // this is AWS specific behavior so this is fine
+        policyDocument {
+            ["Version"] = "2012-10-17"
+            ["Statement"] {
+                ["Effect"] ="Allow"
+                ["Principal"]  {
+                    ["AWS"] = "arn:aws:iam::" + properties.accountId.value + ":root"
+                }
+                ["Action"] = new Listing {
+                    "sqs:SendMessage"
+                    "sqs:ReceiveMessage"
+                }
+                ["Resource"] = standardQueue.res.arn
+                }
+            }
+        }
+
+    // Queue with Inline Policy
+    local inlineQueue = new queue.Queue {
+        label = "queue-with-inline-policy"
+        queueName = properties.name.value + "-inline"
+        visibilityTimeout = 300.s
+    }
+    inlineQueue
+
+    new queueinlinepolicy.QueueInlinePolicy {
+        label = "inline-queue-policy"
+        queue = inlineQueue.res.queueUrl
+        policyDocument {
+            ["Version"] = "2012-10-17"
+            ["Statement"] {
+                ["Effect"] = "Allow"
+                ["Principal"]  {
+                    ["Service"] = "sns.amazonaws.com"
+                }
+                ["Action"] = "sqs:SendMessage"
+                ["Resource"] = "*"
+                ["Condition"] {
+                    ["ArnLike"] {
+                        ["aws:SourceArn"] = "arn:aws:sns:*:" + properties.accountId.value + ":*"
+                    }
+                }
+            }
+        }
+    }
+}

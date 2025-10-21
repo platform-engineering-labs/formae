@@ -1,0 +1,59 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ec2.trafficmirrorfilterrule
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::EC2::TrafficMirrorFilterRule"
+
+@aws.SubResourceHint
+open class PortRange extends formae.SubResource {
+    fromPort: Int
+    toPort: Int
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    tags = "Tags"
+}
+open class TrafficMirrorFilterRule extends formae.Resource {
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint
+    destinationCidrBlock: String
+
+    @aws.FieldHint
+    destinationPortRange: PortRange?
+
+    @aws.FieldHint
+    protocol: Int?
+
+    @aws.FieldHint
+    ruleAction: String
+
+    @aws.FieldHint
+    ruleNumber: Int
+
+    @aws.FieldHint
+    sourceCidrBlock: String
+
+    @aws.FieldHint
+    sourcePortRange: PortRange?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint
+    trafficDirection: String
+
+    @aws.FieldHint{createOnly = true}
+    trafficMirrorFilterId: String|formae.Resolvable
+}

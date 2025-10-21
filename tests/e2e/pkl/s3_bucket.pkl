@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+
+import "@aws/s3/bucket.pkl"
+
+local b = new bucket.Bucket {
+  label = "e2e-s3-bucket"
+  bucketName = "e2e-test-bucket-1234567890-911"
+}
+
+local stackName = "s3-bucket-stack"
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "E2E test for S3 Bucket"
+  }
+
+  new formae.Target {
+    label = "aws-target-bucket"
+    config = new aws.Config {
+      region = "us-east-1" // Specify the AWS region
+    }
+  }
+
+  b
+}
+

@@ -1,0 +1,216 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+import "@aws/ec2/securitygroupegress.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/route53/hostedzone.pkl"
+import "@aws/route53/recordset.pkl"
+import "@aws/elasticloadbalancingv2/loadbalancer.pkl"
+
+local stackName = "alias-record-stack"
+
+// Create VPC
+local vpcAlias = new vpc.VPC {
+    label = "alias-lb-vpc"
+    cidrBlock = "10.0.0.0/16"
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    tags {
+        new formae.Tag {
+            key = "Name"
+            value = "alias-lb-vpc"
+        }
+    }
+}
+
+// Create Internet Gateway
+local igw = new internetgateway.InternetGateway {
+    label = "alias-lb-igw"
+}
+
+// Create public subnets in different AZs
+local subnet1 = new subnet.Subnet {
+    label = "alias-lb-subnet-1"
+    vpcId = vpcAlias.res.id
+    cidrBlock = "10.0.1.0/24"
+    availabilityZone = "us-east-1a"
+    mapPublicIpOnLaunch = true
+    tags {
+        new formae.Tag {
+            key = "Name"
+            value = "alias-lb-subnet-1"
+        }
+    }
+}
+
+local subnet2 = new subnet.Subnet {
+    label = "alias-lb-subnet-2"
+    vpcId = vpcAlias.res.id
+    cidrBlock = "10.0.2.0/24"
+    availabilityZone = "us-east-1b"
+    mapPublicIpOnLaunch = true
+    tags {
+        new formae.Tag {
+            key = "Name"
+            value = "alias-lb-subnet-2"
+        }
+    }
+}
+
+// Create route table
+local rt = new routetable.RouteTable {
+    label = "alias-lb-route-table"
+    vpcId = vpcAlias.res.id
+    tags {
+        new formae.Tag {
+            key = "Name"
+            value = "alias-lb-route-table"
+        }
+    }
+}
+
+// Create route to internet gateway
+local r = new route.Route {
+    label = "alias-lb-route"
+    routeTableId = rt.res.id
+    destinationCidrBlock = "0.0.0.0/0"
+    gatewayId = igw.res.id
+}
+
+// Associate subnets with route table
+local routeAssoc1 = new subnetroutetableassociation.SubnetRouteTableAssociation {
+    label = "alias-lb-route-assoc-1"
+    subnetId = subnet1.res.id
+    routeTableId = rt.res.id
+}
+
+local routeAssoc2 = new subnetroutetableassociation.SubnetRouteTableAssociation {
+    label = "alias-lb-route-assoc-2"
+    subnetId = subnet2.res.id
+    routeTableId = rt.res.id
+}
+
+// Create security group for load balancer
+local securityGroup = new securitygroup.SecurityGroup {
+    label = "alias-lb-security-group"
+    groupDescription = "Security group for alias load balancer"
+    vpcId = vpcAlias.res.id
+}
+
+// Create hosted zone
+local zone = new hostedzone.HostedZone {
+    label = "alias-lb-hosted-zone"
+    name = "lb.snarf.platform.engineering"
+}
+
+// Create Application Load Balancer
+local alb = new loadbalancer.LoadBalancer {
+    label = "alias-lb-load-balancer"
+    name = "alias-lb-alb"
+    type = "application"
+    scheme = "internet-facing"
+    ipAddressType = "ipv4"
+    subnets {
+        subnet1.res.id
+        subnet2.res.id
+    }
+    securityGroups {
+        securityGroup.res.id
+    }
+    tags {
+        new formae.Tag {
+            key = "Name"
+            value = "alias-lb-alb"
+        }
+    }
+}
+
+// Create alias record pointing to the load balancer
+local aliasRecord = new recordset.RecordSet {
+    label = "alias-lb-alias-record"
+    name = "app.lb.snarf.platform.engineering"
+    type = "A"
+    hostedZoneId = zone.res.id
+    aliasTarget = new recordset.AliasTarget {
+        dnsName = alb.res.dnsName
+        evaluateTargetHealth = true
+        hostedZoneId = alb.res.canonicalHostedZoneID
+    }
+}
+
+forma {
+    new formae.Stack {
+        label = stackName
+        description = "Complete infrastructure with VPC, subnets, security group, hosted zone, load balancer and alias record"
+    }
+
+    new formae.Target {
+        label = "aws-target"
+        config = new aws.Config {
+            region = "us-east-1"
+        }
+    }
+
+    // VPC and networking
+    vpcAlias
+    igw
+
+    new vpcgatewayattachment.VPCGatewayAttachment {
+        label = "alias-igw-attachment"
+        vpcId = vpcAlias.res.id
+        internetGatewayId = igw.res.id
+    }
+    subnet1
+    subnet2
+    rt
+    r
+    routeAssoc1
+    routeAssoc2
+
+    // Security
+    securityGroup
+    new securitygroupingress.SecurityGroupIngress {
+        label = "allow-http"
+        groupId = securityGroup.res.id
+        ipProtocol = "tcp"
+        fromPort = 80
+        toPort = 80
+        cidrIp = "0.0.0.0/0"
+        description = "Allow HTTP traffic"
+    }
+
+    new securitygroupingress.SecurityGroupIngress {
+        label = "allow-https"
+        groupId = securityGroup.res.id
+        ipProtocol = "tcp"
+        fromPort = 443
+        toPort = 443
+        cidrIp = "0.0.0.0/0"
+        description = "Allow HTTPS traffic"
+    }
+
+    // DNS
+    zone
+
+    // Load Balancer
+    alb
+
+    // Alias Record
+    aliasRecord
+}

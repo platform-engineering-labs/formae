@@ -1,0 +1,138 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@aws/iam/role.pkl"
+import "@aws/kms/key.pkl"
+
+class Security {
+  name: String
+  kmsKey: key.Key
+
+  hidden sageMakerExecutionRole: role.Role = new {
+    label = "\(name)-sagemaker-execution-role"
+    roleName = "\(name)-sagemaker-execution-role"
+    assumeRolePolicyDocument {
+      ["Version"] = "2012-10-17"
+      ["Statement"] {
+        new {
+          ["Effect"] = "Allow"
+          ["Principal"] {
+            ["Service"] = "sagemaker.amazonaws.com"
+          }
+          ["Action"] = "sts:AssumeRole"
+        }
+      }
+    }
+    managedPolicyArns {
+      "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+    }
+    policies {
+      new {
+        policyName = "SageMakerS3KmsAccess"
+        policyDocument {
+          ["Version"] = "2012-10-17"
+          ["Statement"] {
+            new {
+              ["Effect"] = "Allow"
+              ["Action"] {
+                "s3:GetObject"
+                "s3:PutObject"
+                "s3:ListBucket"
+                "s3:DeleteObject"
+              }
+              ["Resource"] = "*"
+            }
+            new {
+              ["Effect"] = "Allow"
+              ["Action"] {
+                "kms:Decrypt"
+                "kms:GenerateDataKey"
+              }
+              ["Resource"] {
+                kmsKey.res.arn
+              }
+            }
+            new {
+              ["Effect"] = "Allow"
+              ["Action"] {
+                "elasticfilesystem:ClientMount"
+                "elasticfilesystem:ClientWrite"
+                "elasticfilesystem:ClientRootAccess"
+                "elasticfilesystem:DescribeFileSystems"
+                "elasticfilesystem:DescribeAccessPoints"
+              }
+              ["Resource"] = "*"
+            }
+          }
+        }
+      }
+    }
+    tags {
+      new { key = "Name"; value = label }
+      new { key = "ManagedBy"; value = "formae" }
+    }
+  }
+
+  hidden dataScienceRole: role.Role = new {
+    label = "\(name)-data-science-role"
+    roleName = "\(name)-data-science-role"
+    assumeRolePolicyDocument {
+      ["Version"] = "2012-10-17"
+      ["Statement"] {
+        new {
+          ["Effect"] = "Allow"
+          ["Principal"] {
+            ["Service"] = "sagemaker.amazonaws.com"
+          }
+          ["Action"] = "sts:AssumeRole"
+        }
+      }
+    }
+    managedPolicyArns {
+      "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+    }
+    policies {
+      new {
+        policyName = "DataScienceEFSAccess"
+        policyDocument {
+          ["Version"] = "2012-10-17"
+          ["Statement"] {
+            new {
+              ["Effect"] = "Allow"
+              ["Action"] {
+                "elasticfilesystem:ClientMount"
+                "elasticfilesystem:ClientWrite"
+                "elasticfilesystem:ClientRootAccess"
+                "elasticfilesystem:DescribeFileSystems"
+                "elasticfilesystem:DescribeAccessPoints"
+              }
+              ["Resource"] = "*"
+            }
+            new {
+              ["Effect"] = "Allow"
+              ["Action"] {
+                "kms:Decrypt"
+                "kms:GenerateDataKey"
+              }
+              ["Resource"] {
+                kmsKey.res.arn
+              }
+            }
+          }
+        }
+      }
+    }
+    tags {
+      new { key = "Name"; value = label }
+      new { key = "ManagedBy"; value = "formae" }
+    }
+  }
+
+  resources: Listing = new {
+    sageMakerExecutionRole
+    dataScienceRole
+  }
+}

@@ -1,0 +1,35 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.iam.policy
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::IAM::Policy"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+    discoverable = false
+}
+open class Policy extends formae.Resource {
+
+    @aws.FieldHint
+    groups: Listing<String>?
+
+    @aws.FieldHint
+    policyDocument: Dynamic
+
+    @aws.FieldHint
+    policyName: String
+
+    @aws.FieldHint
+    roles: Listing<String|formae.Resolvable>?
+
+    @aws.FieldHint
+    users: Listing<String|formae.Resolvable>?
+}

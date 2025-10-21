@@ -1,0 +1,28 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/sqs/queue.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name"
+    default = "st-res-test"
+  }
+}
+
+forma {
+  new formae.StackResolvable {
+    label = "st-res-test-stack"
+  }
+
+  new queue.Queue {
+    label = "sqs-queue"
+    queueName = properties.name.value + "queue"
+    visibilityTimeout = 300.s
+  }
+}

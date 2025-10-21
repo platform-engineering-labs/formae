@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.iam.servicelinkedrole
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::IAM::ServiceLinkedRole"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "RoleName"
+    discoverable = false
+}
+open class ServiceLinkedRole extends formae.Resource {
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+        outputField = "AWSServiceName"
+    }
+    awsServiceName: String?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    customSuffix: String?
+
+    @aws.FieldHint
+    description: String?
+}

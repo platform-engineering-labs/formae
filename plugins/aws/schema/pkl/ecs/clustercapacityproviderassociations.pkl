@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ecs.clustercapacityproviderassociations
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ECS::ClusterCapacityProviderAssociations"
+
+
+@aws.SubResourceHint
+open class CapacityProvider extends formae.SubResource {
+    base: Int?
+    capacityProvider: String|formae.Resolvable
+    weight: Int?
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Cluster"
+}
+open class ClusterCapacityProviderAssociations extends formae.Resource {
+
+    @aws.FieldHint
+    capacityProviders: Listing<String|formae.Resolvable?>
+
+    @aws.FieldHint{createOnly = true}
+    cluster: String
+
+    @aws.FieldHint
+    defaultCapacityProviderStrategy: Listing<CapacityProvider?>
+}

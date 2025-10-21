@@ -1,0 +1,133 @@
+{
+  "Label": "WebsiteDistribution",
+  "Type": "AWS::CloudFront::Distribution",
+  "Stack": "static-website-stack",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "Tags",
+    "Fields": [
+      "DistributionConfig",
+      "Tags"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "DistributionConfig": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "DistributionConfig": {
+      "Aliases": [],
+      "CacheBehaviors": [],
+      "Comment": "",
+      "ContinuousDeploymentPolicyId": "",
+      "CustomErrorResponses": [],
+      "DefaultCacheBehavior": {
+        "AllowedMethods": [
+          "HEAD",
+          "GET"
+        ],
+        "CachedMethods": [
+          "HEAD",
+          "GET"
+        ],
+        "Compress": false,
+        "DefaultTTL": 60,
+        "FieldLevelEncryptionId": "",
+        "ForwardedValues": {
+          "Cookies": {
+            "Forward": "none"
+          },
+          "Headers": [],
+          "QueryString": false,
+          "QueryStringCacheKeys": []
+        },
+        "FunctionAssociations": [],
+        "GrpcConfig": {
+          "Enabled": false
+        },
+        "LambdaFunctionAssociations": [],
+        "MaxTTL": 600,
+        "MinTTL": 0,
+        "SmoothStreaming": false,
+        "TargetOriginId": "S3Origin",
+        "TrustedKeyGroups": [],
+        "TrustedSigners": [],
+        "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      "DefaultRootObject": "index.html",
+      "Enabled": true,
+      "HttpVersion": "http2",
+      "IPV6Enabled": true,
+      "Logging": {
+        "Bucket": "",
+        "IncludeCookies": false,
+        "Prefix": ""
+      },
+      "OriginGroups": {
+        "Items": [],
+        "Quantity": 0
+      },
+      "Origins": [
+        {
+          "ConnectionAttempts": 3,
+          "ConnectionTimeout": 10,
+          "CustomOriginConfig": {
+            "HTTPPort": 80,
+            "HTTPSPort": 443,
+            "OriginKeepaliveTimeout": 5,
+            "OriginProtocolPolicy": "http-only",
+            "OriginReadTimeout": 30,
+            "OriginSSLProtocols": [
+              "SSLv3",
+              "TLSv1"
+            ]
+          },
+          "DomainName": "static-website-uber-unique-id.s3-website.us-east-2.amazonaws.com",
+          "Id": "S3Origin",
+          "OriginAccessControlId": "",
+          "OriginCustomHeaders": [],
+          "OriginPath": "",
+          "OriginShield": {
+            "Enabled": false
+          }
+        }
+      ],
+      "PriceClass": "PriceClass_All",
+      "Restrictions": {
+        "GeoRestriction": {
+          "Locations": [],
+          "RestrictionType": "none"
+        }
+      },
+      "Staging": false,
+      "ViewerCertificate": {
+        "CloudFrontDefaultCertificate": true,
+        "MinimumProtocolVersion": "TLSv1",
+        "SslSupportMethod": "vip"
+      },
+      "WebACLId": ""
+    }
+  },
+  "ReadOnlyProperties": {
+    "DomainName": "d33jmfuq86ehga.cloudfront.net",
+    "Id": "E3MG989XQU7WTG"
+  },
+  "NativeID": "E3MG989XQU7WTG",
+  "Managed": true,
+  "Ksuid": "34OGKjm578k48s0Nd8lIsQH5h5n"
+}

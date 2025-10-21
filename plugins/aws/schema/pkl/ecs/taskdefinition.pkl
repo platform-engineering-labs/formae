@@ -1,0 +1,369 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ecs.taskdefinition
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ECS::TaskDefinition"
+
+typealias AuthorizationConfigIAM = "ENABLED"|"DISABLED"
+
+@aws.SubResourceHint
+open class AuthorizationConfig extends formae.SubResource {
+    accessPointId: (String|formae.Resolvable)?
+    iAM: AuthorizationConfigIAM?
+}
+
+typealias ContainerDefinitionDockerLabels = Mapping<String, Any>
+
+typealias ContainerDefinitionVersionConsistency = "enabled"|"disabled"
+
+@aws.SubResourceHint
+open class ContainerDefinition extends formae.SubResource {
+    command: Listing<String>?
+    cpu: Int?
+    credentialSpecs: Listing<String>?
+    dependsOn: Listing<ContainerDependency>?
+    disableNetworking: Boolean?
+    dnsSearchDomains: Listing<String>?
+    dnsServers: Listing<String>?
+    dockerLabels: ContainerDefinitionDockerLabels?
+    dockerSecurityOptions: Listing<String>?
+    entryPoint: Listing<String>?
+    environment: Listing<KeyValuePair>?
+    environmentFiles: Listing<EnvironmentFile>?
+    essential: Boolean?
+    extraHosts: Listing<HostEntry>?
+    firelensConfiguration: FirelensConfiguration?
+    healthCheck: HealthCheck?
+    hostname: String?
+    image: String
+    interactive: Boolean?
+    links: Listing<String>?
+    linuxParameters: LinuxParameters?
+    logConfiguration: LogConfiguration?
+    memory: Int?
+    memoryReservation: Int?
+    mountPoints: Listing<MountPoint>?
+    name: String
+    portMappings: Listing<PortMapping>?
+    privileged: Boolean?
+    pseudoTerminal: Boolean?
+    readonlyRootFilesystem: Boolean?
+    repositoryCredentials: RepositoryCredentials?
+    resourceRequirements: Listing<ResourceRequirement>?
+    restartPolicy: RestartPolicy?
+    secrets: Listing<Secret>?
+    startTimeout: Int?
+    stopTimeout: Int?
+    systemControls: Listing<SystemControl>?
+    ulimits: Listing<Ulimit>?
+    user: String?
+    versionConsistency: ContainerDefinitionVersionConsistency?
+    volumesFrom: Listing<VolumeFrom>?
+    workingDirectory: String?
+}
+
+@aws.SubResourceHint
+open class ContainerDependency extends formae.SubResource {
+    condition: String?
+    containerName: String?
+}
+
+@aws.SubResourceHint
+open class Device extends formae.SubResource {
+    containerPath: String?
+    hostPath: String?
+    permissions: Listing<String>?
+}
+
+typealias DockerVolumeConfigurationDriverOpts = Mapping<String, Any>
+
+typealias DockerVolumeConfigurationLabels = Mapping<String, Any>
+
+@aws.SubResourceHint
+open class DockerVolumeConfiguration extends formae.SubResource {
+    autoprovision: Boolean?
+    driver: String?
+    driverOpts: DockerVolumeConfigurationDriverOpts?
+    labels: DockerVolumeConfigurationLabels?
+    scope: String?
+}
+
+typealias EFSVolumeConfigurationTransitEncryption = "ENABLED"|"DISABLED"
+
+@aws.SubResourceHint
+open class EFSVolumeConfiguration extends formae.SubResource {
+    authorizationConfig: AuthorizationConfig?
+    filesystemId: String
+    rootDirectory: String?
+    transitEncryption: EFSVolumeConfigurationTransitEncryption?
+    transitEncryptionPort: Int?
+}
+
+@aws.SubResourceHint
+open class EnvironmentFile extends formae.SubResource {
+    type: String?
+    value: String?
+}
+
+@aws.SubResourceHint
+open class EphemeralStorage extends formae.SubResource {
+    sizeInGiB: Int?
+}
+
+@aws.SubResourceHint
+open class FSxAuthorizationConfig extends formae.SubResource {
+    credentialsParameter: String
+    domain: String
+}
+
+@aws.SubResourceHint
+open class FSxWindowsFileServerVolumeConfiguration extends formae.SubResource {
+    authorizationConfig: FSxAuthorizationConfig?
+    fileSystemId: String
+    rootDirectory: String
+}
+
+typealias FirelensConfigurationOptions = Mapping<String, Any>
+
+@aws.SubResourceHint
+open class FirelensConfiguration extends formae.SubResource {
+    options: FirelensConfigurationOptions?
+    type: String?
+}
+
+@aws.SubResourceHint
+open class HealthCheck extends formae.SubResource {
+    command: Listing<String>?
+    interval: Int?
+    retries: Int?
+    startPeriod: Int?
+    timeout: Int?
+}
+
+@aws.SubResourceHint
+open class HostEntry extends formae.SubResource {
+    hostname: String?
+    ipAddress: String?
+}
+
+@aws.SubResourceHint
+open class HostVolumeProperties extends formae.SubResource {
+    sourcePath: String?
+}
+
+@aws.SubResourceHint
+open class InferenceAccelerator extends formae.SubResource {
+    deviceName: String?
+    deviceType: String?
+}
+
+@aws.SubResourceHint
+open class KernelCapabilities extends formae.SubResource {
+    add: Listing<String>?
+    drop: Listing<String>?
+}
+
+@aws.SubResourceHint
+open class KeyValuePair extends formae.SubResource {
+    name: String?
+    value: String?
+}
+
+@aws.SubResourceHint
+open class LinuxParameters extends formae.SubResource {
+    capabilities: KernelCapabilities?
+    devices: Listing<Device>?
+    initProcessEnabled: Boolean?
+    maxSwap: Int?
+    sharedMemorySize: Int?
+    swappiness: Int?
+    tmpfs: Listing<Tmpfs>?
+}
+
+typealias LogConfigurationOptions = Mapping<String, Any>
+
+@aws.SubResourceHint
+open class LogConfiguration extends formae.SubResource {
+    logDriver: String
+    options: LogConfigurationOptions?
+    secretOptions: Listing<Secret>?
+}
+
+@aws.SubResourceHint
+open class MountPoint extends formae.SubResource {
+    containerPath: String?
+    readOnly: Boolean?
+    sourceVolume: String?
+}
+
+typealias PortMappingAppProtocol = "http"|"http2"|"grpc"
+
+@aws.SubResourceHint
+open class PortMapping extends formae.SubResource {
+    appProtocol: PortMappingAppProtocol?
+    containerPort: Int?
+    containerPortRange: String?
+    hostPort: Int?
+    name: String?
+    protocol: String?
+}
+
+@aws.SubResourceHint
+open class ProxyConfiguration extends formae.SubResource {
+    containerName: String
+    proxyConfigurationProperties: Listing<KeyValuePair>?
+    type: String?
+}
+
+@aws.SubResourceHint
+open class RepositoryCredentials extends formae.SubResource {
+    credentialsParameter: String?
+}
+
+@aws.SubResourceHint
+open class ResourceRequirement extends formae.SubResource {
+    type: String
+    value: String
+}
+
+@aws.SubResourceHint
+open class RestartPolicy extends formae.SubResource {
+    enabled: Boolean?
+    ignoredExitCodes: Listing<Int>?
+    restartAttemptPeriod: Int?
+}
+
+@aws.SubResourceHint
+open class RuntimePlatform extends formae.SubResource {
+    cpuArchitecture: String?
+    operatingSystemFamily: String?
+}
+
+@aws.SubResourceHint
+open class Secret extends formae.SubResource {
+    name: String
+    valueFrom: String
+}
+
+@aws.SubResourceHint
+open class SystemControl extends formae.SubResource {
+    namespace: String?
+    value: String?
+}
+
+@aws.SubResourceHint
+open class PlacementConstraint extends formae.SubResource {
+    expression: String?
+    type: String
+}
+
+@aws.SubResourceHint
+open class Tmpfs extends formae.SubResource {
+    containerPath: String?
+    mountOptions: Listing<String>?
+    size: Int
+}
+
+@aws.SubResourceHint
+open class Ulimit extends formae.SubResource {
+    hardLimit: Int
+    name: String
+    softLimit: Int
+}
+
+@aws.SubResourceHint
+open class Volume extends formae.SubResource {
+    configuredAtLaunch: Boolean?
+    dockerVolumeConfiguration: DockerVolumeConfiguration?
+    eFSVolumeConfiguration: EFSVolumeConfiguration?
+    fSxWindowsFileServerVolumeConfiguration: FSxWindowsFileServerVolumeConfiguration?
+    host: HostVolumeProperties?
+    name: String?
+}
+
+@aws.SubResourceHint
+open class VolumeFrom extends formae.SubResource {
+    readOnly: Boolean?
+    sourceContainer: String?
+}
+
+open class TaskDefinitionResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: TaskDefinitionResolvable = (this) {
+        Property = "Ref"
+    }
+
+    hidden taskDefinitionArn: TaskDefinitionResolvable = (this) {
+        Property = "TaskDefinitionArn"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+    tags = "Tags"
+}
+open class TaskDefinition extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    containerDefinitions: Listing<ContainerDefinition>?
+
+    @aws.FieldHint{createOnly = true}
+    cpu: String?
+
+    @aws.FieldHint{createOnly = true}
+    enableFaultInjection: Boolean?
+
+    @aws.FieldHint{createOnly = true}
+    ephemeralStorage: EphemeralStorage?
+
+    @aws.FieldHint{createOnly = true}
+    executionRoleArn: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    family: String?
+
+    @aws.FieldHint{createOnly = true}
+    inferenceAccelerators: Listing<InferenceAccelerator>?
+
+    @aws.FieldHint{createOnly = true}
+    ipcMode: String?
+
+    @aws.FieldHint{createOnly = true}
+    memory: (String|DataSize)?
+
+    @aws.FieldHint{createOnly = true}
+    networkMode: String?
+
+    @aws.FieldHint{createOnly = true}
+    pidMode: String?
+
+    @aws.FieldHint{createOnly = true}
+    placementConstraints: Listing<PlacementConstraint>?
+
+    @aws.FieldHint{createOnly = true}
+    proxyConfiguration: ProxyConfiguration?
+
+    @aws.FieldHint{createOnly = true}
+    requiresCompatibilities: Listing<String>?
+
+    @aws.FieldHint{createOnly = true}
+    runtimePlatform: RuntimePlatform?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{createOnly = true}
+    taskRoleArn: (String|formae.Resolvable)?
+
+    @aws.FieldHint{createOnly = true}
+    volumes: Listing<Volume>?
+}

@@ -1,0 +1,103 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/ext/random.pkl"
+
+import "@aws/aws.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl"
+
+local stackName = "e2e-ec2-route"
+
+local stack: formae.Stack = new {
+    label = stackName
+    description = "Stack for the lifeline showcase"
+}
+
+local target: formae.Target = new formae.Target {
+    label = "e2e-ec2-route-target"
+    config = new aws.Config {
+        region = "eu-central-1"
+    }
+}
+
+local nvpc = new vpc.VPC {
+    label = stackName + "-vpc"
+    cidrBlock = "10.1.0.0/16"
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    tags { new { key = "Name"; value = stackName + "-vpc" } }
+}
+
+local nsubnet = new subnet.Subnet {
+    label = stackName + "-public-subnet-1"
+    vpcId = nvpc.res.id
+    cidrBlock = "10.1.1.0/24"
+    availabilityZone = "eu-central-1a"
+    mapPublicIpOnLaunch = true
+    tags { new { key = "Name"; value = stackName + "-public-subnet-1" } }
+}
+
+local nroutetable = new routetable.RouteTable {
+    label = stackName + "-public-rt"
+    vpcId = nvpc.res.id
+    tags { new { key = "Name"; value = stackName + "-public-rt" } }
+}
+
+
+local igw = new internetgateway.InternetGateway {
+    label = stackName + "-igw"
+    tags { new { key = "Name"; value = stackName + "-igw" } }
+}
+
+local attachIgw = new vpcgatewayattachment.VPCGatewayAttachment {
+    label = stackName + "-igw-attachment"
+    vpcId = nvpc.res.id
+    internetGatewayId = igw.res.id
+}
+
+local publicRoute = new route.Route {
+    label = stackName + "-public-route"
+    routeTableId = nroutetable.res.id
+    destinationCidrBlock = "0.0.0.0/0"
+    gatewayId = igw.res.id
+}
+
+local subnetassoc = new subnetroutetableassociation.SubnetRouteTableAssociation {
+    label = stackName + "-public-subnet-assoc"
+    subnetId = nsubnet.res.id
+    routeTableId = nroutetable.res.id
+}
+
+local routeTodelete = new route.Route {
+    label = stackName + "-public-route"
+    routeTableId = "asdf"
+    destinationCidrBlock = "0.0.0.0/0"
+}
+
+properties {
+
+}
+
+forma {
+    stack
+    target
+    nvpc
+    nsubnet
+    //nroutetable
+    //igw
+    //attachIgw
+    //publicRoute
+    //subnetassoc
+    //routeTodelete
+}

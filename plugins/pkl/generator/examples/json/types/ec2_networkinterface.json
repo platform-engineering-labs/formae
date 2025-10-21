@@ -1,0 +1,354 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-2",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-2",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "eni-08f5e9bb193629832",
+      "Type": "AWS::EC2::NetworkInterface",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "Tags",
+        "Fields": [
+          "ConnectionTrackingSpecification",
+          "Description",
+          "EnablePrimaryIpv6",
+          "GroupSet",
+          "InterfaceType",
+          "Ipv4PrefixCount",
+          "Ipv4Prefixes",
+          "Ipv6AddressCount",
+          "Ipv6Addresses",
+          "Ipv6PrefixCount",
+          "Ipv6Prefixes",
+          "PrivateIpAddress",
+          "PrivateIpAddresses",
+          "SecondaryPrivateIpAddressCount",
+          "SourceDestCheck",
+          "SubnetId",
+          "Tags"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "ConnectionTrackingSpecification": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnablePrimaryIpv6": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupSet": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "InterfaceType": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv4PrefixCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv4Prefixes": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6AddressCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6Addresses": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6PrefixCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6Prefixes": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateIpAddress": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateIpAddresses": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "SecondaryPrivateIpAddressCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "SourceDestCheck": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "Description": "EFS mount target for fs-0b7a3b44276e507f0 (fsmt-0be74004996d0e6ed)",
+        "GroupSet": [
+          "sg-006290e9f6c33a51b"
+        ],
+        "Id": "eni-08f5e9bb193629832",
+        "InterfaceType": "null",
+        "Ipv4PrefixCount": 0,
+        "Ipv4Prefixes": [],
+        "Ipv6PrefixCount": 0,
+        "Ipv6Prefixes": [],
+        "PrimaryIpv6Address": "",
+        "PrimaryPrivateIpAddress": "10.0.1.65",
+        "PrivateIpAddress": "10.0.1.65",
+        "PrivateIpAddresses": [
+          {
+            "Primary": true,
+            "PrivateIpAddress": "10.0.1.65"
+          }
+        ],
+        "SecondaryPrivateIpAddressCount": 0,
+        "SourceDestCheck": true,
+        "SubnetId": "subnet-071e785c76895db79",
+        "Tags": [],
+        "VpcId": "vpc-0b8acd158b7d588f2"
+      },
+      "ReadOnlyProperties": {
+        "Id": "eni-08f5e9bb193629832",
+        "PrimaryIpv6Address": "",
+        "PrimaryPrivateIpAddress": "10.0.1.65",
+        "SecondaryPrivateIpAddresses": [],
+        "VpcId": "vpc-0b8acd158b7d588f2"
+      },
+      "NativeId": "eni-08f5e9bb193629832",
+      "Ksuid": "33jxnNnRJYyzUCEJE4FzURnxtof"
+    },
+    {
+      "Label": "eni-09fcee5fe58fe577f",
+      "Type": "AWS::EC2::NetworkInterface",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "Tags",
+        "Fields": [
+          "ConnectionTrackingSpecification",
+          "Description",
+          "EnablePrimaryIpv6",
+          "GroupSet",
+          "InterfaceType",
+          "Ipv4PrefixCount",
+          "Ipv4Prefixes",
+          "Ipv6AddressCount",
+          "Ipv6Addresses",
+          "Ipv6PrefixCount",
+          "Ipv6Prefixes",
+          "PrivateIpAddress",
+          "PrivateIpAddresses",
+          "SecondaryPrivateIpAddressCount",
+          "SourceDestCheck",
+          "SubnetId",
+          "Tags"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "ConnectionTrackingSpecification": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Description": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "EnablePrimaryIpv6": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "GroupSet": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "InterfaceType": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv4PrefixCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv4Prefixes": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6AddressCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6Addresses": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6PrefixCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "Ipv6Prefixes": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateIpAddress": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "PrivateIpAddresses": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "SecondaryPrivateIpAddressCount": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "SourceDestCheck": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "Tags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "Description": "EFS mount target for fs-0b7a3b44276e507f0 (fsmt-04865550b141fedd3)",
+        "GroupSet": [
+          "sg-006290e9f6c33a51b"
+        ],
+        "Id": "eni-09fcee5fe58fe577f",
+        "InterfaceType": "null",
+        "Ipv4PrefixCount": 0,
+        "Ipv4Prefixes": [],
+        "Ipv6PrefixCount": 0,
+        "Ipv6Prefixes": [],
+        "PrimaryIpv6Address": "",
+        "PrimaryPrivateIpAddress": "10.0.0.25",
+        "PrivateIpAddress": "10.0.0.25",
+        "PrivateIpAddresses": [
+          {
+            "Primary": true,
+            "PrivateIpAddress": "10.0.0.25"
+          }
+        ],
+        "SecondaryPrivateIpAddressCount": 0,
+        "SourceDestCheck": true,
+        "SubnetId": "subnet-0e3748d472e552acc",
+        "Tags": [],
+        "VpcId": "vpc-0b8acd158b7d588f2"
+      },
+      "ReadOnlyProperties": {
+        "Id": "eni-09fcee5fe58fe577f",
+        "PrimaryIpv6Address": "",
+        "PrimaryPrivateIpAddress": "10.0.0.25",
+        "SecondaryPrivateIpAddresses": [],
+        "VpcId": "vpc-0b8acd158b7d588f2"
+      },
+      "NativeId": "eni-09fcee5fe58fe577f",
+      "Ksuid": "33jxnLbLmxgprsTZpoKuNjpPfmH"
+    }
+  ]
+}

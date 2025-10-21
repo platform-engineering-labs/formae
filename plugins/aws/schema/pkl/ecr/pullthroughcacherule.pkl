@@ -1,0 +1,37 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.ecr.pullthroughcacherule
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::ECR::PullThroughCacheRule"
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "EcrRepositoryPrefix"
+}
+open class PullThroughCacheRule extends formae.Resource {
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    credentialArn: (String(matches(Regex(#"^arn:aws:secretsmanager:[a-zA-Z0-9-:]+:secret:ecr\-pullthroughcache\/[a-zA-Z0-9\/_+=.@-]+$"#)))|formae.Value)?
+
+    @aws.FieldHint{createOnly = true}
+    ecrRepositoryPrefix: String(matches(Regex(#"(?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*"#)))?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    upstreamRegistry: String?
+
+    @aws.FieldHint{createOnly = true}
+    upstreamRegistryUrl: String?
+}

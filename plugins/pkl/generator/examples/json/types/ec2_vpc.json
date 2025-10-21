@@ -1,0 +1,27 @@
+{
+  "Targets": [
+    {
+      "Label": "us-west-1",
+      "Namespace": "AWS",
+      "Config": {
+        "Region": "us-west-1",
+        "Type": "AWS"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "vpc-01234567",
+      "Type": "AWS::EC2::VPC",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true,
+        "VpcId": "vpc-01234567"
+      },
+      "NativeId": "vpc-01234567"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module aws.rds.customdbengineversion
+
+import "@formae/formae.pkl"
+import "../aws.pkl"
+
+const type = "AWS::RDS::CustomDBEngineVersion"
+
+typealias VersionStatus = "available"|"inactive"|"inactive-except-restore"
+
+open class CustomDBEngineVersionResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden dbEngineVersionArn: CustomDBEngineVersionResolvable = (this) {
+        property = "DBEngineVersionArn"
+    }
+}
+
+@aws.ResourceHint {
+    type = module.type
+    identifier = "Ref"
+}
+open class CustomDBEngineVersion extends formae.Resource {
+
+    @aws.FieldHint{createOnly = true}
+    databaseInstallationFilesS3BucketName: String?
+
+    @aws.FieldHint{createOnly = true}
+    databaseInstallationFilesS3Prefix: String?
+
+    @aws.FieldHint
+    description: String?
+
+    @aws.FieldHint{createOnly = true}
+    engine: String
+
+    @aws.FieldHint{createOnly = true}
+    engineVersion: String
+
+    @aws.FieldHint{createOnly = true}
+    imageId: String?
+
+    @aws.FieldHint{
+        createOnly = true
+        outputField = "KMSKeyId"
+    }
+    kmsKeyId: String?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    manifest: String?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    sourceCustomDbEngineVersionIdentifier: String?
+
+    @aws.FieldHint
+    status: VersionStatus?
+
+    @aws.FieldHint
+    tags: Listing<formae.Tag>?
+
+    @aws.FieldHint{
+        createOnly = true
+        writeOnly = true
+    }
+    useAwsProvidedLatestImage: Boolean?
+
+    hidden parent = this
+
+    hidden res: CustomDBEngineVersionResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

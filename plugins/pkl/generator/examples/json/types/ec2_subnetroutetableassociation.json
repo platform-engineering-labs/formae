@@ -1,0 +1,122 @@
+{
+  "Targets": [
+    {
+      "Label": "aws-target",
+      "Namespace": "AWS",
+      "Config": {
+        "Type": "AWS",
+        "Region": "us-west-2"
+      }
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "eks-public-subnet-assoc-eks-public-subnet-1",
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Stack": "eks-example",
+      "Target": "aws-target",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "RouteTableId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "RouteTableId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": true
+      },
+      "Properties": {
+        "RouteTableId": {
+          "$label": "eks-public-rt",
+          "$property": "RouteTableId",
+          "$res": true,
+          "$stack": "eks-example",
+          "$type": "AWS::EC2::RouteTable",
+          "$value": "rtb-0bbee7cba8a4e1244"
+        },
+        "SubnetId": {
+          "$label": "eks-public-subnet-1",
+          "$property": "SubnetId",
+          "$res": true,
+          "$stack": "eks-example",
+          "$type": "AWS::EC2::Subnet",
+          "$value": "subnet-082c9464f0815b3a3"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Id": "rtbassoc-0f7a3f58abfb2b27b"
+      },
+      "NativeId": "rtbassoc-0f7a3f58abfb2b27b",
+      "Managed": true,
+      "Ksuid": "33mbw0ceSOF7q0t0grwgMcH9oSo"
+    },
+    {
+      "Label": "eks-public-subnet-assoc-eks-public-subnet-2",
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Stack": "eks-example",
+      "Target": "aws-target",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "",
+        "Fields": [
+          "RouteTableId",
+          "SubnetId"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "RouteTableId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          },
+          "SubnetId": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true
+          }
+        },
+        "Discoverable": true
+      },
+      "Properties": {
+        "RouteTableId": {
+          "$label": "eks-public-rt",
+          "$property": "RouteTableId",
+          "$res": true,
+          "$stack": "eks-example",
+          "$type": "AWS::EC2::RouteTable",
+          "$value": "rtb-0bbee7cba8a4e1244"
+        },
+        "SubnetId": {
+          "$label": "eks-public-subnet-2",
+          "$property": "SubnetId",
+          "$res": true,
+          "$stack": "eks-example",
+          "$type": "AWS::EC2::Subnet",
+          "$value": "subnet-03438ad068b05dda4"
+        }
+      },
+      "ReadOnlyProperties": {
+        "Id": "rtbassoc-0669d7c7999c0b856"
+      },
+      "NativeId": "rtbassoc-0669d7c7999c0b856",
+      "Managed": true,
+      "Ksuid": "33mbw6gvNADS2Rv0DDbMtEzLTZI"
+    }
+  ]
+}
