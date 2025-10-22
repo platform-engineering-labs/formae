@@ -296,10 +296,10 @@ func (p PKL) ProjectInit(path string, include []string) error {
 		}
 	}
 
-	if stat, statErr := os.Stat(path); os.IsNotExist(err) {
+	if stat, err := os.Stat(path); os.IsNotExist(err) {
 		err = os.Mkdir(path, 0750)
 		if err != nil {
-			return statErr
+			return err
 		}
 	} else {
 		if !stat.IsDir() {
