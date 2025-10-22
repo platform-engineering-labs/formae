@@ -51,7 +51,7 @@ If you don't feel like reading you can check out a series of video walkthroughs 
 
 ## Installation
 
-Follow the [Quick start](https://docs.formae.io/en/latest/) for instructions on how to install **formae**.
+Follow the [Quick start](https://docs.formae.io/en/latest/) for installation instructions **formae**.
 
 ## Contributing
 
