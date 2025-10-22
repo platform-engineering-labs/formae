@@ -1,4 +1,10 @@
-<p align="center"><img width="400" alt="formae" src="https://github.com/user-attachments/assets/e22d32e1-4468-46a7-bd3b-bf9a95e69511" /></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/f5b7267c-4fff-4aab-b33c-6b17a658c88e">
+    <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/e22d32e1-4468-46a7-bd3b-bf9a95e69511">
+    <img width="400" alt="formae" src="https://github.com/user-attachments/assets/e22d32e1-4468-46a7-bd3b-bf9a95e69511">
+  </picture>
+</p>
 
 <p align="center">
   <a href="https://github.com/platform-engineering-labs/formae/actions/workflows/go.yml"><img src="https://github.com/platform-engineering-labs/formae/actions/workflows/go.yml/badge.svg" alt="formae"></a>
