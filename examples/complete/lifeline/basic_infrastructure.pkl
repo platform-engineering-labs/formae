@@ -6,11 +6,13 @@
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
-import "./vars.pkl"
-import "./nvpc.pkl"
-import "./network.pkl"
-import "./security_groups.pkl"
+import "@aws/aws.pkl"
 import "@formae/ext/random.pkl"
+
+import "./vars.pkl"
+
+import "./network_resources.pkl" as nw
+import "./security_group_resources.pkl" as sg
 
 description {
     text = """
@@ -68,38 +70,26 @@ properties {
         flag = "subnetCidr2"
         default = "10.1.2.0/24"
     }
+}
 
-    region = new formae.Prop {
-        flag = "region"
-        default = vars.region
-    }
+local network = new nw.NetworkResources {
+    name = properties.name.value
+    vpcLabel = properties.vpcLabel.value
+    vpcCidr = properties.vpcCidr.value
+    subnetCidr1 = properties.subnetCidr1.value
+    subnetCidr2 = properties.subnetCidr2.value
+    region = vars.region
+}
+
+local securityGroups = new sg.SecurityGroupResources {
+    name = properties.name.value
+    vpc =  network.vpc
 }
 
 forma {
     vars.stack
     vars.target
 
-    // VPC
-    nvpc.nvpc(properties)
-
-    // gateways
-    network.igw(properties)
-    network.attachIgw(properties)
-
-    // subnets
-    for (subnet in network.subnets(properties)) {
-        subnet
-    }
-
-    network.routeTable(properties)
-    network.publicRoute(properties)
-
-    for (subnetAssoc in network.subnetAssocs(properties)) {
-        subnetAssoc
-    }
-
-    // security groups
-    for (securityGroup in security_groups.securityGroups(properties)) {
-        securityGroup
-    }
+    ...network.resources
+    ...securityGroups.resources
 }

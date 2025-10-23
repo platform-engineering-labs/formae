@@ -15,6 +15,7 @@ import "@aws/ec2/route.pkl"
 import "@aws/ec2/subnetroutetableassociation.pkl"
 import "@aws/s3/bucket.pkl"
 import "@aws/ec2/securitygroup.pkl"
+
 import "./vars.pkl"
 
 description {
@@ -32,13 +33,6 @@ description {
     One can run destroy using this forma, but it shouldn't be done.
     """
     confirm = true
-}
-
-properties {
-    prop = new formae.Prop {
-        flag = "region"
-        default = vars.region
-    }
 }
 
 forma {
