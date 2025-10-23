@@ -20,7 +20,7 @@
 ## **formae** capabilities
 
 - **The single source of truth is code:** It unifies every infrastructure resource and change into fully versioned infrastructure code.
-- **Always up-to-data infrastructure code:** It sees when things change outside the tool. It merges these changes into your infrastructure code instead of just ignoring or undoing them. This way, important outside changes are never lost, and are immediately incorporated into the infrastructure code.
+- **Always up-to-date infrastructure code:** It sees when things change outside the tool. It merges these changes into your infrastructure code instead of just ignoring or undoing them. This way, important outside changes are never lost, and are immediately incorporated into the infrastructure code.
 - **Prevents avoidable mistakes:** It is built around a very robust, enforced schema.
 - **Made for everyone:** It welcomes all kinds of engineers, whether they are new or experienced, be they in Ops, DevOps, SRE or Platform Engineering.
 - **Perfect for Platform Engineering:** It allows platform engineers to work on the low level of detail, and developers consume reusable services by just providing a few predefined, schema-safe properties.
