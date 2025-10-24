@@ -29,9 +29,10 @@ func (sys) InvokeSelfWithSudo(args ...string) error {
 		return err
 	}
 
-	args = append([]string{" ", self}, args...)
-
 	env := os.Environ()
+	path := os.Getenv("PATH")
+
+	args = append([]string{" ", "env", "PATH=" + path, self}, args...)
 
 	err = syscall.Exec(sudo, args, env)
 	if err != nil {
