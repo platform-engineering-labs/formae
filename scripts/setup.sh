@@ -34,14 +34,14 @@ if [[ "$version" == "latest" ]]; then
       repo_json = JSON.parse(resp)
 
       repo_json['Packages'].each do |pkg|
-        if pkg['OsArch']['OS'] == ENV['OS'] and pkg['OsArch']['Arch'] == ENV['ARCH']
+        if pkg['OsArch']['OS'] == ENV['OS'] and pkg['OsArch']['Arch'] == ENV['ARCH'] and !pkg['Version'].include?('-')
           print pkg['Version']
           exit
         end
       end
     ")
   elif which jq > /dev/null; then
-    version=$(curl -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
+    version=$(curl -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.Version | index("-") | not) | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
   else
     echo "Could not find a ruby interpreter or jq, required by the installation, please install either package to continue!"
     exit 1
