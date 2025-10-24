@@ -48,6 +48,12 @@ if [[ "$version" == "latest" ]]; then
   fi
 fi
 
+if [[ $version == "" ]]; then
+  echo "No version found for platform: ${OS}-${ARCH}"
+  echo "most likely it is unsupported for now"
+  exit 1
+fi
+
 if ! [ $(id -u) = 0 ]; then
   echo "This script requires escalated privileges to install Formae to: ${INSTALLPREFIX}/formae"
   echo "Your password will be required, to utilize sudo"
