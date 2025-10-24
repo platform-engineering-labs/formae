@@ -43,15 +43,15 @@ Ensure the **formae** node is up and running. Then, in a different shell, run:
 
 Once the asynchronous command is done, you can see in your AWS console that a few resources have been created, for example a VPC with a name starting with `lifeline`, and more network related resources.
 
-### Another holistic apply
+### Making holistic changes
 
 Let's say, some time later, we want to add another security group following our GitOps process.
 
-In `security_groups.pkl`, which is part of the basic infrastructure, you should uncomment the initially commented security group and its corresponding ingress at the end of the file, and then run again:
+You can modify the `SecurityGroupResources` class in `security_group_resources.pkl` to add additional security groups and their ingress rules, then run again:
 
 `formae apply --watch /opt/pel/formae/examples/complete/lifeline/basic_infrastructure.pkl`
 
-Once the asynchronous command is done, you should see in your AWS console that another security group with a name starting with `lifeline` has been created.
+Once the asynchronous command is done, you should see in your AWS console that the new security group with a name starting with `lifeline` has been created.
 
 We are now done with the basic infrastructure.
 
