@@ -29,8 +29,6 @@ target: formae.Target = new formae.Target {
 }
 
 vpcLabel = "lifeline-vpc"
-
 s3BucketSuffix = "-unique-bucket-id"
-
 crossCuttingTag = "cross-cutting-tag"
 crossCuttingTagValue = "cross-cutting-tag-value"
