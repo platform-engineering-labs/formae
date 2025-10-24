@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.72
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.79.2
+	github.com/mashiike/s3-setlock v0.2.0
 	github.com/masterminds/semver v1.5.0
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.10.1
