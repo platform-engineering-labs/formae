@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	s3setlock "github.com/mashiike/s3-setlock"
 	"github.com/platform-engineering-labs/formae/pkg/ppm"
 )
 
@@ -82,6 +83,28 @@ func (w *WriterS3) Publish(prune int, pkgPaths ...string) error {
 	if err != nil {
 		return err
 	}
+
+	lockUri, err := url.JoinPath(w.uri.String(), "ppm.lock")
+	if err != nil {
+		return err
+	}
+
+	lock, err := s3setlock.New(
+		lockUri,
+		s3setlock.WithClient(s3Client),
+		s3setlock.WithContext(context.Background()),
+		s3setlock.WithDelay(true),
+		s3setlock.WithLeaseDuration(30*time.Second),
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = lock.LockWithError(context.Background())
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 
 	result, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 		Bucket: &w.uri.Host,
