@@ -43,6 +43,7 @@ type MetastructureAPI interface {
 	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
+	CancelCommand(commandID string, clientID string) error
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ForceSync() error
@@ -455,6 +456,26 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 	forma := pkgmodel.FormaFromResources(managedResources)
 
 	return m.DestroyForma(forma, config, clientID)
+}
+
+func (m *Metastructure) CancelCommand(commandID string, clientID string) error {
+	slog.Info("Canceling command", "commandID", commandID, "clientID", clientID)
+
+	// Send Cancel message to the ChangesetExecutor for this command
+	changesetExecutorPID := gen.ProcessID{
+		Name: actornames.ChangesetExecutor(commandID),
+		Node: m.Node.Name(),
+	}
+
+	err := m.Node.Send(changesetExecutorPID, changeset.Cancel{
+		CommandID: commandID,
+	})
+	if err != nil {
+		slog.Error("Failed to send cancel message to changeset executor", "commandID", commandID, "error", err)
+		return fmt.Errorf("failed to send cancel message: %w", err)
+	}
+
+	return nil
 }
 
 func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {

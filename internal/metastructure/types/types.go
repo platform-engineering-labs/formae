@@ -33,13 +33,12 @@ const (
 type ResourceUpdateState string
 
 const (
-	ResourceUpdateStateUnknown          ResourceUpdateState = "Unknown"
-	ResourceUpdateStateNotStarted       ResourceUpdateState = "NotStarted"
-	ResourceUpdateStatePending          ResourceUpdateState = "Pending"
-	ResourceUpdateStateInProgress       ResourceUpdateState = "InProgress"
-	ResourceUpdateStateFailed           ResourceUpdateState = "Failed"
-	ResourceUpdateStateSuccess          ResourceUpdateState = "Success"
-	ResourceUpdateStateCancelInProgress ResourceUpdateState = "CancelInProgress"
-	ResourceUpdateStateCancelComplete   ResourceUpdateState = "CancelComplete"
-	ResourceUpdateStateRejected         ResourceUpdateState = "Rejected"
+	ResourceUpdateStateUnknown    ResourceUpdateState = "Unknown"
+	ResourceUpdateStateNotStarted ResourceUpdateState = "NotStarted"
+	ResourceUpdateStatePending    ResourceUpdateState = "Pending"
+	ResourceUpdateStateInProgress ResourceUpdateState = "InProgress"
+	ResourceUpdateStateFailed     ResourceUpdateState = "Failed"
+	ResourceUpdateStateSuccess    ResourceUpdateState = "Success"
+	ResourceUpdateStateCanceled   ResourceUpdateState = "Canceled"
+	ResourceUpdateStateRejected   ResourceUpdateState = "Rejected"
 )

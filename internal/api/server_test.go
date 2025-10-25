@@ -66,6 +66,10 @@ func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCom
 	return nextResponse.SubmitCommandResponse, nextResponse.Error
 }
 
+func (m *FakeMetastructure) CancelCommand(commandID string, clientID string) error {
+	return nil
+}
+
 func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
 	nextResponse := m.listResponses[0]
 	m.listResponses = m.listResponses[1:]

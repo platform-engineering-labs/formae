@@ -75,7 +75,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 					Namespace: "test-namespace",
 				},
 				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateCancelInProgress, // conflicting
+				State:     resource_update.ResourceUpdateStateCanceled, // conflicting
 				Operation: resource_update.OperationCreate,
 			},
 			{

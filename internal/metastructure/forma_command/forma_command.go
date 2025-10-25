@@ -16,14 +16,13 @@ import (
 type CommandState string
 
 const (
-	CommandStateUnknown          CommandState = "Unknown"
-	CommandStateNotStarted       CommandState = "NotStarted"
-	CommandStatePending          CommandState = "Pending"
-	CommandStateInProgress       CommandState = "InProgress"
-	CommandStateFailed           CommandState = "Failed"
-	CommandStateSuccess          CommandState = "Success"
-	CommandStateCancelInProgress CommandState = "CancelInProgress"
-	CommandStateCancelComplete   CommandState = "CancelComplete"
+	CommandStateUnknown    CommandState = "Unknown"
+	CommandStateNotStarted CommandState = "NotStarted"
+	CommandStatePending    CommandState = "Pending"
+	CommandStateInProgress CommandState = "InProgress"
+	CommandStateFailed     CommandState = "Failed"
+	CommandStateSuccess    CommandState = "Success"
+	CommandStateCanceled   CommandState = "Canceled"
 )
 
 type FormaCommand struct {

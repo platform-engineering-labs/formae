@@ -23,6 +23,7 @@ const (
 	StateProcessing           = gen.Atom("processing")
 	StateFinishedSuccessfully = gen.Atom("finished_successfully")
 	StateFinishedWithError    = gen.Atom("finished_with_error")
+	StateCanceled             = gen.Atom("canceled")
 )
 
 // ChangesetExecutor is a state machine that processes a set of resource updates delivered by a forma. The changeset
@@ -66,6 +67,10 @@ type Start struct {
 
 type Resume struct{}
 
+type Cancel struct {
+	CommandID string
+}
+
 type ChangesetState string
 
 const (
@@ -99,13 +104,15 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateMessageHandler(StateNotStarted, start),
 		statemachine.WithStateMessageHandler(StateProcessing, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
+		statemachine.WithStateMessageHandler(StateProcessing, cancel),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
+		statemachine.WithStateMessageHandler(StateCanceled, shutdown),
 	), nil
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
-	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError {
+	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateCanceled {
 		_, err := proc.Call(
 			gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 			forma_persister.MarkFormaCommandAsComplete{
@@ -325,6 +332,14 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 	}
 
 	return nil
+}
+
+func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	proc.Log().Info("ChangesetExecutor received cancel request", "commandID", message.CommandID)
+
+	// Transition immediately to canceled state
+	// The onStateChange callback will handle cleanup
+	return StateCanceled, data, nil, nil
 }
 
 func shutdown(state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
