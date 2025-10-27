@@ -61,7 +61,7 @@ forma {
             ignorePublicAcls = true
             restrictPublicBuckets = true
         }
-        bucketEncryption = new bucket.BucketBucketEncryption {
+        bucketEncryption = new bucket.BucketEncryption {
             serverSideEncryptionConfiguration {
                 new bucket.BucketServerSideEncryptionRule {
                     serverSideEncryptionByDefault = new bucket.BucketServerSideEncryptionByDefault {

@@ -46,7 +46,7 @@ typealias BucketArn = String
 
 
 @aws.SubResourceHint
-open class BucketBucketEncryption extends formae.SubResource {
+open class BucketEncryption extends formae.SubResource {
     serverSideEncryptionConfiguration: Listing<BucketServerSideEncryptionRule>
 }
 
@@ -620,7 +620,7 @@ open class Bucket extends formae.Resource {
     analyticsConfigurations: Listing<BucketAnalyticsConfiguration>?
 
     @aws.FieldHint
-    bucketEncryption: BucketBucketEncryption?
+    bucketEncryption: BucketEncryption?
 
     @aws.FieldHint
     bucketName: String?
