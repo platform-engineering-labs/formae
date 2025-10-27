@@ -22,6 +22,7 @@ const (
 	CommandStateInProgress CommandState = "InProgress"
 	CommandStateFailed     CommandState = "Failed"
 	CommandStateSuccess    CommandState = "Success"
+	CommandStateCanceling  CommandState = "Canceling"
 	CommandStateCanceled   CommandState = "Canceled"
 )
 

@@ -71,7 +71,13 @@ func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	}
 }
 
+// MaxRequestsPerSecondOverride allows tests to override the rate limit
+var MaxRequestsPerSecondOverride *int
+
 func (s FakeAWS) MaxRequestsPerSecond() int {
+	if MaxRequestsPerSecondOverride != nil {
+		return *MaxRequestsPerSecondOverride
+	}
 	return 5
 }
 

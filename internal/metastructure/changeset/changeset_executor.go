@@ -23,6 +23,7 @@ const (
 	StateProcessing           = gen.Atom("processing")
 	StateFinishedSuccessfully = gen.Atom("finished_successfully")
 	StateFinishedWithError    = gen.Atom("finished_with_error")
+	StateCanceling            = gen.Atom("canceling")
 	StateCanceled             = gen.Atom("canceled")
 )
 
@@ -106,6 +107,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateMessageHandler(StateProcessing, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
 		statemachine.WithStateMessageHandler(StateProcessing, cancel),
+		statemachine.WithStateMessageHandler(StateCanceling, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
 		statemachine.WithStateMessageHandler(StateCanceled, resourceUpdateFinished), // Ignore late messages from ResourceUpdaters
@@ -114,6 +116,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
+	// Only shutdown when we reach a final state (not Canceling)
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateCanceled {
 		// Shutdown resolve cache
 		err := proc.Send(
@@ -217,6 +220,46 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 	// If we're in canceled state, ignore late resource update messages
 	if state == StateCanceled {
 		proc.Log().Debug("Ignoring ResourceUpdateFinished in canceled state", "uri", message.Uri)
+		return state, data, nil, nil
+	}
+
+	// If we're in canceling state, we're waiting for in-progress resources to finish
+	// Update the resource state and check if all in-progress resources are done
+	if state == StateCanceling {
+		// Find and update the finished resource
+		for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
+			for _, update := range group.Updates {
+				if update.URI() == message.Uri && update.State == resource_update.ResourceUpdateStateInProgress {
+					update.State = message.State
+					proc.Log().Info("In-progress resource finished during cancellation",
+						"uri", message.Uri,
+						"finalState", message.State)
+					break
+				}
+			}
+		}
+
+		// Check if any resources are still in progress
+		inProgressCount := 0
+		for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
+			for _, update := range group.Updates {
+				if update.State == resource_update.ResourceUpdateStateInProgress {
+					inProgressCount++
+				}
+			}
+		}
+
+		// If no more in-progress resources, transition to Canceled
+		if inProgressCount == 0 {
+			proc.Log().Info("All in-progress resources completed, transitioning to Canceled",
+				"commandID", data.changeset.CommandID)
+			return StateCanceled, data, nil, nil
+		}
+
+		// Still waiting for more resources to finish
+		proc.Log().Info("Still waiting for in-progress resources during cancellation",
+			"commandID", data.changeset.CommandID,
+			"remainingCount", inProgressCount)
 		return state, data, nil, nil
 	}
 
@@ -342,52 +385,24 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	proc.Log().Info("ChangesetExecutor received cancel request", "commandID", message.CommandID)
 
-	// Collect all non-final resource updates from the pipeline
+	// Collect resources by state
 	var urisToCancel []pkgmodel.FormaeURI
-	var inProgressUpdates []pkgmodel.FormaeURI
+	var inProgressCount int
 
 	for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
 		for _, update := range group.Updates {
-			// Check if the update is not in a final state
-			if update.State != resource_update.ResourceUpdateStateSuccess &&
-				update.State != resource_update.ResourceUpdateStateFailed &&
-				update.State != resource_update.ResourceUpdateStateCanceled {
-
+			// Only cancel resources that haven't started yet (NotStarted state)
+			// Do NOT cancel InProgress resources to avoid orphaned cloud resources
+			if update.State == resource_update.ResourceUpdateStateNotStarted {
 				urisToCancel = append(urisToCancel, update.URI())
-
-				// If the update is in progress, we need to send a cancel message to the ResourceUpdater
-				if update.State == resource_update.ResourceUpdateStateInProgress {
-					inProgressUpdates = append(inProgressUpdates, update.URI())
-				}
+			} else if update.State == resource_update.ResourceUpdateStateInProgress {
+				// Count in-progress resources - we need to wait for these to complete
+				inProgressCount++
 			}
 		}
 	}
 
-	// Send cancel messages to all in-progress ResourceUpdaters
-	for _, uri := range inProgressUpdates {
-		var operation string
-		for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
-			for _, update := range group.Updates {
-				if update.URI() == uri {
-					operation = string(update.Operation)
-					break
-				}
-			}
-			if operation != "" {
-				break
-			}
-		}
-
-		resourceUpdaterName := actornames.ResourceUpdater(uri, operation, data.changeset.CommandID)
-		err := proc.Send(
-			gen.ProcessID{Node: proc.Node().Name(), Name: resourceUpdaterName},
-			resource_update.Shutdown{},
-		)
-		if err != nil {
-			proc.Log().Warning("Failed to send shutdown to ResourceUpdater", "uri", uri, "error", err)
-		}
-	}
-
+	// Mark NotStarted resources as canceled
 	if len(urisToCancel) > 0 {
 		_, err := proc.Call(
 			gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
@@ -399,9 +414,28 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 		if err != nil {
 			proc.Log().Error("Failed to mark resources as canceled", "commandID", data.changeset.CommandID, "error", err)
 		}
+
+		proc.Log().Info("Marked NotStarted resources as canceled",
+			"commandID", message.CommandID,
+			"canceledCount", len(urisToCancel))
 	}
 
-	return StateCanceled, data, nil, nil
+	// Determine next state
+	var nextState gen.Atom
+	if inProgressCount > 0 {
+		// We have in-progress resources - transition to Canceling state and wait for them to finish
+		proc.Log().Info("Command is canceling, waiting for in-progress resources to complete",
+			"commandID", message.CommandID,
+			"inProgressCount", inProgressCount)
+		nextState = StateCanceling
+	} else {
+		// No in-progress resources - transition directly to Canceled
+		proc.Log().Info("Command canceled immediately (no in-progress resources)",
+			"commandID", message.CommandID)
+		nextState = StateCanceled
+	}
+
+	return nextState, data, nil, nil
 }
 
 func shutdown(state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
