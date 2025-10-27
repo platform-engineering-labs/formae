@@ -340,16 +340,92 @@ class Fq {
 
     function hints(resourceClass: reflect.Class): Mapping<String, FieldHint> =
         let(resourceHint = resourceClass.annotations.filterIsInstance(ResourceHint).first)
-        resourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+        let(directHints = resourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
             let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
-                Pair(
-                    key,
-                    (fieldHint) {
-                        required = !(v.type is reflect.NullableType)
-                    }
-                )
-        ).toMap().toMapping()
+            let(baseHint = (fieldHint) {
+                required = !(v.type is reflect.NullableType)
+            })
+            Pair(key, baseHint)
+        ))
+        let(nestedHints = resourceClass.properties.filter((_, v) ->
+            v.annotations.filterIsInstance(FieldHint).length > 0 &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+
+            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(subResourceClass = getSubResourceClass(v.type))
+
+            let(subHintsMap = subHints(subResourceClass))
+            subHintsMap.toMap().map((subKey, subHint) ->
+                Pair(parentKey + "." + subKey, subHint)
+            )
+           ))
+
+        (directHints.toMap() + nestedHints.toMap()).toMapping()
+
+    function subHints(subResourceClass: reflect.Class): Mapping<String, FieldHint> =
+        let(subResourceHint = subResourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull)
+        let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
+        let(directHints = subResourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
+            let(baseHint = (fieldHint) {
+                required = !(v.type is reflect.NullableType)
+            })
+            Pair(key, baseHint)
+        ))
+        let(nestedHints = subResourceClass.properties.filter((_, v) ->
+            v.annotations.filterIsInstance(FieldHint).length > 0 &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
+            let(nestedSubResourceClass = getSubResourceClass(v.type))
+            let(nestedSubHints = subHints(nestedSubResourceClass))
+
+            nestedSubHints.toMap().map((subKey, subHint) ->
+                Pair(parentKey + "." + subKey, subHint)
+            )
+        ))
+
+        (directHints.toMap() + nestedHints.toMap()).toMapping()
+
+    function isSubResourceType(type: reflect.Type): Boolean =
+        if (type is reflect.DeclaredType)
+            let(referent = type.referent)
+            if (referent is reflect.Class)
+                isSubResourceClass(referent)
+            else if (referent is reflect.TypeAlias)
+                // Handle type alias by checking its aliased type
+                isSubResourceType(referent.referent)
+            else
+                false
+        else if (type is reflect.NullableType)
+            isSubResourceType(type.member)
+        else
+            false
+
+    function isSubResourceClass(cls: reflect.Class): Boolean =
+        cls.superclass != null &&
+        (cls.superclass.name == "SubResource" ||
+         isSubResourceClass(cls.superclass))
+
+    function getSubResourceClass(type: reflect.Type): reflect.Class =
+        if (type is reflect.DeclaredType)
+            let(referent = type.referent)
+            if (referent is reflect.Class)
+                referent
+            else if (referent is reflect.TypeAlias)
+                // Handle type alias by getting the class from the aliased type
+                getSubResourceClass(referent.referent)
+            else
+                throw("Expected Class or TypeAlias for SubResource, got: \(referent.getClass())")
+        else if (type is reflect.NullableType)
+            getSubResourceClass(type.member)
+        else
+            throw("Expected DeclaredType for SubResource")
 
     function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
         let(subResourceHint = resourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull)

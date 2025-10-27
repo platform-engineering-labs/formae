@@ -90,6 +90,57 @@ local testBucket = new TestBucket {
     tags = new Listing { testTag }
 }
 
+
+@formae.SubResourceHint
+local class NestedSetting extends formae.SubResource {
+    @formae.FieldHint{
+        writeOnly = true
+    }
+    setting1: String
+
+    @formae.FieldHint{
+        outputField = "SettingTwo"
+    }
+    setting2: String
+}
+
+@formae.SubResourceHint
+local class NestedConfig extends formae.SubResource {
+    @formae.FieldHint{
+        writeOnly = true
+    }
+    configName: String
+
+    @formae.FieldHint{
+        outputField = "TestConfigValue"
+    }
+    configValue: String
+
+    @formae.FieldHint
+    setting: NestedSetting
+}
+
+@formae.ResourceHint {
+    type = "FakeAWS::S3::Resource"
+    identifier = "ResourceName"
+}
+local class TestWithNestedResource extends formae.Resource {
+    @formae.FieldHint
+    resourceName: String
+
+    @formae.FieldHint
+    nested: NestedConfig
+}
+
+local nestedResource = new TestWithNestedResource {
+    label = "nested-resource"
+    resourceName = "my-resource"
+    nested = new NestedConfig {
+        configName = "secret-config"
+        configValue = "config-value"
+    }
+}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -145,6 +196,10 @@ examples {
 
     ["Test Resource - render()"] {
         testBucket.render()
+    }
+
+    ["Test Resource - nested"] {
+        nestedResource.fields()
     }
 
     ["Fq - fields"] {

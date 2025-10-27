@@ -210,6 +210,17 @@ examples {
       }
     }
   }
+  ["Test Resource - nested"] {
+    new {
+      "resourceName"
+      "nested"
+      "nested.configName"
+      "nested.TestConfigValue"
+      "nested.setting"
+      "nested.setting.setting1"
+      "nested.setting.SettingTwo"
+    }
+  }
   ["Fq - fields"] {
     new {
       "bucketName"
