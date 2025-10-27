@@ -138,6 +138,10 @@ local nestedResource = new TestWithNestedResource {
     nested = new NestedConfig {
         configName = "secret-config"
         configValue = "config-value"
+        setting = new NestedSetting {
+            setting1 = "value1"
+            setting2 = "value2"
+        }
     }
 }
 
@@ -198,8 +202,8 @@ examples {
         testBucket.render()
     }
 
-    ["Test Resource - nested"] {
-        nestedResource.fields()
+    ["Nested Test Resource - render()"] {
+        nestedResource.render()
     }
 
     ["Fq - fields"] {

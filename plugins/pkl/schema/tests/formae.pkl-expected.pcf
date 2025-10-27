@@ -210,15 +210,90 @@ examples {
       }
     }
   }
-  ["Test Resource - nested"] {
+  ["Nested Test Resource - render()"] {
     new {
-      "resourceName"
-      "nested"
-      "nested.configName"
-      "nested.TestConfigValue"
-      "nested.setting"
-      "nested.setting.setting1"
-      "nested.setting.SettingTwo"
+      Label = "nested-resource"
+      Group = null
+      Target = null
+      Stack = null
+      Type = "FakeAWS::S3::Resource"
+      Schema {
+        Nonprovisionable = false
+        Identifier = "ResourceName"
+        Tags = null
+        Fields {
+          "resourceName"
+          "nested"
+          "nested.configName"
+          "nested.TestConfigValue"
+          "nested.setting"
+          "nested.setting.setting1"
+          "nested.setting.SettingTwo"
+        }
+        Hints {
+          ["resourceName"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = false
+            Required = true
+            RequiredOnCreate = false
+          }
+          ["nested"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = false
+            Required = true
+            RequiredOnCreate = false
+          }
+          ["nested.configName"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = true
+            Required = true
+            RequiredOnCreate = false
+          }
+          ["nested.TestConfigValue"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = false
+            Required = true
+            RequiredOnCreate = false
+          }
+          ["nested.setting"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = false
+            Required = true
+            RequiredOnCreate = false
+          }
+          ["nested.setting.setting1"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = true
+            Required = true
+            RequiredOnCreate = false
+          }
+          ["nested.setting.SettingTwo"] {
+            CreateOnly = false
+            Persist = false
+            WriteOnly = false
+            Required = true
+            RequiredOnCreate = false
+          }
+        }
+        Discoverable = true
+      }
+      Properties {
+        resourceName = "my-resource"
+        nested {
+          configName = "secret-config"
+          configValue = "config-value"
+          setting {
+            setting1 = "value1"
+            setting2 = "value2"
+          }
+        }
+      }
     }
   }
   ["Fq - fields"] {
