@@ -38,7 +38,7 @@ forma {
     new bucket.Bucket {
         label = "simple-demo-bucket"
         bucketName = properties.name.value + properties.bucketSuffix.value
-        versioningConfiguration = new bucket.BucketVersioningConfiguration {
+        versioningConfiguration = new bucket.VersioningConfiguration {
             status = "Enabled"
         }
         tags {
@@ -55,7 +55,7 @@ forma {
                 value = "Development"
             }
         }
-        publicAccessBlockConfiguration = new bucket.BucketPublicAccessBlockConfiguration {
+        publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
             blockPublicAcls = true
             blockPublicPolicy = true
             ignorePublicAcls = true
@@ -63,7 +63,7 @@ forma {
         }
         bucketEncryption = new bucket.BucketEncryption {
             serverSideEncryptionConfiguration {
-                new bucket.BucketServerSideEncryptionRule {
+                new bucket.ServerSideEncryptionRule {
                     serverSideEncryptionByDefault = new bucket.BucketServerSideEncryptionByDefault {
                         sseAlgorithm = "AES256"
                     }

@@ -13,11 +13,11 @@ siteBucket = new bucket.Bucket {
     label = "WebsiteBucket"
     bucketName = vars.projectName + vars.bucketSuffix
 
-    websiteConfiguration = new bucket.BucketWebsiteConfiguration {
+    websiteConfiguration = new bucket.WebsiteConfiguration {
         indexDocument = "index.html"
     }
 
-    publicAccessBlockConfiguration = new bucket.BucketPublicAccessBlockConfiguration {
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
         blockPublicAcls = false
         blockPublicPolicy = false
         ignorePublicAcls = false
