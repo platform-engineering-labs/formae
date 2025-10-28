@@ -88,7 +88,11 @@ gen-aws-pkl-types:
 	cd plugins/aws && go generate .
 	rm plugins/aws/pkg/descriptors/gen/Types.pkl.go
 	cd plugins/aws &&  pkl eval pkg/descriptors/pkl/resources.pkl > pkg/descriptors/pkl/generated_resources.pkl
-	sed -i '' '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		sed -i '' '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
+	else \
+		sed -i '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
+	fi
 
 pkg-pkl:
 	pkl project package ./plugins/aws/schema/pkl ./plugins/pkl/schema --skip-publish-check
