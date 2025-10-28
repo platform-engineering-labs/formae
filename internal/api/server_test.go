@@ -38,11 +38,17 @@ type WrappedListResponse struct {
 	Error                     error
 }
 
+type WrappedCancelResponse struct {
+	CancelCommandResponse *apimodel.CancelCommandResponse
+	Error                 error
+}
+
 type FakeMetastructure struct {
 	applyResponses   []WrappedCommandResponse
 	destroyResponses []WrappedCommandResponse
 	extractResponses []WrappedExtractResponse
 	listResponses    []WrappedListResponse
+	cancelResponses  []WrappedCancelResponse
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
@@ -68,6 +74,13 @@ func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCom
 
 func (m *FakeMetastructure) CancelCommand(commandID string, clientID string) error {
 	return nil
+}
+
+func (m *FakeMetastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
+	nextResponse := m.cancelResponses[0]
+	m.cancelResponses = m.cancelResponses[1:]
+
+	return nextResponse.CancelCommandResponse, nextResponse.Error
 }
 
 func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
@@ -736,4 +749,110 @@ func TestServer_ListCommandStatusInvalidQueryError(t *testing.T) {
 		assert.Equal(t, apimodel.InvalidQuery, errorResponse.ErrorType)
 		assert.Equal(t, "wrong syntax", errorResponse.Data.Reason)
 	}
+}
+
+func TestServer_CancelCommands_Success(t *testing.T) {
+	fakeMetastructure := &FakeMetastructure{
+		cancelResponses: []WrappedCancelResponse{
+			{
+				CancelCommandResponse: &apimodel.CancelCommandResponse{
+					CommandIDs: []string{"cmd-1", "cmd-2"},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
+	req.Header.Set("Client-ID", "test-client")
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.CancelCommands(c)) {
+		assert.Equal(t, http.StatusAccepted, rec.Code)
+
+		body := rec.Body.Bytes()
+		var response apimodel.CancelCommandResponse
+		err := json.Unmarshal(body, &response)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"cmd-1", "cmd-2"}, response.CommandIDs)
+	}
+}
+
+func TestServer_CancelCommands_WithQuery(t *testing.T) {
+	fakeMetastructure := &FakeMetastructure{
+		cancelResponses: []WrappedCancelResponse{
+			{
+				CancelCommandResponse: &apimodel.CancelCommandResponse{
+					CommandIDs: []string{"cmd-3"},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel?query=stack:test", nil)
+	req.Header.Set("Client-ID", "test-client")
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.CancelCommands(c)) {
+		assert.Equal(t, http.StatusAccepted, rec.Code)
+
+		body := rec.Body.Bytes()
+		var response apimodel.CancelCommandResponse
+		err := json.Unmarshal(body, &response)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"cmd-3"}, response.CommandIDs)
+	}
+}
+
+func TestServer_CancelCommands_NoCommandsFound(t *testing.T) {
+	fakeMetastructure := &FakeMetastructure{
+		cancelResponses: []WrappedCancelResponse{
+			{
+				CancelCommandResponse: &apimodel.CancelCommandResponse{
+					CommandIDs: []string{},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
+	req.Header.Set("Client-ID", "test-client")
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.CancelCommands(c)) {
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Empty(t, rec.Body.Bytes())
+	}
+}
+
+func TestServer_CancelCommands_MissingClientID(t *testing.T) {
+	fakeMetastructure := &FakeMetastructure{}
+
+	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
+	// No Client-ID header
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	err := server.CancelCommands(c)
+	assert.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
 }

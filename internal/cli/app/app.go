@@ -239,6 +239,31 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 	return resp, nags, nil
 }
 
+func (a *App) CancelCommand(query string) (*apimodel.CancelCommandResponse, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, _, err := a.runBeforeCommand(client, true)
+	if !compatible {
+		return nil, err
+	}
+
+	clientID, err := config.Config.ClientID()
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := client.CancelCommands(query, clientID)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
 func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {

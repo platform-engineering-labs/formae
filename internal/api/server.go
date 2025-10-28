@@ -35,6 +35,7 @@ const (
 	CommandsRoute          = BasePath + "/commands"
 	CommandStatusRoute     = BasePath + "/commands/:id/status"
 	ListCommandStatusRoute = BasePath + "/commands/status"
+	CancelCommandsRoute    = BasePath + "/commands/cancel"
 	ListResourcesRoute     = BasePath + "/resources"
 	StatsRoute             = BasePath + "/stats"
 	MetricsRoute           = BasePath + "/metrics"
@@ -178,6 +179,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.POST(CommandsRoute, s.SubmitFormaCommand)
 	e.GET(CommandStatusRoute, s.CommandStatus)
 	e.GET(ListCommandStatusRoute, s.ListCommandStatus)
+	e.POST(CancelCommandsRoute, s.CancelCommands)
 
 	// Resource extraction endpoint
 	e.GET(ListResourcesRoute, s.ListResources)
@@ -538,6 +540,37 @@ func mapError(c echo.Context, err error) error {
 	}
 
 	return nil
+}
+
+// @Summary Cancel commands
+// @Description Cancels commands that are currently in progress. Can cancel either the most recent command or commands matching a query.
+// @Tags commands
+// @Produce json
+// @Param Client-ID header string true "Unique identifier for the client."
+// @Param query query string false "Optional query string to select commands to cancel. If not provided, cancels the most recent command."
+// @Success 202 {object} apimodel.CancelCommandResponse "Accepted: Commands are being canceled."
+// @Success 404 {string} string "Not Found: No in-progress commands found to cancel."
+// @Failure 400 {string} string "Bad Request: Invalid query or missing Client-ID."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /commands/cancel [post]
+func (s *Server) CancelCommands(c echo.Context) error {
+	clientID := c.Request().Header.Get("Client-ID")
+	if clientID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Client-ID header is required")
+	}
+
+	query := c.QueryParam("query")
+
+	result, err := s.metastructure.CancelCommandsByQuery(query, clientID)
+	if err != nil {
+		return mapError(c, err)
+	}
+
+	if result == nil || len(result.CommandIDs) == 0 {
+		return c.NoContent(http.StatusNotFound)
+	}
+
+	return c.JSON(http.StatusAccepted, result)
 }
 
 // apiError is a helper to wrap error data in ErrorResponse[T] and return as json

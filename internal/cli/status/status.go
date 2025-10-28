@@ -284,7 +284,7 @@ func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusO
 
 		allFinished := true
 		for _, cmdStatus := range status.Commands {
-			if cmdStatus.State != "Success" && cmdStatus.State != "Failed" {
+			if cmdStatus.State != "Success" && cmdStatus.State != "Failed" && cmdStatus.State != "Canceled" {
 				allFinished = false
 				break
 			}

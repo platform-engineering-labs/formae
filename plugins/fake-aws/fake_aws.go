@@ -23,6 +23,9 @@ var _ plugin.ResourcePlugin = FakeAWS{}
 // Maintain known symbol reference
 var Plugin = FakeAWS{}
 
+// MaxRequestsPerSecond allows tests to control the rate limit
+var MaxRequestsPerSecond int = 5
+
 func (s FakeAWS) Name() string {
 	return "fake-aws"
 }
@@ -71,14 +74,8 @@ func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	}
 }
 
-// MaxRequestsPerSecondOverride allows tests to override the rate limit
-var MaxRequestsPerSecondOverride *int
-
 func (s FakeAWS) MaxRequestsPerSecond() int {
-	if MaxRequestsPerSecondOverride != nil {
-		return *MaxRequestsPerSecondOverride
-	}
-	return 5
+	return MaxRequestsPerSecond
 }
 
 func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error) {

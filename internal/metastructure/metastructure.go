@@ -44,6 +44,7 @@ type MetastructureAPI interface {
 	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	CancelCommand(commandID string, clientID string) error
+	CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ForceSync() error
@@ -476,6 +477,47 @@ func (m *Metastructure) CancelCommand(commandID string, clientID string) error {
 	}
 
 	return nil
+}
+
+func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
+	var commandsToCancel []*forma_command.FormaCommand
+	var err error
+
+	if query != "" {
+		// Cancel by query
+		q := querier.NewBlugeQuerier(m.Datastore)
+		commandsToCancel, err = q.QueryStatus(query, clientID, 100) // limit to 100 commands
+		if err != nil {
+			slog.Debug("Cannot get forma commands from query", "error", err)
+			return nil, err
+		}
+	} else {
+		// Cancel most recent command
+		command, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
+		if err != nil {
+			slog.Debug("Cannot get most recent forma command", "error", err)
+			return nil, err
+		}
+		commandsToCancel = []*forma_command.FormaCommand{command}
+	}
+
+	// Filter to only InProgress commands
+	var canceledCommandIDs []string
+	for _, cmd := range commandsToCancel {
+		if cmd.State == forma_command.CommandStateInProgress {
+			err := m.CancelCommand(cmd.ID, clientID)
+			if err != nil {
+				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
+				// Continue with other commands even if one fails
+				continue
+			}
+			canceledCommandIDs = append(canceledCommandIDs, cmd.ID)
+		}
+	}
+
+	return &apimodel.CancelCommandResponse{
+		CommandIDs: canceledCommandIDs,
+	}, nil
 }
 
 func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {

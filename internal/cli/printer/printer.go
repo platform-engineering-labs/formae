@@ -143,6 +143,15 @@ func (p *HumanReadablePrinter[T]) Print(v any, opts PrintOptions) error {
 		if err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}
+	case *apimodel.CancelCommandResponse:
+		output, err := renderer.RenderCancelCommandResponse(v)
+		if err != nil {
+			return fmt.Errorf("render cancel command response: %w", err)
+		}
+		_, err = p.w.Write([]byte(output))
+		if err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported type: %T", v)
 	}

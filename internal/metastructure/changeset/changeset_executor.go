@@ -231,7 +231,7 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 			for _, update := range group.Updates {
 				if update.URI() == message.Uri && update.State == resource_update.ResourceUpdateStateInProgress {
 					update.State = message.State
-					proc.Log().Info("In-progress resource finished during cancellation",
+					proc.Log().Debug("In-progress resource finished during cancellation",
 						"uri", message.Uri,
 						"finalState", message.State)
 					break
@@ -251,13 +251,13 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 
 		// If no more in-progress resources, transition to Canceled
 		if inProgressCount == 0 {
-			proc.Log().Info("All in-progress resources completed, transitioning to Canceled",
+			proc.Log().Debug("All in-progress resources completed, transitioning to Canceled",
 				"commandID", data.changeset.CommandID)
 			return StateCanceled, data, nil, nil
 		}
 
 		// Still waiting for more resources to finish
-		proc.Log().Info("Still waiting for in-progress resources during cancellation",
+		proc.Log().Debug("Still waiting for in-progress resources during cancellation",
 			"commandID", data.changeset.CommandID,
 			"remainingCount", inProgressCount)
 		return state, data, nil, nil
@@ -383,7 +383,7 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 }
 
 func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
-	proc.Log().Info("ChangesetExecutor received cancel request", "commandID", message.CommandID)
+	proc.Log().Debug("ChangesetExecutor received cancel request", "commandID", message.CommandID)
 
 	// Collect resources by state
 	var urisToCancel []pkgmodel.FormaeURI
@@ -415,7 +415,7 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 			proc.Log().Error("Failed to mark resources as canceled", "commandID", data.changeset.CommandID, "error", err)
 		}
 
-		proc.Log().Info("Marked NotStarted resources as canceled",
+		proc.Log().Debug("Marked NotStarted resources as canceled",
 			"commandID", message.CommandID,
 			"canceledCount", len(urisToCancel))
 	}
@@ -424,13 +424,13 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 	var nextState gen.Atom
 	if inProgressCount > 0 {
 		// We have in-progress resources - transition to Canceling state and wait for them to finish
-		proc.Log().Info("Command is canceling, waiting for in-progress resources to complete",
+		proc.Log().Debug("Command is canceling, waiting for in-progress resources to complete",
 			"commandID", message.CommandID,
 			"inProgressCount", inProgressCount)
 		nextState = StateCanceling
 	} else {
 		// No in-progress resources - transition directly to Canceled
-		proc.Log().Info("Command canceled immediately (no in-progress resources)",
+		proc.Log().Debug("Command canceled immediately (no in-progress resources)",
 			"commandID", message.CommandID)
 		nextState = StateCanceled
 	}
