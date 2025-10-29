@@ -8,7 +8,7 @@
 projectName = "static-website"
 environment = "dev"
 bucketSuffix = "-uber-unique-id"
-region = "us-east-2"
+region = "us-east-1"
 domainName = "test.platform.engineering"
 
 // CloudFront configuration
