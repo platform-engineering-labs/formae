@@ -43,6 +43,10 @@ type CommandID struct {
 	CommandID string `json:"CommandId"`
 }
 
+type CancelCommandResponse struct {
+	CommandIDs []string `json:"CommandIds"`
+}
+
 type ResourceUpdate struct {
 	ResourceID      string            `json:"ResourceId"`
 	ResourceType    string            `json:"ResourceType"`
@@ -72,15 +76,14 @@ const (
 )
 
 const (
-	ResourceUpdateStateUnknown          = "Unknown"
-	ResourceUpdateStateNotStarted       = "NotStarted"
-	ResourceUpdateStatePending          = "Pending"
-	ResourceUpdateStateInProgress       = "InProgress"
-	ResourceUpdateStateFailed           = "Failed"
-	ResourceUpdateStateSuccess          = "Success"
-	ResourceUpdateStateCancelInProgress = "CancelInProgress"
-	ResourceUpdateStateCancelComplete   = "CancelComplete"
-	ResourceUpdateStateRejected         = "Rejected"
+	ResourceUpdateStateUnknown    = "Unknown"
+	ResourceUpdateStateNotStarted = "NotStarted"
+	ResourceUpdateStatePending    = "Pending"
+	ResourceUpdateStateInProgress = "InProgress"
+	ResourceUpdateStateFailed     = "Failed"
+	ResourceUpdateStateSuccess    = "Success"
+	ResourceUpdateStateCanceled   = "Canceled"
+	ResourceUpdateStateRejected   = "Rejected"
 )
 
 type Stats struct {

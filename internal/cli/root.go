@@ -14,6 +14,7 @@ import (
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/agent"
 	"github.com/platform-engineering-labs/formae/internal/cli/apply"
+	"github.com/platform-engineering-labs/formae/internal/cli/cancel"
 	"github.com/platform-engineering-labs/formae/internal/cli/clean"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
@@ -182,6 +183,7 @@ func init() {
 	rootCmd.SetUsageTemplate(cmd.RootCmdUsageTemplate)
 
 	rootCmd.AddCommand(apply.ApplyCmd())
+	rootCmd.AddCommand(cancel.CancelCmd())
 	rootCmd.AddCommand(clean.CleanCmd())
 	rootCmd.AddCommand(eval.EvalCmd())
 	rootCmd.AddCommand(agent.AgentCmd())

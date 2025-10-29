@@ -188,6 +188,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/commands/cancel": {
+            "post": {
+                "description": "Cancels commands that are currently in progress. Can cancel either the most recent command or commands matching a query.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "commands"
+                ],
+                "summary": "Cancel commands",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Unique identifier for the client.",
+                        "name": "Client-ID",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional query string to select commands to cancel. If not provided, cancels the most recent command.",
+                        "name": "query",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted: Commands are being canceled.",
+                        "schema": {
+                            "$ref": "#/definitions/model.CancelCommandResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request: Invalid query or missing Client-ID.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No in-progress commands found to cancel.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/commands/status": {
             "get": {
                 "description": "Retrieves the statuses of multiple Forma commands based on a query string.",
@@ -388,6 +441,17 @@ const docTemplate = `{
                 },
                 "Text": {
                     "type": "string"
+                }
+            }
+        },
+        "model.CancelCommandResponse": {
+            "type": "object",
+            "properties": {
+                "CommandIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

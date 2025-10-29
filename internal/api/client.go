@@ -189,6 +189,37 @@ func (c *Client) DestroyByQuery(query string, simulate bool, clientID string) (*
 	}
 }
 
+func (c *Client) CancelCommands(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
+	var result apimodel.CancelCommandResponse
+
+	req := c.resty.R().
+		SetResult(&result).
+		SetHeader("Client-ID", clientID)
+
+	if query != "" {
+		req.SetQueryParam("query", query)
+	}
+
+	resp, err := req.Post(c.endpoint + "/api/v1/commands/cancel")
+	if err != nil {
+		return nil, fmt.Errorf("failed to cancel commands: %w", err)
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	switch resp.StatusCode() {
+	case http.StatusAccepted:
+		return &result, nil
+	case http.StatusNotFound:
+		return nil, nil
+	case http.StatusBadRequest:
+		return c.parseCancelCommandsErrorResponse(resp.Body)
+	default:
+		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
 // parseSubmitCommandErrorResponse parses the ErrorResponse[T] from the API and returns an appropriate error
 func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.SubmitCommandResponse, error) {
 	bodyBytes, readErr := io.ReadAll(body)
@@ -308,6 +339,33 @@ func (c *Client) parseListCommandStatusErrorResponse(body io.ReadCloser) (*apimo
 
 // parseListResourcesErrorResponse parses the ErrorResponse[T] from the API and returns an appropriate error
 func (c *Client) parseListResourcesErrorResponse(body io.ReadCloser) (*pkgmodel.Forma, error) {
+	bodyBytes, readErr := io.ReadAll(body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read error response body: %w", readErr)
+	}
+
+	var baseError struct {
+		Error apimodel.APIError `json:"error"`
+	}
+	if err := json.Unmarshal(bodyBytes, &baseError); err != nil {
+		return nil, fmt.Errorf("failed to parse error type: %w", err)
+	}
+
+	switch baseError.Error {
+	case apimodel.InvalidQuery:
+		var errResp apimodel.ErrorResponse[apimodel.InvalidQueryError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse InvalidQueryError error: %w", err)
+		}
+		return nil, &errResp
+
+	default:
+		return nil, fmt.Errorf("unknown error type: %s", baseError.Error)
+	}
+}
+
+// parseCancelCommandsErrorResponse parses the ErrorResponse[T] from the API and returns an appropriate error
+func (c *Client) parseCancelCommandsErrorResponse(body io.ReadCloser) (*apimodel.CancelCommandResponse, error) {
 	bodyBytes, readErr := io.ReadAll(body)
 	if readErr != nil {
 		return nil, fmt.Errorf("failed to read error response body: %w", readErr)

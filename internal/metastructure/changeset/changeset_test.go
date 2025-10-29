@@ -525,6 +525,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 		t.Fatalf("Expected vpc delete to be executable after subnet-1 delete")
 	}
 }
+
 func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	var (
 		vpc2KsuidURI    = pkgmodel.NewFormaeURI(util.NewID(), "")

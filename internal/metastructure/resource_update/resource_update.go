@@ -40,15 +40,14 @@ const (
 	OperationRead    = types.OperationRead
 	OperationReplace = types.OperationReplace
 
-	ResourceUpdateStateUnknown          = types.ResourceUpdateStateUnknown
-	ResourceUpdateStateNotStarted       = types.ResourceUpdateStateNotStarted
-	ResourceUpdateStatePending          = types.ResourceUpdateStatePending
-	ResourceUpdateStateInProgress       = types.ResourceUpdateStateInProgress
-	ResourceUpdateStateFailed           = types.ResourceUpdateStateFailed
-	ResourceUpdateStateSuccess          = types.ResourceUpdateStateSuccess
-	ResourceUpdateStateCancelInProgress = types.ResourceUpdateStateCancelInProgress
-	ResourceUpdateStateCancelComplete   = types.ResourceUpdateStateCancelComplete
-	ResourceUpdateStateRejected         = types.ResourceUpdateStateRejected
+	ResourceUpdateStateUnknown    = types.ResourceUpdateStateUnknown
+	ResourceUpdateStateNotStarted = types.ResourceUpdateStateNotStarted
+	ResourceUpdateStatePending    = types.ResourceUpdateStatePending
+	ResourceUpdateStateInProgress = types.ResourceUpdateStateInProgress
+	ResourceUpdateStateFailed     = types.ResourceUpdateStateFailed
+	ResourceUpdateStateSuccess    = types.ResourceUpdateStateSuccess
+	ResourceUpdateStateCanceled   = types.ResourceUpdateStateCanceled
+	ResourceUpdateStateRejected   = types.ResourceUpdateStateRejected
 )
 
 // ResourceUpdate represents an update to a resource in the system. A ResourceUpdate is a logical operation
