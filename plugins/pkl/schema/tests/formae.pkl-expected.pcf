@@ -69,7 +69,8 @@ examples {
       Config {
         Region = "us-east-1"
         AccessKey = "test-key"
-      }
+      }     
+      Discoverable = true
     }
   }
   ["Test Resource - fields()"] {
