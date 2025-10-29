@@ -213,7 +213,7 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 	}
 	proc.Log().Debug("Starting resource discovery", "timestamp", data.timeStarted)
 
-	allTargets, err := data.ds.LoadDiscoverableTargetsDistinctRegion()
+	allTargets, err := data.ds.LoadDiscoverableTargetsDistinctConfig()
 	if err != nil {
 		proc.Log().Error("Discovery: failed to load targets from datastore", "error", err)
 		allTargets = []*pkgmodel.Target{}
@@ -648,21 +648,16 @@ func renderSummary(summary map[string]int) string {
 	return builder.String()
 }
 
-// migrateScanTargetsToDatabase migrates config-based scan_targets to the database
-// This provides one-release grace period backward compatibility
+// migrateScanTargetsToDatabase migrates config-based scan_targets to the database.
+// If a target exists in both config and DB, it will be updated to discoverable=true.
 func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel.DiscoveryConfig, proc gen.Process) error {
-	// If no scan_targets in config, nothing to migrate
 	if len(discoveryCfg.ScanTargets) == 0 {
 		return nil
 	}
+	proc.Log().Warning("DEPRECATION WARNING: scan_targets in config file are deprecated. Please use discoverable targets in forma files instead. These config targets will be automatically marked as discoverable.")
 
-	proc.Log().Error("DEPRECATION WARNING: scan_targets in config file are deprecated. Please use discoverable targets in forma files instead. These config targets will be automatically migrated to the database.")
-
-	migratedCount := 0
-	errorCount := 0
-
+	createdCount, updatedCount, errorCount := 0, 0, 0
 	for _, configTarget := range discoveryCfg.ScanTargets {
-		// Check if target already exists in database
 		existingTarget, err := ds.LoadTarget(configTarget.Label)
 		if err != nil {
 			proc.Log().Error("Failed to check if target exists in database", "target", configTarget.Label, "error", err)
@@ -670,30 +665,38 @@ func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel
 			continue
 		}
 
-		// If target already exists, skip migration (database takes precedence)
 		if existingTarget != nil {
-			proc.Log().Debug("Target already exists in database, skipping migration", "target", configTarget.Label)
-			continue
+			if !existingTarget.Discoverable {
+				existingTarget.Discoverable = true
+				_, err = ds.UpdateTarget(existingTarget)
+				if err != nil {
+					proc.Log().Error("Failed to update target to discoverable", "target", configTarget.Label, "error", err)
+					errorCount++
+					continue
+				}
+				proc.Log().Info("Updated existing target to discoverable", "target", configTarget.Label)
+				updatedCount++
+			} else {
+				proc.Log().Debug("Target already discoverable, no update needed", "target", configTarget.Label)
+			}
+		} else {
+			targetToCreate := configTarget
+			targetToCreate.Discoverable = true
+
+			_, err = ds.CreateTarget(&targetToCreate)
+			if err != nil {
+				proc.Log().Error("Failed to create scan_target in database", "target", configTarget.Label, "error", err)
+				errorCount++
+				continue
+			}
+
+			proc.Log().Debug("Created scan_target in database", "target", configTarget.Label)
+			createdCount++
 		}
-
-		// Migrate config target to database with discoverable = true
-		targetToMigrate := configTarget
-		targetToMigrate.Discoverable = true // Ensure migrated targets are discoverable
-
-		_, err = ds.CreateTarget(&targetToMigrate)
-		if err != nil {
-			proc.Log().Error("Failed to migrate scan_target to database", "target", configTarget.Label, "error", err)
-			errorCount++
-			continue
-		}
-
-		proc.Log().Info("Migrated scan_target to database", "target", configTarget.Label)
-		migratedCount++
 	}
 
-	if migratedCount > 0 {
-		proc.Log().Info("Completed scan_targets migration", "migrated", migratedCount, "errors", errorCount)
-		proc.Log().Error("MIGRATION COMPLETE: Please remove scan_targets from your config file and use discoverable targets in forma files instead. In the next release, scan_targets in config will be completely ignored.")
+	if createdCount > 0 || updatedCount > 0 {
+		proc.Log().Warning("MIGRATION COMPLETE: Please remove scan_targets from your config file and use discoverable targets in forma files instead. In the next release, scan_targets in config will be completely ignored.")
 	}
 
 	return nil

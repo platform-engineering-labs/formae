@@ -207,7 +207,7 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		version INTEGER NOT NULL,
 		namespace TEXT NOT NULL,
 		config JSONB,
-		discoverable BOOLEAN DEFAULT TRUE,
+		discoverable BOOLEAN DEFAULT FALSE,
 		PRIMARY KEY (label, version)
 	)`)
 	if err != nil {
@@ -215,7 +215,7 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		return nil, err
 	}
 
-	_, err = d.pool.Exec(context.Background(), `ALTER TABLE targets ADD COLUMN IF NOT EXISTS discoverable BOOLEAN DEFAULT TRUE`)
+	_, err = d.pool.Exec(context.Background(), `ALTER TABLE targets ADD COLUMN IF NOT EXISTS discoverable BOOLEAN DEFAULT FALSE`)
 	if err != nil {
 		slog.Warn("Could not add discoverable column to targets table", "error", err)
 	}
@@ -1032,8 +1032,8 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	return targets, rows.Err()
 }
 
-func (d DatastorePostgres) LoadDiscoverableTargetsDistinctRegion() ([]*pkgmodel.Target, error) {
-	// Get latest version per label where discoverable = true, deduplicated by region using DISTINCT ON
+func (d DatastorePostgres) LoadDiscoverableTargetsDistinctConfig() ([]*pkgmodel.Target, error) {
+	// Get latest version per label where discoverable = true, deduplicated by config using DISTINCT ON
 	query := `
 	WITH latest_targets AS (
 		SELECT label, version, namespace, config, discoverable
@@ -1046,9 +1046,9 @@ func (d DatastorePostgres) LoadDiscoverableTargetsDistinctRegion() ([]*pkgmodel.
 			AND t2.version > t1.version
 		)
 	)
-	SELECT DISTINCT ON (config->>'region') label, version, namespace, config, discoverable
+	SELECT DISTINCT ON (config) label, version, namespace, config, discoverable
 	FROM latest_targets
-	ORDER BY config->>'region', version DESC`
+	ORDER BY config, version DESC`
 
 	rows, err := d.pool.Query(context.Background(), query)
 	if err != nil {

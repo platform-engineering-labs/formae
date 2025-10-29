@@ -151,7 +151,7 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 		version INTEGER NOT NULL,
 		namespace TEXT NOT NULL,
 		config TEXT,
-		discoverable INTEGER DEFAULT 1,
+		discoverable INTEGER DEFAULT 0,
 		PRIMARY KEY (label, version)
 		)`)
 	if err != nil {
@@ -159,7 +159,7 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 		return nil, err
 	}
 
-	_, err = d.conn.Exec(`ALTER TABLE targets ADD COLUMN discoverable INTEGER DEFAULT 1`)
+	_, err = d.conn.Exec(`ALTER TABLE targets ADD COLUMN discoverable INTEGER DEFAULT 0`)
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		slog.Warn("Could not add discoverable column to targets table", "error", err)
 	}
@@ -1059,9 +1059,9 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	return targets, rows.Err()
 }
 
-func (d DatastoreSQLite) LoadDiscoverableTargetsDistinctRegion() ([]*pkgmodel.Target, error) {
+func (d DatastoreSQLite) LoadDiscoverableTargetsDistinctConfig() ([]*pkgmodel.Target, error) {
 	// Get latest version per label where discoverable = true
-	// Deduplicate by region across all namespaces
+	// Deduplicate by config across all namespaces
 	query := `
 		WITH latest_targets AS (
 			SELECT label, version, namespace, config, discoverable
@@ -1076,7 +1076,7 @@ func (d DatastoreSQLite) LoadDiscoverableTargetsDistinctRegion() ([]*pkgmodel.Ta
 		)
 		SELECT label, version, namespace, config, discoverable
 		FROM latest_targets
-		GROUP BY json_extract(config, '$.region')
+		GROUP BY config
 		HAVING version = MAX(version)`
 
 	rows, err := d.conn.Query(query)
