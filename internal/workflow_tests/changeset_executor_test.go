@@ -136,6 +136,14 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		defer def()
 		assert.NoError(t, err)
 
+		_, err = m.Datastore.CreateTarget(&pkgmodel.Target{
+			Label:        "test-target",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{}`),
+			Discoverable: false,
+		})
+		assert.NoError(t, err)
+
 		messages := make(chan any, 10)
 		_, err = testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
@@ -474,7 +482,11 @@ func newTestResourceUpdate(label string, dependencies []pkgmodel.FormaeURI, reso
 			Properties: json.RawMessage(properties),
 		},
 		ResourceTarget: pkgmodel.Target{
-			Label: "test-target",
+			Label:        "test-target",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{}`),
+			Discoverable: false,
+			Version:      1,
 		},
 		Operation:            resource_update.OperationCreate,
 		State:                resource_update.ResourceUpdateStateNotStarted,
