@@ -21,7 +21,7 @@ import (
 func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 	tests := []struct {
 		name           string
-		forma *pkgmodel.Forma
+		forma          *pkgmodel.Forma
 		existingStacks []*pkgmodel.Stack
 		setupDatastore func(*mockDatastore)
 		expectedCount  int

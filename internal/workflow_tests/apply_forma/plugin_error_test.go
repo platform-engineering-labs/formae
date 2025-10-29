@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-        "github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"

@@ -83,7 +83,7 @@ func TestTargetUpdate_HasChange_NoChange(t *testing.T) {
 
 func TestValidateImmutableFields_Success_IdenticalFields(t *testing.T) {
 	config := json.RawMessage(`{"region": "us-east-1", "account": "123456789"}`)
-	
+
 	existing := &pkgmodel.Target{
 		Label:     "test-target",
 		Namespace: "production",
@@ -119,7 +119,7 @@ func TestValidateImmutableFields_Success_EquivalentConfig(t *testing.T) {
 
 func TestValidateImmutableFields_Error_NamespaceMismatch(t *testing.T) {
 	config := json.RawMessage(`{"region": "us-east-1"}`)
-	
+
 	existing := &pkgmodel.Target{
 		Label:     "test-target",
 		Namespace: "production",
@@ -133,9 +133,9 @@ func TestValidateImmutableFields_Error_NamespaceMismatch(t *testing.T) {
 	}
 
 	err := ValidateImmutableFields(existing, new)
-	
+
 	require.Error(t, err)
-	
+
 	var targetErr model.TargetAlreadyExistsError
 	require.ErrorAs(t, err, &targetErr)
 	assert.Equal(t, "test-target", targetErr.TargetLabel)
@@ -158,9 +158,9 @@ func TestValidateImmutableFields_Error_ConfigMismatch(t *testing.T) {
 	}
 
 	err := ValidateImmutableFields(existing, new)
-	
+
 	require.Error(t, err)
-	
+
 	var targetErr model.TargetAlreadyExistsError
 	require.ErrorAs(t, err, &targetErr)
 	assert.Equal(t, "test-target", targetErr.TargetLabel)
@@ -183,9 +183,9 @@ func TestValidateImmutableFields_Error_ConfigMismatch_EmptyVsNonEmpty(t *testing
 	}
 
 	err := ValidateImmutableFields(existing, new)
-	
+
 	require.Error(t, err)
-	
+
 	var targetErr model.TargetAlreadyExistsError
 	require.ErrorAs(t, err, &targetErr)
 	assert.Equal(t, "config", targetErr.MismatchType)
@@ -205,9 +205,9 @@ func TestValidateImmutableFields_Error_ConfigMismatch_NilVsNonNil(t *testing.T) 
 	}
 
 	err := ValidateImmutableFields(existing, new)
-	
+
 	require.Error(t, err)
-	
+
 	var targetErr model.TargetAlreadyExistsError
 	require.ErrorAs(t, err, &targetErr)
 	assert.Equal(t, "config", targetErr.MismatchType)

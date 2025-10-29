@@ -97,7 +97,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		defer datastore.CleanUp()
 
 		app1 := &forma_command.FormaCommand{
-			ID: util.NewID(),
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
@@ -109,7 +109,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app2 := &forma_command.FormaCommand{
-			ID: util.NewID(),
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
@@ -123,7 +123,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app3 := &forma_command.FormaCommand{
-			ID: util.NewID(),
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
@@ -137,7 +137,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app4 := &forma_command.FormaCommand{
-			ID: util.NewID(),
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
@@ -224,7 +224,7 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 		defer datastore.CleanUp()
 
 		app1 := &forma_command.FormaCommand{
-			ID:   util.NewID(),
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{

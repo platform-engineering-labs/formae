@@ -256,15 +256,15 @@ func (m *mockTargetDatastore) LoadTarget(label string) (*pkgmodel.Target, error)
 	if m.shouldError {
 		return nil, assert.AnError
 	}
-	
+
 	if m.targets == nil {
 		return nil, nil
 	}
-	
+
 	target, exists := m.targets[label]
 	if !exists {
 		return nil, nil
 	}
-	
+
 	return target, nil
 }

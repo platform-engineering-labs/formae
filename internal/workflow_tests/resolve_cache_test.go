@@ -56,7 +56,7 @@ func TestResolveCache(t *testing.T) {
 			Namespace: "test-namespace",
 			Config:    json.RawMessage(`{}`),
 		}
-		
+
 		targetUpdate := target_update.TargetUpdate{
 			Target:    target,
 			Operation: target_update.TargetOperationCreate,
@@ -81,8 +81,8 @@ func TestResolveCache(t *testing.T) {
 				Ksuid:      util.NewID(),
 			},
 			ResourceTarget: target,
-			State:   resource_update.ResourceUpdateStateSuccess,
-			Version: "test-persist-hash-1",
+			State:          resource_update.ResourceUpdateStateSuccess,
+			Version:        "test-persist-hash-1",
 			ProgressResult: []resource.ProgressResult{
 				{
 					Operation:          resource.OperationCreate,

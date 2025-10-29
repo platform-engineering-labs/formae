@@ -595,7 +595,7 @@ func TestDiscovery_NoDiscoverableTargets_CompletesImmediately(t *testing.T) {
 
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
-		
+
 		time.Sleep(time.Millisecond * 500)
 		stack, err := m.Datastore.LoadStack("$unmanaged")
 		require.NoError(t, err)
