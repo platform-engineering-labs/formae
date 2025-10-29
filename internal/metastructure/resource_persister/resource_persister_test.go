@@ -610,6 +610,378 @@ func TestResourcePersister_IdempotentCreate(t *testing.T) {
 	assert.Equal(t, hash1, hash2, "Hashes should be the same for idempotent operations")
 }
 
+func TestResourcePersister_ValidateFields(t *testing.T) {
+	t.Run("NestedFieldWithMissingParent", func(t *testing.T) {
+		// Parent field is missing - should pass validation
+		resource := pkgmodel.Resource{
+			Label: "test-record",
+			Type:  "AWS::Route53::RecordSet",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "ResourceRecords": ["192.168.1.1"]
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "AliasTarget", "ResourceRecords"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                {Required: true},
+					"Type":                {Required: true},
+					"AliasTarget":         {Required: false},
+					"AliasTarget.DNSName": {Required: true}, // This should not be validated if AliasTarget is missing
+					"ResourceRecords":     {},
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when parent field is missing")
+	})
+
+	t.Run("NestedFieldWithNullParent", func(t *testing.T) {
+		// Parent field is null - should pass validation
+		resource := pkgmodel.Resource{
+			Label: "test-record-null",
+			Type:  "AWS::Route53::RecordSet",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "AliasTarget": null,
+                "ResourceRecords": ["192.168.1.1"]
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "AliasTarget", "ResourceRecords"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                {Required: true},
+					"Type":                {Required: true},
+					"AliasTarget":         {Required: false},
+					"AliasTarget.DNSName": {Required: true}, // This should not be validated if AliasTarget is null
+					"ResourceRecords":     {},
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when parent field is null")
+	})
+
+	t.Run("NestedFieldWithEmptyParent", func(t *testing.T) {
+		// Parent field is empty - should fail validation
+		resource := pkgmodel.Resource{
+			Label: "test-record-empty",
+			Type:  "AWS::Route53::RecordSet",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "AliasTarget": {},
+                "ResourceRecords": ["192.168.1.1"]
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "AliasTarget", "ResourceRecords"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                {Required: true},
+					"Type":                {Required: true},
+					"AliasTarget":         {Required: false},
+					"AliasTarget.DNSName": {Required: true}, // This should be validated since AliasTarget is present but empty
+					"ResourceRecords":     {},
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.Error(t, err, "Validation should fail when parent field is empty but child is required")
+		assert.Contains(t, err.Error(), "AliasTarget.DNSName")
+	})
+
+	t.Run("NestedFieldWithPresentParentMissingChild", func(t *testing.T) {
+		// Parent field is present but child field is missing - should fail validation
+		resource := pkgmodel.Resource{
+			Label: "test-record-missing-child",
+			Type:  "AWS::Route53::RecordSet",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "AliasTarget": {
+                    "HostedZoneId": "Z123456789"
+                }
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "AliasTarget", "ResourceRecords"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                     {Required: true},
+					"Type":                     {Required: true},
+					"AliasTarget":              {Required: false},
+					"AliasTarget.DNSName":      {Required: true},
+					"AliasTarget.HostedZoneId": {Required: false},
+					"ResourceRecords":          {},
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.Error(t, err, "Validation should fail when required child field is missing but parent exists")
+		assert.Contains(t, err.Error(), "AliasTarget.DNSName")
+	})
+
+	t.Run("NestedFieldWithCompleteData", func(t *testing.T) {
+		// Both parent and child fields are present - should pass validation
+		resource := pkgmodel.Resource{
+			Label: "test-record-complete",
+			Type:  "AWS::Route53::RecordSet",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "AliasTarget": {
+                    "DNSName": "example.elb.amazonaws.com",
+                    "HostedZoneId": "Z123456789"
+                }
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "AliasTarget", "ResourceRecords"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                     {Required: true},
+					"Type":                     {Required: true},
+					"AliasTarget":              {Required: false},
+					"AliasTarget.DNSName":      {Required: true}, // This should be validated and pass
+					"AliasTarget.HostedZoneId": {Required: false},
+					"ResourceRecords":          {},
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when both parent and child fields are present")
+	})
+
+	t.Run("MultiLevelMissingLevel1Parent", func(t *testing.T) {
+		// parent1 is missing - parent1.parent2.child should not be required
+		resource := pkgmodel.Resource{
+			Label: "test-multi-level-missing-parent1",
+			Type:  "AWS::TestResource",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A"
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "parent1"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                  {Required: true},
+					"Type":                  {Required: true},
+					"parent1":               {Required: false},
+					"parent1.parent2":       {Required: false},
+					"parent1.parent2.child": {Required: true}, // Should not be validated since parent1 is missing
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when top-level parent is missing")
+	})
+
+	t.Run("MultiLevelNullLevel1Parent", func(t *testing.T) {
+		// parent1 is null - parent1.parent2.child should not be required
+		resource := pkgmodel.Resource{
+			Label: "test-multi-level-null-parent1",
+			Type:  "AWS::TestResource",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "parent1": null
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "parent1"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                  {Required: true},
+					"Type":                  {Required: true},
+					"parent1":               {Required: false},
+					"parent1.parent2":       {Required: false},
+					"parent1.parent2.child": {Required: true}, // Should not be validated since parent1 is null
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when top-level parent is null")
+	})
+
+	t.Run("MultiLevelMissingLevel2Parent", func(t *testing.T) {
+		// parent1 exists but parent2 is missing - parent1.parent2.child should not be required
+		resource := pkgmodel.Resource{
+			Label: "test-multi-level-missing-parent2",
+			Type:  "AWS::TestResource",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "parent1": {
+                    "someOtherField": "value"
+                }
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "parent1"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                  {Required: true},
+					"Type":                  {Required: true},
+					"parent1":               {Required: false},
+					"parent1.parent2":       {Required: false},
+					"parent1.parent2.child": {Required: true}, // Should not be validated since parent2 is missing
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when second-level parent is missing")
+	})
+
+	t.Run("MultiLevelNullLevel2Parent", func(t *testing.T) {
+		// parent1 exists but parent2 is null - parent1.parent2.child should not be required
+		resource := pkgmodel.Resource{
+			Label: "test-multi-level-null-parent2",
+			Type:  "AWS::TestResource",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "parent1": {
+                    "parent2": null,
+                    "someOtherField": "value"
+                }
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "parent1"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                  {Required: true},
+					"Type":                  {Required: true},
+					"parent1":               {Required: false},
+					"parent1.parent2":       {Required: false},
+					"parent1.parent2.child": {Required: true}, // Should not be validated since parent2 is null
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when second-level parent is null")
+	})
+
+	t.Run("MultiLevelMissingChildWithPresentParents", func(t *testing.T) {
+		// Both parents exist but child is missing - should fail validation
+		resource := pkgmodel.Resource{
+			Label: "test-multi-level-missing-child",
+			Type:  "AWS::TestResource",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "parent1": {
+                    "parent2": {
+                        "someOtherField": "value"
+                    }
+                }
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "parent1"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                  {Required: true},
+					"Type":                  {Required: true},
+					"parent1":               {Required: false},
+					"parent1.parent2":       {Required: false},
+					"parent1.parent2.child": {Required: true}, // Should be validated since both parents exist
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.Error(t, err, "Validation should fail when required child field is missing but all parents exist")
+		assert.Contains(t, err.Error(), "parent1.parent2.child")
+	})
+
+	t.Run("MultiLevelCompleteHierarchy", func(t *testing.T) {
+		// Complete hierarchy - should pass validation
+		resource := pkgmodel.Resource{
+			Label: "test-multi-level-complete",
+			Type:  "AWS::TestResource",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "parent1": {
+                    "parent2": {
+                        "child": "required_value"
+                    }
+                }
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "parent1"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                  {Required: true},
+					"Type":                  {Required: true},
+					"parent1":               {Required: false},
+					"parent1.parent2":       {Required: false},
+					"parent1.parent2.child": {Required: true}, // Should pass validation
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.NoError(t, err, "Validation should pass when complete hierarchy is present")
+	})
+
+	t.Run("MultiLevelMixedNestedFields", func(t *testing.T) {
+		// Multiple nested fields with mixed presence
+		resource := pkgmodel.Resource{
+			Label: "test-mixed-nested",
+			Type:  "AWS::TestResource",
+			Properties: json.RawMessage(`{
+                "Name": "test.example.com",
+                "Type": "A",
+                "parent1": {
+                    "parent2": {
+                        "child1": "value1"
+                    }
+                },
+                "otherParent": null
+            }`),
+			Stack:  "test-stack",
+			Target: "test-target",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "Type", "parent1", "otherParent"},
+				Hints: map[string]pkgmodel.FieldHint{
+					"Name":                      {Required: true},
+					"Type":                      {Required: true},
+					"parent1":                   {Required: false},
+					"parent1.parent2":           {Required: false},
+					"parent1.parent2.child1":    {Required: true}, // Should pass - all parents exist
+					"parent1.parent2.child2":    {Required: true}, // Should fail - child2 is missing
+					"otherParent":               {Required: false},
+					"otherParent.requiredChild": {Required: true}, // Should pass - otherParent is null
+				},
+			},
+		}
+
+		err := validateRequiredFields(resource)
+		assert.Error(t, err, "Validation should fail when some required nested fields are missing")
+		assert.Contains(t, err.Error(), "parent1.parent2.child2")
+		assert.NotContains(t, err.Error(), "otherParent.requiredChild")
+	})
+}
+
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.
 // This follows the same pattern as FormaCommandPersister tests.
 func newResourcePersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, datastore.Datastore, error) {
