@@ -1,0 +1,81 @@
+{
+  "Label": "lifeline-task-sg",
+  "Type": "AWS::EC2::SecurityGroup",
+  "Stack": "lifeline",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "GroupId",
+    "Tags": "Tags",
+    "Fields": [
+      "GroupDescription",
+      "GroupName",
+      "Tags",
+      "VpcId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "GroupDescription": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "GroupName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "GroupDescription": "Allow HTTP traffic from ALB",
+    "GroupName": "9ClkHb0LDGP5O3uHmHWKjbCV5-BhTfDTW0xCSU",
+    "Tags": [
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "lifeline"
+      },
+      {
+        "Key": "Name",
+        "Value": "test-task-sg"
+      },
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "lifeline-task-sg"
+      }
+    ],
+    "VpcId": {
+      "$label": "lifeline-vpc",
+      "$property": "VpcId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::VPC",
+      "$value": "vpc-0e9c968d385e19a67"
+    }
+  },
+  "ReadOnlyProperties": {
+    "GroupId": "sg-04c3d08b0ef9b4c58",
+    "Id": "sg-04c3d08b0ef9b4c58"
+  },
+  "NativeID": "sg-04c3d08b0ef9b4c58",
+  "Managed": true,
+  "Ksuid": "34k2mXRs8STiczeH6hI2uyHjMvC"
+}

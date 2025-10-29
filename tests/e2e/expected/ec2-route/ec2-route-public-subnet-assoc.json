@@ -1,0 +1,56 @@
+{
+  "Label": "ec2-route-public-subnet-assoc",
+  "Type": "AWS::EC2::SubnetRouteTableAssociation",
+  "Stack": "ec2-route",
+  "Target": "route-target",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "",
+    "Fields": [
+      "RouteTableId",
+      "SubnetId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "RouteTableId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "SubnetId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "RouteTableId": {
+      "$label": "ec2-route-public-rt",
+      "$property": "RouteTableId",
+      "$res": true,
+      "$stack": "ec2-route",
+      "$type": "AWS::EC2::RouteTable",
+      "$value": "rtb-0f62d4fb459422bb6"
+    },
+    "SubnetId": {
+      "$label": "ec2-route-public-subnet-1",
+      "$property": "SubnetId",
+      "$res": true,
+      "$stack": "ec2-route",
+      "$type": "AWS::EC2::Subnet",
+      "$value": "subnet-0847ab37efaf7d7da"
+    }
+  },
+  "ReadOnlyProperties": {
+    "Id": "rtbassoc-0439fdb6f767223c6"
+  },
+  "NativeID": "rtbassoc-0439fdb6f767223c6",
+  "Managed": true,
+  "Ksuid": "34jhLWP394X2x07l4hZ62lpJWqm"
+}

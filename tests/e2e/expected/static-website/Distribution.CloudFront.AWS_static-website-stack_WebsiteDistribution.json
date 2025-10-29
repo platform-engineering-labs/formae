@@ -8,7 +8,9 @@
     "Tags": "Tags",
     "Fields": [
       "DistributionConfig",
-      "Tags"
+      "Tags",
+      "DistributionConfig.CNAMEs",
+      "DistributionConfig.IPV6Enabled"
     ],
     "Nonprovisionable": false,
     "Hints": {
@@ -17,6 +19,20 @@
         "Persist": false,
         "WriteOnly": false,
         "Required": true,
+        "RequiredOnCreate": false
+      },
+      "DistributionConfig.CNAMEs": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "DistributionConfig.IPV6Enabled": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
         "RequiredOnCreate": false
       },
       "Tags": {
@@ -97,7 +113,7 @@
               "TLSv1"
             ]
           },
-          "DomainName": "static-website-uber-unique-id.s3-website.us-east-2.amazonaws.com",
+          "DomainName": "static-website-uber-unique-id.s3-website.us-east-1.amazonaws.com",
           "Id": "S3Origin",
           "OriginAccessControlId": "",
           "OriginCustomHeaders": [],
@@ -124,10 +140,10 @@
     }
   },
   "ReadOnlyProperties": {
-    "DomainName": "d33jmfuq86ehga.cloudfront.net",
-    "Id": "E3MG989XQU7WTG"
+    "DomainName": "d3rc1qucm8dw9c.cloudfront.net",
+    "Id": "E189HQYHEBMRMR"
   },
-  "NativeID": "E3MG989XQU7WTG",
+  "NativeID": "E189HQYHEBMRMR",
   "Managed": true,
-  "Ksuid": "34OGKjm578k48s0Nd8lIsQH5h5n"
+  "Ksuid": "34jc6XXCwWGPm3QHVZ15xnbbV6T"
 }

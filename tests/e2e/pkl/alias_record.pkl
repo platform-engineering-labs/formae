@@ -49,7 +49,7 @@ local subnet1 = new subnet.Subnet {
     label = "alias-lb-subnet-1"
     vpcId = vpcAlias.res.id
     cidrBlock = "10.0.1.0/24"
-    availabilityZone = "us-east-1a"
+    availabilityZone = "us-east-2a"
     mapPublicIpOnLaunch = true
     tags {
         new formae.Tag {
@@ -63,7 +63,7 @@ local subnet2 = new subnet.Subnet {
     label = "alias-lb-subnet-2"
     vpcId = vpcAlias.res.id
     cidrBlock = "10.0.2.0/24"
-    availabilityZone = "us-east-1b"
+    availabilityZone = "us-east-2b"
     mapPublicIpOnLaunch = true
     tags {
         new formae.Tag {
@@ -161,9 +161,9 @@ forma {
     }
 
     new formae.Target {
-        label = "aws-target"
+        label = "aws-target-east-2"
         config = new aws.Config {
-            region = "us-east-1"
+            region = "us-east-2"
         }
     }
 

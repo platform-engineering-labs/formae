@@ -37,7 +37,7 @@ forma {
   }
 
   new formae.Target {
-    label = "aws-target-hostedzone"
+    label = "aws-target-legacy-record"
     config = new aws.Config {
       region = "us-east-1" // Specify the AWS region
     }

@@ -1,8 +1,8 @@
 {
-  "Label": "WebsiteRecord",
+  "Label": "alias-lb-alias-record",
   "Type": "AWS::Route53::RecordSet",
-  "Stack": "static-website-stack",
-  "Target": "aws-target",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
   "Schema": {
     "Identifier": "Id",
     "Tags": "",
@@ -160,28 +160,35 @@
   "Properties": {
     "AliasTarget": {
       "DNSName": {
-        "$label": "WebsiteDistribution",
-        "$property": "DomainName",
+        "$label": "alias-lb-load-balancer",
+        "$property": "DNSName",
         "$res": true,
-        "$stack": "static-website-stack",
-        "$type": "AWS::CloudFront::Distribution",
-        "$value": "d3rc1qucm8dw9c.cloudfront.net."
+        "$stack": "alias-record-stack",
+        "$type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "$value": "alias-lb-alb-1625220838.us-east-2.elb.amazonaws.com."
       },
-      "EvaluateTargetHealth": false,
-      "HostedZoneId": "Z2FDTNDATAQYW2"
+      "EvaluateTargetHealth": true,
+      "HostedZoneId": {
+        "$label": "alias-lb-load-balancer",
+        "$property": "CanonicalHostedZoneID",
+        "$res": true,
+        "$stack": "alias-record-stack",
+        "$type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "$value": "Z3AADJGX6KTTL2"
+      }
     },
     "HostedZoneId": {
-      "$label": "StaticWebsiteHostedZone",
+      "$label": "alias-lb-hosted-zone",
       "$property": "Id",
       "$res": true,
-      "$stack": "static-website-stack",
+      "$stack": "alias-record-stack",
       "$type": "AWS::Route53::HostedZone",
-      "$value": "Z01421733T4ZA1H8A4HPL"
+      "$value": "Z01434631GXNO9DQ0IQRE"
     },
-    "Name": "test.platform.engineering",
+    "Name": "app.lb.snarf.platform.engineering",
     "Type": "A"
   },
-  "NativeID": "Z01421733T4ZA1H8A4HPL|test.platform.engineering.|A",
+  "NativeID": "Z01434631GXNO9DQ0IQRE|app.lb.snarf.platform.engineering.|A",
   "Managed": true,
-  "Ksuid": "34jc6Z2V2iOdaatl4QsfwhlD2zc"
+  "Ksuid": "34jfpmYPOcNwJjQP0T1ZRuFNuno"
 }

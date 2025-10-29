@@ -1,0 +1,62 @@
+{
+  "Label": "ec2-route-public-rt",
+  "Type": "AWS::EC2::RouteTable",
+  "Stack": "ec2-route",
+  "Target": "route-target",
+  "Schema": {
+    "Identifier": "Ref",
+    "Tags": "Tags",
+    "Fields": [
+      "Tags",
+      "VpcId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "Tags": [
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "ec2-route"
+      },
+      {
+        "Key": "Name",
+        "Value": "ec2-route-public-rt"
+      },
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "ec2-route-public-rt"
+      }
+    ],
+    "VpcId": {
+      "$label": "ec2-route-vpc",
+      "$property": "VpcId",
+      "$res": true,
+      "$stack": "ec2-route",
+      "$type": "AWS::EC2::VPC",
+      "$value": "vpc-06df93f52cae5f1be"
+    }
+  },
+  "ReadOnlyProperties": {
+    "RouteTableId": "rtb-0f62d4fb459422bb6"
+  },
+  "NativeID": "rtb-0f62d4fb459422bb6",
+  "Managed": true,
+  "Ksuid": "34jhLTtIAsud7HxgMfb7lNya1d6"
+}

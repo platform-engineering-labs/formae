@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -120,6 +121,23 @@ func validateRequiredFields(resource pkgmodel.Resource) error {
 	var missingFields []string
 	for field, hint := range resource.Schema.Hints {
 		if hint.Required {
+			if strings.Contains(field, ".") {
+				parts := strings.Split(field, ".")
+				shouldSkip := false
+				for i := 0; i < len(parts)-1; i++ {
+					parentField := strings.Join(parts[:i+1], ".")
+					parentValue, parentFound := resource.GetProperty(parentField)
+					if !parentFound || parentValue == "" {
+						shouldSkip = true
+						break
+
+					}
+				}
+
+				if shouldSkip {
+					continue
+				}
+			}
 			value, found := resource.GetProperty(field)
 			if !found || value == "" {
 				missingFields = append(missingFields, field)

@@ -1,0 +1,62 @@
+{
+  "Label": "lifeline-public-rt",
+  "Type": "AWS::EC2::RouteTable",
+  "Stack": "lifeline",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Ref",
+    "Tags": "Tags",
+    "Fields": [
+      "Tags",
+      "VpcId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "Tags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "lifeline-public-rt"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "lifeline"
+      },
+      {
+        "Key": "Name",
+        "Value": "test-public-rt"
+      }
+    ],
+    "VpcId": {
+      "$label": "lifeline-vpc",
+      "$property": "VpcId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::VPC",
+      "$value": "vpc-0e9c968d385e19a67"
+    }
+  },
+  "ReadOnlyProperties": {
+    "RouteTableId": "rtb-0e68564c659ed870c"
+  },
+  "NativeID": "rtb-0e68564c659ed870c",
+  "Managed": true,
+  "Ksuid": "34k2mWfosW3E8SRfCl37YntGocN"
+}

@@ -1,0 +1,46 @@
+{
+  "Label": "ec2-route-igw",
+  "Type": "AWS::EC2::InternetGateway",
+  "Stack": "ec2-route",
+  "Target": "route-target",
+  "Schema": {
+    "Identifier": "InternetGatewayId",
+    "Tags": "Tags",
+    "Fields": [
+      "Tags"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "Tags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "ec2-route-igw"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "ec2-route"
+      },
+      {
+        "Key": "Name",
+        "Value": "ec2-route-igw"
+      }
+    ]
+  },
+  "ReadOnlyProperties": {
+    "InternetGatewayId": "igw-00f7c5b17ba4d4ce6"
+  },
+  "NativeID": "igw-00f7c5b17ba4d4ce6",
+  "Managed": true,
+  "Ksuid": "34jhLTk8Dyh5VjxGum1jyWsuIZV"
+}

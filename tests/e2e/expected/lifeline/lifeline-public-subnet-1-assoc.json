@@ -1,0 +1,56 @@
+{
+  "Label": "lifeline-public-subnet-1-assoc",
+  "Type": "AWS::EC2::SubnetRouteTableAssociation",
+  "Stack": "lifeline",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "",
+    "Fields": [
+      "RouteTableId",
+      "SubnetId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "RouteTableId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "SubnetId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "RouteTableId": {
+      "$label": "lifeline-public-rt",
+      "$property": "RouteTableId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::RouteTable",
+      "$value": "rtb-0e68564c659ed870c"
+    },
+    "SubnetId": {
+      "$label": "lifeline-public-subnet-1",
+      "$property": "SubnetId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::Subnet",
+      "$value": "subnet-0b961fc48b6409b30"
+    }
+  },
+  "ReadOnlyProperties": {
+    "Id": "rtbassoc-058eaf3022bd024be"
+  },
+  "NativeID": "rtbassoc-058eaf3022bd024be",
+  "Managed": true,
+  "Ksuid": "34k2mZlugBrTuzMs2aWAUQlKmM6"
+}

@@ -1,0 +1,62 @@
+{
+  "Label": "alias-lb-route-table",
+  "Type": "AWS::EC2::RouteTable",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
+  "Schema": {
+    "Identifier": "Ref",
+    "Tags": "Tags",
+    "Fields": [
+      "Tags",
+      "VpcId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "Tags": [
+      {
+        "Key": "Name",
+        "Value": "alias-lb-route-table"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "alias-record-stack"
+      },
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "alias-lb-route-table"
+      }
+    ],
+    "VpcId": {
+      "$label": "alias-lb-vpc",
+      "$property": "VpcId",
+      "$res": true,
+      "$stack": "alias-record-stack",
+      "$type": "AWS::EC2::VPC",
+      "$value": "vpc-0a8e1e3e317737174"
+    }
+  },
+  "ReadOnlyProperties": {
+    "RouteTableId": "rtb-064b85cdd2582325c"
+  },
+  "NativeID": "rtb-064b85cdd2582325c",
+  "Managed": true,
+  "Ksuid": "34jfRA9VXGcOnHJXiAbL66Wy3m1"
+}

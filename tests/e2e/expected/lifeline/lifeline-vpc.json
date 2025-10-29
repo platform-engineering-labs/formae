@@ -1,0 +1,104 @@
+{
+  "Label": "lifeline-vpc",
+  "Type": "AWS::EC2::VPC",
+  "Stack": "lifeline",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "VpcId",
+    "Tags": "Tags",
+    "Fields": [
+      "CidrBlock",
+      "EnableDnsHostnames",
+      "EnableDnsSupport",
+      "InstanceTenancy",
+      "Ipv4IpamPoolId",
+      "Ipv4NetmaskLength",
+      "Tags"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "CidrBlock": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "EnableDnsHostnames": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "EnableDnsSupport": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "InstanceTenancy": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Ipv4IpamPoolId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": true,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Ipv4NetmaskLength": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": true,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "CidrBlock": "10.1.0.0/16",
+    "EnableDnsHostnames": true,
+    "EnableDnsSupport": true,
+    "InstanceTenancy": "default",
+    "Tags": [
+      {
+        "Key": "Name",
+        "Value": "test-vpc"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "lifeline"
+      },
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "lifeline-vpc"
+      }
+    ]
+  },
+  "ReadOnlyProperties": {
+    "CidrBlockAssociations": [
+      "vpc-cidr-assoc-01e1814a74ec5056c"
+    ],
+    "DefaultNetworkAcl": "acl-03f355089f0a35141",
+    "DefaultSecurityGroup": "sg-008cc643348add04f",
+    "Ipv6CidrBlocks": [],
+    "VpcId": "vpc-0e9c968d385e19a67"
+  },
+  "NativeID": "vpc-0e9c968d385e19a67",
+  "Managed": true,
+  "Ksuid": "34k2mYgXmnOnTtTlETQllEIlehG"
+}

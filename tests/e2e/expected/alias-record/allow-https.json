@@ -1,0 +1,134 @@
+{
+  "Label": "allow-https",
+  "Type": "AWS::EC2::SecurityGroupIngress",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "",
+    "Fields": [
+      "CidrIp",
+      "CidrIpv6",
+      "Description",
+      "FromPort",
+      "GroupId",
+      "GroupName",
+      "IpProtocol",
+      "SourcePrefixListId",
+      "SourceSecurityGroupId",
+      "SourceSecurityGroupName",
+      "SourceSecurityGroupOwnerId",
+      "ToPort"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "CidrIp": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "CidrIpv6": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Description": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "FromPort": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GroupId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GroupName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "IpProtocol": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "SourcePrefixListId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SourceSecurityGroupId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SourceSecurityGroupName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SourceSecurityGroupOwnerId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "ToPort": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "CidrIp": "0.0.0.0/0",
+    "Description": "Allow HTTPS traffic",
+    "FromPort": 443,
+    "GroupId": {
+      "$label": "alias-lb-security-group",
+      "$property": "GroupId",
+      "$res": true,
+      "$stack": "alias-record-stack",
+      "$type": "AWS::EC2::SecurityGroup",
+      "$value": "sg-06d9c32f942eb9b3d"
+    },
+    "GroupName": "jVnDzHqajb0GKSJ0jjfKgaI8Q-CdgF2cUozHOw",
+    "IpProtocol": "tcp",
+    "ToPort": 443
+  },
+  "ReadOnlyProperties": {
+    "Id": "sgr-0d406c9e39d1c3ddd"
+  },
+  "NativeID": "sgr-0d406c9e39d1c3ddd",
+  "Managed": true,
+  "Ksuid": "34jfR8JW6li3hujheMJQwLE6y7X"
+}

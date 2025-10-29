@@ -17,7 +17,7 @@ import "@aws/ec2/routetable.pkl"
 import "@aws/ec2/route.pkl"
 import "@aws/ec2/subnetroutetableassociation.pkl"
 
-local stackName = "e2e-ec2-route"
+local stackName = "ec2-route"
 
 local stack: formae.Stack = new {
     label = stackName
@@ -25,7 +25,7 @@ local stack: formae.Stack = new {
 }
 
 local target: formae.Target = new formae.Target {
-    label = "e2e-ec2-route-target"
+    label = "route-target"
     config = new aws.Config {
         region = "eu-central-1"
     }
@@ -79,12 +79,6 @@ local subnetassoc = new subnetroutetableassociation.SubnetRouteTableAssociation 
     routeTableId = nroutetable.res.id
 }
 
-local routeTodelete = new route.Route {
-    label = stackName + "-public-route"
-    routeTableId = "asdf"
-    destinationCidrBlock = "0.0.0.0/0"
-}
-
 properties {
 
 }
@@ -94,10 +88,9 @@ forma {
     target
     nvpc
     nsubnet
-    //nroutetable
-    //igw
-    //attachIgw
-    //publicRoute
-    //subnetassoc
-    //routeTodelete
+    nroutetable
+    igw
+    attachIgw
+    publicRoute
+    subnetassoc
 }
