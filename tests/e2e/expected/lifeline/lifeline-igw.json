@@ -1,0 +1,46 @@
+{
+  "Label": "lifeline-igw",
+  "Type": "AWS::EC2::InternetGateway",
+  "Stack": "lifeline",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "InternetGatewayId",
+    "Tags": "Tags",
+    "Fields": [
+      "Tags"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "Tags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "lifeline-igw"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "lifeline"
+      },
+      {
+        "Key": "Name",
+        "Value": "test-igw"
+      }
+    ]
+  },
+  "ReadOnlyProperties": {
+    "InternetGatewayId": "igw-08a426d1e22a2f8d6"
+  },
+  "NativeID": "igw-08a426d1e22a2f8d6",
+  "Managed": true,
+  "Ksuid": "34k2mdKUF2SpUyJQhQ82bwFhh4a"
+}

@@ -1,0 +1,42 @@
+{
+  "Label": "alias-lb-igw",
+  "Type": "AWS::EC2::InternetGateway",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
+  "Schema": {
+    "Identifier": "InternetGatewayId",
+    "Tags": "Tags",
+    "Fields": [
+      "Tags"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "Tags": [
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "alias-lb-igw"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "alias-record-stack"
+      }
+    ]
+  },
+  "ReadOnlyProperties": {
+    "InternetGatewayId": "igw-0594118d4cbb1727e"
+  },
+  "NativeID": "igw-0594118d4cbb1727e",
+  "Managed": true,
+  "Ksuid": "34jfRB1Ip3PoAY0kNwsokZRboF1"
+}

@@ -2,7 +2,7 @@
   "Label": "1-pel-record-external",
   "Type": "AWS::Route53::RecordSet",
   "Stack": "legacy-record-stack",
-  "Target": "aws-target-hostedzone",
+  "Target": "aws-target-legacy-record",
   "Schema": {
     "Identifier": "Id",
     "Tags": "",
@@ -22,7 +22,9 @@
       "SetIdentifier",
       "TTL",
       "Type",
-      "Weight"
+      "Weight",
+      "AliasTarget.DNSName",
+      "GeoProximityLocation.AWSRegion"
     ],
     "Nonprovisionable": true,
     "Hints": {
@@ -31,6 +33,13 @@
         "Persist": true,
         "WriteOnly": false,
         "Required": false,
+        "RequiredOnCreate": false
+      },
+      "AliasTarget.DNSName": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
         "RequiredOnCreate": false
       },
       "CidrRoutingConfig": {
@@ -62,6 +71,13 @@
         "RequiredOnCreate": false
       },
       "GeoProximityLocation": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GeoProximityLocation.AWSRegion": {
         "CreateOnly": false,
         "Persist": false,
         "WriteOnly": false,
@@ -148,7 +164,7 @@
       "$res": true,
       "$stack": "legacy-record-stack",
       "$type": "AWS::Route53::HostedZone",
-      "$value": "Z08912173CC2WS8HWWRXE"
+      "$value": "Z0207265PMOQ4QK9Z729"
     },
     "Name": "a.snarf.platform.engineering",
     "ResourceRecords": [
@@ -157,7 +173,7 @@
     "TTL": 430,
     "Type": "A"
   },
-  "NativeID": "Z08912173CC2WS8HWWRXE|a.snarf.platform.engineering.|A",
+  "NativeID": "Z0207265PMOQ4QK9Z729|a.snarf.platform.engineering.|A",
   "Managed": true,
-  "Ksuid": "34O4MzFDHd7fPtUrrZVtpRardGC"
+  "Ksuid": "34jaDdkmXjDHSswq3CSidox6Rl2"
 }

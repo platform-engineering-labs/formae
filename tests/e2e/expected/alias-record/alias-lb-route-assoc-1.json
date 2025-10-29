@@ -1,0 +1,56 @@
+{
+  "Label": "alias-lb-route-assoc-1",
+  "Type": "AWS::EC2::SubnetRouteTableAssociation",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "",
+    "Fields": [
+      "RouteTableId",
+      "SubnetId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "RouteTableId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "SubnetId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "RouteTableId": {
+      "$label": "alias-lb-route-table",
+      "$property": "RouteTableId",
+      "$res": true,
+      "$stack": "alias-record-stack",
+      "$type": "AWS::EC2::RouteTable",
+      "$value": "rtb-064b85cdd2582325c"
+    },
+    "SubnetId": {
+      "$label": "alias-lb-subnet-1",
+      "$property": "SubnetId",
+      "$res": true,
+      "$stack": "alias-record-stack",
+      "$type": "AWS::EC2::Subnet",
+      "$value": "subnet-0f6ba83a1e6516ded"
+    }
+  },
+  "ReadOnlyProperties": {
+    "Id": "rtbassoc-0639c7fd3179cc8bf"
+  },
+  "NativeID": "rtbassoc-0639c7fd3179cc8bf",
+  "Managed": true,
+  "Ksuid": "34jfpkdunkE1wLtV30lm7x7l6u1"
+}

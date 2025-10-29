@@ -1,0 +1,104 @@
+{
+  "Label": "alias-lb-vpc",
+  "Type": "AWS::EC2::VPC",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
+  "Schema": {
+    "Identifier": "VpcId",
+    "Tags": "Tags",
+    "Fields": [
+      "CidrBlock",
+      "EnableDnsHostnames",
+      "EnableDnsSupport",
+      "InstanceTenancy",
+      "Ipv4IpamPoolId",
+      "Ipv4NetmaskLength",
+      "Tags"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "CidrBlock": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "EnableDnsHostnames": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "EnableDnsSupport": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "InstanceTenancy": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Ipv4IpamPoolId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": true,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Ipv4NetmaskLength": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": true,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "CidrBlock": "10.0.0.0/16",
+    "EnableDnsHostnames": true,
+    "EnableDnsSupport": true,
+    "InstanceTenancy": "default",
+    "Tags": [
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "alias-record-stack"
+      },
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "alias-lb-vpc"
+      },
+      {
+        "Key": "Name",
+        "Value": "alias-lb-vpc"
+      }
+    ]
+  },
+  "ReadOnlyProperties": {
+    "CidrBlockAssociations": [
+      "vpc-cidr-assoc-09d06127605349495"
+    ],
+    "DefaultNetworkAcl": "acl-0fa97f1eeabe941af",
+    "DefaultSecurityGroup": "sg-0481ee6946dba1db6",
+    "Ipv6CidrBlocks": [],
+    "VpcId": "vpc-0a8e1e3e317737174"
+  },
+  "NativeID": "vpc-0a8e1e3e317737174",
+  "Managed": true,
+  "Ksuid": "34jfR9jlA5Rt56GNUD7F2KipsdN"
+}

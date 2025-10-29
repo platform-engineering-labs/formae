@@ -1,0 +1,142 @@
+{
+  "Label": "lifeline-task-http-ingress",
+  "Type": "AWS::EC2::SecurityGroupIngress",
+  "Stack": "lifeline",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Id",
+    "Tags": "",
+    "Fields": [
+      "CidrIp",
+      "CidrIpv6",
+      "Description",
+      "FromPort",
+      "GroupId",
+      "GroupName",
+      "IpProtocol",
+      "SourcePrefixListId",
+      "SourceSecurityGroupId",
+      "SourceSecurityGroupName",
+      "SourceSecurityGroupOwnerId",
+      "ToPort"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "CidrIp": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "CidrIpv6": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Description": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "FromPort": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GroupId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GroupName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "IpProtocol": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "SourcePrefixListId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SourceSecurityGroupId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SourceSecurityGroupName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "SourceSecurityGroupOwnerId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "ToPort": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "FromPort": 80,
+    "GroupId": {
+      "$label": "lifeline-task-sg",
+      "$property": "GroupId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::SecurityGroup",
+      "$value": "sg-04c3d08b0ef9b4c58"
+    },
+    "GroupName": "9ClkHb0LDGP5O3uHmHWKjbCV5-BhTfDTW0xCSU",
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+      "$label": "lifeline-alb-sg",
+      "$property": "GroupId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::SecurityGroup",
+      "$value": "sg-0f7363bd4c66442d7"
+    },
+    "SourceSecurityGroupName": "sIItUIl0RC5IyVqKUXJyPkhpN-qIHAT1pR1dAV",
+    "SourceSecurityGroupOwnerId": "021891619792",
+    "ToPort": 80
+  },
+  "ReadOnlyProperties": {
+    "Id": "sgr-03795629e874942b4"
+  },
+  "NativeID": "sgr-03795629e874942b4",
+  "Managed": true,
+  "Ksuid": "34k2mZRb1imPyTaOsfxkj3K2nn5"
+}

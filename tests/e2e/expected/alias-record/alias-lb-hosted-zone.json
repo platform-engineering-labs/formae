@@ -1,8 +1,8 @@
 {
-  "Label": "route53-hostedzone",
+  "Label": "alias-lb-hosted-zone",
   "Type": "AWS::Route53::HostedZone",
-  "Stack": "legacy-record-stack",
-  "Target": "aws-target-legacy-record",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
   "Schema": {
     "Identifier": "Id",
     "Tags": "HostedZoneTags",
@@ -57,27 +57,27 @@
     "HostedZoneConfig": {},
     "HostedZoneTags": [
       {
-        "Key": "FormaeResourceLabel",
-        "Value": "route53-hostedzone"
+        "Key": "FormaeStackLabel",
+        "Value": "alias-record-stack"
       },
       {
-        "Key": "FormaeStackLabel",
-        "Value": "legacy-record-stack"
+        "Key": "FormaeResourceLabel",
+        "Value": "alias-lb-hosted-zone"
       }
     ],
-    "Name": "snarf.platform.engineering.",
+    "Name": "lb.snarf.platform.engineering.",
     "VPCs": []
   },
   "ReadOnlyProperties": {
-    "Id": "Z0330129CCZQT8EPVS62",
+    "Id": "Z01434631GXNO9DQ0IQRE",
     "NameServers": [
-      "ns-1611.awsdns-09.co.uk",
-      "ns-968.awsdns-57.net",
-      "ns-1518.awsdns-61.org",
-      "ns-188.awsdns-23.com"
+      "ns-396.awsdns-49.com",
+      "ns-1514.awsdns-61.org",
+      "ns-1779.awsdns-30.co.uk",
+      "ns-932.awsdns-52.net"
     ]
   },
-  "NativeID": "Z0330129CCZQT8EPVS62",
+  "NativeID": "Z01434631GXNO9DQ0IQRE",
   "Managed": true,
-  "Ksuid": "34OG6kRRj1szVx0j22IQLW8rN2i"
+  "Ksuid": "34jfR5etspuzFiIPMM02zDfIZwY"
 }
