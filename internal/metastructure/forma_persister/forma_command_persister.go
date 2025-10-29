@@ -25,6 +25,11 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
+// FormaCommandPersister is responsible for all FormaCommand updates.
+// IMPORTANT: Must remain a singleton actor to ensure serial processing.
+// Each message handler loads fresh state, modifies it, and stores the
+// entire FormaCommand. The actor's serial message processing prevents
+// concurrent database updates that could cause data loss.
 type FormaCommandPersister struct {
 	act.Actor
 
@@ -126,6 +131,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.loadFormaCommand(msg.CommandID)
 	case messages.UpdateResourceProgress:
 		return f.updateCommandFromProgress(&msg)
+	case messages.UpdateTargetStates:
+		return f.updateTargetStates(&msg)
 	case MarkResourcesAsRejected:
 		return f.markResourcesAsRejected(&msg)
 	case MarkResourcesAsFailed:
@@ -223,6 +230,28 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		return false, fmt.Errorf("failed to update Forma command from resource progress: %w", err)
 	}
 
+	return true, nil
+}
+
+func (f *FormaCommandPersister) updateTargetStates(msg *messages.UpdateTargetStates) (bool, error) {
+	f.Log().Debug("Updating Forma command with target states", "commandID", msg.CommandID, "targetCount", len(msg.TargetUpdates))
+
+	command, err := f.datastore.GetFormaCommandByCommandID(msg.CommandID)
+	if err != nil {
+		f.Log().Error("Failed to load Forma command for target state update", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to load Forma command for target state update: %w", err)
+	}
+
+	command.TargetUpdates = msg.TargetUpdates
+	command.State = overallCommandState(command)
+
+	err = f.datastore.StoreFormaCommand(command, command.ID)
+	if err != nil {
+		f.Log().Error("Failed to update Forma command with target states", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to update Forma command with target states: %w", err)
+	}
+
+	f.Log().Debug("Successfully updated Forma command with target states", "commandID", msg.CommandID)
 	return true, nil
 }
 

@@ -87,7 +87,7 @@ func TestResourcePersister_LoadsResource(t *testing.T) {
 		Label:     "test-target",
 		Namespace: "aws",
 	}
-	_, err = ds.StoreTarget(&target)
+	_, err = ds.CreateTarget(&target)
 	assert.NoError(t, err)
 
 	resourceKsuid := util.NewID()

@@ -42,3 +42,12 @@ const (
 	ResourceUpdateStateCanceled   ResourceUpdateState = "Canceled"
 	ResourceUpdateStateRejected   ResourceUpdateState = "Rejected"
 )
+
+// TargetUpdateState represents the state of a target update
+type TargetUpdateState string
+
+const (
+	TargetUpdateStateNotStarted TargetUpdateState = "NotStarted"
+	TargetUpdateStateSuccess    TargetUpdateState = "Success"
+	TargetUpdateStateFailed     TargetUpdateState = "Failed"
+)

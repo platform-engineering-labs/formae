@@ -5,10 +5,10 @@
 package resource_persister
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -56,6 +57,12 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 	case resource_update.PersistResourceUpdate:
 		hash, err := rp.storeResourceUpdate(req.CommandID, req.ResourceOperation, req.PluginOperation, &req.ResourceUpdate)
 		return hash, err
+	case target_update.PersistTargetUpdates:
+		versions, err := rp.persistTargetUpdates(req.TargetUpdates, req.CommandID)
+		if err != nil {
+			return nil, err
+		}
+		return versions, nil
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
 	default:
@@ -156,14 +163,6 @@ func (rp *ResourcePersister) storeStacks(formaCommand *forma_command.FormaComman
 		for i := range formaCommand.ResourceUpdates {
 			rc := &formaCommand.ResourceUpdates[i]
 			if rc.Resource.Stack == stack.SingleStackLabel() && rc.State == resource_update.ResourceUpdateStateSuccess && rc.Version == "" {
-				err := rp.storeTarget(formaCommand)
-				if err != nil {
-					slog.Error("Failed to store target",
-						"error", err,
-						"stackLabel", stack.SingleStackLabel(),
-						"resourceLabel", rc.Resource.Label)
-					return fmt.Errorf("failed to store target %s: %w", rc.Resource.Label, err)
-				}
 				slog.Debug("Resource command successful, persisting...",
 					"stackLabel", rc.Resource.Stack,
 					"resourceLabel", rc.Resource.Label,
@@ -377,84 +376,55 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, stack pkgmo
 	return resourceVersion, nil
 }
 
-func (rp *ResourcePersister) storeTarget(formaCommand *forma_command.FormaCommand) error {
-	// First check if there are any successful resource commands for each target
-	targetHasSuccessfulCommands := make(map[string]bool)
+func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.TargetUpdate, commandID string) ([]string, error) {
+    rp.Log().Debug("Starting to persist target updates", "count", len(updates), "commandID", commandID)
+    
+    versions := make([]string, 0, len(updates))
+    for i := range updates {
+        rp.Log().Debug("Persisting target update", "index", i, "label", updates[i].Target.Label)
+        if err := rp.persistTargetUpdate(&updates[i]); err != nil {
+            rp.Log().Error("Failed to persist target update", "index", i, "label", updates[i].Target.Label, "error", err)
+            return nil, fmt.Errorf("failed to persist target update for %s: %w", updates[i].Target.Label, err)
+        }
+        rp.Log().Debug("Successfully persisted target update", "index", i, "label", updates[i].Target.Label)
+        versions = append(versions, updates[i].Version)
+    }
+    
+    rp.Log().Debug("Finished persisting all target updates", "commandID", commandID)
+    return versions, nil
+}
 
-	for _, rc := range formaCommand.ResourceUpdates {
+func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpdate) error {
+	var version string
+	var err error
 
-		t := rc.Resource.Target
-		if rc.State == resource_update.ResourceUpdateStateSuccess && rc.Resource.Target != "" {
-			targetHasSuccessfulCommands[t] = true
-		}
+	switch update.Operation {
+	case target_update.TargetOperationCreate:
+		version, err = rp.datastore.CreateTarget(&update.Target)
+	case target_update.TargetOperationUpdate:
+		version, err = rp.datastore.UpdateTarget(&update.Target)
+	default:
+		err = fmt.Errorf("unknown target operation: %s", update.Operation)
 	}
 
-	for _, target := range formaCommand.Forma.Targets {
-		// Skip targets without successful resource commands
-		if !targetHasSuccessfulCommands[target.Label] {
-			slog.Debug("Skipping target without successful resource commands",
-				"targetLabel", target.Label)
-			continue
-		}
-
-		slog.Debug("Processing target with successful commands",
-			"targetLabel", target.Label,
-			"namespace", target.Namespace)
-
-		currentTarget, err := rp.datastore.LoadTarget(target.Label)
-		if err != nil {
-			slog.Error("Error loading target",
-				"targetLabel", target.Label,
-				"error", err)
-			return fmt.Errorf("failed to load target %s: %w", target.Label, err)
-		}
-
-		// If target doesn't exist, persist it
-		if currentTarget == nil {
-			slog.Debug("Target not found, creating new one",
-				"targetLabel", target.Label)
-
-			targetVersion, err := rp.datastore.StoreTarget(&target)
-			if err != nil {
-				slog.Error("Failed to persist new target",
-					"targetLabel", target.Label,
-					"error", err)
-				return fmt.Errorf("failed to persist new target %s: %w", target.Label, err)
-			}
-
-			slog.Debug("Successfully persisted new target",
-				"targetLabel", target.Label,
-				"hash", targetVersion)
-			continue
-		}
-
-		// Compare existing target with new one
-		currentConfig, _ := json.Marshal(currentTarget.Config)
-		newConfig, _ := json.Marshal(target.Config)
-
-		if currentTarget.Label != target.Label ||
-			currentTarget.Namespace != target.Namespace ||
-			string(currentConfig) != string(newConfig) {
-
-			slog.Debug("Target has changed, updating",
-				"targetLabel", target.Label)
-
-			targetVersion, err := rp.datastore.StoreTarget(&target)
-			if err != nil {
-				slog.Error("Failed to persist target update",
-					"targetLabel", target.Label,
-					"error", err)
-				return fmt.Errorf("failed to persist target update %s: %w", target.Label, err)
-			}
-
-			slog.Debug("Successfully persisted target update",
-				"targetLabel", target.Label,
-				"hash", targetVersion)
-		} else {
-			slog.Debug("Target unchanged, skipping persist",
-				"targetLabel", target.Label)
-		}
+	if err != nil {
+		update.State = target_update.TargetUpdateStateFailed
+		update.ErrorMessage = err.Error()
+		update.ModifiedTs = time.Now()
+		slog.Error("Failed to persist target",
+			"label", update.Target.Label,
+			"operation", update.Operation,
+			"error", err)
+		return err
 	}
+
+	update.Version = version
+	update.State = target_update.TargetUpdateStateSuccess
+	update.ModifiedTs = time.Now()
+	slog.Debug("Successfully persisted target",
+		"label", update.Target.Label,
+		"operation", update.Operation,
+		"version", version)
 
 	return nil
 }

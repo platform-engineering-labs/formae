@@ -259,3 +259,137 @@ func stripAnsiCodes(t *testing.T, s string) string {
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
 	return ansi.ReplaceAllString(s, "")
 }
+
+func TestFormatHumanReadableStatus_TargetCreate(t *testing.T) {
+	cmd := apimodel.Command{
+		CommandID: "test-target-create",
+		Command:   "apply",
+		TargetUpdates: []apimodel.TargetUpdate{
+			{
+				TargetLabel: "new-target",
+				Operation:   "create",
+				State:       "Success",
+			},
+		},
+		State: "Success",
+	}
+
+	result, err := RenderStatus(&apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{cmd}})
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "apply command with ID test-target-create: Success")
+	assert.Contains(t, result, "create target new-target: Success")
+}
+
+func TestFormatHumanReadableStatus_TargetUpdate(t *testing.T) {
+	cmd := apimodel.Command{
+		CommandID: "test-target-update",
+		Command:   "apply",
+		TargetUpdates: []apimodel.TargetUpdate{
+			{
+				TargetLabel:     "existing-target",
+				Operation:       "update",
+				State:           "Success",
+				DiscoverableOld: false,
+				DiscoverableNew: true,
+			},
+		},
+		State: "Success",
+	}
+
+	result, err := RenderStatus(&apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{cmd}})
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "apply command with ID test-target-update: Success")
+	assert.Contains(t, result, "update target existing-target to discoverable: Success")
+}
+
+func TestFormatHumanReadableStatus_MixedTargetAndResource(t *testing.T) {
+	cmd := apimodel.Command{
+		CommandID: "test-mixed-updates",
+		Command:   "apply",
+		TargetUpdates: []apimodel.TargetUpdate{
+			{
+				TargetLabel: "test-target",
+				Operation:   "create",
+				State:       "Success",
+			},
+		},
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{
+				ResourceID:    util.NewID(),
+				ResourceType:  "AWS::EC2::VPC",
+				ResourceLabel: "test-vpc",
+				StackName:     "test-stack",
+				Operation:     "create",
+				State:         "Success",
+			},
+		},
+		State: "Success",
+	}
+
+	result, err := RenderStatus(&apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{cmd}})
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "create target test-target: Success")
+	assert.Contains(t, result, "create resource test-vpc: Success")
+	assert.Contains(t, result, "of type AWS::EC2::VPC")
+}
+
+func TestFormatHumanReadableStatus_TargetFailure(t *testing.T) {
+	cmd := apimodel.Command{
+		CommandID: "test-target-failure",
+		Command:   "apply",
+		TargetUpdates: []apimodel.TargetUpdate{
+			{
+				TargetLabel:  "failed-target",
+				Operation:    "update",
+				State:        "Failed",
+				ErrorMessage: "datastore error",
+			},
+		},
+		State: "Failed",
+	}
+
+	result, err := RenderStatus(&apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{cmd}})
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "update target failed-target to not discoverable: Failed")
+	assert.Contains(t, result, "reason for failure: datastore error")
+}
+
+func TestRenderSimulation_WithTargets(t *testing.T) {
+	sim := apimodel.Simulation{
+		ChangesRequired: true,
+		Command: apimodel.Command{
+			CommandID: "test-sim-targets",
+			Command:   "apply",
+			TargetUpdates: []apimodel.TargetUpdate{
+				{
+					TargetLabel: "sim-target",
+					Operation:   "create",
+				},
+			},
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{
+					ResourceID:    util.NewID(),
+					ResourceType:  "AWS::EC2::VPC",
+					ResourceLabel: "sim-vpc",
+					StackName:     "sim-stack",
+					Operation:     "create",
+				},
+			},
+		},
+	}
+
+	result, err := RenderSimulation(&sim)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "create target sim-target")
+	assert.Contains(t, result, "create resource sim-vpc")
+}

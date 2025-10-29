@@ -36,6 +36,7 @@ type Command struct {
 	StartTs         time.Time        `json:"StartTs,omitempty"`
 	EndTs           time.Time        `json:"EndTs,omitempty"`
 	ResourceUpdates []ResourceUpdate `json:"ResourceUpdates,omitempty"`
+	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
 }
 
 // wrapper for machine-readable output
@@ -85,6 +86,18 @@ const (
 	ResourceUpdateStateCanceled   = "Canceled"
 	ResourceUpdateStateRejected   = "Rejected"
 )
+
+type TargetUpdate struct {
+	TargetLabel     string    `json:"TargetLabel"`
+	Operation       string    `json:"Operation"`
+	State           string    `json:"State"`
+	Duration        int64     `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage    string    `json:"ErrorMessage,omitempty"`
+	DiscoverableOld bool      `json:"DiscoverableOld,omitempty"`
+	DiscoverableNew bool      `json:"DiscoverableNew"`
+	StartTs         time.Time `json:"StartTs,omitempty"`
+	ModifiedTs      time.Time `json:"ModifiedTs,omitempty"`
+}
 
 type Stats struct {
 	Version            string         `json:"Version"`

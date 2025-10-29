@@ -9,6 +9,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -33,6 +34,7 @@ type FormaCommand struct {
 	StartTs         time.Time                        `json:"StartTs"`
 	ModifiedTs      time.Time                        `json:"ModifiedTs"`
 	ResourceUpdates []resource_update.ResourceUpdate `json:"ResourceUpdates,omitempty"`
+	TargetUpdates   []target_update.TargetUpdate     `json:"TargetUpdates,omitempty"`
 	Config          config.FormaCommandConfig        `json:"Config"`
 	Command         pkgmodel.Command                 `json:"Command"`
 	ClientID        string                           `json:"ClientId,omitempty"`
@@ -52,6 +54,7 @@ func NewFormaCommand(
 	formaCommandConfig *config.FormaCommandConfig,
 	command pkgmodel.Command,
 	resourceUpdates []resource_update.ResourceUpdate,
+	targetUpdates []target_update.TargetUpdate,
 	clientID string,
 ) *FormaCommand {
 	return &FormaCommand{
@@ -59,10 +62,16 @@ func NewFormaCommand(
 		StartTs:         util.TimeNow(),
 		ModifiedTs:      util.TimeNow(),
 		ResourceUpdates: resourceUpdates,
+		TargetUpdates:   targetUpdates,
 		Config:          *formaCommandConfig,
 		Command:         command,
 		Forma:           *forma,
 		State:           CommandStateNotStarted,
 		ClientID:        clientID,
 	}
+}
+
+// HasChanges returns true if the command has any resource or target updates
+func (fc *FormaCommand) HasChanges() bool {
+	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0
 }

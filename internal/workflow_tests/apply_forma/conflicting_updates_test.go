@@ -157,6 +157,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 			&config.FormaCommandConfig{},
 			pkgmodel.CommandApply,
 			executingFormaResourceUpdates,
+			nil, // No target updates for test
 			"")
 		executingForma.State = forma_command.CommandStateInProgress
 
@@ -195,7 +196,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 				},
 			},
 		}
-		newFormaCommand := forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, "")
+		newFormaCommand := forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
 		err = m.Datastore.StoreFormaCommand(executingForma, "1")
 		if err != nil {
 			t.Fatalf("Failed to store forma command: %v", err)
@@ -294,6 +295,7 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			&config.FormaCommandConfig{},
 			pkgmodel.CommandApply,
 			executingFormaResourceUpdates,
+			nil,
 			"")
 		executingForma.State = forma_command.CommandStateInProgress
 		err = m.Datastore.StoreFormaCommand(executingForma, "1")
@@ -382,6 +384,7 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			&config.FormaCommandConfig{},
 			pkgmodel.CommandApply,
 			anotherExecutingFormaResourceUpdates,
+			nil,
 			"")
 		anotherExecutingForma.State = forma_command.CommandStateInProgress
 		err = m.Datastore.StoreFormaCommand(anotherExecutingForma, "2")
@@ -551,7 +554,7 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			},
 		}
 
-		newFormaCommand := forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, "")
+		newFormaCommand := forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
 
 		cfg := config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,

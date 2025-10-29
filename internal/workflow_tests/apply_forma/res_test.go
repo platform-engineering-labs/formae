@@ -50,7 +50,7 @@ func TestMetastructure_ApplyFormaWithRes(t *testing.T) {
 		defer def()
 		require.NoError(t, err)
 
-		m.Datastore.StoreTarget(&pkgmodel.Target{
+		m.Datastore.CreateTarget(&pkgmodel.Target{
 			Label:  "test-target",
 			Config: json.RawMessage(`{}`),
 		})

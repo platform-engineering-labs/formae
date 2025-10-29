@@ -151,15 +151,24 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 		version INTEGER NOT NULL,
 		namespace TEXT NOT NULL,
 		config TEXT,
+		discoverable INTEGER DEFAULT 1,
 		PRIMARY KEY (label, version)
 		)`)
-
 	if err != nil {
 		slog.Error("Failed to create targets table", "error", err)
 		return nil, err
 	}
 
+	_, err = d.conn.Exec(`ALTER TABLE targets ADD COLUMN discoverable INTEGER DEFAULT 1`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		slog.Warn("Could not add discoverable column to targets table", "error", err)
+	}
+
 	if err := d.createIndex("targets", "namespace"); err != nil {
+		return nil, err
+	}
+
+	if err := d.createIndex("targets", "discoverable"); err != nil {
 		return nil, err
 	}
 
@@ -888,42 +897,61 @@ func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
 	return forma, nil
 }
 
-func (d DatastoreSQLite) StoreTarget(target *pkgmodel.Target) (string, error) {
-	// Target is implemented as inserted once and can't be updated.
-	// First check if target already exists
-	existingTarget, err := d.LoadTarget(target.Label)
+func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
+	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
 	}
 
-	// If target already exists, return the existing version ID without inserting
-	if existingTarget != nil {
-		return fmt.Sprintf("%s_1", target.Label), nil
-	}
-
-	// Target doesn't exist, insert it with version 1
-	jsonData, err := json.Marshal(target.Config)
+	query := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES (?, 1, ?, ?, ?)`
+	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, boolToInt(target.Discoverable))
 	if err != nil {
-		return "", err
-	}
-
-	query := `INSERT INTO targets (label, version, namespace, config) VALUES (?, 1, ?, ?)`
-	_, err = d.conn.Exec(query, target.Label, target.Namespace, jsonData)
-	if err != nil {
-		slog.Error("Failed to store target", "error", err, "label", target.Label)
+		slog.Error("Failed to create target", "error", err, "label", target.Label)
 		return "", err
 	}
 
 	return fmt.Sprintf("%s_1", target.Label), nil
 }
 
+func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
+	query := `SELECT MAX(version) FROM targets WHERE label = ?`
+	row := d.conn.QueryRow(query, target.Label)
+
+	var maxVersion sql.NullInt64
+	if err := row.Scan(&maxVersion); err != nil {
+		return "", err
+	}
+
+	if !maxVersion.Valid {
+		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+	}
+
+	newVersion := int(maxVersion.Int64) + 1
+
+	cfg, err := json.Marshal(target.Config)
+	if err != nil {
+		return "", err
+	}
+
+	insertQuery := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES (?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, boolToInt(target.Discoverable))
+	if err != nil {
+		slog.Error("Failed to update target", "error", err, "label", target.Label, "version", newVersion)
+		return "", err
+	}
+
+	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
+}
+
 func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
-	query := `SELECT namespace, config FROM targets WHERE label = ?`
+	query := `SELECT version, namespace, config, discoverable FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, label)
 
+	var version int
 	var namespace string
 	var config json.RawMessage
-	if err := row.Scan(&namespace, &config); err != nil {
+	var discoverable int
+	if err := row.Scan(&version, &namespace, &config, &discoverable); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -931,16 +959,26 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	}
 
 	return &pkgmodel.Target{
-		Label:     label,
-		Namespace: namespace,
-		Config:    config,
+		Label:        label,
+		Namespace:    namespace,
+		Config:       config,
+		Discoverable: discoverable == 1,
+		Version:      version,
 	}, nil
 }
 
 func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	var targets []*pkgmodel.Target
 
-	query := `SELECT label, namespace, config FROM targets`
+	query := `
+		SELECT label, version, namespace, config, discoverable
+		FROM targets t1
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)`
 	rows, err := d.conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -950,15 +988,19 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 
 	for rows.Next() {
 		var label, namespace string
+		var version int
 		var config json.RawMessage
-		if err := rows.Scan(&label, &namespace, &config); err != nil {
+		var discoverable int
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
 			return nil, err
 		}
 
 		targets = append(targets, &pkgmodel.Target{
-			Label:     label,
-			Namespace: namespace,
-			Config:    config,
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable == 1,
+			Version:      version,
 		})
 	}
 
@@ -979,9 +1021,15 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	}
 
 	query := fmt.Sprintf(`
-        SELECT label, namespace, config
-        FROM targets
-        WHERE label IN (%s)`, strings.Join(placeholders, ","))
+		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable
+		FROM targets t1
+		WHERE t1.label IN (%s)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)`, strings.Join(placeholders, ","))
 
 	rows, err := d.conn.Query(query, args...)
 	if err != nil {
@@ -992,15 +1040,67 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	var targets []*pkgmodel.Target
 	for rows.Next() {
 		var label, namespace string
+		var version int
 		var config json.RawMessage
-		if err := rows.Scan(&label, &namespace, &config); err != nil {
+		var discoverable int
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
 			return nil, err
 		}
 
 		targets = append(targets, &pkgmodel.Target{
-			Label:     label,
-			Namespace: namespace,
-			Config:    config,
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable == 1,
+			Version:      version,
+		})
+	}
+
+	return targets, rows.Err()
+}
+
+func (d DatastoreSQLite) LoadDiscoverableTargetsDistinctRegion() ([]*pkgmodel.Target, error) {
+	// Get latest version per label where discoverable = true
+	// Deduplicate by region across all namespaces
+	query := `
+		WITH latest_targets AS (
+			SELECT label, version, namespace, config, discoverable
+			FROM targets t1
+			WHERE discoverable = 1
+			AND NOT EXISTS (
+				SELECT 1
+				FROM targets t2
+				WHERE t1.label = t2.label
+				AND t2.version > t1.version
+			)
+		)
+		SELECT label, version, namespace, config, discoverable
+		FROM latest_targets
+		GROUP BY json_extract(config, '$.region')
+		HAVING version = MAX(version)`
+
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var targets []*pkgmodel.Target
+	for rows.Next() {
+		var label, ns string
+		var version int
+		var config json.RawMessage
+		var discoverable int
+		if err := rows.Scan(&label, &version, &ns, &config, &discoverable); err != nil {
+			return nil, err
+		}
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    ns,
+			Config:       config,
+			Discoverable: discoverable == 1,
+			Version:      version,
 		})
 	}
 
