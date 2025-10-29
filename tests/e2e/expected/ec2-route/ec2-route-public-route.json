@@ -1,0 +1,158 @@
+{
+  "Label": "ec2-route-public-route",
+  "Type": "AWS::EC2::Route",
+  "Stack": "ec2-route",
+  "Target": "route-target",
+  "Schema": {
+    "Identifier": "Ref",
+    "Tags": "",
+    "Fields": [
+      "CarrierGatewayId",
+      "CoreNetworkArn",
+      "DestinationCidrBlock",
+      "DestinationIpv6CidrBlock",
+      "DestinationPrefixListId",
+      "EgressOnlyInternetGatewayId",
+      "GatewayId",
+      "InstanceId",
+      "LocalGatewayId",
+      "NatGatewayId",
+      "NetworkInterfaceId",
+      "RouteTableId",
+      "TransitGatewayId",
+      "VpcEndpointId",
+      "VpcPeeringConnectionId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "CarrierGatewayId": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "CoreNetworkArn": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "DestinationCidrBlock": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "DestinationIpv6CidrBlock": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "DestinationPrefixListId": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "EgressOnlyInternetGatewayId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GatewayId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "InstanceId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "LocalGatewayId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "NatGatewayId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "NetworkInterfaceId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "RouteTableId": {
+        "CreateOnly": true,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "TransitGatewayId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcEndpointId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcPeeringConnectionId": {
+        "CreateOnly": false,
+        "Persist": true,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "DestinationCidrBlock": "0.0.0.0/0",
+    "GatewayId": {
+      "$label": "ec2-route-igw",
+      "$property": "InternetGatewayId",
+      "$res": true,
+      "$stack": "ec2-route",
+      "$type": "AWS::EC2::InternetGateway",
+      "$value": "igw-00f7c5b17ba4d4ce6"
+    },
+    "RouteTableId": {
+      "$label": "ec2-route-public-rt",
+      "$property": "RouteTableId",
+      "$res": true,
+      "$stack": "ec2-route",
+      "$type": "AWS::EC2::RouteTable",
+      "$value": "rtb-0f62d4fb459422bb6"
+    }
+  },
+  "NativeID": "rtb-0f62d4fb459422bb6|0.0.0.0/0|GatewayId=igw-00f7c5b17ba4d4ce6",
+  "Managed": true,
+  "Ksuid": "34jhLZemc0qNXyXametnjfRiDpo"
+}

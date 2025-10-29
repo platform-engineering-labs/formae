@@ -1,0 +1,64 @@
+{
+  "Label": "ec2-route-igw-attachment",
+  "Type": "AWS::EC2::VPCGatewayAttachment",
+  "Stack": "ec2-route",
+  "Target": "route-target",
+  "Schema": {
+    "Identifier": "Ref",
+    "Tags": "",
+    "Fields": [
+      "InternetGatewayId",
+      "VpcId",
+      "VpnGatewayId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "InternetGatewayId": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "VpnGatewayId": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "InternetGatewayId": {
+      "$label": "ec2-route-igw",
+      "$property": "InternetGatewayId",
+      "$res": true,
+      "$stack": "ec2-route",
+      "$type": "AWS::EC2::InternetGateway",
+      "$value": "igw-00f7c5b17ba4d4ce6"
+    },
+    "VpcId": {
+      "$label": "ec2-route-vpc",
+      "$property": "VpcId",
+      "$res": true,
+      "$stack": "ec2-route",
+      "$type": "AWS::EC2::VPC",
+      "$value": "vpc-06df93f52cae5f1be"
+    }
+  },
+  "ReadOnlyProperties": {
+    "AttachmentType": "IGW"
+  },
+  "NativeID": "IGW|vpc-06df93f52cae5f1be",
+  "Managed": true,
+  "Ksuid": "34jhLWEuTPcaD9o3UZexpcFQS5z"
+}

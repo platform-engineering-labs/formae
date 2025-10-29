@@ -23,3 +23,37 @@ tests:
     timeout:
       apply: 1800
       destroy: 1200
+  alias-record:
+    name: "Alias record"
+    description: "Alias record example with load balancer"
+    source: "tests/e2e/pkl/alias_record.pkl"
+    expected_dir: "tests/e2e/expected/alias-record"
+    timeout:
+      apply: 1800
+      destroy: 1200
+  ec2-route:
+    name: "EC2 route"
+    description: "EC2 route example"
+    source: "tests/e2e/pkl/ec2_route.pkl"
+    expected_dir: "tests/e2e/expected/ec2-route"
+    timeout:
+      apply: 1800
+      destroy: 1200
+  lifeline:
+    name: "Lifeline"
+    description: "Lifeline example"
+    source: "examples/complete/lifeline/basic_infrastructure.pkl"
+    expected_dir: "tests/e2e/expected/lifeline"
+    timeout:
+      apply: 1800
+      destroy: 1200
+    properties:
+      name: test
+  static-website:
+    name: "Static Website"
+    description: "Static Website example"
+    source: "examples/complete/static-website/main.pkl"
+    expected_dir: "tests/e2e/expected/static-website"
+    timeout:
+      apply: 1800
+      destroy: 1200

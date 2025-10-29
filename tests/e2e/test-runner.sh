@@ -309,9 +309,29 @@ run_single_test() {
 
     local test_failed=0
 
+    # Build properties arguments for apply command
+    local properties_args=""
+
+    # Check if test has properties defined
+    local properties_exist=$(yq eval ".tests.$test_name.properties // null" "$TEST_DEFINITIONS")
+    if [[ "$properties_exist" != "null" ]]; then
+        # Get all property keys for this test
+        local property_keys=$(yq eval ".tests.$test_name.properties | keys | .[]" "$TEST_DEFINITIONS")
+
+        for property_key in $property_keys; do
+            local property_value=$(yq eval ".tests.$test_name.properties.$property_key" "$TEST_DEFINITIONS")
+            properties_args="$properties_args --$property_key $property_value"
+        done
+
+        echo "Using properties for $test_name: $properties_args"
+    fi
+
     # Apply
     echo "Applying configuration..."
-    local apply_output=$($E2E_FORMAE_BINARY apply --output-consumer machine --mode reconcile "$source_file")
+    local apply_cmd="$E2E_FORMAE_BINARY apply --output-consumer machine --mode reconcile $properties_args $source_file"
+    echo "Apply command: $apply_cmd"
+
+    local apply_output=$($apply_cmd)
     local apply_command_id=$(echo "$apply_output" | jq -r '.CommandId // empty')
 
     if [[ -z "$apply_command_id" ]]; then
@@ -336,7 +356,10 @@ run_single_test() {
 
         # Destroy (attempt even if apply/comparison failed)
         echo "Destroying configuration..."
-        local destroy_output=$($E2E_FORMAE_BINARY destroy --output-consumer machine "$source_file" )
+        local destroy_cmd="$E2E_FORMAE_BINARY destroy --output-consumer machine $properties_args $source_file"
+        echo "Destroy command: $destroy_cmd"
+
+        local destroy_output=$($destroy_cmd)
         local destroy_command_id=$(echo "$destroy_output" | jq -r '.CommandId // empty')
 
         if [[ -z "$destroy_command_id" ]]; then

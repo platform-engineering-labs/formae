@@ -1,0 +1,64 @@
+{
+  "Label": "lifeline-igw-attachment",
+  "Type": "AWS::EC2::VPCGatewayAttachment",
+  "Stack": "lifeline",
+  "Target": "aws-target",
+  "Schema": {
+    "Identifier": "Ref",
+    "Tags": "",
+    "Fields": [
+      "InternetGatewayId",
+      "VpcId",
+      "VpnGatewayId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "InternetGatewayId": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "VpnGatewayId": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "InternetGatewayId": {
+      "$label": "lifeline-igw",
+      "$property": "InternetGatewayId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::InternetGateway",
+      "$value": "igw-08a426d1e22a2f8d6"
+    },
+    "VpcId": {
+      "$label": "lifeline-vpc",
+      "$property": "VpcId",
+      "$res": true,
+      "$stack": "lifeline",
+      "$type": "AWS::EC2::VPC",
+      "$value": "vpc-0e9c968d385e19a67"
+    }
+  },
+  "ReadOnlyProperties": {
+    "AttachmentType": "IGW"
+  },
+  "NativeID": "IGW|vpc-0e9c968d385e19a67",
+  "Managed": true,
+  "Ksuid": "34k2mayjLMuBT5wSjK3ZZDiwxLu"
+}

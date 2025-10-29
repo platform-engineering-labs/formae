@@ -1,8 +1,8 @@
 {
-  "Label": "1-pel-record-external",
+  "Label": "alias-lb-alias-record",
   "Type": "AWS::Route53::RecordSet",
-  "Stack": "legacy-record-stack",
-  "Target": "aws-target-legacy-record",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
   "Schema": {
     "Identifier": "Id",
     "Tags": "",
@@ -158,22 +158,37 @@
     "Discoverable": true
   },
   "Properties": {
+    "AliasTarget": {
+      "DNSName": {
+        "$label": "alias-lb-load-balancer",
+        "$property": "DNSName",
+        "$res": true,
+        "$stack": "alias-record-stack",
+        "$type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "$value": "alias-lb-alb-1625220838.us-east-2.elb.amazonaws.com."
+      },
+      "EvaluateTargetHealth": true,
+      "HostedZoneId": {
+        "$label": "alias-lb-load-balancer",
+        "$property": "CanonicalHostedZoneID",
+        "$res": true,
+        "$stack": "alias-record-stack",
+        "$type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "$value": "Z3AADJGX6KTTL2"
+      }
+    },
     "HostedZoneId": {
-      "$label": "route53-hostedzone",
+      "$label": "alias-lb-hosted-zone",
       "$property": "Id",
       "$res": true,
-      "$stack": "legacy-record-stack",
+      "$stack": "alias-record-stack",
       "$type": "AWS::Route53::HostedZone",
-      "$value": "Z0207265PMOQ4QK9Z729"
+      "$value": "Z01434631GXNO9DQ0IQRE"
     },
-    "Name": "a.snarf.platform.engineering",
-    "ResourceRecords": [
-      "192.168.55.1"
-    ],
-    "TTL": 430,
+    "Name": "app.lb.snarf.platform.engineering",
     "Type": "A"
   },
-  "NativeID": "Z0207265PMOQ4QK9Z729|a.snarf.platform.engineering.|A",
+  "NativeID": "Z01434631GXNO9DQ0IQRE|app.lb.snarf.platform.engineering.|A",
   "Managed": true,
-  "Ksuid": "34jaDdkmXjDHSswq3CSidox6Rl2"
+  "Ksuid": "34jfpmYPOcNwJjQP0T1ZRuFNuno"
 }

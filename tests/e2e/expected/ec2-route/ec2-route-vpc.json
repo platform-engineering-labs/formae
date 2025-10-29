@@ -1,0 +1,104 @@
+{
+  "Label": "ec2-route-vpc",
+  "Type": "AWS::EC2::VPC",
+  "Stack": "ec2-route",
+  "Target": "route-target",
+  "Schema": {
+    "Identifier": "VpcId",
+    "Tags": "Tags",
+    "Fields": [
+      "CidrBlock",
+      "EnableDnsHostnames",
+      "EnableDnsSupport",
+      "InstanceTenancy",
+      "Ipv4IpamPoolId",
+      "Ipv4NetmaskLength",
+      "Tags"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "CidrBlock": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "EnableDnsHostnames": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "EnableDnsSupport": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "InstanceTenancy": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Ipv4IpamPoolId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": true,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Ipv4NetmaskLength": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": true,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "CidrBlock": "10.1.0.0/16",
+    "EnableDnsHostnames": true,
+    "EnableDnsSupport": true,
+    "InstanceTenancy": "default",
+    "Tags": [
+      {
+        "Key": "Name",
+        "Value": "ec2-route-vpc"
+      },
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "ec2-route-vpc"
+      },
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "ec2-route"
+      }
+    ]
+  },
+  "ReadOnlyProperties": {
+    "CidrBlockAssociations": [
+      "vpc-cidr-assoc-0c906e13d05bd77d2"
+    ],
+    "DefaultNetworkAcl": "acl-0755cf1fb015d9c7c",
+    "DefaultSecurityGroup": "sg-09755b51064cacb1c",
+    "Ipv6CidrBlocks": [],
+    "VpcId": "vpc-06df93f52cae5f1be"
+  },
+  "NativeID": "vpc-06df93f52cae5f1be",
+  "Managed": true,
+  "Ksuid": "34jhLZGzEOJxWlMiqjsguD9H3Pa"
+}

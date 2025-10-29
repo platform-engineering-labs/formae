@@ -1,0 +1,77 @@
+{
+  "Label": "alias-lb-security-group",
+  "Type": "AWS::EC2::SecurityGroup",
+  "Stack": "alias-record-stack",
+  "Target": "aws-target-east-2",
+  "Schema": {
+    "Identifier": "GroupId",
+    "Tags": "Tags",
+    "Fields": [
+      "GroupDescription",
+      "GroupName",
+      "Tags",
+      "VpcId"
+    ],
+    "Nonprovisionable": false,
+    "Hints": {
+      "GroupDescription": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
+        "RequiredOnCreate": false
+      },
+      "GroupName": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "Tags": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "VpcId": {
+        "CreateOnly": true,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      }
+    },
+    "Discoverable": true
+  },
+  "Properties": {
+    "GroupDescription": "Security group for alias load balancer",
+    "GroupName": "jVnDzHqajb0GKSJ0jjfKgaI8Q-CdgF2cUozHOw",
+    "Tags": [
+      {
+        "Key": "FormaeStackLabel",
+        "Value": "alias-record-stack"
+      },
+      {
+        "Key": "FormaeResourceLabel",
+        "Value": "alias-lb-security-group"
+      }
+    ],
+    "VpcId": {
+      "$label": "alias-lb-vpc",
+      "$property": "VpcId",
+      "$res": true,
+      "$stack": "alias-record-stack",
+      "$type": "AWS::EC2::VPC",
+      "$value": "vpc-0a8e1e3e317737174"
+    }
+  },
+  "ReadOnlyProperties": {
+    "GroupId": "sg-06d9c32f942eb9b3d",
+    "Id": "sg-06d9c32f942eb9b3d"
+  },
+  "NativeID": "sg-06d9c32f942eb9b3d",
+  "Managed": true,
+  "Ksuid": "34jfR5HDxnoWwmdAE8H6spHH4bm"
+}
