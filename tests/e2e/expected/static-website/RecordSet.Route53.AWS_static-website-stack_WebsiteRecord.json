@@ -22,7 +22,9 @@
       "SetIdentifier",
       "TTL",
       "Type",
-      "Weight"
+      "Weight",
+      "AliasTarget.DNSName",
+      "GeoProximityLocation.AWSRegion"
     ],
     "Nonprovisionable": true,
     "Hints": {
@@ -31,6 +33,13 @@
         "Persist": true,
         "WriteOnly": false,
         "Required": false,
+        "RequiredOnCreate": false
+      },
+      "AliasTarget.DNSName": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": true,
         "RequiredOnCreate": false
       },
       "CidrRoutingConfig": {
@@ -62,6 +71,13 @@
         "RequiredOnCreate": false
       },
       "GeoProximityLocation": {
+        "CreateOnly": false,
+        "Persist": false,
+        "WriteOnly": false,
+        "Required": false,
+        "RequiredOnCreate": false
+      },
+      "GeoProximityLocation.AWSRegion": {
         "CreateOnly": false,
         "Persist": false,
         "WriteOnly": false,
@@ -149,7 +165,7 @@
         "$res": true,
         "$stack": "static-website-stack",
         "$type": "AWS::CloudFront::Distribution",
-        "$value": "d33jmfuq86ehga.cloudfront.net."
+        "$value": "d3rc1qucm8dw9c.cloudfront.net."
       },
       "EvaluateTargetHealth": false,
       "HostedZoneId": "Z2FDTNDATAQYW2"
@@ -160,12 +176,12 @@
       "$res": true,
       "$stack": "static-website-stack",
       "$type": "AWS::Route53::HostedZone",
-      "$value": "Z024628284WFBI5TNEVW"
+      "$value": "Z01421733T4ZA1H8A4HPL"
     },
     "Name": "test.platform.engineering",
     "Type": "A"
   },
-  "NativeID": "Z024628284WFBI5TNEVW|test.platform.engineering.|A",
+  "NativeID": "Z01421733T4ZA1H8A4HPL|test.platform.engineering.|A",
   "Managed": true,
-  "Ksuid": "34OGKhzdpWO9mptsQkT8hzMLwUE"
+  "Ksuid": "34jc6Z2V2iOdaatl4QsfwhlD2zc"
 }
