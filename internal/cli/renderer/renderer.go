@@ -384,6 +384,23 @@ func formatResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {
 	addStatusDetails(node, rc)
 }
 
+// coloredResourceUpdateStateForCanceledCommand returns the state formatted with appropriate color
+// for resource updates belonging to a canceled command. The semantics are flipped:
+// - "Canceled" is considered success (the user wanted to cancel) -> shown in green
+// - "Success" means the operation completed before cancellation -> shown in grey with different text
+func coloredResourceUpdateStateForCanceledCommand(state string) string {
+	switch state {
+	case "Canceled":
+		return display.Green(state)
+	case "Success":
+		return display.Grey("Completed (unable to cancel)")
+	case "Failed", "Rejected":
+		return display.Red(state)
+	default:
+		return display.Grey(state)
+	}
+}
+
 // formatResourceUpdateForCanceledCommand formats resource updates for commands that were canceled.
 // In the context of a canceled command, the semantics flip:
 // - "Canceled" resource updates represent successful cancellations (shown in green)
@@ -392,7 +409,7 @@ func formatResourceUpdateForCanceledCommand(root *gtree.Node, rc apimodel.Resour
 	op := coloredOperation(rc.Operation)
 
 	line := display.Greyf("%s resource %s", op, rc.ResourceLabel)
-	line = line + fmt.Sprintf(": %s", coloredCommandState(rc.State))
+	line = line + fmt.Sprintf(": %s", coloredResourceUpdateStateForCanceledCommand(rc.State))
 	line = line + formatDurationLine(rc.Duration)
 
 	node := root.Add(line)
@@ -427,8 +444,6 @@ func formatDurationLine(duration int64) string {
 // coloredUpdateState returns the state formatted with appropriate color for both resource and target updates
 func coloredUpdateState(state string) string {
 	switch state {
-	case "Canceled":
-		return display.Green(string(state))
 	case "Success":
 		return display.Green(state)
 	case "Failed", "Rejected":
