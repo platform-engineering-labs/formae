@@ -144,14 +144,14 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 
 	// Load discoverable targets from datastore
 	ds := dsEnv.(datastore.Datastore)
-	
+
 	// ONE-RELEASE GRACE PERIOD: Auto-migrate config scan_targets to database
 	// This provides backward compatibility for users still using scan_targets in config
 	if err := migrateScanTargetsToDatabase(ds, &discoveryCfg, d); err != nil {
 		d.Log().Error("Failed to migrate scan_targets to database", "error", err)
 		// Continue startup even if migration fails - don't block the system
 	}
-	
+
 	data := DiscoveryData{
 		pluginManager:                 pluginManager.(*plugin.Manager),
 		ds:                            ds,
@@ -217,7 +217,7 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 	if err != nil {
 		proc.Log().Error("Discovery: failed to load targets from datastore", "error", err)
 		allTargets = []*pkgmodel.Target{}
-	}	
+	}
 	data.SetTargets(allTargets)
 
 	// If there are no discoverable targets, complete discovery immediately
@@ -232,7 +232,6 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 			proc.Log().Error("Discovery: no resource plugin for namespace %s: %v", target.Namespace, err)
 			continue
 		}
-
 
 		discoverableResources := (*resourcePlugin).SupportedResources()
 		supportedResources := make([]plugin.ResourceDescriptor, 0)

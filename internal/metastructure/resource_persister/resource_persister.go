@@ -377,21 +377,21 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, stack pkgmo
 }
 
 func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.TargetUpdate, commandID string) ([]string, error) {
-    rp.Log().Debug("Starting to persist target updates", "count", len(updates), "commandID", commandID)
-    
-    versions := make([]string, 0, len(updates))
-    for i := range updates {
-        rp.Log().Debug("Persisting target update", "index", i, "label", updates[i].Target.Label)
-        if err := rp.persistTargetUpdate(&updates[i]); err != nil {
-            rp.Log().Error("Failed to persist target update", "index", i, "label", updates[i].Target.Label, "error", err)
-            return nil, fmt.Errorf("failed to persist target update for %s: %w", updates[i].Target.Label, err)
-        }
-        rp.Log().Debug("Successfully persisted target update", "index", i, "label", updates[i].Target.Label)
-        versions = append(versions, updates[i].Version)
-    }
-    
-    rp.Log().Debug("Finished persisting all target updates", "commandID", commandID)
-    return versions, nil
+	rp.Log().Debug("Starting to persist target updates", "count", len(updates), "commandID", commandID)
+
+	versions := make([]string, 0, len(updates))
+	for i := range updates {
+		rp.Log().Debug("Persisting target update", "index", i, "label", updates[i].Target.Label)
+		if err := rp.persistTargetUpdate(&updates[i]); err != nil {
+			rp.Log().Error("Failed to persist target update", "index", i, "label", updates[i].Target.Label, "error", err)
+			return nil, fmt.Errorf("failed to persist target update for %s: %w", updates[i].Target.Label, err)
+		}
+		rp.Log().Debug("Successfully persisted target update", "index", i, "label", updates[i].Target.Label)
+		versions = append(versions, updates[i].Version)
+	}
+
+	rp.Log().Debug("Finished persisting all target updates", "commandID", commandID)
+	return versions, nil
 }
 
 func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpdate) error {
