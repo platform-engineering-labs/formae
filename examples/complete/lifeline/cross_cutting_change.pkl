@@ -13,7 +13,6 @@ import "@aws/ec2/subnet.pkl"
 import "@aws/ec2/routetable.pkl"
 import "@aws/ec2/route.pkl"
 import "@aws/ec2/subnetroutetableassociation.pkl"
-import "@aws/s3/bucket.pkl"
 import "@aws/ec2/securitygroup.pkl"
 
 import "./vars.pkl"
