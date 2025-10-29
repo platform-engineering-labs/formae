@@ -487,6 +487,30 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes)
 }
 
+func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	targets, err := client.ListTargets(query)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if targets == nil {
+		targets = []*pkgmodel.Target{}
+	}
+
+	return targets, nags, nil
+}
+
 // Plugins
 
 func (p *Plugins) List() []*plugin.Plugin {

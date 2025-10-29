@@ -16,6 +16,10 @@ definitions:
         type: string
       State:
         type: string
+      TargetUpdates:
+        items:
+          $ref: '#/definitions/model.TargetUpdate'
+        type: array
     type: object
   github_com_platform-engineering-labs_formae_internal_api_model.Description:
     properties:
@@ -250,9 +254,35 @@ definitions:
         items:
           type: integer
         type: array
+      Discoverable:
+        type: boolean
       Label:
         type: string
       Namespace:
+        type: string
+      Version:
+        type: integer
+    type: object
+  model.TargetUpdate:
+    properties:
+      DiscoverableNew:
+        type: boolean
+      DiscoverableOld:
+        type: boolean
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      ModifiedTs:
+        type: string
+      Operation:
+        type: string
+      StartTs:
+        type: string
+      State:
+        type: string
+      TargetLabel:
         type: string
     type: object
 host: localhost:8080
@@ -527,4 +557,32 @@ paths:
       summary: Get usage statistics
       tags:
       - stats
+  /targets:
+    get:
+      description: Retrieves targets based on query parameters
+      parameters:
+      - description: Query string to filter targets (e.g., 'namespace:aws discoverable:true')
+        in: query
+        name: query
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: List of targets.'
+          schema:
+            items:
+              $ref: '#/definitions/model.Target'
+            type: array
+        "404":
+          description: 'Not Found: No targets found.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List targets
+      tags:
+      - targets
 swagger: "2.0"

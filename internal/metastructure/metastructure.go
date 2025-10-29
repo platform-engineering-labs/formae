@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"ergo.services/application/observer"
@@ -49,6 +50,7 @@ type MetastructureAPI interface {
 	CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
+	ExtractTargets(query string) ([]*pkgmodel.Target, error)
 	ForceSync() error
 	ForceDiscovery() error
 	Stats() (*apimodel.Stats, error)
@@ -644,6 +646,51 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 	}
 
 	return forma, nil
+}
+
+func (m *Metastructure) ExtractTargets(queryStr string) ([]*pkgmodel.Target, error) {
+	slog.Debug("ExtractTargets called", "queryStr", queryStr)
+	query := &datastore.TargetQuery{}
+
+	if queryStr != "" {
+		parts := strings.Fields(queryStr)
+		for _, part := range parts {
+			if strings.Contains(part, ":") {
+				kv := strings.SplitN(part, ":", 2)
+				key := strings.TrimSpace(kv[0])
+				value := strings.TrimSpace(kv[1])
+
+				switch key {
+				case "label":
+					query.Label = &datastore.QueryItem[string]{
+						Item:       value,
+						Constraint: datastore.Required,
+					}
+				case "namespace":
+					query.Namespace = &datastore.QueryItem[string]{
+						Item:       value,
+						Constraint: datastore.Required,
+					}
+				case "discoverable":
+					boolVal := value == "true"
+					query.Discoverable = &datastore.QueryItem[bool]{
+						Item:       boolVal,
+						Constraint: datastore.Required,
+					}
+				}
+			}
+		}
+	}
+
+	slog.Debug("Calling QueryTargets", "query", query)
+	targets, err := m.Datastore.QueryTargets(query)
+	if err != nil {
+		slog.Debug("Cannot get targets from query", "error", err)
+		return nil, err
+	}
+
+	slog.Debug("ExtractTargets returning", "count", len(targets))
+	return targets, nil
 }
 
 func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) error {

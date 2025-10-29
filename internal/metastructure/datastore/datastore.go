@@ -48,6 +48,13 @@ type ResourceQuery struct {
 	N                int
 }
 
+type TargetQuery struct {
+	Label        *QueryItem[string]
+	Namespace    *QueryItem[string]
+	Discoverable *QueryItem[bool]
+	N            int
+}
+
 type ResourceModification struct {
 	Stack     string
 	Type      string
@@ -84,6 +91,7 @@ type Datastore interface {
 	LoadAllTargets() ([]*pkgmodel.Target, error)
 	LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error)
 	LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
+	QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error)
 
 	Stats() (*stats.Stats, error)
 

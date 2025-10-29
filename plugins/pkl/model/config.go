@@ -58,8 +58,9 @@ type LoggingConfig struct {
 }
 
 type Target struct {
-	Label     string `pkl:"label"`
-	Namespace string `pkl:"namespace"`
+	Label        string      `pkl:"label"`
+	Namespace    string      `pkl:"namespace"`
+	Discoverable bool        `pkl:"discoverable"`
 	// Output is postprocessed, hence the key case difference
 	Config *pkl.Object `pkl:"Config"`
 }

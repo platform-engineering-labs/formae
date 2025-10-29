@@ -134,7 +134,79 @@ func InventoryCmd() *cobra.Command {
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
 	resources := resourcesCmd()
+	targets := targetsCmd()
 	command.AddCommand(resources)
+	command.AddCommand(targets)
 
 	return command
+}
+
+func targetsCmd() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "targets",
+		Short: "Query inventory of targets",
+		PreRun: func(cmd *cobra.Command, args []string) {
+			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
+		},
+		RunE: func(command *cobra.Command, args []string) error {
+			opts := &InventoryOptions{}
+			consumer, _ := command.Flags().GetString("output-consumer")
+			opts.OutputConsumer = printer.Consumer(consumer)
+			query, _ := command.Flags().GetString("query")
+			opts.Query = strings.TrimSpace(query)
+			opts.MaxResults, _ = command.Flags().GetInt("max-results")
+			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
+
+			app, err := cmd.AppFromContext(command.Context(), "", "", command)
+			if err != nil {
+				return err
+			}
+
+			return runTargets(app, opts)
+		},
+		Annotations: map[string]string{
+			"examples": "{{.Name}} {{.Command}} inventory targets --query 'discoverable:true' --max-results 50",
+		},
+		SilenceErrors: true,
+	}
+
+	command.Flags().String("query", "", "Query that allows to find targets by their attributes (e.g., 'namespace:AWS', 'discoverable:true', 'label:prod-us-east-1')")
+	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
+	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
+	command.Flags().Int("max-results", 10, "Maximum number of targets to display in the table (0 = unlimited)")
+
+	return command
+}
+
+func runTargets(app *app.App, opts *InventoryOptions) error {
+	if err := validateInventoryOptions(opts); err != nil {
+		return err
+	}
+
+	if opts.OutputConsumer == printer.ConsumerMachine {
+		return runTargetsForMachines(app, opts)
+	}
+	return runTargetsForHumans(app, opts)
+}
+
+func runTargetsForMachines(app *app.App, opts *InventoryOptions) error {
+	targets, _, err := app.ExtractTargets(opts.Query)
+	if err != nil {
+		return err
+	}
+
+	p := printer.NewMachineReadablePrinter[[]*pkgmodel.Target](os.Stdout, opts.OutputSchema)
+	return p.Print(&targets)
+}
+
+func runTargetsForHumans(app *app.App, opts *InventoryOptions) error {
+	display.PrintBanner()
+
+	targets, _, err := app.ExtractTargets(opts.Query)
+	if err != nil {
+		return err
+	}
+
+	p := printer.NewHumanReadablePrinter[[]*pkgmodel.Target](os.Stdout)
+	return p.Print(&targets, printer.PrintOptions{MaxResults: opts.MaxResults})
 }
