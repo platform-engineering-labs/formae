@@ -88,7 +88,7 @@ local securityGroups = new sg.SecurityGroupResources {
 
 forma {
     vars.stack
-    // vars.target
+    vars.target
 
     ...network.resources
     ...securityGroups.resources
