@@ -20,6 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
@@ -112,6 +113,11 @@ type MarkFormaCommandAsComplete struct {
 	CommandID string
 }
 
+type MarkResourcesAsCanceled struct {
+	CommandID    string
+	ResourceUris []pkgmodel.FormaeURI
+}
+
 func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message any) (any, error) {
 	switch msg := message.(type) {
 	case StoreNewFormaCommand:
@@ -124,6 +130,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markResourcesAsRejected(&msg)
 	case MarkResourcesAsFailed:
 		return f.markResourcesAsFailed(&msg)
+	case MarkResourcesAsCanceled:
+		return f.markResourcesAsCanceled(&msg)
 	case messages.MarkResourceUpdateAsComplete:
 		return f.markResourceUpdateAsComplete(&msg)
 	case MarkFormaCommandAsComplete:
@@ -159,7 +167,17 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		return false, fmt.Errorf("failed to load Forma command for update: %w", err)
 	}
 
+	// Don't update if command is already canceled
+	if command.State == forma_command.CommandStateCanceled {
+		f.Log().Debug("Ignoring progress update for canceled command", "commandID", progress.CommandID)
+		return true, nil
+	}
+
 	for i, res := range command.ResourceUpdates {
+		// Don't update if resource is already canceled
+		if res.State == types.ResourceUpdateStateCanceled {
+			continue
+		}
 		if res.Resource.Ksuid == progress.ResourceURI.KSUID() && shouldUpdateResourceUpdate(res, progress.Progress) {
 			res.State = progress.ResourceState
 			res.StartTs = progress.ResourceStartTs
@@ -226,6 +244,15 @@ func (f *FormaCommandPersister) markResourcesAsFailed(msg *MarkResourcesAsFailed
 	})
 }
 
+func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanceled) (bool, error) {
+	return f.bulkUpdateResourceState(&BulkUpdateResourceStateByKsuid{
+		CommandID:          msg.CommandID,
+		ResourceUris:       msg.ResourceUris,
+		ResourceState:      types.ResourceUpdateStateCanceled,
+		ResourceModifiedTs: util.TimeNow(),
+	})
+}
+
 func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkResourceUpdateAsComplete) (bool, error) {
 	f.Log().Debug("Marking command resource as complete", "commandID", msg.CommandID, "resourceURI", msg.ResourceURI)
 	cmd, err := f.datastore.GetFormaCommandByCommandID(msg.CommandID)
@@ -259,6 +286,13 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 
 	cmd.ModifiedTs = msg.ResourceModifiedTs
 	cmd.State = overallCommandState(cmd)
+
+	// Hash sensitive data if command is now complete
+	_, err = f.hashSensitiveDataIfComplete(cmd)
+	if err != nil {
+		f.Log().Error("Failed to hash sensitive data", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
+	}
 
 	err = f.datastore.StoreFormaCommand(cmd, cmd.ID)
 	if err != nil {
@@ -298,6 +332,13 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(bulkUpdate *BulkUpdateRe
 	command.ModifiedTs = bulkUpdate.ResourceModifiedTs
 	command.State = overallCommandState(command)
 
+	// Hash sensitive data if command is now complete
+	_, err = f.hashSensitiveDataIfComplete(command)
+	if err != nil {
+		f.Log().Error("Failed to hash sensitive data", "commandID", bulkUpdate.CommandID, "error", err)
+		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
+	}
+
 	err = f.datastore.StoreFormaCommand(command, command.ID)
 	if err != nil {
 		f.Log().Error("Failed to bulk update resource states", "commandID", bulkUpdate.CommandID, "error", err)
@@ -318,6 +359,71 @@ func (f *FormaCommandPersister) markFormaCommandAsComplete(msg *MarkFormaCommand
 		return false, fmt.Errorf("failed to load Forma command for final hashing: %w", err)
 	}
 
+	containsSensitive, err := f.hashSensitiveDataIfComplete(command)
+	if err != nil {
+		f.Log().Error("Failed to hash sensitive data", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
+	}
+
+	if containsSensitive {
+		err = f.datastore.StoreFormaCommand(command, command.ID)
+		if err != nil {
+			f.Log().Error("Failed to store forma command after final hashing", "commandID", msg.CommandID, "error", err)
+			return false, fmt.Errorf("failed to store forma command after final hashing: %w", err)
+		}
+	}
+
+	return true, nil
+}
+
+func overallCommandState(command *forma_command.FormaCommand) forma_command.CommandState {
+	var states []types.ResourceUpdateState
+	for _, res := range command.ResourceUpdates {
+		states = append(states, res.State)
+	}
+
+	// Check if any resources are not in a final state
+	if slices.ContainsFunc(states, func(s types.ResourceUpdateState) bool {
+		return s != types.ResourceUpdateStateSuccess &&
+			s != types.ResourceUpdateStateFailed &&
+			s != types.ResourceUpdateStateRejected &&
+			s != types.ResourceUpdateStateCanceled
+	}) {
+		return forma_command.CommandStateInProgress
+	}
+
+	// Check if any resources were canceled
+	if slices.ContainsFunc(states, func(s types.ResourceUpdateState) bool {
+		return s == types.ResourceUpdateStateCanceled
+	}) {
+		return forma_command.CommandStateCanceled
+	}
+
+	// Check if any resources failed or were rejected
+	if slices.ContainsFunc(states, func(s types.ResourceUpdateState) bool {
+		return s == types.ResourceUpdateStateFailed || s == types.ResourceUpdateStateRejected
+	}) {
+		return forma_command.CommandStateFailed
+	}
+
+	return forma_command.CommandStateSuccess
+}
+
+func hasOpaqueValues(props json.RawMessage) bool {
+	return bytes.Contains(props, []byte(`"$visibility"`)) &&
+		bytes.Contains(props, []byte(`"Opaque"`))
+}
+
+// hashSensitiveDataIfComplete checks if the command is in a final state and hashes sensitive data if so.
+// This should be called after updating resource states to ensure opaque values are hashed when the command completes.
+func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_command.FormaCommand) (bool, error) {
+	// Only hash if the command is in a final state
+	if command.State != forma_command.CommandStateSuccess &&
+		command.State != forma_command.CommandStateFailed &&
+		command.State != forma_command.CommandStateCanceled {
+		return false, nil
+	}
+
 	t := transformations.NewPersistValueTransformer()
 	hashedCount := 0
 
@@ -327,7 +433,7 @@ func (f *FormaCommandPersister) markFormaCommandAsComplete(msg *MarkFormaCommand
 			transformed, err := t.ApplyToResource(&resource)
 			if err != nil {
 				f.Log().Error("Failed to hash forma resource during final cleanup",
-					"commandID", msg.CommandID,
+					"commandID", command.ID,
 					"resourceLabel", resource.Label,
 					"error", err)
 				return false, fmt.Errorf("failed to hash forma resource %s during final cleanup: %w", resource.Label, err)
@@ -343,7 +449,7 @@ func (f *FormaCommandPersister) markFormaCommandAsComplete(msg *MarkFormaCommand
 			transformed, err := t.ApplyToResource(&resourceUpdate.Resource)
 			if err != nil {
 				f.Log().Error("Failed to hash resource update during final cleanup",
-					"commandID", msg.CommandID,
+					"commandID", command.ID,
 					"resourceLabel", resourceUpdate.Resource.Label,
 					"error", err)
 				return false, fmt.Errorf("failed to hash resource update %s during final cleanup: %w", resourceUpdate.Resource.Label, err)
@@ -354,41 +460,13 @@ func (f *FormaCommandPersister) markFormaCommandAsComplete(msg *MarkFormaCommand
 	}
 
 	if hashedCount > 0 {
-		err = f.datastore.StoreFormaCommand(command, command.ID)
-		if err != nil {
-			f.Log().Error("Failed to store forma command after final hashing", "commandID", msg.CommandID, "error", err)
-			return false, fmt.Errorf("failed to store forma command after final hashing: %w", err)
-		}
-
-		f.Log().Debug("Successfully hashed all forma resources for command completion",
-			"commandID", msg.CommandID,
+		f.Log().Debug("Hashed sensitive data for completed command",
+			"commandID", command.ID,
+			"state", command.State,
 			"hashedResourceCount", hashedCount)
 	}
 
-	return true, nil
-}
-
-func overallCommandState(command *forma_command.FormaCommand) forma_command.CommandState {
-	var states []types.ResourceUpdateState
-	for _, res := range command.ResourceUpdates {
-		states = append(states, res.State)
-	}
-	if slices.ContainsFunc(states, func(s types.ResourceUpdateState) bool {
-		return s != types.ResourceUpdateStateSuccess && s != types.ResourceUpdateStateFailed && s != types.ResourceUpdateStateRejected
-	}) {
-		return forma_command.CommandStateInProgress
-	} else if slices.ContainsFunc(states, func(s types.ResourceUpdateState) bool {
-		return s == types.ResourceUpdateStateFailed || s == types.ResourceUpdateStateRejected
-	}) {
-		return forma_command.CommandStateFailed
-	}
-
-	return forma_command.CommandStateSuccess
-}
-
-func hasOpaqueValues(props json.RawMessage) bool {
-	return bytes.Contains(props, []byte(`"$visibility"`)) &&
-		bytes.Contains(props, []byte(`"Opaque"`))
+	return hashedCount > 0, nil
 }
 
 // shouldUpdateResourceUpdate determines if a ResourceUpdate should be updated based on the progress

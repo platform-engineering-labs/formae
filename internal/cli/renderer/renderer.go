@@ -73,12 +73,13 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 		display.Green("Success"),
 		display.Gold("Retry"),
 		display.Red("Fail"),
+		display.Grey("Canceled"),
 		display.LightBlue("Started At"),
 		display.LightBlue("Time"))
 
 	data := make([][]any, len(status.Commands))
 	for i, command := range status.Commands {
-		data[i] = make([]any, 11)
+		data[i] = make([]any, 12)
 		data[i][0] = display.LightBlue(string(command.CommandID))
 		data[i][1] = command.Command
 		status := display.Grey(string(command.State))
@@ -87,11 +88,13 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 			status = display.Green(string(command.State))
 		case "Failed":
 			status = display.Red(string(command.State))
+		case "Canceled":
+			status = display.Grey(string(command.State))
 		}
 
 		data[i][2] = status
 
-		statusData := make([]int, 6)
+		statusData := make([]int, 7)
 		for _, rc := range command.ResourceUpdates {
 			if rc.Operation != apimodel.OperationRead {
 				statusData[0]++
@@ -109,6 +112,8 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 					statusData[3]++
 				case apimodel.ResourceUpdateStateFailed:
 					statusData[5]++
+				case apimodel.ResourceUpdateStateCanceled:
+					statusData[6]++
 				}
 			}
 		}
@@ -119,8 +124,9 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 		data[i][6] = display.Green(fmt.Sprintf("%d", statusData[3]))
 		data[i][7] = display.Gold(fmt.Sprintf("%d", statusData[4]))
 		data[i][8] = display.Red(fmt.Sprintf("%d", statusData[5]))
-		data[i][9] = display.LightBlue(command.StartTs.Format("01/02/2006 3:04PM"))
-		data[i][10] = display.LightBlue(formatDuration(calculateDuration(command)))
+		data[i][9] = display.Grey(fmt.Sprintf("%d", statusData[6]))
+		data[i][10] = display.LightBlue(command.StartTs.Format("01/02/2006 3:04PM"))
+		data[i][11] = display.LightBlue(formatDuration(calculateDuration(command)))
 	}
 
 	err := table.Bulk(data)
@@ -144,7 +150,7 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 	var result string
 	renderHeader := func(cmd apimodel.Command) string {
 		totalDuration := display.Grey("(total duration: ") + display.LightBlue(formatDuration(calculateDuration(cmd))) + display.Grey(")")
-		return fmt.Sprintf("%s %s %s: %s, %s",
+		return fmt.Sprintf("%s %s %s: %s %s",
 			cmd.Command,
 			display.Grey("command with ID"),
 			display.LightBluef("%s", cmd.CommandID),
@@ -152,7 +158,15 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 			totalDuration)
 	}
 	for _, cmd := range s.Commands {
-		s, err := renderCommand(cmd, renderHeader, formatResourceUpdate)
+		// Create a context-aware formatter for canceled commands
+		var formatter func(*gtree.Node, apimodel.ResourceUpdate)
+		if cmd.State == "Canceled" {
+			formatter = formatResourceUpdateForCanceledCommand
+		} else {
+			formatter = formatResourceUpdate
+		}
+
+		s, err := renderCommand(cmd, renderHeader, formatter)
 		if err != nil {
 			return "", err
 		}
@@ -337,6 +351,24 @@ func formatResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {
 	addStatusDetails(node, rc)
 }
 
+// formatResourceUpdateForCanceledCommand formats resource updates for commands that were canceled.
+// In the context of a canceled command, the semantics flip:
+// - "Canceled" resource updates represent successful cancellations (shown in green)
+// - "Success" resource updates represent operations that completed before cancellation (shown in grey)
+func formatResourceUpdateForCanceledCommand(root *gtree.Node, rc apimodel.ResourceUpdate) {
+	op := coloredOperation(rc.Operation)
+
+	line := display.Greyf("%s resource %s", op, rc.ResourceLabel)
+	line = line + fmt.Sprintf(": %s", coloredResourceUpdateStateForCanceledCommand(rc.State))
+	line = line + formatDurationLine(rc.Duration)
+
+	node := root.Add(line)
+
+	node.Add(display.Greyf("of type %s", rc.ResourceType))
+	node.Add(formatStackLine(rc.Operation, rc.OldStackName, rc.StackName))
+	addStatusDetails(node, rc)
+}
+
 func coloredOperation(operation string) string {
 	var colored string
 	switch operation {
@@ -364,6 +396,23 @@ func coloredResourceUpdateState(state string) string {
 	switch state {
 	case "Success":
 		return display.Green(string(state))
+	case "Failed", "Rejected":
+		return display.Red(string(state))
+	default:
+		return display.Grey(string(state))
+	}
+}
+
+// coloredResourceUpdateStateForCanceledCommand returns the state formatted with appropriate color
+// for resource updates belonging to a canceled command. The semantics are flipped:
+// - "Canceled" is considered success (the user wanted to cancel) -> shown in green
+// - "Success" means the operation completed before cancellation -> shown in grey with different text
+func coloredResourceUpdateStateForCanceledCommand(state string) string {
+	switch state {
+	case "Canceled":
+		return display.Green(string(state))
+	case "Success":
+		return display.Grey("Completed (unable to cancel)")
 	case "Failed", "Rejected":
 		return display.Red(string(state))
 	default:
@@ -576,4 +625,22 @@ func RenderInventoryResources(resources []pkgmodel.Resource, maxRows int) (strin
 
 		return buf.String() + summary + "\n", nil
 	}
+}
+
+// RenderCancelCommandResponse renders the result of a cancel command
+func RenderCancelCommandResponse(response *apimodel.CancelCommandResponse) (string, error) {
+	var buf strings.Builder
+
+	if response == nil || len(response.CommandIDs) == 0 {
+		return display.Gold("No commands to cancel.\n"), nil
+	}
+
+	buf.WriteString(display.Gold("Commands are being canceled:\n\n"))
+	for _, cmdID := range response.CommandIDs {
+		buf.WriteString(fmt.Sprintf("  %s %s\n", display.Green("•"), cmdID))
+	}
+
+	buf.WriteString(fmt.Sprintf("\n%s\n", display.Grey("Use 'formae status' to check the cancellation progress.")))
+
+	return buf.String(), nil
 }

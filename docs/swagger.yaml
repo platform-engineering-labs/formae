@@ -31,6 +31,13 @@ definitions:
       Text:
         type: string
     type: object
+  model.CancelCommandResponse:
+    properties:
+      CommandIds:
+        items:
+          type: string
+        type: array
+    type: object
   model.FieldHint:
     properties:
       createOnly:
@@ -376,6 +383,43 @@ paths:
           schema:
             type: string
       summary: Submit a Forma command
+      tags:
+      - commands
+  /commands/cancel:
+    post:
+      description: Cancels commands that are currently in progress. Can cancel either
+        the most recent command or commands matching a query.
+      parameters:
+      - description: Unique identifier for the client.
+        in: header
+        name: Client-ID
+        required: true
+        type: string
+      - description: Optional query string to select commands to cancel. If not provided,
+          cancels the most recent command.
+        in: query
+        name: query
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: 'Accepted: Commands are being canceled.'
+          schema:
+            $ref: '#/definitions/model.CancelCommandResponse'
+        "400":
+          description: 'Bad Request: Invalid query or missing Client-ID.'
+          schema:
+            type: string
+        "404":
+          description: 'Not Found: No in-progress commands found to cancel.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Cancel commands
       tags:
       - commands
   /commands/status:
