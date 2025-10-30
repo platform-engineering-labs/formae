@@ -37,6 +37,7 @@ const (
 	ListCommandStatusRoute = BasePath + "/commands/status"
 	CancelCommandsRoute    = BasePath + "/commands/cancel"
 	ListResourcesRoute     = BasePath + "/resources"
+	ListTargetsRoute       = BasePath + "/targets"
 	StatsRoute             = BasePath + "/stats"
 	MetricsRoute           = BasePath + "/metrics"
 
@@ -183,6 +184,9 @@ func (s *Server) configureEcho() *echo.Echo {
 
 	// Resource extraction endpoint
 	e.GET(ListResourcesRoute, s.ListResources)
+
+	// Target listing endpoint
+	e.GET(ListTargetsRoute, s.ListTargets)
 
 	// Usage stats endpoint
 	e.GET(StatsRoute, s.Stats)
@@ -362,6 +366,30 @@ func (s *Server) ListResources(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, resources)
+}
+
+// @Summary List targets
+// @Description Retrieves targets based on query parameters
+// @Tags targets
+// @Produce json
+// @Param query query string false "Query string to filter targets (e.g., 'namespace:aws discoverable:true')"
+// @Success 200 {array} pkgmodel.Target "OK: List of targets."
+// @Failure 404 {string} string "Not Found: No targets found."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /targets [get]
+func (s *Server) ListTargets(c echo.Context) error {
+	query := c.QueryParam("query")
+	targets, err := s.metastructure.ExtractTargets(query)
+	if err != nil {
+		return mapError(c, err)
+	}
+	if len(targets) == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "No targets found",
+		})
+	}
+
+	return c.JSON(http.StatusOK, targets)
 }
 
 // @Summary Get usage statistics

@@ -1249,10 +1249,10 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 		defer datastore.CleanUp()
 
 		stackReconcile := &forma_command.FormaCommand{
-			ID:      "stack-reconcile-id",
-			Command: pkgmodel.CommandApply,
-			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			StartTs: util.TimeNow().Add(-10 * time.Minute),
+			ID:              "stack-reconcile-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs:         util.TimeNow().Add(-10 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
@@ -1267,10 +1267,10 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 		assert.NoError(t, err)
 
 		stackPatchA := &forma_command.FormaCommand{
-			ID:      "stack-patch-a-id",
-			Command: pkgmodel.CommandApply,
-			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
-			StartTs: util.TimeNow().Add(-8 * time.Minute),
+			ID:              "stack-patch-a-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs:         util.TimeNow().Add(-8 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
@@ -1295,10 +1295,10 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 		assert.NoError(t, err)
 
 		stackPatchB := &forma_command.FormaCommand{
-			ID:      "stack-patch-b-id",
-			Command: pkgmodel.CommandApply,
-			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
-			StartTs: util.TimeNow().Add(-4 * time.Minute),
+			ID:              "stack-patch-b-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs:         util.TimeNow().Add(-4 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
@@ -1326,4 +1326,198 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 	} else {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
+}
+
+func setupQueryTargetsTestData(ds Datastore, t *testing.T) {
+	targets := []*pkgmodel.Target{
+		{
+			Label:        "prod-us-east-1",
+			Namespace:    "AWS",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Region":"us-east-1","AccountID":"123"}`),
+		},
+		{
+			Label:        "prod-us-west-2",
+			Namespace:    "AWS",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Region":"us-west-2","AccountID":"123"}`),
+		},
+		{
+			Label:        "dev-us-east-1",
+			Namespace:    "AWS",
+			Discoverable: false,
+			Config:       json.RawMessage(`{"Region":"us-east-1","AccountID":"456"}`),
+		},
+		{
+			Label:        "tailscale-main",
+			Namespace:    "TAILSCALE",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Tailnet":"example.com"}`),
+		},
+	}
+
+	for _, target := range targets {
+		_, err := ds.CreateTarget(target)
+		assert.NoError(t, err)
+	}
+}
+
+func TestDatastore_QueryTargets_All(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer ds.CleanUp()
+
+	setupQueryTargetsTestData(ds, t)
+
+	got, err := ds.QueryTargets(&TargetQuery{})
+	assert.NoError(t, err)
+	assert.Len(t, got, 4)
+}
+
+func TestDatastore_QueryTargets_ByNamespace(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer ds.CleanUp()
+
+	setupQueryTargetsTestData(ds, t)
+
+	got, err := ds.QueryTargets(&TargetQuery{
+		Namespace: &QueryItem[string]{
+			Item:       "AWS",
+			Constraint: Required,
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, got, 3)
+	for _, target := range got {
+		assert.Equal(t, "AWS", target.Namespace)
+	}
+}
+
+func TestDatastore_QueryTargets_ByDiscoverable(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer ds.CleanUp()
+
+	setupQueryTargetsTestData(ds, t)
+
+	got, err := ds.QueryTargets(&TargetQuery{
+		Discoverable: &QueryItem[bool]{
+			Item:       true,
+			Constraint: Required,
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, got, 3)
+	for _, target := range got {
+		assert.True(t, target.Discoverable)
+	}
+}
+
+func TestDatastore_QueryTargets_ByLabel(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer ds.CleanUp()
+
+	setupQueryTargetsTestData(ds, t)
+
+	got, err := ds.QueryTargets(&TargetQuery{
+		Label: &QueryItem[string]{
+			Item:       "prod-us-east-1",
+			Constraint: Required,
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, got, 1)
+	assert.Equal(t, "prod-us-east-1", got[0].Label)
+}
+
+func TestDatastore_QueryTargets_DiscoverableAWS(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer ds.CleanUp()
+
+	setupQueryTargetsTestData(ds, t)
+
+	got, err := ds.QueryTargets(&TargetQuery{
+		Namespace: &QueryItem[string]{
+			Item:       "AWS",
+			Constraint: Required,
+		},
+		Discoverable: &QueryItem[bool]{
+			Item:       true,
+			Constraint: Required,
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, got, 2)
+	for _, target := range got {
+		assert.Equal(t, "AWS", target.Namespace)
+		assert.True(t, target.Discoverable)
+	}
+}
+
+func TestDatastore_QueryTargets_NonDiscoverable(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer ds.CleanUp()
+
+	setupQueryTargetsTestData(ds, t)
+
+	got, err := ds.QueryTargets(&TargetQuery{
+		Discoverable: &QueryItem[bool]{
+			Item:       false,
+			Constraint: Required,
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, got, 1)
+	assert.Equal(t, "dev-us-east-1", got[0].Label)
+	assert.False(t, got[0].Discoverable)
+}
+
+func TestDatastore_QueryTargets_Versioning(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer ds.CleanUp()
+
+	target := &pkgmodel.Target{
+		Label:        "version-test",
+		Namespace:    "AWS",
+		Discoverable: false,
+		Config:       json.RawMessage(`{"Version":"1"}`),
+	}
+
+	_, err = ds.CreateTarget(target)
+	assert.NoError(t, err)
+
+	target.Discoverable = true
+	target.Config = json.RawMessage(`{"Version":"2"}`)
+	_, err = ds.UpdateTarget(target)
+	assert.NoError(t, err)
+
+	results, err := ds.QueryTargets(&TargetQuery{
+		Label: &QueryItem[string]{
+			Item:       "version-test",
+			Constraint: Required,
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.True(t, results[0].Discoverable)
+	assert.Contains(t, string(results[0].Config), "Version\":\"2")
 }

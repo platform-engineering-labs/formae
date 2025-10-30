@@ -5,7 +5,9 @@
 package renderer
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -726,6 +728,109 @@ func RenderInventoryResources(resources []pkgmodel.Resource, maxRows int) (strin
 
 		return buf.String() + summary + "\n", nil
 	}
+}
+
+// RenderInventoryTargets renders a list of targets in a table format
+func RenderInventoryTargets(targets []*pkgmodel.Target, maxRows int) (string, error) {
+	var buf strings.Builder
+	table := tablewriter.NewTable(&buf,
+		tablewriter.WithRowAutoWrap(tw.WrapBreak),
+		tablewriter.WithHeaderAutoFormat(tw.Off),
+		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
+			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On, ShowHeader: tw.On}},
+		})))
+	table.Header(display.LightBlue("Label"), "Namespace", "Discoverable", "Config")
+
+	effectiveMaxRows := len(targets)
+	if maxRows > 0 && maxRows < len(targets) {
+		effectiveMaxRows = maxRows
+	}
+
+	data := make([][]string, effectiveMaxRows)
+	for i := 0; i < effectiveMaxRows; i++ {
+		target := targets[i]
+
+		data[i] = make([]string, 4)
+		data[i][0] = display.LightBlue(target.Label)
+		data[i][1] = target.Namespace
+
+		if target.Discoverable {
+			data[i][2] = display.Green("true")
+		} else {
+			data[i][2] = "false"
+		}
+
+		// Format config with sensitive field filtering
+		data[i][3] = formatTargetConfig(target.Config)
+	}
+
+	err := table.Bulk(data)
+	if err != nil {
+		return "", fmt.Errorf("error rendering targets: %v", err)
+	}
+
+	if len(targets) == 0 {
+		return display.Gold("No targets found.\n"), nil
+	}
+
+	err = table.Render()
+	if err != nil {
+		return "", fmt.Errorf("error rendering targets: %v", err)
+	}
+
+	summary := fmt.Sprintf("\n%s Showing %d of %d total targets",
+		display.Gold("Summary:"),
+		effectiveMaxRows,
+		len(targets))
+
+	if maxRows > 0 && len(targets) > maxRows {
+		summary += fmt.Sprintf(" (use --max-results %d to see all)", len(targets))
+	}
+
+	return buf.String() + summary + "\n", nil
+}
+
+// formatTargetConfig converts a target config to a human-readable string,
+// filtering out sensitive fields
+func formatTargetConfig(configJSON json.RawMessage) string {
+	if len(configJSON) == 0 {
+		return ""
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return string(configJSON) // fallback to raw JSON
+	}
+
+	var parts []string
+	for key, value := range config {
+		// Skip sensitive fields (case-insensitive check)
+		lowerKey := strings.ToLower(key)
+		if strings.Contains(lowerKey, "key") ||
+			strings.Contains(lowerKey, "token") ||
+			strings.Contains(lowerKey, "secret") ||
+			strings.Contains(lowerKey, "password") ||
+			strings.Contains(lowerKey, "credential") {
+			continue
+		}
+
+		var valueStr string
+		switch v := value.(type) {
+		case string:
+			valueStr = v
+		case bool:
+			valueStr = fmt.Sprintf("%t", v)
+		case float64:
+			valueStr = fmt.Sprintf("%.0f", v)
+		default:
+			valueStr = fmt.Sprintf("%v", v)
+		}
+
+		parts = append(parts, fmt.Sprintf("%s=%s", key, valueStr))
+	}
+	sort.Strings(parts)
+
+	return strings.Join(parts, ", ")
 }
 
 // RenderCancelCommandResponse renders the result of a cancel command
