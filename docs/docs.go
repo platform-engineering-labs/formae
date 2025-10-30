@@ -842,10 +842,7 @@ const docTemplate = `{
         "model.TargetUpdate": {
             "type": "object",
             "properties": {
-                "DiscoverableNew": {
-                    "type": "boolean"
-                },
-                "DiscoverableOld": {
+                "Discoverable": {
                     "type": "boolean"
                 },
                 "Duration": {

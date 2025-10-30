@@ -265,9 +265,7 @@ definitions:
     type: object
   model.TargetUpdate:
     properties:
-      DiscoverableNew:
-        type: boolean
-      DiscoverableOld:
+      Discoverable:
         type: boolean
       Duration:
         description: milliseconds
