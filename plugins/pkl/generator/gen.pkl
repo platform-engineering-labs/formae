@@ -418,7 +418,7 @@ function shouldSkipPropertyName(propertyName: String): Boolean =
 
 
 local function parseValueEnhanced(value: Any): Any =
-if (value == null)
+  if (value == null)
     null
 
   else if (value is Mapping)
