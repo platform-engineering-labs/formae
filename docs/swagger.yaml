@@ -16,6 +16,10 @@ definitions:
         type: string
       State:
         type: string
+      TargetUpdates:
+        items:
+          $ref: '#/definitions/model.TargetUpdate'
+        type: array
     type: object
   github_com_platform-engineering-labs_formae_internal_api_model.Description:
     properties:
@@ -250,9 +254,33 @@ definitions:
         items:
           type: integer
         type: array
+      Discoverable:
+        type: boolean
       Label:
         type: string
       Namespace:
+        type: string
+      Version:
+        type: integer
+    type: object
+  model.TargetUpdate:
+    properties:
+      Discoverable:
+        type: boolean
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      ModifiedTs:
+        type: string
+      Operation:
+        type: string
+      StartTs:
+        type: string
+      State:
+        type: string
+      TargetLabel:
         type: string
     type: object
 host: localhost:8080

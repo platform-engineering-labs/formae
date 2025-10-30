@@ -419,6 +419,12 @@ const docTemplate = `{
                 },
                 "State": {
                     "type": "string"
+                },
+                "TargetUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.TargetUpdate"
+                    }
                 }
             }
         },
@@ -776,10 +782,46 @@ const docTemplate = `{
                         "type": "integer"
                     }
                 },
+                "Discoverable": {
+                    "type": "boolean"
+                },
                 "Label": {
                     "type": "string"
                 },
                 "Namespace": {
+                    "type": "string"
+                },
+                "Version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.TargetUpdate": {
+            "type": "object",
+            "properties": {
+                "Discoverable": {
+                    "type": "boolean"
+                },
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "ModifiedTs": {
+                    "type": "string"
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
+                    "type": "string"
+                },
+                "TargetLabel": {
                     "type": "string"
                 }
             }
