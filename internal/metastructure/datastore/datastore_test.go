@@ -1249,10 +1249,10 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 		defer datastore.CleanUp()
 
 		stackReconcile := &forma_command.FormaCommand{
-			ID:      "stack-reconcile-id",
-			Command: pkgmodel.CommandApply,
-			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			StartTs: util.TimeNow().Add(-10 * time.Minute),
+			ID:              "stack-reconcile-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs:         util.TimeNow().Add(-10 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
@@ -1267,10 +1267,10 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 		assert.NoError(t, err)
 
 		stackPatchA := &forma_command.FormaCommand{
-			ID:      "stack-patch-a-id",
-			Command: pkgmodel.CommandApply,
-			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
-			StartTs: util.TimeNow().Add(-8 * time.Minute),
+			ID:              "stack-patch-a-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs:         util.TimeNow().Add(-8 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
@@ -1295,10 +1295,10 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 		assert.NoError(t, err)
 
 		stackPatchB := &forma_command.FormaCommand{
-			ID:      "stack-patch-b-id",
-			Command: pkgmodel.CommandApply,
-			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
-			StartTs: util.TimeNow().Add(-4 * time.Minute),
+			ID:              "stack-patch-b-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs:         util.TimeNow().Add(-4 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
