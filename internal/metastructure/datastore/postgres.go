@@ -536,10 +536,16 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 		AND r1.operation != 'delete'
 	)
 	AND T1.timestamp > (
-		SELECT timestamp
-		FROM forma_commands
-		WHERE data->'Config'->>'Mode' = 'reconcile'
-		ORDER BY timestamp DESC
+		SELECT fc.timestamp
+		FROM forma_commands fc
+		WHERE fc.data->'Config'->>'Mode' = 'reconcile'
+		AND EXISTS (
+			SELECT 1
+			FROM resources r
+			WHERE r.command_id = fc.command_id
+			AND r.stack = $1
+		)
+		ORDER BY fc.timestamp DESC
 		LIMIT 1
 	)
 	AND T2.stack = $1;
@@ -1032,7 +1038,7 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	return targets, rows.Err()
 }
 
-func (d DatastorePostgres) LoadDiscoverableTargetsDistinctConfig() ([]*pkgmodel.Target, error) {
+func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 	// Get latest version per label where discoverable = true, deduplicated by config using DISTINCT ON
 	query := `
 	WITH latest_targets AS (

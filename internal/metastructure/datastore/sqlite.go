@@ -362,16 +362,22 @@ WHERE
       ) AND r1.operation != 'delete'
   ) AND T1.timestamp > (
     SELECT
-      timestamp
-    FROM forma_commands
+      fc.timestamp
+    FROM forma_commands fc
     WHERE
-      json_extract(data, '$.Config.Mode') = 'reconcile'
+      json_extract(fc.data, '$.Config.Mode') = 'reconcile'
+      AND EXISTS (
+        SELECT 1
+        FROM resources r
+        WHERE r.command_id = fc.command_id
+        AND r.stack = ?
+      )
     ORDER BY
-      timestamp DESC
+      fc.timestamp DESC
     LIMIT 1
   ) AND T2.stack = ?;
 		`, CommandsTable)
-	rows, err := d.conn.Query(query, stack, stack)
+	rows, err := d.conn.Query(query, stack, stack, stack)
 	if err != nil {
 		return nil, err
 	}
@@ -1059,7 +1065,7 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	return targets, rows.Err()
 }
 
-func (d DatastoreSQLite) LoadDiscoverableTargetsDistinctConfig() ([]*pkgmodel.Target, error) {
+func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 	// Get latest version per label where discoverable = true
 	// Deduplicate by config across all namespaces
 	query := `

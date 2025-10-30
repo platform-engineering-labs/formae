@@ -25,11 +25,6 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// FormaCommandPersister is responsible for all FormaCommand updates.
-// IMPORTANT: Must remain a singleton actor to ensure serial processing.
-// Each message handler loads fresh state, modifies it, and stores the
-// entire FormaCommand. The actor's serial message processing prevents
-// concurrent database updates that could cause data loss.
 type FormaCommandPersister struct {
 	act.Actor
 

@@ -213,7 +213,7 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 	}
 	proc.Log().Debug("Starting resource discovery", "timestamp", data.timeStarted)
 
-	allTargets, err := data.ds.LoadDiscoverableTargetsDistinctConfig()
+	allTargets, err := data.ds.LoadDiscoverableTargets()
 	if err != nil {
 		proc.Log().Error("Discovery: failed to load targets from datastore", "error", err)
 		allTargets = []*pkgmodel.Target{}

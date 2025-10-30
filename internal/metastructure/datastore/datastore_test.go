@@ -1240,3 +1240,90 @@ func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
 }
+
+// TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCommand verifies
+// that an intermediate reconcile command (for a different stack or target) doesn't affect
+// modification tracking for the original stack.
+func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCommand(t *testing.T) {
+	if datastore, err := prepareDatastore(); err == nil {
+		defer datastore.CleanUp()
+
+		stackReconcile := &forma_command.FormaCommand{
+			ID:      "stack-reconcile-id",
+			Command: pkgmodel.CommandApply,
+			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs: util.TimeNow().Add(-10 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = datastore.StoreResource(&pkgmodel.Resource{
+			NativeID: "bucket-1",
+			Stack:    "test-stack",
+			Type:     "AWS::S3::Bucket",
+			Label:    "bucket-1",
+			Target:   "default-target",
+		}, stackReconcile.ID)
+		assert.NoError(t, err)
+		err = datastore.StoreFormaCommand(stackReconcile, stackReconcile.ID)
+		assert.NoError(t, err)
+
+		stackPatchA := &forma_command.FormaCommand{
+			ID:      "stack-patch-a-id",
+			Command: pkgmodel.CommandApply,
+			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs: util.TimeNow().Add(-8 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = datastore.StoreResource(&pkgmodel.Resource{
+			NativeID: "bucket-2",
+			Stack:    "test-stack",
+			Type:     "AWS::S3::Bucket",
+			Label:    "bucket-2",
+			Target:   "default-target",
+		}, stackPatchA.ID)
+		assert.NoError(t, err)
+		err = datastore.StoreFormaCommand(stackPatchA, stackPatchA.ID)
+		assert.NoError(t, err)
+
+		intermediateReconcile := &forma_command.FormaCommand{
+			ID:              "intermediate-reconcile-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs:         util.TimeNow().Add(-6 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{},
+		}
+		err = datastore.StoreFormaCommand(intermediateReconcile, intermediateReconcile.ID)
+		assert.NoError(t, err)
+
+		stackPatchB := &forma_command.FormaCommand{
+			ID:      "stack-patch-b-id",
+			Command: pkgmodel.CommandApply,
+			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs: util.TimeNow().Add(-4 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = datastore.StoreResource(&pkgmodel.Resource{
+			NativeID: "bucket-3",
+			Stack:    "test-stack",
+			Type:     "AWS::S3::Bucket",
+			Label:    "bucket-3",
+			Target:   "default-target",
+		}, stackPatchB.ID)
+		assert.NoError(t, err)
+		err = datastore.StoreFormaCommand(stackPatchB, stackPatchB.ID)
+		assert.NoError(t, err)
+
+		modifications, err := datastore.GetResourceModificationsSinceLastReconcile("test-stack")
+		assert.NoError(t, err)
+
+		assert.Len(t, modifications, 2, "Should include both patches despite intermediate reconcile")
+		labels := make(map[string]bool)
+		for _, mod := range modifications {
+			labels[mod.Label] = true
+		}
+		assert.True(t, labels["bucket-2"], "Should include first patch")
+		assert.True(t, labels["bucket-3"], "Should include second patch")
+
+	} else {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+}

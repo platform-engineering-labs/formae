@@ -13,7 +13,7 @@ const (
 	FormaCommandSourceDiscovery   FormaCommandSource = "discovery"
 )
 
-// OperationType is the high-level operation being performed on a resource.
+// OperationType is the high-level operation being performed on a resource or target.
 // This is distinct from a DelegateCommand.
 // An Operation can be Individual or Composite.
 type OperationType string

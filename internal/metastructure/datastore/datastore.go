@@ -83,7 +83,7 @@ type Datastore interface {
 	LoadTarget(targetLabel string) (*pkgmodel.Target, error)
 	LoadAllTargets() ([]*pkgmodel.Target, error)
 	LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error)
-	LoadDiscoverableTargetsDistinctConfig() ([]*pkgmodel.Target, error)
+	LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 
 	Stats() (*stats.Stats, error)
 

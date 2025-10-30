@@ -27,7 +27,8 @@ func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
 
 // GenerateTargetUpdates determines what target changes are needed
 func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command) ([]TargetUpdate, error) {
-	// TODO: Generate updates for destroy commands
+	// NOTE: Destroy command support for targets is intentionally deferred for future implementation.
+	// Currently, destroy commands only operate on resources, not targets.
 	if command == pkgmodel.CommandDestroy {
 		return nil, nil
 	}

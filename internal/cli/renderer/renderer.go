@@ -24,7 +24,7 @@ func RenderSimulation(s *apimodel.Simulation) (string, error) {
 	buf := strings.Builder{}
 	renderHeader := func(cmd apimodel.Command) string { return "Command will" }
 
-	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, true)
+	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate)
 	if err != nil {
 		return "", err
 	}
@@ -125,9 +125,9 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 }
 
 // countUpdateStates counts states for both resource and target updates
-// Returns [total, waiting, inProgress, success, retry, failed]
+// Returns [total, waiting, inProgress, success, retry, failed, canceled]
 func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates []apimodel.TargetUpdate) []int {
-	statusData := make([]int, 6)
+	statusData := make([]int, 7)
 
 	// Count resource updates
 	for _, rc := range resourceUpdates {
@@ -190,7 +190,7 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 			formatter = formatResourceUpdate
 		}
 
-		s, err := renderCommand(cmd, renderHeader, formatter, false)
+		s, err := renderCommand(cmd, renderHeader, formatter, formatTargetUpdate)
 		if err != nil {
 			return "", err
 		}
@@ -200,16 +200,12 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 	return result, nil
 }
 
-func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate), isSimulation bool) (string, error) {
+func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate), renderTargetUpdate func(*gtree.Node, apimodel.TargetUpdate)) (string, error) {
 	root := gtree.NewRoot(renderHeader(cmd))
 
 	// Render target updates first (before resources)
 	for _, tu := range cmd.TargetUpdates {
-		if isSimulation {
-			formatSimulatedTargetUpdate(root, tu)
-		} else {
-			formatTargetUpdate(root, tu)
-		}
+		renderTargetUpdate(root, tu)
 	}
 
 	groupedUpdates := make(map[string][]apimodel.ResourceUpdate)
