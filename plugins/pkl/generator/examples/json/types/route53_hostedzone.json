@@ -39,6 +39,72 @@
         ]
       },
       "NativeId": "Z01234567890ABCDEF"
+    },
+    {
+      "Label": "Z01762211CHP02OT2BGCB",
+      "Type": "AWS::Route53::HostedZone",
+      "Stack": "$unmanaged",
+      "Target": "us-west-1",
+      "Schema": {
+        "Identifier": "Id",
+        "Tags": "HostedZoneTags",
+        "Fields": [
+          "HostedZoneTags",
+          "HostedZoneConfig",
+          "Name",
+          "QueryLoggingConfig",
+          "VPCs"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "HostedZoneConfig": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false,
+            "RequiredOnCreate": false
+          },
+          "HostedZoneTags": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false,
+            "RequiredOnCreate": false
+          },
+          "Name": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false,
+            "RequiredOnCreate": false
+          },
+          "QueryLoggingConfig": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false,
+            "RequiredOnCreate": false
+          },
+          "VPCs": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false,
+            "RequiredOnCreate": false
+          }
+        },
+        "Discoverable": false
+      },
+      "Properties": {
+        "HostedZoneConfig": {
+          "Comment": "HostedZone created by Route53 Registrar"
+        },
+        "Id": "Z01234567890ABCDE1",
+        "Name": "test.platformengineering.local.",
+        "VPCs": [{ "VPCId": "vpc-123456789", "VPCRegion": "us-west-1" }]
+      },
+      "ReadOnlyProperties": { "Id": "Z01234567890ABCDE1" },
+      "NativeID": "Z01234567890ABCDE1"
     }
   ]
 }

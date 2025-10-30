@@ -12,17 +12,17 @@ import "../aws.pkl"
 const type = "AWS::Route53::HostedZone"
 
 @aws.SubResourceHint
-open class HostedZoneConfig {
+open class HostedZoneConfig  extends formae.SubResource{
     comment: String?
 }
 
 @aws.SubResourceHint
-open class QueryLoggingConfig {
+open class QueryLoggingConfig  extends formae.SubResource {
     cloudWatchLogsLogGroupArn: String
 }
 
 @aws.SubResourceHint
-open class VPC {
+open class VPC extends formae.SubResource {
     @aws.FieldHint {
         outputField = "VPCId"
     }

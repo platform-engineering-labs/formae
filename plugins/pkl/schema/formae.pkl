@@ -467,24 +467,61 @@ class Fq {
 
     function reverseFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
         let(resourceHint = resourceClass.annotations.filterIsInstance(ResourceHint).first)
-        resourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+        let(directMapping = resourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
             let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
-                Pair(outputKey, k)
-        ).toMap().toMapping()
+            Pair(outputKey, k)
+        ))
+        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+            v.annotations.filterIsInstance(FieldHint).length > 0 &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(subResourceClass = getSubResourceClass(v.type))
+            let(subMapping = reverseSubResourceFieldMapping(subResourceClass))
+
+            subMapping.toMap().map((outputKey, pklKey) ->
+                Pair(parentKey + "." + outputKey, k + "." + pklKey)
+            )
+        ))
+
+        (directMapping.toMap() + nestedMapping.toMap()).toMapping()
 
     function reverseSubResourceFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
         let(subResourceHint = resourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull)
-        resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+        let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
+        // Include ALL properties, not just those with @FieldHint
+        let(directMapping = resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
             let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey =
                 if (fieldHint != null && fieldHint.outputField != null)
                     fieldHint.outputField
                 else
-                    subResourceHint.outputKeyTransformation.apply(k)
+                    outputKeyTransformation.apply(k)
             )
-                Pair(outputKey, k)
-        ).toMap().toMapping()
+            Pair(outputKey, k)
+        ))
+        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+            !v.modifiers.contains("hidden") &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey =
+                if (fieldHint != null && fieldHint.outputField != null)
+                    fieldHint.outputField
+                else
+                    outputKeyTransformation.apply(k)
+            )
+            let(nestedSubResourceClass = getSubResourceClass(v.type))
+            let(nestedSubMapping = reverseSubResourceFieldMapping(nestedSubResourceClass))
+
+            nestedSubMapping.toMap().map((outputKey, pklKey) ->
+                Pair(parentKey + "." + outputKey, k + "." + pklKey)
+            )
+        ))
+
+        (directMapping.toMap() + nestedMapping.toMap()).toMapping()
 }
 
 const fq: Fq = new Fq{}
