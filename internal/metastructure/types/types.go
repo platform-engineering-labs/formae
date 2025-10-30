@@ -13,7 +13,7 @@ const (
 	FormaCommandSourceDiscovery   FormaCommandSource = "discovery"
 )
 
-// OperationType is the high-level operation being performed on a resource.
+// OperationType is the high-level operation being performed on a resource or target.
 // This is distinct from a DelegateCommand.
 // An Operation can be Individual or Composite.
 type OperationType string
@@ -41,4 +41,13 @@ const (
 	ResourceUpdateStateSuccess    ResourceUpdateState = "Success"
 	ResourceUpdateStateCanceled   ResourceUpdateState = "Canceled"
 	ResourceUpdateStateRejected   ResourceUpdateState = "Rejected"
+)
+
+// TargetUpdateState represents the state of a target update
+type TargetUpdateState string
+
+const (
+	TargetUpdateStateNotStarted TargetUpdateState = "NotStarted"
+	TargetUpdateStateSuccess    TargetUpdateState = "Success"
+	TargetUpdateStateFailed     TargetUpdateState = "Failed"
 )

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package workflow_tests
 
@@ -21,6 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -406,6 +406,18 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 
 		vpcKsuid := util.NewID()
 		bucketKsuid := util.NewID()
+
+		_, err = testutil.Call(m.Node, "ResourcePersister", target_update.PersistTargetUpdates{
+			CommandID: "test-forma-command-create",
+			TargetUpdates: []target_update.TargetUpdate{{
+				Target: pkgmodel.Target{
+					Label:     "test-target",
+					Namespace: "test-namespace",
+				},
+				Operation: target_update.TargetOperationCreate,
+			}},
+		})
+		assert.NoError(t, err)
 
 		// store the ref resource on the stack
 		referencedResource := resource_update.ResourceUpdate{

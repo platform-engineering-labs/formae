@@ -53,6 +53,7 @@ local testStack = new formae.Stack {
 local testTarget = new formae.Target {
     label = "my-target"
     namespace = "AWS"
+    discoverable = true
     config = new Dynamic {
         Region = "us-east-1"
         AccessKey = "test-key"

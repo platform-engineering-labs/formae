@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package workflow_tests
 
@@ -134,6 +133,14 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 
 		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
 		defer def()
+		assert.NoError(t, err)
+
+		_, err = m.Datastore.CreateTarget(&pkgmodel.Target{
+			Label:        "test-target",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{}`),
+			Discoverable: false,
+		})
 		assert.NoError(t, err)
 
 		messages := make(chan any, 10)
@@ -474,7 +481,11 @@ func newTestResourceUpdate(label string, dependencies []pkgmodel.FormaeURI, reso
 			Properties: json.RawMessage(properties),
 		},
 		ResourceTarget: pkgmodel.Target{
-			Label: "test-target",
+			Label:        "test-target",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{}`),
+			Discoverable: false,
+			Version:      1,
 		},
 		Operation:            resource_update.OperationCreate,
 		State:                resource_update.ResourceUpdateStateNotStarted,

@@ -98,6 +98,13 @@ type DiscoveryData struct {
 	summary                       map[string]int
 }
 
+func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
+	d.targets = make(map[string]pkgmodel.Target, len(targets))
+	for _, target := range targets {
+		d.targets[target.Label] = *target
+	}
+}
+
 func (d DiscoveryData) HasOutstandingWork() bool {
 	return len(d.queuedListOperations) > 0 || len(d.outstandingListOperations) > 0 || len(d.outstandingSyncCommands) > 0
 }
@@ -115,7 +122,7 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		return statemachine.StateMachineSpec[DiscoveryData]{}, fmt.Errorf("discovery: missing 'PluginManager' environment variable")
 	}
 
-	ds, ok := d.Env("Datastore")
+	dsEnv, ok := d.Env("Datastore")
 	if !ok {
 		d.Log().Error("Discovery: missing 'Datastore' environment variable")
 		return statemachine.StateMachineSpec[DiscoveryData]{}, fmt.Errorf("discovery: missing 'Datastore' environment variable")
@@ -135,17 +142,22 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 	}
 	discoveryCfg := dcfg.(pkgmodel.DiscoveryConfig)
 
-	targets := make(map[string]pkgmodel.Target)
-	for _, target := range discoveryCfg.ScanTargets {
-		targets[target.Label] = target
+	// Load discoverable targets from datastore
+	ds := dsEnv.(datastore.Datastore)
+
+	// ONE-RELEASE GRACE PERIOD: Auto-migrate config scan_targets to database
+	// This provides backward compatibility for users still using scan_targets in config
+	if err := migrateScanTargetsToDatabase(ds, &discoveryCfg, d); err != nil {
+		d.Log().Error("Failed to migrate scan_targets to database", "error", err)
+		// Continue startup even if migration fails - don't block the system
 	}
 
 	data := DiscoveryData{
 		pluginManager:                 pluginManager.(*plugin.Manager),
-		ds:                            ds.(datastore.Datastore),
+		ds:                            ds,
 		discoveryCfg:                  &discoveryCfg,
 		serverCfg:                     &serverCfg,
-		targets:                       targets,
+		targets:                       make(map[string]pkgmodel.Target), // Will be populated on each discovery run
 		resourceDescriptorRoots:       make(map[string]ResourceDescriptorTreeNode),
 		resourceDescriptors:           make(map[string]plugin.ResourceDescriptor),
 		queuedListOperations:          make(map[string][]ListOperation),
@@ -200,6 +212,19 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 		return state, data, nil, nil
 	}
 	proc.Log().Debug("Starting resource discovery", "timestamp", data.timeStarted)
+
+	allTargets, err := data.ds.LoadDiscoverableTargets()
+	if err != nil {
+		proc.Log().Error("Discovery: failed to load targets from datastore", "error", err)
+		allTargets = []*pkgmodel.Target{}
+	}
+	data.SetTargets(allTargets)
+
+	// If there are no discoverable targets, complete discovery immediately
+	if len(data.targets) == 0 {
+		proc.Log().Debug("No discoverable targets found, completing discovery")
+		return StateIdle, data, nil, nil
+	}
 
 	for _, target := range data.targets {
 		resourcePlugin, err := data.pluginManager.ResourcePlugin(target.Namespace)
@@ -429,6 +454,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		formaCommandConfig,
 		pkgmodel.CommandSync,
 		resourceUpdates,
+		nil, // No target updates on discovery
 		"formae",
 	)
 
@@ -620,4 +646,64 @@ func renderSummary(summary map[string]int) string {
 	}
 
 	return builder.String()
+}
+
+// migrateScanTargetsToDatabase migrates config-based scanTargets to the database.
+// If a target exists in both config and DB, it will be updated to discoverable=true.
+func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel.DiscoveryConfig, proc gen.Process) error {
+	if len(discoveryCfg.ScanTargets) == 0 {
+		return nil
+	}
+
+	createdCount, updatedCount, errorCount := 0, 0, 0
+	for _, configTarget := range discoveryCfg.ScanTargets {
+		existingTarget, err := ds.LoadTarget(configTarget.Label)
+		if err != nil {
+			proc.Log().Error("Failed to check if target exists in database", "target", configTarget.Label, "error", err)
+			errorCount++
+			continue
+		}
+
+		if existingTarget != nil {
+			if !existingTarget.Discoverable {
+				existingTarget.Discoverable = true
+				_, err = ds.UpdateTarget(existingTarget)
+				if err != nil {
+					proc.Log().Error("Failed to update target to discoverable", "target", configTarget.Label, "error", err)
+					errorCount++
+					continue
+				}
+				updatedCount++
+			} else {
+				proc.Log().Debug("Target already discoverable, no update needed", "target", configTarget.Label)
+			}
+		} else {
+			targetToCreate := configTarget
+			targetToCreate.Discoverable = true
+
+			_, err = ds.CreateTarget(&targetToCreate)
+			if err != nil {
+				proc.Log().Error("Failed to create target from scanTargets config", "target", configTarget.Label, "error", err)
+				errorCount++
+				continue
+			}
+
+			proc.Log().Debug("Created target from scanTargets config", "target", configTarget.Label)
+			createdCount++
+		}
+	}
+
+	if createdCount > 0 || updatedCount > 0 {
+		message := fmt.Sprintf("DEPRECATION WARNING: The 'scanTargets' configuration option is deprecated and will be removed in a future release.\n\n"+
+			"Please transition to setting 'discoverable' on individual targets in your Forma files instead.\n\n"+
+			"For this release, any targets specified in 'scanTargets' have been automatically migrated:\n"+
+			"- Created %d new target(s) with discoverable=true\n"+
+			"- Updated %d existing target(s) to discoverable=true\n\n"+
+			"No immediate action is required, but we recommend removing 'scanTargets' from your configuration file (~/.config/formae/formae.conf.pkl) and managing discovery through the 'discoverable' property on individual targets instead.\n\n"+
+			"See: https://docs.formae.io/en/latest/core-concepts/target/",
+			createdCount, updatedCount)
+		proc.Log().Warning(message)
+	}
+
+	return nil
 }

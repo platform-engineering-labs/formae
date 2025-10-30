@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package workflow_tests
 
@@ -16,6 +15,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -50,6 +50,24 @@ func TestResolveCache(t *testing.T) {
 		_, err = testutil.StartTestHelperActor(m.Node, received)
 		assert.NoError(t, err)
 
+		target := pkgmodel.Target{
+			Label:     "test-target",
+			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{}`),
+		}
+
+		targetUpdate := target_update.TargetUpdate{
+			Target:    target,
+			Operation: target_update.TargetOperationCreate,
+			State:     target_update.TargetUpdateStateNotStarted,
+		}
+
+		_, err = testutil.Call(m.Node, "ResourcePersister", target_update.PersistTargetUpdates{
+			TargetUpdates: []target_update.TargetUpdate{targetUpdate},
+			CommandID:     "test-command-1",
+		})
+		assert.NoError(t, err)
+
 		// store the resource
 		resourceUpdate := &resource_update.ResourceUpdate{
 			Resource: pkgmodel.Resource{
@@ -61,12 +79,9 @@ func TestResolveCache(t *testing.T) {
 				NativeID:   "test-native-id-1",
 				Ksuid:      util.NewID(),
 			},
-			ResourceTarget: pkgmodel.Target{
-				Label:     "test-target",
-				Namespace: "test-namespace",
-			},
-			State:   resource_update.ResourceUpdateStateSuccess,
-			Version: "test-persist-hash-1",
+			ResourceTarget: target,
+			State:          resource_update.ResourceUpdateStateSuccess,
+			Version:        "test-persist-hash-1",
 			ProgressResult: []resource.ProgressResult{
 				{
 					Operation:          resource.OperationCreate,
