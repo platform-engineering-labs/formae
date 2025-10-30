@@ -7,9 +7,11 @@ package model
 import "encoding/json"
 
 type Target struct {
-	Label     string          `json:"Label" pkl:"Label"`
-	Namespace string          `json:"Namespace" pkl:"Namespace"`
-	Config    json.RawMessage `json:"Config,omitempty" pkl:"Config,omitempty"`
+	Label        string          `json:"Label" pkl:"Label"`
+	Namespace    string          `json:"Namespace" pkl:"Namespace"`
+	Config       json.RawMessage `json:"Config,omitempty" pkl:"Config,omitempty"`
+	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
+	Version      int             `json:"Version,omitempty"`
 }
 
 func NewTargetFromString(target string) Target {

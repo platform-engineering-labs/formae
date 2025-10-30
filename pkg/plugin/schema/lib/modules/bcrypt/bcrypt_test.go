@@ -1,5 +1,4 @@
 //go:build unit
-// +build unit
 
 // © 2025 Platform Engineering Labs Inc.
 //

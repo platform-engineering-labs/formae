@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package workflow_tests
 
@@ -50,7 +49,7 @@ func TestMetastructure_ApplyFormaWithRes(t *testing.T) {
 		defer def()
 		require.NoError(t, err)
 
-		m.Datastore.StoreTarget(&pkgmodel.Target{
+		m.Datastore.CreateTarget(&pkgmodel.Target{
 			Label:  "test-target",
 			Config: json.RawMessage(`{}`),
 		})

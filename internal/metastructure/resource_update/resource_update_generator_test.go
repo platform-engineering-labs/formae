@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package resource_update
 
@@ -25,8 +24,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 	t.Run("translates resolvable objects to KSUID refs", func(t *testing.T) {
 		forma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-			},
+			Stacks: []pkgmodel.Stack{},
 			Resources: []pkgmodel.Resource{
 				{
 					Label:  "vpc",
@@ -74,8 +72,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 	t.Run("translates intra-forma references to KSUIDs", func(t *testing.T) {
 		forma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-			},
+			Stacks: []pkgmodel.Stack{},
 			Resources: []pkgmodel.Resource{
 				{
 					Label:  "vpc",
@@ -131,8 +128,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 	t.Run("handles resources with no references unchanged", func(t *testing.T) {
 		forma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-			},
+			Stacks: []pkgmodel.Stack{},
 			Resources: []pkgmodel.Resource{
 				{
 					Label:  "vpc",
@@ -183,8 +179,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 	t.Run("handles multiple references in same resource", func(t *testing.T) {
 		forma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-			},
+			Stacks: []pkgmodel.Stack{},
 			Resources: []pkgmodel.Resource{
 				{
 					Label: "vpc", Type: "AWS::EC2::VPC", Stack: "test-stack", Target: "aws-target",
@@ -249,8 +244,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 	t.Run("handles same reference multiple times", func(t *testing.T) {
 		forma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-			},
+			Stacks: []pkgmodel.Stack{},
 			Resources: []pkgmodel.Resource{
 				{
 					Label: "vpc", Type: "AWS::EC2::VPC", Stack: "test-stack", Target: "aws-target",

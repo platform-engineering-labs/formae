@@ -98,10 +98,6 @@ func TestDiscovery_FindsAndCreatesNewResources(t *testing.T) {
 		}
 
 		cfg := test_helpers.NewTestMetastructureConfig()
-		cfg.Agent.Discovery.ScanTargets = []pkgmodel.Target{
-			{Label: "us-east-1", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
-			{Label: "us-west-2", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-west-2"}`)},
-		}
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer def()
@@ -109,6 +105,24 @@ func TestDiscovery_FindsAndCreatesNewResources(t *testing.T) {
 			t.Fatalf("Failed to create metastructure: %v", err)
 			return
 		}
+
+		target1 := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target1)
+		assert.NoError(t, err)
+
+		target2 := &pkgmodel.Target{
+			Label:        "us-west-2",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-west-2"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target2)
+		assert.NoError(t, err)
 
 		// start test helper actor to interact with the actors in the metastructure
 		incoming := make(chan any, 1)
@@ -228,12 +242,18 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 		}
 
 		cfg := test_helpers.NewTestMetastructureConfig()
-		cfg.Agent.Discovery.ScanTargets = []pkgmodel.Target{
-			{Label: "us-east-1", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
-		}
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer def()
+		require.NoError(t, err)
+
+		target := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target)
 		require.NoError(t, err)
 
 		_, err = m.Datastore.StoreResource(&pkgmodel.Resource{
@@ -303,13 +323,27 @@ func TestDiscovery_OverlapProtection(t *testing.T) {
 		}
 
 		cfg := test_helpers.NewTestMetastructureConfig()
-		cfg.Agent.Discovery.ScanTargets = []pkgmodel.Target{
-			{Label: "us-east-1", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
-			{Label: "us-west-2", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-west-2"}`)},
-		}
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer def()
+		require.NoError(t, err)
+
+		target1 := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target1)
+		require.NoError(t, err)
+
+		target2 := &pkgmodel.Target{
+			Label:        "us-west-2",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-west-2"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target2)
 		require.NoError(t, err)
 
 		incoming := make(chan any, 1)
@@ -402,13 +436,27 @@ func TestDiscovery_NoTagKeysAreFound_LabelIsSetToNativeId(t *testing.T) {
 
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Discovery.LabelTagKeys = []string{"Name"}
-		cfg.Agent.Discovery.ScanTargets = []pkgmodel.Target{
-			{Label: "us-east-1", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
-			{Label: "us-west-2", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-west-2"}`)},
-		}
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer def()
+		require.NoError(t, err)
+
+		target1 := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target1)
+		require.NoError(t, err)
+
+		target2 := &pkgmodel.Target{
+			Label:        "us-west-2",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-west-2"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target2)
 		require.NoError(t, err)
 
 		incoming := make(chan any, 1)
@@ -459,10 +507,18 @@ func TestDiscovery_DiscoveryReadSetsRedactSensitiveIntent(t *testing.T) {
 			},
 		}
 		cfg := test_helpers.NewTestMetastructureConfig()
-		cfg.Agent.Discovery.ScanTargets = []pkgmodel.Target{{Label: "us-east-1", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)}}
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer def()
+		require.NoError(t, err)
+
+		target := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target)
 		require.NoError(t, err)
 		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
 		require.NoError(t, err)
@@ -516,4 +572,33 @@ func resourceUpdateCreatingResource1() *resource_update.ResourceUpdate {
 		StackLabel:           "test-stack",
 		GroupID:              "test-group-id",
 	}
+}
+
+func TestDiscovery_NoDiscoverableTargets_CompletesImmediately(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		cfg := test_helpers.NewTestMetastructureConfig()
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, nil, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		target := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: false,
+		}
+		_, err = m.Datastore.CreateTarget(target)
+		require.NoError(t, err)
+
+		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
+		require.NoError(t, err)
+
+		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
+		require.NoError(t, err)
+
+		time.Sleep(time.Millisecond * 500)
+		stack, err := m.Datastore.LoadStack("$unmanaged")
+		require.NoError(t, err)
+		assert.Nil(t, stack, "No unmanaged stack should be created when no discoverable targets exist")
+	})
 }

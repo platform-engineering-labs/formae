@@ -66,15 +66,7 @@ class RetryConfig {
 class DiscoveryConfig {
     enabled: Boolean = false
 
-    scanTargets: Listing<Target> = new Listing<Target> {
-        new {
-            label = "us-west-2"
-            config {
-                type = "AWS"
-                region = "us-west-2"
-            }
-        }
-    }
+    scanTargets: Listing<Target> = new Listing<Target> { }
 
     labelTagKeys: Listing<String> = new Listing<String> {
         "Name"
@@ -95,6 +87,8 @@ class Target {
     label: String
 
     namespace: String = config.type.toUpperCase()
+
+    discoverable: Boolean = false
 
     hidden config: Dynamic(this.hasProperty("type"))
     Config: Dynamic = config.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()

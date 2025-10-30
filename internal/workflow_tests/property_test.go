@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build property
-// +build property
 
 // Next steps:
 // 1) CloudModify, CloudDelete

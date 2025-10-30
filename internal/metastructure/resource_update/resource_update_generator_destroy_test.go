@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package resource_update
 
@@ -21,7 +20,7 @@ import (
 func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 	tests := []struct {
 		name           string
-		forma *pkgmodel.Forma
+		forma          *pkgmodel.Forma
 		existingStacks []*pkgmodel.Stack
 		setupDatastore func(*mockDatastore)
 		expectedCount  int
