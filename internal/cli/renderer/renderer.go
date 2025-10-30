@@ -380,23 +380,6 @@ func formatResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {
 	addStatusDetails(node, rc)
 }
 
-// coloredResourceUpdateStateForCanceledCommand returns the state formatted with appropriate color
-// for resource updates belonging to a canceled command. The semantics are flipped:
-// - "Canceled" is considered success (the user wanted to cancel) -> shown in green
-// - "Success" means the operation completed before cancellation -> shown in grey with different text
-func coloredResourceUpdateStateForCanceledCommand(state string) string {
-	switch state {
-	case "Canceled":
-		return display.Green(state)
-	case "Success":
-		return display.Grey("Completed (unable to cancel)")
-	case "Failed", "Rejected":
-		return display.Red(state)
-	default:
-		return display.Grey(state)
-	}
-}
-
 // formatResourceUpdateForCanceledCommand formats resource updates for commands that were canceled.
 // In the context of a canceled command, the semantics flip:
 // - "Canceled" resource updates represent successful cancellations (shown in green)
@@ -446,6 +429,24 @@ func coloredUpdateState(state string) string {
 		return display.Red(state)
 	default:
 		return display.Grey(state)
+	}
+}
+
+// coloredResourceUpdateStateForCanceledCommand returns the state formatted with appropriate color
+// for resource updates belonging to a canceled command. The semantics are flipped:
+// - "Canceled" is considered success (the user wanted to cancel) -> shown in green
+// - "Failed" and "Rejected" are similar as "Canceled" as they did not execute, which is what the user wanted -> shown in green
+// - "Success" means the operation completed before cancellation -> shown in red with different text
+func coloredResourceUpdateStateForCanceledCommand(state string) string {
+	switch state {
+	case "Canceled":
+		return display.Green(string(state))
+	case "Success":
+		return display.Red("Completed (unable to cancel)")
+	case "Failed", "Rejected":
+		return display.Green(string(state))
+	default:
+		return display.Grey(string(state))
 	}
 }
 
