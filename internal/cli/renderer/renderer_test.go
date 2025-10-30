@@ -5,6 +5,7 @@
 package renderer
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 func TestFormatHumanReadableStatus(t *testing.T) {
@@ -391,4 +393,98 @@ func TestRenderSimulation_WithTargets(t *testing.T) {
 
 	assert.Contains(t, result, "create target sim-target")
 	assert.Contains(t, result, "create resource sim-vpc")
+}
+
+func TestRenderInventoryTargets(t *testing.T) {
+	targets := []*pkgmodel.Target{
+		{
+			Label:        "prod-us-east-1",
+			Namespace:    "AWS",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Region":"us-east-1","Type":"prod"}`),
+		},
+		{
+			Label:        "dev-us-west-2",
+			Namespace:    "AWS",
+			Discoverable: false,
+			Config:       json.RawMessage(`{"Region":"us-west-2","Type":"dev"}`),
+		},
+	}
+
+	result, err := RenderInventoryTargets(targets, 0)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "prod-us-east-1")
+	assert.Contains(t, result, "dev-us-west-2")
+	assert.Contains(t, result, "AWS")
+	assert.Contains(t, result, "true")
+	assert.Contains(t, result, "false")
+	assert.Contains(t, result, "Region=us-east-1")
+	assert.Contains(t, result, "Showing 2 of 2")
+}
+
+func TestRenderInventoryTargets_MaxRows(t *testing.T) {
+	targets := []*pkgmodel.Target{
+		{Label: "target-1", Namespace: "AWS", Discoverable: true, Config: json.RawMessage(`{}`)},
+		{Label: "target-2", Namespace: "AWS", Discoverable: true, Config: json.RawMessage(`{}`)},
+		{Label: "target-3", Namespace: "AWS", Discoverable: true, Config: json.RawMessage(`{}`)},
+	}
+
+	result, err := RenderInventoryTargets(targets, 2)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "target-1")
+	assert.Contains(t, result, "target-2")
+	assert.NotContains(t, result, "target-3")
+	assert.Contains(t, result, "Showing 2 of 3")
+	assert.Contains(t, result, "use --max-results 3 to see all")
+}
+
+func TestRenderInventoryTargets_Empty(t *testing.T) {
+	result, err := RenderInventoryTargets([]*pkgmodel.Target{}, 0)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "No targets found")
+}
+
+func TestFormatTargetConfig_BasicConfig(t *testing.T) {
+	config := json.RawMessage(`{"Region":"us-east-1","AccountID":"123456"}`)
+	got := formatTargetConfig(config)
+	assert.Contains(t, got, "AccountID=123456")
+	assert.Contains(t, got, "Region=us-east-1")
+}
+
+func TestFormatTargetConfig_FiltersSensitiveFields(t *testing.T) {
+	config := json.RawMessage(`{"Region":"us-east-1","AccessKey":"secret","SecretKey":"topsecret","ApiToken":"token123"}`)
+	got := formatTargetConfig(config)
+	assert.Contains(t, got, "Region=us-east-1")
+	assert.NotContains(t, got, "AccessKey")
+	assert.NotContains(t, got, "SecretKey")
+	assert.NotContains(t, got, "ApiToken")
+}
+
+func TestFormatTargetConfig_HandlesVariousSensitiveFieldNames(t *testing.T) {
+	config := json.RawMessage(`{"Region":"us-east-1","password":"pass","credential":"cred","MySecretValue":"val"}`)
+	got := formatTargetConfig(config)
+	assert.Contains(t, got, "Region=us-east-1")
+	assert.NotContains(t, got, "password")
+	assert.NotContains(t, got, "credential")
+	assert.NotContains(t, got, "MySecretValue")
+}
+
+func TestFormatTargetConfig_EmptyConfig(t *testing.T) {
+	config := json.RawMessage(`{}`)
+	got := formatTargetConfig(config)
+	assert.Equal(t, "", got)
+}
+
+func TestFormatTargetConfig_SortsOutputAlphabetically(t *testing.T) {
+	config := json.RawMessage(`{"Zebra":"z","Apple":"a","Banana":"b"}`)
+	got := formatTargetConfig(config)
+	assert.Contains(t, got, "Apple=a")
+	assert.Contains(t, got, "Banana=b")
+	assert.Contains(t, got, "Zebra=z")
 }

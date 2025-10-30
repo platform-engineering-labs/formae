@@ -422,9 +422,10 @@ func translateTargets(targets []pklmodel.Target) []pkgmodel.Target {
 			continue
 		}
 		translated = append(translated, pkgmodel.Target{
-			Label:     target.Label,
-			Namespace: target.Namespace,
-			Config:    configJson,
+			Label:        target.Label,
+			Namespace:    target.Namespace,
+			Config:       configJson,
+			Discoverable: target.Discoverable,
 		})
 	}
 	return translated

@@ -393,6 +393,49 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/targets": {
+            "get": {
+                "description": "Retrieves targets based on query parameters",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "targets"
+                ],
+                "summary": "List targets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Query string to filter targets (e.g., 'namespace:aws discoverable:true')",
+                        "name": "query",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: List of targets.",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Target"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No targets found.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {

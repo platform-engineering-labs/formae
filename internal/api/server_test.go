@@ -8,6 +8,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -42,10 +43,16 @@ type WrappedCancelResponse struct {
 	Error                 error
 }
 
+type WrappedTargetResponse struct {
+	Targets []*pkgmodel.Target
+	Error   error
+}
+
 type FakeMetastructure struct {
 	applyResponses   []WrappedCommandResponse
 	destroyResponses []WrappedCommandResponse
 	extractResponses []WrappedExtractResponse
+	targetResponses  []WrappedTargetResponse
 	listResponses    []WrappedListResponse
 	cancelResponses  []WrappedCancelResponse
 }
@@ -94,6 +101,15 @@ func (m *FakeMetastructure) ExtractResources(query string) (*pkgmodel.Forma, err
 	m.extractResponses = m.extractResponses[1:]
 
 	return nextResponse.Forma, nextResponse.Error
+}
+
+func (m *FakeMetastructure) ExtractTargets(query string) ([]*pkgmodel.Target, error) {
+	if len(m.targetResponses) == 0 {
+		return []*pkgmodel.Target{}, nil
+	}
+	nextResponse := m.targetResponses[0]
+	m.targetResponses = m.targetResponses[1:]
+	return nextResponse.Targets, nextResponse.Error
 }
 
 func (m *FakeMetastructure) ForceSync() error {
@@ -161,7 +177,7 @@ func TestServer_ApplyFormaConflictingResourcesError(t *testing.T) {
 	meta := &FakeMetastructure{}
 	conflict := apimodel.FormaConflictingCommandsError{
 		ConflictingCommands: []apimodel.Command{
-			apimodel.Command{
+			{
 				CommandID: "forma_cmd1",
 				Command:   "apply",
 				State:     "InProgress",
@@ -174,7 +190,7 @@ func TestServer_ApplyFormaConflictingResourcesError(t *testing.T) {
 					},
 				},
 			},
-			apimodel.Command{
+			{
 				CommandID: "forma_cmd2",
 				Command:   "apply",
 				State:     "InProgress",
@@ -762,7 +778,7 @@ func TestServer_CancelCommands_Success(t *testing.T) {
 		},
 	}
 
-	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
 	req.Header.Set("Client-ID", "test-client")
@@ -793,7 +809,7 @@ func TestServer_CancelCommands_WithQuery(t *testing.T) {
 		},
 	}
 
-	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel?query=stack:test", nil)
 	req.Header.Set("Client-ID", "test-client")
@@ -824,7 +840,7 @@ func TestServer_CancelCommands_NoCommandsFound(t *testing.T) {
 		},
 	}
 
-	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
 	req.Header.Set("Client-ID", "test-client")
@@ -841,7 +857,7 @@ func TestServer_CancelCommands_NoCommandsFound(t *testing.T) {
 func TestServer_CancelCommands_MissingClientID(t *testing.T) {
 	fakeMetastructure := &FakeMetastructure{}
 
-	server := NewServer(nil, fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
 	// No Client-ID header
@@ -854,4 +870,88 @@ func TestServer_CancelCommands_MissingClientID(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	assert.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+}
+
+func TestServer_ListTargets_Success(t *testing.T) {
+	meta := &FakeMetastructure{}
+	targets := []*pkgmodel.Target{
+		{
+			Label:        "prod-us-east-1",
+			Namespace:    "AWS",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+		},
+		{
+			Label:        "dev-us-west-2",
+			Namespace:    "AWS",
+			Discoverable: false,
+			Config:       json.RawMessage(`{"Region":"us-west-2"}`),
+		},
+	}
+	meta.targetResponses = []WrappedTargetResponse{{Targets: targets, Error: nil}}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets?query=namespace:aws", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListTargets(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response []*pkgmodel.Target
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Len(t, response, 2)
+		assert.Equal(t, "prod-us-east-1", response[0].Label)
+		assert.Equal(t, "AWS", response[0].Namespace)
+	}
+}
+
+func TestServer_ListTargets_NoResults(t *testing.T) {
+	meta := &FakeMetastructure{}
+	meta.targetResponses = []WrappedTargetResponse{{Targets: []*pkgmodel.Target{}, Error: nil}}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListTargets(c)) {
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestServer_ListTargets_WithQuery(t *testing.T) {
+	meta := &FakeMetastructure{}
+	targets := []*pkgmodel.Target{
+		{
+			Label:        "tailscale-main",
+			Namespace:    "TAILSCALE",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Tailnet":"example.com"}`),
+		},
+	}
+	meta.targetResponses = []WrappedTargetResponse{{Targets: targets, Error: nil}}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets?query=namespace:tailscale+discoverable:true", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListTargets(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response []*pkgmodel.Target
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Len(t, response, 1)
+		assert.Equal(t, "TAILSCALE", response[0].Namespace)
+		assert.True(t, response[0].Discoverable)
+	}
 }

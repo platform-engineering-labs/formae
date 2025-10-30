@@ -555,4 +555,32 @@ paths:
       summary: Get usage statistics
       tags:
       - stats
+  /targets:
+    get:
+      description: Retrieves targets based on query parameters
+      parameters:
+      - description: Query string to filter targets (e.g., 'namespace:aws discoverable:true')
+        in: query
+        name: query
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: List of targets.'
+          schema:
+            items:
+              $ref: '#/definitions/model.Target'
+            type: array
+        "404":
+          description: 'Not Found: No targets found.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List targets
+      tags:
+      - targets
 swagger: "2.0"

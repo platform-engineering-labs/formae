@@ -1113,6 +1113,55 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 	return targets, rows.Err()
 }
 
+func (d DatastoreSQLite) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error) {
+	queryStr := `
+		SELECT label, version, namespace, config, discoverable
+		FROM targets t1
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)`
+	args := []any{}
+
+	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Namespace, " AND namespace %s ?", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Discoverable, " AND discoverable %s ?", &args)
+	queryStr += " ORDER BY label"
+
+	slog.Debug("QueryTargets", "queryStr", queryStr, "args", args)
+
+	rows, err := d.conn.Query(queryStr, args...)
+	if err != nil {
+		slog.Error("QueryTargets failed", "error", err)
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var targets []*pkgmodel.Target
+	for rows.Next() {
+		var label, namespace string
+		var version int
+		var config json.RawMessage
+		var discoverable int
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+			return nil, err
+		}
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable == 1,
+			Version:      version,
+		})
+	}
+
+	slog.Debug("QueryTargets results", "count", len(targets))
+	return targets, rows.Err()
+}
+
 func (d DatastoreSQLite) LatestLabelForResource(label string) (string, error) {
 	query := `
     SELECT label FROM resources
