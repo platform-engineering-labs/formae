@@ -648,13 +648,12 @@ func renderSummary(summary map[string]int) string {
 	return builder.String()
 }
 
-// migrateScanTargetsToDatabase migrates config-based scan_targets to the database.
+// migrateScanTargetsToDatabase migrates config-based scanTargets to the database.
 // If a target exists in both config and DB, it will be updated to discoverable=true.
 func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel.DiscoveryConfig, proc gen.Process) error {
 	if len(discoveryCfg.ScanTargets) == 0 {
 		return nil
 	}
-	proc.Log().Warning("DEPRECATION WARNING: scan_targets in config file are deprecated. Please use discoverable targets in forma files instead. These config targets will be automatically marked as discoverable.")
 
 	createdCount, updatedCount, errorCount := 0, 0, 0
 	for _, configTarget := range discoveryCfg.ScanTargets {
@@ -674,7 +673,6 @@ func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel
 					errorCount++
 					continue
 				}
-				proc.Log().Info("Updated existing target to discoverable", "target", configTarget.Label)
 				updatedCount++
 			} else {
 				proc.Log().Debug("Target already discoverable, no update needed", "target", configTarget.Label)
@@ -685,18 +683,26 @@ func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel
 
 			_, err = ds.CreateTarget(&targetToCreate)
 			if err != nil {
-				proc.Log().Error("Failed to create scan_target in database", "target", configTarget.Label, "error", err)
+				proc.Log().Error("Failed to create target from scanTargets config", "target", configTarget.Label, "error", err)
 				errorCount++
 				continue
 			}
 
-			proc.Log().Debug("Created scan_target in database", "target", configTarget.Label)
+			proc.Log().Debug("Created target from scanTargets config", "target", configTarget.Label)
 			createdCount++
 		}
 	}
 
 	if createdCount > 0 || updatedCount > 0 {
-		proc.Log().Warning("MIGRATION COMPLETE: Please remove scan_targets from your config file and use discoverable targets in forma files instead. In the next release, scan_targets in config will be completely ignored.")
+		message := fmt.Sprintf("DEPRECATION WARNING: The 'scanTargets' configuration option is deprecated and will be removed in a future release.\n\n"+
+			"Please transition to setting 'discoverable' on individual targets in your Forma files instead.\n\n"+
+			"For this release, any targets specified in 'scanTargets' have been automatically migrated:\n"+
+			"- Created %d new target(s) with discoverable=true\n"+
+			"- Updated %d existing target(s) to discoverable=true\n\n"+
+			"No immediate action is required, but we recommend removing 'scanTargets' from your configuration file (~/.config/formae/formae.conf.pkl) and managing discovery through the 'discoverable' property on individual targets instead.\n\n"+
+			"See: https://docs.formae.io/en/latest/core-concepts/target/",
+			createdCount, updatedCount)
+		proc.Log().Warning(message)
 	}
 
 	return nil

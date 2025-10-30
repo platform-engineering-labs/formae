@@ -497,7 +497,7 @@ func formatSimulatedTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
 	} else if tu.Operation == "update" {
 		discoverableText := "discoverable"
-		if !tu.DiscoverableNew {
+		if !tu.Discoverable {
 			discoverableText = "not discoverable"
 		}
 		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
@@ -517,7 +517,7 @@ func formatTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
 	} else if tu.Operation == "update" {
 		discoverableText := "discoverable"
-		if !tu.DiscoverableNew {
+		if !tu.Discoverable {
 			discoverableText = "not discoverable"
 		}
 		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)

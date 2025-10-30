@@ -263,6 +263,8 @@ func renderStats(stats *apimodel.Stats) error {
 func prepareScreen(what string) {
 	display.ClearScreen()
 	display.PrintBanner()
+	fmt.Printf("%s %s\n", display.Gold("DEPRECATION:"), "'scanTargets' config deprecated. Set 'discoverable' on targets in your Forma files.")
+	fmt.Printf("%s %s\n", display.Grey("See:"), display.LightBlue("https://docs.formae.io/en/latest/core-concepts/target/"))
 	fmt.Printf("Watching %s (refreshing every 2s)...\n\n", what)
 }
 

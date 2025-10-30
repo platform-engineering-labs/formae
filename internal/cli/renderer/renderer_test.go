@@ -288,11 +288,10 @@ func TestFormatHumanReadableStatus_TargetUpdate(t *testing.T) {
 		Command:   "apply",
 		TargetUpdates: []apimodel.TargetUpdate{
 			{
-				TargetLabel:     "existing-target",
-				Operation:       "update",
-				State:           "Success",
-				DiscoverableOld: false,
-				DiscoverableNew: true,
+				TargetLabel:  "existing-target",
+				Operation:    "update",
+				State:        "Success",
+				Discoverable: true,
 			},
 		},
 		State: "Success",
