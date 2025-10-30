@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package resource_persister
 
@@ -87,7 +86,7 @@ func TestResourcePersister_LoadsResource(t *testing.T) {
 		Label:     "test-target",
 		Namespace: "aws",
 	}
-	_, err = ds.StoreTarget(&target)
+	_, err = ds.CreateTarget(&target)
 	assert.NoError(t, err)
 
 	resourceKsuid := util.NewID()

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit
-// +build unit
 
 package workflow_tests
 
@@ -19,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-        "github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"

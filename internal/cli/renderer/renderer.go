@@ -24,7 +24,7 @@ func RenderSimulation(s *apimodel.Simulation) (string, error) {
 	buf := strings.Builder{}
 	renderHeader := func(cmd apimodel.Command) string { return "Command will" }
 
-	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate)
+	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate)
 	if err != nil {
 		return "", err
 	}
@@ -94,29 +94,7 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 
 		data[i][2] = status
 
-		statusData := make([]int, 7)
-		for _, rc := range command.ResourceUpdates {
-			if rc.Operation != apimodel.OperationRead {
-				statusData[0]++
-
-				switch rc.State {
-				case apimodel.ResourceUpdateStateNotStarted:
-					statusData[1]++
-				case apimodel.ResourceUpdateStateInProgress:
-					if rc.CurrentAttempt > 1 {
-						statusData[4]++
-					} else {
-						statusData[2]++
-					}
-				case apimodel.ResourceUpdateStateSuccess:
-					statusData[3]++
-				case apimodel.ResourceUpdateStateFailed:
-					statusData[5]++
-				case apimodel.ResourceUpdateStateCanceled:
-					statusData[6]++
-				}
-			}
-		}
+		statusData := countUpdateStates(command.ResourceUpdates, command.TargetUpdates)
 
 		data[i][3] = fmt.Sprintf("%d", statusData[0])
 		data[i][4] = display.Grey(fmt.Sprintf("%d", statusData[1]))
@@ -146,6 +124,52 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 	}
 }
 
+// countUpdateStates counts states for both resource and target updates
+// Returns [total, waiting, inProgress, success, retry, failed, canceled]
+func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates []apimodel.TargetUpdate) []int {
+	statusData := make([]int, 7)
+
+	// Count resource updates
+	for _, rc := range resourceUpdates {
+		if rc.Operation != apimodel.OperationRead {
+			statusData[0]++ // Total changes
+
+			switch rc.State {
+			case apimodel.ResourceUpdateStateNotStarted:
+				statusData[1]++ // Waiting
+			case apimodel.ResourceUpdateStateInProgress:
+				if rc.CurrentAttempt > 1 {
+					statusData[4]++ // Retry
+				} else {
+					statusData[2]++ // In Progress
+				}
+			case apimodel.ResourceUpdateStateSuccess:
+				statusData[3]++ // Success
+			case apimodel.ResourceUpdateStateFailed:
+				statusData[5]++ // Failed
+			case apimodel.ResourceUpdateStateCanceled:
+				statusData[6]++ // Canceled
+			}
+		}
+	}
+
+	// Count target updates (create/update operations only, no read operations for targets)
+	for _, tu := range targetUpdates {
+		statusData[0]++ // Total changes
+
+		switch tu.State {
+		case "NotStarted":
+			statusData[1]++ // Waiting
+		case "Success":
+			statusData[3]++ // Success
+		case "Failed":
+			statusData[5]++ // Failed
+		}
+	}
+
+	return statusData
+}
+
 func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 	var result string
 	renderHeader := func(cmd apimodel.Command) string {
@@ -166,7 +190,7 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 			formatter = formatResourceUpdate
 		}
 
-		s, err := renderCommand(cmd, renderHeader, formatter)
+		s, err := renderCommand(cmd, renderHeader, formatter, formatTargetUpdate)
 		if err != nil {
 			return "", err
 		}
@@ -176,8 +200,13 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 	return result, nil
 }
 
-func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate)) (string, error) {
+func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate), renderTargetUpdate func(*gtree.Node, apimodel.TargetUpdate)) (string, error) {
 	root := gtree.NewRoot(renderHeader(cmd))
+
+	// Render target updates first (before resources)
+	for _, tu := range cmd.TargetUpdates {
+		renderTargetUpdate(root, tu)
+	}
 
 	groupedUpdates := make(map[string][]apimodel.ResourceUpdate)
 	ungroupedUpdates := make([]apimodel.ResourceUpdate, 0)
@@ -341,7 +370,7 @@ func formatResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {
 	op := coloredOperation(rc.Operation)
 
 	line := display.Greyf("%s resource %s", op, rc.ResourceLabel)
-	line = line + fmt.Sprintf(": %s", coloredResourceUpdateState(rc.State))
+	line = line + fmt.Sprintf(": %s", coloredUpdateState(rc.State))
 	line = line + formatDurationLine(rc.Duration)
 
 	node := root.Add(line)
@@ -349,6 +378,23 @@ func formatResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {
 	node.Add(display.Greyf("of type %s", rc.ResourceType))
 	node.Add(formatStackLine(rc.Operation, rc.OldStackName, rc.StackName))
 	addStatusDetails(node, rc)
+}
+
+// coloredResourceUpdateStateForCanceledCommand returns the state formatted with appropriate color
+// for resource updates belonging to a canceled command. The semantics are flipped:
+// - "Canceled" is considered success (the user wanted to cancel) -> shown in green
+// - "Success" means the operation completed before cancellation -> shown in grey with different text
+func coloredResourceUpdateStateForCanceledCommand(state string) string {
+	switch state {
+	case "Canceled":
+		return display.Green(state)
+	case "Success":
+		return display.Grey("Completed (unable to cancel)")
+	case "Failed", "Rejected":
+		return display.Red(state)
+	default:
+		return display.Grey(state)
+	}
 }
 
 // formatResourceUpdateForCanceledCommand formats resource updates for commands that were canceled.
@@ -391,32 +437,15 @@ func formatDurationLine(duration int64) string {
 	return display.Greyf(" (duration: %s)", display.LightBlue(formatDuration(duration)))
 }
 
-// coloredResourceUpdateState returns the state formatted with appropriate color
-func coloredResourceUpdateState(state string) string {
+// coloredUpdateState returns the state formatted with appropriate color for both resource and target updates
+func coloredUpdateState(state string) string {
 	switch state {
 	case "Success":
-		return display.Green(string(state))
+		return display.Green(state)
 	case "Failed", "Rejected":
-		return display.Red(string(state))
+		return display.Red(state)
 	default:
-		return display.Grey(string(state))
-	}
-}
-
-// coloredResourceUpdateStateForCanceledCommand returns the state formatted with appropriate color
-// for resource updates belonging to a canceled command. The semantics are flipped:
-// - "Canceled" is considered success (the user wanted to cancel) -> shown in green
-// - "Success" means the operation completed before cancellation -> shown in grey with different text
-func coloredResourceUpdateStateForCanceledCommand(state string) string {
-	switch state {
-	case "Canceled":
-		return display.Green(string(state))
-	case "Success":
-		return display.Grey("Completed (unable to cancel)")
-	case "Failed", "Rejected":
-		return display.Red(string(state))
-	default:
-		return display.Grey(string(state))
+		return display.Grey(state)
 	}
 }
 
@@ -437,30 +466,82 @@ func formatStackLine(operation, oldStackName, stackName string) string {
 	return display.Greyf("%s %s", prefix, stackName)
 }
 
-func addStatusDetails(node *gtree.Node, rc apimodel.ResourceUpdate) {
-	switch rc.State {
+// addUpdateStatusDetails adds status details for both resource and target updates
+func addUpdateStatusDetails(node *gtree.Node, state, errorMessage, statusMessage string, currentAttempt, maxAttempts int) {
+	switch state {
 	case "Failed", "Rejected":
-		if rc.ErrorMessage != "" {
-			node.Add(display.Grey("reason for failure: ") + display.Red(rc.ErrorMessage))
+		if errorMessage != "" {
+			node.Add(display.Grey("reason for failure: ") + display.Red(errorMessage))
 		}
 	case "InProgress":
-		node.Add(display.Greyf("attempt: %d/%d", rc.CurrentAttempt, rc.MaxAttempts))
+		if maxAttempts > 0 {
+			node.Add(display.Greyf("attempt: %d/%d", currentAttempt, maxAttempts))
+		}
 
-		if rc.StatusMessage != "" {
-			node.Add(display.Grey("reason: ") + display.Gold(rc.StatusMessage))
+		if statusMessage != "" {
+			node.Add(display.Grey("reason: ") + display.Gold(statusMessage))
 		}
 	}
 }
 
+func addStatusDetails(node *gtree.Node, rc apimodel.ResourceUpdate) {
+	addUpdateStatusDetails(node, rc.State, rc.ErrorMessage, rc.StatusMessage, rc.CurrentAttempt, rc.MaxAttempts)
+}
+
+// formatSimulatedTargetUpdate formats a target update for simulation view
+func formatSimulatedTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
+	op := coloredOperation(tu.Operation)
+
+	var line string
+	if tu.Operation == "create" {
+		line = display.Greyf("%s target %s", op, tu.TargetLabel)
+	} else if tu.Operation == "update" {
+		discoverableText := "discoverable"
+		if !tu.Discoverable {
+			discoverableText = "not discoverable"
+		}
+		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
+	} else {
+		line = display.Greyf("%s target %s", op, tu.TargetLabel)
+	}
+
+	root.Add(line)
+}
+
+// formatTargetUpdate formats a target update for status view
+func formatTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
+	op := coloredOperation(tu.Operation)
+
+	var line string
+	if tu.Operation == "create" {
+		line = display.Greyf("%s target %s", op, tu.TargetLabel)
+	} else if tu.Operation == "update" {
+		discoverableText := "discoverable"
+		if !tu.Discoverable {
+			discoverableText = "not discoverable"
+		}
+		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
+	} else {
+		line = display.Greyf("%s target %s", op, tu.TargetLabel)
+	}
+
+	line = line + fmt.Sprintf(": %s", coloredUpdateState(tu.State))
+
+	node := root.Add(line)
+
+	// Use unified status details function (targets don't have attempt counts or status messages currently)
+	addUpdateStatusDetails(node, tu.State, tu.ErrorMessage, "", 0, 0)
+}
+
 // PromptForOperations returns a prompt based on the operations to be performed
 func PromptForOperations(cmd *apimodel.Command) string {
-	creates, updates, deletes, replaces := analyzeCommands(cmd)
+	targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
 
-	if creates == 0 && updates == 0 && deletes == 0 && replaces == 0 {
+	if targetCreates == 0 && targetUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	summary := operationSummary(creates, updates, deletes, replaces)
+	summary := operationSummary(targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
 	if summary == "" {
 		return ""
 	}
@@ -470,8 +551,8 @@ func PromptForOperations(cmd *apimodel.Command) string {
 	return prompt
 }
 
-// analyzeCommands analyzes the resource commands and returns operation type counts
-func analyzeCommands(cmd *apimodel.Command) (creates, updates, deletes, replaces int) {
+// analyzeCommands analyzes the resource and target commands and returns operation type counts
+func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
 	// Group operations by GroupId
 	groupedOperations := make(map[string][]apimodel.ResourceUpdate)
 	ungroupedOperations := make([]apimodel.ResourceUpdate, 0)
@@ -510,13 +591,13 @@ func analyzeCommands(cmd *apimodel.Command) (creates, updates, deletes, replaces
 		}
 
 		if hasDelete && hasCreate {
-			replaces++
+			resourceReplaces++
 		} else if hasDelete {
-			deletes++
+			resourceDeletes++
 		} else if hasCreate {
-			creates++
+			resourceCreates++
 		} else if hasUpdate {
-			updates++
+			resourceUpdates++
 		}
 	}
 
@@ -524,38 +605,57 @@ func analyzeCommands(cmd *apimodel.Command) (creates, updates, deletes, replaces
 	for _, rc := range ungroupedOperations {
 		switch rc.Operation {
 		case apimodel.OperationCreate:
-			creates++
+			resourceCreates++
 		case apimodel.OperationUpdate:
-			updates++
+			resourceUpdates++
 		case apimodel.OperationDelete:
-			deletes++
+			resourceDeletes++
 		case apimodel.OperationReplace:
-			replaces++
+			resourceReplaces++
+		}
+	}
+
+	for _, tu := range cmd.TargetUpdates {
+		switch tu.Operation {
+		case "create":
+			targetCreates++
+		case "update":
+			targetUpdates++
 		}
 	}
 
 	return
 }
 
-func operationSummary(creates, updates, deletes, replaces int) string {
-	if deletes == 0 && replaces == 0 && creates == 0 && updates == 0 {
+func operationSummary(targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
+	if targetCreates == 0 && targetUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
 	var parts []string
 
-	// Destructive ops first
-	if deletes > 0 {
-		parts = append(parts, display.Redf("delete %d resource(s)", deletes))
+	// Destructive resource ops first
+	if resourceDeletes > 0 {
+		parts = append(parts, display.Redf("delete %d resource(s)", resourceDeletes))
 	}
-	if replaces > 0 {
-		parts = append(parts, display.Redf("replace %d resource(s)", replaces))
+	if resourceReplaces > 0 {
+		parts = append(parts, display.Redf("replace %d resource(s)", resourceReplaces))
 	}
-	if creates > 0 {
-		parts = append(parts, display.Greenf("create %d resource(s)", creates))
+
+	// Creates
+	if targetCreates > 0 {
+		parts = append(parts, display.Greenf("create %d target(s)", targetCreates))
 	}
-	if updates > 0 {
-		parts = append(parts, display.Goldf("update %d resource(s)", updates))
+	if resourceCreates > 0 {
+		parts = append(parts, display.Greenf("create %d resource(s)", resourceCreates))
+	}
+
+	// Updates
+	if targetUpdates > 0 {
+		parts = append(parts, display.Goldf("update %d target(s)", targetUpdates))
+	}
+	if resourceUpdates > 0 {
+		parts = append(parts, display.Goldf("update %d resource(s)", resourceUpdates))
 	}
 
 	var joinedParts string

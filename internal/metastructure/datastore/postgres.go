@@ -6,6 +6,7 @@ package datastore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -206,6 +207,7 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		version INTEGER NOT NULL,
 		namespace TEXT NOT NULL,
 		config JSONB,
+		discoverable BOOLEAN DEFAULT FALSE,
 		PRIMARY KEY (label, version)
 	)`)
 	if err != nil {
@@ -213,7 +215,16 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		return nil, err
 	}
 
+	_, err = d.pool.Exec(context.Background(), `ALTER TABLE targets ADD COLUMN IF NOT EXISTS discoverable BOOLEAN DEFAULT FALSE`)
+	if err != nil {
+		slog.Warn("Could not add discoverable column to targets table", "error", err)
+	}
+
 	if err := d.createIndex("targets", "namespace"); err != nil {
+		return nil, err
+	}
+
+	if err := d.createIndex("targets", "discoverable"); err != nil {
 		return nil, err
 	}
 
@@ -525,10 +536,16 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 		AND r1.operation != 'delete'
 	)
 	AND T1.timestamp > (
-		SELECT timestamp
-		FROM forma_commands
-		WHERE data->'Config'->>'Mode' = 'reconcile'
-		ORDER BY timestamp DESC
+		SELECT fc.timestamp
+		FROM forma_commands fc
+		WHERE fc.data->'Config'->>'Mode' = 'reconcile'
+		AND EXISTS (
+			SELECT 1
+			FROM resources r
+			WHERE r.command_id = fc.command_id
+			AND r.stack = $1
+		)
+		ORDER BY fc.timestamp DESC
 		LIMIT 1
 	)
 	AND T2.stack = $1;
@@ -720,8 +737,14 @@ func (d DatastorePostgres) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 
 func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	query := `
-	SELECT label, namespace, config
-	FROM targets
+	SELECT label, version, namespace, config, discoverable
+	FROM targets t1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
 	`
 
 	rows, err := d.pool.Query(context.Background(), query)
@@ -733,15 +756,19 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	var targets []*pkgmodel.Target
 	for rows.Next() {
 		var label, namespace string
+		var version int
 		var config json.RawMessage
-		if err := rows.Scan(&label, &namespace, &config); err != nil {
+		var discoverable bool
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
 			return nil, err
 		}
 
 		targets = append(targets, &pkgmodel.Target{
-			Label:     label,
-			Namespace: namespace,
-			Config:    config,
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable,
+			Version:      version,
 		})
 	}
 
@@ -930,15 +957,19 @@ func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error)
 
 func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	query := `
-	SELECT namespace, config
+	SELECT version, namespace, config, discoverable
 	FROM targets
 	WHERE label = $1
+	ORDER BY version DESC
+	LIMIT 1
 	`
 	row := d.pool.QueryRow(context.Background(), query, label)
 
+	var version int
 	var namespace string
 	var config json.RawMessage
-	if err := row.Scan(&namespace, &config); err != nil {
+	var discoverable bool
+	if err := row.Scan(&version, &namespace, &config, &discoverable); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -946,9 +977,11 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	}
 
 	return &pkgmodel.Target{
-		Label:     label,
-		Namespace: namespace,
-		Config:    config,
+		Label:        label,
+		Namespace:    namespace,
+		Config:       config,
+		Discoverable: discoverable,
+		Version:      version,
 	}, nil
 }
 
@@ -966,9 +999,15 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, namespace, config
-	FROM targets
-	WHERE label IN (%s)
+	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable
+	FROM targets t1
+	WHERE t1.label IN (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
 	`, strings.Join(placeholders, ","))
 
 	rows, err := d.pool.Query(context.Background(), query, args...)
@@ -980,15 +1019,65 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	var targets []*pkgmodel.Target
 	for rows.Next() {
 		var label, namespace string
+		var version int
 		var config json.RawMessage
-		if err := rows.Scan(&label, &namespace, &config); err != nil {
+		var discoverable bool
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
 			return nil, err
 		}
 
 		targets = append(targets, &pkgmodel.Target{
-			Label:     label,
-			Namespace: namespace,
-			Config:    config,
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable,
+			Version:      version,
+		})
+	}
+
+	return targets, rows.Err()
+}
+
+func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
+	// Get latest version per label where discoverable = true, deduplicated by config using DISTINCT ON
+	query := `
+	WITH latest_targets AS (
+		SELECT label, version, namespace, config, discoverable
+		FROM targets t1
+		WHERE discoverable = TRUE
+		AND NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)
+	)
+	SELECT DISTINCT ON (config) label, version, namespace, config, discoverable
+	FROM latest_targets
+	ORDER BY config, version DESC`
+
+	rows, err := d.pool.Query(context.Background(), query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var targets []*pkgmodel.Target
+	for rows.Next() {
+		var label, ns string
+		var version int
+		var config json.RawMessage
+		var discoverable bool
+		if err := rows.Scan(&label, &version, &ns, &config, &discoverable); err != nil {
+			return nil, err
+		}
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    ns,
+			Config:       config,
+			Discoverable: discoverable,
+			Version:      version,
 		})
 	}
 
@@ -1394,35 +1483,52 @@ func (d DatastorePostgres) StoreStack(stack *pkgmodel.Forma, commandID string) (
 	return lastVersionID, nil
 }
 
-func (d DatastorePostgres) StoreTarget(target *pkgmodel.Target) (string, error) {
-	// Check if the target already exists
-	existingTarget, err := d.LoadTarget(target.Label)
-	if err != nil {
-		return "", err
-	}
-
-	// If the target already exists, return the existing version ID without inserting
-	if existingTarget != nil {
-		return fmt.Sprintf("%s_1", target.Label), nil
-	}
-
-	// Target doesn't exist, insert it with version 1
-	jsonData, err := json.Marshal(target.Config)
+func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error) {
+	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
 	}
 
 	query := `
-	INSERT INTO targets (label, version, namespace, config)
-	VALUES ($1, 1, $2, $3)
+	INSERT INTO targets (label, version, namespace, config, discoverable)
+	VALUES ($1, 1, $2, $3, $4)
 	`
-	_, err = d.pool.Exec(context.Background(), query, target.Label, target.Namespace, jsonData)
+	_, err = d.pool.Exec(context.Background(), query, target.Label, target.Namespace, cfg, target.Discoverable)
 	if err != nil {
-		slog.Error("failed to store target", "error", err, "label", target.Label)
+		slog.Error("failed to create target", "error", err, "label", target.Label)
 		return "", err
 	}
 
 	return fmt.Sprintf("%s_1", target.Label), nil
+}
+
+func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error) {
+	query := `SELECT MAX(version) FROM targets WHERE label = $1`
+	row := d.pool.QueryRow(context.Background(), query, target.Label)
+
+	var maxVersion sql.NullInt64
+	if err := row.Scan(&maxVersion); err != nil {
+		return "", err
+	}
+
+	if !maxVersion.Valid {
+		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+	}
+
+	newVersion := int(maxVersion.Int64) + 1
+	cfg, err := json.Marshal(target.Config)
+	if err != nil {
+		return "", err
+	}
+
+	insertQuery := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES ($1, $2, $3, $4, $5)`
+	_, err = d.pool.Exec(context.Background(), insertQuery, target.Label, newVersion, target.Namespace, cfg, target.Discoverable)
+	if err != nil {
+		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
+		return "", err
+	}
+
+	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
 func (d DatastorePostgres) Close() {

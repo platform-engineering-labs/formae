@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //go:build unit || integration
-// +build unit integration
 
 package datastore
 
@@ -97,10 +96,11 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		defer datastore.CleanUp()
 
 		app1 := &forma_command.FormaCommand{
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
-					ResourceTarget: pkgmodel.Target{Config: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "target1", Namespace: "default", Config: json.RawMessage("{}")},
 					State:          resource_update.ResourceUpdateStateSuccess},
 			},
 			Command: pkgmodel.CommandApply,
@@ -108,10 +108,11 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app2 := &forma_command.FormaCommand{
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
-					ResourceTarget:           pkgmodel.Target{Config: json.RawMessage("{}")},
+					ResourceTarget:           pkgmodel.Target{Label: "target2", Namespace: "default", Config: json.RawMessage("{}")},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
 					Resource:                 pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateRejected},
@@ -121,10 +122,11 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app3 := &forma_command.FormaCommand{
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
-					ResourceTarget:           pkgmodel.Target{Config: json.RawMessage("{}")},
+					ResourceTarget:           pkgmodel.Target{Label: "target3", Namespace: "default", Config: json.RawMessage("{}")},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
 					Resource:                 pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateFailed},
@@ -134,10 +136,11 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app4 := &forma_command.FormaCommand{
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
-					ResourceTarget:           pkgmodel.Target{Config: json.RawMessage("{}")},
+					ResourceTarget:           pkgmodel.Target{Label: "target4", Namespace: "default", Config: json.RawMessage("{}")},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
 					Resource: pkgmodel.Resource{
 						Properties:         json.RawMessage("{}"),
@@ -148,7 +151,6 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 			Command: pkgmodel.CommandApply,
 			State:   forma_command.CommandStateInProgress,
 		}
-
 		err := datastore.StoreFormaCommand(app1, app1.ID)
 		assert.NoError(t, err)
 		err = datastore.StoreFormaCommand(app2, app2.ID)
@@ -180,10 +182,11 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 		defer datastore.CleanUp()
 
 		cmd1 := &forma_command.FormaCommand{
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
-					ResourceTarget: pkgmodel.Target{Config: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "cmd1-target", Namespace: "default", Config: json.RawMessage("{}")},
 					State:          resource_update.ResourceUpdateStateInProgress},
 			},
 			Command: pkgmodel.CommandSync,
@@ -191,10 +194,11 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 		}
 
 		cmd2 := &forma_command.FormaCommand{
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
-					ResourceTarget: pkgmodel.Target{Config: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "cmd2-target", Namespace: "default", Config: json.RawMessage("{}")},
 					State:          resource_update.ResourceUpdateStateInProgress},
 			},
 			Command: pkgmodel.CommandApply,
@@ -219,16 +223,18 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 		defer datastore.CleanUp()
 
 		app1 := &forma_command.FormaCommand{
+			ID:    util.NewID(),
 			Forma: pkgmodel.Forma{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ExistingResource: pkgmodel.Resource{
-						Properties: json.RawMessage("null"), // Changed from nil to explicit "null"
+						Properties: json.RawMessage("null"),
 					},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
-					ResourceTarget:           pkgmodel.Target{Config: json.RawMessage("{}")},
+					ResourceTarget:           pkgmodel.Target{Label: "hash-target", Namespace: "default", Config: json.RawMessage("{}")},
 					Resource:                 pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateSuccess,
+					MetaData:                 json.RawMessage("null"),
 				},
 			},
 		}
@@ -291,7 +297,16 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
 		defer datastore.CleanUp()
 
+		target := &pkgmodel.Target{
+			Label:     "default-target",
+			Namespace: "default",
+			Config:    json.RawMessage(`{}`),
+		}
+		_, err := datastore.CreateTarget(target)
+		assert.NoError(t, err)
+
 		reconcileStack1 := &forma_command.FormaCommand{
+			ID:      "reconcile-stack1-id",
 			Forma:   pkgmodel.Forma{},
 			Command: pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
@@ -305,6 +320,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		syncStack1 := &forma_command.FormaCommand{
+			ID:      "sync-stack1-id",
 			Forma:   pkgmodel.Forma{},
 			Command: pkgmodel.CommandSync,
 			Config:  config.FormaCommandConfig{},
@@ -316,6 +332,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		reconcileStack2 := &forma_command.FormaCommand{
+			ID:      "reconcile-stack2-id",
 			Forma:   pkgmodel.Forma{},
 			Command: pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
@@ -329,6 +346,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		syncStack2 := &forma_command.FormaCommand{
+			ID:      "sync-stack2-id",
 			Forma:   pkgmodel.Forma{},
 			Command: pkgmodel.CommandSync,
 			Config:  config.FormaCommandConfig{},
@@ -340,6 +358,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		patchStack2 := &forma_command.FormaCommand{
+			ID:      "patch-stack2-id",
 			Forma:   pkgmodel.Forma{},
 			Command: pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
@@ -353,51 +372,56 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 
-		_, err := datastore.StoreResource(&pkgmodel.Resource{
+		_, err = datastore.StoreResource(&pkgmodel.Resource{
 			NativeID: "resource-1",
 			Stack:    "stack-1",
 			Type:     "AWS::S3::Bucket",
 			Label:    "test-bucket-1",
+			Target:   "default-target",
 		}, reconcileStack1.ID)
 		assert.NoError(t, err)
 		err = datastore.StoreFormaCommand(reconcileStack1, reconcileStack1.ID)
 		assert.NoError(t, err)
 
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
-			NativeID: "resource-1",
+			NativeID: "resource-2",
 			Stack:    "stack-1",
 			Type:     "AWS::S3::Bucket",
-			Label:    "test-bucket-1",
+			Label:    "test-bucket-1b",
+			Target:   "default-target",
 		}, syncStack1.ID)
 		assert.NoError(t, err)
 		err = datastore.StoreFormaCommand(syncStack1, syncStack1.ID)
 		assert.NoError(t, err)
 
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
-			NativeID: "resource-1",
+			NativeID: "resource-3",
 			Stack:    "stack-2",
 			Type:     "AWS::S3::Bucket",
 			Label:    "test-bucket-2",
+			Target:   "default-target",
 		}, reconcileStack2.ID)
 		assert.NoError(t, err)
 		err = datastore.StoreFormaCommand(reconcileStack2, reconcileStack2.ID)
 		assert.NoError(t, err)
 
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
-			NativeID: "resource-1",
+			NativeID: "resource-4",
 			Stack:    "stack-2",
 			Type:     "AWS::S3::Bucket",
-			Label:    "test-bucket-2",
+			Label:    "test-bucket-2b",
+			Target:   "default-target",
 		}, syncStack2.ID)
 		assert.NoError(t, err)
 		err = datastore.StoreFormaCommand(syncStack2, syncStack2.ID)
 		assert.NoError(t, err)
 
 		_, err = datastore.StoreResource(&pkgmodel.Resource{
-			NativeID: "resource-1",
+			NativeID: "resource-5",
 			Stack:    "stack-2",
 			Type:     "AWS::S3::Bucket",
-			Label:    "test-bucket-2",
+			Label:    "test-bucket-2c",
+			Target:   "default-target",
 		}, patchStack2.ID)
 		assert.NoError(t, err)
 		err = datastore.StoreFormaCommand(patchStack2, patchStack2.ID)
@@ -406,7 +430,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 		modifications, err := datastore.GetResourceModificationsSinceLastReconcile("stack-2")
 		assert.NoError(t, err)
 
-		assert.Len(t, modifications, 1)
+		assert.Len(t, modifications, 2)
 		assert.Equal(t, "stack-2", modifications[0].Stack)
 	} else {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
@@ -446,6 +470,7 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 					},
 				},
 			}
+			command.ID = fmt.Sprintf("command-%d", i)
 			err := datastore.StoreFormaCommand(command, command.ID)
 			assert.NoError(t, err)
 		}
@@ -586,6 +611,14 @@ func TestDatastore_StoreResource(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
 		defer datastore.CleanUp()
 
+		target := &pkgmodel.Target{
+			Label:     "target-1",
+			Namespace: "default",
+			Config:    json.RawMessage(`{}`),
+		}
+		_, err := datastore.CreateTarget(target)
+		assert.NoError(t, err)
+
 		resource := &pkgmodel.Resource{
 			NativeID: "native-1",
 			Stack:    "stack-1",
@@ -598,7 +631,7 @@ func TestDatastore_StoreResource(t *testing.T) {
 			Managed: false,
 		}
 
-		_, err := datastore.StoreResource(resource, "test-command")
+		_, err = datastore.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
 		query := &ResourceQuery{
@@ -747,13 +780,23 @@ func TestDatastore_QueryResources(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
 		defer datastore.CleanUp()
 
+		for i := range 7 {
+			target := &pkgmodel.Target{
+				Label:     fmt.Sprintf("target-%d", i),
+				Namespace: "default",
+				Config:    json.RawMessage(`{}`),
+			}
+			_, err := datastore.CreateTarget(target)
+			assert.NoError(t, err)
+		}
+
 		for i := range 10 {
 			resource := &pkgmodel.Resource{
-				NativeID: fmt.Sprintf("native-%d", i%2),
+				NativeID: fmt.Sprintf("native-%d", i),
 				Stack:    fmt.Sprintf("stack-%d", i%3),
 				Type:     fmt.Sprintf("type-%d", i%4),
 				Label:    fmt.Sprintf("label-%d", i%5),
-				Target:   fmt.Sprintf("target-%d", i%6),
+				Target:   fmt.Sprintf("target-%d", i%7),
 				Managed:  i%2 == 0,
 				Properties: json.RawMessage(fmt.Sprintf(`{
 				"key": "value-%d"
@@ -771,7 +814,7 @@ func TestDatastore_QueryResources(t *testing.T) {
 		}
 		results, err := datastore.QueryResources(query)
 		assert.NoError(t, err)
-		assert.NotEmpty(t, results)
+		assert.Len(t, results, 1)
 		for _, result := range results {
 			assert.Equal(t, "native-1", result.NativeID)
 		}
@@ -842,7 +885,6 @@ func TestDatastore_QueryResources(t *testing.T) {
 		}
 		results, err = datastore.QueryResources(query)
 		assert.NoError(t, err)
-		assert.NotEmpty(t, results)
 		assert.Len(t, results, 5)
 
 		query = &ResourceQuery{
@@ -865,20 +907,30 @@ func TestDatastore_StoreResource_SameResourceTwiceReturnsSameVersionId(t *testin
 	if datastore, err := prepareDatastore(); err == nil {
 		defer datastore.CleanUp()
 
+		target := &pkgmodel.Target{
+			Label:     "test-target",
+			Namespace: "default",
+			Config:    json.RawMessage(`{}`),
+		}
+		_, err := datastore.CreateTarget(target)
+		assert.NoError(t, err)
+
 		resource := &pkgmodel.Resource{
 			NativeID: "native-1",
 			Stack:    "stack-1",
 			Type:     "type-1",
 			Label:    "label-1",
+			Target:   "test-target",
+			Managed:  true,
 			Properties: json.RawMessage(`{
 			"key": "value"
 			}`),
 		}
 
-		firstVersionId, err := datastore.StoreResource(resource, "test-command-1")
+		firstVersionId, err := datastore.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
-		secondVersionId, err := datastore.StoreResource(resource, "test-command-2")
+		secondVersionId, err := datastore.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
 		assert.Equal(t, firstVersionId, secondVersionId)
@@ -1183,6 +1235,93 @@ func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(results), "Should find only the Bucket after BucketPolicy deletion")
 		assert.Equal(t, "AWS::S3::Bucket", results[0].Type, "Remaining resource should be the Bucket")
+
+	} else {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+}
+
+// TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCommand verifies
+// that an intermediate reconcile command (for a different stack or target) doesn't affect
+// modification tracking for the original stack.
+func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCommand(t *testing.T) {
+	if datastore, err := prepareDatastore(); err == nil {
+		defer datastore.CleanUp()
+
+		stackReconcile := &forma_command.FormaCommand{
+			ID:      "stack-reconcile-id",
+			Command: pkgmodel.CommandApply,
+			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs: util.TimeNow().Add(-10 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = datastore.StoreResource(&pkgmodel.Resource{
+			NativeID: "bucket-1",
+			Stack:    "test-stack",
+			Type:     "AWS::S3::Bucket",
+			Label:    "bucket-1",
+			Target:   "default-target",
+		}, stackReconcile.ID)
+		assert.NoError(t, err)
+		err = datastore.StoreFormaCommand(stackReconcile, stackReconcile.ID)
+		assert.NoError(t, err)
+
+		stackPatchA := &forma_command.FormaCommand{
+			ID:      "stack-patch-a-id",
+			Command: pkgmodel.CommandApply,
+			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs: util.TimeNow().Add(-8 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = datastore.StoreResource(&pkgmodel.Resource{
+			NativeID: "bucket-2",
+			Stack:    "test-stack",
+			Type:     "AWS::S3::Bucket",
+			Label:    "bucket-2",
+			Target:   "default-target",
+		}, stackPatchA.ID)
+		assert.NoError(t, err)
+		err = datastore.StoreFormaCommand(stackPatchA, stackPatchA.ID)
+		assert.NoError(t, err)
+
+		intermediateReconcile := &forma_command.FormaCommand{
+			ID:              "intermediate-reconcile-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs:         util.TimeNow().Add(-6 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{},
+		}
+		err = datastore.StoreFormaCommand(intermediateReconcile, intermediateReconcile.ID)
+		assert.NoError(t, err)
+
+		stackPatchB := &forma_command.FormaCommand{
+			ID:      "stack-patch-b-id",
+			Command: pkgmodel.CommandApply,
+			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs: util.TimeNow().Add(-4 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = datastore.StoreResource(&pkgmodel.Resource{
+			NativeID: "bucket-3",
+			Stack:    "test-stack",
+			Type:     "AWS::S3::Bucket",
+			Label:    "bucket-3",
+			Target:   "default-target",
+		}, stackPatchB.ID)
+		assert.NoError(t, err)
+		err = datastore.StoreFormaCommand(stackPatchB, stackPatchB.ID)
+		assert.NoError(t, err)
+
+		modifications, err := datastore.GetResourceModificationsSinceLastReconcile("test-stack")
+		assert.NoError(t, err)
+
+		assert.Len(t, modifications, 2, "Should include both patches despite intermediate reconcile")
+		labels := make(map[string]bool)
+		for _, mod := range modifications {
+			labels[mod.Label] = true
+		}
+		assert.True(t, labels["bucket-2"], "Should include first patch")
+		assert.True(t, labels["bucket-3"], "Should include second patch")
 
 	} else {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
