@@ -16,6 +16,7 @@ import (
 	"github.com/demula/mksuid/v2"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -94,6 +95,18 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		}
 	}
 
+	migrationDB, err := sql.Open("pgx", connStr)
+	if err != nil {
+		slog.Error("failed to open database for migrations", "error", err)
+		return nil, err
+	}
+
+	if err = runMigrations(migrationDB, "postgres"); err != nil {
+		migrationDB.Close()
+		return nil, err
+	}
+	migrationDB.Close()
+
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
 		slog.Error("failed to connect to PostgreSQL database", "error", err)
@@ -102,156 +115,9 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 
 	d := DatastorePostgres{pool: pool, agentID: agentID, cfg: cfg, ctx: ctx}
 
-	_, err = d.pool.Exec(d.ctx, fmt.Sprintf(`
-	CREATE TABLE IF NOT EXISTS %s (
-		command_id TEXT NOT NULL,
-		timestamp TIMESTAMP NOT NULL,
-		command TEXT NOT NULL,
-		state TEXT NOT NULL,
-		agent_version TEXT,
-		client_id TEXT,
-		agent_id TEXT,
-		data JSONB,
-		PRIMARY KEY (command_id)
-	)`, CommandsTable))
-	if err != nil {
-		slog.Error(fmt.Sprintf("failed to create %s table", CommandsTable), "error", err)
-		return nil, err
-	}
-
-	if err = d.createIndex(CommandsTable, "timestamp"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex(CommandsTable, "command"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex(CommandsTable, "state"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex(CommandsTable, "agent_version"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex(CommandsTable, "agent_id"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex(CommandsTable, "client_id"); err != nil {
-		return nil, err
-	}
-
-	_, err = d.pool.Exec(context.Background(), `
-	CREATE TABLE IF NOT EXISTS resources (
-		uri TEXT NOT NULL,
-		version TEXT NOT NULL,
-		valid_from TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		command_id TEXT,
-		operation TEXT,
-		native_id TEXT,
-		stack TEXT,
-		type TEXT,
-		label TEXT,
-		target TEXT,
-		data JSONB,
-		managed BOOLEAN DEFAULT TRUE,
-		ksuid TEXT,
-		PRIMARY KEY (uri, version)
-	)`)
-	if err != nil {
-		slog.Error("failed to create resources table", "error", err)
-		return nil, err
-	}
-
-	if err = d.createIndex("resources", "valid_from"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex("resources", "command_id"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex("resources", "operation"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex("resources", "native_id"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex("resources", "stack"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex("resources", "type"); err != nil {
-		return nil, err
-	}
-
-	if err = d.createIndex("resources", "label"); err != nil {
-		return nil, err
-	}
-
-	if err := d.createCompositeIndex("resources", []string{"stack", "label", "type", "version"}); err != nil {
-		return nil, err
-	}
-
-	if err := d.createIndex("resources", "ksuid"); err != nil {
-		return nil, err
-	}
-
-	_, err = d.pool.Exec(context.Background(), `
-	CREATE TABLE IF NOT EXISTS targets (
-		label TEXT NOT NULL,
-		version INTEGER NOT NULL,
-		namespace TEXT NOT NULL,
-		config JSONB,
-		discoverable BOOLEAN DEFAULT FALSE,
-		PRIMARY KEY (label, version)
-	)`)
-	if err != nil {
-		slog.Error("failed to create targets table", "error", err)
-		return nil, err
-	}
-
-	_, err = d.pool.Exec(context.Background(), `ALTER TABLE targets ADD COLUMN IF NOT EXISTS discoverable BOOLEAN DEFAULT FALSE`)
-	if err != nil {
-		slog.Warn("Could not add discoverable column to targets table", "error", err)
-	}
-
-	if err := d.createIndex("targets", "namespace"); err != nil {
-		return nil, err
-	}
-
-	if err := d.createIndex("targets", "discoverable"); err != nil {
-		return nil, err
-	}
-
 	slog.Info("Started PostgreSQL datastore", "host", cfg.Postgres.Host, "port", cfg.Postgres.Port, "database", cfg.Postgres.Database, "schema", cfg.Postgres.Schema, "user", cfg.Postgres.User, "connectionParams", cfg.Postgres.ConnectionParams)
 
 	return d, nil
-}
-
-func (d DatastorePostgres) createIndex(tableName, columnName string) error {
-	indexName := fmt.Sprintf("idx_%s_%s", tableName, columnName)
-	_, err := d.pool.Exec(context.Background(), fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s (%s)", indexName, tableName, columnName))
-	if err != nil {
-		slog.Error(fmt.Sprintf("failed to create index on %s (%s)", tableName, columnName), "error", err)
-		return err
-	}
-	return nil
-}
-
-func (d DatastorePostgres) createCompositeIndex(tableName string, columns []string) error {
-	indexName := fmt.Sprintf("idx_%s_%s", tableName, strings.Join(columns, "_"))
-	columnList := strings.Join(columns, ", ")
-	_, err := d.pool.Exec(context.Background(), fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s (%s)", indexName, tableName, columnList))
-	if err != nil {
-		slog.Error(fmt.Sprintf("failed to create composite index on %s (%s)", tableName, columnList), "error", err)
-		return err
-	}
-	return nil
 }
 
 func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
