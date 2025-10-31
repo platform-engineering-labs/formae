@@ -100,12 +100,15 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		slog.Error("failed to open database for migrations", "error", err)
 		return nil, err
 	}
+	defer func() {
+		if err := migrationDB.Close(); err != nil {
+			slog.Warn("failed to close migration database", "error", err)
+		}
+	}()
 
 	if err = runMigrations(migrationDB, "postgres"); err != nil {
-		migrationDB.Close()
 		return nil, err
 	}
-	migrationDB.Close()
 
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
