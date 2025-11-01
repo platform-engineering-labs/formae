@@ -1,0 +1,112 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module azure
+
+import "@formae/formae.pkl"
+
+typealias Location = "eastus" |
+  "eastus2" |
+  "southcentralus" |
+  "westus2" |
+  "westus3" |
+  "australiaeast" |
+  "southeastasia" |
+  "northeurope" |
+  "swedencentral" |
+  "uksouth" |
+  "westeurope" |
+  "centralus" |
+  "southafricanorth" |
+  "centralindia" |
+  "eastasia" |
+  "japaneast" |
+  "koreacentral" |
+  "canadacentral" |
+  "francecentral" |
+  "germanywestcentral" |
+  "italynorth" |
+  "norwayeast" |
+  "polandcentral" |
+  "switzerlandnorth" |
+  "uaenorth" |
+  "brazilsouth" |
+  "israelcentral" |
+  "qatarcentral" |
+  "centralusstage" |
+  "eastusstage" |
+  "eastus2stage" |
+  "northcentralusstage" |
+  "southcentralusstage" |
+  "westusstage" |
+  "westus2stage" |
+  "asia" |
+  "asiapacific" |
+  "australia" |
+  "brazil" |
+  "canada" |
+  "europe" |
+  "france" |
+  "germany" |
+  "global" |
+  "india" |
+  "japan" |
+  "korea" |
+  "norway" |
+  "singapore" |
+  "southafrica" |
+  "switzerland" |
+  "uae" |
+  "uk" |
+  "unitedstates" |
+  "unitedstateseuap" |
+  "eastasiastage" |
+  "southeastasiastage" |
+  "brazilus" |
+  "eastusstg" |
+  "northcentralus" |
+  "westus" |
+  "japanwest" |
+  "jioindiawest" |
+  "centraluseuap" |
+  "eastus2euap" |
+  "westcentralus" |
+  "southafricawest" |
+  "australiacentral" |
+  "australiacentral2" |
+  "australiasoutheast" |
+  "jioindiacentral" |
+  "koreasouth" |
+  "southindia" |
+  "westindia" |
+  "canadaeast" |
+  "francesouth" |
+  "germanynorth" |
+  "norwaywest" |
+  "switzerlandwest" |
+  "ukwest" |
+  "uaecentral" |
+  "brazilsoutheast"
+
+open class Config {
+  hidden fixed type: String = "Azure"
+  hidden subscriptionId: String
+  hidden tenantId: String?
+  hidden defaultLocation: Location?
+
+  fixed Type: String = type
+  fixed SubscriptionId: String = subscriptionId
+  fixed TenantId: String? = tenantId
+  fixed DefaultLocation: Location? = defaultLocation
+}
+
+class FieldHint extends formae.FieldHint {}
+
+class ResourceHint extends formae.ResourceHint {
+  apiVersion: String?
+}
+
+class SubResourceHint extends formae.SubResourceHint {}

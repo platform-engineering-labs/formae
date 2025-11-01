@@ -1,0 +1,48 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@azure/azure.pkl"
+import "@azure/resources/resourcegroup.pkl"
+
+properties {
+  name = new formae.Prop {
+    flag = "name"
+    default = "azure-test"
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "azure-test"
+    description = "Stack for Azure tests"
+  }
+  new formae.Target {
+    label = "azure-target"
+    config = new azure.Config {
+      // Example subscription ID - replace with your actual subscription ID
+      // Or set via ARM_SUBSCRIPTION_ID / AZURE_SUBSCRIPTION_ID environment variable
+      subscriptionId = "12345678-1234-1234-1234-123456789012"
+
+      // Example tenant ID - replace with your actual tenant ID
+      // Or set via ARM_TENANT_ID / AZURE_TENANT_ID environment variable
+      tenantId = "87654321-4321-4321-4321-210987654321"
+
+      defaultLocation = "eastus"
+    }
+  }
+
+  new resourcegroup.ResourceGroup {
+    label = "test-rg"
+    name = "formae-test-rg"
+    location = "eastus"
+    tags {
+      new formae.Tag { key = "environment"; value = "test" }
+      new formae.Tag { key = "managed-by"; value = "formae" }
+    }
+  }
+}
