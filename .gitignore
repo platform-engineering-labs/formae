@@ -64,11 +64,12 @@ version.semver
 tests/e2e/formae-server.log
 tests/e2e/test-logs
 
-# Claude Code local settings
+# Claude Code files
 .claude/
 CLAUDE.md
 
 .handoffs/
 .research/
-.serena/
 
+# MCP
+.serena/
