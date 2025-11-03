@@ -111,7 +111,14 @@ func (rg *ResourceGroup) Create(ctx context.Context, request *resource.CreateReq
 		nil,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create resource group: %w", err)
+		return &resource.CreateResult{
+			ProgressResult: &resource.ProgressResult{
+				Operation:       resource.OperationCreate,
+				OperationStatus: resource.OperationStatusFailure,
+				ResourceType:    request.Resource.Type,
+				ErrorCode:       mapAzureErrorToOperationErrorCode(err),
+			},
+		}, fmt.Errorf("failed to create resource group: %w", err)
 	}
 
 	// Return CreateResult
@@ -130,11 +137,153 @@ func (rg *ResourceGroup) Update(ctx context.Context, request *resource.UpdateReq
 }
 
 func (rg *ResourceGroup) Delete(ctx context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
-	return nil, fmt.Errorf("not implemented")
+	// Extract resource group name from NativeID
+	parts := splitResourceID(*request.NativeID)
+	rgName, ok := parts["resourceGroups"]
+	if !ok || rgName == "" {
+		return nil, fmt.Errorf("invalid NativeID: could not extract resource group name from %s", *request.NativeID)
+	}
+
+	// Start async deletion
+	// Note: We don't wait for completion - Status will poll for completion
+	_, err := rg.Client.ResourceGroupsClient.BeginDelete(ctx, rgName, nil)
+	if err != nil {
+		return &resource.DeleteResult{
+			ProgressResult: &resource.ProgressResult{
+				Operation:       resource.OperationDelete,
+				OperationStatus: resource.OperationStatusFailure,
+				NativeID:        *request.NativeID,
+				ResourceType:    request.ResourceType,
+				ErrorCode:       mapAzureErrorToOperationErrorCode(err),
+			},
+		}, fmt.Errorf("failed to start resource group deletion: %w", err)
+	}
+
+	// Return InProgress with resource group name as RequestID
+	// The RequestID will be used by Status to poll for completion
+	return &resource.DeleteResult{
+		ProgressResult: &resource.ProgressResult{
+			Operation:       resource.OperationDelete,
+			OperationStatus: resource.OperationStatusInProgress,
+			RequestID:       rgName, // Use resource group name as RequestID for status polling
+			NativeID:        *request.NativeID,
+			ResourceType:    request.ResourceType,
+		},
+	}, nil
 }
 
 func (rg *ResourceGroup) Status(ctx context.Context, request *resource.StatusRequest) (*resource.StatusResult, error) {
-	return nil, fmt.Errorf("not implemented")
+	// RequestID is the resource group name (set in Delete operation)
+	rgName := request.RequestID
+
+	// Try to get the resource group to check if it still exists
+	_, err := rg.Client.ResourceGroupsClient.Get(ctx, rgName, nil)
+
+	if err != nil {
+		// Map Azure error to OperationErrorCode
+		// The PluginOperator will interpret this in the context of the operation
+		// For Delete: NotFound = Success
+		// For Create/Read: NotFound = Failure
+		errorCode := mapAzureErrorToOperationErrorCode(err)
+
+		return &resource.StatusResult{
+			ProgressResult: &resource.ProgressResult{
+				Operation:       resource.OperationDelete,
+				OperationStatus: resource.OperationStatusFailure,
+				RequestID:       request.RequestID,
+				ResourceType:    request.ResourceType,
+				ErrorCode:       errorCode,
+			},
+		}, nil
+	}
+
+	// Resource group still exists - deletion in progress
+	return &resource.StatusResult{
+		ProgressResult: &resource.ProgressResult{
+			Operation:       resource.OperationDelete,
+			OperationStatus: resource.OperationStatusInProgress,
+			RequestID:       request.RequestID,
+			ResourceType:    request.ResourceType,
+		},
+	}, nil
+}
+
+// mapAzureErrorToOperationErrorCode maps Azure SDK errors to OperationErrorCode
+// This allows the PluginOperator to handle errors in an operation-aware context
+func mapAzureErrorToOperationErrorCode(err error) resource.OperationErrorCode {
+	if err == nil {
+		return ""
+	}
+
+	errStr := err.Error()
+
+	// Map common Azure error patterns to operation error codes
+	switch {
+	// 404 Not Found errors
+	case strings.Contains(errStr, "ResourceGroupNotFound"),
+		strings.Contains(errStr, "ResourceNotFound"),
+		strings.Contains(errStr, "NotFound"),
+		strings.Contains(errStr, "404"):
+		return resource.OperationErrorCodeNotFound
+
+	// 403 Forbidden / Access Denied
+	case strings.Contains(errStr, "AuthorizationFailed"),
+		strings.Contains(errStr, "Forbidden"),
+		strings.Contains(errStr, "403"):
+		return resource.OperationErrorCodeAccessDenied
+
+	// 401 Unauthorized / Invalid Credentials
+	case strings.Contains(errStr, "Unauthorized"),
+		strings.Contains(errStr, "AuthenticationFailed"),
+		strings.Contains(errStr, "InvalidAuthenticationToken"),
+		strings.Contains(errStr, "401"):
+		return resource.OperationErrorCodeInvalidCredentials
+
+	// 409 Conflict
+	case strings.Contains(errStr, "Conflict"),
+		strings.Contains(errStr, "ResourceExists"),
+		strings.Contains(errStr, "409"):
+		return resource.OperationErrorCodeResourceConflict
+
+	// 429 Throttling
+	case strings.Contains(errStr, "TooManyRequests"),
+		strings.Contains(errStr, "Throttling"),
+		strings.Contains(errStr, "429"):
+		return resource.OperationErrorCodeThrottling
+
+	// 500 Internal Server Error
+	case strings.Contains(errStr, "InternalServerError"),
+		strings.Contains(errStr, "500"):
+		return resource.OperationErrorCodeServiceInternalError
+
+	// Timeout errors
+	case strings.Contains(errStr, "Timeout"),
+		strings.Contains(errStr, "RequestTimeout"),
+		strings.Contains(errStr, "GatewayTimeout"):
+		return resource.OperationErrorCodeServiceTimeout
+
+	// Service limit/quota exceeded
+	case strings.Contains(errStr, "QuotaExceeded"),
+		strings.Contains(errStr, "LimitExceeded"):
+		return resource.OperationErrorCodeServiceLimitExceeded
+
+	// Invalid request
+	case strings.Contains(errStr, "InvalidParameter"),
+		strings.Contains(errStr, "InvalidRequest"),
+		strings.Contains(errStr, "BadRequest"),
+		strings.Contains(errStr, "400"):
+		return resource.OperationErrorCodeInvalidRequest
+
+	// Network failures
+	case strings.Contains(errStr, "connection refused"),
+		strings.Contains(errStr, "network"),
+		strings.Contains(errStr, "dial"):
+		return resource.OperationErrorCodeNetworkFailure
+
+	// Default to general service exception for unknown errors
+	default:
+		return resource.OperationErrorCodeGeneralServiceException
+	}
 }
 
 func (rg *ResourceGroup) Read(ctx context.Context, request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -151,7 +300,7 @@ func (rg *ResourceGroup) Read(ctx context.Context, request *resource.ReadRequest
 	if err != nil {
 		return &resource.ReadResult{
 			ResourceType: request.ResourceType,
-			ErrorCode:    resource.OperationErrorCode("NotFound"),
+			ErrorCode:    mapAzureErrorToOperationErrorCode(err),
 		}, fmt.Errorf("failed to read resource group: %w", err)
 	}
 

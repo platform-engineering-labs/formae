@@ -220,3 +220,126 @@ func TestAzureRead_Integration(t *testing.T) {
 
 	t.Logf("Read operation successful. Properties: %v", props)
 }
+
+func TestAzureDelete_Integration(t *testing.T) {
+	ctx := context.Background()
+
+	// Create unique resource group name for this test
+	rgName := fmt.Sprintf("formae-test-rg-delete-%d", time.Now().Unix())
+
+	// Create resource group using Azure SDK directly (not our plugin)
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	assert.NoError(t, err)
+
+	rgClient, err := armresources.NewResourceGroupsClient(testSubscriptionID, cred, nil)
+	assert.NoError(t, err)
+
+	// Create resource group
+	location := "westus"
+	params := armresources.ResourceGroup{
+		Location: &location,
+	}
+
+	createdRg, err := rgClient.CreateOrUpdate(ctx, rgName, params, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, createdRg.ID)
+	t.Logf("Created resource group via Azure SDK: %s", *createdRg.ID)
+
+	// Defer cleanup in case test fails before deletion completes
+	defer func() {
+		// Try to delete if it still exists
+		_, err := rgClient.Get(ctx, rgName, nil)
+		if err == nil {
+			// Resource still exists, clean it up
+			poller, err := rgClient.BeginDelete(ctx, rgName, nil)
+			if err != nil {
+				log.Printf("Failed to start cleanup deletion: %v\n", err)
+				return
+			}
+			_, err = poller.PollUntilDone(ctx, nil)
+			if err != nil {
+				log.Printf("Failed to complete cleanup deletion: %v\n", err)
+			} else {
+				log.Printf("Cleanup: deleted test resource group %s\n", rgName)
+			}
+		}
+	}()
+
+	// Prepare target configuration
+	targetConfig := fmt.Appendf(nil, `{"SubscriptionId":"%s"}`, testSubscriptionID)
+
+	// Execute: Call Azure plugin Delete
+	nativeID := *createdRg.ID
+	deleteReq := &resource.DeleteRequest{
+		NativeID:     &nativeID,
+		ResourceType: "Azure::Resources::ResourceGroup",
+		Target: &model.Target{
+			Namespace: "Azure",
+			Config:    targetConfig,
+		},
+	}
+
+	deleteResult, err := azurePlugin.Delete(ctx, deleteReq)
+
+	// Assert: Expect InProgress status with RequestID
+	assert.NoError(t, err)
+	assert.NotNil(t, deleteResult)
+	assert.NotNil(t, deleteResult.ProgressResult)
+	assert.Equal(t, resource.OperationDelete, deleteResult.ProgressResult.Operation)
+	assert.Equal(t, resource.OperationStatusInProgress, deleteResult.ProgressResult.OperationStatus)
+	assert.NotEmpty(t, deleteResult.ProgressResult.RequestID, "RequestID should be set for async operations")
+	t.Logf("Delete started with RequestID: %s", deleteResult.ProgressResult.RequestID)
+
+	// Poll Status until operation completes
+	maxPolls := 60 // With 500ms interval, this gives 30 seconds max
+	pollInterval := 500 * time.Millisecond
+	var finalStatus resource.OperationStatus
+	var statusResult *resource.StatusResult
+
+	for i := 0; i < maxPolls; i++ {
+		statusReq := &resource.StatusRequest{
+			RequestID:    deleteResult.ProgressResult.RequestID,
+			ResourceType: "Azure::Resources::ResourceGroup",
+			Target: &model.Target{
+				Namespace: "Azure",
+				Config:    targetConfig,
+			},
+		}
+
+		statusResult, err = azurePlugin.Status(ctx, statusReq)
+		assert.NoError(t, err)
+		assert.NotNil(t, statusResult)
+		assert.NotNil(t, statusResult.ProgressResult)
+
+		finalStatus = statusResult.ProgressResult.OperationStatus
+		t.Logf("Poll %d: Status = %s, ErrorCode = %s", i+1, finalStatus, statusResult.ProgressResult.ErrorCode)
+
+		if finalStatus == resource.OperationStatusSuccess || finalStatus == resource.OperationStatusFailure {
+			// Operation completed - check error code
+			if finalStatus == resource.OperationStatusFailure {
+				// For Delete operations, NotFound error code means success
+				// (The PluginOperator interprets this, but we test it here directly)
+				assert.Equal(t, resource.OperationErrorCodeNotFound, statusResult.ProgressResult.ErrorCode,
+					"Delete should complete with NotFound error code (resource no longer exists)")
+			}
+			break
+		}
+
+		// Should be InProgress while deleting
+		assert.Equal(t, resource.OperationStatusInProgress, finalStatus, "Status should be InProgress while operation is ongoing")
+
+		time.Sleep(pollInterval)
+	}
+
+	// Assert: Final status should be Failure with NotFound error code
+	// The PluginOperator will interpret NotFound as Success for Delete operations
+	assert.Equal(t, resource.OperationStatusFailure, finalStatus, "Status should return Failure when resource not found")
+	assert.Equal(t, resource.OperationErrorCodeNotFound, statusResult.ProgressResult.ErrorCode,
+		"Error code should be NotFound when resource is deleted")
+	t.Logf("Delete completed - Status returned Failure with NotFound (expected for deleted resources)")
+
+	// Verify resource is actually deleted from Azure
+	_, err = rgClient.Get(ctx, rgName, nil)
+	assert.Error(t, err, "Resource group should not exist after deletion")
+	t.Logf("Verified resource group deleted from Azure")
+}
