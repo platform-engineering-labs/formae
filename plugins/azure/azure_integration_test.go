@@ -343,3 +343,108 @@ func TestAzureDelete_Integration(t *testing.T) {
 	assert.Error(t, err, "Resource group should not exist after deletion")
 	t.Logf("Verified resource group deleted from Azure")
 }
+
+func TestAzureUpdate_Integration(t *testing.T) {
+	ctx := context.Background()
+
+	// Create unique resource group name for this test
+	rgName := fmt.Sprintf("formae-test-rg-update-%d", time.Now().Unix())
+
+	// Step 1: Create resource group using Azure SDK with initial tags
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	assert.NoError(t, err)
+	rgClient, err := armresources.NewResourceGroupsClient(testSubscriptionID, cred, nil)
+	assert.NoError(t, err)
+
+	// Create with initial tags
+	location := "westus"
+	initialTags := map[string]*string{
+		"environment": stringPtr("dev"),
+		"test":        stringPtr("formae-update-test"),
+	}
+	params := armresources.ResourceGroup{
+		Location: &location,
+		Tags:     initialTags,
+	}
+
+	createResult, err := rgClient.CreateOrUpdate(ctx, rgName, params, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, createResult.ID)
+	nativeID := *createResult.ID
+	t.Logf("Created resource group: %s with ID: %s", rgName, nativeID)
+
+	// Verify initial tags
+	t.Logf("Initial tags: environment=dev, test=formae-update-test")
+
+	// Cleanup: Ensure resource group is deleted even if test fails
+	defer func() {
+		poller, err := rgClient.BeginDelete(ctx, rgName, nil)
+		if err != nil {
+			t.Logf("Failed to start deletion: %v", err)
+			return
+		}
+		_, err = poller.PollUntilDone(ctx, nil)
+		if err != nil {
+			t.Logf("Failed to complete deletion: %v", err)
+		} else {
+			t.Logf("Cleaned up resource group: %s", rgName)
+		}
+	}()
+
+	// Step 2: Prepare target configuration for plugin
+	targetConfig := fmt.Appendf(nil, `{"SubscriptionId":"%s"}`, testSubscriptionID)
+
+	// Step 3: Prepare updated properties (modify existing tag, add new tag, remove old tag)
+	// We're updating: environment: dev -> prod, adding: purpose=testing, keeping: test
+	updatedProperties := []byte(`{
+		"location": "westus",
+		"tags": {
+			"environment": "prod",
+			"test": "formae-update-test",
+			"purpose": "testing"
+		}
+	}`)
+
+	// Step 4: Call Azure plugin Update
+	updateReq := &resource.UpdateRequest{
+		Resource: &model.Resource{
+			Type:       "Azure::Resources::ResourceGroup",
+			Label:      rgName,
+			Stack:      "test-stack",
+			Properties: updatedProperties,
+		},
+		Target: &model.Target{
+			Namespace: "Azure",
+			Config:    targetConfig,
+		},
+		NativeID: &nativeID,
+	}
+
+	result, err := azurePlugin.Update(ctx, updateReq)
+
+	// Assert: Expect success
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.ProgressResult)
+	assert.Equal(t, resource.OperationUpdate, result.ProgressResult.Operation)
+	assert.Equal(t, resource.OperationStatusSuccess, result.ProgressResult.OperationStatus)
+	assert.Equal(t, nativeID, result.ProgressResult.NativeID)
+	assert.Equal(t, "Azure::Resources::ResourceGroup", result.ProgressResult.ResourceType)
+	t.Logf("Update completed successfully")
+
+	// Step 5: Verify tags were updated correctly by reading from Azure
+	updatedRG, err := rgClient.Get(ctx, rgName, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, updatedRG.Tags)
+
+	// Verify updated tag values
+	assert.Equal(t, "prod", *updatedRG.Tags["environment"], "environment tag should be updated to prod")
+	assert.Equal(t, "formae-update-test", *updatedRG.Tags["test"], "test tag should remain unchanged")
+	assert.Equal(t, "testing", *updatedRG.Tags["purpose"], "purpose tag should be added")
+	t.Logf("Verified updated tags: %v", updatedRG.Tags)
+}
+
+// Helper function to create string pointers
+func stringPtr(s string) *string {
+	return &s
+}

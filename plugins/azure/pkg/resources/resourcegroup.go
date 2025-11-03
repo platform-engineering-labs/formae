@@ -133,7 +133,73 @@ func (rg *ResourceGroup) Create(ctx context.Context, request *resource.CreateReq
 }
 
 func (rg *ResourceGroup) Update(ctx context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
-	return nil, fmt.Errorf("not implemented")
+	// Extract resource group name from NativeID
+	parts := splitResourceID(*request.NativeID)
+	rgName, ok := parts["resourceGroups"]
+	if !ok || rgName == "" {
+		return nil, fmt.Errorf("invalid NativeID: could not extract resource group name from %s", *request.NativeID)
+	}
+
+	// Parse properties JSON
+	var props map[string]interface{}
+	if err := json.Unmarshal(request.Resource.Properties, &props); err != nil {
+		return nil, fmt.Errorf("failed to parse resource properties: %w", err)
+	}
+
+	// Extract location (required for Azure API even though it's CreateOnly)
+	location, ok := props["location"].(string)
+	if !ok || location == "" {
+		return nil, fmt.Errorf("location is required")
+	}
+
+	// Build ResourceGroup parameters
+	params := armresources.ResourceGroup{
+		Location: &location,
+	}
+
+	// Add tags if present using model.GetTagsFromProperties
+	tags := model.GetTagsFromProperties(request.Resource.Properties)
+	if len(tags) > 0 {
+		azureTags := make(map[string]*string)
+		for _, tag := range tags {
+			val := tag.Value
+			azureTags[tag.Key] = &val
+		}
+		params.Tags = azureTags
+	}
+
+	// Note: managedBy is a CreateOnly field, so we don't update it
+
+	// Call Azure API to update resource group
+	// Note: CreateOrUpdate handles both create and update operations
+	// Resource Groups are synchronous operations (no LRO polling needed)
+	result, err := rg.Client.ResourceGroupsClient.CreateOrUpdate(
+		ctx,
+		rgName,
+		params,
+		nil,
+	)
+	if err != nil {
+		return &resource.UpdateResult{
+			ProgressResult: &resource.ProgressResult{
+				Operation:       resource.OperationUpdate,
+				OperationStatus: resource.OperationStatusFailure,
+				NativeID:        *request.NativeID,
+				ResourceType:    request.Resource.Type,
+				ErrorCode:       mapAzureErrorToOperationErrorCode(err),
+			},
+		}, fmt.Errorf("failed to update resource group: %w", err)
+	}
+
+	// Return UpdateResult
+	return &resource.UpdateResult{
+		ProgressResult: &resource.ProgressResult{
+			Operation:       resource.OperationUpdate,
+			OperationStatus: resource.OperationStatusSuccess,
+			NativeID:        *result.ID,
+			ResourceType:    request.Resource.Type,
+		},
+	}, nil
 }
 
 func (rg *ResourceGroup) Delete(ctx context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
