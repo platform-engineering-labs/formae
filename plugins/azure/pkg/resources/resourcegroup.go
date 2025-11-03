@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -137,7 +138,78 @@ func (rg *ResourceGroup) Status(ctx context.Context, request *resource.StatusReq
 }
 
 func (rg *ResourceGroup) Read(ctx context.Context, request *resource.ReadRequest) (*resource.ReadResult, error) {
-	return nil, fmt.Errorf("not implemented")
+	// Extract resource group name from NativeID
+	// NativeID format: /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}
+	parts := splitResourceID(request.NativeID)
+	rgName, ok := parts["resourceGroups"]
+	if !ok || rgName == "" {
+		return nil, fmt.Errorf("invalid NativeID: could not extract resource group name from %s", request.NativeID)
+	}
+
+	// Get resource group from Azure
+	result, err := rg.Client.ResourceGroupsClient.Get(ctx, rgName, nil)
+	if err != nil {
+		return &resource.ReadResult{
+			ResourceType: request.ResourceType,
+			ErrorCode:    resource.OperationErrorCode("NotFound"),
+		}, fmt.Errorf("failed to read resource group: %w", err)
+	}
+
+	// Build properties map
+	props := make(map[string]interface{})
+
+	// Add location
+	if result.Location != nil {
+		props["location"] = *result.Location
+	}
+
+	// Add tags in formae.Tag format
+	if len(result.Tags) > 0 {
+		tags := make(map[string]string)
+		for k, v := range result.Tags {
+			if v != nil {
+				tags[k] = *v
+			}
+		}
+		props["tags"] = tags
+	}
+
+	// Add managedBy if present
+	if result.ManagedBy != nil {
+		props["managedBy"] = *result.ManagedBy
+	}
+
+	// Marshal properties to JSON
+	propsJSON, err := json.Marshal(props)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal properties: %w", err)
+	}
+
+	return &resource.ReadResult{
+		ResourceType: request.ResourceType,
+		Properties:   string(propsJSON),
+	}, nil
+}
+
+// splitResourceID splits an Azure resource ID into its component parts
+// Example: /subscriptions/xxx/resourceGroups/yyy returns map["subscriptions"]="xxx", map["resourceGroups"]="yyy"
+func splitResourceID(resourceID string) map[string]string {
+	parts := make(map[string]string)
+
+	// Split by / and filter out empty strings
+	segments := []string{}
+	for _, seg := range strings.Split(resourceID, "/") {
+		if seg != "" {
+			segments = append(segments, seg)
+		}
+	}
+
+	// Pair up key-value segments
+	for i := 0; i < len(segments)-1; i += 2 {
+		parts[segments[i]] = segments[i+1]
+	}
+
+	return parts
 }
 
 func (rg *ResourceGroup) List(ctx context.Context, request *resource.ListRequest) (*resource.ListResult, error) {

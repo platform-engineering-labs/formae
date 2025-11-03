@@ -8,6 +8,7 @@ package azure
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"testing"
@@ -129,4 +130,93 @@ func TestAzureCreate_Integration(t *testing.T) {
 	assert.Equal(t, "formae", *rg.Tags["test"])
 	assert.Equal(t, "integration-test", *rg.Tags["purpose"])
 	t.Logf("Verified tags: %v", rg.Tags)
+}
+
+func TestAzureRead_Integration(t *testing.T) {
+	ctx := context.Background()
+
+	// Create unique resource group name for this test
+	rgName := fmt.Sprintf("formae-test-rg-read-%d", time.Now().Unix())
+
+	// Create resource group using Azure SDK directly (not our plugin)
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	assert.NoError(t, err)
+
+	rgClient, err := armresources.NewResourceGroupsClient(testSubscriptionID, cred, nil)
+	assert.NoError(t, err)
+
+	// Create resource group with specific properties
+	location := "westus"
+	testTag := "formae-read-test"
+	purposeTag := "read-verification"
+	params := armresources.ResourceGroup{
+		Location: &location,
+		Tags: map[string]*string{
+			"test":    &testTag,
+			"purpose": &purposeTag,
+		},
+	}
+
+	createdRg, err := rgClient.CreateOrUpdate(ctx, rgName, params, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, createdRg.ID)
+	t.Logf("Created resource group via Azure SDK: %s", *createdRg.ID)
+
+	// Defer cleanup
+	defer func() {
+		poller, err := rgClient.BeginDelete(ctx, rgName, nil)
+		if err != nil {
+			log.Printf("Failed to start deletion of test resource group: %v\n", err)
+			return
+		}
+		_, err = poller.PollUntilDone(ctx, nil)
+		if err != nil {
+			log.Printf("Failed to delete test resource group: %v\n", err)
+		} else {
+			log.Printf("Successfully deleted test resource group: %s\n", rgName)
+		}
+	}()
+
+	// Now use our plugin to Read the resource
+	targetConfig := fmt.Appendf(nil, `{"SubscriptionId":"%s"}`, testSubscriptionID)
+
+	readReq := &resource.ReadRequest{
+		NativeID:     *createdRg.ID,
+		ResourceType: "Azure::Resources::ResourceGroup",
+		Target: &model.Target{
+			Namespace: "Azure",
+			Config:    targetConfig,
+		},
+	}
+
+	// Execute: Call Azure plugin Read
+	result, err := azurePlugin.Read(ctx, readReq)
+
+	// Assert: Expect success and correct properties
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify the resource type
+	assert.Equal(t, "Azure::Resources::ResourceGroup", result.ResourceType)
+
+	// Parse the properties to verify them
+	var props map[string]interface{}
+	err = json.Unmarshal([]byte(result.Properties), &props)
+	assert.NoError(t, err)
+
+	// Verify location
+	assert.Equal(t, location, props["location"])
+
+	// Verify tags using GetTagsFromProperties
+	tags := model.GetTagsFromProperties([]byte(result.Properties))
+	assert.Len(t, tags, 2)
+
+	tagMap := make(map[string]string)
+	for _, tag := range tags {
+		tagMap[tag.Key] = tag.Value
+	}
+	assert.Equal(t, testTag, tagMap["test"])
+	assert.Equal(t, purposeTag, tagMap["purpose"])
+
+	t.Logf("Read operation successful. Properties: %v", props)
 }
