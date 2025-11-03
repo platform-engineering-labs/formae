@@ -15,14 +15,14 @@ Separate directories handle dialect differences (e.g. INTEGER vs BOOLEAN, TEXT v
 
 1. Create sequentially numbered migration files in **both** directories:
    ```
-   migrations_sqlite/0000N_add_column_name.sql
-   migrations_postgres/0000N_add_column_name.sql
+   migrations_sqlite/0000N_description.sql
+   migrations_postgres/0000N_description.sql
    ```
 
    Or use goose to generate the next number:
    ```bash
    cd internal/metastructure/datastore/migrations_sqlite
-   goose create add_column_name sql
+   goose create description sql
    ```
 
 2. Use goose syntax with Up/Down sections:
@@ -34,9 +34,11 @@ Separate directories handle dialect differences (e.g. INTEGER vs BOOLEAN, TEXT v
    ALTER TABLE targets DROP COLUMN created_at;
    ```
 
-3. For SQLite, note that `DROP COLUMN` isn't supported (requires table recreation)
+3. **Important dialect differences:**
+   - SQLite: `DROP COLUMN` not supported (requires table recreation), use `INTEGER` for booleans
+   - PostgreSQL: Full DDL support, use `BOOLEAN` type, supports `IF NOT EXISTS` clauses
 
-4. Migrations are embedded at compile time via `//go:embed` and run automatically
+4. Migrations are embedded at compile time via `//go:embed` and run automatically on agent start up
 
 ## Testing
 
