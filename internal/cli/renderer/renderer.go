@@ -790,8 +790,7 @@ func RenderInventoryTargets(targets []*pkgmodel.Target, maxRows int) (string, er
 	return buf.String() + summary + "\n", nil
 }
 
-// formatTargetConfig converts a target config to a human-readable string,
-// filtering out sensitive fields
+// formatTargetConfig converts a target config to a human-readable string
 func formatTargetConfig(configJSON json.RawMessage) string {
 	if len(configJSON) == 0 {
 		return ""
@@ -804,16 +803,6 @@ func formatTargetConfig(configJSON json.RawMessage) string {
 
 	var parts []string
 	for key, value := range config {
-		// Skip sensitive fields (case-insensitive check)
-		lowerKey := strings.ToLower(key)
-		if strings.Contains(lowerKey, "key") ||
-			strings.Contains(lowerKey, "token") ||
-			strings.Contains(lowerKey, "secret") ||
-			strings.Contains(lowerKey, "password") ||
-			strings.Contains(lowerKey, "credential") {
-			continue
-		}
-
 		var valueStr string
 		switch v := value.(type) {
 		case string:

@@ -457,24 +457,6 @@ func TestFormatTargetConfig_BasicConfig(t *testing.T) {
 	assert.Contains(t, got, "Region=us-east-1")
 }
 
-func TestFormatTargetConfig_FiltersSensitiveFields(t *testing.T) {
-	config := json.RawMessage(`{"Region":"us-east-1","AccessKey":"secret","SecretKey":"topsecret","ApiToken":"token123"}`)
-	got := formatTargetConfig(config)
-	assert.Contains(t, got, "Region=us-east-1")
-	assert.NotContains(t, got, "AccessKey")
-	assert.NotContains(t, got, "SecretKey")
-	assert.NotContains(t, got, "ApiToken")
-}
-
-func TestFormatTargetConfig_HandlesVariousSensitiveFieldNames(t *testing.T) {
-	config := json.RawMessage(`{"Region":"us-east-1","password":"pass","credential":"cred","MySecretValue":"val"}`)
-	got := formatTargetConfig(config)
-	assert.Contains(t, got, "Region=us-east-1")
-	assert.NotContains(t, got, "password")
-	assert.NotContains(t, got, "credential")
-	assert.NotContains(t, got, "MySecretValue")
-}
-
 func TestFormatTargetConfig_EmptyConfig(t *testing.T) {
 	config := json.RawMessage(`{}`)
 	got := formatTargetConfig(config)

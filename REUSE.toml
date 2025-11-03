@@ -2,7 +2,7 @@ version = 1
 
 # Configuration files
 [[annotations]]
-path = ["docs/docs.go", "**/*.yml", "**/*.yaml", "**/*.json", "**/*.mod", "**/*.sum", "**/*.lock", "**/*.toml", ".gitignore", "**/.gitignore", "Makefile", "**/PklProject"]
+path = ["docs/docs.go", "**/*.yml", "**/*.yaml", "**/*.json", "**/*.mod", "**/*.sum", "**/*.lock", "**/*.toml", "**/*.sql", ".gitignore", "**/.gitignore", "Makefile", "**/PklProject"]
 SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
 SPDX-License-Identifier = "FSL-1.1-ALv2"
 
