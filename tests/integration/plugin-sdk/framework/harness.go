@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ type TestHarness struct {
 	agentStarted bool
 	tempDir      string
 	configFile   string
+	logFile      string
 }
 
 // NewTestHarness creates a new test harness instance
@@ -82,6 +84,9 @@ func (h *TestHarness) setupTestEnvironment() error {
 	// Create database path in temp directory
 	dbPath := filepath.Join(tempDir, "formae-test.db")
 
+	// Create log file path in temp directory
+	logPath := filepath.Join(tempDir, "formae-test.log")
+
 	// Generate test config file
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
@@ -104,8 +109,13 @@ agent {
     discovery {
         enabled = false
     }
+    logging {
+        consoleLogLevel = "debug"
+        filePath = %q
+        fileLogLevel = "debug"
+    }
 }
-`, dbPath)
+`, dbPath, logPath)
 
 	// Write config to temp directory
 	configFile := filepath.Join(tempDir, "test-config.pkl")
@@ -113,8 +123,9 @@ agent {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	h.configFile = configFile
+	h.logFile = logPath
 
-	h.t.Logf("Created test environment: tempDir=%s, configFile=%s, dbPath=%s", tempDir, configFile, dbPath)
+	h.t.Logf("Created test environment: tempDir=%s, configFile=%s, dbPath=%s, logPath=%s", tempDir, configFile, dbPath, logPath)
 	return nil
 }
 
@@ -295,8 +306,8 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 
 // InventoryResponse represents the JSON response from formae inventory
 type InventoryResponse struct {
-	Targets   []map[string]interface{} `json:"Targets,omitempty"`
-	Resources []map[string]interface{} `json:"Resources,omitempty"`
+	Targets   []map[string]any `json:"Targets,omitempty"`
+	Resources []map[string]any `json:"Resources,omitempty"`
 }
 
 // Inventory runs `formae inventory` with the given query and returns the parsed response
@@ -306,7 +317,7 @@ func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 	cmd := exec.Command(
 		h.formaeBinary,
 		"inventory",
-		"resources",  // Need to specify the subcommand
+		"resources", // Need to specify the subcommand
 		"--query", query,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
@@ -325,6 +336,54 @@ func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 
 	h.t.Logf("Inventory returned %d resource(s)", len(response.Resources))
 	return &response, nil
+}
+
+// Sync triggers a synchronization operation via the admin endpoint
+func (h *TestHarness) Sync() error {
+	h.t.Log("Triggering synchronization via /api/v1/admin/synchronize")
+
+	// Default port from plugins/pkl/assets/formae/Config.pkl:20
+	syncURL := "http://localhost:49684/api/v1/admin/synchronize"
+
+	resp, err := http.Post(syncURL, "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("failed to trigger sync: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("sync endpoint returned status %d", resp.StatusCode)
+	}
+
+	h.t.Log("Synchronization triggered successfully")
+	return nil
+}
+
+// WaitForSyncCompletion waits for the synchronization to complete by polling the agent log file
+func (h *TestHarness) WaitForSyncCompletion(timeout time.Duration) error {
+	h.t.Log("Waiting for synchronization to complete...")
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 500 * time.Millisecond
+	syncMessage := "Synchronization finished"
+
+	for time.Now().Before(deadline) {
+		// Read the log file
+		logContent, err := os.ReadFile(h.logFile)
+		if err != nil {
+			// File might not exist yet, continue polling
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		if strings.Contains(string(logContent), syncMessage) {
+			h.t.Log("Synchronization completed")
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for synchronization to complete after %v", timeout)
 }
 
 // PollStatus polls the command status until it reaches a terminal state or times out

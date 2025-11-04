@@ -65,6 +65,24 @@ func TestPluginSDK_CRUD(t *testing.T) {
 	}
 }
 
+// compareProperties compares expected properties against actual properties from inventory
+func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) {
+	if actualProperties, ok := actualResource["Properties"].(map[string]any); ok {
+		t.Logf("Comparing expected properties with actual properties (%s)...", context)
+		for key, expectedValue := range expectedProperties {
+			actualValue, exists := actualProperties[key]
+			assert.True(t, exists, "Property %s should exist in actual resource (%s)", key, context)
+			if exists {
+				assert.Equal(t, expectedValue, actualValue,
+					"Property %s should match expected value (%s)", key, context)
+			}
+		}
+		t.Logf("All expected properties matched (%s)!", context)
+	} else {
+		t.Errorf("Could not extract Properties from inventory resource (%s)", context)
+	}
+}
+
 // runCRUDTest runs the CRUD lifecycle test for a single resource
 func runCRUDTest(t *testing.T, harness *framework.TestHarness, tc framework.TestCase) {
 	t.Logf("Testing resource: %s (file: %s)", tc.Name, tc.PKLFile)
@@ -79,10 +97,10 @@ func runCRUDTest(t *testing.T, harness *framework.TestHarness, tc framework.Test
 	err = json.Unmarshal([]byte(expectedOutput), &evalResult)
 	require.NoError(t, err, "Should be able to parse eval output")
 	require.NotEmpty(t, evalResult.Resources, "Eval should return at least one resource")
-	
+
 	expectedResource := evalResult.Resources[0]
 	actualResourceType := expectedResource["Type"].(string)
-	expectedProperties := expectedResource["Properties"].(map[string]interface{})
+	expectedProperties := expectedResource["Properties"].(map[string]any)
 	t.Logf("Expected resource type: %s", actualResourceType)
 	t.Logf("Expected properties: %+v", expectedProperties)
 
@@ -105,44 +123,51 @@ func runCRUDTest(t *testing.T, harness *framework.TestHarness, tc framework.Test
 	assert.NotNil(t, inventory, "Inventory should return a response")
 	assert.Len(t, inventory.Resources, 1, "Inventory should contain exactly 1 resource")
 
-	if len(inventory.Resources) > 0 {
-		actualResource := inventory.Resources[0]
-		t.Logf("Found resource in inventory with type: %s", actualResource["Type"])
-		
-		// Verify the resource type matches
-		assert.Equal(t, actualResourceType, actualResource["Type"], "Resource type should match")
-		
-		// Compare Properties: all properties from eval should exist in inventory with same values
-		if actualProperties, ok := actualResource["Properties"].(map[string]interface{}); ok {
-			t.Log("Comparing expected properties with actual properties...")
-			for key, expectedValue := range expectedProperties {
-				actualValue, exists := actualProperties[key]
-				assert.True(t, exists, "Property %s should exist in actual resource", key)
-				if exists {
-					assert.Equal(t, expectedValue, actualValue, 
-						"Property %s should match expected value", key)
-				}
-			}
-			t.Log("All expected properties matched!")
-		} else {
-			t.Error("Could not extract Properties from inventory resource")
-		}
-	}
+	actualResource := inventory.Resources[0]
+	t.Logf("Found resource in inventory with type: %s", actualResource["Type"])
 
-	// Step 5: Destroy the resource
-	t.Log("Step 5: Destroying resource...")
+	// Verify the resource type matches
+	assert.Equal(t, actualResourceType, actualResource["Type"], "Resource type should match")
+
+	// Compare properties using helper
+	compareProperties(t, expectedProperties, actualResource, "after create")
+
+	// Step 5: Force synchronization to read actual state from cloud
+	t.Log("Step 5: Forcing synchronization...")
+	err = harness.Sync()
+	require.NoError(t, err, "Sync command should succeed")
+
+	// Step 6: Wait for synchronization to complete
+	t.Log("Step 6: Waiting for synchronization to complete...")
+	err = harness.WaitForSyncCompletion(30 * time.Second)
+	require.NoError(t, err, "Synchronization should complete successfully")
+
+	// Step 7: Verify inventory still matches expected state (idempotency check)
+	t.Log("Step 7: Verifying resource state unchanged after sync (idempotency)...")
+	inventoryAfterSync, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
+	require.NoError(t, err, "Inventory command should succeed after sync")
+	assert.Len(t, inventoryAfterSync.Resources, 1, "Inventory should still contain exactly 1 resource")
+
+	resourceAfterSync := inventoryAfterSync.Resources[0]
+
+	// Compare properties using helper - verifies idempotency
+	compareProperties(t, expectedProperties, resourceAfterSync, "after sync")
+	t.Log("Idempotency verified!")
+
+	// Step 8: Destroy the resource
+	t.Log("Step 8: Destroying resource...")
 	destroyCommandID, err := harness.Destroy(tc.PKLFile)
 	require.NoError(t, err, "Destroy command should succeed")
 	assert.NotEmpty(t, destroyCommandID, "Destroy should return a command ID")
 
-	// Step 6: Poll for destroy command to complete successfully
-	t.Log("Step 6: Polling for destroy command completion...")
+	// Step 9: Poll for destroy command to complete successfully
+	t.Log("Step 9: Polling for destroy command completion...")
 	destroyStatus, err := harness.PollStatus(destroyCommandID, 5*time.Minute)
 	require.NoError(t, err, "Destroy command should complete successfully")
 	assert.Equal(t, "Success", destroyStatus, "Destroy command should reach Success state")
 
-	// Step 7: Verify resource no longer exists in inventory
-	t.Log("Step 7: Verifying resource removed from inventory...")
+	// Step 10: Verify resource no longer exists in inventory
+	t.Log("Step 10: Verifying resource removed from inventory...")
 	inventoryAfterDestroy, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
 	require.NoError(t, err, "Inventory command should succeed after destroy")
 	assert.Len(t, inventoryAfterDestroy.Resources, 0, "Inventory should be empty after destroy")
