@@ -143,6 +143,16 @@ test-integration:
 	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
+test-plugin-sdk-aws: build
+	@echo "Resolving PKL dependencies for AWS plugin..."
+	@pkl project resolve plugins/aws/testdata
+	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=integration -v -failfast ./...
+
+test-plugin-sdk-azure: build
+	@echo "Resolving PKL dependencies for Azure plugin..."
+	@pkl project resolve plugins/azure/testdata
+	PLUGIN_NAME=azure go test -C ./tests/integration/plugin-sdk -tags=integration -v -failfast ./...
+
 test-e2e: gen-pkl pkg-pkl build
 	echo "Resolving PKL project..."
 	pkl project resolve tests/e2e/pkl
