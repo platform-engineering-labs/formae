@@ -20,13 +20,13 @@ import (
 
 // TestHarness manages the lifecycle of formae agent and CLI commands for testing
 type TestHarness struct {
-	t              *testing.T
-	formaeBinary   string
-	agentCmd       *exec.Cmd
-	agentCtx       context.Context
-	agentCancel    context.CancelFunc
-	cleanupFuncs   []func()
-	agentStarted   bool
+	t            *testing.T
+	formaeBinary string
+	agentCmd     *exec.Cmd
+	agentCtx     context.Context
+	agentCancel  context.CancelFunc
+	cleanupFuncs []func()
+	agentStarted bool
 }
 
 // NewTestHarness creates a new test harness instance
@@ -102,11 +102,11 @@ func (h *TestHarness) waitForAgent() error {
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(healthURL)
 		if err == nil && resp.StatusCode == http.StatusOK {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil
 		}
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		time.Sleep(pollInterval)
 	}
@@ -229,7 +229,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 		switch status {
 		case "Success", "Completed":
 			return status, nil
-		case "Failed", "Cancelled", "Canceled":
+		case "Failed", "Canceled":
 			return status, fmt.Errorf("command reached terminal state: %s", status)
 		case "NotStarted", "InProgress", "Pending", "Canceling":
 			// Continue polling
