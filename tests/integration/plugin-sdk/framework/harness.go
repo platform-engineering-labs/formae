@@ -27,6 +27,8 @@ type TestHarness struct {
 	agentCancel  context.CancelFunc
 	cleanupFuncs []func()
 	agentStarted bool
+	tempDir      string
+	configFile   string
 }
 
 // NewTestHarness creates a new test harness instance
@@ -45,7 +47,7 @@ func NewTestHarness(t *testing.T) *TestHarness {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &TestHarness{
+	h := &TestHarness{
 		t:            t,
 		formaeBinary: absPath,
 		agentCtx:     ctx,
@@ -53,6 +55,67 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		cleanupFuncs: []func(){},
 		agentStarted: false,
 	}
+
+	// Set up test environment (temp dir and config)
+	if err := h.setupTestEnvironment(); err != nil {
+		t.Fatalf("failed to setup test environment: %v", err)
+	}
+
+	return h
+}
+
+// setupTestEnvironment creates a temporary directory and config file for testing
+func (h *TestHarness) setupTestEnvironment() error {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "formae-test-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	h.tempDir = tempDir
+
+	// Register cleanup to remove temp directory
+	h.RegisterCleanup(func() {
+		h.t.Logf("Cleaning up temp directory: %s", tempDir)
+		_ = os.RemoveAll(tempDir)
+	})
+
+	// Create database path in temp directory
+	dbPath := filepath.Join(tempDir, "formae-test.db")
+
+	// Generate test config file
+	configContent := fmt.Sprintf(`/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Auto-generated test configuration
+amends "formae:/Config.pkl"
+
+agent {
+    datastore {
+        sqlite {
+            filePath = %q
+        }
+    }
+    synchronization {
+        enabled = false
+    }
+    discovery {
+        enabled = false
+    }
+}
+`, dbPath)
+
+	// Write config to temp directory
+	configFile := filepath.Join(tempDir, "test-config.pkl")
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	h.configFile = configFile
+
+	h.t.Logf("Created test environment: tempDir=%s, configFile=%s, dbPath=%s", tempDir, configFile, dbPath)
+	return nil
 }
 
 // StartAgent starts the formae agent in the background
@@ -68,8 +131,8 @@ func (h *TestHarness) StartAgent() error {
 
 	h.t.Log("Starting formae agent...")
 
-	// Start agent with context so we can cancel it
-	h.agentCmd = exec.CommandContext(h.agentCtx, h.formaeBinary, "agent", "start")
+	// Start agent with context and custom config so we can cancel it
+	h.agentCmd = exec.CommandContext(h.agentCtx, h.formaeBinary, "agent", "start", "--config", h.configFile)
 	h.agentCmd.Stdout = os.Stdout
 	h.agentCmd.Stderr = os.Stderr
 
