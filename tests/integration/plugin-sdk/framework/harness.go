@@ -115,6 +115,10 @@ agent {
         fileLogLevel = "debug"
     }
 }
+
+cli {
+	disableUsageReporting = true
+}
 `, dbPath, logPath)
 
 	// Write config to temp directory
