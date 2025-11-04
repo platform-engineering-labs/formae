@@ -273,6 +273,60 @@ func (h *TestHarness) Destroy(pklFile string) (string, error) {
 	return response.CommandID, nil
 }
 
+// Eval runs `formae eval` with the given PKL file and returns the JSON output
+func (h *TestHarness) Eval(pklFile string) (string, error) {
+	h.t.Logf("Running formae eval with %s", pklFile)
+
+	cmd := exec.Command(
+		h.formaeBinary,
+		"eval",
+		pklFile,
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("eval command failed: %w\nOutput: %s", err, string(output))
+	}
+
+	return string(output), nil
+}
+
+// InventoryResponse represents the JSON response from formae inventory
+type InventoryResponse struct {
+	Targets   []map[string]interface{} `json:"Targets,omitempty"`
+	Resources []map[string]interface{} `json:"Resources,omitempty"`
+}
+
+// Inventory runs `formae inventory` with the given query and returns the parsed response
+func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
+	h.t.Logf("Running formae inventory with query: %s", query)
+
+	cmd := exec.Command(
+		h.formaeBinary,
+		"inventory",
+		"resources",  // Need to specify the subcommand
+		"--query", query,
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("inventory command failed: %w\nOutput: %s", err, string(output))
+	}
+
+	// Parse JSON response
+	var response InventoryResponse
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse inventory response: %w\nOutput: %s", err, string(output))
+	}
+
+	h.t.Logf("Inventory returned %d resource(s)", len(response.Resources))
+	return &response, nil
+}
+
 // PollStatus polls the command status until it reaches a terminal state or times out
 func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (string, error) {
 	h.t.Logf("Polling status for command %s", commandID)
