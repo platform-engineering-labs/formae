@@ -495,6 +495,10 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 
 func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
 	q := querier.NewBlugeQuerier(m.Datastore)
+	if err := q.ValidateDestroy(query); err != nil {
+		return nil, err
+	}
+
 	resources, err := q.QueryResources(query)
 	if err != nil {
 		slog.Debug("Cannot get resources from query", "error", err)

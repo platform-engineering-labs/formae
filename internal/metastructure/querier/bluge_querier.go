@@ -6,6 +6,7 @@ package querier
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -221,4 +222,43 @@ func (b *BlugeQuerier) assignTermToResourceQuery(field string, value any, rq *da
 		return fmt.Errorf("unknown field for ResourceQuery: '%s'", field)
 	}
 	return nil
+}
+
+func (b *BlugeQuerier) ValidateDestroy(queryString string) error {
+	if err := b.validateNoManagedField(queryString); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (b *BlugeQuerier) validateNoManagedField(queryString string) error {
+	if queryString == "" {
+		return nil
+	}
+
+	q, err := querystr.ParseQueryString(queryString, querystr.QueryStringOptions{})
+	if err != nil {
+		return nil
+	}
+
+	if b.hasManagedField(q) {
+		return apimodel.InvalidQueryError{
+			Reason: "managed field cannot be used in destroy queries",
+		}
+	}
+
+	return nil
+}
+
+func (b *BlugeQuerier) hasManagedField(q bluge.Query) bool {
+	switch v := q.(type) {
+	case *bluge.BooleanQuery:
+		return slices.ContainsFunc(v.Musts(), func(m bluge.Query) bool { return b.hasManagedField(m) }) ||
+			slices.ContainsFunc(v.Shoulds(), func(s bluge.Query) bool { return b.hasManagedField(s) }) ||
+			slices.ContainsFunc(v.MustNots(), func(n bluge.Query) bool { return b.hasManagedField(n) })
+	case *bluge.MatchQuery:
+		return strings.ToLower(v.Field()) == "managed"
+	default:
+		return false
+	}
 }
