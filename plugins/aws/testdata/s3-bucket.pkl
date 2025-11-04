@@ -11,11 +11,6 @@ import "@aws/aws.pkl"
 
 import "@aws/s3/bucket.pkl"
 
-local b = new bucket.Bucket {
-  label = "plugin-sdk-test-bucket"
-  bucketName = "formae-plugin-sdk-test-s3-20250103"
-}
-
 local stackName = "plugin-sdk-test-stack"
 
 forma {
@@ -31,5 +26,8 @@ forma {
     }
   }
 
-  b
+  new bucket.Bucket {
+    label = "plugin-sdk-test-bucket"
+    bucketName = "formae-plugin-sdk-test-s3-20250103"
+  }
 }

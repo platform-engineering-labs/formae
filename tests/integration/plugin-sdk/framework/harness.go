@@ -225,15 +225,25 @@ func (h *TestHarness) RegisterCleanup(f func()) {
 	h.cleanupFuncs = append(h.cleanupFuncs, f)
 }
 
-// Apply runs `formae apply` with the given PKL file and returns the command ID
+// GetTempDir returns the temporary directory path used for test files
+func (h *TestHarness) GetTempDir() string {
+	return h.tempDir
+}
+
+// Apply runs `formae apply` with the given PKL file in reconcile mode and returns the command ID
 func (h *TestHarness) Apply(pklFile string) (string, error) {
-	h.t.Logf("Running formae apply with %s", pklFile)
+	return h.ApplyWithMode(pklFile, "reconcile")
+}
+
+// ApplyWithMode runs `formae apply` with the given PKL file and mode, and returns the command ID
+func (h *TestHarness) ApplyWithMode(pklFile string, mode string) (string, error) {
+	h.t.Logf("Running formae apply with %s (mode: %s)", pklFile, mode)
 
 	cmd := exec.Command(
 		h.formaeBinary,
 		"apply",
 		pklFile,
-		"--mode", "reconcile",
+		"--mode", mode,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
