@@ -217,6 +217,7 @@ func AgentCmd() *cobra.Command {
 			}
 
 			if watch && consumer == printer.ConsumerHuman { // machine consumer can't watch
+				nag.MaybePrintNags(nags)
 				return watchStats(app)
 			}
 
@@ -263,17 +264,18 @@ func renderStats(stats *apimodel.Stats) error {
 func prepareScreen(what string) {
 	display.ClearScreen()
 	display.PrintBanner()
-	fmt.Printf("%s %s\n", display.Gold("DEPRECATION:"), "'scanTargets' config deprecated. Set 'discoverable' on targets in your Forma files.")
-	fmt.Printf("%s %s\n", display.Grey("See:"), display.LightBlue("https://docs.formae.io/en/latest/core-concepts/target/"))
 	fmt.Printf("Watching %s (refreshing every 2s)...\n\n", what)
 }
 
 func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusOutput) error {
+	var nags []string
+	var status *apimodel.ListCommandStatusResponse
+	var err error
 	for {
 		time.Sleep(2 * time.Second)
 
 		prepareScreen("commands status")
-		status, _, err := app.GetCommandsStatus(query, n, true)
+		status, nags, err = app.GetCommandsStatus(query, n, true)
 		if err != nil {
 			return err
 		}
@@ -296,6 +298,8 @@ func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusO
 			break
 		}
 	}
+
+	nag.MaybePrintNags(nags)
 
 	return nil
 }

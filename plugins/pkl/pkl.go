@@ -140,7 +140,6 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 			},
 			Discovery: pkgmodel.DiscoveryConfig{
 				Enabled:                 config.Agent.Discovery.Enabled,
-				ScanTargets:             translateTargets(config.Agent.Discovery.ScanTargets),
 				Interval:                config.Agent.Discovery.Interval.GoDuration(),
 				LabelTagKeys:            config.Agent.Discovery.LabelTagKeys,
 				ResourceTypesToDiscover: config.Agent.Discovery.ResourceTypesToDiscover,

@@ -40,22 +40,6 @@ agent {
     }
     discovery {
         enabled = true
-        scanTargets = new Listing<Target> {
-            new {
-                label = "default-aws-target"
-                config {
-                    type = "AWS"
-                    region = "us-east-1"
-                }
-            }
-            new {
-                label = "aws-target"
-                config {
-                    type = "AWS"
-                    region = "us-west-2"
-                }
-            }
-        }
         labelTagKeys = new Listing<String> {
             "Name"
             "Environment"

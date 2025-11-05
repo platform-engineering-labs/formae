@@ -72,7 +72,6 @@ type User struct {
 
 type DiscoveryConfig struct {
 	Enabled                 bool          `pkl:"enabled"`
-	ScanTargets             []Target      `pkl:"scanTargets"`
 	Interval                *pkl.Duration `pkl:"interval"`
 	LabelTagKeys            []string      `pkl:"labelTagKeys"`
 	ResourceTypesToDiscover []string      `pkl:"resourceTypesToDiscover"`
