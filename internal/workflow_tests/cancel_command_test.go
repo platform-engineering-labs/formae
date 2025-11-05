@@ -114,8 +114,9 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 					Properties: json.RawMessage(`{
 						"CidrBlock": "10.0.0.0/16"
 					}`),
-					Stack:  "test-stack",
-					Target: "test-target",
+					Stack:   "test-stack",
+					Target:  "test-target",
+					Managed: true,
 				},
 				{
 					Label: "bucket1",
@@ -123,8 +124,9 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 					Properties: json.RawMessage(`{
 						"BucketName": "test-bucket-1"
 					}`),
-					Stack:  "test-stack",
-					Target: "test-target",
+					Stack:   "test-stack",
+					Target:  "test-target",
+					Managed: true,
 				},
 				{
 					Label: "subnet",
@@ -139,8 +141,9 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 						},
 						"CidrBlock": "10.0.1.0/24"
 					}`),
-					Stack:  "test-stack",
-					Target: "test-target",
+					Stack:   "test-stack",
+					Target:  "test-target",
+					Managed: true,
 				},
 				{
 					Label: "bucket2",
@@ -148,8 +151,9 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 					Properties: json.RawMessage(`{
 						"BucketName": "test-bucket-2"
 					}`),
-					Stack:  "test-stack",
-					Target: "test-target",
+					Stack:   "test-stack",
+					Target:  "test-target",
+					Managed: true,
 				},
 			},
 			Targets: []pkgmodel.Target{

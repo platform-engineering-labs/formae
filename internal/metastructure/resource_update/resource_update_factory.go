@@ -103,7 +103,7 @@ func NewResourceUpdateForExisting(
 			PatchDocument: patchDocument,
 			Target:        newResource.Target,
 			NativeID:      existingResource.NativeID, // Ensure existing NativeID is set for updates
-			Managed:       true,                      // Resources from forma files are always managed
+			Managed:       newResource.Managed,
 			Ksuid:         newResource.Ksuid,
 		},
 		ResourceTarget:       newTarget,
@@ -146,7 +146,6 @@ func NewResourceUpdateForReplace(
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata for new resource %s: %w", existingResource.Label, err)
 	}
-	newResource.Managed = true
 
 	// Create create operation for new resource
 	createUpdate := ResourceUpdate{
@@ -205,7 +204,6 @@ func NewResourceUpdateForCreate(
 			Type:          newResource.Type,
 		}
 	}
-	newResource.Managed = true
 
 	return ResourceUpdate{
 		Resource:             newResource,

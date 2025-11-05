@@ -25,7 +25,7 @@ open class Resource {
     target: TargetResolvable?
     stack: StackResolvable?
     hidden tags: (Listing<Tag>)?
-    fixed Managed: Boolean = true
+    fixed managed: Boolean = true
 
     local self = this
     function fields(): Listing<String> = module.fq.fields(reflect.Class(this.getClass()))
@@ -39,6 +39,7 @@ open class Resource {
         Group = self.group
         Target = self.target
         Stack = self.stack
+        Managed = self.managed
 
         Type = self.type()
         Schema = self.schema()
