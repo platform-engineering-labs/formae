@@ -20,22 +20,24 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/api/model"
-	"github.com/platform-engineering-labs/formae/internal/constants"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 // TestHarness manages the lifecycle of formae agent and CLI commands for testing
 type TestHarness struct {
-	t            *testing.T
-	formaeBinary string
-	agentCmd     *exec.Cmd
-	agentCtx     context.Context
-	agentCancel  context.CancelFunc
-	cleanupFuncs []func()
-	agentStarted bool
-	tempDir      string
-	configFile   string
-	logFile      string
+	t             *testing.T
+	formaeBinary  string
+	agentCmd      *exec.Cmd
+	agentCtx      context.Context
+	agentCancel   context.CancelFunc
+	cleanupFuncs  []func()
+	agentStarted  bool
+	tempDir       string
+	configFile    string
+	logFile       string
+	pluginManager *plugin.Manager
 }
 
 // NewTestHarness creates a new test harness instance
@@ -66,6 +68,11 @@ func NewTestHarness(t *testing.T) *TestHarness {
 	// Set up test environment (temp dir and config)
 	if err := h.setupTestEnvironment(); err != nil {
 		t.Fatalf("failed to setup test environment: %v", err)
+	}
+
+	// Initialize plugin manager
+	if err := h.setupPluginManager(); err != nil {
+		t.Fatalf("failed to setup plugin manager: %v", err)
 	}
 
 	return h
@@ -135,6 +142,28 @@ cli {
 	h.logFile = logPath
 
 	h.t.Logf("Created test environment: tempDir=%s, configFile=%s, dbPath=%s, logPath=%s", tempDir, configFile, dbPath, logPath)
+	return nil
+}
+
+// setupPluginManager initializes the plugin manager and loads plugins
+func (h *TestHarness) setupPluginManager() error {
+	// Find plugin directory similar to how we find the formae binary
+	// Plugins should be at ../../../plugins relative to the test directory
+	pluginPath := filepath.Join("..", "..", "..", "plugins")
+	absPluginPath, err := filepath.Abs(pluginPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for plugins: %w", err)
+	}
+
+	h.t.Logf("Loading plugins from: %s", absPluginPath)
+
+	// Create plugin manager with the plugin path
+	h.pluginManager = plugin.NewManager(absPluginPath)
+
+	// Load all plugins
+	h.pluginManager.Load()
+
+	h.t.Logf("Plugin manager initialized successfully")
 	return nil
 }
 
@@ -516,10 +545,10 @@ func (h *TestHarness) WaitForDiscoveryCompletion(timeout time.Duration) error {
 	return fmt.Errorf("timeout waiting for discovery to complete after %v", timeout)
 }
 
-// CreateUnmanagedResource creates an unmanaged resource by modifying the evaluated JSON
-// to set stack=$unmanaged and Managed=false, then submitting via regular reconcile apply
+// CreateUnmanagedResource creates an unmanaged resource using the plugin directly,
+// bypassing formae's validation and database storage
 func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, error) {
-	h.t.Log("Creating unmanaged resource via API")
+	h.t.Log("Creating unmanaged resource via plugin")
 
 	// Parse the evaluated JSON into a Forma object
 	var forma pkgmodel.Forma
@@ -527,35 +556,209 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 		return "", fmt.Errorf("failed to parse forma JSON: %w", err)
 	}
 
-	// Mark all targets as discoverable
-	for i := range forma.Targets {
-		h.t.Logf("Setting Discoverable=true for target: %s", forma.Targets[i].Label)
-		forma.Targets[i].Discoverable = true
-	}
-
-	// Modify resources to be unmanaged and on the $unmanaged stack
+	// Find the cloud resource to create
+	var cloudResource *pkgmodel.Resource
 	for i := range forma.Resources {
-		// Only modify cloud resources (those with :: in type)
 		if strings.Contains(forma.Resources[i].Type, "::") {
-			h.t.Logf("Setting Stack=%s and Managed=false for resource: %s", constants.UnmanagedStack, forma.Resources[i].Type)
-			forma.Resources[i].Stack = constants.UnmanagedStack
-			forma.Resources[i].Managed = false
+			cloudResource = &forma.Resources[i]
+			break
 		}
 	}
 
-	// Submit the modified forma
-	modifiedJSON, err := json.Marshal(forma)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal modified forma: %w", err)
+	if cloudResource == nil {
+		return "", fmt.Errorf("no cloud resource found in forma")
 	}
 
-	resourceCommandID, err := h.submitForma(modifiedJSON, "unmanaged-resource-creation")
+	h.t.Logf("Creating resource of type: %s", cloudResource.Type)
+
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
+	namespace := strings.ToLower(strings.Split(cloudResource.Type, "::")[0])
+	h.t.Logf("Using plugin namespace: %s", namespace)
+
+	// Get the resource plugin
+	resourcePlugin, err := h.pluginManager.ResourcePlugin(namespace)
 	if err != nil {
-		return "", fmt.Errorf("failed to create resource: %w", err)
+		return "", fmt.Errorf("failed to get resource plugin for namespace %s: %w", namespace, err)
 	}
 
-	h.t.Logf("Unmanaged resource creation submitted, CommandID: %s", resourceCommandID)
-	return resourceCommandID, nil
+	// Strip Formae metadata tags from the resource properties
+	h.stripFormaeTags(cloudResource)
+
+	// Find the target
+	if len(forma.Targets) == 0 {
+		return "", fmt.Errorf("no targets found in forma")
+	}
+	target := &forma.Targets[0]
+
+	// Create the resource using the plugin
+	createRequest := &resource.CreateRequest{
+		Resource: cloudResource,
+		Target:   target,
+	}
+
+	h.t.Logf("Calling plugin Create method")
+	createResult, err := (*resourcePlugin).Create(context.Background(), createRequest)
+	if err != nil {
+		return "", fmt.Errorf("plugin Create failed: %w", err)
+	}
+
+	if createResult.ProgressResult == nil {
+		return "", fmt.Errorf("plugin Create returned nil ProgressResult")
+	}
+
+	h.t.Logf("Create initiated, RequestID: %s, Status: %s",
+		createResult.ProgressResult.RequestID,
+		createResult.ProgressResult.OperationStatus)
+
+	// Poll for completion
+	nativeID, err := h.pollPluginStatus(
+		*resourcePlugin,
+		createResult.ProgressResult.RequestID,
+		cloudResource.Type,
+		target,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed waiting for resource creation: %w", err)
+	}
+
+	h.t.Logf("Resource created successfully, NativeID: %s", nativeID)
+
+	// Now we need to submit the target via API so it gets stored with Discoverable=true
+	// We create a minimal forma with just the target
+	targetOnlyForma := pkgmodel.Forma{
+		Targets: []pkgmodel.Target{forma.Targets[0]},
+	}
+
+	targetJSON, err := json.Marshal(targetOnlyForma)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal target-only forma: %w", err)
+	}
+
+	_, err = h.submitForma(targetJSON, "target-registration")
+	if err != nil {
+		h.t.Logf("Warning: failed to register target for discovery: %v", err)
+		// Don't fail completely, as the resource was created successfully
+	}
+
+	return nativeID, nil
+}
+
+// stripFormaeTags removes FormaeStackLabel and FormaeResourceLabel from resource tags
+func (h *TestHarness) stripFormaeTags(resource *pkgmodel.Resource) {
+	if len(resource.Properties) == 0 {
+		return
+	}
+
+	// Parse Properties into a map
+	var properties map[string]any
+	if err := json.Unmarshal(resource.Properties, &properties); err != nil {
+		h.t.Logf("Failed to unmarshal Properties for resource %s: %v", resource.Type, err)
+		return
+	}
+
+	// Check if Properties contains Tags
+	tagsInterface, hasTags := properties["Tags"]
+	if !hasTags {
+		return
+	}
+
+	// Tags could be an array of tag objects with Key/Value fields
+	tags, ok := tagsInterface.([]any)
+	if !ok {
+		h.t.Logf("Tags field is not an array, skipping tag stripping for resource %s", resource.Type)
+		return
+	}
+
+	// Filter out Formae metadata tags
+	filteredTags := make([]any, 0, len(tags))
+	for _, tagInterface := range tags {
+		tag, ok := tagInterface.(map[string]any)
+		if !ok {
+			// Keep non-map tags as-is
+			filteredTags = append(filteredTags, tagInterface)
+			continue
+		}
+
+		key, hasKey := tag["Key"].(string)
+		if !hasKey {
+			// Keep tags without a Key field
+			filteredTags = append(filteredTags, tagInterface)
+			continue
+		}
+
+		// Skip Formae metadata tags
+		if key == "FormaeStackLabel" || key == "FormaeResourceLabel" {
+			h.t.Logf("Stripping tag %s from resource %s", key, resource.Type)
+			continue
+		}
+
+		// Keep all other tags
+		filteredTags = append(filteredTags, tagInterface)
+	}
+
+	// Update properties with filtered tags
+	properties["Tags"] = filteredTags
+
+	// Marshal back to Properties
+	modifiedProperties, err := json.Marshal(properties)
+	if err != nil {
+		h.t.Logf("Failed to marshal modified Properties for resource %s: %v", resource.Type, err)
+		return
+	}
+
+	resource.Properties = modifiedProperties
+}
+
+// pollPluginStatus polls the plugin's Status method until the operation completes
+func (h *TestHarness) pollPluginStatus(
+	resourcePlugin plugin.ResourcePlugin,
+	requestID string,
+	resourceType string,
+	target *pkgmodel.Target,
+) (string, error) {
+	h.t.Logf("Polling plugin status for RequestID: %s", requestID)
+
+	deadline := time.Now().Add(2 * time.Minute) // 2 minute timeout
+	pollInterval := 2 * time.Second
+
+	for time.Now().Before(deadline) {
+		statusRequest := &resource.StatusRequest{
+			RequestID:    requestID,
+			ResourceType: resourceType,
+			Target:       target,
+		}
+
+		statusResult, err := resourcePlugin.Status(context.Background(), statusRequest)
+		if err != nil {
+			return "", fmt.Errorf("plugin Status call failed: %w", err)
+		}
+
+		if statusResult.ProgressResult == nil {
+			return "", fmt.Errorf("plugin Status returned nil ProgressResult")
+		}
+
+		h.t.Logf("Status check - Operation: %s, Status: %s",
+			statusResult.ProgressResult.Operation,
+			statusResult.ProgressResult.OperationStatus)
+
+		// Check if operation succeeded
+		if statusResult.ProgressResult.OperationStatus == resource.OperationStatusSuccess {
+			h.t.Log("Operation completed successfully")
+			return statusResult.ProgressResult.NativeID, nil
+		}
+
+		// Check if operation failed
+		if statusResult.ProgressResult.OperationStatus == resource.OperationStatusFailure {
+			return "", fmt.Errorf("operation failed: %s (error code: %s)",
+				statusResult.ProgressResult.StatusMessage,
+				statusResult.ProgressResult.ErrorCode)
+		}
+
+		// Operation still in progress, wait and retry
+		time.Sleep(pollInterval)
+	}
+
+	return "", fmt.Errorf("timeout waiting for operation to complete after 2 minutes")
 }
 
 // submitForma is a helper to submit forma JSON to the API

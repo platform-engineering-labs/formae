@@ -86,7 +86,7 @@ func findMatchingBrace(content string, startPos int) int {
 
 // createPatchFileWithTag creates a patch PKL file by adding a new tag to the resource
 // This function is generic and works with any PKL file structure
-func createPatchFileWithTag(t *testing.T, originalPKLFile, patchFilePath string) error {
+func createPatchFileWithTag(originalPKLFile, patchFilePath string) error {
 	// Read the original PKL file
 	content, err := os.ReadFile(originalPKLFile)
 	if err != nil {
@@ -259,7 +259,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	patchFile := filepath.Join(pklDir, "resource-patch.pkl")
 
 	// Use generic helper to create patch file by modifying the original
-	err = createPatchFileWithTag(t, tc.PKLFile, patchFile)
+	err = createPatchFileWithTag(tc.PKLFile, patchFile)
 	require.NoError(t, err, "Should be able to create patch PKL file")
 	t.Logf("Created patch file at: %s", patchFile)
 
@@ -398,17 +398,12 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	err = harness.StartAgent()
 	require.NoError(t, err, "Failed to start formae agent")
 
-	// Step 4: Create unmanaged resource via API
-	t.Log("Step 4: Creating unmanaged resource via API...")
-	createCommandID, err := harness.CreateUnmanagedResource(evalOutput)
+	// Step 4: Create unmanaged resource via plugin (bypasses formae database)
+	t.Log("Step 4: Creating unmanaged resource via plugin...")
+	nativeID, err := harness.CreateUnmanagedResource(evalOutput)
 	require.NoError(t, err, "Creating unmanaged resource should succeed")
-	assert.NotEmpty(t, createCommandID, "Create should return a command ID")
-
-	// Step 5: Wait for resource creation to complete
-	t.Log("Step 5: Waiting for resource creation to complete...")
-	createStatus, err := harness.PollStatus(createCommandID, 5*time.Minute)
-	require.NoError(t, err, "Create command should complete successfully")
-	assert.Equal(t, "Success", createStatus, "Create command should reach Success state")
+	assert.NotEmpty(t, nativeID, "Create should return a native ID")
+	t.Logf("Created unmanaged resource with NativeID: %s", nativeID)
 
 	// Register cleanup for the unmanaged resource
 	// We need to delete it via AWS CLI since it's not managed by formae
@@ -422,23 +417,23 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 		})
 	}
 
-	// Step 6: Trigger discovery
-	t.Log("Step 6: Triggering discovery...")
+	// Step 5: Trigger discovery
+	t.Log("Step 5: Triggering discovery...")
 	err = harness.TriggerDiscovery()
 	require.NoError(t, err, "Triggering discovery should succeed")
 
-	// Step 7: Wait for discovery to complete
-	t.Log("Step 7: Waiting for discovery to complete...")
+	// Step 6: Wait for discovery to complete
+	t.Log("Step 6: Waiting for discovery to complete...")
 	err = harness.WaitForDiscoveryCompletion(2 * time.Minute)
 	require.NoError(t, err, "Discovery should complete within timeout")
 
-	// Step 8: Query inventory for unmanaged resources
-	t.Log("Step 8: Querying inventory for unmanaged resources...")
+	// Step 7: Query inventory for unmanaged resources
+	t.Log("Step 7: Querying inventory for unmanaged resources...")
 	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", actualResourceType))
 	require.NoError(t, err, "Inventory query should succeed")
 
-	// Step 9: Verify our specific resource was discovered
-	t.Log("Step 9: Verifying discovered resource...")
+	// Step 8: Verify our specific resource was discovered
+	t.Log("Step 8: Verifying discovered resource...")
 	assert.NotEmpty(t, inventory.Resources, "Should discover at least one unmanaged resource")
 
 	if len(inventory.Resources) == 0 {
