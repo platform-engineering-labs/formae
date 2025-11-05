@@ -13,9 +13,9 @@ import (
 
 // TestCase represents a single plugin resource test case
 type TestCase struct {
-	Name        string // e.g., "AWS::S3::Bucket"
-	PKLFile     string // Absolute path to the PKL file
-	PluginName  string // e.g., "aws"
+	Name         string // e.g., "AWS::S3::Bucket"
+	PKLFile      string // Absolute path to the PKL file
+	PluginName   string // e.g., "aws"
 	ResourceType string // e.g., "s3-bucket"
 }
 

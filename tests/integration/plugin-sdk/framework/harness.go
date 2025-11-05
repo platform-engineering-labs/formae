@@ -431,7 +431,7 @@ func (h *TestHarness) Sync() error {
 	if err != nil {
 		return fmt.Errorf("failed to trigger sync: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sync endpoint returned status %d", resp.StatusCode)
@@ -479,7 +479,7 @@ func (h *TestHarness) TriggerDiscovery() error {
 	if err != nil {
 		return fmt.Errorf("failed to trigger discovery: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("discover endpoint returned status %d", resp.StatusCode)
@@ -598,7 +598,7 @@ func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response
 	respBody, err := io.ReadAll(resp.Body)
