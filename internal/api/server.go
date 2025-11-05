@@ -250,6 +250,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
+
 		response, err = s.metastructure.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode:     mode,
 			Simulate: simulate,

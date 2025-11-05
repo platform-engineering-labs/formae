@@ -5,9 +5,12 @@
 package framework
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,6 +20,8 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/api/model"
+	"github.com/platform-engineering-labs/formae/internal/constants"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // TestHarness manages the lifecycle of formae agent and CLI commands for testing
@@ -130,6 +135,69 @@ cli {
 	h.logFile = logPath
 
 	h.t.Logf("Created test environment: tempDir=%s, configFile=%s, dbPath=%s, logPath=%s", tempDir, configFile, dbPath, logPath)
+	return nil
+}
+
+// ConfigureDiscovery updates the config file to enable discovery for specific resource types
+// This must be called before StartAgent() to take effect
+func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
+	if h.agentStarted {
+		return fmt.Errorf("cannot configure discovery after agent has started")
+	}
+
+	h.t.Logf("Configuring discovery for resource types: %v", resourceTypes)
+
+	// Create database path in temp directory
+	dbPath := filepath.Join(h.tempDir, "formae-test.db")
+
+	// Build the resourceTypesToDiscover listing
+	resourceTypesList := ""
+	for _, rt := range resourceTypes {
+		resourceTypesList += fmt.Sprintf("        %q\n", rt)
+	}
+
+	// Generate updated config file with discovery enabled
+	configContent := fmt.Sprintf(`/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Auto-generated test configuration
+amends "formae:/Config.pkl"
+
+agent {
+    datastore {
+        sqlite {
+            filePath = %q
+        }
+    }
+    synchronization {
+        enabled = false
+    }
+    discovery {
+        enabled = true
+        resourceTypesToDiscover {
+%s        }
+    }
+    logging {
+        consoleLogLevel = "debug"
+        filePath = %q
+        fileLogLevel = "debug"
+    }
+}
+
+cli {
+	disableUsageReporting = true
+}
+`, dbPath, resourceTypesList, h.logFile)
+
+	// Overwrite the config file
+	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write updated config file: %w", err)
+	}
+
+	h.t.Log("Discovery configuration updated successfully")
 	return nil
 }
 
@@ -398,6 +466,157 @@ func (h *TestHarness) WaitForSyncCompletion(timeout time.Duration) error {
 	}
 
 	return fmt.Errorf("timeout waiting for synchronization to complete after %v", timeout)
+}
+
+// TriggerDiscovery triggers a discovery operation via the admin endpoint
+func (h *TestHarness) TriggerDiscovery() error {
+	h.t.Log("Triggering discovery via /api/v1/admin/discover")
+
+	// Default port from plugins/pkl/assets/formae/Config.pkl:20
+	discoverURL := "http://localhost:49684/api/v1/admin/discover"
+
+	resp, err := http.Post(discoverURL, "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("failed to trigger discovery: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("discover endpoint returned status %d", resp.StatusCode)
+	}
+
+	h.t.Log("Discovery triggered successfully")
+	return nil
+}
+
+// WaitForDiscoveryCompletion waits for the discovery to complete by polling the agent log file
+func (h *TestHarness) WaitForDiscoveryCompletion(timeout time.Duration) error {
+	h.t.Log("Waiting for discovery to complete...")
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 500 * time.Millisecond
+	discoveryMessage := "Discovery finished."
+
+	for time.Now().Before(deadline) {
+		// Read the log file
+		logContent, err := os.ReadFile(h.logFile)
+		if err != nil {
+			// File might not exist yet, continue polling
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		if strings.Contains(string(logContent), discoveryMessage) {
+			h.t.Log("Discovery completed")
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for discovery to complete after %v", timeout)
+}
+
+// CreateUnmanagedResource creates an unmanaged resource by modifying the evaluated JSON
+// to set stack=$unmanaged and Managed=false, then submitting via regular reconcile apply
+func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, error) {
+	h.t.Log("Creating unmanaged resource via API")
+
+	// Parse the evaluated JSON into a Forma object
+	var forma pkgmodel.Forma
+	if err := json.Unmarshal([]byte(evaluatedJSON), &forma); err != nil {
+		return "", fmt.Errorf("failed to parse forma JSON: %w", err)
+	}
+
+	// Mark all targets as discoverable
+	for i := range forma.Targets {
+		h.t.Logf("Setting Discoverable=true for target: %s", forma.Targets[i].Label)
+		forma.Targets[i].Discoverable = true
+	}
+
+	// Modify resources to be unmanaged and on the $unmanaged stack
+	for i := range forma.Resources {
+		// Only modify cloud resources (those with :: in type)
+		if strings.Contains(forma.Resources[i].Type, "::") {
+			h.t.Logf("Setting Stack=%s and Managed=false for resource: %s", constants.UnmanagedStack, forma.Resources[i].Type)
+			forma.Resources[i].Stack = constants.UnmanagedStack
+			forma.Resources[i].Managed = false
+		}
+	}
+
+	// Submit the modified forma
+	modifiedJSON, err := json.Marshal(forma)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal modified forma: %w", err)
+	}
+
+	resourceCommandID, err := h.submitForma(modifiedJSON, "unmanaged-resource-creation")
+	if err != nil {
+		return "", fmt.Errorf("failed to create resource: %w", err)
+	}
+
+	h.t.Logf("Unmanaged resource creation submitted, CommandID: %s", resourceCommandID)
+	return resourceCommandID, nil
+}
+
+// submitForma is a helper to submit forma JSON to the API
+func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, error) {
+	commandsURL := "http://localhost:49684/api/v1/commands"
+
+	// Create multipart writer
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add form fields
+	_ = writer.WriteField("command", "apply")
+	_ = writer.WriteField("mode", "reconcile")
+
+	// Add file field with forma JSON
+	fileWriter, err := writer.CreateFormFile("file", filename+".json")
+	if err != nil {
+		return "", fmt.Errorf("failed to create form file: %w", err)
+	}
+	if _, err := fileWriter.Write(formaJSON); err != nil {
+		return "", fmt.Errorf("failed to write forma JSON: %w", err)
+	}
+
+	// Close the multipart writer
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	// Create the HTTP request
+	req, err := http.NewRequest("POST", commandsURL, body)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Client-ID", "plugin-sdk-test")
+
+	// Send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusAccepted {
+		return "", fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse response to get command ID
+	var submitResponse model.SubmitCommandResponse
+	if err := json.Unmarshal(respBody, &submitResponse); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return submitResponse.CommandID, nil
 }
 
 // PollStatus polls the command status until it reaches a terminal state or times out

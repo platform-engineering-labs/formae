@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -339,4 +340,157 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	assert.Len(t, inventoryAfterDestroy.Resources, 0, "Inventory should be empty after destroy")
 
 	t.Logf("Resource lifecycle test completed successfully for %s!", tc.Name)
+}
+
+// TestPluginSDK_Discovery tests resource discovery for unmanaged resources
+func TestPluginSDK_Discovery(t *testing.T) {
+	pluginPath := getPluginPath(t)
+
+	// Discover all test cases in the plugin's testdata directory
+	testCases, err := framework.DiscoverTestData(pluginPath)
+	require.NoError(t, err, "Failed to discover test data")
+
+	t.Logf("Discovered %d test case(s) for discovery testing", len(testCases))
+
+	// Run each test case as a subtest
+	for _, tc := range testCases {
+		tc := tc // Capture range variable
+		t.Run(tc.Name, func(t *testing.T) {
+			runDiscoveryTest(t, tc)
+		})
+	}
+}
+
+// runDiscoveryTest runs the discovery test for a single test case
+func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
+	// Create test harness
+	harness := framework.NewTestHarness(t)
+	defer harness.Cleanup()
+
+	// Step 1: Evaluate PKL file to get expected state
+	t.Log("Step 1: Evaluating PKL file to get expected state...")
+	evalOutput, err := harness.Eval(tc.PKLFile)
+	require.NoError(t, err, "Eval command should succeed")
+
+	// Parse eval output
+	var evalData map[string]any
+	err = json.Unmarshal([]byte(evalOutput), &evalData)
+	require.NoError(t, err, "Eval output should be valid JSON")
+
+	resources, ok := evalData["Resources"].([]any)
+	require.True(t, ok, "Eval output should contain Resources array")
+	require.NotEmpty(t, resources, "Eval output should contain at least one resource")
+
+	// Get the resource we're testing (last one, which is the main resource after Stack and Target)
+	resourceData := resources[len(resources)-1].(map[string]any)
+	actualResourceType := resourceData["Type"].(string)
+	expectedProperties := resourceData["Properties"].(map[string]any)
+
+	t.Logf("Testing resource type: %s", actualResourceType)
+
+	// Step 2: Configure discovery for this resource type
+	t.Log("Step 2: Configuring discovery for resource type...")
+	err = harness.ConfigureDiscovery([]string{actualResourceType})
+	require.NoError(t, err, "Discovery configuration should succeed")
+
+	// Step 3: Start agent with discovery configured
+	t.Log("Step 3: Starting formae agent with discovery enabled...")
+	err = harness.StartAgent()
+	require.NoError(t, err, "Failed to start formae agent")
+
+	// Step 4: Create unmanaged resource via API
+	t.Log("Step 4: Creating unmanaged resource via API...")
+	createCommandID, err := harness.CreateUnmanagedResource(evalOutput)
+	require.NoError(t, err, "Creating unmanaged resource should succeed")
+	assert.NotEmpty(t, createCommandID, "Create should return a command ID")
+
+	// Step 5: Wait for resource creation to complete
+	t.Log("Step 5: Waiting for resource creation to complete...")
+	createStatus, err := harness.PollStatus(createCommandID, 5*time.Minute)
+	require.NoError(t, err, "Create command should complete successfully")
+	assert.Equal(t, "Success", createStatus, "Create command should reach Success state")
+
+	// Register cleanup for the unmanaged resource
+	// We need to delete it via AWS CLI since it's not managed by formae
+	if actualResourceType == "AWS::S3::Bucket" {
+		bucketName := expectedProperties["BucketName"].(string)
+		harness.RegisterCleanup(func() {
+			t.Logf("Cleaning up unmanaged S3 bucket: %s", bucketName)
+			// Use AWS CLI to delete the bucket (force delete even if it has contents)
+			cmd := exec.Command("bash", "-c", fmt.Sprintf("aws s3 rb s3://%s --force 2>/dev/null || true", bucketName))
+			_ = cmd.Run()
+		})
+	}
+
+	// Step 6: Trigger discovery
+	t.Log("Step 6: Triggering discovery...")
+	err = harness.TriggerDiscovery()
+	require.NoError(t, err, "Triggering discovery should succeed")
+
+	// Step 7: Wait for discovery to complete
+	t.Log("Step 7: Waiting for discovery to complete...")
+	err = harness.WaitForDiscoveryCompletion(2 * time.Minute)
+	require.NoError(t, err, "Discovery should complete within timeout")
+
+	// Step 8: Query inventory for unmanaged resources
+	t.Log("Step 8: Querying inventory for unmanaged resources...")
+	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", actualResourceType))
+	require.NoError(t, err, "Inventory query should succeed")
+
+	// Step 9: Verify our specific resource was discovered
+	t.Log("Step 9: Verifying discovered resource...")
+	assert.NotEmpty(t, inventory.Resources, "Should discover at least one unmanaged resource")
+
+	if len(inventory.Resources) == 0 {
+		t.Fatal("No unmanaged resources discovered")
+	}
+
+	// Find our specific bucket by BucketName in the discovered resources
+	bucketName := expectedProperties["BucketName"].(string)
+	var discoveredResource map[string]any
+	for _, res := range inventory.Resources {
+		if props, ok := res["Properties"].(map[string]any); ok {
+			if props["BucketName"] == bucketName {
+				discoveredResource = res
+				break
+			}
+		}
+	}
+
+	if discoveredResource == nil {
+		t.Fatalf("Did not find our bucket %s in discovered resources", bucketName)
+	}
+
+	// Step 10: Verify the discovered resource properties match what we created
+	t.Log("Step 10: Verifying discovered resource properties...")
+
+	// Verify resource is on the unmanaged stack
+	stack, ok := discoveredResource["Stack"].(string)
+	require.True(t, ok, "Discovered resource should have Stack field")
+	assert.Equal(t, "$unmanaged", stack, "Discovered resource should be on $unmanaged stack")
+
+	// Verify resource type matches
+	discoveredType, ok := discoveredResource["Type"].(string)
+	require.True(t, ok, "Discovered resource should have Type field")
+	assert.Equal(t, actualResourceType, discoveredType, "Discovered resource type should match")
+
+	// Compare properties (excluding metadata tags since we stripped them)
+	discoveredProps, ok := discoveredResource["Properties"].(map[string]any)
+	require.True(t, ok, "Discovered resource should have Properties")
+
+	// For properties comparison, we expect the properties we created (without formae tags)
+	// but discovery might add some discovered metadata, so we only verify key properties
+	for key, expectedValue := range expectedProperties {
+		// Skip Tags comparison as we intentionally stripped formae tags
+		if key == "Tags" {
+			continue
+		}
+
+		actualValue, exists := discoveredProps[key]
+		assert.True(t, exists, "Property %s should exist in discovered resource", key)
+		assert.Equal(t, expectedValue, actualValue, "Property %s should match", key)
+	}
+
+	t.Log("Discovery test completed successfully!")
+	t.Log("Successfully discovered unmanaged resource and verified its properties")
 }
