@@ -5,7 +5,7 @@ examples {
       group = null
       target = null
       stack = null
-      Managed = true
+      managed = true
       x = 42
       name = "test"
     }
@@ -16,7 +16,7 @@ examples {
       group = null
       target = null
       stack = null
-      Managed = true
+      managed = true
       items {
         "item1"
         "item2"
@@ -27,10 +27,10 @@ examples {
     }
   }
   ["Convert to map with types - simple"] {
-    Map("label", "simple", "group", null, "target", null, "stack", null, "Managed", true, "x", 42, "name", "test")
+    Map("label", "simple", "group", null, "target", null, "stack", null, "managed", true, "x", 42, "name", "test")
   }
   ["Convert to map with types - complex"] {
-    Map("label", "my-bucket", "group", null, "target", null, "stack", null, "tags", List(), "Managed", true, "type", "FakeAWS::Suckets::TestResource", "size", null, "bucketName", "my-test-bucket")
+    Map("label", "my-bucket", "group", null, "target", null, "stack", null, "tags", List(), "managed", true, "type", "FakeAWS::Suckets::TestResource", "size", null, "bucketName", "my-test-bucket")
   }
   ["Generate import statements"] {
     List("@aws/s3.pkl")

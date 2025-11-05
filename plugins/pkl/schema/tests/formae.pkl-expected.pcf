@@ -69,7 +69,7 @@ examples {
       Config {
         Region = "us-east-1"
         AccessKey = "test-key"
-      }     
+      }
       Discoverable = true
     }
   }
@@ -164,6 +164,7 @@ examples {
         $res = true
         $visibility = "Clear"
       }
+      Managed = true
       Type = "AWS::S3::Bucket"
       Schema {
         Nonprovisionable = false
@@ -217,6 +218,7 @@ examples {
       Group = null
       Target = null
       Stack = null
+      Managed = true
       Type = "FakeAWS::S3::Resource"
       Schema {
         Nonprovisionable = false
