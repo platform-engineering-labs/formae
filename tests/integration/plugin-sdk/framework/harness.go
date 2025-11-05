@@ -625,8 +625,12 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 
 	// Now we need to submit the target via API so it gets stored with Discoverable=true
 	// We create a minimal forma with just the target
+	discoverableTarget := forma.Targets[0]
+	discoverableTarget.Discoverable = true
+	h.t.Logf("Setting Discoverable=true for target: %s", discoverableTarget.Label)
+	
 	targetOnlyForma := pkgmodel.Forma{
-		Targets: []pkgmodel.Target{forma.Targets[0]},
+		Targets: []pkgmodel.Target{discoverableTarget},
 	}
 
 	targetJSON, err := json.Marshal(targetOnlyForma)
@@ -641,6 +645,57 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 	}
 
 	return nativeID, nil
+}
+
+// DeleteUnmanagedResource deletes a resource directly via the plugin, bypassing formae.
+// This is useful for cleanup in discovery tests where resources were created outside formae.
+func (h *TestHarness) DeleteUnmanagedResource(resourceType, nativeID string, target *pkgmodel.Target) error {
+	h.t.Logf("Deleting unmanaged resource via plugin: type=%s, nativeID=%s", resourceType, nativeID)
+
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
+	namespace := strings.ToLower(strings.Split(resourceType, "::")[0])
+	h.t.Logf("Using plugin namespace: %s", namespace)
+
+	// Get the resource plugin
+	resourcePlugin, err := h.pluginManager.ResourcePlugin(namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get resource plugin for namespace %s: %w", namespace, err)
+	}
+
+	// Delete the resource using the plugin
+	deleteRequest := &resource.DeleteRequest{
+		NativeID:     &nativeID,
+		ResourceType: resourceType,
+		Target:       target,
+	}
+
+	h.t.Logf("Calling plugin Delete method")
+	deleteResult, err := (*resourcePlugin).Delete(context.Background(), deleteRequest)
+	if err != nil {
+		return fmt.Errorf("plugin Delete failed: %w", err)
+	}
+
+	if deleteResult.ProgressResult == nil {
+		return fmt.Errorf("plugin Delete returned nil ProgressResult")
+	}
+
+	h.t.Logf("Delete initiated, RequestID: %s, Status: %s",
+		deleteResult.ProgressResult.RequestID,
+		deleteResult.ProgressResult.OperationStatus)
+
+	// Poll for completion
+	_, err = h.pollPluginStatus(
+		*resourcePlugin,
+		deleteResult.ProgressResult.RequestID,
+		resourceType,
+		target,
+	)
+	if err != nil {
+		return fmt.Errorf("failed waiting for resource deletion: %w", err)
+	}
+
+	h.t.Logf("Resource deleted successfully")
+	return nil
 }
 
 // stripFormaeTags removes FormaeStackLabel and FormaeResourceLabel from resource tags

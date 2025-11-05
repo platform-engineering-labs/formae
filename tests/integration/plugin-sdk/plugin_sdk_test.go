@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/tests/integration/plugin-sdk/framework"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -405,17 +405,27 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	assert.NotEmpty(t, nativeID, "Create should return a native ID")
 	t.Logf("Created unmanaged resource with NativeID: %s", nativeID)
 
-	// Register cleanup for the unmanaged resource
-	// We need to delete it via AWS CLI since it's not managed by formae
-	if actualResourceType == "AWS::S3::Bucket" {
-		bucketName := expectedProperties["BucketName"].(string)
-		harness.RegisterCleanup(func() {
-			t.Logf("Cleaning up unmanaged S3 bucket: %s", bucketName)
-			// Use AWS CLI to delete the bucket (force delete even if it has contents)
-			cmd := exec.Command("bash", "-c", fmt.Sprintf("aws s3 rb s3://%s --force 2>/dev/null || true", bucketName))
-			_ = cmd.Run()
-		})
-	}
+	// Parse target from eval output for cleanup
+	targets, ok := evalData["Targets"].([]any)
+	require.True(t, ok, "Eval output should contain Targets array")
+	require.NotEmpty(t, targets, "Eval output should contain at least one target")
+	targetData := targets[0].(map[string]any)
+	
+	// Convert target to the model type needed by DeleteUnmanagedResource
+	targetJSON, err := json.Marshal(targetData)
+	require.NoError(t, err, "Failed to marshal target")
+	var target pkgmodel.Target
+	err = json.Unmarshal(targetJSON, &target)
+	require.NoError(t, err, "Failed to unmarshal target")
+
+	// Register cleanup for the unmanaged resource using plugin
+	harness.RegisterCleanup(func() {
+		t.Logf("Cleaning up unmanaged resource: type=%s, nativeID=%s", actualResourceType, nativeID)
+		err := harness.DeleteUnmanagedResource(actualResourceType, nativeID, &target)
+		if err != nil {
+			t.Logf("Warning: failed to delete unmanaged resource: %v", err)
+		}
+	})
 
 	// Step 5: Trigger discovery
 	t.Log("Step 5: Triggering discovery...")
