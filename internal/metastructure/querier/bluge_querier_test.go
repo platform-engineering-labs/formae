@@ -347,7 +347,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedTrue(t *testing.T) 
 
 	queryString := "managed:true"
 	_, err := querier.QueryResourcesForDestroy(queryString)
-	
+
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
@@ -359,7 +359,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedFalse(t *testing.T)
 
 	queryString := "managed:false"
 	_, err := querier.QueryResourcesForDestroy(queryString)
-	
+
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
@@ -371,7 +371,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_RejectsRequiredManaged(t *testing
 
 	queryString := "+managed:true"
 	_, err := querier.QueryResourcesForDestroy(queryString)
-	
+
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
@@ -383,7 +383,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_RejectsExcludedManaged(t *testing
 
 	queryString := "-managed:true"
 	_, err := querier.QueryResourcesForDestroy(queryString)
-	
+
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
@@ -395,7 +395,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedInComplexQuery(t *t
 
 	queryString := "stack:test-stack managed:true type:Bucket"
 	_, err := querier.QueryResourcesForDestroy(queryString)
-	
+
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
@@ -409,7 +409,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsQueryWithoutManaged(t *tes
 
 		queryString := "stack:test-stack type:Bucket"
 		_, err := querier.QueryResourcesForDestroy(queryString)
-		
+
 		assert.NoError(t, err)
 	})
 }
@@ -421,7 +421,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsEmptyQuery(t *testing.T) {
 
 		queryString := ""
 		_, err := querier.QueryResourcesForDestroy(queryString)
-		
+
 		assert.NoError(t, err)
 	})
 }
@@ -433,7 +433,7 @@ func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsComplexQueryWithoutManaged
 
 		queryString := "stack:prod +type:Bucket -label:test"
 		_, err := querier.QueryResourcesForDestroy(queryString)
-		
+
 		assert.NoError(t, err)
 	})
 }
