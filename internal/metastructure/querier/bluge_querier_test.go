@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
@@ -338,5 +339,101 @@ func TestBlugeQuerier_resourceQuery(t *testing.T) {
 		resources, err = querier.QueryResources(queryString)
 		assert.NoError(t, err)
 		assert.Len(t, resources, 2)
+	})
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedTrue(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "managed:true"
+	_, err := querier.QueryResourcesForDestroy(queryString)
+
+	assert.Error(t, err)
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr)
+	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedFalse(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "managed:false"
+	_, err := querier.QueryResourcesForDestroy(queryString)
+
+	assert.Error(t, err)
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr)
+	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsRequiredManaged(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "+managed:true"
+	_, err := querier.QueryResourcesForDestroy(queryString)
+
+	assert.Error(t, err)
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr)
+	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsExcludedManaged(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "-managed:true"
+	_, err := querier.QueryResourcesForDestroy(queryString)
+
+	assert.Error(t, err)
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr)
+	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedInComplexQuery(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "stack:test-stack managed:true type:Bucket"
+	_, err := querier.QueryResourcesForDestroy(queryString)
+
+	assert.Error(t, err)
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr)
+	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsQueryWithoutManaged(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		ds := newTestDatastoreSQLite()
+		querier := NewBlugeQuerier(ds)
+
+		queryString := "stack:test-stack type:Bucket"
+		_, err := querier.QueryResourcesForDestroy(queryString)
+
+		assert.NoError(t, err)
+	})
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsEmptyQuery(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		ds := newTestDatastoreSQLite()
+		querier := NewBlugeQuerier(ds)
+
+		queryString := ""
+		_, err := querier.QueryResourcesForDestroy(queryString)
+
+		assert.NoError(t, err)
+	})
+}
+
+func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsComplexQueryWithoutManaged(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		ds := newTestDatastoreSQLite()
+		querier := NewBlugeQuerier(ds)
+
+		queryString := "stack:prod +type:Bucket -label:test"
+		_, err := querier.QueryResourcesForDestroy(queryString)
+
+		assert.NoError(t, err)
 	})
 }
