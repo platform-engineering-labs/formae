@@ -33,6 +33,7 @@ function GetAllResourceTypes() = new Listing<types.ResourceType> {
                                 }
                             }
                             Fields = formae.fq.fields(v)
+                            Extractable = v.annotations[0].getProperty("extractable")
                         }
                         ParentResourceTypesWithMappingProperties =
                             let (parent = v.annotations[0].getProperty("parent"))

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build integration
+//go:build plugin_sdk
 
 package pluginsdk_test
 
@@ -229,44 +229,54 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	// Compare properties using helper
 	compareProperties(t, expectedProperties, actualResource, "after create")
 
-	// Step 5: Extract resource and verify it matches original
-	t.Log("Step 5: Extracting resource to PKL and verifying...")
-
-	// Create temp directory for extracted files
-	extractDir, err := os.MkdirTemp("", "formae-extract-test-*")
-	require.NoError(t, err, "Should be able to create temp directory for extraction")
-	t.Logf("Created extract directory: %s", extractDir)
-
-	// Extract the resource
-	extractFile := filepath.Join(extractDir, "extracted.pkl")
-	err = harness.Extract(fmt.Sprintf("type:%s", actualResourceType), extractFile)
-	require.NoError(t, err, "Extract command should succeed")
-
-	// Eval the extracted PKL file
-	extractedOutput, err := harness.Eval(extractFile)
-	require.NoError(t, err, "Eval of extracted file should succeed")
-
-	// Parse extracted eval output
-	var extractedResult framework.InventoryResponse
-	err = json.Unmarshal([]byte(extractedOutput), &extractedResult)
-	require.NoError(t, err, "Should be able to parse extracted eval output")
-	require.NotEmpty(t, extractedResult.Resources, "Extracted eval should return at least one resource")
-
-	// Get the extracted resource properties
-	extractedResource := extractedResult.Resources[0]
-	extractedProperties := extractedResource["Properties"].(map[string]any)
-
-	// Compare properties from extracted file with original
-	t.Log("Comparing extracted properties with original expected properties...")
-	for key, expectedValue := range expectedProperties {
-		actualValue, exists := extractedProperties[key]
-		assert.True(t, exists, "Property %s should exist in extracted resource", key)
-		if exists {
-			assert.Equal(t, expectedValue, actualValue, "Property %s should match in extracted resource", key)
+	// Check if resource is extractable before running Step 5
+	shouldSkipExtract := false
+	if schema, ok := expectedResource["Schema"].(map[string]any); ok {
+		if extractable, ok := schema["Extractable"].(bool); ok && !extractable {
+			t.Logf("Skipping extract validation: resource type %s has extractable=false", actualResourceType)
+			shouldSkipExtract = true
 		}
 	}
-	t.Log("Extract validation completed!")
 
+	// Step 5: Extract resource and verify it matches original
+	if !shouldSkipExtract {
+		t.Log("Step 5: Extracting resource to PKL and verifying...")
+
+		// Create temp directory for extracted files
+		extractDir, err := os.MkdirTemp("", "formae-extract-test-*")
+		require.NoError(t, err, "Should be able to create temp directory for extraction")
+		t.Logf("Created extract directory: %s", extractDir)
+
+		// Extract the resource
+		extractFile := filepath.Join(extractDir, "extracted.pkl")
+		err = harness.Extract(fmt.Sprintf("type:%s", actualResourceType), extractFile)
+		require.NoError(t, err, "Extract command should succeed")
+
+		// Eval the extracted PKL file
+		extractedOutput, err := harness.Eval(extractFile)
+		require.NoError(t, err, "Eval of extracted file should succeed")
+
+		// Parse extracted eval output
+		var extractedResult framework.InventoryResponse
+		err = json.Unmarshal([]byte(extractedOutput), &extractedResult)
+		require.NoError(t, err, "Should be able to parse extracted eval output")
+		require.NotEmpty(t, extractedResult.Resources, "Extracted eval should return at least one resource")
+
+		// Get the extracted resource properties
+		extractedResource := extractedResult.Resources[0]
+		extractedProperties := extractedResource["Properties"].(map[string]any)
+
+		// Compare properties from extracted file with original
+		t.Log("Comparing extracted properties with original expected properties...")
+		for key, expectedValue := range expectedProperties {
+			actualValue, exists := extractedProperties[key]
+			assert.True(t, exists, "Property %s should exist in extracted resource", key)
+			if exists {
+				assert.Equal(t, expectedValue, actualValue, "Property %s should match in extracted resource", key)
+			}
+		}
+		t.Log("Extract validation completed!")
+	}
 	// Step 6: Force synchronization to read actual state from cloud
 	t.Log("Step 6: Forcing synchronization...")
 	err = harness.Sync()

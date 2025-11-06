@@ -11,6 +11,7 @@ type Schema struct {
 	Nonprovisionable bool
 	Hints            map[string]FieldHint
 	Discoverable     bool
+	Extractable      bool
 }
 
 type FieldHint struct {

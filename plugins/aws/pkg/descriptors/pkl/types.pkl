@@ -52,6 +52,8 @@ open class Schema {
     Hints: Mapping<String, FieldHint>
     // All the fields that can be set by user on the resource which are the Properties keys
     Fields: Listing<String>
+    /// Property that dictates whether a resource can be extracted to PKL
+    Extractable: Boolean = true
 }
 
 open class ListProperty {

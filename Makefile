@@ -120,6 +120,9 @@ test-all: test-build test-pkl
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./
 	go test -tags="unit integration" -count=1 -failfast ./...
+	@echo "Running Plugin SDK tests for AWS..."
+	@pkl project resolve plugins/aws/testdata
+	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -count=1 -failfast ./...
 
 test-unit:
 	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...
@@ -146,12 +149,12 @@ test-integration:
 test-plugin-sdk-aws: build
 	@echo "Resolving PKL dependencies for AWS plugin..."
 	@pkl project resolve plugins/aws/testdata
-	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=integration -v -failfast ./...
+	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
 
 test-plugin-sdk-azure: build
 	@echo "Resolving PKL dependencies for Azure plugin..."
 	@pkl project resolve plugins/azure/testdata
-	PLUGIN_NAME=azure go test -C ./tests/integration/plugin-sdk -tags=integration -v -failfast ./...
+	PLUGIN_NAME=azure go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
 
 test-e2e: gen-pkl pkg-pkl build
 	echo "Resolving PKL project..."
@@ -194,7 +197,7 @@ test-generator-pkl:
 	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/resources_example.json
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/lifeline.json
-	cd plugins/pkl/generator && python run_generator.py examples/json/types
+	cd plugins/pkl/generator && python3 run_generator.py examples/json/types
 
 verify-pkl: gen-pkl
 	cd plugins/pkl/verify && pkl eval verify.pkl

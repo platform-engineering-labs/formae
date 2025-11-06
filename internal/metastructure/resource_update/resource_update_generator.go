@@ -146,11 +146,6 @@ func validateStackReferences(forma *pkgmodel.Forma, ds ResourceDataLookup) error
 
 	// Validate each of these stacks exists in the database
 	for stackLabel := range stacksToValidate {
-		// Skip validation for the special unmanaged stack - it's created automatically
-		if stackLabel == constants.UnmanagedStack {
-			continue
-		}
-
 		existingStack, err := ds.LoadStack(stackLabel)
 		if err != nil {
 			return fmt.Errorf("failed to load stack %s: %w", stackLabel, err)
