@@ -87,13 +87,13 @@ func (b *BlugeQuerier) processStatusQueryNode(q bluge.Query, sq *datastore.Statu
 	case *bluge.MatchQuery:
 		return b.assignTermToStatusQuery(v.Field(), v.Match(), sq, clientID, constraint)
 	default:
-		return fmt.Errorf("unsupported query type: %T", q)
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unsupported query type: %T", q)}
 	}
 }
 
 func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *datastore.StatusQuery, clientID string, constraint datastore.QueryItemConstraint) error {
 	if field == "" {
-		return fmt.Errorf("query term '%s' must have an explicit field", value)
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("query term '%s' must have an explicit field", value)}
 	}
 
 	switch strings.ToLower(field) {
@@ -113,7 +113,7 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 	case "managed":
 		sq.Managed = queryItem(value.(bool), constraint)
 	default:
-		return fmt.Errorf("unknown field for StatusQuery: '%s'", field)
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unknown field for StatusQuery: '%s'", field)}
 	}
 	return nil
 }
@@ -195,13 +195,13 @@ func (b *BlugeQuerier) processResourceQueryNode(q bluge.Query, rq *datastore.Res
 	case *bluge.MatchQuery:
 		return b.assignTermToResourceQuery(v.Field(), v.Match(), rq, constraint)
 	default:
-		return fmt.Errorf("unsupported query type: %T", q)
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unsupported query type: %T", q)}
 	}
 }
 
 func (b *BlugeQuerier) assignTermToResourceQuery(field string, value any, rq *datastore.ResourceQuery, constraint datastore.QueryItemConstraint) error {
 	if field == "" {
-		return fmt.Errorf("query term '%s' must have an explicit field", value)
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("query term '%s' must have an explicit field", value)}
 	}
 
 	switch strings.ToLower(field) {
@@ -214,11 +214,105 @@ func (b *BlugeQuerier) assignTermToResourceQuery(field string, value any, rq *da
 	case "managed":
 		boolVal, err := strconv.ParseBool(fmt.Sprintf("%v", value))
 		if err != nil {
-			return fmt.Errorf("invalid boolean value for 'managed': %v", err)
+			return apimodel.InvalidQueryError{Reason: fmt.Sprintf("invalid boolean value for 'managed': %v", err)}
 		}
 		rq.Managed = queryItem(boolVal, constraint)
 	default:
-		return fmt.Errorf("unknown field for ResourceQuery: '%s'", field)
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unknown field for ResourceQuery: '%s'", field)}
+	}
+	return nil
+}
+
+func (b *BlugeQuerier) QueryResourcesForDestroy(queryString string) ([]*pkgmodel.Resource, error) {
+	if queryString == "" {
+		return b.datastore.QueryResources(&datastore.ResourceQuery{})
+	}
+
+	destroyQuery, err := b.destroyResourcesQuery(queryString)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceQuery := &datastore.ResourceQuery{
+		Stack:    destroyQuery.Stack,
+		Type:     destroyQuery.Type,
+		Label:    destroyQuery.Label,
+		Target:   destroyQuery.Target,
+		NativeID: destroyQuery.NativeID,
+	}
+
+	return b.datastore.QueryResources(resourceQuery)
+}
+
+func (b *BlugeQuerier) destroyResourcesQuery(queryString string) (*datastore.DestroyResourcesQuery, error) {
+	q, err := querystr.ParseQueryString(queryString, querystr.QueryStringOptions{})
+	if err != nil {
+		return nil, apimodel.InvalidQueryError{Reason: err.Error()}
+	}
+
+	destroyQuery, err := b.translateToDestroyResourcesQuery(q)
+	if err != nil {
+		return nil, err
+	}
+
+	return destroyQuery, nil
+}
+
+func (b *BlugeQuerier) translateToDestroyResourcesQuery(blugeQuery bluge.Query) (*datastore.DestroyResourcesQuery, error) {
+	destroyQuery := &datastore.DestroyResourcesQuery{}
+	err := b.processDestroyResourcesQueryNode(blugeQuery, destroyQuery, datastore.Required)
+	if err != nil {
+		return nil, err
+	}
+	return destroyQuery, nil
+}
+
+func (b *BlugeQuerier) processDestroyResourcesQueryNode(q bluge.Query, dq *datastore.DestroyResourcesQuery, constraint datastore.QueryItemConstraint) error {
+	switch v := q.(type) {
+	case *bluge.BooleanQuery:
+		for _, m := range v.Musts() {
+			if err := b.processDestroyResourcesQueryNode(m, dq, datastore.Required); err != nil {
+				return err
+			}
+		}
+		for _, s := range v.Shoulds() {
+			if err := b.processDestroyResourcesQueryNode(s, dq, datastore.Optional); err != nil {
+				return err
+			}
+		}
+		for _, n := range v.MustNots() {
+			if err := b.processDestroyResourcesQueryNode(n, dq, datastore.Excluded); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *bluge.MatchQuery:
+		return b.assignTermToDestroyResourcesQuery(v.Field(), v.Match(), dq, constraint)
+	default:
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unsupported query type: %T", q)}
+	}
+}
+
+func (b *BlugeQuerier) assignTermToDestroyResourcesQuery(field string, value any, dq *datastore.DestroyResourcesQuery, constraint datastore.QueryItemConstraint) error {
+	if field == "" {
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("query term '%s' must have an explicit field", value)}
+	}
+
+	switch strings.ToLower(field) {
+	case "stack":
+		dq.Stack = queryItem(value.(string), constraint)
+	case "type":
+		dq.Type = queryItem(value.(string), constraint)
+	case "label":
+		dq.Label = queryItem(value.(string), constraint)
+	case "target":
+		dq.Target = queryItem(value.(string), constraint)
+	case "native_id":
+		dq.NativeID = queryItem(value.(string), constraint)
+	case "managed":
+		return apimodel.InvalidQueryError{Reason: "managed field cannot be used in destroy queries"}
+	default:
+		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unknown field for destroy query: '%s'", field)}
 	}
 	return nil
 }
