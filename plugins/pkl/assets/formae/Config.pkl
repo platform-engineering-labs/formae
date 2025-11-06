@@ -64,7 +64,7 @@ class RetryConfig {
 }
 
 class DiscoveryConfig {
-    enabled: Boolean = false
+    enabled: Boolean = true
 
     scanTargets: Listing<Target> = new Listing<Target> { }
 
@@ -72,7 +72,7 @@ class DiscoveryConfig {
         "Name"
     }
 
-    interval: Duration = 1.h
+    interval: Duration = 10.min
 
     resourceTypesToDiscover: Listing<String> = new Listing<String> { }
 }
