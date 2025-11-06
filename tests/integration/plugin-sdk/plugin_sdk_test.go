@@ -229,18 +229,56 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	// Compare properties using helper
 	compareProperties(t, expectedProperties, actualResource, "after create")
 
-	// Step 5: Force synchronization to read actual state from cloud
-	t.Log("Step 5: Forcing synchronization...")
+	// Step 5: Extract resource and verify it matches original
+	t.Log("Step 5: Extracting resource to PKL and verifying...")
+
+	// Create temp directory for extracted files
+	extractDir, err := os.MkdirTemp("", "formae-extract-test-*")
+	require.NoError(t, err, "Should be able to create temp directory for extraction")
+	t.Logf("Created extract directory: %s", extractDir)
+
+	// Extract the resource
+	extractFile := filepath.Join(extractDir, "extracted.pkl")
+	err = harness.Extract(fmt.Sprintf("type:%s", actualResourceType), extractFile)
+	require.NoError(t, err, "Extract command should succeed")
+
+	// Eval the extracted PKL file
+	extractedOutput, err := harness.Eval(extractFile)
+	require.NoError(t, err, "Eval of extracted file should succeed")
+
+	// Parse extracted eval output
+	var extractedResult framework.InventoryResponse
+	err = json.Unmarshal([]byte(extractedOutput), &extractedResult)
+	require.NoError(t, err, "Should be able to parse extracted eval output")
+	require.NotEmpty(t, extractedResult.Resources, "Extracted eval should return at least one resource")
+
+	// Get the extracted resource properties
+	extractedResource := extractedResult.Resources[0]
+	extractedProperties := extractedResource["Properties"].(map[string]any)
+
+	// Compare properties from extracted file with original
+	t.Log("Comparing extracted properties with original expected properties...")
+	for key, expectedValue := range expectedProperties {
+		actualValue, exists := extractedProperties[key]
+		assert.True(t, exists, "Property %s should exist in extracted resource", key)
+		if exists {
+			assert.Equal(t, expectedValue, actualValue, "Property %s should match in extracted resource", key)
+		}
+	}
+	t.Log("Extract validation completed!")
+
+	// Step 6: Force synchronization to read actual state from cloud
+	t.Log("Step 6: Forcing synchronization...")
 	err = harness.Sync()
 	require.NoError(t, err, "Sync command should succeed")
 
-	// Step 6: Wait for synchronization to complete
-	t.Log("Step 6: Waiting for synchronization to complete...")
+	// Step 7: Wait for synchronization to complete
+	t.Log("Step 7: Waiting for synchronization to complete...")
 	err = harness.WaitForSyncCompletion(30 * time.Second)
 	require.NoError(t, err, "Synchronization should complete successfully")
 
-	// Step 7: Verify inventory still matches expected state (idempotency check)
-	t.Log("Step 7: Verifying resource state unchanged after sync (idempotency)...")
+	// Step 8: Verify inventory still matches expected state (idempotency check)
+	t.Log("Step 8: Verifying resource state unchanged after sync (idempotency)...")
 	inventoryAfterSync, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
 	require.NoError(t, err, "Inventory command should succeed after sync")
 	assert.Len(t, inventoryAfterSync.Resources, 1, "Inventory should still contain exactly 1 resource")
@@ -251,8 +289,8 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	compareProperties(t, expectedProperties, resourceAfterSync, "after sync")
 	t.Log("Idempotency verified!")
 
-	// Step 8: Update the resource by adding a tag (using patch mode)
-	t.Log("Step 8: Creating patch PKL file to add a tag...")
+	// Step 9: Update the resource by adding a tag (using patch mode)
+	t.Log("Step 9: Creating patch PKL file to add a tag...")
 
 	// Create patch file in same directory as original PKL file so it can resolve dependencies
 	pklDir := filepath.Dir(tc.PKLFile)
@@ -268,20 +306,20 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 		_ = os.Remove(patchFile)
 	})
 
-	// Step 9: Apply the patch to add the tag
-	t.Log("Step 9: Applying patch to add tag...")
+	// Step 10: Apply the patch to add the tag
+	t.Log("Step 10: Applying patch to add tag...")
 	patchCommandID, err := harness.ApplyWithMode(patchFile, "patch")
 	require.NoError(t, err, "Patch apply command should succeed")
 	assert.NotEmpty(t, patchCommandID, "Patch apply should return a command ID")
 
-	// Step 10: Poll for patch command to complete successfully
-	t.Log("Step 10: Polling for patch command completion...")
+	// Step 11: Poll for patch command to complete successfully
+	t.Log("Step 11: Polling for patch command completion...")
 	patchStatus, err := harness.PollStatus(patchCommandID, 5*time.Minute)
 	require.NoError(t, err, "Patch command should complete successfully")
 	assert.Equal(t, "Success", patchStatus, "Patch command should reach Success state")
 
-	// Step 11: Verify the tag was added to the resource
-	t.Log("Step 11: Verifying tag was added to resource...")
+	// Step 12: Verify the tag was added to the resource
+	t.Log("Step 12: Verifying tag was added to resource...")
 	inventoryAfterPatch, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
 	require.NoError(t, err, "Inventory command should succeed after patch")
 	assert.Len(t, inventoryAfterPatch.Resources, 1, "Inventory should still contain exactly 1 resource")
@@ -321,20 +359,20 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	compareProperties(t, expectedPropertiesWithTag, resourceAfterPatch, "after patch")
 	t.Log("Update test completed successfully - tag was added!")
 
-	// Step 12: Destroy the resource
-	t.Log("Step 12: Destroying resource...")
+	// Step 13: Destroy the resource
+	t.Log("Step 13: Destroying resource...")
 	destroyCommandID, err := harness.Destroy(tc.PKLFile)
 	require.NoError(t, err, "Destroy command should succeed")
 	assert.NotEmpty(t, destroyCommandID, "Destroy should return a command ID")
 
-	// Step 13: Poll for destroy command to complete successfully
-	t.Log("Step 13: Polling for destroy command completion...")
+	// Step 14: Poll for destroy command to complete successfully
+	t.Log("Step 14: Polling for destroy command completion...")
 	destroyStatus, err := harness.PollStatus(destroyCommandID, 5*time.Minute)
 	require.NoError(t, err, "Destroy command should complete successfully")
 	assert.Equal(t, "Success", destroyStatus, "Destroy command should reach Success state")
 
-	// Step 14: Verify resource no longer exists in inventory
-	t.Log("Step 14: Verifying resource removed from inventory...")
+	// Step 15: Verify resource no longer exists in inventory
+	t.Log("Step 15: Verifying resource removed from inventory...")
 	inventoryAfterDestroy, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
 	require.NoError(t, err, "Inventory command should succeed after destroy")
 	assert.Len(t, inventoryAfterDestroy.Resources, 0, "Inventory should be empty after destroy")

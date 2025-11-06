@@ -580,7 +580,11 @@ local function formatListAsListing(list: List, indent: String, propertyName: Str
     else
       "new Listing {}"
   else
-    // Filter out FormaeResourceLabel and FormaeStackLabel tags if this is  property
+    // Filter out FormaeResourceLabel and FormaeStackLabel tags if this is tags property
+    // We check both "key" and "Key" because:
+    // - During extraction, we receive raw AWS data with capital "Key" (PascalCase)
+    // - PKL rendering will transform to camelCase "key" in the output
+    // - At this filter stage, we operate on untransformed AWS format data
     let (filteredList = if (propertyName == "tags")
       list.filter((item) ->
         if (item is Map && item.containsKey("__type__") && item["__type__"] == "tag")
@@ -588,6 +592,9 @@ local function formatListAsListing(list: List, indent: String, propertyName: Str
           key != "FormaeResourceLabel" && key != "FormaeStackLabel"
         else if (item is Map && item.containsKey("key"))
           let (key = item["key"])
+          key != "FormaeResourceLabel" && key != "FormaeStackLabel"
+        else if (item is Map && item.containsKey("Key"))
+          let (key = item["Key"])
           key != "FormaeResourceLabel" && key != "FormaeStackLabel"
         else
           true

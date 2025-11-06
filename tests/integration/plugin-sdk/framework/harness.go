@@ -415,6 +415,26 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 	return string(output), nil
 }
 
+// Extract runs `formae extract` with the given query and output file
+func (h *TestHarness) Extract(query string, outputFile string) error {
+	h.t.Logf("Running formae extract with query '%s' to %s", query, outputFile)
+
+	cmd := exec.Command(
+		h.formaeBinary,
+		"extract",
+		"--query", query,
+		outputFile,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("extract command failed: %w\nOutput: %s", err, string(output))
+	}
+
+	h.t.Logf("Extract completed successfully")
+	return nil
+}
+
 // InventoryResponse represents the JSON response from formae inventory
 type InventoryResponse struct {
 	Targets   []map[string]any `json:"Targets,omitempty"`
