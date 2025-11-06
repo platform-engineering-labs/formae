@@ -223,6 +223,16 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 	// If there are no discoverable targets, complete discovery immediately
 	if len(data.targets) == 0 {
 		proc.Log().Debug("No discoverable targets found, completing discovery")
+
+		if data.isScheduledDiscovery {
+			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
+			if err != nil {
+				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				return StateIdle, data, nil, gen.TerminateReasonPanic
+			}
+			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
+		}
+
 		return StateIdle, data, nil, nil
 	}
 
