@@ -48,6 +48,14 @@ type ResourceQuery struct {
 	N                int
 }
 
+type DestroyResourcesQuery struct {
+	Stack    *QueryItem[string]
+	Type     *QueryItem[string]
+	Label    *QueryItem[string]
+	Target   *QueryItem[string]
+	NativeID *QueryItem[string]
+}
+
 type TargetQuery struct {
 	Label        *QueryItem[string]
 	Namespace    *QueryItem[string]

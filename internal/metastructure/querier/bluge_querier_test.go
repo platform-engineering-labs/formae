@@ -342,89 +342,98 @@ func TestBlugeQuerier_resourceQuery(t *testing.T) {
 	})
 }
 
-func TestBlugeQuerier_ValidateDestroy_RejectsManagedTrue(t *testing.T) {
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedTrue(t *testing.T) {
 	querier := &BlugeQuerier{}
 
 	queryString := "managed:true"
-	err := querier.ValidateDestroy(queryString)
-
+	_, err := querier.QueryResourcesForDestroy(queryString)
+	
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
 	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
 }
 
-func TestBlugeQuerier_ValidateDestroy_RejectsManagedFalse(t *testing.T) {
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedFalse(t *testing.T) {
 	querier := &BlugeQuerier{}
 
 	queryString := "managed:false"
-	err := querier.ValidateDestroy(queryString)
-
+	_, err := querier.QueryResourcesForDestroy(queryString)
+	
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
 	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
 }
 
-func TestBlugeQuerier_ValidateDestroy_RejectsRequiredManaged(t *testing.T) {
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsRequiredManaged(t *testing.T) {
 	querier := &BlugeQuerier{}
 
 	queryString := "+managed:true"
-	err := querier.ValidateDestroy(queryString)
-
+	_, err := querier.QueryResourcesForDestroy(queryString)
+	
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
 	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
 }
 
-func TestBlugeQuerier_ValidateDestroy_RejectsExcludedManaged(t *testing.T) {
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsExcludedManaged(t *testing.T) {
 	querier := &BlugeQuerier{}
 
 	queryString := "-managed:true"
-	err := querier.ValidateDestroy(queryString)
-
+	_, err := querier.QueryResourcesForDestroy(queryString)
+	
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
 	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
 }
 
-func TestBlugeQuerier_ValidateDestroy_RejectsManagedInComplexQuery(t *testing.T) {
+func TestBlugeQuerier_QueryResourcesForDestroy_RejectsManagedInComplexQuery(t *testing.T) {
 	querier := &BlugeQuerier{}
 
 	queryString := "stack:test-stack managed:true type:Bucket"
-	err := querier.ValidateDestroy(queryString)
-
+	_, err := querier.QueryResourcesForDestroy(queryString)
+	
 	assert.Error(t, err)
 	var invalidQueryErr apimodel.InvalidQueryError
 	assert.ErrorAs(t, err, &invalidQueryErr)
 	assert.Contains(t, invalidQueryErr.Reason, "managed field cannot be used in destroy queries")
 }
 
-func TestBlugeQuerier_ValidateDestroy_AcceptsQueryWithoutManaged(t *testing.T) {
-	querier := &BlugeQuerier{}
+func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsQueryWithoutManaged(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		ds := newTestDatastoreSQLite()
+		querier := NewBlugeQuerier(ds)
 
-	queryString := "stack:test-stack type:Bucket"
-	err := querier.ValidateDestroy(queryString)
-
-	assert.NoError(t, err)
+		queryString := "stack:test-stack type:Bucket"
+		_, err := querier.QueryResourcesForDestroy(queryString)
+		
+		assert.NoError(t, err)
+	})
 }
 
-func TestBlugeQuerier_ValidateDestroy_AcceptsEmptyQuery(t *testing.T) {
-	querier := &BlugeQuerier{}
+func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsEmptyQuery(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		ds := newTestDatastoreSQLite()
+		querier := NewBlugeQuerier(ds)
 
-	queryString := ""
-	err := querier.ValidateDestroy(queryString)
-
-	assert.NoError(t, err)
+		queryString := ""
+		_, err := querier.QueryResourcesForDestroy(queryString)
+		
+		assert.NoError(t, err)
+	})
 }
 
-func TestBlugeQuerier_ValidateDestroy_AcceptsComplexQueryWithoutManaged(t *testing.T) {
-	querier := &BlugeQuerier{}
+func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsComplexQueryWithoutManaged(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		ds := newTestDatastoreSQLite()
+		querier := NewBlugeQuerier(ds)
 
-	queryString := "stack:prod +type:Bucket -label:test"
-	err := querier.ValidateDestroy(queryString)
-
-	assert.NoError(t, err)
+		queryString := "stack:prod +type:Bucket -label:test"
+		_, err := querier.QueryResourcesForDestroy(queryString)
+		
+		assert.NoError(t, err)
+	})
 }
