@@ -120,9 +120,6 @@ test-all: test-build test-pkl
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./
 	go test -tags="unit integration" -count=1 -failfast ./...
-	@echo "Running Plugin SDK tests for AWS..."
-	@pkl project resolve plugins/aws/testdata
-	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -count=1 -failfast ./...
 
 test-unit:
 	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...

@@ -897,6 +897,34 @@ func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, er
 	return submitResponse.CommandID, nil
 }
 
+// GetResourceDescriptor returns the ResourceDescriptor for a given resource type by querying the plugin
+func (h *TestHarness) GetResourceDescriptor(resourceType string) (*plugin.ResourceDescriptor, error) {
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
+	parts := strings.Split(resourceType, "::")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid resource type format: %s", resourceType)
+	}
+	namespace := strings.ToLower(parts[0])
+
+	// Get the resource plugin
+	resourcePlugin, err := h.pluginManager.ResourcePlugin(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get resource plugin for namespace %s: %w", namespace, err)
+	}
+
+	// Get all supported resources from the plugin
+	supportedResources := (*resourcePlugin).SupportedResources()
+
+	// Find the descriptor for the requested resource type
+	for i := range supportedResources {
+		if supportedResources[i].Type == resourceType {
+			return &supportedResources[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("resource type %s not found in plugin %s", resourceType, namespace)
+}
+
 // PollStatus polls the command status until it reaches a terminal state or times out
 func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (string, error) {
 	h.t.Logf("Polling status for command %s", commandID)

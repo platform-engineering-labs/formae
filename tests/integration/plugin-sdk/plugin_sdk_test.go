@@ -230,12 +230,14 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	compareProperties(t, expectedProperties, actualResource, "after create")
 
 	// Check if resource is extractable before running Step 5
+	// Query the resource plugin to get the actual extractable value
 	shouldSkipExtract := false
-	if schema, ok := expectedResource["Schema"].(map[string]any); ok {
-		if extractable, ok := schema["Extractable"].(bool); ok && !extractable {
-			t.Logf("Skipping extract validation: resource type %s has extractable=false", actualResourceType)
-			shouldSkipExtract = true
-		}
+	descriptor, err := harness.GetResourceDescriptor(actualResourceType)
+	if err != nil {
+		t.Logf("Warning: failed to get resource descriptor for %s: %v", actualResourceType, err)
+	} else if !descriptor.Extractable {
+		t.Logf("Skipping extract validation: resource type %s has extractable=false", actualResourceType)
+		shouldSkipExtract = true
 	}
 
 	// Step 5: Extract resource and verify it matches original
@@ -436,11 +438,13 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 
 	t.Logf("Testing resource type: %s", actualResourceType)
 
-	// Check if resource is discoverable
-	if schema, ok := resourceData["Schema"].(map[string]any); ok {
-		if discoverable, ok := schema["Discoverable"].(bool); ok && !discoverable {
-			t.Skipf("Skipping discovery test: resource type %s has discoverable=false", actualResourceType)
-		}
+	// Check if resource is discoverable by querying the resource plugin
+	descriptor, err := harness.GetResourceDescriptor(actualResourceType)
+	if err != nil {
+		t.Fatalf("Failed to get resource descriptor for %s: %v", actualResourceType, err)
+	}
+	if !descriptor.Discoverable {
+		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", actualResourceType)
 	}
 
 	// Step 2: Configure discovery for this resource type
