@@ -19,6 +19,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -556,5 +557,250 @@ func TestSynchronizer_OverlapProtection(t *testing.T) {
 		// With 2 resources x 3 sync requests, expect minimal overlap due to fast mock operations
 		assert.GreaterOrEqual(t, syncCallCount, 2, "Should have at least 2 read calls (one per resource)")
 		assert.LessOrEqual(t, syncCallCount, 4, "Should not have more than 4 read calls (overlap protection should prevent excessive calls)")
+	})
+}
+func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Set up test logger to capture log output for deterministic assertions
+		logCapture := test_helpers.SetupTestLogger()
+
+		// Channels to coordinate the test
+		updateStarted := make(chan struct{})
+		updateCanComplete := make(chan struct{})
+
+		var mu sync.Mutex
+		statusCallCount := 0
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "create-" + request.Resource.Label,
+						NativeID:        request.Resource.Label,
+						ResourceType:    request.Resource.Type,
+					},
+				}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				// Signal that update has started
+				select {
+				case updateStarted <- struct{}{}:
+				default:
+				}
+
+				// Return InProgress status
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationUpdate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       "update-" + request.Resource.Label,
+						NativeID:        request.Resource.Label,
+						ResourceType:    request.Resource.Type,
+					},
+				}, nil
+			},
+			Status: func(request *resource.StatusRequest) (*resource.StatusResult, error) {
+				mu.Lock()
+				statusCallCount++
+				mu.Unlock()
+
+				// Keep returning InProgress until we get the signal to complete
+				// This simulates a long-running update operation
+				select {
+				case <-updateCanComplete:
+					// Signal received, return success
+					return &resource.StatusResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationUpdate,
+							OperationStatus: resource.OperationStatusSuccess,
+							RequestID:       request.RequestID,
+							ResourceType:    request.ResourceType,
+						},
+					}, nil
+				default:
+					// Still in progress
+					return &resource.StatusResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationUpdate,
+							OperationStatus: resource.OperationStatusInProgress,
+							RequestID:       request.RequestID,
+							ResourceType:    request.ResourceType,
+						},
+					}, nil
+				}
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				// Return original properties - we're not simulating an out-of-band change
+				// The update will change the properties via the Update operation
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"foo":"original","bar":"original"}`,
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false // Manual sync control
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+
+		// Initial apply to create the resource
+		f := &pkgmodel.Forma{
+			Stacks:  []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "test-resource",
+					Type:       "FakeAWS::Resource",
+					Properties: json.RawMessage(`{"foo":"original","bar":"original"}`),
+					Stack:      stack,
+					Schema:     pkgmodel.Schema{Fields: []string{"foo", "bar"}},
+					Target:     "test-target",
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "test-target"}},
+		}
+
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		require.NoError(t, err)
+
+		// Wait for initial resource creation
+		require.Eventually(t, func() bool {
+			stacks, err := m.Datastore.LoadAllStacks()
+			return err == nil && len(stacks) == 1 && len(stacks[0].Resources) == 1
+		}, 5*time.Second, 100*time.Millisecond)
+
+		// Get the initial resource to check versions later
+		stacks, err := m.Datastore.LoadAllStacks()
+		require.NoError(t, err)
+		initialResource := stacks[0].Resources[0]
+
+		// Start update in a goroutine using reconcile mode
+		// This is more realistic - a full reconcile that happens to update the resource
+		// Note: We don't include Targets since the target hasn't changed and reconcile
+		// would check if target config differs from what's already stored
+		go func() {
+			fUpdate := &pkgmodel.Forma{
+				Stacks:  []pkgmodel.Stack{{Label: stack}},
+				Resources: []pkgmodel.Resource{
+					{
+						Label:      "test-resource",
+						Type:       "FakeAWS::Resource",
+						Properties: json.RawMessage(`{"foo":"updated","bar":"updated"}`),
+						Stack:      stack,
+						Schema:     pkgmodel.Schema{Fields: []string{"foo", "bar"}},
+						Target:     "test-target",
+					},
+				},
+				Targets: []pkgmodel.Target{}, // Empty - target already exists and hasn't changed
+			}
+			_, err := m.ApplyForma(fUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+			assert.NoError(t, err)
+		}()
+
+		// Wait for update to start
+		<-updateStarted
+
+		// Trigger sync while update is in progress
+		err = m.ForceSync()
+		require.NoError(t, err)
+
+		// Wait for sync to FINISH processing (log-based, deterministic)
+		// When our fix works, sync will exclude the resource being updated and have no resources to sync
+		// This logs either "Synchronizer: no resources found to synchronize" or "Synchronization finished"
+		require.Eventually(t, func() bool {
+			return logCapture.ContainsAll("Starting resource synchronization") &&
+				(logCapture.ContainsAll("Synchronizer: no resources found to synchronize") ||
+					logCapture.ContainsAll("Synchronization finished"))
+		}, 10*time.Second, 100*time.Millisecond,
+			"Synchronizer should have processed (either finished or found no resources)")
+
+		// Check that sync command either wasn't created OR didn't include the resource being updated
+		// When our fix works, all resources are filtered out, so either:
+		// 1. No sync command is created (synchronizer returns early)
+		// 2. Sync command exists but has no resource updates
+		commands, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+
+		var syncCommand *forma_command.FormaCommand
+		for i := range commands {
+			if commands[i].Command == pkgmodel.CommandSync {
+				syncCommand = commands[i]
+				break
+			}
+		}
+
+		// If sync command was created, it should NOT include the resource being updated
+		if syncCommand != nil {
+			for _, ru := range syncCommand.ResourceUpdates {
+				assert.NotEqual(t, initialResource.URI(), ru.URI(), "Sync should not include resource being updated by apply")
+			}
+			// Verify the sync command is empty (all resources were filtered out)
+			assert.Empty(t, syncCommand.ResourceUpdates, "Sync command should have no resource updates (all filtered out)")
+		}
+		// If no sync command was created, that's also correct behavior (synchronizer filtered out all resources)
+
+		// Allow the update to complete
+		close(updateCanComplete)
+
+		// Wait for update to complete
+		require.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			// Find the update command (should be the second reconcile command)
+			reconcileCount := 0
+			for _, cmd := range commands {
+				if cmd.Command == pkgmodel.CommandApply && cmd.Config.Mode == pkgmodel.FormaApplyModeReconcile {
+					reconcileCount++
+					// The second reconcile is our update
+					if reconcileCount == 2 && cmd.State == forma_command.CommandStateSuccess {
+						return true
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond)
+
+		// Verify both commands completed successfully
+		commands, err = m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+
+		// Should have at least 2 commands: initial create (reconcile), update (reconcile)
+		// Sync command might not exist if all resources were filtered out (which is correct!)
+		require.GreaterOrEqual(t, len(commands), 2, "Should have at least 2 commands")
+
+		// Find and verify update command completed successfully (second reconcile)
+		var updateCmd *forma_command.FormaCommand
+		reconcileCount := 0
+		for i := range commands {
+			if commands[i].Command == pkgmodel.CommandApply && commands[i].Config.Mode == pkgmodel.FormaApplyModeReconcile {
+				reconcileCount++
+				if reconcileCount == 2 {
+					updateCmd = commands[i]
+					break
+				}
+			}
+		}
+		require.NotNil(t, updateCmd, "Update command should exist")
+		require.Equal(t, forma_command.CommandStateSuccess, updateCmd.State, "Update command should complete successfully")
+
+		// If a sync command was created, verify it completed successfully
+		// (It might not exist if all resources were filtered out)
+		syncCommand = nil
+		for i := range commands {
+			if commands[i].Command == pkgmodel.CommandSync {
+				syncCommand = commands[i]
+				break
+			}
+		}
+		if syncCommand != nil {
+			require.Equal(t, forma_command.CommandStateSuccess, syncCommand.State, "Sync command should complete successfully if it was created")
+		}
 	})
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -305,6 +306,19 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 	// Update the state
 	finishedUpdate.State = message.State
 
+	// Unregister non-sync resources from the Synchronizer
+	// Now that the operation is complete, the resource can be included in sync operations again
+	if finishedUpdate.Source != resource_update.FormaCommandSourceSynchronize {
+		synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+		err := proc.Send(synchronizerPID, messages.UnregisterInProgressResource{
+			ResourceURI: string(finishedUpdate.URI()),
+		})
+		if err != nil {
+			proc.Log().Error("Failed to unregister in-progress resource from synchronizer", "error", err, "resourceURI", finishedUpdate.URI())
+			// Don't return error - this is not critical enough to fail the operation
+		}
+	}
+
 	// Update pipeline and get next executable updates and any failed updates
 	cascadingFailures, err := data.changeset.UpdatePipeline(finishedUpdate)
 	if err != nil {
@@ -376,6 +390,19 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 		if err != nil {
 			proc.Log().Error("Failed to send start message to resource updater", "error", err)
 			return err
+		}
+
+		// Register non-sync resources as in-progress with the Synchronizer
+		// to prevent race conditions where sync might include resources being updated by user operations
+		if update.Source != resource_update.FormaCommandSourceSynchronize {
+			synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+			err = proc.Send(synchronizerPID, messages.RegisterInProgressResource{
+				ResourceURI: string(update.URI()),
+			})
+			if err != nil {
+				proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", update.URI())
+				// Don't return error - this is not critical enough to fail the operation
+			}
 		}
 	}
 

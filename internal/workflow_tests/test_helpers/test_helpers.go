@@ -6,6 +6,7 @@ package test_helpers
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -44,8 +45,27 @@ func DelegatesByNamespace(t *testing.T, m *metastructure.Metastructure, namespac
 	return ret
 }
 
+// SetupTestLogger configures a test logger that captures all log output
+// Returns the log capture that tests can use for assertions
+func SetupTestLogger() *logging.TestLogCapture {
+	capture := logging.NewTestLogCapture()
+
+	// Create a text handler that writes to our capture
+	handler := slog.NewTextHandler(capture, &slog.HandlerOptions{
+		Level: slog.LevelDebug, // Capture all debug logs
+	})
+
+	// Set as the global default - this will affect all slog calls
+	// including those from ErgoLogger
+	slog.SetDefault(slog.New(handler))
+
+	return capture
+}
+
 func NewTestMetastructureConfig() *pkgmodel.Config {
-	logging.SetupInitialLogging()
+	// Note: logging.SetupInitialLogging() removed - tests should call
+	// SetupTestLogger() if they need log capture, or call
+	// logging.SetupInitialLogging() explicitly if they need standard logging
 	prefix := util.RandomString(10) + "-"
 
 	// Create a temporary file for the database
