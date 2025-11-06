@@ -426,6 +426,13 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 
 	t.Logf("Testing resource type: %s", actualResourceType)
 
+	// Check if resource is discoverable
+	if schema, ok := resourceData["Schema"].(map[string]any); ok {
+		if discoverable, ok := schema["Discoverable"].(bool); ok && !discoverable {
+			t.Skipf("Skipping discovery test: resource type %s has discoverable=false", actualResourceType)
+		}
+	}
+
 	// Step 2: Configure discovery for this resource type
 	t.Log("Step 2: Configuring discovery for resource type...")
 	err = harness.ConfigureDiscovery([]string{actualResourceType})

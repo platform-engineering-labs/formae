@@ -648,7 +648,7 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 	discoverableTarget := forma.Targets[0]
 	discoverableTarget.Discoverable = true
 	h.t.Logf("Setting Discoverable=true for target: %s", discoverableTarget.Label)
-	
+
 	targetOnlyForma := pkgmodel.Forma{
 		Targets: []pkgmodel.Target{discoverableTarget},
 	}
