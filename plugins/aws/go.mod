@@ -9,7 +9,7 @@ replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plug
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
 require (
-	github.com/apple/pkl-go v0.11.1
+	github.com/apple/pkl-go v0.12.0
 	github.com/aws/aws-sdk-go-v2 v1.39.3
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
 	github.com/aws/aws-sdk-go-v2/service/cloudcontrol v1.23.4
