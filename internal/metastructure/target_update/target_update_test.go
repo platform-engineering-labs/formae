@@ -216,7 +216,7 @@ func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
 	update := TargetUpdate{
 		Target: pkgmodel.Target{
 			Label:        "test",
-			Discoverable:    true,
+			Discoverable: true,
 		},
 		Operation: TargetOperationCreate,
 	}

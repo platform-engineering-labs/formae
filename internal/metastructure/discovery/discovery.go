@@ -82,7 +82,7 @@ type DiscoverSync struct {
 
 // DiscoverSyncResult is the response from DiscoverSync
 type DiscoverSyncResult struct {
-	Started        bool 
+	Started        bool
 	AlreadyRunning bool
 }
 
@@ -292,7 +292,7 @@ func discoverSync(state gen.Atom, data DiscoveryData, message DiscoverSync, proc
 		}, nil, nil
 	}
 
-	newState, newData, actions, err := discover(state, data, Discover{Once: message.Once}, proc)
+	newState, newData, actions, err := discover(state, data, Discover(message), proc)
 	if err != nil {
 		proc.Log().Error("Discovery failed to start", "error", err)
 		return newState, newData, &DiscoverSyncResult{
@@ -772,5 +772,3 @@ func TriggerOnce(proc gen.Process) (*DiscoverSyncResult, error) {
 
 	return result.(*DiscoverSyncResult), nil
 }
-
-
