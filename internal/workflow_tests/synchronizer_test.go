@@ -651,7 +651,7 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 
 		// Initial apply to create the resource
 		f := &pkgmodel.Forma{
-			Stacks:  []pkgmodel.Stack{{Label: stack}},
+			Stacks: []pkgmodel.Stack{{Label: stack}},
 			Resources: []pkgmodel.Resource{
 				{
 					Label:      "test-resource",
@@ -685,7 +685,7 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 		// would check if target config differs from what's already stored
 		go func() {
 			fUpdate := &pkgmodel.Forma{
-				Stacks:  []pkgmodel.Stack{{Label: stack}},
+				Stacks: []pkgmodel.Stack{{Label: stack}},
 				Resources: []pkgmodel.Resource{
 					{
 						Label:      "test-resource",
