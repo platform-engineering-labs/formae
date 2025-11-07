@@ -14,6 +14,7 @@ import (
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -31,6 +32,7 @@ type ResourcePersister struct {
 
 	datastore               datastore.Datastore
 	persistValueTransformer transformations.ResourceTransformer
+	discoveryConfig         pkgmodel.DiscoveryConfig
 }
 
 func NewResourcePersister() gen.ProcessBehavior {
@@ -46,6 +48,13 @@ func (rp *ResourcePersister) Init(args ...any) error {
 		return fmt.Errorf("resource persister: missing 'Datastore' environment variable")
 	}
 	rp.datastore = ds.(datastore.Datastore)
+
+	dcfg, ok := rp.Env("DiscoveryConfig")
+	if !ok {
+		rp.Log().Error("ResourcePersister: missing 'DiscoveryConfig' environment variable")
+		return fmt.Errorf("resource persister: missing 'DiscoveryConfig' environment variable")
+	}
+	rp.discoveryConfig = dcfg.(pkgmodel.DiscoveryConfig)
 
 	rp.persistValueTransformer = transformations.NewPersistValueTransformer()
 
@@ -425,6 +434,27 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		"label", update.Target.Label,
 		"operation", update.Operation,
 		"version", version)
+
+	// Trigger discovery for freshly added discoverable targets
+	if target_update.ShouldTriggerDiscovery(update) {
+		rp.Log().Debug("Triggering discovery for newly discoverable target",
+			"label", update.Target.Label,
+			"operation", update.Operation)
+
+		result, err := discovery.TriggerOnce(rp)
+		if err != nil {
+			rp.Log().Error("Failed to trigger discovery for target",
+				"label", update.Target.Label,
+				"error", err)
+		} else if result.AlreadyRunning {
+			rp.Log().Warning("Discovery is currently running. Target %s will be discovered on the next scheduled discovery run (interval: %s).",
+				update.Target.Label,
+				rp.discoveryConfig.Interval.String())
+		} else if result.Started {
+			rp.Log().Debug("Discovery started successfully for new target",
+				"label", update.Target.Label)
+		}
+	}
 
 	return nil
 }

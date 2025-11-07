@@ -211,3 +211,104 @@ func TestValidateImmutableFields_Error_ConfigMismatch_NilVsNonNil(t *testing.T) 
 	require.ErrorAs(t, err, &targetErr)
 	assert.Equal(t, "config", targetErr.MismatchType)
 }
+
+func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable:    true,
+		},
+		Operation: TargetOperationCreate,
+	}
+
+	assert.True(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Create_NotDiscoverable(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: false,
+		},
+		Operation: TargetOperationCreate,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_BecomesDiscoverable(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: false,
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.True(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_BecomesNotDiscoverable(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: false,
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_StaysNotDiscoverable(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: false,
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: false,
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_NilExistingTarget(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+		},
+		ExistingTarget: nil,
+		Operation:      TargetOperationUpdate,
+	}
+
+	assert.True(t, ShouldTriggerDiscovery(&update))
+}
