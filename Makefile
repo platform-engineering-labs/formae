@@ -194,7 +194,7 @@ test-generator-pkl:
 	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/resources_example.json
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/lifeline.json
-	cd plugins/pkl/generator && python3 run_generator.py examples/json/types
+	cd plugins/pkl/generator && python run_generator.py examples/json/types
 
 verify-pkl: gen-pkl
 	cd plugins/pkl/verify && pkl eval verify.pkl
