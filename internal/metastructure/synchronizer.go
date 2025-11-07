@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -67,6 +68,11 @@ type SynchronizerData struct {
 	isScheduledSync bool
 	timeStarted     time.Time
 	commandID       string
+
+	// excludedResources tracks resources that are currently being updated by
+	// non-sync operations (e.g., user apply/destroy commands). These resources
+	// should be excluded from synchronization to prevent race conditions.
+	excludedResources map[string]struct{}
 }
 
 // Messages processed by Synchronizer
@@ -94,8 +100,9 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 	}
 
 	data := SynchronizerData{
-		datastore: ds.(datastore.Datastore),
-		cfg:       synchronizerCfg,
+		datastore:         ds.(datastore.Datastore),
+		cfg:               synchronizerCfg,
+		excludedResources: make(map[string]struct{}),
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -106,6 +113,12 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 		statemachine.WithStateMessageHandler(StateIdle, synchronize),
 		statemachine.WithStateMessageHandler(StateSynchronizing, synchronize),
 		statemachine.WithStateMessageHandler(StateSynchronizing, changesetCompleted),
+
+		// Handle resource exclusion in both states
+		statemachine.WithStateMessageHandler(StateIdle, registerInProgressResource),
+		statemachine.WithStateMessageHandler(StateSynchronizing, registerInProgressResource),
+		statemachine.WithStateMessageHandler(StateIdle, unregisterInProgressResource),
+		statemachine.WithStateMessageHandler(StateSynchronizing, unregisterInProgressResource),
 	)
 
 	if synchronizerCfg.Enabled {
@@ -173,6 +186,18 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		allResourceUpdates = append(allResourceUpdates, resourceUpdates...)
 	}
 
+	// Filter out resources that are currently being updated by non-sync operations
+	filteredResourceUpdates := make([]resource_update.ResourceUpdate, 0, len(allResourceUpdates))
+	for _, update := range allResourceUpdates {
+		resourceURI := string(update.URI())
+		if _, excluded := data.excludedResources[resourceURI]; !excluded {
+			filteredResourceUpdates = append(filteredResourceUpdates, update)
+		} else {
+			proc.Log().Debug("Excluding resource from sync (in-progress operation)", "resourceURI", resourceURI)
+		}
+	}
+	allResourceUpdates = filteredResourceUpdates
+
 	if len(allResourceUpdates) == 0 {
 		proc.Log().Debug("Synchronizer: no resources found to synchronize")
 		if err = scheduleNextSync(data, proc); err != nil {
@@ -239,6 +264,18 @@ func changesetCompleted(state gen.Atom, data SynchronizerData, message changeset
 	}
 
 	return StateIdle, data, nil, nil
+}
+
+func registerInProgressResource(state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+	data.excludedResources[message.ResourceURI] = struct{}{}
+	proc.Log().Debug("Resource registered as in-progress, excluded from sync", "resourceURI", message.ResourceURI)
+	return state, data, nil, nil
+}
+
+func unregisterInProgressResource(state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+	delete(data.excludedResources, message.ResourceURI)
+	proc.Log().Debug("Resource unregistered from in-progress, can be synced", "resourceURI", message.ResourceURI)
+	return state, data, nil, nil
 }
 
 func scheduleNextSync(data SynchronizerData, proc gen.Process) error {

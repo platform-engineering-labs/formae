@@ -19,6 +19,7 @@ const (
 	RateLimiter               = gen.Atom("RateLimiter")
 	ResourcePersister         = gen.Atom("ResourcePersister")
 	ResourceUpdaterSupervisor = gen.Atom("ResourceUpdaterSupervisor")
+	Synchronizer              = gen.Atom("Synchronizer")
 )
 
 func ChangesetExecutor(commandID string) gen.Atom {
