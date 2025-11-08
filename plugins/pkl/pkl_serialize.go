@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,7 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 
 	evaluator, err := pkl.NewProjectEvaluator(
 		context.Background(),
-		tempDir+"/generator",
+		&url.URL{Scheme: "file", Path: tempDir + "/generator"},
 		pkl.PreconfiguredOptions,
 		pkl.WithResourceReader(libExtension{}),
 		func(opts *pkl.EvaluatorOptions) {

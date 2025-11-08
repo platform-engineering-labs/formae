@@ -6,7 +6,7 @@ Welcome, and thank you for considering to contribute to formae!
 
 Before getting started, make sure you have the following tools installed:
 * [Go 1.25.1](https://go.dev/doc/install) or higher
-* [Pkl 0.29.1](https://pkl-lang.org/main/current/pkl-cli/index.html#installation) or later
+* [Pkl 0.30.0](https://pkl-lang.org/main/current/pkl-cli/index.html#installation) or later
 * [pkl-gen-go](https://pkl-lang.org/go/current/quickstart.html#1-install-dependencies)
 * [Golangci-lint](https://golangci-lint.run/docs/welcome/install/#local-installation)
 * [REUSE - License Compliance](https://github.com/fsfe/reuse-tool)
