@@ -41,7 +41,7 @@ jobs:
       - name: Install pkl
         uses: pkl-community/setup-pkl@v0
         with:
-          pkl-version: 0.29.0
+          pkl-version: 0.30.0
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -80,7 +80,7 @@ jobs:
       - name: Install pkl
         uses: pkl-community/setup-pkl@v0
         with:
-          pkl-version: 0.29.0
+          pkl-version: 0.30.0
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -115,7 +115,7 @@ jobs:
       - name: Install pkl
         uses: pkl-community/setup-pkl@v0
         with:
-          pkl-version: 0.29.0
+          pkl-version: 0.30.0
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -150,7 +150,7 @@ jobs:
       - name: Install pkl
         uses: pkl-community/setup-pkl@v0
         with:
-          pkl-version: 0.29.0
+          pkl-version: 0.30.0
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -185,7 +185,7 @@ jobs:
       - name: Install pkl
         uses: pkl-community/setup-pkl@v0
         with:
-          pkl-version: 0.29.0
+          pkl-version: 0.30.0
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4

@@ -5,7 +5,7 @@ go 1.25
 toolchain go1.25.1
 
 require (
-	github.com/apple/pkl-go v0.11.1
+	github.com/apple/pkl-go v0.12.0
 	github.com/masterminds/semver v1.5.0
 	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
