@@ -139,6 +139,7 @@ examples {
         }
       }
       Discoverable = true
+      Extractable = true
     }
   }
   ["Test Resource - type()"] {
@@ -199,6 +200,7 @@ examples {
           }
         }
         Discoverable = true
+        Extractable = true
       }
       Properties {
         bucketName = "my-test-bucket"
@@ -285,6 +287,7 @@ examples {
           }
         }
         Discoverable = true
+        Extractable = true
       }
       Properties {
         resourceName = "my-resource"
@@ -365,6 +368,7 @@ examples {
         }
       }
       Discoverable = true
+      Extractable = true
     }
   }
   ["Fq - type"] {

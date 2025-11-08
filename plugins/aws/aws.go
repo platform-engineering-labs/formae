@@ -75,6 +75,7 @@ func init() {
 		Descriptors = append(Descriptors, plugin.ResourceDescriptor{
 			Type:                                     typeName,
 			Discoverable:                             ResourceTypeDescriptors[typeName].Discoverable,
+			Extractable:                              ResourceTypeDescriptors[typeName].Extractable,
 			ParentResourceTypesWithMappingProperties: ResourceTypeDescriptors[typeName].ParentResourcesWithMappingProperties,
 		})
 	}

@@ -17,6 +17,7 @@ function GetAllResourceTypes() = new Listing<types.ResourceType> {
                         //Type = v.properties["_MAGIC"].defaultValue.Schema.Type
                         Type = v.annotations[0].getProperty("type")
                         Discoverable = v.annotations[0].getProperty("discoverable")
+                        Extractable = v.annotations[0].getProperty("extractable")
                         Schema = new types.Schema {
                             Nonprovisionable = v.annotations[0].getProperty("nonprovisionable")
                             Identifier = v.annotations[0].getProperty("identifier")

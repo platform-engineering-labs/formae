@@ -18,11 +18,12 @@ import (
 )
 
 func startCmd() *cobra.Command {
-	return &cobra.Command{
+	command := &cobra.Command{
 		Use:   "start",
 		Short: "Start the agent",
 		Run: func(command *cobra.Command, args []string) {
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				slog.Error(err.Error())
 				return
@@ -62,6 +63,10 @@ func startCmd() *cobra.Command {
 		},
 		SilenceErrors: true,
 	}
+
+	command.Flags().String("config", "", "Path to config file")
+
+	return command
 }
 
 func stopCmd() *cobra.Command {
