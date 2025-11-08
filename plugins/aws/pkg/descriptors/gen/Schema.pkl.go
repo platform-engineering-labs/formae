@@ -23,7 +23,7 @@ type SchemaImpl struct {
 	// Property that dictates whether a resource is supported by the CC API
 	Nonprovisionable bool `pkl:"Nonprovisionable"`
 
-	// Property to store as the NativeID following create
+	// Property to store as the NativeId following create
 	Identifier string `pkl:"Identifier"`
 
 	// Property that contains tags

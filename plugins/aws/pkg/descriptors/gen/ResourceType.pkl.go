@@ -12,6 +12,8 @@ type ResourceType interface {
 
 	GetDiscoverable() bool
 
+	GetExtractable() bool
+
 	GetParentResourceTypesWithMappingProperties() *map[string][]ListProperty
 }
 
@@ -23,6 +25,8 @@ type ResourceTypeImpl struct {
 	Schema Schema `pkl:"Schema"`
 
 	Discoverable bool `pkl:"Discoverable"`
+
+	Extractable bool `pkl:"Extractable"`
 
 	ParentResourceTypesWithMappingProperties *map[string][]ListProperty `pkl:"ParentResourceTypesWithMappingProperties"`
 }
@@ -37,6 +41,10 @@ func (rcv ResourceTypeImpl) GetSchema() Schema {
 
 func (rcv ResourceTypeImpl) GetDiscoverable() bool {
 	return rcv.Discoverable
+}
+
+func (rcv ResourceTypeImpl) GetExtractable() bool {
+	return rcv.Extractable
 }
 
 func (rcv ResourceTypeImpl) GetParentResourceTypesWithMappingProperties() *map[string][]ListProperty {

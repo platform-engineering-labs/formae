@@ -67,3 +67,8 @@ tests/e2e/test-logs
 # Claude Code local settings
 .claude/
 CLAUDE.md
+
+.handoffs/
+.research/
+.serena/
+
