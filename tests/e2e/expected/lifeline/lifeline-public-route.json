@@ -131,7 +131,7 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true,
+    "Discoverable": false,
     "Extractable": true
   },
   "Properties": {
