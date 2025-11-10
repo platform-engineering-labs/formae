@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
@@ -992,6 +993,10 @@ func newResourcePersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, datast
 
 	env := map[gen.Env]any{
 		"Datastore": ds,
+		"DiscoveryConfig": pkgmodel.DiscoveryConfig{
+			Enabled:  true,
+			Interval: 10 * time.Minute,
+		},
 	}
 
 	sender := gen.PID{Node: "test", ID: 100}

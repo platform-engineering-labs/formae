@@ -13,6 +13,7 @@ import (
 
 const (
 	ChangesetSupervisor       = gen.Atom("ChangesetSupervisor")
+	Discovery                 = gen.Atom("Discovery")
 	FormaCommandPersister     = gen.Atom("FormaCommandPersister")
 	MetastructureBridge       = gen.Atom("MetastructureBridge")
 	PluginOperatorSupervisor  = gen.Atom("PluginOperatorSupervisor")

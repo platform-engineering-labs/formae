@@ -13,7 +13,9 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -425,6 +427,22 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		"label", update.Target.Label,
 		"operation", update.Operation,
 		"version", version)
+
+	// Trigger discovery for freshly added discoverable targets
+	if target_update.ShouldTriggerDiscovery(update) {
+		discoveryPID := gen.ProcessID{
+			Name: actornames.Discovery,
+			Node: rp.Node().Name(),
+		}
+		if err := rp.Send(discoveryPID, discovery.Discover{Once: true}); err != nil {
+			rp.Log().Error("Failed to trigger discovery for newly discoverable target",
+				"label", update.Target.Label,
+				"error", err)
+		} else {
+			rp.Log().Debug("Triggered discovery for newly discoverable target",
+				"label", update.Target.Label)
+		}
+	}
 
 	return nil
 }
