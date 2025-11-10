@@ -84,6 +84,9 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 		if err != nil {
 			return fmt.Errorf("failed to load configuration from '%s': %s", path, err.Error())
 		}
+
+		// Config loaded successfully from provided path, don't look for other configs
+		return nil
 	}
 
 	// Check for supported types first wins

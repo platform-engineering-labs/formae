@@ -155,6 +155,8 @@ open class Schema {
     Hints: Mapping<String, FieldHint>?
     /// Property that dictates whether a resource is blocked from discovery
     Discoverable: Boolean = true
+    /// Property that dictates whether a resource can be extracted to PKL
+    Extractable: Boolean = true
 
     /// Query fields by FieldHint property
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
@@ -464,6 +466,8 @@ class Fq {
                 Tags = hint.tags
                 Fields = fields(resourceClass)
                 Hints = hints(resourceClass)
+                Discoverable = hint.discoverable
+                Extractable = hint.extractable
             }
 
     function type(resourceClass: reflect.Class): String = resourceClass.annotations.filterIsInstance(ResourceHint).first.getProperty("type")

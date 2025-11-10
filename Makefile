@@ -7,7 +7,7 @@
 DEBUG_GOFLAGS := -gcflags="all=-N -l"
 VERSION := $(shell git describe --tags --abbrev=0)
 
-PKL_BUNDLE_VERSION := 0.29.0
+PKL_BUNDLE_VERSION := 0.30.0
 PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSION}/pkl-$(shell ./scripts/baduname.sh)
 
 clean:
@@ -143,6 +143,16 @@ test-integration:
 	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
+test-plugin-sdk-aws: build
+	@echo "Resolving PKL dependencies for AWS plugin..."
+	@pkl project resolve plugins/aws/testdata
+	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
+
+test-plugin-sdk-azure: build
+	@echo "Resolving PKL dependencies for Azure plugin..."
+	@pkl project resolve plugins/azure/testdata
+	PLUGIN_NAME=azure go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
+
 test-e2e: gen-pkl pkg-pkl build
 	echo "Resolving PKL project..."
 	pkl project resolve tests/e2e/pkl
@@ -184,8 +194,7 @@ test-generator-pkl:
 	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/resources_example.json
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/lifeline.json
-	@PYTHON_CMD=$$(command -v python3 || command -v python); \
-	cd plugins/pkl/generator && $$PYTHON_CMD run_generator.py examples/json/types
+	cd plugins/pkl/generator && python3 run_generator.py examples/json/types
 
 verify-pkl: gen-pkl
 	cd plugins/pkl/verify && pkl eval verify.pkl

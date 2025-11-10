@@ -26,6 +26,7 @@ type TypeInformation struct {
 	Schema                               model.Schema
 	ParentResourcesWithMappingProperties map[string][]plugin.ListParameter
 	Discoverable                         bool
+	Extractable                          bool
 }
 
 // LoadDescriptors loads resource descriptors from embedded PKL files and returns a map of Type -> Schema
@@ -93,6 +94,7 @@ func LoadDescriptors(ctx context.Context) (map[string]TypeInformation, error) {
 			Schema:                               schema,
 			ParentResourcesWithMappingProperties: listParameters,
 			Discoverable:                         resourceType.GetDiscoverable(),
+			Extractable:                          resourceType.GetExtractable(),
 		}
 	}
 

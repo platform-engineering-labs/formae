@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -186,7 +187,7 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 	if projectDir != "" {
 		evaluator, err = pkl.NewProjectEvaluator(
 			context.Background(),
-			projectDir,
+			&url.URL{Scheme: "file", Path: projectDir},
 			pkl.PreconfiguredOptions,
 			pkl.WithResourceReader(libExtension{}),
 			func(opts *pkl.EvaluatorOptions) {

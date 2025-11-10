@@ -16,6 +16,7 @@ open class ResourceType {
     Type: String
     Schema: Schema
     Discoverable: Boolean = false
+    Extractable: Boolean = true
     ParentResourceTypesWithMappingProperties: Mapping<String, List<ListProperty>>?
 
     function convert() = """
@@ -23,6 +24,7 @@ open class ResourceType {
         Type = "\(Type)"
         Schema = "\(Schema.toString())"
         Discoverable = \(Discoverable)
+        Extractable = \(Extractable)
         ParentResourceTypesWithMappingProperties = \(ParentResourceTypesWithMappingProperties?.toString() ?? "null")
         }
         """.replaceFirst("\"new Schema", "new types.Schema").replaceLast("}\"", "}").replaceAll("new ListProperty", "new types.ListProperty")

@@ -238,7 +238,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	// Create changeset early to catch validation errors before simulate
 	var cs changeset.Changeset
 	if len(fa.ResourceUpdates) > 0 {
-		cs, err = changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, pkgmodel.CommandApply)
+		cs, err = changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, fa.Command)
 		if err != nil {
 			return nil, err
 		}

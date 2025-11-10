@@ -23,4 +23,7 @@ type ResourceDescriptor struct {
 
 	// Indicates whether the resource type should be automatically discovered.
 	Discoverable bool
+
+	// Indicates whether the resource type can be extracted to PKL.
+	Extractable bool
 }

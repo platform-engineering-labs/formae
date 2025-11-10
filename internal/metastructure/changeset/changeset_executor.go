@@ -78,7 +78,7 @@ type ChangesetState string
 const (
 	ChangeSetStateFinishedSuccessfully ChangesetState = "FinishedSuccessfully"
 	ChangeSetStateFinishedWithErrors   ChangesetState = "FinishedWithErrors"
-	ChangeSetStateCancelled            ChangesetState = "Cancelled"
+	ChangeSetStateCanceled             ChangesetState = "Canceled"
 )
 
 type ChangesetData struct {
@@ -144,7 +144,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 			if newState == StateFinishedWithError {
 				changesetState = ChangeSetStateFinishedWithErrors
 			} else if newState == StateCanceled {
-				changesetState = ChangeSetStateCancelled
+				changesetState = ChangeSetStateCanceled
 			}
 			completed := ChangesetCompleted{
 				CommandID: data.changeset.CommandID,
