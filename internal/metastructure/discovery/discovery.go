@@ -74,18 +74,6 @@ type Discover struct {
 	Once bool
 }
 
-// DiscoverSync is a synchronous version of Discover that returns immediately
-// indicating whether discovery started or was already running.
-type DiscoverSync struct {
-	Once bool
-}
-
-// DiscoverSyncResult is the response from DiscoverSync
-type DiscoverSyncResult struct {
-	Started        bool
-	AlreadyRunning bool
-}
-
 type ResumeScanning struct{}
 
 const (
@@ -189,10 +177,6 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		statemachine.WithStateMessageHandler(StateDiscovering, resumeScanning),
 		statemachine.WithStateMessageHandler(StateDiscovering, processListing),
 		statemachine.WithStateMessageHandler(StateDiscovering, syncCompleted),
-
-		// Call handlers for synchronous discovery
-		statemachine.WithStateCallHandler(StateIdle, discoverSync),
-		statemachine.WithStateCallHandler(StateDiscovering, discoverSync),
 	)
 
 	if discoveryCfg.Enabled {
@@ -282,29 +266,6 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 	}
 
 	return StateDiscovering, data, nil, nil
-}
-
-func discoverSync(state gen.Atom, data DiscoveryData, message DiscoverSync, proc gen.Process) (gen.Atom, DiscoveryData, *DiscoverSyncResult, []statemachine.Action, error) {
-	if state == StateDiscovering {
-		return state, data, &DiscoverSyncResult{
-			Started:        false,
-			AlreadyRunning: true,
-		}, nil, nil
-	}
-
-	newState, newData, actions, err := discover(state, data, Discover(message), proc)
-	if err != nil {
-		proc.Log().Error("Discovery failed to start", "error", err)
-		return newState, newData, &DiscoverSyncResult{
-			Started:        false,
-			AlreadyRunning: false,
-		}, nil, nil
-	}
-
-	return newState, newData, &DiscoverSyncResult{
-		Started:        true,
-		AlreadyRunning: false,
-	}, actions, nil
 }
 
 func resumeScanning(state gen.Atom, data DiscoveryData, message ResumeScanning, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
@@ -755,20 +716,4 @@ func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel
 	}
 
 	return nil
-}
-
-// TriggerOnce sends a synchronous discovery message and returns the result.
-// Returns immediately when discovery starts (or if already running), not when it completes.
-func TriggerOnce(proc gen.Process) (*DiscoverSyncResult, error) {
-	discoveryPID := gen.ProcessID{
-		Name: gen.Atom("Discovery"),
-		Node: proc.Node().Name(),
-	}
-
-	result, err := proc.Call(discoveryPID, DiscoverSync{Once: true})
-	if err != nil {
-		return nil, err
-	}
-
-	return result.(*DiscoverSyncResult), nil
 }
