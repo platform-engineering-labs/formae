@@ -166,7 +166,7 @@ open class Target {
     hidden label: String
     hidden namespace: String = config.type.toUpperCase()
     hidden config: Any?
-    hidden discoverable: Boolean = false
+    hidden discoverable: Boolean = true
 
     local self = this
     hidden res: TargetResolvable = new {
