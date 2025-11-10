@@ -64,7 +64,6 @@ type LoggingConfig struct {
 
 type DiscoveryConfig struct {
 	Enabled                 bool
-	ScanTargets             []Target
 	Interval                time.Duration
 	LabelTagKeys            []string
 	ResourceTypesToDiscover []string

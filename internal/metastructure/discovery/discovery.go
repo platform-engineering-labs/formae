@@ -145,13 +145,6 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 	// Load discoverable targets from datastore
 	ds := dsEnv.(datastore.Datastore)
 
-	// ONE-RELEASE GRACE PERIOD: Auto-migrate config scan_targets to database
-	// This provides backward compatibility for users still using scan_targets in config
-	if err := migrateScanTargetsToDatabase(ds, &discoveryCfg, d); err != nil {
-		d.Log().Error("Failed to migrate scan_targets to database", "error", err)
-		// Continue startup even if migration fails - don't block the system
-	}
-
 	data := DiscoveryData{
 		pluginManager:                 pluginManager.(*plugin.Manager),
 		ds:                            ds,
@@ -656,64 +649,4 @@ func renderSummary(summary map[string]int) string {
 	}
 
 	return builder.String()
-}
-
-// migrateScanTargetsToDatabase migrates config-based scanTargets to the database.
-// If a target exists in both config and DB, it will be updated to discoverable=true.
-func migrateScanTargetsToDatabase(ds datastore.Datastore, discoveryCfg *pkgmodel.DiscoveryConfig, proc gen.Process) error {
-	if len(discoveryCfg.ScanTargets) == 0 {
-		return nil
-	}
-
-	createdCount, updatedCount, errorCount := 0, 0, 0
-	for _, configTarget := range discoveryCfg.ScanTargets {
-		existingTarget, err := ds.LoadTarget(configTarget.Label)
-		if err != nil {
-			proc.Log().Error("Failed to check if target exists in database", "target", configTarget.Label, "error", err)
-			errorCount++
-			continue
-		}
-
-		if existingTarget != nil {
-			if !existingTarget.Discoverable {
-				existingTarget.Discoverable = true
-				_, err = ds.UpdateTarget(existingTarget)
-				if err != nil {
-					proc.Log().Error("Failed to update target to discoverable", "target", configTarget.Label, "error", err)
-					errorCount++
-					continue
-				}
-				updatedCount++
-			} else {
-				proc.Log().Debug("Target already discoverable, no update needed", "target", configTarget.Label)
-			}
-		} else {
-			targetToCreate := configTarget
-			targetToCreate.Discoverable = true
-
-			_, err = ds.CreateTarget(&targetToCreate)
-			if err != nil {
-				proc.Log().Error("Failed to create target from scanTargets config", "target", configTarget.Label, "error", err)
-				errorCount++
-				continue
-			}
-
-			proc.Log().Debug("Created target from scanTargets config", "target", configTarget.Label)
-			createdCount++
-		}
-	}
-
-	if createdCount > 0 || updatedCount > 0 {
-		message := fmt.Sprintf("DEPRECATION WARNING: The 'scanTargets' configuration option is deprecated and will be removed in a future release.\n\n"+
-			"Please transition to setting 'discoverable' on individual targets in your Forma files instead.\n\n"+
-			"For this release, any targets specified in 'scanTargets' have been automatically migrated:\n"+
-			"- Created %d new target(s) with discoverable=true\n"+
-			"- Updated %d existing target(s) to discoverable=true\n\n"+
-			"No immediate action is required, but we recommend removing 'scanTargets' from your configuration file (~/.config/formae/formae.conf.pkl) and managing discovery through the 'discoverable' property on individual targets instead.\n\n"+
-			"See: https://docs.formae.io/en/latest/core-concepts/target/",
-			createdCount, updatedCount)
-		proc.Log().Warning(message)
-	}
-
-	return nil
 }
