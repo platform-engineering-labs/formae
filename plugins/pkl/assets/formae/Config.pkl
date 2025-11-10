@@ -66,8 +66,6 @@ class RetryConfig {
 class DiscoveryConfig {
     enabled: Boolean = true
 
-    scanTargets: Listing<Target> = new Listing<Target> { }
-
     labelTagKeys: Listing<String> = new Listing<String> {
         "Name"
     }

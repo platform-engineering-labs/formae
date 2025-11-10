@@ -120,12 +120,6 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.Equal(t, 10*time.Minute, config.Agent.Synchronization.Interval)
 
 	assert.True(t, config.Agent.Discovery.Enabled)
-	assert.Len(t, config.Agent.Discovery.ScanTargets, 2)
-	assert.Equal(t, "default-aws-target", config.Agent.Discovery.ScanTargets[0].Label)
-	assert.Equal(t, "AWS", config.Agent.Discovery.ScanTargets[0].Namespace)
-	assert.Equal(t, "aws-target", config.Agent.Discovery.ScanTargets[1].Label)
-	assert.Equal(t, "AWS", config.Agent.Discovery.ScanTargets[1].Namespace)
-	assert.JSONEq(t, `{"Region":"us-east-1", "Type":"AWS"}`, string(config.Agent.Discovery.ScanTargets[0].Config))
 	assert.Equal(t, 20*time.Minute, config.Agent.Discovery.Interval)
 	assert.Equal(t, []string{"Name", "Environment"}, config.Agent.Discovery.LabelTagKeys)
 
