@@ -77,3 +77,25 @@ type PersistTargetUpdates struct {
 	TargetUpdates []TargetUpdate
 	CommandID     string
 }
+
+// ShouldTriggerDiscovery determines if discovery should be triggered
+// for a target update based on whether the target is newly discoverable.
+// Returns true if:
+//   - For create operations: the target is discoverable
+//   - For update operations: the target is discoverable AND wasn't discoverable before
+func ShouldTriggerDiscovery(update *TargetUpdate) bool {
+	if !update.Target.Discoverable {
+		return false
+	}
+
+	if update.Operation == TargetOperationCreate {
+		return true
+	}
+
+	if update.Operation == TargetOperationUpdate {
+		// Trigger if target wasn't discoverable before
+		return update.ExistingTarget == nil || !update.ExistingTarget.Discoverable
+	}
+
+	return false
+}

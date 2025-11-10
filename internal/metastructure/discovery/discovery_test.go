@@ -7,8 +7,9 @@ package discovery
 import (
 	"testing"
 
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 func TestConstructParentResourceDescriptors(t *testing.T) {
