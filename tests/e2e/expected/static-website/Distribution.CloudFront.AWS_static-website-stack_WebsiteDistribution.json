@@ -43,7 +43,8 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true
+    "Discoverable": false,
+    "Extractable": false
   },
   "Properties": {
     "DistributionConfig": {

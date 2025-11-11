@@ -43,7 +43,8 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true
+    "Discoverable": true,
+    "Extractable": true
   },
   "Properties": {
     "GroupDescription": "Allow HTTP traffic to ALB",

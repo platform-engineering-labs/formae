@@ -19,7 +19,8 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true
+    "Discoverable": true,
+    "Extractable": true
   },
   "Properties": {
     "Tags": [

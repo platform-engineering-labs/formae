@@ -27,7 +27,8 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true
+    "Discoverable": true,
+    "Extractable": true
   },
   "Properties": {
     "Bucket": "static-website-uber-unique-id",

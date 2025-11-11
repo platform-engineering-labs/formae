@@ -107,7 +107,8 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true
+    "Discoverable": true,
+    "Extractable": true
   },
   "Properties": {
     "CidrIp": "0.0.0.0/0",
