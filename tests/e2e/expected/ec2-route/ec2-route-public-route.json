@@ -131,7 +131,8 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true
+    "Discoverable": false,
+    "Extractable": true
   },
   "Properties": {
     "DestinationCidrBlock": "0.0.0.0/0",

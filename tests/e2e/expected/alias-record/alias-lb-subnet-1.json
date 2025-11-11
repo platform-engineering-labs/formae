@@ -147,7 +147,8 @@
         "RequiredOnCreate": false
       }
     },
-    "Discoverable": true
+    "Discoverable": true,
+    "Extractable": true
   },
   "Properties": {
     "AssignIpv6AddressOnCreation": false,
