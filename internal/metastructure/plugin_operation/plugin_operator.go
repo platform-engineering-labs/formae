@@ -12,6 +12,7 @@ import (
 
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -130,18 +131,24 @@ type DeleteResource struct {
 	Target       model.Target
 }
 
+type ListParam struct {
+	ParentProperty string
+	ListParam      string
+	ListValue      string
+}
+
 type ListResources struct {
 	Namespace      string
 	ResourceType   string
 	Target         model.Target
-	ListParameters map[string]string
+	ListParameters map[string]ListParam
 }
 
 type Listing struct {
 	Namespace      string
 	Resources      []resource.Resource
 	ResourceType   string
-	ListParameters map[string]string
+	ListParameters map[string]ListParam
 	Target         model.Target
 	Error          error
 }
@@ -672,12 +679,16 @@ func list(state gen.Atom, data PluginUpdateData, operation ListResources, proc g
 	var nextPageToken *string
 	var resources []resource.Resource
 	for {
+		additionalProps := make(map[string]string)
+		for _, v := range operation.ListParameters {
+			additionalProps[v.ListParam] = v.ListValue
+		}
 		result, err := (*plugin).List(data.context, &resource.ListRequest{
 			ResourceType:         operation.ResourceType,
 			Target:               &operation.Target,
 			PageSize:             100,
 			PageToken:            nextPageToken,
-			AdditionalProperties: operation.ListParameters,
+			AdditionalProperties: additionalProps,
 		})
 		if err != nil {
 			proc.Log().Error("PluginOperator: failed to list resources of type %s in target %s with list parameters %v: %v", operation.ResourceType, operation.Target.Label, operation.ListParameters, err)

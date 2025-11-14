@@ -77,9 +77,14 @@ func (l *RateLimiter) Init(args ...any) error {
 func (l *RateLimiter) HandleCall(from gen.PID, ref gen.Ref, message any) (any, error) {
 	switch msg := message.(type) {
 	case RequestTokens:
-		l.buckets[msg.Namespace].replenish()
-		n := util.Min(msg.N, l.buckets[msg.Namespace].Tokens)
-		l.buckets[msg.Namespace].consume(n)
+		bucket, exists := l.buckets[msg.Namespace]
+		if !exists {
+			l.Log().Error(fmt.Sprintf("RateLimiter: unknown namespace requested: %s", msg.Namespace))
+			return TokensGranted{N: 0}, fmt.Errorf("unknown namespace: %s", msg.Namespace)
+		}
+		bucket.replenish()
+		n := util.Min(msg.N, bucket.Tokens)
+		bucket.consume(n)
 		return TokensGranted{N: n}, nil
 	default:
 		return TokensGranted{N: 0}, fmt.Errorf("unhandled message type: %T", msg)
