@@ -735,21 +735,21 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	return &resource, nil
 }
 
-func (d DatastorePostgres) LoadResourceByNativeID(nativeID string) (*pkgmodel.Resource, error) {
+func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error) {
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
-	WHERE native_id = $1
+	WHERE native_id = $1 AND type = $2
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
-	AND r1.operation != $2
+	AND r1.operation != $3
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(context.Background(), query, nativeID, resource_update.OperationDelete)
+	row := d.pool.QueryRow(context.Background(), query, nativeID, resourceType, resource_update.OperationDelete)
 
 	var jsonData string
 	var ksuid string

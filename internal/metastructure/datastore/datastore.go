@@ -85,7 +85,7 @@ type Datastore interface {
 	StoreResource(resource *pkgmodel.Resource, commandID string) (string, error)
 	DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error)
 	LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error)
-	LoadResourceByNativeID(nativeID string) (*pkgmodel.Resource, error)
+	LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error)
 	LoadAllResources() ([]*pkgmodel.Resource, error)
 	LatestLabelForResource(label string) (string, error)
 

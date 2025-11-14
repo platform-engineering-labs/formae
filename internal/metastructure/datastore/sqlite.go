@@ -577,11 +577,11 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	return &loadedResource, nil
 }
 
-func (d DatastoreSQLite) LoadResourceByNativeID(nativeID string) (*pkgmodel.Resource, error) {
+func (d DatastoreSQLite) LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error) {
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
-	WHERE native_id = ?
+	WHERE native_id = ? AND type = ?
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -591,7 +591,7 @@ func (d DatastoreSQLite) LoadResourceByNativeID(nativeID string) (*pkgmodel.Reso
 	AND r1.operation != ?
 	LIMIT 1
 	`
-	row := d.conn.QueryRow(query, nativeID, resource_update.OperationDelete)
+	row := d.conn.QueryRow(query, nativeID, resourceType, resource_update.OperationDelete)
 
 	var jsonData string
 	var ksuid string

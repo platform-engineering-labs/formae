@@ -372,9 +372,10 @@ func processListing(state gen.Atom, data DiscoveryData, message plugin_operation
 	// De-duplicate resources already under management
 	var newResources []resource.Resource
 	for _, resource := range message.Resources {
-		if !resourceExists(resource.NativeID, data) {
+		if !resourceExists(resource.NativeID, message.ResourceType, data) {
 			newResources = append(newResources, resource)
-			data.recentlyDiscoveredResourceIDs[resource.NativeID] = struct{}{}
+			key := fmt.Sprintf("%s::%s", message.ResourceType, resource.NativeID)
+			data.recentlyDiscoveredResourceIDs[key] = struct{}{}
 			data.summary[message.ResourceType]++
 		}
 	}
@@ -559,15 +560,16 @@ func syncCompleted(state gen.Atom, data DiscoveryData, message changeset.Changes
 // Some resource types are global and might be discovered in multiple targets. This introduces a race condition. A resource can be discovered, but before the resource has
 // been synchronized and created in the database the resource is then discovered again. Therefore we cannot rely on the database for deduplication but we maintain a set of
 // recently discovered resources locally in the actor.
-func resourceExists(nativeID string, data DiscoveryData) bool {
-	_, recentlyDiscovered := data.recentlyDiscoveredResourceIDs[nativeID]
+func resourceExists(nativeID string, resourceType string, data DiscoveryData) bool {
+	key := fmt.Sprintf("%s::%s", resourceType, nativeID)
+	_, recentlyDiscovered := data.recentlyDiscoveredResourceIDs[key]
 	if recentlyDiscovered {
 		return true
 	}
 
-	resource, err := data.ds.LoadResourceByNativeID(nativeID)
+	resource, err := data.ds.LoadResourceByNativeID(nativeID, resourceType)
 	if err != nil {
-		slog.Error("Failed to load resource by native ID", "nativeID", nativeID, "error", err)
+		slog.Error("Failed to load resource by native ID", "nativeID", nativeID, "resourceType", resourceType, "error", err)
 		return false
 	}
 	return resource != nil
