@@ -46,7 +46,7 @@ func TestConstructParentResourceDescriptors(t *testing.T) {
 	descriptors := constructParentResourceDescriptors(supportedResources)
 
 	// VPCCidrBlock is included. Despite having a parent (VPC), it might have children.
-	// This allows discoverNestedResources() to look it up when processing resources 
+	// This allows discoverNestedResources() to look it up when processing resources
 	// that have VPCCidrBlock as their parent.
 	assert.Len(t, descriptors, 3)
 	assert.Contains(t, descriptors, "FakeAWS::EC2::VPC")
@@ -107,26 +107,26 @@ func TestConstructParentResourceDescriptorsMultiLevel(t *testing.T) {
 
 	vpcDescriptor := descriptors["FakeAWS::EC2::VPC"]
 	assert.Len(t, vpcDescriptor.NestedResourcesWithMappingProperties, 1)
-	
+
 	var subnetNode *ResourceDescriptorTreeNode
 	for node := range vpcDescriptor.NestedResourcesWithMappingProperties {
 		assert.Equal(t, "FakeAWS::EC2::Subnet", node.ResourceType)
 		subnetNode = node
 	}
 	assert.NotNil(t, subnetNode)
-	assert.Equal(t, []plugin.ListParameter{{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}}, 
+	assert.Equal(t, []plugin.ListParameter{{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
 		vpcDescriptor.NestedResourcesWithMappingProperties[subnetNode])
 
 	subnetDescriptor := descriptors["FakeAWS::EC2::Subnet"]
 	assert.Len(t, subnetDescriptor.NestedResourcesWithMappingProperties, 1)
-	
+
 	var networkInterfaceNode *ResourceDescriptorTreeNode
 	for node := range subnetDescriptor.NestedResourcesWithMappingProperties {
 		assert.Equal(t, "FakeAWS::EC2::NetworkInterface", node.ResourceType)
 		networkInterfaceNode = node
 	}
 	assert.NotNil(t, networkInterfaceNode)
-	assert.Equal(t, []plugin.ListParameter{{ParentProperty: "SubnetId", ListProperty: "SubnetId", QueryPath: "$.SubnetId"}}, 
+	assert.Equal(t, []plugin.ListParameter{{ParentProperty: "SubnetId", ListProperty: "SubnetId", QueryPath: "$.SubnetId"}},
 		subnetDescriptor.NestedResourcesWithMappingProperties[networkInterfaceNode])
 
 	// NetworkInterface should have no children
