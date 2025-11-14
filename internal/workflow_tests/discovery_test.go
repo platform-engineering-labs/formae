@@ -285,7 +285,7 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 }
 
 func TestDiscovery_DiscoversNestedResourcesWhenAllParentsAlreadyExist(t *testing.T) {
-	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {		
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
 				switch request.ResourceType {
