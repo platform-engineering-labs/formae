@@ -343,10 +343,19 @@ class Fq {
         }
     }
 
+    function findResourceHint(resourceClass: reflect.Class?): ResourceHint =
+      resourceClass.annotations.filterIsInstance(ResourceHint).firstOrNull ?? findResourceHint(resourceClass.superclass)
+
+    function findSubResourceHint(resourceClass: reflect.Class?): SubResourceHint? =
+      if (resourceClass == null)
+        null
+      else
+        resourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull ?? findSubResourceHint(resourceClass.superclass)
+
     function hints(resourceClass: reflect.Class): Mapping<String, FieldHint> =
-        let(resourceHint = resourceClass.annotations.filterIsInstance(ResourceHint).first)
-        let(directHints = resourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+        let(resourceHint = findResourceHint(resourceClass))
+        let(directHints = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
@@ -354,11 +363,11 @@ class Fq {
             Pair(key, baseHint)
         ))
         let(nestedHints = resourceClass.properties.filter((_, v) ->
-            v.annotations.filterIsInstance(FieldHint).length > 0 &&
+            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->
 
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(subResourceClass = getSubResourceClass(v.type))
 
@@ -371,10 +380,10 @@ class Fq {
         (directHints.toMap() + nestedHints.toMap()).toMapping()
 
     function subHints(subResourceClass: reflect.Class): Mapping<String, FieldHint> =
-        let(subResourceHint = subResourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull)
+        let(subResourceHint = findSubResourceHint(subResourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
-        let(directHints = subResourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+        let(directHints = subResourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
@@ -382,10 +391,10 @@ class Fq {
             Pair(key, baseHint)
         ))
         let(nestedHints = subResourceClass.properties.filter((_, v) ->
-            v.annotations.filterIsInstance(FieldHint).length > 0 &&
+            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(nestedSubResourceClass = getSubResourceClass(v.type))
             let(nestedSubHints = subHints(nestedSubResourceClass))
@@ -433,9 +442,9 @@ class Fq {
             throw("Expected DeclaredType for SubResource")
 
     function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
-        let(subResourceHint = resourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull)
+        let(subResourceHint = findSubResourceHint(resourceClass))
         resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             if (fieldHint != null && subResource.getPropertyOrNull(k) != null && fieldHint.outputCondition.apply(subResource.getPropertyOrNull(k)))
                 let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
                 if (fieldHint.outputTransformation != null)
@@ -448,9 +457,9 @@ class Fq {
         ).toDynamic()
 
     function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
-        let(resourceHint = resourceClass.annotations.filterIsInstance(ResourceHint).first)
-        resourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+        let(resourceHint = findResourceHint(resourceClass))
+        resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             if (fieldHint.outputTransformation != null && resource.getPropertyOrNull(k) != null && fieldHint.outputCondition.apply(resource.getPropertyOrNull(k)))
                 Pair(key, fieldHint.outputTransformation.apply(resource.getPropertyOrNull(k)))
@@ -459,7 +468,7 @@ class Fq {
         ).toDynamic()
 
     function schema(resourceClass: reflect.Class): Schema =
-        let (hint = resourceClass.annotations.filterIsInstance(ResourceHint).first)
+        let (hint = findResourceHint(resourceClass))
             new Schema {
                 Identifier = hint.identifier
                 Nonprovisionable = hint.nonprovisionable
@@ -470,20 +479,22 @@ class Fq {
                 Extractable = hint.extractable
             }
 
-    function type(resourceClass: reflect.Class): String = resourceClass.annotations.filterIsInstance(ResourceHint).first.getProperty("type")
+    function type(resourceClass: reflect.Class): String =
+      let (resourceHint = findResourceHint(resourceClass))
+      resourceHint.getProperty("type")
 
     function reverseFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
-        let(resourceHint = resourceClass.annotations.filterIsInstance(ResourceHint).first)
-        let(directMapping = resourceClass.properties.filter((_, v) -> v.annotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+        let(resourceHint = findResourceHint(resourceClass))
+        let(directMapping = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             Pair(outputKey, k)
         ))
         let(nestedMapping = resourceClass.properties.filter((_, v) ->
-            v.annotations.filterIsInstance(FieldHint).length > 0 &&
+            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(subResourceClass = getSubResourceClass(v.type))
             let(subMapping = reverseSubResourceFieldMapping(subResourceClass))
@@ -496,11 +507,11 @@ class Fq {
         (directMapping.toMap() + nestedMapping.toMap()).toMapping()
 
     function reverseSubResourceFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
-        let(subResourceHint = resourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull)
+        let(subResourceHint = findSubResourceHint(resourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
         // Include ALL properties, not just those with @FieldHint
         let(directMapping = resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey =
                 if (fieldHint != null && fieldHint.outputField != null)
                     fieldHint.outputField
@@ -513,7 +524,7 @@ class Fq {
             !v.modifiers.contains("hidden") &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->
-            let(fieldHint = v.annotations.filterIsInstance(FieldHint).firstOrNull)
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey =
                 if (fieldHint != null && fieldHint.outputField != null)
                     fieldHint.outputField
