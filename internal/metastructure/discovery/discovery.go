@@ -17,6 +17,7 @@ import (
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
+	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -92,7 +93,7 @@ type DiscoveryData struct {
 	resourceHierarchy             map[string]*hierarchyNode
 	resourceDescriptors           map[string]plugin.ResourceDescriptor
 	queuedListOperations          map[string][]ListOperation
-	outstandingListOperations     map[ListOperation]struct{}
+	outstandingListOperations     map[string]ListOperation
 	outstandingSyncCommands       map[string]ListOperation
 	recentlyDiscoveredResourceIDs map[string]struct{}
 	timeStarted                   time.Time
@@ -113,6 +114,7 @@ func (d DiscoveryData) HasOutstandingWork() bool {
 type ListOperation struct {
 	ResourceType string
 	TargetLabel  string
+	ParentKSUID  string
 	ListParams   string
 }
 
@@ -155,7 +157,7 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		resourceHierarchy:             make(map[string]*hierarchyNode),
 		resourceDescriptors:           make(map[string]plugin.ResourceDescriptor),
 		queuedListOperations:          make(map[string][]ListOperation),
-		outstandingListOperations:     make(map[ListOperation]struct{}),
+		outstandingListOperations:     make(map[string]ListOperation),
 		outstandingSyncCommands:       make(map[string]ListOperation),
 		recentlyDiscoveredResourceIDs: make(map[string]struct{}),
 		summary:                       make(map[string]int),
@@ -258,7 +260,7 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 			}
 			if len(originalDesc.ParentResourceTypesWithMappingProperties) == 0 {
 				data.queuedListOperations[target.Namespace] = append(data.queuedListOperations[target.Namespace],
-					ListOperation{ResourceType: node.resourceType, TargetLabel: target.Label, ListParams: util.MapToString(make(map[string]string))})
+					ListOperation{ResourceType: node.resourceType, TargetLabel: target.Label, ListParams: util.MapToString(make(map[string]plugin_operation.ListParam))})
 			}
 		}
 		err = proc.Send(proc.PID(), ResumeScanning{})
@@ -289,10 +291,10 @@ func resumeScanning(state gen.Atom, data DiscoveryData, message ResumeScanning, 
 		}
 
 		for range n {
-			next := data.queuedListOperations[namespace][0]
-			err := scanTargetForResourceType(data.targets[next.TargetLabel], next.ResourceType, util.StringToMap(next.ListParams), data, proc)
+			nextOp := data.queuedListOperations[namespace][0]
+			err := scanTargetForResourceType(data.targets[nextOp.TargetLabel], nextOp, data, proc)
 			if err != nil {
-				proc.Log().Error("Failed to scan target for resource type %s: %v", next.ResourceType, err)
+				proc.Log().Error("Failed to scan target for resource type %s: %v", nextOp.ResourceType, err)
 				return state, data, nil, gen.TerminateReasonPanic
 			}
 			data.queuedListOperations[namespace] = data.queuedListOperations[namespace][1:]
@@ -313,24 +315,20 @@ func resumeScanning(state gen.Atom, data DiscoveryData, message ResumeScanning, 
 	return StateDiscovering, data, nil, nil
 }
 
-func scanTargetForResourceType(target pkgmodel.Target, resourceType string, listParameters map[string]string, data DiscoveryData, proc gen.Process) error {
-	if !data.resourceDescriptors[resourceType].Discoverable {
-		proc.Log().Debug("Skipping non-discoverable resource type %s in target %s", resourceType, target.Label)
+func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data DiscoveryData, proc gen.Process) error {
+	if !data.resourceDescriptors[op.ResourceType].Discoverable {
+		proc.Log().Debug("Skipping non-discoverable resource type %s in target %s", op.ResourceType, target.Label)
 		return nil
 	}
 
 	// Register the operation as remaining work
-	op := ListOperation{
-		ResourceType: resourceType,
-		TargetLabel:  target.Label,
-		ListParams:   util.MapToString(listParameters),
-	}
-	data.outstandingListOperations[op] = struct{}{}
-	if _, exists := data.summary[resourceType]; !exists {
-		data.summary[resourceType] = 0
+	mapKey := listOperationMapKey(op.ResourceType, op.TargetLabel, op.ListParams)
+	data.outstandingListOperations[mapKey] = op
+	if _, exists := data.summary[op.ResourceType]; !exists {
+		data.summary[op.ResourceType] = 0
 	}
 
-	uri := discoveryURI(resourceType)
+	uri := discoveryURI(op.ResourceType)
 	operation := resource.OperationList
 	operationID := uuid.New().String()
 
@@ -341,21 +339,22 @@ func scanTargetForResourceType(target pkgmodel.Target, resourceType string, list
 		OperationID: operationID,
 	})
 	if err != nil {
-		delete(data.outstandingListOperations, op)
+		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("failed to ensure PluginOperator for %s: %w", uri, err)
 	}
 
+	listParameters := util.StringToMap[plugin_operation.ListParam](op.ListParams)
 	err = proc.Send(actornames.PluginOperator(uri, string(operation), operationID), plugin_operation.ListResources{
 		Namespace:      target.Namespace,
-		ResourceType:   resourceType,
+		ResourceType:   op.ResourceType,
 		Target:         target,
 		ListParameters: listParameters,
 	})
 	if err != nil {
-		delete(data.outstandingListOperations, op)
+		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("discovery failed to send ListResources for %s: %w", uri, err)
 	}
-	proc.Log().Debug("Scanning resource type %s in target %s with list properties %v in %f seconds", resourceType, target.Label, listParameters)
+	proc.Log().Debug("Scanning resource type %s in target %s with list properties %v in %f seconds", op.ResourceType, target.Label, listParameters)
 
 	return nil
 }
@@ -363,12 +362,10 @@ func scanTargetForResourceType(target pkgmodel.Target, resourceType string, list
 func processListing(state gen.Atom, data DiscoveryData, message plugin_operation.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	proc.Log().Debug("Processing listing for %s in target %s with list parameters %v", message.ResourceType, message.Target.Label, message.ListParameters)
 
-	op := ListOperation{
-		ResourceType: message.ResourceType,
-		TargetLabel:  message.Target.Label,
-		ListParams:   util.MapToString(message.ListParameters),
-	}
-	delete(data.outstandingListOperations, op)
+	mapKey := listOperationMapKey(message.ResourceType, message.Target.Label, util.MapToString(message.ListParameters))
+	op := data.outstandingListOperations[mapKey]
+
+	delete(data.outstandingListOperations, mapKey)
 
 	// Remove the operation from remaining work if the plugin reported an error
 	if message.Error != nil {
@@ -427,6 +424,10 @@ func processListing(state gen.Atom, data DiscoveryData, message plugin_operation
 	return StateDiscovering, data, nil, nil
 }
 
+func listOperationMapKey(resourceType, targetLabel, listParams string) string {
+	return fmt.Sprintf("%s#%s#%s", resourceType, targetLabel, listParams)
+}
+
 func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []resource.Resource, data DiscoveryData, proc gen.Process) (string, error) {
 	plugin, err := data.pluginManager.ResourcePlugin(namespace)
 	if err != nil {
@@ -451,7 +452,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 			Stack:      constants.UnmanagedStack,
 			Target:     target.Label,
 			NativeID:   resource.NativeID,
-			Properties: json.RawMessage(resource.Properties),
+			Properties: injectResolvables(resource.Properties, op),
 			Schema:     schema,
 			Managed:    false,
 			Ksuid:      util.NewID(),
@@ -538,23 +539,25 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 
 	for _, parent := range parents {
 		for childNode, mappingProps := range parentNode.children {
-			listParams := make(map[string]string)
+			listParams := make(map[string]plugin_operation.ListParam)
 			for _, param := range mappingProps {
 				value, found := parent.GetProperty(param.ParentProperty)
 				if found {
-					listParams[param.ListProperty] = value
+					listParams[param.ListProperty] = plugin_operation.ListParam{
+						ParentProperty: param.ParentProperty,
+						ListParam:      param.ListProperty,
+						ListValue:      value,
+					}
 				} else {
 					proc.Log().Error("Missing parent property", "property", param.ParentProperty, "parent_id", parent.NativeID)
 				}
 			}
-			data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(
-				data.queuedListOperations[data.targets[op.TargetLabel].Namespace],
-				ListOperation{
-					ResourceType: childNode.resourceType,
-					TargetLabel:  op.TargetLabel,
-					ListParams:   util.MapToString(listParams),
-				},
-			)
+			data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(data.queuedListOperations[data.targets[op.TargetLabel].Namespace], ListOperation{
+				ResourceType: childNode.resourceType,
+				TargetLabel:  op.TargetLabel,
+				ParentKSUID:  parent.Ksuid,
+				ListParams:   util.MapToString(listParams),
+			})
 			err = proc.Send(proc.PID(), ResumeScanning{})
 			if err != nil {
 				proc.Log().Error("Failed to send ResumeScanning", "error", err)
@@ -686,4 +689,24 @@ func renderSummary(summary map[string]int) string {
 	}
 
 	return builder.String()
+}
+
+func injectResolvables(props string, op ListOperation) json.RawMessage {
+	if op.ParentKSUID == "" {
+		return json.RawMessage(props)
+	}
+
+	params := util.StringToMap[plugin_operation.ListParam](op.ListParams)
+	for _, v := range params {
+		prop := struct {
+			Ref   string `json:"$ref"`
+			Value string `json:"$value"`
+		}{
+			Ref:   fmt.Sprintf("formae://%s#/%s", op.ParentKSUID, v.ParentProperty),
+			Value: v.ListValue,
+		}
+		props, _ = sjson.Set(props, v.ListParam, prop)
+	}
+
+	return json.RawMessage(props)
 }

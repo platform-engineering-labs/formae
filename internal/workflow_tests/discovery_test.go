@@ -7,6 +7,7 @@ package workflow_tests
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -76,12 +77,13 @@ func TestDiscovery_FindsAndCreatesNewResources(t *testing.T) {
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
 				if awsRegionFromTarget(t, request.Target) == "us-east-1" {
-					if request.NativeID == "test-resource-2" {
+					switch request.NativeID {
+					case "test-resource-2":
 						return &resource.ReadResult{
 							ResourceType: "FakeAWS::S3::Bucket",
 							Properties:   fmt.Sprintf(`{"Tags": {"Name": "%s", "Environment": "test"}, "foo": "bar"}`, request.NativeID),
 						}, nil
-					} else if request.NativeID == "test-resource-3" {
+					case "test-resource-3":
 						return &resource.ReadResult{
 							ResourceType: "FakeAWS::S3::Bucket",
 							Properties:   fmt.Sprintf(`{"Tags": {"Name": "%s", "Environment": "test"}, "baz": "qux"}`, request.NativeID),
@@ -155,23 +157,23 @@ func TestDiscovery_FindsAndCreatesNewResources(t *testing.T) {
 			5*time.Second,
 			100*time.Millisecond)
 
-		resource2 := findResourceByNativeId("test-resource-2", stack)
+		resource2 := findResourceByNativeID("test-resource-2", stack)
 		assert.NotNil(t, resource2)
 		assert.False(t, resource2.Managed)
 
-		resource3 := findResourceByNativeId("test-resource-3", stack)
+		resource3 := findResourceByNativeID("test-resource-3", stack)
 		assert.NotNil(t, resource3)
 		assert.False(t, resource3.Managed)
 
-		resource4 := findResourceByNativeId("test-resource-4", stack)
+		resource4 := findResourceByNativeID("test-resource-4", stack)
 		assert.NotNil(t, resource4)
 		assert.False(t, resource4.Managed)
 	})
 }
 
-func findResourceByNativeId(nativeId string, stack *pkgmodel.Forma) *pkgmodel.Resource {
+func findResourceByNativeID(nativeID string, stack *pkgmodel.Forma) *pkgmodel.Resource {
 	for i := range stack.Resources {
-		if stack.Resources[i].NativeID == nativeId {
+		if stack.Resources[i].NativeID == nativeID {
 			return &stack.Resources[i]
 		}
 	}
@@ -197,6 +199,7 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 					switch request.AdditionalProperties["VpcId"] {
 					case "vpc-1":
 						return &resource.ListResult{
+							ResourceType: "FakeAWS::EC2::VPCCidrBlock",
 							Resources: []resource.Resource{
 								{
 									NativeID:   "vpc-1-cidr-1",
@@ -205,6 +208,7 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 							}}, nil
 					case "vpc-2":
 						return &resource.ListResult{
+							ResourceType: "FakeAWS::EC2::VPCCidrBlock",
 							Resources: []resource.Resource{
 								{
 									NativeID:   "vpc-2-cidr-1",
@@ -223,17 +227,17 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 				case "vpc-2":
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::EC2::VPC",
-						Properties:   `{"Id":"vpc-2"}`,
+						Properties:   `{"VpcId":"vpc-2"}`,
 					}, nil
 				case "vpc-1-cidr-1":
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::EC2::VPCCidrBlock",
-						Properties:   `{}`,
+						Properties:   `{"VpcId":"vpc-1","CidrBlock":"10.0.1.0/16"}`,
 					}, nil
 				case "vpc-2-cidr-1":
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::EC2::VPCCidrBlock",
-						Properties:   `{}`,
+						Properties:   `{"VpcId":"vpc-2","CidrBlock":"10.0.1.0/24"}`,
 					}, nil
 				default:
 					return nil, fmt.Errorf("unexpected native id: %s", request.NativeID)
@@ -262,7 +266,7 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 			NativeID:   "vpc-1",
 			Stack:      "infrastructure",
 			Target:     "us-east-1",
-			Properties: json.RawMessage(`{"Id":"vpc-1"}`),
+			Properties: json.RawMessage(`{"VpcId":"vpc-1"}`),
 		}, "test-nested-resources-id")
 		require.NoError(t, err)
 
@@ -273,14 +277,54 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
 
-		var stack *pkgmodel.Forma
-		assert.Eventually(t, func() bool {
-			stack, err = m.Datastore.LoadStack("$unmanaged")
-			if err != nil || stack == nil {
+		var unmanagedStack *pkgmodel.Forma
+		require.Eventually(t, func() bool {
+			unmanagedStack, err = m.Datastore.LoadStack("$unmanaged")
+			if err != nil || unmanagedStack == nil {
 				return false
 			}
-			return len(stack.Resources) == 3
+			return len(unmanagedStack.Resources) == 3
 		}, 10*time.Second, 100*time.Millisecond)
+
+		idxVpc2 := slices.IndexFunc(unmanagedStack.Resources, func(r pkgmodel.Resource) bool {
+			return r.NativeID == "vpc-2"
+		})
+		require.NotEqual(t, -1, idxVpc2)
+		vpc2 := unmanagedStack.Resources[idxVpc2]
+
+		idxCidr2 := slices.IndexFunc(unmanagedStack.Resources, func(r pkgmodel.Resource) bool {
+			return r.NativeID == "vpc-2-cidr-1"
+		})
+		require.NotEqual(t, -1, idxCidr2)
+		vpcCidrBlock2 := unmanagedStack.Resources[idxCidr2]
+
+		assert.JSONEq(t, fmt.Sprintf(`{
+						"VpcId": {
+							"$ref": "formae://%s#/VpcId",
+							"$value": "vpc-2"
+						},
+						"CidrBlock": "10.0.1.0/24"
+					}`, vpc2.Ksuid), string(vpcCidrBlock2.Properties))
+
+		infraStack, err := m.Datastore.LoadStack("infrastructure")
+		require.NoError(t, err)
+		require.Len(t, infraStack.Resources, 1)
+
+		vpc1 := infraStack.Resources[0]
+
+		idxCidr1 := slices.IndexFunc(unmanagedStack.Resources, func(r pkgmodel.Resource) bool {
+			return r.NativeID == "vpc-1-cidr-1"
+		})
+		assert.NotEqual(t, -1, idxCidr1)
+		vpcCidrBlock1 := unmanagedStack.Resources[idxCidr1]
+
+		assert.JSONEq(t, fmt.Sprintf(`{
+						"VpcId": {
+							"$ref": "formae://%s#/VpcId",
+							"$value": "vpc-1"
+						},
+						"CidrBlock": "10.0.1.0/16"
+					}`, vpc1.Ksuid), string(vpcCidrBlock1.Properties))
 	})
 }
 
@@ -334,22 +378,22 @@ func TestDiscovery_DiscoversNestedResourcesWhenAllParentsAlreadyExist(t *testing
 				case "vpc-1":
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::EC2::VPC",
-						Properties:   `{"Id":"vpc-1"}`,
+						Properties:   `{"VpcId":"vpc-1"}`,
 					}, nil
 				case "vpc-2":
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::EC2::VPC",
-						Properties:   `{"Id":"vpc-2"}`,
+						Properties:   `{"VpcId":"vpc-2"}`,
 					}, nil
 				case "vpc-1-cidr-1":
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::EC2::VPCCidrBlock",
-						Properties:   `{}`,
+						Properties:   `{"VpcId":"vpc-1","CidrBlock":"10.0.1.0/16"}`,
 					}, nil
 				case "vpc-2-cidr-1":
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::EC2::VPCCidrBlock",
-						Properties:   `{}`,
+						Properties:   `{"VpcId":"vpc-2","CidrBlock":"10.0.1.0/24"}`,
 					}, nil
 				default:
 					return nil, fmt.Errorf("unexpected native id: %s", request.NativeID)
@@ -379,7 +423,7 @@ func TestDiscovery_DiscoversNestedResourcesWhenAllParentsAlreadyExist(t *testing
 			NativeID:   "vpc-1",
 			Stack:      "infrastructure",
 			Target:     "us-east-1",
-			Properties: json.RawMessage(`{"Id":"vpc-1"}`),
+			Properties: json.RawMessage(`{"VpcId":"vpc-1"}`),
 		}, "test-bug2-id-1")
 		require.NoError(t, err)
 
@@ -389,7 +433,7 @@ func TestDiscovery_DiscoversNestedResourcesWhenAllParentsAlreadyExist(t *testing
 			NativeID:   "vpc-2",
 			Stack:      "infrastructure",
 			Target:     "us-east-1",
-			Properties: json.RawMessage(`{"Id":"vpc-2"}`),
+			Properties: json.RawMessage(`{"VpcId":"vpc-2"}`),
 		}, "test-bug2-id-2")
 		require.NoError(t, err)
 
@@ -501,9 +545,9 @@ func TestDiscovery_OverlapProtection(t *testing.T) {
 		close(blockFirstDiscovery)
 
 		assert.Eventually(t, func() bool {
-			stack, err := m.Datastore.LoadStack("$unmanaged")
-			if err != nil {
-				t.Logf("Error loading stack: %v", err)
+			stack, loadStackErr := m.Datastore.LoadStack("$unmanaged")
+			if loadStackErr != nil {
+				t.Logf("Error loading stack: %v", loadStackErr)
 				return false
 			}
 			return stack != nil && len(stack.Resources) == 1
