@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -54,14 +55,14 @@ type Discovery struct {
 	statemachine.StateMachine[DiscoveryData]
 }
 
-type ResourceDescriptorTreeNode struct {
-	ResourceType                         string
-	Discoverable                         bool
-	NestedResourcesWithMappingProperties map[*ResourceDescriptorTreeNode][]plugin.ListParameter
+type hierarchyNode struct {
+	resourceType string
+	discoverable bool
+	children     map[*hierarchyNode][]plugin.ListParameter
 }
 
-func (n ResourceDescriptorTreeNode) HasNestedResources() bool {
-	return len(n.NestedResourcesWithMappingProperties) > 0
+func (n *hierarchyNode) hasChildren() bool {
+	return len(n.children) > 0
 }
 
 func NewDiscovery() gen.ProcessBehavior {
@@ -88,7 +89,7 @@ type DiscoveryData struct {
 	discoveryCfg                  *pkgmodel.DiscoveryConfig
 	isScheduledDiscovery          bool
 	targets                       map[string]pkgmodel.Target
-	resourceDescriptorRoots       map[string]ResourceDescriptorTreeNode
+	resourceHierarchy             map[string]*hierarchyNode
 	resourceDescriptors           map[string]plugin.ResourceDescriptor
 	queuedListOperations          map[string][]ListOperation
 	outstandingListOperations     map[ListOperation]struct{}
@@ -150,8 +151,8 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		ds:                            ds,
 		discoveryCfg:                  &discoveryCfg,
 		serverCfg:                     &serverCfg,
-		targets:                       make(map[string]pkgmodel.Target), // Will be populated on each discovery run
-		resourceDescriptorRoots:       make(map[string]ResourceDescriptorTreeNode),
+		targets:                       make(map[string]pkgmodel.Target),
+		resourceHierarchy:             make(map[string]*hierarchyNode),
 		resourceDescriptors:           make(map[string]plugin.ResourceDescriptor),
 		queuedListOperations:          make(map[string][]ListOperation),
 		outstandingListOperations:     make(map[ListOperation]struct{}),
@@ -246,10 +247,19 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 			}
 		}
 
-		data.resourceDescriptorRoots = constructParentResourceDescriptors(supportedResources)
-		for _, desc := range data.resourceDescriptorRoots {
-			data.queuedListOperations[target.Namespace] = append(data.queuedListOperations[target.Namespace],
-				ListOperation{ResourceType: desc.ResourceType, TargetLabel: target.Label, ListParams: util.MapToString(make(map[string]string))})
+		newHierarchy := buildResourceHierarchy(supportedResources)
+		maps.Copy(data.resourceHierarchy, newHierarchy)
+
+		for resourceType, node := range newHierarchy {
+			originalDesc, exists := data.resourceDescriptors[resourceType]
+			if !exists {
+				proc.Log().Error("Resource descriptor not found for type %s", resourceType)
+				continue
+			}
+			if len(originalDesc.ParentResourceTypesWithMappingProperties) == 0 {
+				data.queuedListOperations[target.Namespace] = append(data.queuedListOperations[target.Namespace],
+					ListOperation{ResourceType: node.resourceType, TargetLabel: target.Label, ListParams: util.MapToString(make(map[string]string))})
+			}
 		}
 		err = proc.Send(proc.PID(), ResumeScanning{})
 		if err != nil {
@@ -380,8 +390,16 @@ func processListing(state gen.Atom, data DiscoveryData, message plugin_operation
 	}
 
 	// If there are no new resources, we can skip the synchronization
+	// However, we still need to discover nested resources if this parent resource type has any
 	if len(newResources) == 0 {
 		proc.Log().Debug("No new resources to synchronize for %s in target %s", message.ResourceType, message.Target.Label)
+		if err := discoverChildren(op, data, proc); err != nil {
+			proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+			if !data.HasOutstandingWork() {
+				return StateIdle, data, nil, nil
+			}
+			return state, data, nil, nil
+		}
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
 		}
@@ -397,8 +415,14 @@ func processListing(state gen.Atom, data DiscoveryData, message plugin_operation
 		}
 	}
 
-	// Register the asynchronously running sync command
 	data.outstandingSyncCommands[commandID] = op
+
+	// Discover nested resources for existing parents immediately, even though we're also syncing new ones.
+	// This ensures we don't miss nested resources for existing parents while waiting for new ones to sync.
+	// New nested resources will be discovered after sync completes in syncCompleted().
+	if err := discoverChildren(op, data, proc); err != nil {
+		proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+	}
 
 	return StateDiscovering, data, nil, nil
 }
@@ -496,6 +520,52 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	return syncCommand.ID, nil
 }
 
+func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) error {
+	parentNode, exists := data.resourceHierarchy[op.ResourceType]
+	if !exists || !parentNode.hasChildren() {
+		return nil
+	}
+
+	query := datastore.ResourceQuery{
+		Type:   &datastore.QueryItem[string]{Item: op.ResourceType, Constraint: datastore.Required},
+		Target: &datastore.QueryItem[string]{Item: op.TargetLabel, Constraint: datastore.Required},
+	}
+	parents, err := data.ds.QueryResources(&query)
+	if err != nil {
+		proc.Log().Error("Failed to load parent resources", "type", op.ResourceType, "target", op.TargetLabel, "error", err)
+		return fmt.Errorf("failed to load parent resources: %w", err)
+	}
+
+	for _, parent := range parents {
+		for childNode, mappingProps := range parentNode.children {
+			listParams := make(map[string]string)
+			for _, param := range mappingProps {
+				value, found := parent.GetProperty(param.ParentProperty)
+				if found {
+					listParams[param.ListProperty] = value
+				} else {
+					proc.Log().Error("Missing parent property", "property", param.ParentProperty, "parent_id", parent.NativeID)
+				}
+			}
+			data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(
+				data.queuedListOperations[data.targets[op.TargetLabel].Namespace],
+				ListOperation{
+					ResourceType: childNode.resourceType,
+					TargetLabel:  op.TargetLabel,
+					ListParams:   util.MapToString(listParams),
+				},
+			)
+			err = proc.Send(proc.PID(), ResumeScanning{})
+			if err != nil {
+				proc.Log().Error("Failed to send ResumeScanning", "error", err)
+				return fmt.Errorf("failed to send ResumeScanning: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
 func syncCompleted(state gen.Atom, data DiscoveryData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	op, exists := data.outstandingSyncCommands[message.CommandID]
 	if !exists {
@@ -511,43 +581,13 @@ func syncCompleted(state gen.Atom, data DiscoveryData, message changeset.Changes
 		}
 	}
 
-	if data.resourceDescriptorRoots[op.ResourceType].HasNestedResources() {
-		// Load all parent resources of this type that were just synchronized
-		query := datastore.ResourceQuery{
-			Type:   &datastore.QueryItem[string]{Item: op.ResourceType, Constraint: datastore.Required},
-			Target: &datastore.QueryItem[string]{Item: op.TargetLabel, Constraint: datastore.Required},
+	// Discover nested resources after parent resources are completely sync'd
+	if err := discoverChildren(op, data, proc); err != nil {
+		proc.Log().Error("Failed to discover children for %s in target %s: %v", op.ResourceType, op.TargetLabel, err)
+		if !data.HasOutstandingWork() {
+			return StateIdle, data, nil, nil
 		}
-		parentResources, err := data.ds.QueryResources(&query)
-		if err != nil {
-			proc.Log().Error("Failed to load parent resources for discovery of nested resources", "resourceType", op.ResourceType, "target", op.TargetLabel, "error", err)
-			return state, data, nil, gen.TerminateReasonPanic
-		}
-		proc.Log().Debug("Found %d parent resources of type %s in target %s", len(parentResources), op.ResourceType, op.TargetLabel)
-		for _, parentResource := range parentResources {
-			for nestedResource, mappingProperties := range data.resourceDescriptorRoots[op.ResourceType].NestedResourcesWithMappingProperties {
-				proc.Log().Debug("Scanning for nested resource type %s in target %s with list properties %+v", nestedResource, op.TargetLabel, mappingProperties)
-				listParameters := make(map[string]string)
-				for _, param := range mappingProperties {
-					proc.Log().Debug("Getting mapping property for nested resource discovery", "propertyQuery", param, "resourceType", op.ResourceType, "target", op.TargetLabel, "nativeId", parentResource.NativeID)
-					value, found := parentResource.GetProperty(param.ParentProperty)
-					if found {
-						listParameters[param.ListProperty] = value
-					} else {
-						proc.Log().Error("Failed to get mapping property for nested resource discovery", "param", param, "resourceType", op.ResourceType, "target", op.TargetLabel, "nativeId", parentResource.NativeID)
-					}
-				}
-				data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(data.queuedListOperations[data.targets[op.TargetLabel].Namespace], ListOperation{
-					ResourceType: nestedResource.ResourceType,
-					TargetLabel:  op.TargetLabel,
-					ListParams:   util.MapToString(listParameters),
-				})
-				err = proc.Send(proc.PID(), ResumeScanning{})
-				if err != nil {
-					proc.Log().Error("Discovery failed to send ResumeScanning message: %v", err)
-					return state, data, nil, gen.TerminateReasonPanic
-				}
-			}
-		}
+		return state, data, nil, nil
 	}
 	if !data.HasOutstandingWork() {
 		return StateIdle, data, nil, nil
@@ -573,42 +613,39 @@ func resourceExists(nativeID string, data DiscoveryData) bool {
 	return resource != nil
 }
 
-func constructParentResourceDescriptors(descriptors []plugin.ResourceDescriptor) map[string]ResourceDescriptorTreeNode {
-	parentResources := make(map[string]ResourceDescriptorTreeNode)
-	nestedDescriptors := make(map[string]plugin.ResourceDescriptor)
+func buildResourceHierarchy(descriptors []plugin.ResourceDescriptor) map[string]*hierarchyNode {
+	hierarchy := make(map[string]*hierarchyNode)
+	childDescriptors := make(map[string]plugin.ResourceDescriptor)
+
 	for _, desc := range descriptors {
-		slog.Debug("Processing resource descriptor", "type", desc.Type, "parents", desc.ParentResourceTypesWithMappingProperties, "discoverable", desc.Discoverable)
 		if !desc.Discoverable {
-			slog.Debug("Skipping non-discoverable resource type", "type", desc.Type)
 			continue
 		}
-		if len(desc.ParentResourceTypesWithMappingProperties) == 0 {
-			parentResources[desc.Type] = ResourceDescriptorTreeNode{
-				ResourceType:                         desc.Type,
-				Discoverable:                         desc.Discoverable,
-				NestedResourcesWithMappingProperties: make(map[*ResourceDescriptorTreeNode][]plugin.ListParameter),
-			}
-		} else {
-			nestedDescriptors[desc.Type] = desc
+
+		hierarchy[desc.Type] = &hierarchyNode{
+			resourceType: desc.Type,
+			discoverable: desc.Discoverable,
+			children:     make(map[*hierarchyNode][]plugin.ListParameter),
+		}
+
+		if len(desc.ParentResourceTypesWithMappingProperties) > 0 {
+			childDescriptors[desc.Type] = desc
 		}
 	}
-	for _, desc := range nestedDescriptors {
-		for parentType, mappingProperties := range desc.ParentResourceTypesWithMappingProperties {
-			parent, exists := parentResources[parentType]
+
+	for _, desc := range childDescriptors {
+		childNode := hierarchy[desc.Type]
+		for parentType, mappingProps := range desc.ParentResourceTypesWithMappingProperties {
+			parentNode, exists := hierarchy[parentType]
 			if !exists {
-				slog.Error("Parent resource type for nested resource type not found", "parent", parentType, "nested", desc.Type)
+				slog.Error("Parent resource type not found", "parent", parentType, "child", desc.Type)
 				continue
 			}
-			parent.NestedResourcesWithMappingProperties[&ResourceDescriptorTreeNode{
-				ResourceType:                         desc.Type,
-				Discoverable:                         desc.Discoverable,
-				NestedResourcesWithMappingProperties: make(map[*ResourceDescriptorTreeNode][]plugin.ListParameter),
-			}] = mappingProperties
+			parentNode.children[childNode] = mappingProps
 		}
 	}
-	slog.Debug("Constructed parent resource descriptors", "count", len(parentResources))
 
-	return parentResources
+	return hierarchy
 }
 
 func discoveryURI(resourceType string) pkgmodel.FormaeURI {
