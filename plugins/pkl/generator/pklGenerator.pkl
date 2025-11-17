@@ -82,6 +82,7 @@ function parseStacks(stacksData: List<Map<String, Any>>): String =
 function parseTargets(targetsData: List<Map<String, Any>>): String =
     let (targetsString = targetsData.map((targetData) ->
         let (label = targetData["label"])
+        let (discoverable = targetData.getOrNull("discoverable"))
         let (camelCaseLabel = toCamelCase(label))
         let (config = targetData["config"])
         let (namespace = targetData.getOrNull("namespace") ?? "aws")
@@ -108,7 +109,7 @@ function parseTargets(targetsData: List<Map<String, Any>>): String =
 
       local \(camelCaseLabel) = new formae.Target {
         label = "\(label)"
-        namespace = "\(namespace)"\(configString)
+        namespace = "\(namespace)"\(if (discoverable != null) "\n        discoverable = \(discoverable)" else "")\(configString)
       }
       \(camelCaseLabel)
       """
@@ -162,7 +163,9 @@ function generateFormaFile(parsed: json.Value): String =
         parsed.Targets.toList().map((target) -> Map(
             "label", target.Label,
             "namespace", target.Namespace ?? "aws",
-            "config", target.Config)
+            "config", target.Config,
+            "discoverable", target.getPropertyOrNull("Discoverable")
+            )
         )
     else
         List()
