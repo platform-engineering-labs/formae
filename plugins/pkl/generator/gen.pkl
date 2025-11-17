@@ -287,7 +287,7 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
     let (valueAsMap = value.toMap())
     if (valueAsMap.containsKey("$res"))
         let (res = valueAsMap.getOrNull("$res"))
-        let (s = "\(valueAsMap.getOrNull("$stack")).label")
+        let (s = valueAsMap.getOrNull("$stack"))
         let (l = valueAsMap.getOrNull("$label"))
         let (refType = valueAsMap.getOrNull("$type"))
         let (typeName = valueAsMap.getOrNull("$type"))
@@ -541,7 +541,7 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           let (comment = if (realValue != null) "\n" + indent + "  // RealValue: \(realValue)" else "")
             typeDeclaration + " {" +
             comment + "\n" +
-            (if (stack != null) indent + "  stack = \"\(stack)\"\n" else "") +
+            (if (stack != null) indent + "  stack = \"\(stack)\".label\n" else "") +
             (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
              indent + "}.\(property)"
         else if (typeName == "FakeValue")
