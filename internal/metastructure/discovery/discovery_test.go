@@ -13,7 +13,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
-func TestConstructParentResourceDescriptors(t *testing.T) {
+func TestBuildResourceHierarchy(t *testing.T) {
 	supportedResources := []plugin.ResourceDescriptor{
 		{
 			Type:         "FakeAWS::S3::Bucket",
@@ -43,31 +43,25 @@ func TestConstructParentResourceDescriptors(t *testing.T) {
 		},
 	}
 
-	descriptors := constructParentResourceDescriptors(supportedResources)
+	hierarchy := buildResourceHierarchy(supportedResources)
 
-	// VPCCidrBlock is included. Despite having a parent (VPC), it might have children.
-	// This allows discoverNestedResources() to look it up when processing resources
-	// that have VPCCidrBlock as their parent.
-	assert.Len(t, descriptors, 3)
-	assert.Contains(t, descriptors, "FakeAWS::EC2::VPC")
-	assert.Contains(t, descriptors, "FakeAWS::S3::Bucket")
-	assert.Contains(t, descriptors, "FakeAWS::EC2::VPCCidrBlock")
+	assert.Len(t, hierarchy, 3)
+	assert.Contains(t, hierarchy, "FakeAWS::EC2::VPC")
+	assert.Contains(t, hierarchy, "FakeAWS::S3::Bucket")
+	assert.Contains(t, hierarchy, "FakeAWS::EC2::VPCCidrBlock")
 
-	assert.Len(t, descriptors["FakeAWS::EC2::VPC"].NestedResourcesWithMappingProperties, 1)
-	// There should only be one entry for the VPC CIDR Block
+	assert.Len(t, hierarchy["FakeAWS::EC2::VPC"].children, 1)
 	var mappingProperties []plugin.ListParameter
 	var resourceType string
-	for t, props := range descriptors["FakeAWS::EC2::VPC"].NestedResourcesWithMappingProperties {
+	for childNode, props := range hierarchy["FakeAWS::EC2::VPC"].children {
 		mappingProperties = props
-		resourceType = t.ResourceType
+		resourceType = childNode.resourceType
 	}
 	assert.Equal(t, "FakeAWS::EC2::VPCCidrBlock", resourceType)
 	assert.Equal(t, []plugin.ListParameter{{ParentProperty: "Id", ListProperty: "VpcId", QueryPath: "$.Id"}}, mappingProperties)
 }
 
-// This test ensures intermediate resources (those that are both children and parents)
-// are correctly included in the parent resource descriptors map.
-func TestConstructParentResourceDescriptorsMultiLevel(t *testing.T) {
+func TestBuildResourceHierarchyMultiLevel(t *testing.T) {
 	supportedResources := []plugin.ResourceDescriptor{
 		{
 			Type:         "FakeAWS::EC2::VPC",
@@ -97,45 +91,43 @@ func TestConstructParentResourceDescriptorsMultiLevel(t *testing.T) {
 		},
 	}
 
-	descriptors := constructParentResourceDescriptors(supportedResources)
+	hierarchy := buildResourceHierarchy(supportedResources)
 
-	assert.Len(t, descriptors, 4)
-	assert.Contains(t, descriptors, "FakeAWS::EC2::VPC")
-	assert.Contains(t, descriptors, "FakeAWS::EC2::Subnet")
-	assert.Contains(t, descriptors, "FakeAWS::EC2::NetworkInterface")
-	assert.Contains(t, descriptors, "FakeAWS::S3::Bucket")
+	assert.Len(t, hierarchy, 4)
+	assert.Contains(t, hierarchy, "FakeAWS::EC2::VPC")
+	assert.Contains(t, hierarchy, "FakeAWS::EC2::Subnet")
+	assert.Contains(t, hierarchy, "FakeAWS::EC2::NetworkInterface")
+	assert.Contains(t, hierarchy, "FakeAWS::S3::Bucket")
 
-	vpcDescriptor := descriptors["FakeAWS::EC2::VPC"]
-	assert.Len(t, vpcDescriptor.NestedResourcesWithMappingProperties, 1)
+	vpcNode := hierarchy["FakeAWS::EC2::VPC"]
+	assert.Len(t, vpcNode.children, 1)
 
-	var subnetNode *ResourceDescriptorTreeNode
-	for node := range vpcDescriptor.NestedResourcesWithMappingProperties {
-		assert.Equal(t, "FakeAWS::EC2::Subnet", node.ResourceType)
+	var subnetNode *hierarchyNode
+	for node := range vpcNode.children {
+		assert.Equal(t, "FakeAWS::EC2::Subnet", node.resourceType)
 		subnetNode = node
 	}
 	assert.NotNil(t, subnetNode)
 	assert.Equal(t, []plugin.ListParameter{{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
-		vpcDescriptor.NestedResourcesWithMappingProperties[subnetNode])
+		vpcNode.children[subnetNode])
 
-	subnetDescriptor := descriptors["FakeAWS::EC2::Subnet"]
-	assert.Len(t, subnetDescriptor.NestedResourcesWithMappingProperties, 1)
+	subnetHierarchyNode := hierarchy["FakeAWS::EC2::Subnet"]
+	assert.Len(t, subnetHierarchyNode.children, 1)
 
-	var networkInterfaceNode *ResourceDescriptorTreeNode
-	for node := range subnetDescriptor.NestedResourcesWithMappingProperties {
-		assert.Equal(t, "FakeAWS::EC2::NetworkInterface", node.ResourceType)
+	var networkInterfaceNode *hierarchyNode
+	for node := range subnetHierarchyNode.children {
+		assert.Equal(t, "FakeAWS::EC2::NetworkInterface", node.resourceType)
 		networkInterfaceNode = node
 	}
 	assert.NotNil(t, networkInterfaceNode)
 	assert.Equal(t, []plugin.ListParameter{{ParentProperty: "SubnetId", ListProperty: "SubnetId", QueryPath: "$.SubnetId"}},
-		subnetDescriptor.NestedResourcesWithMappingProperties[networkInterfaceNode])
+		subnetHierarchyNode.children[networkInterfaceNode])
 
-	// NetworkInterface should have no children
-	networkInterfaceDescriptor := descriptors["FakeAWS::EC2::NetworkInterface"]
-	assert.Len(t, networkInterfaceDescriptor.NestedResourcesWithMappingProperties, 0)
+	networkInterfaceHierarchyNode := hierarchy["FakeAWS::EC2::NetworkInterface"]
+	assert.Len(t, networkInterfaceHierarchyNode.children, 0)
 
-	// Bucket should have no children
-	bucketDescriptor := descriptors["FakeAWS::S3::Bucket"]
-	assert.Len(t, bucketDescriptor.NestedResourcesWithMappingProperties, 0)
+	bucketNode := hierarchy["FakeAWS::S3::Bucket"]
+	assert.Len(t, bucketNode.children, 0)
 }
 
 func TestMultipleNamespacesMerge(t *testing.T) {
@@ -167,25 +159,23 @@ func TestMultipleNamespacesMerge(t *testing.T) {
 		},
 	}
 
-	parentDescriptors := make(map[string]ResourceDescriptorTreeNode)
+	hierarchy := make(map[string]*hierarchyNode)
 
-	awsDescriptors := constructParentResourceDescriptors(awsResources)
-	maps.Copy(parentDescriptors, awsDescriptors)
+	awsHierarchy := buildResourceHierarchy(awsResources)
+	maps.Copy(hierarchy, awsHierarchy)
 
-	ociDescriptors := constructParentResourceDescriptors(ociResources)
-	maps.Copy(parentDescriptors, ociDescriptors)
+	ociHierarchy := buildResourceHierarchy(ociResources)
+	maps.Copy(hierarchy, ociHierarchy)
 
-	// After processing both namespaces, we should have descriptors from both
-	assert.Len(t, parentDescriptors, 4, "Should have descriptors from both AWS and OCI namespaces")
-	assert.Contains(t, parentDescriptors, "AWS::EC2::VPC")
-	assert.Contains(t, parentDescriptors, "AWS::EC2::Subnet")
-	assert.Contains(t, parentDescriptors, "OCI::VCN::VCN")
-	assert.Contains(t, parentDescriptors, "OCI::VCN::Subnet")
+	assert.Len(t, hierarchy, 4, "Should have descriptors from both AWS and OCI namespaces")
+	assert.Contains(t, hierarchy, "AWS::EC2::VPC")
+	assert.Contains(t, hierarchy, "AWS::EC2::Subnet")
+	assert.Contains(t, hierarchy, "OCI::VCN::VCN")
+	assert.Contains(t, hierarchy, "OCI::VCN::Subnet")
 
-	// Ensure parent-child relationships preserved
-	awsVpc := parentDescriptors["AWS::EC2::VPC"]
-	assert.Len(t, awsVpc.NestedResourcesWithMappingProperties, 1)
+	awsVpc := hierarchy["AWS::EC2::VPC"]
+	assert.Len(t, awsVpc.children, 1)
 
-	ociVcn := parentDescriptors["OCI::VCN::VCN"]
-	assert.Len(t, ociVcn.NestedResourcesWithMappingProperties, 1)
+	ociVcn := hierarchy["OCI::VCN::VCN"]
+	assert.Len(t, ociVcn.children, 1)
 }
