@@ -46,6 +46,8 @@ open class SubnetResolvable extends formae.Resolvable {
     type = module.type
     identifier = "SubnetId"
     tags = "Tags"
+    parent = "AWS::EC2::VPC"
+    listParam = new formae.ListProperty { parentProperty = "VpcId" listParameter = "VpcId" }
 }
 open class Subnet extends formae.Resource {
 
