@@ -63,7 +63,7 @@ func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 		{
 			Type: "FakeAWS::EC2::VPCCidrBlock",
 			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
-				"FakeAWS::EC2::VPC": {{ParentProperty: "Id", ListProperty: "VpcId", QueryPath: "$.Id"}},
+				"FakeAWS::EC2::VPC": {{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
 			},
 			Discoverable: true,
 		},
@@ -79,32 +79,52 @@ func (s FakeAWS) MaxRequestsPerSecond() int {
 }
 
 func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error) {
-	return model.Schema{
-		Identifier: "BucketName",
-		Tags:       "Tags",
-		Fields: []string{
-			"AccelerateConfiguration",
-			"AccessControl",
-			"AnalyticsConfigurations",
-			"BucketEncryption",
-			"BucketName",
-			"CorsConfiguration",
-			"IntelligentTieringConfigurations",
-			"InventoryConfigurations",
-			"LifecycleConfiguration",
-			"LoggingConfiguration",
-			"MetricsConfigurations",
-			"NotificationConfiguration",
-			"ObjectLockEnabled",
-			"ObjectLockConfiguration",
-			"OwnershipControls",
-			"PublicAccessBlockConfiguration",
-			"ReplicationConfiguration",
-			"Tags",
-			"VersioningConfiguration",
-			"WebsiteConfiguration"},
-		Nonprovisionable: false,
-	}, nil
+	switch resourceType {
+	case "FakeAWS::EC2::VPCCidrBlock":
+		return model.Schema{
+			Identifier: "Id",
+			Tags:       "Tags",
+			Fields: []string{
+				"AmazonProvidedIpv6CidrBlock",
+				"CidrBlock",
+				"Ipv4IpamPoolId",
+				"Ipv4NetmaskLength",
+				"Ipv6CidrBlock",
+				"Ipv6CidrBlockNetworkBorderGroup",
+				"Ipv6IpamPoolId",
+				"Ipv6NetmaskLength",
+				"Ipv6Pool",
+				"VpcId"},
+			Nonprovisionable: false,
+		}, nil
+	default:
+		return model.Schema{
+			Identifier: "BucketName",
+			Tags:       "Tags",
+			Fields: []string{
+				"AccelerateConfiguration",
+				"AccessControl",
+				"AnalyticsConfigurations",
+				"BucketEncryption",
+				"BucketName",
+				"CorsConfiguration",
+				"IntelligentTieringConfigurations",
+				"InventoryConfigurations",
+				"LifecycleConfiguration",
+				"LoggingConfiguration",
+				"MetricsConfigurations",
+				"NotificationConfiguration",
+				"ObjectLockEnabled",
+				"ObjectLockConfiguration",
+				"OwnershipControls",
+				"PublicAccessBlockConfiguration",
+				"ReplicationConfiguration",
+				"Tags",
+				"VersioningConfiguration",
+				"WebsiteConfiguration"},
+			Nonprovisionable: false,
+		}, nil
+	}
 }
 
 func (s FakeAWS) Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {

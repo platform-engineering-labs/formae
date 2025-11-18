@@ -703,6 +703,9 @@ const docTemplate = `{
                 "discoverable": {
                     "type": "boolean"
                 },
+                "extractable": {
+                    "type": "boolean"
+                },
                 "fields": {
                     "type": "array",
                     "items": {
