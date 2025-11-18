@@ -5,53 +5,39 @@
 package util
 
 import (
-	"sort"
-	"strings"
+	"encoding/json"
 )
 
-// mapToString converts a map[string]string to a consistent string representation.
-// It sorts the map keys to ensure the output string is always the same for the
-// same input map, which is crucial for a reliable conversion back to a map.
-// The format is "key1:value1,key2:value2,...".
-func MapToString(m map[string]string) string {
+// MapToString converts a map[string]T to a JSON string representation.
+// It uses JSON encoding to ensure the output is consistent and can handle
+// arbitrary types. The map is serialized to a JSON object string.
+func MapToString[T any](m map[string]T) string {
 	if len(m) == 0 {
 		return ""
 	}
 
-	// Get all keys and sort them. This guarantees a consistent order.
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var sb strings.Builder
-	for i, k := range keys {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString(k)
-		sb.WriteString(":")
-		sb.WriteString(m[k])
+	// Marshal to JSON
+	data, err := json.Marshal(m)
+	if err != nil {
+		// This shouldn't happen with maps, but handle it gracefully
+		return ""
 	}
 
-	return sb.String()
+	return string(data)
 }
 
-// stringToMap converts a string formatted by mapToString back into a
-// map[string]string. It returns an error if the string format is invalid.
-func StringToMap(s string) map[string]string {
+// StringToMap converts a JSON string back into a map[string]T.
+// It uses JSON decoding to handle arbitrary types.
+func StringToMap[T any](s string) map[string]T {
 	if len(s) == 0 {
-		return make(map[string]string)
+		return make(map[string]T)
 	}
 
-	result := make(map[string]string)
-
-	for pair := range strings.SplitSeq(s, ",") {
-		parts := strings.SplitN(pair, ":", 2)
-		key := parts[0]
-		value := parts[1]
-		result[key] = value
+	result := make(map[string]T)
+	err := json.Unmarshal([]byte(s), &result)
+	if err != nil {
+		// Return empty map on error
+		return make(map[string]T)
 	}
 
 	return result

@@ -6,9 +6,6 @@ package metastructure
 
 import (
 	"ergo.services/ergo/gen"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 )
 
 func CreateApplication() gen.ApplicationBehavior {
@@ -25,24 +22,8 @@ func (app *Application) Load(node gen.Node, args ...any) (gen.ApplicationSpec, e
 		Mode:        gen.ApplicationModePermanent,
 		Group: []gen.ApplicationMemberSpec{
 			{
-				Name:    "MetastructureBridge",
-				Factory: NewMetastructureBridge,
-			},
-			{
-				Name:    "PluginOperatorSupervisor",
-				Factory: plugin_operation.NewPluginOperatorSupervisor,
-			},
-			{
-				Name:    "ResourceUpdaterSupervisor",
-				Factory: resource_update.NewResourceUpdaterSupervisor,
-			},
-			{
-				Name:    "ChangesetSupervisor",
-				Factory: changeset.NewChangesetSupervisor,
-			},
-			{
 				Name:    "Supervisor",
-				Factory: factory_Supervisor,
+				Factory: newSupervisor,
 			},
 		},
 	}, nil

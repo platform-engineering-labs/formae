@@ -177,6 +177,8 @@ definitions:
     properties:
       discoverable:
         type: boolean
+      extractable:
+        type: boolean
       fields:
         items:
           type: string
