@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package azure
+package main
 
 import (
 	"context"
@@ -19,6 +19,8 @@ import (
 	// Import resources to trigger init() registration
 	_ "github.com/platform-engineering-labs/formae/plugins/azure/pkg/resources"
 )
+
+var Version = "0.0.0"
 
 type Azure struct{}
 
