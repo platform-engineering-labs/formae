@@ -54,6 +54,7 @@ var ResourceGroupSchema = model.Schema{
 		},
 	},
 	Discoverable: true,
+	Extractable:  false, // TODO: Implement extract support later
 }
 
 func init() {

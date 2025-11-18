@@ -1,0 +1,6 @@
+amends "pkl:Project"
+
+dependencies {
+  ["formae"] = import("../../pkl/schema/PklProject")
+  ["azure"] = import("../schema/pkl/PklProject")
+}
