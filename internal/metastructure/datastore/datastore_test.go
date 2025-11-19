@@ -968,24 +968,85 @@ func TestDatastore_LoadResourceByNativeID(t *testing.T) {
 		_, err := datastore.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
-		loadedResource, err := datastore.LoadResourceByNativeID("native-123")
+		loadedResource, err := datastore.LoadResourceByNativeID("native-123", "type-1")
 		assert.NoError(t, err)
 		assert.NotNil(t, loadedResource)
 		assert.Equal(t, resource.NativeID, loadedResource.NativeID)
 		assert.Equal(t, resource.Stack, loadedResource.Stack)
 		assert.Equal(t, resource.Type, loadedResource.Type)
 
-		// Negative test
-		nonExistentResource, err := datastore.LoadResourceByNativeID("non-existent")
+		// Negative test - wrong type
+		nonExistentResource, err := datastore.LoadResourceByNativeID("native-123", "wrong-type")
 		assert.NoError(t, err)
 		assert.Nil(t, nonExistentResource)
+
+		// Negative test - non-existent native ID
+		nonExistentResource2, err := datastore.LoadResourceByNativeID("non-existent", "type-1")
+		assert.NoError(t, err)
+		assert.Nil(t, nonExistentResource2)
 
 		_, err = datastore.DeleteResource(resource, "test-delete-command")
 		assert.NoError(t, err)
 
-		deletedResource, err := datastore.LoadResourceByNativeID("native-123")
+		deletedResource, err := datastore.LoadResourceByNativeID("native-123", "type-1")
 		assert.NoError(t, err)
 		assert.Nil(t, deletedResource, "Deleted resource should not be found")
+	} else {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+}
+
+// TestDatastore_LoadResourceByNativeID_DifferentTypes verifies that resources
+// with the same native ID but different types are properly distinguished
+func TestDatastore_LoadResourceByNativeID_DifferentTypes(t *testing.T) {
+	if datastore, err := prepareDatastore(); err == nil {
+		defer datastore.CleanUp()
+
+		// Store two resources with same native ID but different types
+		resource1 := &pkgmodel.Resource{
+			NativeID: "shared-id-123",
+			Type:     "AWS::S3::Bucket",
+			Stack:    "stack-1",
+			Label:    "bucket-1",
+			Properties: json.RawMessage(`{
+				"BucketName": "my-bucket"
+			}`),
+			Managed: false,
+		}
+		resource2 := &pkgmodel.Resource{
+			NativeID: "shared-id-123",
+			Type:     "AWS::IAM::Role",
+			Stack:    "stack-1",
+			Label:    "role-1",
+			Properties: json.RawMessage(`{
+				"RoleName": "my-role"
+			}`),
+			Managed: false,
+		}
+
+		_, err := datastore.StoreResource(resource1, "cmd-1")
+		assert.NoError(t, err)
+		_, err = datastore.StoreResource(resource2, "cmd-2")
+		assert.NoError(t, err)
+
+		// Should return bucket when querying for bucket type
+		loaded1, err := datastore.LoadResourceByNativeID("shared-id-123", "AWS::S3::Bucket")
+		assert.NoError(t, err)
+		assert.NotNil(t, loaded1, "Bucket should be found")
+		assert.Equal(t, "AWS::S3::Bucket", loaded1.Type)
+		assert.Equal(t, "bucket-1", loaded1.Label)
+
+		// Should return role when querying for role type
+		loaded2, err := datastore.LoadResourceByNativeID("shared-id-123", "AWS::IAM::Role")
+		assert.NoError(t, err)
+		assert.NotNil(t, loaded2, "Role should be found")
+		assert.Equal(t, "AWS::IAM::Role", loaded2.Type)
+		assert.Equal(t, "role-1", loaded2.Label)
+
+		// Should return nil for wrong type
+		loaded3, err := datastore.LoadResourceByNativeID("shared-id-123", "AWS::EC2::Instance")
+		assert.NoError(t, err)
+		assert.Nil(t, loaded3, "Non-existent type should return nil")
 	} else {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
@@ -1032,15 +1093,15 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Get the actual KSUIDs from the stored resources by querying them back
-		storedResource1, err := datastore.LoadResourceByNativeID("bucket-1")
+		storedResource1, err := datastore.LoadResourceByNativeID("bucket-1", "AWS::S3::Bucket")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource1)
 
-		storedResource2, err := datastore.LoadResourceByNativeID("vpc-1")
+		storedResource2, err := datastore.LoadResourceByNativeID("vpc-1", "AWS::EC2::VPC")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource2)
 
-		storedResource3, err := datastore.LoadResourceByNativeID("role-1")
+		storedResource3, err := datastore.LoadResourceByNativeID("role-1", "AWS::IAM::Role")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource3)
 
@@ -1124,7 +1185,7 @@ func TestDatastore_BatchGetKSUIDsByTriplets_PatchScenario(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Get the stored resource to see what KSUID it got
-		storedResource, err := datastore.LoadResourceByNativeID("bucket-123")
+		storedResource, err := datastore.LoadResourceByNativeID("bucket-123", "FakeAWS::S3::Bucket")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource)
 		assert.NotEmpty(t, storedResource.Ksuid)
