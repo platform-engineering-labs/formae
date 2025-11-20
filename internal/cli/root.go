@@ -60,7 +60,7 @@ func init() {
 		Hidden: true,
 	})
 
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	rootCmd.CompletionOptions.DisableDefaultCmd = false
 
 	cobra.AddTemplateFunc("typeMap", func(cmds []*cobra.Command) map[string][]*cobra.Command {
 		m := make(map[string][]*cobra.Command)

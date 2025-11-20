@@ -101,3 +101,7 @@ fi
 echo "Done."
 echo ""
 echo "IMPORTANT: ensure you add /opt/pel/formae/bin to your PATH, and reload your shell configuration"
+echo "Optional bash completion:"
+echo "  formae completion bash > formae-cli-completion.bash"
+echo "  mkdir -p ~/.local/share/bash-completion/completions"
+echo "  cp formae-cli-completion.bash ~/.local/share/bash-completion/completions/formae"
