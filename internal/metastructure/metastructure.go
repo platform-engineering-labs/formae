@@ -92,7 +92,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.Cfg = cfg
 	metastructure.PluginManager = pluginManager
 
-	err := initDelegateMessageTypes()
+	err := registerEDFTypes()
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,11 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("AgentID"):               agentID,
 	}
 
-	metastructure.options.Network.Mode = gen.NetworkModeDisabled
+	// Enable Ergo networking for distributed plugin architecture
+	metastructure.options.Network.Mode = gen.NetworkModeEnabled
+
+	// Enable environment sharing for RemoteSpawn (plugins inherit config)
+	metastructure.options.Security.ExposeEnvRemoteSpawn = true
 
 	//FIXME(discount-elf): enable real TLS if we want it
 	//cert, _ := lib.GenerateSelfSignedCert("formae node")
