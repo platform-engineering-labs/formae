@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -47,10 +48,15 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 		"Json": string(input),
 	}
 
+	generatorURL, err := url.Parse("file://" + generatorDir)
+	if err != nil {
+		return "", fmt.Errorf("error parsing generator directory path: %w", err)
+	}
+
 	// Use the local generator directory directly with ProjectEvaluator
 	evaluator, err := pkl.NewProjectEvaluator(
 		context.Background(),
-		generatorDir,
+		generatorURL,
 		pkl.PreconfiguredOptions,
 		pkl.WithResourceReader(libExtension{}),
 		func(opts *pkl.EvaluatorOptions) {
