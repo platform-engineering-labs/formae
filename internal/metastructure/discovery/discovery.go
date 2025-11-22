@@ -17,6 +17,7 @@ import (
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -741,6 +742,37 @@ func injectResolvables(props string, op ListOperation) json.RawMessage {
 
 	params := util.StringToMap[plugin_operation.ListParam](op.ListParams)
 	for _, v := range params {
+		// Check if there's an existing value and validate it matches the parent's expected value
+		// This prevents incorrect parent associations when resources are discovered via multiple paths
+		existingProp := gjson.Get(props, v.ListParam)
+		if existingProp.Exists() {
+			// If it's already a reference object, check if the $value matches
+			if existingProp.IsObject() && existingProp.Get("$ref").Exists() {
+				existingValue := existingProp.Get("$value").String()
+				if existingValue != v.ListValue {
+					slog.Debug("Skipping parent reference injection - existing ref has different value",
+						"field", v.ListParam,
+						"existingValue", existingValue,
+						"expectedValue", v.ListValue,
+						"parentKSUID", op.ParentKSUID)
+					continue
+				}
+				// Value matches, but already has a reference - skip to avoid overwriting
+				continue
+			}
+
+			// If it's a plain string value, validate it matches before converting to reference
+			if existingValue := existingProp.String(); existingValue != v.ListValue {
+				slog.Debug("Skipping parent reference injection - value mismatch",
+					"field", v.ListParam,
+					"existingValue", existingValue,
+					"expectedValue", v.ListValue,
+					"parentKSUID", op.ParentKSUID)
+				continue
+			}
+		}
+
+		// Either no existing value, or it matches the expected value - inject the reference
 		prop := struct {
 			Ref   string `json:"$ref"`
 			Value string `json:"$value"`
