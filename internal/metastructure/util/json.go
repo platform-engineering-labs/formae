@@ -134,3 +134,34 @@ func deepEqualIgnoreArrayOrder(a, b any) bool {
 		return reflect.DeepEqual(a, b)
 	}
 }
+
+// MergeJSON merges multiple JSON objects into a single JSON object.
+// Later objects in the list override earlier ones if there are key conflicts.
+// Returns an error if any of the JSON objects cannot be unmarshaled or if the result cannot be marshaled.
+func MergeJSON(jsons ...json.RawMessage) (json.RawMessage, error) {
+	merged := make(map[string]any)
+
+	for _, j := range jsons {
+		// Skip nil or empty JSON
+		if len(j) == 0 || string(j) == "null" {
+			continue
+		}
+
+		var obj map[string]any
+		if err := json.Unmarshal(j, &obj); err != nil {
+			return nil, err
+		}
+
+		// Merge into the result
+		for k, v := range obj {
+			merged[k] = v
+		}
+	}
+
+	result, err := json.Marshal(merged)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
