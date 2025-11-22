@@ -458,17 +458,39 @@ func generateResourceUpdatesForReconcile(
 			}
 
 			if !found {
-				// New resource that doesn't exist in the stack, so it will be created
-				resourceCreate, err := NewResourceUpdateForCreate(
-					newResource,
-					*targetMap[newResource.Target],
-					source,
-				)
-				if err != nil {
-					return nil, err
-				}
+				// Check if this resource exists in $unmanaged (stack transition case)
+				if existingUnmanaged, ok := findUnmanagedResource(newResource, allExistingStacks); ok {
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allExistingStacks)
+					if err != nil {
+						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
+					}
 
-				resourceCreates = append(resourceCreates, resourceCreate)
+					resourceUpdate, err := NewResourceUpdateForExisting(
+						readOnlyProperties,
+						existingUnmanaged,
+						newResource,
+						*targetMap[existingUnmanaged.Target],
+						*targetMap[newResource.Target],
+						mode,
+						source,
+					)
+					if err != nil {
+						return nil, fmt.Errorf("failed to generate resource update for existing unmanaged resource: %w", err)
+					}
+					resourceUpdates = append(resourceUpdates, resourceUpdate...)
+				} else {
+					// New resource that doesn't exist in the stack or $unmanaged, so it will be created
+					resourceCreate, err := NewResourceUpdateForCreate(
+						newResource,
+						*targetMap[newResource.Target],
+						source,
+					)
+					if err != nil {
+						return nil, err
+					}
+
+					resourceCreates = append(resourceCreates, resourceCreate)
+				}
 			}
 		}
 	}
@@ -885,9 +907,28 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 	for i, idx := range needsLookupIndices {
 		triplet := tripletsToLookup[i]
 		if existingKSUID, ok := ksuidMap[triplet]; ok {
+			// Found by triplet in the target stack
 			resources[idx].Ksuid = existingKSUID
 		} else {
-			resources[idx].Ksuid = util.NewID()
+			// Not found in target stack - check if it exists in $unmanaged
+			// This handles the case where we're bringing unmanaged resources under management
+			unmanagedKSUID, err := ds.GetKSUIDByTriplet(
+				constants.UnmanagedStack,
+				triplet.Label,
+				triplet.Type,
+			)
+			if err == nil && unmanagedKSUID != "" {
+				// Found in $unmanaged - preserve that KSUID
+				slog.Debug("Preserving KSUID from $unmanaged stack",
+					"label", triplet.Label,
+					"type", triplet.Type,
+					"ksuid", unmanagedKSUID)
+				resources[idx].Ksuid = unmanagedKSUID
+				ksuidToLabel[unmanagedKSUID] = triplet.Label
+			} else {
+				// Truly doesn't exist! Generate new KSUID
+				resources[idx].Ksuid = util.NewID()
+			}
 		}
 	}
 
