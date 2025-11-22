@@ -38,40 +38,48 @@ func NewResourceUpdateForExisting(
 		return nil, fmt.Errorf("resource labels don't match: %s vs %s", existingResource.Label, newResource.Label)
 	}
 
+	stackChanged := existingResource.Stack != newResource.Stack
+
 	hasChanges, filteredProps, err := EnforceSetOnceAndCompareResourceForUpdate(&existingResource, &newResource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
-	if !hasChanges {
+	if !hasChanges && !stackChanged {
 		return []ResourceUpdate{}, nil
 	}
 
-	existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
-	}
+	var patchDocument json.RawMessage
+	var needsReplacement bool
 
-	newPluginProps, err := resolver.ConvertToPluginFormat(filteredProps)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
-	}
+	if hasChanges {
+		existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
+		}
 
-	// Generate patch document
-	patchDocument, needsReplacement, err := patch.GeneratePatch(
-		existingPluginProps,
-		newPluginProps,
-		resolvableProperties,
-		existingResource.Schema.Fields,
-		existingResource.Schema.CreateOnly(),
-		mode,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
-	}
+		newPluginProps, err := resolver.ConvertToPluginFormat(filteredProps)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
+		}
 
-	if patchDocument == nil {
-		// No changes needed
-		return []ResourceUpdate{}, nil
+		patchDocument, needsReplacement, err = patch.GeneratePatch(
+			existingPluginProps,
+			newPluginProps,
+			resolvableProperties,
+			existingResource.Schema.Fields,
+			existingResource.Schema.CreateOnly(),
+			mode,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
+		}
+
+		if patchDocument == nil && !stackChanged {
+			return []ResourceUpdate{}, nil
+		}
+	} else {
+		patchDocument = json.RawMessage(`[]`)
+		filteredProps = existingResource.Properties
 	}
 
 	if needsReplacement {
@@ -95,16 +103,17 @@ func NewResourceUpdateForExisting(
 		ExistingResource: existingResource,
 		ExistingTarget:   existingTarget,
 		Resource: pkgmodel.Resource{
-			Label:         newResource.Label,
-			Type:          newResource.Type,
-			Stack:         newResource.Stack,
-			Schema:        newResource.Schema,
-			Properties:    filteredProps,
-			PatchDocument: patchDocument,
-			Target:        newResource.Target,
-			NativeID:      existingResource.NativeID, // Ensure existing NativeID is set for updates
-			Managed:       newResource.Managed,
-			Ksuid:         newResource.Ksuid,
+			Label:              newResource.Label,
+			Type:               newResource.Type,
+			Stack:              newResource.Stack,
+			Schema:             newResource.Schema,
+			Properties:         filteredProps,
+			PatchDocument:      patchDocument,
+			Target:             newResource.Target,
+			NativeID:           existingResource.NativeID,
+			ReadOnlyProperties: existingResource.ReadOnlyProperties,
+			Managed:            newResource.Managed,
+			Ksuid:              newResource.Ksuid,
 		},
 		ResourceTarget:       newTarget,
 		Operation:            OperationUpdate,
