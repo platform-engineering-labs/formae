@@ -23,20 +23,12 @@ import (
 )
 
 func RenderSimulation(s *apimodel.Simulation) (string, error) {
-	buf := strings.Builder{}
 	renderHeader := func(cmd apimodel.Command) string { return "Command will" }
-
 	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate)
 	if err != nil {
 		return "", err
 	}
-	root := gtree.NewRoot(command)
-
-	if err := gtree.OutputFromRoot(&buf, root); err != nil {
-		return "", err
-	}
-
-	return buf.String(), nil
+	return command, nil
 }
 
 func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, error) {
