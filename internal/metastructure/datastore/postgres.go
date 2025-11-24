@@ -1303,7 +1303,7 @@ func (d DatastorePostgres) storeResource(resource *pkgmodel.Resource, data []byt
 	// for any resources that may have already created references to it.
 	if !managed && operation != string(resource_update.OperationDelete) {
 		// Preserve the discovered KSUID instead of generating a new one
-		slog.Info("Resource discovered before apply completed, adopting discovered KSUID",
+		slog.Debug("Resource discovered before apply completed, adopting discovered KSUID",
 			"native_id", resource.NativeID,
 			"type", resource.Type,
 			"discovered_ksuid", ksuid,

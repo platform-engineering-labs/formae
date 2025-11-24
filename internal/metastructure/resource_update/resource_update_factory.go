@@ -38,6 +38,9 @@ func NewResourceUpdateForExisting(
 		return nil, fmt.Errorf("resource labels don't match: %s vs %s", existingResource.Label, newResource.Label)
 	}
 
+	// Check if we're bringing an unmanaged resource under management
+	// This check needs to happen before hasChanges, because for tag-less resources
+	// the properties might be identical
 	stackChanged := existingResource.Stack != newResource.Stack
 
 	hasChanges, filteredProps, err := EnforceSetOnceAndCompareResourceForUpdate(&existingResource, &newResource)
