@@ -26,6 +26,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -98,6 +99,10 @@ type DiscoveryData struct {
 	recentlyDiscoveredResourceIDs map[string]struct{}
 	timeStarted                   time.Time
 	summary                       map[string]int
+	// pauseCount tracks the number of active pause requests. When > 0, Discovery
+	// will not start new list operations, but will allow outstanding operations
+	// to complete. Uses reference counting to support multiple concurrent pausers.
+	pauseCount int
 }
 
 func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
@@ -173,6 +178,12 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		statemachine.WithStateMessageHandler(StateDiscovering, resumeScanning),
 		statemachine.WithStateMessageHandler(StateDiscovering, processListing),
 		statemachine.WithStateMessageHandler(StateDiscovering, syncCompleted),
+
+		// Handle pause/resume in both states to allow pausing at any time
+		statemachine.WithStateCallHandler(StateIdle, pauseDiscovery),
+		statemachine.WithStateCallHandler(StateDiscovering, pauseDiscovery),
+		statemachine.WithStateMessageHandler(StateIdle, resumeDiscovery),
+		statemachine.WithStateMessageHandler(StateDiscovering, resumeDiscovery),
 	)
 
 	if discoveryCfg.Enabled {
@@ -197,6 +208,30 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, pro
 		}
 	}
 	return newState, data, nil
+}
+
+func pauseDiscovery(state gen.Atom, data DiscoveryData, message messages.PauseDiscovery, proc gen.Process) (gen.Atom, DiscoveryData, messages.PauseDiscoveryResponse, []statemachine.Action, error) {
+	data.pauseCount++
+	proc.Log().Debug("Discovery paused", "pauseCount", data.pauseCount, "outstandingListOps", len(data.outstandingListOperations), "outstandingSyncCmds", len(data.outstandingSyncCommands))
+	return state, data, messages.PauseDiscoveryResponse{}, nil, nil
+}
+
+func resumeDiscovery(state gen.Atom, data DiscoveryData, message messages.ResumeDiscovery, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+	if data.pauseCount > 0 {
+		data.pauseCount--
+	}
+	proc.Log().Debug("Discovery resume requested", "pauseCount", data.pauseCount)
+
+	// If we're no longer paused and have queued operations, resume scanning
+	if data.pauseCount == 0 && len(data.queuedListOperations) > 0 {
+		err := proc.Send(proc.PID(), ResumeScanning{})
+		if err != nil {
+			proc.Log().Error("Failed to send ResumeScanning after unpause", "error", err)
+			return state, data, nil, gen.TerminateReasonPanic
+		}
+	}
+
+	return state, data, nil, nil
 }
 
 func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
@@ -274,6 +309,12 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 }
 
 func resumeScanning(state gen.Atom, data DiscoveryData, message ResumeScanning, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+	// Don't start new list operations if Discovery is paused
+	if data.pauseCount > 0 {
+		proc.Log().Debug("Discovery is paused, skipping resumeScanning", "pauseCount", data.pauseCount)
+		return state, data, nil, nil
+	}
+
 	finished := make(map[string]bool)
 
 	// Do as much work as the rate limiter allows for each namespace

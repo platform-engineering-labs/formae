@@ -82,8 +82,9 @@ const (
 )
 
 type ChangesetData struct {
-	changeset   Changeset
-	requestedBy gen.PID
+	changeset       Changeset
+	requestedBy     gen.PID
+	discoveryPaused bool // Tracks if this changeset paused Discovery
 }
 
 type RegisterEvents struct{}
@@ -119,6 +120,17 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
 	// Only shutdown when we reach a final state (not Canceling)
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateCanceled {
+		// Resume Discovery if we paused it
+		if data.discoveryPaused {
+			discoveryPID := gen.ProcessID{Name: actornames.Discovery, Node: proc.Node().Name()}
+			err := proc.Send(discoveryPID, messages.ResumeDiscovery{})
+			if err != nil {
+				proc.Log().Error("Failed to resume Discovery", "error", err, "commandID", data.changeset.CommandID)
+			} else {
+				proc.Log().Debug("Resumed Discovery after user changeset completed", "commandID", data.changeset.CommandID)
+			}
+		}
+
 		// Shutdown resolve cache
 		err := proc.Send(
 			gen.ProcessID{Node: proc.Node().Name(), Name: actornames.ResolveCache(data.changeset.CommandID)},
@@ -177,6 +189,20 @@ func start(state gen.Atom, data ChangesetData, message Start, proc gen.Process) 
 	if data.changeset.IsComplete() {
 		proc.Log().Error("No resource updates were found for commandID %s", data.changeset.CommandID)
 		return StateFinishedWithError, data, nil, nil
+	}
+
+	// Pause Discovery for user operations to prevent race conditions where Discovery
+	// might list resources that are being created/modified by this changeset
+	if changesetHasUserUpdates(data.changeset) {
+		discoveryPID := gen.ProcessID{Name: actornames.Discovery, Node: proc.Node().Name()}
+		_, err := proc.Call(discoveryPID, messages.PauseDiscovery{})
+		if err != nil {
+			proc.Log().Error("Failed to pause Discovery", "error", err, "commandID", data.changeset.CommandID)
+			// Don't fail the operation - this is not critical enough to fail the user's operation
+		} else {
+			data.discoveryPaused = true
+			proc.Log().Debug("Paused Discovery for user changeset", "commandID", data.changeset.CommandID)
+		}
 	}
 
 	return resume(state, data, Resume{}, proc)
@@ -467,4 +493,17 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 
 func shutdown(state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
+}
+
+// changesetHasUserUpdates checks if the changeset contains any updates from user operations.
+// Returns true if at least one update has Source == FormaCommandSourceUser.
+func changesetHasUserUpdates(changeset Changeset) bool {
+	for _, group := range changeset.Pipeline.ResourceUpdateGroups {
+		for _, update := range group.Updates {
+			if update.Source == resource_update.FormaCommandSourceUser {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -10,9 +10,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_persister"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 )
 
 func newSupervisor() gen.ProcessBehavior {
@@ -45,18 +43,6 @@ func (sup *Supervisor) Init(args ...any) (act.SupervisorSpec, error) {
 		{
 			Name:    "MetastructureBridge",
 			Factory: NewMetastructureBridge,
-		},
-		{
-			Name:    "PluginOperatorSupervisor",
-			Factory: plugin_operation.NewPluginOperatorSupervisor,
-		},
-		{
-			Name:    "ResourceUpdaterSupervisor",
-			Factory: resource_update.NewResourceUpdaterSupervisor,
-		},
-		{
-			Name:    "ChangesetSupervisor",
-			Factory: changeset.NewChangesetSupervisor,
 		},
 		{
 			Name:    "Synchronizer",
