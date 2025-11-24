@@ -11,6 +11,7 @@ import (
 	"reflect"
 
 	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -38,11 +39,17 @@ func NewResourceUpdateForExisting(
 		return nil, fmt.Errorf("resource labels don't match: %s vs %s", existingResource.Label, newResource.Label)
 	}
 
+	// Check if we're bringing an unmanaged resource under management
+	// This check needs to happen before hasChanges, because for tag-less resources
+	// the properties might be identical
+	isBringingUnderManagement := existingResource.Stack == constants.UnmanagedStack &&
+		newResource.Stack != constants.UnmanagedStack
+
 	hasChanges, filteredProps, err := EnforceSetOnceAndCompareResourceForUpdate(&existingResource, &newResource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
-	if !hasChanges {
+	if !hasChanges && !isBringingUnderManagement {
 		return []ResourceUpdate{}, nil
 	}
 
@@ -70,8 +77,23 @@ func NewResourceUpdateForExisting(
 	}
 
 	if patchDocument == nil {
-		// No changes needed
-		return []ResourceUpdate{}, nil
+		// Special case: bringing tag-less resources under management
+		// For resources that don't support tags (e.g., AWS::EC2::VPCGatewayAttachment),
+		// the patch will be empty even though we need to mark the resource as managed
+		// and move it to a new stack.
+		if isBringingUnderManagement {
+			slog.Debug("Bringing unmanaged resource under management with no property changes",
+				"resource", existingResource.Label,
+				"type", existingResource.Type,
+				"oldStack", existingResource.Stack,
+				"newStack", newResource.Stack)
+			// Continue with the update - we'll create an empty patch document
+			// The resource updater will handle this specially to avoid calling the plugin
+			patchDocument = json.RawMessage("[]")
+		} else {
+			// No changes needed
+			return []ResourceUpdate{}, nil
+		}
 	}
 
 	if needsReplacement {

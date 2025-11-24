@@ -195,7 +195,7 @@ func TestFormatPatchDocument_TagsPropertyCreated_ReplacesAddOpsForFormaeTagsWith
 	assert.NoError(t, err)
 
 	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "$unmanaged")
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
@@ -227,7 +227,7 @@ func TestFormatPatchDocument_ElementsAddedToTagProperty_ReplacesAddOpsForFormaeT
 	assert.NoError(t, err)
 
 	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "$unmanaged")
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
@@ -254,7 +254,7 @@ func TestFormatPatchDocument_TagsPropertyCreatedWithMixedTags_ShowsBothFormaeMes
 	assert.NoError(t, err)
 
 	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "$unmanaged")
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
@@ -307,7 +307,7 @@ func TestFormatPatchDocument_TagsPropertyCreatedWithOnlyCustomTags_ShowsOnlyCust
 	assert.NoError(t, err)
 
 	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "")
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
@@ -383,7 +383,7 @@ func TestFormatPatchDocument_WithReferences(t *testing.T) {
 			"ksuid-vpc-123": "my-vpc",
 		}
 
-		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
+		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "")
 
 		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 		assert.NoError(t, err)
@@ -408,13 +408,46 @@ func TestFormatPatchDocument_WithReferences(t *testing.T) {
 
 		refLabels := map[string]string{}
 
-		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
+		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "")
 
 		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 		assert.NoError(t, err)
 
 		assert.Len(t, nodes, 2)
 		assert.Contains(t, nodes[1].Name(), "ksuid-vpc-456.VpcId")
+	})
+}
+
+func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_ShowsManagementMessage(t *testing.T) {
+	t.Run("empty patch document with $unmanaged oldStackName shows management message", func(t *testing.T) {
+		node := gtree.NewRoot("")
+		emptyPatchDoc := json.RawMessage("[]")
+		properties := json.RawMessage("{}")
+		refLabels := map[string]string{}
+
+		FormatPatchDocument(node, emptyPatchDoc, properties, json.RawMessage("{}"), refLabels, "$unmanaged")
+
+		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
+		assert.NoError(t, err)
+
+		// Should have root node + management message
+		assert.Len(t, nodes, 2)
+		assert.Contains(t, nodes[1].Name(), "put resource under management")
+	})
+
+	t.Run("empty patch document without $unmanaged oldStackName shows nothing", func(t *testing.T) {
+		node := gtree.NewRoot("")
+		emptyPatchDoc := json.RawMessage("[]")
+		properties := json.RawMessage("{}")
+		refLabels := map[string]string{}
+
+		FormatPatchDocument(node, emptyPatchDoc, properties, json.RawMessage("{}"), refLabels, "some-other-stack")
+
+		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
+		assert.NoError(t, err)
+
+		// Should only have root node, no management message
+		assert.Len(t, nodes, 1)
 	})
 }
 

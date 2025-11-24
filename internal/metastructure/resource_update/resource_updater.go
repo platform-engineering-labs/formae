@@ -12,6 +12,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
@@ -398,6 +399,50 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 }
 
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	// Special case: bringing tag-less resources under management without property changes
+	// For resources that don't support tags (e.g., AWS::EC2::VPCGatewayAttachment),
+	// we skip the plugin Update call since there are no actual changes to make in the cloud.
+	// Instead, we create a synthetic ProgressResult using the existing resource's properties.
+	hasEmptyPatch := data.resourceUpdate.Resource.PatchDocument == nil ||
+		string(data.resourceUpdate.Resource.PatchDocument) == "[]" ||
+		string(data.resourceUpdate.Resource.PatchDocument) == ""
+
+	isBringingUnderManagement := data.resourceUpdate.ExistingResource.Stack == constants.UnmanagedStack &&
+		data.resourceUpdate.Resource.Stack != constants.UnmanagedStack
+
+	if isBringingUnderManagement && hasEmptyPatch {
+		proc.Log().Debug("Bringing tag-less resource under management without property changes",
+			"resourceURI", data.resourceUpdate.Resource.URI(),
+			"oldStack", data.resourceUpdate.ExistingResource.Stack,
+			"newStack", data.resourceUpdate.Resource.Stack)
+
+		// Merge Properties and ReadOnlyProperties to get complete cloud state
+		completeProperties, err := util.MergeJSON(
+			data.resourceUpdate.ExistingResource.Properties,
+			data.resourceUpdate.ExistingResource.ReadOnlyProperties,
+		)
+		if err != nil {
+			proc.Log().Error("failed to merge properties for tag-less resource", "error", err)
+			data.resourceUpdate.MarkAsFailed()
+			return StateFinishedWithError, data, nil, nil
+		}
+
+		// Create synthetic ProgressResult with existing resource data
+		// No ConvertToPluginFormat needed - properties are already in plain JSON format
+		syntheticResult := resource.ProgressResult{
+			Operation:          resource.OperationUpdate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			StatusMessage:      "Brought under management without property changes (tag-less resource)",
+			NativeID:           data.resourceUpdate.ExistingResource.NativeID,
+			ResourceType:       data.resourceUpdate.Resource.Type,
+			ResourceProperties: completeProperties,
+			StartTs:            util.TimeNow(),
+			ModifiedTs:         util.TimeNow(),
+		}
+
+		return handleProgressUpdate(state, data, syntheticResult, proc)
+	}
+
 	updateOperation := plugin_operation.UpdateResource{
 		Namespace:        data.resourceUpdate.Resource.Namespace(),
 		NativeID:         data.resourceUpdate.Resource.NativeID,

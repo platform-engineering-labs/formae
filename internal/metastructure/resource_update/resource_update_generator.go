@@ -451,24 +451,58 @@ func generateResourceUpdatesForReconcile(
 				if newResource.Label == existingResource.Label &&
 					newResource.Type == existingResource.Type &&
 					newResource.Target == existingResource.Target &&
-					newResource.Stack == existingResource.Stack {
+					(newResource.Stack == existingResource.Stack || existingResource.Stack == constants.UnmanagedStack) {
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				// New resource that doesn't exist in the stack, so it will be created
-				resourceCreate, err := NewResourceUpdateForCreate(
-					newResource,
-					*targetMap[newResource.Target],
-					source,
-				)
-				if err != nil {
-					return nil, err
-				}
+				// Check if this resource exists as an unmanaged resource
+				if existingUnmanaged, ok := findUnmanagedResource(newResource, allExistingStacks); ok {
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allExistingStacks)
+					if err != nil {
+						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
+					}
 
-				resourceCreates = append(resourceCreates, resourceCreate)
+					resourceUpdate, err := NewResourceUpdateForExisting(
+						readOnlyProperties,
+						existingUnmanaged,
+						newResource,
+						*targetMap[existingUnmanaged.Target],
+						*targetMap[newResource.Target],
+						mode,
+						source,
+					)
+					if err != nil {
+						return nil, fmt.Errorf("failed to generate resource update for unmanaged resource: %w", err)
+					}
+
+					for _, update := range resourceUpdate {
+						switch update.Operation {
+						case OperationUpdate:
+							resourceUpdates = append(resourceUpdates, update)
+						case OperationDelete:
+							resourceReplaces = append(resourceReplaces, update)
+						case OperationCreate:
+							resourceReplaces = append(resourceReplaces, update)
+						default:
+							resourceReplaces = append(resourceReplaces, update)
+						}
+					}
+				} else {
+					// New resource that doesn't exist anywhere, so it will be created
+					resourceCreate, err := NewResourceUpdateForCreate(
+						newResource,
+						*targetMap[newResource.Target],
+						source,
+					)
+					if err != nil {
+						return nil, err
+					}
+
+					resourceCreates = append(resourceCreates, resourceCreate)
+				}
 			}
 		}
 	}

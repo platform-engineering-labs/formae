@@ -14,6 +14,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/constants"
 )
 
 type patchOperation struct {
@@ -41,23 +42,39 @@ type PropertyChange struct {
 }
 
 // FormatPatchDocument formats JSON Patch operations for cli display
-func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties json.RawMessage, previousProperties json.RawMessage, refLabels map[string]string) {
+func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties json.RawMessage, previousProperties json.RawMessage, refLabels map[string]string, oldStackName string) {
+	// Check if we're bringing a resource under management
+	// This needs to happen before early returns so it works for tag-less resources with empty patches
+	isBringingUnderManagement := oldStackName == constants.UnmanagedStack
+
 	patches := parsePatchOperations(patchDoc, node)
 	if patches == nil {
+		// Even with no patches, show the management message if applicable
+		if isBringingUnderManagement {
+			node.Add(display.LightBlue("put resource under management"))
+		}
 		return
 	}
 
 	props := parseProperties(properties, node)
 	if props == nil {
+		// Even with no properties, show the management message if applicable
+		if isBringingUnderManagement {
+			node.Add(display.LightBlue("put resource under management"))
+		}
 		return
 	}
 
-	patches, foundFormaeTagOperations := removeFormaeTagOperations(patches)
+	// Remove formae metadata tag operations from display
+	patches, _ = removeFormaeTagOperations(patches)
 
 	for _, patch := range patches {
 		formatSinglePatch(node, patch, props, previousProperties, refLabels)
 	}
-	if foundFormaeTagOperations {
+
+	// Use OldStackName to detect bringing under management instead of patch analysis
+	// This works for both taggable and tag-less resources
+	if isBringingUnderManagement {
 		node.Add(display.LightBlue("put resource under management"))
 	}
 }
