@@ -231,7 +231,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 			formaCommandPersisterProcess(proc),
 			messages.MarkResourceUpdateAsComplete{
 				CommandID:                  data.commandID,
-				ResourceURI:                data.resourceUpdate.Resource.URI(),
+				ResourceURI:                data.originalResourceKsuidURI,
 				FinalState:                 data.resourceUpdate.State,
 				ResourceStartTs:            data.resourceUpdate.StartTs,
 				ResourceModifiedTs:         data.resourceUpdate.ModifiedTs,
@@ -245,11 +245,11 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 		}
 
 		// Send a ResourceUpdateFinished message to the requester to inform it about the final state of the resource update.
-		proc.Log().Debug("ResourceUpdater: sending ResourceUpdateFinished message to requester", "state", newState, "uri", data.resourceUpdate.Resource.URI())
+		proc.Log().Debug("ResourceUpdater: sending ResourceUpdateFinished message to requester", "state", newState, "uri", data.originalResourceKsuidURI)
 		err = proc.Send(
 			data.requestedBy,
 			ResourceUpdateFinished{
-				Uri:   data.resourceUpdate.Resource.URI(),
+				Uri:   data.originalResourceKsuidURI,
 				State: data.resourceUpdate.State,
 			})
 		if err != nil {

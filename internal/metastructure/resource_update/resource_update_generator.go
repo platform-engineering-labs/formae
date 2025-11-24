@@ -350,7 +350,19 @@ func generateResourceUpdatesForReconcile(
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate resource update for existing unmanaged resource: %w", err)
 					}
-					resourceUpdates = append(resourceUpdates, resourceUpdate...)
+
+					for _, update := range resourceUpdate {
+						switch update.Operation {
+						case OperationUpdate:
+							resourceUpdates = append(resourceUpdates, update)
+						case OperationDelete:
+							resourceReplaces = append(resourceReplaces, update)
+						case OperationCreate:
+							resourceReplaces = append(resourceReplaces, update)
+						default:
+							resourceReplaces = append(resourceReplaces, update)
+						}
+					}
 				} else {
 					resourceCreate, err := NewResourceUpdateForCreate(
 						newResource,
@@ -919,9 +931,28 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 	for i, idx := range needsLookupIndices {
 		triplet := tripletsToLookup[i]
 		if existingKSUID, ok := ksuidMap[triplet]; ok {
+			// Found by triplet in the target stack
 			resources[idx].Ksuid = existingKSUID
 		} else {
-			resources[idx].Ksuid = util.NewID()
+			// Not found in target stack - check if it exists in $unmanaged
+			// This handles the case where we're bringing unmanaged resources under management
+			unmanagedKSUID, err := ds.GetKSUIDByTriplet(
+				constants.UnmanagedStack,
+				triplet.Label,
+				triplet.Type,
+			)
+			if err == nil && unmanagedKSUID != "" {
+				// Found in $unmanaged - preserve that KSUID
+				slog.Debug("Preserving KSUID from $unmanaged stack",
+					"label", triplet.Label,
+					"type", triplet.Type,
+					"ksuid", unmanagedKSUID)
+				resources[idx].Ksuid = unmanagedKSUID
+				ksuidToLabel[unmanagedKSUID] = triplet.Label
+			} else {
+				// Truly doesn't exist! Generate new KSUID
+				resources[idx].Ksuid = util.NewID()
+			}
 		}
 	}
 

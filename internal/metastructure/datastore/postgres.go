@@ -456,16 +456,20 @@ func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string
 	}
 
 	query := fmt.Sprintf(`
-	SELECT ksuid, stack, label, type
-	FROM resources r1
-	WHERE ksuid IN (%s)
-	AND NOT EXISTS (
-		SELECT 1
-		FROM resources r2
-		WHERE r1.ksuid = r2.ksuid
-		AND r2.version > r1.version
+	WITH latest_resources AS (
+		SELECT ksuid, stack, label, type, managed, version,
+		       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version DESC) as rn
+		FROM resources
+		WHERE ksuid IN (%s)
+		AND operation != $%d
 	)
-	`, strings.Join(placeholders, ","))
+	SELECT ksuid, stack, label, type
+	FROM latest_resources
+	WHERE rn = 1
+	`, strings.Join(placeholders, ","), len(ksuids)+1)
+
+	// Add operation type to args for the delete check
+	args = append(args, resource_update.OperationDelete)
 
 	rows, err := d.pool.Query(context.Background(), query, args...)
 	if err != nil {
@@ -1295,15 +1299,18 @@ func (d DatastorePostgres) storeResource(resource *pkgmodel.Resource, data []byt
 	}
 
 	// It can happen in rare cases that the resource existed on the unmanaged stack. This happens when a resource is discovered
-	// before the create operation completes. In this case, we need to delete the unmanaged resource, unless the unmanaged
-	// resource is being deleted itself.
+	// before the create operation completes. In this case, we preserve the discovered KSUID to maintain referential integrity
+	// for any resources that may have already created references to it.
 	if !managed && operation != string(resource_update.OperationDelete) {
-		query = `DELETE FROM resources WHERE ksuid = $1`
-		_, err = d.pool.Exec(context.Background(), query, ksuid)
-		if err != nil {
-			slog.Error("Failed to delete unmanaged resource", "error", err, "resourceURI", resource.URI())
-			return "", err
-		}
+		// Preserve the discovered KSUID instead of generating a new one
+		slog.Debug("Resource discovered before apply completed, adopting discovered KSUID",
+			"native_id", resource.NativeID,
+			"type", resource.Type,
+			"discovered_ksuid", ksuid,
+			"original_ksuid", resource.Ksuid)
+		resource.Ksuid = ksuid
+		// Don't delete - we'll update the existing resource to managed status
+		// The rest of the function will handle creating a new version with the preserved KSUID
 	}
 
 	var existingResource pkgmodel.Resource
