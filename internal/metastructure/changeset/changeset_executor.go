@@ -397,6 +397,19 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 	for _, update := range updates {
 		proc.Log().Debug("Starting resource updater", "uri", update.URI(), "operation", update.Operation)
 
+		// Register non-sync resources as in-progress with the Synchronizer
+		// to prevent race conditions where sync might include resources being updated by user operations
+		if update.Source != resource_update.FormaCommandSourceSynchronize {
+			synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+			err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
+				ResourceURI: string(update.URI()),
+			})
+			if err != nil {
+				proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", update.URI())
+				// Don't return error - this is not critical enough to fail the operation
+			}
+		}
+
 		_, err := proc.Call(gen.ProcessID{Name: actornames.ResourceUpdaterSupervisor, Node: proc.Node().Name()},
 			resource_update.EnsureResourceUpdater{
 				ResourceURI: update.URI(),
@@ -416,19 +429,6 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 		if err != nil {
 			proc.Log().Error("Failed to send start message to resource updater", "error", err)
 			return err
-		}
-
-		// Register non-sync resources as in-progress with the Synchronizer
-		// to prevent race conditions where sync might include resources being updated by user operations
-		if update.Source != resource_update.FormaCommandSourceSynchronize {
-			synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
-			err = proc.Send(synchronizerPID, messages.RegisterInProgressResource{
-				ResourceURI: string(update.URI()),
-			})
-			if err != nil {
-				proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", update.URI())
-				// Don't return error - this is not critical enough to fail the operation
-			}
 		}
 	}
 
