@@ -338,31 +338,31 @@ func generateResourceUpdatesForReconcile(
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
 
-				resourceUpdate, err := NewResourceUpdateForExisting(
-					readOnlyProperties,
-					existingUnmanaged,
-					newResource,
-					*targetMap[existingUnmanaged.Target],
-					*targetMap[newResource.Target],
-					mode,
-					source,
-				)
-				if err != nil {
-					return nil, fmt.Errorf("failed to generate resource update for existing unmanaged resource: %w", err)
-				}
-
-				for _, update := range resourceUpdate {
-					switch update.Operation {
-					case OperationUpdate:
-						resourceUpdates = append(resourceUpdates, update)
-					case OperationDelete:
-						resourceReplaces = append(resourceReplaces, update)
-					case OperationCreate:
-						resourceReplaces = append(resourceReplaces, update)
-					default:
-						resourceReplaces = append(resourceReplaces, update)
+					resourceUpdate, err := NewResourceUpdateForExisting(
+						readOnlyProperties,
+						existingUnmanaged,
+						newResource,
+						*targetMap[existingUnmanaged.Target],
+						*targetMap[newResource.Target],
+						mode,
+						source,
+					)
+					if err != nil {
+						return nil, fmt.Errorf("failed to generate resource update for existing unmanaged resource: %w", err)
 					}
-				}
+
+					for _, update := range resourceUpdate {
+						switch update.Operation {
+						case OperationUpdate:
+							resourceUpdates = append(resourceUpdates, update)
+						case OperationDelete:
+							resourceReplaces = append(resourceReplaces, update)
+						case OperationCreate:
+							resourceReplaces = append(resourceReplaces, update)
+						default:
+							resourceReplaces = append(resourceReplaces, update)
+						}
+					}
 				} else {
 					resourceCreate, err := NewResourceUpdateForCreate(
 						newResource,
