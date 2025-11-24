@@ -11,7 +11,6 @@ import (
 	"reflect"
 
 	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
-	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -42,58 +41,48 @@ func NewResourceUpdateForExisting(
 	// Check if we're bringing an unmanaged resource under management
 	// This check needs to happen before hasChanges, because for tag-less resources
 	// the properties might be identical
-	isBringingUnderManagement := existingResource.Stack == constants.UnmanagedStack &&
-		newResource.Stack != constants.UnmanagedStack
+	stackChanged := existingResource.Stack != newResource.Stack
 
 	hasChanges, filteredProps, err := EnforceSetOnceAndCompareResourceForUpdate(&existingResource, &newResource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
-	if !hasChanges && !isBringingUnderManagement {
+	if !hasChanges && !stackChanged {
 		return []ResourceUpdate{}, nil
 	}
 
-	existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
-	}
+	var patchDocument json.RawMessage
+	var needsReplacement bool
 
-	newPluginProps, err := resolver.ConvertToPluginFormat(filteredProps)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
-	}
+	if hasChanges {
+		existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
+		}
 
-	// Generate patch document
-	patchDocument, needsReplacement, err := patch.GeneratePatch(
-		existingPluginProps,
-		newPluginProps,
-		resolvableProperties,
-		existingResource.Schema.Fields,
-		existingResource.Schema.CreateOnly(),
-		mode,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
-	}
+		newPluginProps, err := resolver.ConvertToPluginFormat(filteredProps)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
+		}
 
-	if patchDocument == nil {
-		// Special case: bringing tag-less resources under management
-		// For resources that don't support tags (e.g., AWS::EC2::VPCGatewayAttachment),
-		// the patch will be empty even though we need to mark the resource as managed
-		// and move it to a new stack.
-		if isBringingUnderManagement {
-			slog.Debug("Bringing unmanaged resource under management with no property changes",
-				"resource", existingResource.Label,
-				"type", existingResource.Type,
-				"oldStack", existingResource.Stack,
-				"newStack", newResource.Stack)
-			// Continue with the update - we'll create an empty patch document
-			// The resource updater will handle this specially to avoid calling the plugin
-			patchDocument = json.RawMessage("[]")
-		} else {
-			// No changes needed
+		patchDocument, needsReplacement, err = patch.GeneratePatch(
+			existingPluginProps,
+			newPluginProps,
+			resolvableProperties,
+			existingResource.Schema.Fields,
+			existingResource.Schema.CreateOnly(),
+			mode,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
+		}
+
+		if patchDocument == nil && !stackChanged {
 			return []ResourceUpdate{}, nil
 		}
+	} else {
+		patchDocument = json.RawMessage(`[]`)
+		filteredProps = existingResource.Properties
 	}
 
 	if needsReplacement {
@@ -117,16 +106,17 @@ func NewResourceUpdateForExisting(
 		ExistingResource: existingResource,
 		ExistingTarget:   existingTarget,
 		Resource: pkgmodel.Resource{
-			Label:         newResource.Label,
-			Type:          newResource.Type,
-			Stack:         newResource.Stack,
-			Schema:        newResource.Schema,
-			Properties:    filteredProps,
-			PatchDocument: patchDocument,
-			Target:        newResource.Target,
-			NativeID:      existingResource.NativeID, // Ensure existing NativeID is set for updates
-			Managed:       newResource.Managed,
-			Ksuid:         newResource.Ksuid,
+			Label:              newResource.Label,
+			Type:               newResource.Type,
+			Stack:              newResource.Stack,
+			Schema:             newResource.Schema,
+			Properties:         filteredProps,
+			PatchDocument:      patchDocument,
+			Target:             newResource.Target,
+			NativeID:           existingResource.NativeID,
+			ReadOnlyProperties: existingResource.ReadOnlyProperties,
+			Managed:            newResource.Managed,
+			Ksuid:              newResource.Ksuid,
 		},
 		ResourceTarget:       newTarget,
 		Operation:            OperationUpdate,
