@@ -84,7 +84,7 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 	// To avoid this, we skip the validation when the operation is a delete.
 	if resourceOperation != resource_update.OperationDelete {
 		if err := validateRequiredFields(resourceUpdate.Resource); err != nil {
-			slog.Error("Validation of required fields failed", "error", err)
+			slog.Debug("Validation of required fields failed", "error", err)
 			return "", nil
 		}
 	}
