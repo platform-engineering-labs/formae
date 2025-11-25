@@ -79,17 +79,17 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 		panic(fmt.Sprintf("Progress for operation %s not found in resource update %s", pluginOperation, resourceUpdate.Resource.Label))
 	}
 
+	resourceUpdate.Operation = resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress)
+
 	// This can cause a validation error when the delete op is in fact valid.
 	// Subsequently no delete is persisted and the system doesn't work as expected.
 	// To avoid this, we skip the validation when the operation is a delete.
-	if resourceOperation != resource_update.OperationDelete {
+	if resourceUpdate.Operation != resource_update.OperationDelete {
 		if err := validateRequiredFields(resourceUpdate.Resource); err != nil {
 			slog.Debug("Validation of required fields failed", "error", err)
 			return "", nil
 		}
 	}
-
-	resourceUpdate.Operation = delegateCommandFromOperation(resourceOperation, pluginOperation, relevantProgress)
 
 	forma := &forma_command.FormaCommand{
 		ID:      commandID,
@@ -99,7 +99,7 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 			{
 				Resource:                 resourceUpdate.Resource,
 				ResourceTarget:           resourceUpdate.ResourceTarget,
-				Operation:                delegateCommandFromOperation(resourceOperation, pluginOperation, relevantProgress),
+				Operation:                resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress),
 				State:                    resource_update.ResourceUpdateStateSuccess,
 				StartTs:                  relevantProgress.StartTs,
 				ModifiedTs:               relevantProgress.ModifiedTs,
@@ -250,7 +250,7 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 	}
 }
 
-func delegateCommandFromOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *pkgresource.ProgressResult) resource_update.OperationType {
+func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *pkgresource.ProgressResult) resource_update.OperationType {
 	switch pluginOperation {
 	case pkgresource.OperationCreate:
 		return resource_update.OperationCreate
