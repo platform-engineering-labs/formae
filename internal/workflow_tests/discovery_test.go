@@ -782,3 +782,62 @@ func TestDiscovery_NoDiscoverableTargets_CompletesImmediately(t *testing.T) {
 		assert.Nil(t, stack, "No unmanaged stack should be created when no discoverable targets exist")
 	})
 }
+
+func TestDiscovery_ListPropertiesNotPersistedOnlyReadProperties(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			List: func(req *resource.ListRequest) (*resource.ListResult, error) {
+				if req.ResourceType != "FakeAWS::S3::Bucket" {
+					return &resource.ListResult{}, nil
+				}
+				return &resource.ListResult{
+					Resources: []resource.Resource{
+						{
+							NativeID:   "test-bucket",
+							Properties: `{"ListOnlyProp": "should-not-persist", "BucketName": "list-value"}`,
+						},
+					},
+				}, nil
+			},
+			Read: func(req *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: "FakeAWS::S3::Bucket",
+					Properties:   `{"BucketName": "read-value", "ReadOnlyProp": "from-read"}`,
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		target := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target)
+		require.NoError(t, err)
+
+		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
+		require.NoError(t, err)
+
+		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
+		require.NoError(t, err)
+
+		var stack *pkgmodel.Forma
+		require.Eventually(t, func() bool {
+			stack, err = m.Datastore.LoadStack("$unmanaged")
+			return err == nil && stack != nil && len(stack.Resources) == 1
+		}, 5*time.Second, 100*time.Millisecond)
+
+		res := stack.Resources[0]
+		var props map[string]any
+		require.NoError(t, json.Unmarshal(res.Properties, &props))
+
+		assert.Equal(t, "read-value", props["BucketName"], "BucketName should come from READ, not LIST")
+		assert.NotContains(t, props, "ListOnlyProp", "LIST-only properties should not be persisted")
+	})
+}

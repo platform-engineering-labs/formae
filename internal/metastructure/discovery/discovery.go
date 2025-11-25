@@ -495,7 +495,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 			Stack:      constants.UnmanagedStack,
 			Target:     target.Label,
 			NativeID:   resource.NativeID,
-			Properties: injectResolvables(resource.Properties, op),
+			Properties: injectResolvables("{}", op), // Only inject $refs, let READ populate properties
 			Schema:     schema,
 			Managed:    false,
 			Ksuid:      util.NewID(),

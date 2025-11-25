@@ -329,6 +329,11 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, stack pkgmo
 			if !util.JsonEqualRaw(currentResource.Properties, rc.Resource.Properties) ||
 				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, rc.Resource.ReadOnlyProperties) {
 
+				// Preserve the current stack and managed state during sync READ operations
+				// to prevent stale sync data from overwriting recent stack changes
+				secretSafeResource.Stack = currentResource.Stack
+				secretSafeResource.Managed = currentResource.Managed
+
 				currentResource.Properties = secretSafeResource.Properties
 				currentResource.ReadOnlyProperties = secretSafeResource.ReadOnlyProperties
 
