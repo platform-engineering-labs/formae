@@ -104,6 +104,9 @@ type DiscoveryData struct {
 	// will not start new list operations, but will allow outstanding operations
 	// to complete. Uses reference counting to support multiple concurrent pausers.
 	pauseCount int
+	// hasPendingResumeScan tracks whether a delayed ResumeScanning message is in flight.
+	// This prevents sending redundant delayed messages when one is already pending.
+	hasPendingResumeScan bool
 }
 
 func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
@@ -238,6 +241,7 @@ func resumeDiscovery(state gen.Atom, data DiscoveryData, message messages.Resume
 func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	data.isScheduledDiscovery = !message.Once
 	data.timeStarted = time.Now()
+	data.summary = make(map[string]int)
 
 	if state == StateDiscovering {
 		proc.Log().Debug("Discovery already running, consider configuring a longer interval")
@@ -310,6 +314,9 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 }
 
 func resumeScanning(state gen.Atom, data DiscoveryData, message ResumeScanning, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+	// The delayed message has arrived - clear the pending flag
+	data.hasPendingResumeScan = false
+
 	// Don't start new list operations if Discovery is paused
 	if data.pauseCount > 0 {
 		proc.Log().Debug("Discovery is paused, skipping resumeScanning", "pauseCount", data.pauseCount)
@@ -344,11 +351,13 @@ func resumeScanning(state gen.Atom, data DiscoveryData, message ResumeScanning, 
 	}
 	for namespace, done := range finished {
 		if !done {
+			// Send a delayed message to continue processing
 			_, err := proc.SendAfter(proc.PID(), ResumeScanning{}, 1*time.Second)
 			if err != nil {
 				proc.Log().Error("Discovery failed to send ResumeScanning message: %v", err)
 				return state, data, nil, gen.TerminateReasonPanic
 			}
+			data.hasPendingResumeScan = true
 			return state, data, nil, nil
 		}
 		delete(data.queuedListOperations, namespace)
@@ -604,10 +613,14 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 				ParentKSUID:  parent.Ksuid,
 				ListParams:   util.MapToString(listParams),
 			})
-			err = proc.Send(proc.PID(), ResumeScanning{})
-			if err != nil {
-				proc.Log().Error("Failed to send ResumeScanning", "error", err)
-				return fmt.Errorf("failed to send ResumeScanning: %w", err)
+			// Only send immediate ResumeScanning if no delayed message is pending.
+			// If a delayed message is pending, it will process the queued work when it arrives.
+			if !data.hasPendingResumeScan {
+				err = proc.Send(proc.PID(), ResumeScanning{})
+				if err != nil {
+					proc.Log().Error("Failed to send ResumeScanning", "error", err)
+					return fmt.Errorf("failed to send ResumeScanning: %w", err)
+				}
 			}
 		}
 	}
