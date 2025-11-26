@@ -485,13 +485,11 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 
 	resourceFilters := (*plugin).GetResourceFilters()
 
-	// LIST only provides native IDs - properties come from READ
 	var nativeIDs []string
 	for _, resource := range resources {
 		nativeIDs = append(nativeIDs, resource.NativeID)
 	}
 
-	// Build minimal resource stubs for sync - READ will populate full properties
 	var resourcesToSynchronize []pkgmodel.Resource
 	for _, nativeID := range nativeIDs {
 		resourcesToSynchronize = append(resourcesToSynchronize, pkgmodel.Resource{
