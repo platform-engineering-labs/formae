@@ -982,6 +982,96 @@ func TestResourcePersister_ValidateFields(t *testing.T) {
 	})
 }
 
+func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	assert.NoError(t, err)
+
+	resourceKsuid := util.NewID()
+
+	initialResource := resource_update.ResourceUpdate{
+		Resource: pkgmodel.Resource{
+			Label:      "test-vpc",
+			Type:       "AWS::EC2::VPC",
+			Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+			Stack:      "managed-stack",
+			Ksuid:      resourceKsuid,
+			Managed:    true,
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     "test-target",
+			Namespace: "aws",
+		},
+		State:      resource_update.ResourceUpdateStateSuccess,
+		StackLabel: "managed-stack",
+		ProgressResult: []resource.ProgressResult{
+			{
+				Operation:          resource.OperationCreate,
+				OperationStatus:    resource.OperationStatusSuccess,
+				NativeID:           "vpc-123",
+				ResourceType:       "AWS::EC2::VPC",
+				ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				StartTs:            util.TimeNow(),
+				ModifiedTs:         util.TimeNow(),
+			},
+		},
+	}
+
+	createResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "create-cmd",
+		ResourceOperation: resource_update.OperationCreate,
+		PluginOperation:   resource.OperationCreate,
+		ResourceUpdate:    initialResource,
+	})
+	assert.NoError(t, createResult.Error)
+
+	syncUpdate := resource_update.ResourceUpdate{
+		Resource: pkgmodel.Resource{
+			Label:      "test-vpc",
+			Type:       "AWS::EC2::VPC",
+			Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16","VpcId":"vpc-123"}`),
+			Stack:      "$unmanaged",
+			Ksuid:      resourceKsuid,
+			Managed:    false,
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     "test-target",
+			Namespace: "aws",
+		},
+		State:      resource_update.ResourceUpdateStateSuccess,
+		StackLabel: "$unmanaged",
+		ProgressResult: []resource.ProgressResult{
+			{
+				Operation:          resource.OperationRead,
+				OperationStatus:    resource.OperationStatusSuccess,
+				NativeID:           "vpc-123",
+				ResourceType:       "AWS::EC2::VPC",
+				ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16","VpcId":"vpc-123"}`),
+				StartTs:            util.TimeNow(),
+				ModifiedTs:         util.TimeNow(),
+			},
+		},
+	}
+
+	readResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "sync-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncUpdate,
+	})
+	assert.NoError(t, readResult.Error)
+
+	loadedStack, err := ds.LoadStack("managed-stack")
+	assert.NoError(t, err)
+	assert.NotNil(t, loadedStack, "Resource should remain in managed-stack, not move to $unmanaged")
+	assert.Equal(t, 1, len(loadedStack.Resources))
+	assert.Equal(t, "test-vpc", loadedStack.Resources[0].Label)
+	assert.True(t, loadedStack.Resources[0].Managed, "Resource should remain managed")
+
+	unmanagedStack, err := ds.LoadStack("$unmanaged")
+	assert.NoError(t, err)
+	assert.Nil(t, unmanagedStack, "Resource should not appear in $unmanaged stack")
+}
+
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.
 // This follows the same pattern as FormaCommandPersister tests.
 func newResourcePersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, datastore.Datastore, error) {
