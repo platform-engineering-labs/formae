@@ -856,6 +856,7 @@ func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
 			Label:      nativeID,
 			Target:     "test-target",
 			Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+			Schema:     pkgmodel.Schema{Discoverable: false, Extractable: false},
 			Managed:    false,
 		}
 		_, err = m.Datastore.StoreResource(unmanagedResource, "discovery-cmd")
@@ -877,7 +878,7 @@ func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
 				NativeID:   nativeID,
 				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
 				Stack:      managedStack,
-				Schema:     pkgmodel.Schema{Fields: []string{"CidrBlock"}},
+				Schema:     pkgmodel.Schema{Fields: []string{"CidrBlock"}, Discoverable: true, Extractable: true},
 				Target:     "test-target",
 				Managed:    true,
 			}},
@@ -891,13 +892,16 @@ func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
 			return err == nil && res != nil && res.Stack == managedStack && res.Managed
 		}, 5*time.Second, 100*time.Millisecond)
 
+		// Unblock sync's READ
 		close(readCanComplete)
 		time.Sleep(2 * time.Second)
 
 		res, err := m.Datastore.LoadResourceByNativeID(nativeID, "FakeAWS::EC2::VPC")
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		assert.Equal(t, managedStack, res.Stack, "Resource should remain in managed stack")
-		assert.True(t, res.Managed, "Resource should remain managed")
+		assert.Equal(t, managedStack, res.Stack, "Stack should be preserved")
+		assert.True(t, res.Managed, "Managed should be preserved")
+		assert.True(t, res.Schema.Discoverable, "Schema.Discoverable should be preserved")
+		assert.True(t, res.Schema.Extractable, "Schema.Extractable should be preserved")
 	})
 }
