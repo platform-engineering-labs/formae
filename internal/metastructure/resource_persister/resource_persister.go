@@ -333,6 +333,8 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, stack pkgmo
 				// to prevent stale sync data from overwriting recent stack changes
 				secretSafeResource.Stack = currentResource.Stack
 				secretSafeResource.Managed = currentResource.Managed
+				secretSafeResource.Schema.Discoverable = currentResource.Schema.Discoverable
+				secretSafeResource.Schema.Extractable = currentResource.Schema.Extractable
 
 				currentResource.Properties = secretSafeResource.Properties
 				currentResource.ReadOnlyProperties = secretSafeResource.ReadOnlyProperties

@@ -485,17 +485,22 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 
 	resourceFilters := (*plugin).GetResourceFilters()
 
-	var resourcesToSynchronize []pkgmodel.Resource
+	// LIST only provides native IDs - properties come from READ
+	var nativeIDs []string
 	for _, resource := range resources {
-		// We initially set the label to the native ID. Since not every List API reliably returns tags we need to overwrite the label
-		// in the resource_updater where we sync (read) the resource.
+		nativeIDs = append(nativeIDs, resource.NativeID)
+	}
+
+	// Build minimal resource stubs for sync - READ will populate full properties
+	var resourcesToSynchronize []pkgmodel.Resource
+	for _, nativeID := range nativeIDs {
 		resourcesToSynchronize = append(resourcesToSynchronize, pkgmodel.Resource{
-			Label:      url.QueryEscape(resource.NativeID),
+			Label:      url.QueryEscape(nativeID),
 			Type:       op.ResourceType,
 			Stack:      constants.UnmanagedStack,
 			Target:     target.Label,
-			NativeID:   resource.NativeID,
-			Properties: injectResolvables("{}", op), // Only inject $refs, let READ populate properties
+			NativeID:   nativeID,
+			Properties: injectResolvables("{}", op),
 			Schema:     schema,
 			Managed:    false,
 			Ksuid:      util.NewID(),

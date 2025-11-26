@@ -804,3 +804,100 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 		}
 	})
 }
+
+// TestSynchronizer_SyncDoesNotOverwriteApplyStackChange reproduces the race condition where:
+// 1. Sync starts and loads resource with Stack=$unmanaged, Managed=false
+// 2. Apply brings resource under management (Stack=my-stack, Managed=true)
+// 3. Sync READ returns with changed properties (e.g., VpcId added by AWS)
+// 4. Without the fix, sync would overwrite Stack back to $unmanaged
+// 5. With the fix, sync preserves the current Stack and Managed from the database
+func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		readStarted := make(chan struct{})
+		readCanComplete := make(chan struct{})
+		readCount := 0
+		var mu sync.Mutex
+
+		nativeID := "vpc-" + uuid.New().String()
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				mu.Lock()
+				readCount++
+				currentRead := readCount
+				mu.Unlock()
+
+				if currentRead == 1 {
+					select {
+					case readStarted <- struct{}{}:
+					default:
+					}
+					<-readCanComplete
+				}
+
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"CidrBlock":"10.0.0.0/16","VpcId":"` + nativeID + `"}`,
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		unmanagedResource := &pkgmodel.Resource{
+			Ksuid:      util.NewID(),
+			NativeID:   nativeID,
+			Stack:      "$unmanaged",
+			Type:       "FakeAWS::EC2::VPC",
+			Label:      nativeID,
+			Target:     "test-target",
+			Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+			Managed:    false,
+		}
+		_, err = m.Datastore.StoreResource(unmanagedResource, "discovery-cmd")
+		require.NoError(t, err)
+
+		_, err = m.Datastore.CreateTarget(&pkgmodel.Target{Label: "test-target", Discoverable: true})
+		require.NoError(t, err)
+
+		go func() { _ = m.ForceSync() }()
+		<-readStarted
+
+		managedStack := "my-managed-stack"
+		f := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: managedStack}},
+			Resources: []pkgmodel.Resource{{
+				Ksuid:      unmanagedResource.Ksuid,
+				Label:      nativeID,
+				Type:       "FakeAWS::EC2::VPC",
+				NativeID:   nativeID,
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				Stack:      managedStack,
+				Schema:     pkgmodel.Schema{Fields: []string{"CidrBlock"}},
+				Target:     "test-target",
+				Managed:    true,
+			}},
+			Targets: []pkgmodel.Target{},
+		}
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			res, err := m.Datastore.LoadResourceByNativeID(nativeID, "FakeAWS::EC2::VPC")
+			return err == nil && res != nil && res.Stack == managedStack && res.Managed
+		}, 5*time.Second, 100*time.Millisecond)
+
+		close(readCanComplete)
+		time.Sleep(2 * time.Second)
+
+		res, err := m.Datastore.LoadResourceByNativeID(nativeID, "FakeAWS::EC2::VPC")
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, managedStack, res.Stack, "Resource should remain in managed stack")
+		assert.True(t, res.Managed, "Resource should remain managed")
+	})
+}
