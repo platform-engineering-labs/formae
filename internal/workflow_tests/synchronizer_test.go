@@ -805,12 +805,9 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 	})
 }
 
-// TestSynchronizer_SyncDoesNotOverwriteApplyStackChange reproduces the race condition where:
-// 1. Sync starts and loads resource with Stack=$unmanaged, Managed=false
-// 2. Apply brings resource under management (Stack=my-stack, Managed=true)
-// 3. Sync READ returns with changed properties (e.g., VpcId added by AWS)
-// 4. Without the fix, sync would overwrite Stack back to $unmanaged
-// 5. With the fix, sync preserves the current Stack and Managed from the database
+// TestSynchronizer_SyncDoesNotOverwriteApplyStackChange verifies that sync preserves
+// user-controlled state (Stack, Managed, Schema.Discoverable, Schema.Extractable) when
+// a race occurs between apply and sync operations.
 func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		readStarted := make(chan struct{})
