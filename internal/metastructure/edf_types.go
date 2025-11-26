@@ -18,20 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// Internal message types for distributed plugin coordination
-
-// GetPluginOperator is sent to PluginCoordinator to request a remote PluginOperator PID
-type GetPluginOperator struct {
-	Namespace   string // Plugin namespace (e.g., "AWS", "Azure", "FakeAWS")
-	ResourceURI string // Resource identifier
-	Operation   string // Operation type (e.g., "Create", "Read", "Update", "Delete")
-	OperationID string // Unique operation identifier
-}
-
-// PluginOperatorPID is the response from PluginCoordinator containing a remote plugin operator PID
-type PluginOperatorPID struct {
-	PID gen.ProcessID // Remote process ID pointing to plugin's PluginOperator actor
-}
+// Internal message types for distributed plugin coordination are now in messages/plugin.go
 
 // registerEDFTypes registers all types that will be serialized and sent over Ergo network
 // Note: Request/Result types with pointers are handled by Ergo's Call mechanism and don't need
@@ -76,9 +63,11 @@ func registerEDFTypes() error {
 		messages.MarkResourceUpdateAsComplete{},
 		messages.UpdateResourceProgress{},
 
-		// NEW: Internal coordination messages (agent <-> plugin coordinator)
-		GetPluginOperator{},
-		PluginOperatorPID{},
+		// Plugin coordination messages (agent <-> plugins)
+		messages.PluginAnnouncement{},
+		messages.PluginHeartbeat{},
+		messages.GetPluginOperator{},
+		messages.PluginOperatorPID{},
 	}
 
 	for _, t := range types {

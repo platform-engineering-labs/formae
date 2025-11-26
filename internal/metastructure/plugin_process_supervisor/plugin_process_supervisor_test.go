@@ -1,4 +1,4 @@
-package plugin_coordinator
+package plugin_process_supervisor
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPluginCoordinator_Init(t *testing.T) {
+func TestPluginProcessSupervisor_Init(t *testing.T) {
 	// Setup test node
 	options := gen.NodeOptions{}
 	options.Network.Mode = gen.NetworkModeEnabled
@@ -17,8 +17,8 @@ func TestPluginCoordinator_Init(t *testing.T) {
 	require.NoError(t, err)
 	defer node.Stop()
 
-	// Spawn PluginCoordinator
-	pid, err := node.SpawnRegister("coordinator", NewPluginCoordinator, gen.ProcessOptions{})
+	// Spawn PluginProcessSupervisor
+	pid, err := node.SpawnRegister("supervisor", NewPluginProcessSupervisor, gen.ProcessOptions{})
 
 	assert.NoError(t, err)
 	assert.NotEqual(t, gen.PID{}, pid)

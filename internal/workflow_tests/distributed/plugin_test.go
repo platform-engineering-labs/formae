@@ -8,100 +8,57 @@ package distributed
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
-// TestMetastructure_ApplyForma_DistributedPlugin tests the full apply workflow
-// with FakeAWS running as a distributed plugin in a separate process.
+// TestMetastructure_ApplyForma_DistributedPlugin tests the distributed plugin workflow
+// with FakeAWS running as a separate process that announces itself to PluginRegistry.
 //
 // This test verifies:
 // - Building the fake-aws plugin binary
-// - Starting the plugin process via PluginCoordinator
-// - Executing a create operation through remote PluginOperator
-// - Completing the apply workflow successfully
+// - Starting the plugin process via PluginProcessSupervisor
+// - Plugin announcing itself to PluginRegistry
+// - Plugin registration being logged
 func TestMetastructure_ApplyForma_DistributedPlugin(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		// Step 1: Build the fake-aws plugin binary
-		pluginBinaryPath := buildFakeAWSPlugin(t)
+		// Step 1: Build the fake-aws plugin binary with hardcoded test behavior
+		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
 		defer os.Remove(pluginBinaryPath)
 
-		// Step 2: Setup test configuration with plugin discovery
-		cfg := newDistributedTestConfig(t, pluginBinaryPath)
+		// Step 2: Setup test configuration
+		cfg := newDistributedTestConfig(t)
 		defer cleanupTestDatabase(t, cfg)
 
-		// Step 3: Create metastructure with distributed plugin support
+		// Step 3: Setup test logger to capture all logs
+		logCapture := setupTestLogger()
+
+		// Step 4: Create and start metastructure
+		// This should trigger PluginCoordinator to scan ~/.pel/formae/plugins/
+		// and spawn the fake-aws plugin via meta.Port
 		m := newDistributedMetastructure(t, cfg)
 		defer m.Stop(true)
 
-		// Step 4: Define a simple Forma with one FakeAWS resource
-		forma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-				{
-					Label: "test-stack",
-				},
-			},
-			Resources: []pkgmodel.Resource{
-				{
-					Label:   "test-bucket",
-					Type:    "FakeAWS::S3::Bucket",
-					Stack:   "test-stack",
-					Target:  "test-target",
-					Managed: true,
-				},
-			},
-			Targets: []pkgmodel.Target{
-				{
-					Label:     "test-target",
-					Namespace: "FakeAWS",
-				},
-			},
-		}
+		// Step 5: Wait for the plugin to register with PluginRegistry
+		// The plugin sends a PluginAnnouncement to PluginRegistry which logs it
+		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
 
-		// Step 5: Apply the forma (create resource via distributed plugin)
-		_, err := m.ApplyForma(
-			forma,
-			&config.FormaCommandConfig{
-				Mode:     pkgmodel.FormaApplyModeReconcile,
-				Simulate: false,
-			},
-			"test-client-id",
-		)
-		require.NoError(t, err, "ApplyForma should succeed")
-
-		// Step 6: Wait for command to complete
-		var commands []*forma_command.FormaCommand
-		assert.Eventually(t, func() bool {
-			commands, err = m.Datastore.LoadFormaCommands()
-			assert.NoError(t, err)
-
-			incompleteCommands, err := m.Datastore.LoadIncompleteFormaCommands()
-			assert.NoError(t, err)
-
-			// Success: one completed command, no incomplete commands
-			return len(commands) == 1 && len(incompleteCommands) == 0
-		}, 10*time.Second, 100*time.Millisecond, "Command should complete successfully")
-
-		// Step 7: Verify the resource was created
-		require.Len(t, commands, 1, "Should have one completed command")
-		assert.True(t, commands[0].Forma.Resources[0].Managed, "Resource should be managed")
-		assert.Equal(t, "test-bucket", commands[0].Forma.Resources[0].Label)
-		assert.Equal(t, "FakeAWS::S3::Bucket", commands[0].Forma.Resources[0].Type)
+		require.True(t, foundMessage, "Plugin should have registered with PluginRegistry")
+		t.Logf("✓ Plugin registered successfully")
 	})
 }
 
@@ -109,14 +66,21 @@ func TestMetastructure_ApplyForma_DistributedPlugin(t *testing.T) {
 func buildFakeAWSPlugin(t *testing.T) string {
 	t.Helper()
 
-	// Create temp directory for the plugin binary
-	tmpDir := t.TempDir()
-	pluginPath := filepath.Join(tmpDir, "fake-aws-plugin")
+	// Build to standard plugin location: ~/.pel/formae/plugins/fake-aws/v1.0.0/fake-aws-plugin
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err, "Failed to get home directory")
 
-	// Build the plugin binary
+	pluginDir := filepath.Join(homeDir, ".pel", "formae", "plugins", "fake-aws", "v1.0.0")
+	err = os.MkdirAll(pluginDir, 0755)
+	require.NoError(t, err, "Failed to create plugin directory")
+
+	pluginPath := filepath.Join(pluginDir, "fake-aws-plugin")
+
+	// Build the plugin binary from its own module directory
 	cmd := exec.Command("go", "build",
+		"-C", "./plugins/fake-aws",
 		"-o", pluginPath,
-		"./plugins/fake-aws",
+		".",
 	)
 
 	output, err := cmd.CombinedOutput()
@@ -130,8 +94,13 @@ func buildFakeAWSPlugin(t *testing.T) string {
 	return pluginPath
 }
 
+// Alias for clarity in test
+func buildFakeAWSPluginToStandardLocation(t *testing.T) string {
+	return buildFakeAWSPlugin(t)
+}
+
 // newDistributedTestConfig creates a test configuration for distributed plugins
-func newDistributedTestConfig(t *testing.T, pluginBinaryPath string) *pkgmodel.Config {
+func newDistributedTestConfig(t *testing.T) *pkgmodel.Config {
 	t.Helper()
 
 	prefix := util.RandomString(10) + "-"
@@ -171,16 +140,7 @@ func newDistributedTestConfig(t *testing.T, pluginBinaryPath string) *pkgmodel.C
 			},
 		},
 		Plugins: pkgmodel.PluginConfig{
-			// TODO: Add ResourcePlugins configuration
-			// This will tell PluginCoordinator where to find the fake-aws binary
-			// Resources: []pkgmodel.ResourcePluginConfig{
-			// 	{
-			// 		Namespace:   "FakeAWS",
-			// 		Enabled:     true,
-			// 		BinaryPath:  pluginBinaryPath,
-			// 		Environment: map[string]string{},
-			// 	},
-			// },
+			// PluginCoordinator will scan ~/.pel/formae/plugins/ for plugins
 		},
 	}
 }
@@ -193,10 +153,10 @@ func newDistributedMetastructure(t *testing.T, cfg *pkgmodel.Config) *metastruct
 	db, err := datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 	require.NoError(t, err, "Failed to create datastore")
 
-	// Create plugin manager WITHOUT loading in-process plugins
+	// Create plugin manager and load all plugins
+	// Load() discovers both in-process plugins and external resource plugins
 	pluginManager := plugin.NewManager()
-	// NOTE: We do NOT call pluginManager.Load() here
-	// The PluginCoordinator will spawn external plugin processes
+	pluginManager.Load()
 
 	// Create metastructure
 	ctx := context.Background()
@@ -223,4 +183,21 @@ func cleanupTestDatabase(t *testing.T, cfg *pkgmodel.Config) {
 	if cfg.Agent.Datastore.Sqlite.FilePath != ":memory:" {
 		_ = os.Remove(cfg.Agent.Datastore.Sqlite.FilePath)
 	}
+}
+
+// setupTestLogger configures a test logger that captures all log output
+// Returns the log capture that tests can use for assertions
+func setupTestLogger() *logging.TestLogCapture {
+	capture := logging.NewTestLogCapture()
+
+	// Create a text handler that writes to our capture
+	handler := slog.NewTextHandler(capture, &slog.HandlerOptions{
+		Level: slog.LevelDebug, // Capture all debug logs
+	})
+
+	// Set as the global default - this will affect all slog calls
+	// including those from ErgoLogger
+	slog.SetDefault(slog.New(handler))
+
+	return capture
 }

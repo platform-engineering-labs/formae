@@ -15,6 +15,7 @@ require (
 )
 
 require (
+	ergo.services/ergo v1.999.310 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/PaesslerAG/gval v1.0.0 // indirect
 	github.com/PaesslerAG/jsonpath v0.1.1 // indirect

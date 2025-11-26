@@ -17,6 +17,15 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// ResourcePluginInfo contains metadata for external resource plugins
+// that run as separate processes (not loaded via plugin.Open).
+// TODO: Move PluginManager out of pkg/plugin package as it should not be exposed to library users.
+type ResourcePluginInfo struct {
+	Namespace  string
+	Version    string
+	BinaryPath string
+}
+
 type Manager struct {
 	pluginPaths []string
 	plugins     []*Plugin
@@ -25,6 +34,9 @@ type Manager struct {
 	networkPlugins        []*NetworkPlugin
 	resourcePlugins       []*ResourcePlugin
 	schemaPlugins         []*SchemaPlugin
+
+	// External resource plugins that run as separate processes
+	externalResourcePlugins []ResourcePluginInfo
 }
 
 func NewManager(paths ...string) *Manager {
@@ -105,17 +117,22 @@ func (m *Manager) Load() {
 
 		dl, err := goplugin.Open(p)
 		if err != nil {
-			panic(err)
+			// Skip plugins that fail to load (e.g., version mismatch)
+			// This allows the system to continue with other plugins
+			fmt.Fprintf(os.Stderr, "Warning: Failed to load plugin %s: %v\n", p, err)
+			continue
 		}
 
 		lookup, err := dl.Lookup("Plugin")
 		if err != nil {
-			panic(err)
+			fmt.Fprintf(os.Stderr, "Warning: Plugin %s missing 'Plugin' symbol: %v\n", p, err)
+			continue
 		}
 
 		cast, ok := lookup.(Plugin)
 		if !ok {
-			panic("Could not cast plugin")
+			fmt.Fprintf(os.Stderr, "Warning: Could not cast plugin %s\n", p)
+			continue
 		}
 
 		m.plugins = append(m.plugins, &cast)
@@ -123,28 +140,89 @@ func (m *Manager) Load() {
 		case Authentication:
 			cast, ok := lookup.(AuthenticationPlugin)
 			if !ok {
-				panic("Could not cast authentication plugin")
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast authentication plugin %s\n", p)
+				continue
 			}
 			m.authenticationPlugins = append(m.authenticationPlugins, &cast)
 		case Network:
 			cast, ok := lookup.(NetworkPlugin)
 			if !ok {
-				panic("Could not cast network plugin")
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast network plugin %s\n", p)
+				continue
 			}
 			m.networkPlugins = append(m.networkPlugins, &cast)
 		case Resource:
-			cast, ok := lookup.(ResourcePlugin)
-			if !ok {
-				panic("Could not cast resource plugin")
-			}
-			m.resourcePlugins = append(m.resourcePlugins, &cast)
+			// Skip in-process resource plugins - they will be handled as external plugins
+			// External resource plugins are discovered via discoverExternalResourcePlugins()
+			continue
 		case Schema:
 			cast, ok := lookup.(SchemaPlugin)
 			if !ok {
-				panic("Could not cast schema plugin")
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast schema plugin %s\n", p)
+				continue
 			}
 			m.schemaPlugins = append(m.schemaPlugins, &cast)
 		default:
+		}
+	}
+
+	// Discover external resource plugins that run as separate processes
+	m.discoverExternalResourcePlugins()
+}
+
+func (m *Manager) discoverExternalResourcePlugins() {
+	// Get user home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		// If we can't get home dir, skip external plugin discovery
+		return
+	}
+
+	pluginBaseDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
+
+	// Check if plugin directory exists
+	if _, err := os.Stat(pluginBaseDir); os.IsNotExist(err) {
+		return
+	}
+
+	// Walk through namespace directories
+	namespaceEntries, err := os.ReadDir(pluginBaseDir)
+	if err != nil {
+		return
+	}
+
+	for _, namespaceEntry := range namespaceEntries {
+		if !namespaceEntry.IsDir() {
+			continue
+		}
+
+		namespace := namespaceEntry.Name()
+		namespacePath := filepath.Join(pluginBaseDir, namespace)
+
+		// Look for version directories
+		versionEntries, err := os.ReadDir(namespacePath)
+		if err != nil {
+			continue
+		}
+
+		// Use the first version found (version selection can be enhanced later)
+		for _, versionEntry := range versionEntries {
+			if !versionEntry.IsDir() {
+				continue
+			}
+
+			version := versionEntry.Name()
+			binaryPath := filepath.Join(namespacePath, version, namespace+"-plugin")
+
+			// Check if binary exists and is executable
+			if info, err := os.Stat(binaryPath); err == nil && !info.IsDir() {
+				m.externalResourcePlugins = append(m.externalResourcePlugins, ResourcePluginInfo{
+					Namespace:  namespace,
+					Version:    version,
+					BinaryPath: binaryPath,
+				})
+				break // Only use first version
+			}
 		}
 	}
 }
@@ -155,6 +233,10 @@ func (m *Manager) List() []*Plugin {
 
 func (m *Manager) ListResourcePlugins() []*ResourcePlugin {
 	return m.resourcePlugins
+}
+
+func (m *Manager) ListExternalResourcePlugins() []ResourcePluginInfo {
+	return m.externalResourcePlugins
 }
 
 func (m *Manager) PluginVersion(name string) *semver.Version {
