@@ -18,15 +18,29 @@ type PluginHeartbeat struct {
 	Namespace string // e.g., "AWS"
 }
 
-// GetPluginOperator is sent to PluginRegistry to request a remote PluginOperator PID
-type GetPluginOperator struct {
-	Namespace   string // e.g., "AWS", "Azure"
-	ResourceURI string // e.g., "formae://ksuid"
-	Operation   string // e.g., "Create", "Read", "Update", "Delete"
-	OperationID string // unique ID for this operation
+// SpawnPluginOperator is sent to PluginCoordinator to spawn a PluginOperator for a resource operation.
+// The coordinator will spawn remotely on the plugin node (distributed) or locally (fallback).
+type SpawnPluginOperator struct {
+	Namespace   string  // e.g., "AWS", "Azure", "FakeAWS"
+	ResourceURI string  // e.g., "formae://ksuid"
+	Operation   string  // e.g., "Create", "Read", "Update", "Delete"
+	OperationID string  // unique ID for this operation
+	RequestedBy gen.PID // PID of the requester (ResourceUpdater) - passed to PluginOperator Init
 }
 
-// PluginOperatorPID is the response from PluginRegistry containing a remote plugin operator PID
-type PluginOperatorPID struct {
-	PID gen.ProcessID
+// SpawnPluginOperatorResult is the response from PluginCoordinator after spawning a PluginOperator
+type SpawnPluginOperatorResult struct {
+	PID   gen.PID // PID of the spawned PluginOperator
+	Error string  // Error message if spawn failed (empty on success)
+}
+
+// GetPluginNode is sent to PluginCoordinator to get the node name for a plugin namespace.
+// This is used by ResourceUpdater to remote spawn PluginOperator on the plugin's node.
+type GetPluginNode struct {
+	Namespace string // e.g., "AWS", "Azure", "FakeAWS"
+}
+
+// PluginNode is the response containing the plugin's Ergo node name
+type PluginNode struct {
+	NodeName gen.Atom
 }

@@ -4,7 +4,7 @@
 
 //go:build integration
 
-package azure
+package main
 
 import (
 	"context"

@@ -24,7 +24,7 @@ clean-pel:
 build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
 	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws.so
-	go build -C plugins/azure -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o azure.so
+	#	go build -C plugins/azure -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o azure.so
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	go build -C plugins/json -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json.so
 	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
@@ -42,7 +42,7 @@ build-aws:
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
 	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws-debug.so
-	go build -C plugins/azure ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o azure-debug.so
+	#	go build -C plugins/azure ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o azure-debug.so
 	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
 	go build -C plugins/json ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json-debug.so
 	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
@@ -92,9 +92,9 @@ gen-aws-pkl-types:
 	cd plugins/aws &&  pkl eval pkg/descriptors/pkl/resources.pkl > pkg/descriptors/pkl/generated_resources.pkl
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		sed -i '' '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-	else \
+		else \
 		sed -i '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-	fi
+		fi
 
 pkg-pkl:
 	pkl project package ./plugins/aws/schema/pkl ./plugins/pkl/schema --skip-publish-check
@@ -230,7 +230,7 @@ api-docs:
 
 lint:
 	@echo "Running linter..."
-	@golangci-lint-v2 run
+	@golangci-lint run
 	@echo "Linting completed successfully."
 
 lint-reuse:

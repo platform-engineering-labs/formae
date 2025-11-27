@@ -5,6 +5,8 @@
 package logging
 
 import (
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +16,21 @@ import (
 type TestLogCapture struct {
 	mu      sync.RWMutex
 	Entries []string
+	tee     io.Writer // optional writer to tee output to (e.g., os.Stderr)
 }
 
 func NewTestLogCapture() *TestLogCapture {
 	return &TestLogCapture{
 		Entries: make([]string, 0),
+		tee:     os.Stderr, // Default: also write to stderr so logs are visible in tests
+	}
+}
+
+// NewTestLogCaptureQuiet creates a TestLogCapture that doesn't output to stderr
+func NewTestLogCaptureQuiet() *TestLogCapture {
+	return &TestLogCapture{
+		Entries: make([]string, 0),
+		tee:     nil,
 	}
 }
 
@@ -26,6 +38,9 @@ func (c *TestLogCapture) Write(p []byte) (n int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Entries = append(c.Entries, string(p))
+	if c.tee != nil {
+		_, _ = c.tee.Write(p)
+	}
 	return len(p), nil
 }
 

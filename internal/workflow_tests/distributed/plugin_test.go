@@ -15,11 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -27,12 +30,12 @@ import (
 )
 
 // TestMetastructure_ApplyForma_DistributedPlugin tests the distributed plugin workflow
-// with FakeAWS running as a separate process that announces itself to PluginRegistry.
+// with FakeAWS running as a separate process that announces itself to PluginCoordinator.
 //
 // This test verifies:
 // - Building the fake-aws plugin binary
 // - Starting the plugin process via PluginProcessSupervisor
-// - Plugin announcing itself to PluginRegistry
+// - Plugin announcing itself to PluginCoordinator
 // - Plugin registration being logged
 func TestMetastructure_ApplyForma_DistributedPlugin(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
@@ -53,11 +56,11 @@ func TestMetastructure_ApplyForma_DistributedPlugin(t *testing.T) {
 		m := newDistributedMetastructure(t, cfg)
 		defer m.Stop(true)
 
-		// Step 5: Wait for the plugin to register with PluginRegistry
-		// The plugin sends a PluginAnnouncement to PluginRegistry which logs it
+		// Step 5: Wait for the plugin to register with PluginCoordinator
+		// The plugin sends a PluginAnnouncement to PluginCoordinator which logs it
 		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
 
-		require.True(t, foundMessage, "Plugin should have registered with PluginRegistry")
+		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
 		t.Logf("✓ Plugin registered successfully")
 	})
 }
@@ -200,4 +203,88 @@ func setupTestLogger() *logging.TestLogCapture {
 	slog.SetDefault(slog.New(handler))
 
 	return capture
+}
+
+// TestMetastructure_ApplyForma_DistributedPlugin_HappyPath tests a full apply workflow
+// with FakeAWS running as a separate process.
+//
+// This test verifies the end-to-end flow:
+// - Building and starting the fake-aws plugin as a separate process
+// - Plugin announcing itself to PluginCoordinator with capabilities
+// - Submitting a Forma apply command
+// - PluginOperator routing CRUD operations to the remote plugin
+// - Command completing successfully
+func TestMetastructure_ApplyForma_DistributedPlugin_HappyPath(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Step 1: Build the fake-aws plugin binary
+		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
+		defer os.Remove(pluginBinaryPath)
+
+		// Step 2: Setup test configuration
+		cfg := newDistributedTestConfig(t)
+		defer cleanupTestDatabase(t, cfg)
+
+		// Step 3: Setup test logger to capture logs
+		logCapture := setupTestLogger()
+
+		// Step 4: Create and start metastructure
+		m := newDistributedMetastructure(t, cfg)
+		defer m.Stop(true)
+
+		// Step 5: Wait for the plugin to register
+		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
+		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
+		t.Logf("✓ Plugin registered successfully")
+
+		// Step 6: Submit a Forma apply command (mirrors happy_path_test.go)
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{
+				{
+					Label: "test-stack",
+				},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:   "test-resource",
+					Type:    "FakeAWS::S3::Bucket",
+					Stack:   "test-stack",
+					Target:  "test-target",
+					Managed: true,
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{
+					Label:     "test-target",
+					Namespace: "FakeAWS",
+				},
+			},
+		}
+
+		_, err := m.ApplyForma(
+			forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id",
+		)
+		require.NoError(t, err, "ApplyForma should not return an error")
+
+		// Step 7: Wait for the command to complete successfully
+		var commands []*forma_command.FormaCommand
+		require.Eventually(t, func() bool {
+			var err error
+			commands, err = m.Datastore.LoadFormaCommands()
+			if err != nil {
+				t.Logf("Error loading commands: %v", err)
+				return false
+			}
+			if len(commands) > 0 {
+				t.Logf("Command state: %s", commands[0].State)
+			}
+
+			return len(commands) == 1 && commands[0].State == forma_command.CommandStateSuccess
+		}, 10*time.Second, 100*time.Millisecond, "Command should complete successfully")
+
+		assert.Equal(t, "4567", commands[0].ResourceUpdates[0].Resource.NativeID, "Resource should have expected NativeID")
+
+		t.Logf("✓ Apply command completed successfully")
+	})
 }

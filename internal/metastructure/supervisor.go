@@ -7,9 +7,12 @@ package metastructure
 import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_coordinator"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_process_supervisor"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_persister"
 )
 
@@ -31,6 +34,14 @@ func (sup *Supervisor) Init(args ...any) (act.SupervisorSpec, error) {
 		{
 			Name:    "RateLimiter",
 			Factory: changeset.NewRateLimiter,
+		},
+		{
+			Name:    "PluginCoordinator",
+			Factory: plugin_coordinator.NewPluginCoordinator,
+		},
+		{
+			Name:    "PluginProcessSupervisor",
+			Factory: plugin_process_supervisor.NewPluginProcessSupervisor,
 		},
 		{
 			Name:    "FormaCommandPersister",

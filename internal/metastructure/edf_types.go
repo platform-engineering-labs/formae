@@ -66,8 +66,8 @@ func registerEDFTypes() error {
 		// Plugin coordination messages (agent <-> plugins)
 		messages.PluginAnnouncement{},
 		messages.PluginHeartbeat{},
-		messages.GetPluginOperator{},
-		messages.PluginOperatorPID{},
+		messages.SpawnPluginOperator{},
+		messages.SpawnPluginOperatorResult{},
 	}
 
 	for _, t := range types {

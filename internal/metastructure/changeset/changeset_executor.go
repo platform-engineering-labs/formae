@@ -356,7 +356,7 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 	// as failed. For non-cascading failures the resource updater would already have taken care of this but as
 	// we never spawn a resource updater for these dependent updates, we need to handle it here.
 	if len(cascadingFailures) > 0 {
-		proc.Log().Warning("Cascading failures detected", "failedCount", len(cascadingFailures), "commandID", data.changeset.CommandID)
+		proc.Log().Warning("Cascading failures detected: %d failures for command %s", len(cascadingFailures), data.changeset.CommandID)
 
 		// Extract URIs of failed resources for bulk update
 		var failedURIs []pkgmodel.FormaeURI

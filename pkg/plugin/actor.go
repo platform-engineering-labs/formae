@@ -17,6 +17,7 @@ type PluginActor struct {
 
 	namespace string
 	agentNode gen.Atom
+	plugin    ResourcePlugin
 }
 
 func factoryPluginActor() gen.ProcessBehavior {
@@ -24,15 +25,18 @@ func factoryPluginActor() gen.ProcessBehavior {
 }
 
 func (p *PluginActor) Init(args ...any) error {
-	// Get namespace from environment
-	namespaceVal, ok := p.Env("Namespace")
+	// Get plugin from environment
+	pluginVal, ok := p.Env("Plugin")
 	if !ok {
-		return fmt.Errorf("PluginActor: missing 'Namespace' in environment")
+		return fmt.Errorf("PluginActor: missing 'Plugin' in environment")
 	}
-	p.namespace, ok = namespaceVal.(string)
+	p.plugin, ok = pluginVal.(ResourcePlugin)
 	if !ok {
-		return fmt.Errorf("PluginActor: 'Namespace' has wrong type")
+		return fmt.Errorf("PluginActor: 'Plugin' has wrong type")
 	}
+
+	// Get namespace from plugin
+	p.namespace = p.plugin.Namespace()
 
 	// Get agent node from environment
 	agentNodeVal, ok := p.Env("AgentNode")
@@ -46,11 +50,13 @@ func (p *PluginActor) Init(args ...any) error {
 
 	// Send announcement to PluginRegistry on agent node
 	registryPID := gen.ProcessID{
-		Name: "PluginRegistry",
+		Name: "PluginCoordinator",
 		Node: p.agentNode,
 	}
 	announcement := PluginAnnouncement{
-		Namespace: p.namespace,
+		Namespace:            p.namespace,
+		NodeName:             string(p.Node().Name()),
+		MaxRequestsPerSecond: p.plugin.MaxRequestsPerSecond(),
 	}
 
 	if err := p.Send(registryPID, announcement); err != nil {
@@ -58,7 +64,7 @@ func (p *PluginActor) Init(args ...any) error {
 		return fmt.Errorf("failed to send announcement: %w", err)
 	}
 
-	p.Log().Info("Plugin announced", "namespace", p.namespace, "agent", p.agentNode)
+	p.Log().Info("Plugin announced", "namespace", p.namespace, "node", p.Node().Name(), "agent", p.agentNode)
 	return nil
 }
 

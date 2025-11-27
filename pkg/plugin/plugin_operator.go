@@ -2,21 +2,18 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package plugin_operation
+package plugin
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
-
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -30,37 +27,38 @@ import (
 //
 // The machine transitions are as follows:
 //
-//                              +-----------------------+
-//          ------------------- |      NotStarted       |--------------------
-//         |                    +-----------------------+                    |
-//         |                        |               |                        |
-//         |                        |               |                        |
-//         |                        |               |                        |
-//         |                        |               |                        |
-//         |                        |               |                        |
-//         |                        v               v                        |
-//         |   +-----------------------+           +----------------------+  |
-//         |   |      Waiting          |<--------- |   Retrying           |  |
-//         |   +-----------------------+           +----------------------+  |
-//         |         |        |  |                      ^      |    |        |
-//         |         |        |  |                      |      |    |        |
-//         |         |        |   ----------------------       |    |        |
-//         |         |        |                                |    |        |
-//         |         |      --|--------------------------------     |        |
-//         |         |     |  |                                     |        |
-//         |         |     |   --------------------------------     |        |
-//         |         |     |                                   |    |        |
-//         |         v     v                                   v    v        |
-//         |   +----------------------+            +----------------------+  |
-//          -> | FinishedSuccessfully |            |  FinishedWithErrors  |<-
-//             +----------------------+            +----------------------+
-//
-
+//	                     +-----------------------+
+//	 ------------------- |      NotStarted       |--------------------
+//	|                    +-----------------------+                    |
+//	|                        |               |                        |
+//	|                        |               |                        |
+//	|                        |               |                        |
+//	|                        |               |                        |
+//	|                        |               |                        |
+//	|                        v               v                        |
+//	|   +-----------------------+           +----------------------+  |
+//	|   |      Waiting          |<--------- |   Retrying           |  |
+//	|   +-----------------------+           +----------------------+  |
+//	|         |        |  |                      ^      |    |        |
+//	|         |        |  |                      |      |    |        |
+//	|         |        |   ----------------------       |    |        |
+//	|         |        |                                |    |        |
+//	|         |      --|--------------------------------     |        |
+//	|         |     |  |                                     |        |
+//	|         |     |   --------------------------------     |        |
+//	|         |     |                                   |    |        |
+//	|         v     v                                   v    v        |
+//	|   +----------------------+            +----------------------+  |
+//	 -> | FinishedSuccessfully |            |  FinishedWithErrors  |<-
+//	    +----------------------+            +----------------------+
 type PluginOperator struct {
 	statemachine.StateMachine[PluginUpdateData]
 }
 
-func newPluginOperator() gen.ProcessBehavior {
+// PluginOperatorFactoryName is the factory name for remote spawning
+const PluginOperatorFactoryName = "PluginOperator"
+
+func NewPluginOperator() gen.ProcessBehavior {
 	return &PluginOperator{}
 }
 
@@ -76,16 +74,16 @@ const (
 
 type StartPluginOperation struct{}
 
-type Shutdown struct{}
+type PluginOperatorShutdown struct{}
 
 type ResumeWaitingForResource struct {
 	Namespace         string
 	ResourceOperation resource.Operation
-	Request           CheckStatus
+	Request           PluginOperatorCheckStatus
 	PreviousAttempts  int
 }
 
-type Retry struct {
+type PluginOperatorRetry struct {
 	ResourceOperation resource.Operation
 	Request           any
 }
@@ -153,7 +151,7 @@ type Listing struct {
 	Error          error
 }
 
-type CheckStatus struct {
+type PluginOperatorCheckStatus struct {
 	Namespace         string
 	RequestID         string
 	ResourceType      string          // Optional resource type for status checks
@@ -166,23 +164,18 @@ type CheckStatus struct {
 // StatusCheck is an interface that facilitates generating a status check message from the different resource
 // operations so the retry logic can be generalized.
 type StatusCheck interface {
-	StatusCheck(progress *resource.ProgressResult) CheckStatus
+	StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus
 	Operation() resource.Operation
 }
 
-func (r ReadResource) StatusCheck(progress *resource.ProgressResult) CheckStatus {
-
-	resolvedProperties, err := resolver.ConvertToPluginFormat(r.ExistingResource.Properties)
-	if err != nil {
-		slog.Debug("PluginOperator: failed to resolve properties for resource %s: %v", r.ExistingResource.Type, err)
-	}
-	r.ExistingResource.Properties = json.RawMessage(resolvedProperties)
+// StatusCheck implementations - properties are expected to be pre-resolved by ResourceUpdater
+func (r ReadResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
 	metadata, err := r.ExistingResource.GetMetadata()
 	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource %s: %v", r.ExistingResource.Type, err)
+		slog.Debug("PluginOperator: failed to get metadata for resource", "type", r.ExistingResource.Type, "error", err)
 		metadata = json.RawMessage("{}")
 	}
-	return CheckStatus{
+	return PluginOperatorCheckStatus{
 		Namespace:         r.Resource.Namespace(),
 		RequestID:         r.NativeID,
 		ResourceType:      r.Resource.Type,
@@ -193,41 +186,30 @@ func (r ReadResource) StatusCheck(progress *resource.ProgressResult) CheckStatus
 	}
 }
 
-func (c CreateResource) StatusCheck(progress *resource.ProgressResult) CheckStatus {
-	resolvedProperties, err := resolver.ConvertToPluginFormat(c.Resource.Properties)
-	if err != nil {
-		slog.Debug("PluginOperator: failed to resolve properties for resource %s: %v", c.Resource.Type, err)
-	}
-	c.Resource.Properties = json.RawMessage(resolvedProperties)
+func (c CreateResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
 	metadata, err := c.Resource.GetMetadata()
 	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource %s: %v", c.Resource.Type, err)
+		slog.Debug("PluginOperator: failed to get metadata for resource", "type", c.Resource.Type, "error", err)
 		metadata = json.RawMessage("{}")
 	}
-	return CheckStatus{
+	return PluginOperatorCheckStatus{
 		Namespace:         c.Namespace,
 		RequestID:         progress.RequestID,
 		ResourceType:      c.Resource.Type,
-		Metadata:          metadata, //Required for legacy resources
+		Metadata:          metadata,
 		Target:            c.Target,
 		ResourceOperation: resource.OperationCreate,
 		Request:           c,
 	}
 }
 
-func (u UpdateResource) StatusCheck(progress *resource.ProgressResult) CheckStatus {
-	resolvedProperties, err := resolver.ConvertToPluginFormat(u.ExistingResource.Properties)
-	if err != nil {
-		slog.Debug("PluginOperator: failed to resolve properties for resource %s: %v", u.ExistingResource.Type, err)
-	}
-	u.ExistingResource.Properties = json.RawMessage(resolvedProperties)
+func (u UpdateResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
 	metadata, err := u.ExistingResource.GetMetadata()
 	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource %s: %v", u.ExistingResource.Type, err)
+		slog.Debug("PluginOperator: failed to get metadata for resource", "type", u.ExistingResource.Type, "error", err)
 		metadata = json.RawMessage("{}")
 	}
-
-	return CheckStatus{
+	return PluginOperatorCheckStatus{
 		Namespace:         u.Namespace,
 		RequestID:         progress.RequestID,
 		ResourceType:      u.Resource.Type,
@@ -238,18 +220,13 @@ func (u UpdateResource) StatusCheck(progress *resource.ProgressResult) CheckStat
 	}
 }
 
-func (d DeleteResource) StatusCheck(progress *resource.ProgressResult) CheckStatus {
-	resolvedProperties, err := resolver.ConvertToPluginFormat(d.Resource.Properties)
-	if err != nil {
-		slog.Debug("PluginOperator: failed to resolve properties for resource %s: %v", d.Resource.Type, err)
-	}
-	d.Resource.Properties = json.RawMessage(resolvedProperties)
+func (d DeleteResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
 	metadata, err := d.Resource.GetMetadata()
 	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource %s: %v", d.Resource.Type, err)
+		slog.Debug("PluginOperator: failed to get metadata for resource", "type", d.Resource.Type, "error", err)
 		metadata = json.RawMessage("{}")
 	}
-	return CheckStatus{
+	return PluginOperatorCheckStatus{
 		Namespace:         d.Namespace,
 		RequestID:         progress.RequestID,
 		ResourceType:      d.ResourceType,
@@ -260,7 +237,7 @@ func (d DeleteResource) StatusCheck(progress *resource.ProgressResult) CheckStat
 	}
 }
 
-func (c CheckStatus) StatusCheck(progress *resource.ProgressResult) CheckStatus {
+func (c PluginOperatorCheckStatus) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
 	return c
 }
 
@@ -268,43 +245,74 @@ func (c CheckStatus) StatusCheck(progress *resource.ProgressResult) CheckStatus 
 // in a generic way.
 type PluginOperation interface {
 	Operation() resource.Operation
+	PluginNamespace() string
 }
 
 func (r ReadResource) Operation() resource.Operation {
 	return resource.OperationRead
 }
 
+func (r ReadResource) PluginNamespace() string {
+	return r.Namespace
+}
+
 func (c CreateResource) Operation() resource.Operation {
 	return resource.OperationCreate
+}
+
+func (c CreateResource) PluginNamespace() string {
+	return c.Namespace
 }
 
 func (u UpdateResource) Operation() resource.Operation {
 	return resource.OperationUpdate
 }
 
+func (u UpdateResource) PluginNamespace() string {
+	return u.Namespace
+}
+
 func (d DeleteResource) Operation() resource.Operation {
 	return resource.OperationDelete
+}
+
+func (d DeleteResource) PluginNamespace() string {
+	return d.Namespace
 }
 
 func (r ResumeWaitingForResource) Operation() resource.Operation {
 	return r.ResourceOperation
 }
 
-func (c CheckStatus) Operation() resource.Operation {
+func (r ResumeWaitingForResource) PluginNamespace() string {
+	return r.Namespace
+}
+
+func (c PluginOperatorCheckStatus) Operation() resource.Operation {
 	return resource.OperationNoOp
+}
+
+func (c PluginOperatorCheckStatus) PluginNamespace() string {
+	return c.Namespace
 }
 
 type PluginUpdateData struct {
 	attempts          int
 	LastStatusMessage string
 
-	config        model.RetryConfig
-	pluginManager *plugin.Manager
-	context       context.Context
-	requestedBy   gen.PID
+	config      model.RetryConfig
+	plugin      ResourcePlugin
+	context     context.Context
+	requestedBy gen.PID
 }
 
-var PluginNotFoundError = resource.ProgressResult{OperationStatus: resource.OperationStatusFailure, ErrorCode: resource.OperationErrorCodePluginNotFound, Attempts: 1, MaxAttempts: 1}
+// NamespaceMismatchError is returned when an operation targets a different namespace than the plugin handles
+var NamespaceMismatchError = resource.ProgressResult{
+	OperationStatus: resource.OperationStatusFailure,
+	ErrorCode:       resource.OperationErrorCodePluginNotFound,
+	Attempts:        1,
+	MaxAttempts:     1,
+}
 
 func (data PluginUpdateData) newUnforeseenError() resource.ProgressResult {
 	return resource.ProgressResult{
@@ -326,19 +334,20 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 		initialState = args[1].(gen.Atom)
 	}
 
-	pluginManager, ok := o.Env("PluginManager")
+	// Get the plugin from Ergo environment (set by plugin.Run or PluginCoordinator for local spawn)
+	pluginEnv, ok := o.Env("Plugin")
 	if !ok {
-		o.Log().Error("PluginOperator: missing 'PluginManager' environment variable")
-		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'PluginManager' environment variable")
+		o.Log().Error("PluginOperator: missing 'Plugin' environment variable")
+		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Plugin' environment variable")
 	}
-	data.pluginManager = pluginManager.(*plugin.Manager)
+	data.plugin = pluginEnv.(ResourcePlugin)
 
-	conext, ok := o.Env("Context")
+	ctx, ok := o.Env("Context")
 	if !ok {
 		o.Log().Error("PluginOperator: missing 'Context' environment variable")
 		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Context' environment variable")
 	}
-	data.context = conext.(context.Context)
+	data.context = ctx.(context.Context)
 
 	cfg, ok := o.Env("RetryConfig")
 	if !ok {
@@ -352,31 +361,31 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 
 		statemachine.WithStateEnterCallback(onStateChange),
 
-		statemachine.WithStateCallHandler(StateNotStarted, read),
-		statemachine.WithStateCallHandler(StateNotStarted, create),
-		statemachine.WithStateCallHandler(StateNotStarted, update),
-		statemachine.WithStateCallHandler(StateNotStarted, delete),
-		statemachine.WithStateCallHandler(StateNotStarted, resume),
-		statemachine.WithStateCallHandler(StateRetrying, read),
-		statemachine.WithStateCallHandler(StateRetrying, create),
-		statemachine.WithStateCallHandler(StateRetrying, update),
-		statemachine.WithStateCallHandler(StateRetrying, delete),
+		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorRead),
+		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorCreate),
+		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorUpdate),
+		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorDelete),
+		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorResume),
+		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorRead),
+		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorCreate),
+		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorUpdate),
+		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorDelete),
 
-		statemachine.WithStateMessageHandler(StateNotStarted, list),
-		statemachine.WithStateMessageHandler(StateWaitingForResource, status),
-		statemachine.WithStateMessageHandler(StateRetrying, retry),
-		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
-		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
+		statemachine.WithStateMessageHandler(StateNotStarted, pluginOperatorList),
+		statemachine.WithStateMessageHandler(StateWaitingForResource, pluginOperatorStatus),
+		statemachine.WithStateMessageHandler(StateRetrying, pluginOperatorRetry),
+		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, pluginOperatorShutdown),
+		statemachine.WithStateMessageHandler(StateFinishedWithError, pluginOperatorShutdown),
 	), nil
 }
 
-func shutdown(state gen.Atom, data PluginUpdateData, shutdown Shutdown, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+func pluginOperatorShutdown(state gen.Atom, data PluginUpdateData, shutdown PluginOperatorShutdown, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, proc gen.Process) (gen.Atom, PluginUpdateData, error) {
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError {
-		err := proc.Send(proc.PID(), Shutdown{})
+		err := proc.Send(proc.PID(), PluginOperatorShutdown{})
 		if err != nil {
 			proc.Log().Error("PluginOperator: failed to send terminate message: %v", err)
 		}
@@ -384,31 +393,36 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, 
 	return newState, data, nil
 }
 
-func read(state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
-	plugin, err := data.pluginManager.ResourcePlugin(operation.ExistingResource.Namespace())
-	if err != nil {
-		proc.Log().Error("PluginOperator: read failed to get resource plugin for namespace %s: %v", operation.Resource.Namespace(), err)
-		return StateFinishedWithError, data, PluginNotFoundError, nil, nil
+// validateNamespace checks that the operation targets the correct plugin
+func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process) bool {
+	if namespace != data.plugin.Namespace() {
+		proc.Log().Error("PluginOperator: namespace mismatch", "expected", data.plugin.Namespace(), "got", namespace)
+		return false
+	}
+	return true
+}
+
+func pluginOperatorRead(state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	if !validateNamespace(data, operation.Namespace, proc) {
+		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
 
-	properties, err := resolver.ConvertToPluginFormat(operation.ExistingResource.Properties)
-	if err != nil {
-		proc.Log().Error("failed to replace dynamic properties for resource update", "error", err, "resourceURI", operation.Resource.URI())
-	}
+	// Properties are expected to be pre-resolved by ResourceUpdater
 	existingResource := operation.ExistingResource
-	existingResource.Properties = properties
 	metadata, err := existingResource.GetMetadata()
 	if err != nil {
-		proc.Log().Error("failed to get metadata for resource update", "error", err, "resourceURI", operation.Resource.URI())
+		proc.Log().Error("failed to get metadata for resource read", "error", err, "resourceURI", operation.Resource.URI())
 		metadata = json.RawMessage("{}")
 	}
+
 	progressResult := resource.ProgressResult{
 		Operation:    resource.OperationRead,
 		NativeID:     operation.NativeID,
 		ResourceType: operation.Resource.Type,
 	}
 	proc.Log().Debug("PluginOperator: starting read operation for %s", operation.NativeID)
-	result, err := (*plugin).Read(data.context, &resource.ReadRequest{
+
+	result, err := data.plugin.Read(data.context, &resource.ReadRequest{
 		NativeID:        operation.NativeID,
 		ResourceType:    operation.Resource.Type,
 		Metadata:        metadata,
@@ -435,25 +449,16 @@ func read(state gen.Atom, data PluginUpdateData, operation ReadResource, proc ge
 	return handlePluginResult(data, operation, proc, &progressResult)
 }
 
-func create(state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
-	plugin, err := data.pluginManager.ResourcePlugin(operation.Namespace)
-	if err != nil {
-		proc.Log().Error("PluginOperator: create failed to get resource plugin for namespace %s: %v", operation.Namespace, err)
-		return StateFinishedWithError, data, PluginNotFoundError, nil, nil
+func pluginOperatorCreate(state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	if !validateNamespace(data, operation.Namespace, proc) {
+		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
+
 	proc.Log().Debug("PluginOperator: starting create operation for %s", operation.Resource.Type)
 
-	props, err := resolver.ConvertToPluginFormat(operation.Resource.Properties)
-	if err != nil {
-		proc.Log().Error("PluginOperator: failed to resolve properties for resource %s: %v", operation.Resource.Type, err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
-	}
-
-	copyResource := operation.Resource
-	copyResource.Properties = json.RawMessage(props)
-
-	result, err := (*plugin).Create(data.context, &resource.CreateRequest{
-		Resource: &copyResource,
+	// Properties are expected to be pre-resolved by ResourceUpdater
+	result, err := data.plugin.Create(data.context, &resource.CreateRequest{
+		Resource: &operation.Resource,
 		Target:   &operation.Target,
 	})
 	if err != nil {
@@ -464,40 +469,27 @@ func create(state gen.Atom, data PluginUpdateData, operation CreateResource, pro
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func update(state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
-	plugin, err := data.pluginManager.ResourcePlugin(operation.Namespace)
-	if err != nil {
-		proc.Log().Error("PluginOperator: update failed to get resource plugin for namespace %s: %v", operation.Namespace, err)
-		//		proc.sendError(err)
-		return StateFinishedWithError, data, PluginNotFoundError, nil, nil
-	}
-	existingResource := operation.ExistingResource
-	resolvedExistingProperties, err := resolver.ConvertToPluginFormat(existingResource.Properties)
-	if err != nil {
-		proc.Log().Error("PluginOperator: update failed to resolve metadata for existing resource %s: %v", operation.ExistingResource.Type, err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+func pluginOperatorUpdate(state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	if !validateNamespace(data, operation.Namespace, proc) {
+		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
 
-	existingResource.Properties = resolvedExistingProperties
+	// Properties are expected to be pre-resolved by ResourceUpdater
+	existingResource := operation.ExistingResource
 	oldMetadata, err := existingResource.GetMetadata()
 	if err != nil {
-		proc.Log().Error("PluginOperator: update failed to get metadata for existing resource %s: %v", operation.ExistingResource.Type, err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
-	}
-	properties, err := resolver.ConvertToPluginFormat(operation.Resource.Properties)
-	if err != nil {
-		proc.Log().Error("PluginOperator: update failed to parse metadata for resource %s: %v", operation.Resource.Type, err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
-	}
-	newResource := operation.Resource
-	newResource.Properties = properties
-	metadata, err := newResource.GetMetadata()
-	if err != nil {
-		proc.Log().Error("PluginOperator: update failed to get metadata for resource %s: %v", operation.Resource.Type, err)
+		proc.Log().Error("PluginOperator: update failed to get metadata for existing resource", "type", operation.ExistingResource.Type, "error", err)
 		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
 	}
 
-	result, err := (*plugin).Update(data.context, &resource.UpdateRequest{
+	newResource := operation.Resource
+	metadata, err := newResource.GetMetadata()
+	if err != nil {
+		proc.Log().Error("PluginOperator: update failed to get metadata for resource", "type", operation.Resource.Type, "error", err)
+		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+	}
+
+	result, err := data.plugin.Update(data.context, &resource.UpdateRequest{
 		NativeID:      &operation.NativeID,
 		Resource:      &operation.Resource,
 		PatchDocument: &operation.PatchDocument,
@@ -513,14 +505,12 @@ func update(state gen.Atom, data PluginUpdateData, operation UpdateResource, pro
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func delete(state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
-	plugin, err := data.pluginManager.ResourcePlugin(operation.Namespace)
-	if err != nil {
-		proc.Log().Error("PluginOperator: delete failed to get resource plugin for namespace %s: %v", operation.Namespace, err)
-		//		proc.sendError(err)
-		return StateFinishedWithError, data, PluginNotFoundError, nil, nil
+func pluginOperatorDelete(state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	if !validateNamespace(data, operation.Namespace, proc) {
+		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
-	result, err := (*plugin).Delete(data.context, &resource.DeleteRequest{
+
+	result, err := data.plugin.Delete(data.context, &resource.DeleteRequest{
 		NativeID:     &operation.NativeID,
 		ResourceType: operation.ResourceType,
 		Metadata:     operation.Metadata,
@@ -534,15 +524,14 @@ func delete(state gen.Atom, data PluginUpdateData, operation DeleteResource, pro
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func status(state gen.Atom, data PluginUpdateData, operation CheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
-	plugin, err := data.pluginManager.ResourcePlugin(operation.Namespace)
-	if err != nil {
-		proc.Log().Error("PluginOperator: status failed to get resource plugin for namespace %s: %v", operation.Namespace, err)
+func pluginOperatorStatus(state gen.Atom, data PluginUpdateData, operation PluginOperatorCheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, nil, nil
 	}
+
 	proc.Log().Debug("PluginOperator: checking status of resource %s", operation.RequestID)
 
-	result, err := (*plugin).Status(data.context, &resource.StatusRequest{
+	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
 		RequestID:    operation.RequestID,
 		ResourceType: operation.ResourceType,
 		Metadata:     operation.Metadata,
@@ -563,7 +552,7 @@ func status(state gen.Atom, data PluginUpdateData, operation CheckStatus, proc g
 	return nextState, data, actions, pluginErr
 }
 
-func retry(state gen.Atom, data PluginUpdateData, operation Retry, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+func pluginOperatorRetry(state gen.Atom, data PluginUpdateData, operation PluginOperatorRetry, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	var nextState gen.Atom
 	var newData PluginUpdateData
 	var progress resource.ProgressResult
@@ -574,13 +563,13 @@ func retry(state gen.Atom, data PluginUpdateData, operation Retry, proc gen.Proc
 
 	switch operation.ResourceOperation {
 	case resource.OperationRead:
-		nextState, newData, progress, actions, pluginErr = read(state, data, operation.Request.(ReadResource), proc)
+		nextState, newData, progress, actions, pluginErr = pluginOperatorRead(state, data, operation.Request.(ReadResource), proc)
 	case resource.OperationCreate:
-		nextState, newData, progress, actions, pluginErr = create(state, data, operation.Request.(CreateResource), proc)
+		nextState, newData, progress, actions, pluginErr = pluginOperatorCreate(state, data, operation.Request.(CreateResource), proc)
 	case resource.OperationUpdate:
-		nextState, newData, progress, actions, pluginErr = update(state, data, operation.Request.(UpdateResource), proc)
+		nextState, newData, progress, actions, pluginErr = pluginOperatorUpdate(state, data, operation.Request.(UpdateResource), proc)
 	case resource.OperationDelete:
-		nextState, newData, progress, actions, pluginErr = delete(state, data, operation.Request.(DeleteResource), proc)
+		nextState, newData, progress, actions, pluginErr = pluginOperatorDelete(state, data, operation.Request.(DeleteResource), proc)
 	}
 
 	progress.Attempts = data.attempts
@@ -596,15 +585,15 @@ func retry(state gen.Atom, data PluginUpdateData, operation Retry, proc gen.Proc
 	return nextState, newData, actions, pluginErr
 }
 
-func resume(state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
-	data.attempts = operation.PreviousAttempts
-	plugin, err := data.pluginManager.ResourcePlugin(operation.Namespace)
-	if err != nil {
-		proc.Log().Error("PluginOperator: resume failed to get resource plugin for namespace %s: %v", operation.Namespace, err)
-		return StateFinishedWithError, data, resource.ProgressResult{}, nil, nil
+func pluginOperatorResume(state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	if !validateNamespace(data, operation.Namespace, proc) {
+		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
+
+	data.attempts = operation.PreviousAttempts
 	proc.Log().Debug("PluginOperator: resume waiting for resource %s", operation.Request.RequestID)
-	result, err := (*plugin).Status(data.context, &resource.StatusRequest{
+
+	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
 		RequestID:    operation.Request.RequestID,
 		ResourceType: operation.Request.ResourceType,
 		Metadata:     operation.Request.Metadata,
@@ -623,7 +612,7 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 	progress := *result
 	progress.Attempts = data.attempts
 	progress.MaxAttempts = maxAttempts
-	progress.ModifiedTs = util.TimeNow()
+	progress.ModifiedTs = time.Now()
 
 	if data.attempts > 1 {
 		progress.StatusMessage = data.LastStatusMessage
@@ -637,11 +626,11 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 		if resource.IsRecoverable(progress.ErrorCode) && data.attempts <= maxAttempts {
 			proc.Log().Info("PluginOperator: %T operation failed with recoverable error code %s. Status message: %s. Retrying (%d/%d)", operation, progress.ErrorCode, progress.StatusMessage, data.attempts, maxAttempts)
 			data.LastStatusMessage = progress.StatusMessage
-			var retryMessage Retry
-			if val, ok := operation.(CheckStatus); ok {
-				retryMessage = Retry{ResourceOperation: val.ResourceOperation, Request: val.Request}
+			var retryMessage PluginOperatorRetry
+			if val, ok := operation.(PluginOperatorCheckStatus); ok {
+				retryMessage = PluginOperatorRetry{ResourceOperation: val.ResourceOperation, Request: val.Request}
 			} else {
-				retryMessage = Retry{ResourceOperation: operation.Operation(), Request: operation}
+				retryMessage = PluginOperatorRetry{ResourceOperation: operation.Operation(), Request: operation}
 			}
 
 			_, err := proc.SendAfter(proc.PID(), retryMessage, data.config.RetryDelay)
@@ -668,10 +657,8 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 	return StateWaitingForResource, data, progress, []statemachine.Action{statusCheck}, nil
 }
 
-func list(state gen.Atom, data PluginUpdateData, operation ListResources, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
-	plugin, err := data.pluginManager.ResourcePlugin(operation.Namespace)
-	if err != nil {
-		proc.Log().Error("PluginOperator: list failed to get resource plugin for namespace %s: %v", operation.Namespace, err)
+func pluginOperatorList(state gen.Atom, data PluginUpdateData, operation ListResources, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -683,7 +670,7 @@ func list(state gen.Atom, data PluginUpdateData, operation ListResources, proc g
 		for _, v := range operation.ListParameters {
 			additionalProps[v.ListParam] = v.ListValue
 		}
-		result, err := (*plugin).List(data.context, &resource.ListRequest{
+		result, err := data.plugin.List(data.context, &resource.ListRequest{
 			ResourceType:         operation.ResourceType,
 			Target:               &operation.Target,
 			PageSize:             100,
@@ -714,7 +701,7 @@ func list(state gen.Atom, data PluginUpdateData, operation ListResources, proc g
 		}
 	}
 
-	err = proc.Send(data.requestedBy, Listing{
+	err := proc.Send(data.requestedBy, Listing{
 		Namespace:      operation.Namespace,
 		Resources:      resources,
 		ResourceType:   operation.ResourceType,

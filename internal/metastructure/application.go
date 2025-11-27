@@ -8,9 +8,6 @@ import (
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_process_supervisor"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_registry"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 )
 
@@ -28,24 +25,12 @@ func (app *Application) Load(node gen.Node, args ...any) (gen.ApplicationSpec, e
 		Mode:        gen.ApplicationModePermanent,
 		Group: []gen.ApplicationMemberSpec{
 			{
-				Name:    "PluginOperatorSupervisor",
-				Factory: plugin_operation.NewPluginOperatorSupervisor,
-			},
-			{
 				Name:    "ResourceUpdaterSupervisor",
 				Factory: resource_update.NewResourceUpdaterSupervisor,
 			},
 			{
 				Name:    "ChangesetSupervisor",
 				Factory: changeset.NewChangesetSupervisor,
-			},
-			{
-				Name:    "PluginProcessSupervisor",
-				Factory: plugin_process_supervisor.NewPluginProcessSupervisor,
-			},
-			{
-				Name:    "PluginRegistry",
-				Factory: plugin_registry.NewPluginRegistry,
 			},
 			{
 				Name:    "MetastructureSupervisor",

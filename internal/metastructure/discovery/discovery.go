@@ -28,7 +28,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -383,19 +382,32 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	operation := resource.OperationList
 	operationID := uuid.New().String()
 
-	// Ensure the plugin operator supervisor is running
-	_, err := proc.Call(actornames.PluginOperatorSupervisor, plugin_operation.EnsurePluginOperator{
-		ResourceURI: uri,
-		Operation:   operation,
-		OperationID: operationID,
-	})
+	// Spawn PluginOperator via PluginCoordinator
+	spawnResult, err := proc.Call(
+		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
+		messages.SpawnPluginOperator{
+			Namespace:   target.Namespace,
+			ResourceURI: string(uri),
+			Operation:   string(operation),
+			OperationID: operationID,
+			RequestedBy: proc.PID(),
+		})
 	if err != nil {
 		delete(data.outstandingListOperations, mapKey)
-		return fmt.Errorf("failed to ensure PluginOperator for %s: %w", uri, err)
+		return fmt.Errorf("failed to spawn PluginOperator for %s: %w", uri, err)
+	}
+	listParameters := util.StringToMap[plugin.ListParam](op.ListParams)
+	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
+	if !ok {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
+	}
+	if spawnRes.Error != "" {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("failed to spawn PluginOperator: %s", spawnRes.Error)
 	}
 
-	listParameters := util.StringToMap[plugin_operation.ListParam](op.ListParams)
-	err = proc.Send(actornames.PluginOperator(uri, string(operation), operationID), plugin_operation.ListResources{
+	err = proc.Send(spawnRes.PID, plugin.ListResources{
 		Namespace:      target.Namespace,
 		ResourceType:   op.ResourceType,
 		Target:         target,
@@ -410,7 +422,7 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	return nil
 }
 
-func processListing(state gen.Atom, data DiscoveryData, message plugin_operation.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+func processListing(state gen.Atom, data DiscoveryData, message plugin.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	proc.Log().Debug("Processing listing for %s in target %s with list parameters %v", message.ResourceType, message.Target.Label, message.ListParameters)
 
 	mapKey := listOperationMapKey(message.ResourceType, message.Target.Label, util.MapToString(message.ListParameters))

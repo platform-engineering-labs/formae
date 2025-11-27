@@ -905,6 +905,12 @@ Create comprehensive distributed tests using FakeAWS plugin
 #### Task 2.1: Create Distributed Test Helpers
 **File**: `internal/workflow_tests/distributed_helpers/helpers.go` (new)
 
+**Plugin Binary Location for Tests**: 
+- Test plugins are placed in: `~/.pel/formae/plugins/{namespace}/test/{namespace}-plugin`
+- Example: `~/.pel/formae/plugins/fake-aws/test/fake-aws-plugin`
+- PluginCoordinator scans this directory structure to discover and start plugins
+- Tests compile the plugin binary with hardcoded behavior (no context-based overrides in distributed mode)
+
 **Test First**: We'll use these in actual distributed tests
 
 **Implementation**:

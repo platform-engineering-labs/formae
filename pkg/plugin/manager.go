@@ -152,9 +152,14 @@ func (m *Manager) Load() {
 			}
 			m.networkPlugins = append(m.networkPlugins, &cast)
 		case Resource:
-			// Skip in-process resource plugins - they will be handled as external plugins
-			// External resource plugins are discovered via discoverExternalResourcePlugins()
-			continue
+			// Load in-process resource plugins for local testing (e.g., FakeAWS)
+			// Production plugins run as external processes and are discovered separately
+			cast, ok := lookup.(ResourcePlugin)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast resource plugin %s\n", p)
+				continue
+			}
+			m.resourcePlugins = append(m.resourcePlugins, &cast)
 		case Schema:
 			cast, ok := lookup.(SchemaPlugin)
 			if !ok {

@@ -9,6 +9,7 @@ import (
 
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/edf"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/assert"
@@ -34,8 +35,8 @@ func TestEDF_AllTypesRegistered(t *testing.T) {
 		model.FormaeURI(""),
 
 		// Internal coordination messages
-		GetPluginOperator{},
-		PluginOperatorPID{},
+		messages.SpawnPluginOperator{},
+		messages.SpawnPluginOperatorResult{},
 
 		// Configuration types
 		model.RetryConfig{},
@@ -52,8 +53,8 @@ func TestEDF_AllTypesRegistered(t *testing.T) {
 
 func TestEDF_MessageTypes_HaveRequiredFields(t *testing.T) {
 	// Test that our internal message types have the expected structure
-	t.Run("GetPluginOperator", func(t *testing.T) {
-		msg := GetPluginOperator{
+	t.Run("SpawnPluginOperator", func(t *testing.T) {
+		msg := messages.SpawnPluginOperator{
 			Namespace:   "AWS",
 			ResourceURI: "formae://test123",
 			Operation:   "Create",
@@ -66,15 +67,15 @@ func TestEDF_MessageTypes_HaveRequiredFields(t *testing.T) {
 		assert.Equal(t, "op-456", msg.OperationID)
 	})
 
-	t.Run("PluginOperatorPID", func(t *testing.T) {
-		msg := PluginOperatorPID{
-			PID: gen.ProcessID{
-				Name: "test-operator",
+	t.Run("SpawnPluginOperatorResult", func(t *testing.T) {
+		msg := messages.SpawnPluginOperatorResult{
+			PID: gen.PID{
 				Node: "test-node@localhost",
 			},
+			Error: "",
 		}
 
-		assert.Equal(t, gen.Atom("test-operator"), msg.PID.Name)
 		assert.Equal(t, gen.Atom("test-node@localhost"), msg.PID.Node)
+		assert.Empty(t, msg.Error)
 	})
 }

@@ -49,7 +49,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 
 	// Get external resource plugins from PluginManager
 	externalPlugins := pluginManager.ListExternalResourcePlugins()
-	p.Log().Info("Discovered external resource plugins", "count", len(externalPlugins))
+	p.Log().Info("Discovered %d external resource plugins", len(externalPlugins))
 
 	// Store plugin info and spawn each plugin
 	for _, pluginInfo := range externalPlugins {
@@ -63,7 +63,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 			healthy:    false,
 		}
 
-		p.Log().Info("Discovered plugin", "namespace", namespace, "version", version, "path", binaryPath)
+		p.Log().Info("Discovered plugin: namespace=%s version=%s path=%s", namespace, version, binaryPath)
 
 		// Spawn the plugin
 		err := p.spawnPlugin(namespace, p.plugins[namespace])
@@ -74,7 +74,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 		}
 	}
 
-	p.Log().Info("PluginProcessSupervisor initialized", "plugin_count", len(p.plugins))
+	p.Log().Info("PluginProcessSupervisor initialized with %d plugins", len(p.plugins))
 	return nil
 }
 
@@ -117,8 +117,6 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 
 	return nil
 }
-
-
 
 // spawnPlugin spawns a plugin process via meta.Port
 func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *PluginInfo) error {
