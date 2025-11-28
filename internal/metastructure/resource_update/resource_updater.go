@@ -226,7 +226,7 @@ func formaCommandPersisterProcess(proc gen.Process) gen.ProcessID {
 	}
 }
 
-func shutdown(state gen.Atom, data ResourceUpdateData, shutdown Shutdown, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Shutdown, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
@@ -272,7 +272,8 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 	return newState, data, nil
 }
 
-func start(state gen.Atom, data ResourceUpdateData, message StartResourceUpdate, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartResourceUpdate, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.requestedBy = from
 	data.resourceUpdate = &message.ResourceUpdate
 	data.commandID = message.CommandID
 	data.commandSource = message.ResourceUpdate.Source
@@ -316,7 +317,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *progress, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *progress, proc)
 }
 
 func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
@@ -364,7 +365,7 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateDeleting, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *result, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
@@ -395,7 +396,7 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 	return StateResolving, data, []statemachine.Action{timeout}, nil
 }
 
-func resourceResolved(state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value)
 	if err != nil {
 		proc.Log().Error("failed to resolve value for resource update", "error", err, "resourceURI", message.ResourceURI)
@@ -437,7 +438,7 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *result, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
@@ -524,13 +525,13 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *result, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
 func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKnownProgress *resource.ProgressResult, operation plugin.StatusCheck, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	// If the lastKnownProgress was finished, we can let the progress handler process the result and determine next steps.
 	if lastKnownProgress.HasFinished() {
-		return handleProgressUpdate(state, data, *lastKnownProgress, proc)
+		return handleProgressUpdate(gen.PID{}, state, data, *lastKnownProgress, proc)
 	}
 
 	// Otherwise we retrieve the actual progress by spawning a plugin operator in the WaitingForResource state.
@@ -543,7 +544,7 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 
 	// If the actual progress is finished, again we let the progress handler process the result and determine next steps.
 	if actualProgress.HasFinished() {
-		return handleProgressUpdate(state, data, *actualProgress, proc)
+		return handleProgressUpdate(gen.PID{}, state, data, *actualProgress, proc)
 	}
 
 	// If not, this means that the plugin operator is waiting for the operation to be completed, so we stay in the
@@ -574,7 +575,7 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 // handleProgressUpdate handles progress updates from th plugin operator. It persists any progress made, and moves the
 // state machine to the next state when the plugin operation finished successfully. After the last plugin operation, or
 // after the first error, it reports the final state to the stack updater and exits.
-func handleProgressUpdate(state gen.Atom, data ResourceUpdateData, message resource.ProgressResult, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData, message resource.ProgressResult, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
 		proc.Log().Error("failed to record progress for resource update", "error", err)
@@ -760,19 +761,19 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 	return &progressResult, nil
 }
 
-func pluginOperationMissingInAction(state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Plugin operator is missing in action", "state", state, "data", data)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
-func resolveCacheMissingInAction(state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resolveCacheMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Resolve cache is missing in action", "state", state, "data", data)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
-func resourceFailedToResolve(state gen.Atom, data ResourceUpdateData, message messages.FailedToResolveValue, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.FailedToResolveValue, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Failed to resolve resource property", "resourceUri", message.ResourceURI)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil

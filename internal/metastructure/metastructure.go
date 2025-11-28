@@ -129,8 +129,10 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	// Enable Ergo networking for distributed plugin architecture
 	metastructure.options.Network.Mode = gen.NetworkModeEnabled
 
-	// Enable environment sharing for RemoteSpawn (plugins inherit config)
-	metastructure.options.Security.ExposeEnvRemoteSpawn = true
+	// Disable environment sharing for RemoteSpawn because the agent's environment contains
+	// non-serializable types (Datastore, PluginManager, Context). The plugin node sets up
+	// its own environment with everything PluginOperator needs (see pkg/plugin/run.go).
+	metastructure.options.Security.ExposeEnvRemoteSpawn = false
 
 	//FIXME(discount-elf): enable real TLS if we want it
 	//cert, _ := lib.GenerateSelfSignedCert("formae node")

@@ -159,6 +159,7 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 	ru.updateState()
 	slog.Debug("Updating resource state for " + string(ru.URI()) + " to " + string(ru.State))
 
+	slog.Debug("Setting NativeID from progress", "nativeID", progress.NativeID, "uri", ru.URI())
 	ru.Resource.NativeID = progress.NativeID
 	if ru.StartTs.IsZero() {
 		ru.StartTs = progress.StartTs

@@ -8,6 +8,7 @@ package distributed
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -245,11 +246,12 @@ func TestMetastructure_ApplyForma_DistributedPlugin_HappyPath(t *testing.T) {
 			},
 			Resources: []pkgmodel.Resource{
 				{
-					Label:   "test-resource",
-					Type:    "FakeAWS::S3::Bucket",
-					Stack:   "test-stack",
-					Target:  "test-target",
-					Managed: true,
+					Label:      "test-resource",
+					Type:       "FakeAWS::S3::Bucket",
+					Stack:      "test-stack",
+					Target:     "test-target",
+					Properties: json.RawMessage(`{"BucketName":"my-test-bucket"}`),
+					Managed:    true,
 				},
 			},
 			Targets: []pkgmodel.Target{
@@ -283,7 +285,10 @@ func TestMetastructure_ApplyForma_DistributedPlugin_HappyPath(t *testing.T) {
 			return len(commands) == 1 && commands[0].State == forma_command.CommandStateSuccess
 		}, 10*time.Second, 100*time.Millisecond, "Command should complete successfully")
 
-		assert.Equal(t, "4567", commands[0].ResourceUpdates[0].Resource.NativeID, "Resource should have expected NativeID")
+		require.Len(t, commands[0].ResourceUpdates[0].ProgressResult, 1)
+		assert.Equal(t, "1234", commands[0].ResourceUpdates[0].ProgressResult[0].RequestID)
+		assert.Equal(t, "5678", commands[0].ResourceUpdates[0].ProgressResult[0].NativeID)
+		assert.Equal(t, json.RawMessage(`{"BucketName":"my-test-bucket"}`), commands[0].ResourceUpdates[0].ProgressResult[0].ResourceProperties)
 
 		t.Logf("✓ Apply command completed successfully")
 	})

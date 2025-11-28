@@ -134,7 +134,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 
 	// 1. Check if plugin is registered (distributed mode)
 	if registeredPlugin, ok := c.plugins[req.Namespace]; ok {
-		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName, req.RequestedBy)
+		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName)
 		if err != nil {
 			c.Log().Error("Failed to remote spawn PluginOperator",
 				"namespace", req.Namespace,
@@ -182,7 +182,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 				}
 			}
 
-			pid, err := c.localSpawn(*localPlugin, registerName, req.RequestedBy)
+			pid, err := c.localSpawn(*localPlugin, registerName)
 			if err != nil {
 				c.Log().Error("Failed to local spawn PluginOperator",
 					"namespace", req.Namespace,
@@ -203,7 +203,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 }
 
 // remoteSpawn spawns a PluginOperator on a remote plugin node
-func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom, requestedBy gen.PID) (gen.PID, error) {
+func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom) (gen.PID, error) {
 	// Get connection to remote node
 	remoteNode, err := c.Node().Network().GetNode(nodeName)
 	if err != nil {
@@ -213,7 +213,9 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 	// Remote spawn with registration
 	// The remote node's environment already has Plugin, Context, and RetryConfig set
 	// (configured in pkg/plugin/run.go)
-	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, gen.ProcessOptions{}, requestedBy)
+	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, gen.ProcessOptions{
+		Env: map[gen.Env]any{},
+	})
 	if err != nil {
 		return gen.PID{}, fmt.Errorf("failed to remote spawn on %s: %w", nodeName, err)
 	}
@@ -222,7 +224,7 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 }
 
 // localSpawn spawns a PluginOperator locally with the given plugin
-func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, registerName gen.Atom, requestedBy gen.PID) (gen.PID, error) {
+func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, registerName gen.Atom) (gen.PID, error) {
 	// Get context and retry config from environment
 	ctx := context.Background()
 	if envCtx, ok := c.Env("Context"); ok {
@@ -247,7 +249,7 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, regist
 		},
 	}
 
-	pid, err := c.SpawnRegister(registerName, plugin.NewPluginOperator, opts, requestedBy)
+	pid, err := c.SpawnRegister(registerName, plugin.NewPluginOperator, opts)
 	if err != nil {
 		return gen.PID{}, fmt.Errorf("failed to local spawn: %w", err)
 	}

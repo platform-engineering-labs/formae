@@ -237,7 +237,7 @@ func resumeDiscovery(state gen.Atom, data DiscoveryData, message messages.Resume
 	return state, data, nil, nil
 }
 
-func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	data.isScheduledDiscovery = !message.Once
 	data.timeStarted = time.Now()
 	data.summary = make(map[string]int)
@@ -299,7 +299,7 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 			}
 			if len(originalDesc.ParentResourceTypesWithMappingProperties) == 0 {
 				data.queuedListOperations[target.Namespace] = append(data.queuedListOperations[target.Namespace],
-					ListOperation{ResourceType: node.resourceType, TargetLabel: target.Label, ListParams: util.MapToString(make(map[string]plugin_operation.ListParam))})
+					ListOperation{ResourceType: node.resourceType, TargetLabel: target.Label, ListParams: util.MapToString(make(map[string]plugin.ListParam))})
 			}
 		}
 		err = proc.Send(proc.PID(), ResumeScanning{})
@@ -312,7 +312,7 @@ func discover(state gen.Atom, data DiscoveryData, message Discover, proc gen.Pro
 	return StateDiscovering, data, nil, nil
 }
 
-func resumeScanning(state gen.Atom, data DiscoveryData, message ResumeScanning, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message ResumeScanning, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	// The delayed message has arrived - clear the pending flag
 	data.hasPendingResumeScan = false
 
@@ -422,7 +422,7 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	return nil
 }
 
-func processListing(state gen.Atom, data DiscoveryData, message plugin.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message plugin.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	proc.Log().Debug("Processing listing for %s in target %s with list parameters %v", message.ResourceType, message.Target.Label, message.ListParameters)
 
 	mapKey := listOperationMapKey(message.ResourceType, message.Target.Label, util.MapToString(message.ListParameters))
@@ -606,11 +606,11 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 
 	for _, parent := range parents {
 		for childNode, mappingProps := range parentNode.children {
-			listParams := make(map[string]plugin_operation.ListParam)
+			listParams := make(map[string]plugin.ListParam)
 			for _, param := range mappingProps {
 				value, found := parent.GetProperty(param.ParentProperty)
 				if found {
-					listParams[param.ListProperty] = plugin_operation.ListParam{
+					listParams[param.ListProperty] = plugin.ListParam{
 						ParentProperty: param.ParentProperty,
 						ListParam:      param.ListProperty,
 						ListValue:      value,
@@ -640,7 +640,7 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 	return nil
 }
 
-func syncCompleted(state gen.Atom, data DiscoveryData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	op, exists := data.outstandingSyncCommands[message.CommandID]
 	if !exists {
 		proc.Log().Error("Discovery received ChangesetCompleted for unknown command ID", "commandID", message.CommandID)
@@ -768,7 +768,7 @@ func injectResolvables(props string, op ListOperation) json.RawMessage {
 		return json.RawMessage(props)
 	}
 
-	params := util.StringToMap[plugin_operation.ListParam](op.ListParams)
+	params := util.StringToMap[plugin.ListParam](op.ListParams)
 	for _, v := range params {
 		// Check if there's an existing value and validate it matches the parent's expected value
 		// This prevents incorrect parent associations when resources are discovered via multiple paths

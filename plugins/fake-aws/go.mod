@@ -1,4 +1,6 @@
 module github.com/platform-engineering-labs/formae/plugins/fake-aws
+replace ergo.services/actor/statemachine => /home/jeroen/dev/oss/ergo-services/actor/statemachine
+
 
 go 1.25
 

@@ -15,6 +15,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	internalTypes "github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -24,50 +25,81 @@ import (
 // Note: Request/Result types with pointers are handled by Ergo's Call mechanism and don't need
 // explicit registration. Only value types that are embedded in messages need registration.
 func registerEDFTypes() error {
+	// IMPORTANT: Types must be registered in dependency order!
+	// Types that are embedded in other types must be registered first.
 	types := []any{
-		// Basic types
+		// 1. Basic types
 		time.Duration(0),
 		slog.Level(0),
 
-		// Internal types (from old types.go)
+		// 2. Internal enum types (no dependencies)
 		forma_command.CommandStatePending,
 		model.FormaApplyModeReconcile,
 		internalTypes.OperationType(""),
 		internalTypes.ResourceUpdateState(""),
 		internalTypes.FormaCommandSource(""),
 
-		// Resource plugin enums and result types
+		// 3. Model types in dependency order
+		// First: types with no external dependencies
+		model.FormaeURI(""),
+		model.FieldHint{},
+		model.Description{},
+		model.Prop{},
+		model.Command(""),
+
+		// Second: Schema depends on FieldHint (map[string]FieldHint)
+		model.Schema{},
+
+		// Third: Resource depends on Schema
+		model.Resource{},
+
+		// Fourth: Target and other model types
+		model.Target{},
+		model.Stack{},
+		model.Forma{},
+
+		// 4. Resource operation types (some may depend on model types)
 		resource.OperationStatus(""),
 		resource.Operation(""),
 		resource.OperationErrorCode(""),
-		resource.ProgressResult{},
+		resource.ProgressResult{}, // depends on model.Resource
 
-		// Model types (dependencies for ProgressResult and other messages)
-		model.FormaeURI(""),
-		model.FieldHint{},
-		model.Schema{},
-		model.Resource{},
-		model.Stack{},
-		model.Target{},
-		model.Prop{},
-		model.Description{},
-		model.Forma{},
-		model.Command(""),
-
-		// Configuration types
+		// 5. Configuration types
 		config.FormaCommandConfig{},
 		model.RetryConfig{},
 		model.LoggingConfig{},
+		model.SynchronizationConfig{},
+		model.DiscoveryConfig{},
+		model.ServerConfig{},
+		model.SqliteConfig{},
+		model.PostgresConfig{},
+		model.DatastoreConfig{},
+		model.PluginConfig{},
+		model.OTLPConfig{},
+		model.OTelConfig{},
 
-		// Internal messages (from old types.go)
+		// 6. Internal messages
 		messages.MarkResourceUpdateAsComplete{},
 		messages.UpdateResourceProgress{},
 
-		// Plugin coordination messages (agent <-> plugins)
+		// 7. Plugin coordination messages (agent <-> plugins)
 		messages.PluginAnnouncement{},
 		messages.PluginHeartbeat{},
 		messages.SpawnPluginOperator{},
 		messages.SpawnPluginOperatorResult{},
+
+		// 8. Plugin operation messages (ResourceUpdater <-> PluginOperator)
+		// These depend on model.Resource and model.Target
+		plugin.ReadResource{},
+		plugin.CreateResource{},
+		plugin.UpdateResource{},
+		plugin.DeleteResource{},
+		plugin.PluginOperatorCheckStatus{},
+		plugin.ResumeWaitingForResource{},
+		plugin.PluginOperatorRetry{},
+		plugin.PluginOperatorShutdown{},
+		plugin.ListResources{},
+		plugin.StartPluginOperation{},
 	}
 
 	for _, t := range types {

@@ -141,7 +141,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data SynchronizerData, 
 	return newState, data, nil
 }
 
-func synchronize(state gen.Atom, data SynchronizerData, message Synchronize, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func synchronize(from gen.PID, state gen.Atom, data SynchronizerData, message Synchronize, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	data.isScheduledSync = !message.Once
 	data.timeStarted = time.Now()
 
@@ -257,7 +257,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	return StateSynchronizing, data, nil, nil
 }
 
-func changesetCompleted(state gen.Atom, data SynchronizerData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func changesetCompleted(from gen.PID, state gen.Atom, data SynchronizerData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	if message.CommandID != data.commandID {
 		proc.Log().Error("Synchronizer received ChangesetCompleted for unknown command ID", "commandID", message.CommandID)
 		return state, data, nil, nil
@@ -266,13 +266,13 @@ func changesetCompleted(state gen.Atom, data SynchronizerData, message changeset
 	return StateIdle, data, nil, nil
 }
 
-func registerInProgressResource(state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func registerInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	data.excludedResources[message.ResourceURI] = struct{}{}
 	proc.Log().Debug("Resource registered as in-progress, excluded from sync", "resourceURI", message.ResourceURI)
 	return state, data, nil, nil
 }
 
-func unregisterInProgressResource(state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func unregisterInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	delete(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource unregistered from in-progress, can be synced", "resourceURI", message.ResourceURI)
 	return state, data, nil, nil

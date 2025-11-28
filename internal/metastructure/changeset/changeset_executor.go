@@ -95,12 +95,7 @@ type ChangesetCompleted struct {
 }
 
 func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[ChangesetData], error) {
-	if len(args) != 1 {
-		return statemachine.StateMachineSpec[ChangesetData]{}, fmt.Errorf("expected 1 argument, got %d", len(args))
-	}
-	data := ChangesetData{
-		requestedBy: args[0].(gen.PID),
-	}
+	data := ChangesetData{}
 
 	return statemachine.NewStateMachineSpec(StateNotStarted,
 		statemachine.WithData(data),
@@ -171,7 +166,8 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 	return newState, data, nil
 }
 
-func start(state gen.Atom, data ChangesetData, message Start, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	data.requestedBy = from
 	data.changeset = message.Changeset
 
 	// Ensure the resolve cache is started
@@ -205,10 +201,10 @@ func start(state gen.Atom, data ChangesetData, message Start, proc gen.Process) 
 		}
 	}
 
-	return resume(state, data, Resume{}, proc)
+	return resume(from, state, data, Resume{}, proc)
 }
 
-func resume(state gen.Atom, data ChangesetData, message Resume, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	finished := true
 	availableUpdates := data.changeset.AvailableExecutableUpdates()
 
@@ -243,7 +239,7 @@ func resume(state gen.Atom, data ChangesetData, message Resume, proc gen.Process
 	return StateProcessing, data, actions, nil
 }
 
-func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource_update.ResourceUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message resource_update.ResourceUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	// If we're in canceled state, ignore late resource update messages
 	if state == StateCanceled {
 		proc.Log().Debug("Ignoring ResourceUpdateFinished in canceled state", "uri", message.Uri)
@@ -390,7 +386,7 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 	}
 
 	// Try to start the next batch of resource updates that can be executed in parallel
-	return resume(state, data, Resume{}, proc)
+	return resume(from, state, data, Resume{}, proc)
 }
 
 func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID string, proc gen.Process) error {
@@ -435,7 +431,7 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 	return nil
 }
 
-func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	proc.Log().Debug("ChangesetExecutor received cancel request", "commandID", message.CommandID)
 
 	// Collect resources by state
@@ -491,7 +487,7 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 	return nextState, data, nil, nil
 }
 
-func shutdown(state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
 }
 

@@ -103,12 +103,69 @@ func Run(rp ResourcePlugin) {
 // registerEDFTypes registers all message types needed for network serialization
 // between the agent and plugin processes.
 func registerEDFTypes() {
-	// Plugin announcement
+	// IMPORTANT: Types must be registered in dependency order!
+	// Types that are embedded in other types must be registered first.
+
+	// 1. First register model types that have no dependencies
+	if err := edf.RegisterTypeOf(model.FormaeURI("")); err != nil {
+		log.Printf("Warning: failed to register FormaeURI type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(model.FieldHint{}); err != nil {
+		log.Printf("Warning: failed to register FieldHint type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(model.Description{}); err != nil {
+		log.Printf("Warning: failed to register Description type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(model.Prop{}); err != nil {
+		log.Printf("Warning: failed to register Prop type: %v", err)
+	}
+
+	// 2. Schema depends on FieldHint (map[string]FieldHint)
+	if err := edf.RegisterTypeOf(model.Schema{}); err != nil {
+		log.Printf("Warning: failed to register Schema type: %v", err)
+	}
+
+	// 3. Resource depends on Schema
+	if err := edf.RegisterTypeOf(model.Resource{}); err != nil {
+		log.Printf("Warning: failed to register Resource type: %v", err)
+	}
+
+	// 4. Target (no external dependencies but registering with other model types)
+	if err := edf.RegisterTypeOf(model.Target{}); err != nil {
+		log.Printf("Warning: failed to register Target type: %v", err)
+	}
+
+	// 5. Higher-level model types
+	if err := edf.RegisterTypeOf(model.Stack{}); err != nil {
+		log.Printf("Warning: failed to register Stack type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(model.Forma{}); err != nil {
+		log.Printf("Warning: failed to register Forma type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(model.Command("")); err != nil {
+		log.Printf("Warning: failed to register Command type: %v", err)
+	}
+
+	// 6. Resource operation types
+	if err := edf.RegisterTypeOf(resource.OperationStatus("")); err != nil {
+		log.Printf("Warning: failed to register OperationStatus type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(resource.Operation("")); err != nil {
+		log.Printf("Warning: failed to register Operation type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(resource.OperationErrorCode("")); err != nil {
+		log.Printf("Warning: failed to register OperationErrorCode type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(resource.ProgressResult{}); err != nil {
+		log.Printf("Warning: failed to register ProgressResult type: %v", err)
+	}
+
+	// 7. Plugin announcement (no external dependencies)
 	if err := edf.RegisterTypeOf(PluginAnnouncement{}); err != nil {
 		log.Printf("Warning: failed to register PluginAnnouncement type: %v", err)
 	}
 
-	// Operator message types (for remote spawn and message passing)
+	// 8. Finally, register operator message types that depend on model types
 	if err := edf.RegisterTypeOf(ReadResource{}); err != nil {
 		log.Printf("Warning: failed to register ReadResource type: %v", err)
 	}
@@ -124,11 +181,11 @@ func registerEDFTypes() {
 	if err := edf.RegisterTypeOf(ListResources{}); err != nil {
 		log.Printf("Warning: failed to register ListResources type: %v", err)
 	}
-	if err := edf.RegisterTypeOf(PluginOperatorCheckStatus{}); err != nil {
-		log.Printf("Warning: failed to register PluginOperatorCheckStatus type: %v", err)
-	}
 	if err := edf.RegisterTypeOf(Listing{}); err != nil {
 		log.Printf("Warning: failed to register Listing type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(PluginOperatorCheckStatus{}); err != nil {
+		log.Printf("Warning: failed to register PluginOperatorCheckStatus type: %v", err)
 	}
 	if err := edf.RegisterTypeOf(PluginOperatorShutdown{}); err != nil {
 		log.Printf("Warning: failed to register PluginOperatorShutdown type: %v", err)
@@ -139,9 +196,7 @@ func registerEDFTypes() {
 	if err := edf.RegisterTypeOf(ResumeWaitingForResource{}); err != nil {
 		log.Printf("Warning: failed to register ResumeWaitingForResource type: %v", err)
 	}
-
-	// Resource types (progress results sent back to agent)
-	if err := edf.RegisterTypeOf(resource.ProgressResult{}); err != nil {
-		log.Printf("Warning: failed to register ProgressResult type: %v", err)
+	if err := edf.RegisterTypeOf(StartPluginOperation{}); err != nil {
+		log.Printf("Warning: failed to register StartPluginOperation type: %v", err)
 	}
 }

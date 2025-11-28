@@ -325,31 +325,34 @@ func (data PluginUpdateData) newUnforeseenError() resource.ProgressResult {
 
 func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[PluginUpdateData], error) {
 	data := PluginUpdateData{
-		requestedBy: args[0].(gen.PID),
-		attempts:    1,
+		attempts: 1,
 	}
 
 	initialState := StateNotStarted
-	if len(args) > 1 {
-		initialState = args[1].(gen.Atom)
+	if len(args) > 0 {
+		initialState = args[0].(gen.Atom)
 	}
 
-	// Get the plugin from Ergo environment (set by plugin.Run or PluginCoordinator for local spawn)
-	pluginEnv, ok := o.Env("Plugin")
+	// Get the plugin from Node's Ergo environment (set by plugin.Run)
+	// For remote spawns, process-level Env() doesn't inherit from the target node,
+	// so we access the node's environment directly.
+	pluginEnv, ok := o.Node().Env("Plugin")
 	if !ok {
 		o.Log().Error("PluginOperator: missing 'Plugin' environment variable")
 		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Plugin' environment variable")
 	}
 	data.plugin = pluginEnv.(ResourcePlugin)
 
-	ctx, ok := o.Env("Context")
+	// Context from node environment
+	ctx, ok := o.Node().Env("Context")
 	if !ok {
 		o.Log().Error("PluginOperator: missing 'Context' environment variable")
 		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Context' environment variable")
 	}
 	data.context = ctx.(context.Context)
 
-	cfg, ok := o.Env("RetryConfig")
+	// RetryConfig from node environment
+	cfg, ok := o.Node().Env("RetryConfig")
 	if !ok {
 		o.Log().Error("PluginOperator: missing 'RetryConfig' environment variable")
 		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'RetryConfig' environment variable")
@@ -361,25 +364,25 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 
 		statemachine.WithStateEnterCallback(onStateChange),
 
-		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorRead),
-		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorCreate),
-		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorUpdate),
-		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorDelete),
-		statemachine.WithStateCallHandler(StateNotStarted, pluginOperatorResume),
-		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorRead),
-		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorCreate),
-		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorUpdate),
-		statemachine.WithStateCallHandler(StateRetrying, pluginOperatorDelete),
+		statemachine.WithStateCallHandler(StateNotStarted, read),
+		statemachine.WithStateCallHandler(StateNotStarted, create),
+		statemachine.WithStateCallHandler(StateNotStarted, update),
+		statemachine.WithStateCallHandler(StateNotStarted, delete),
+		statemachine.WithStateCallHandler(StateNotStarted, resume),
+		statemachine.WithStateCallHandler(StateRetrying, read),
+		statemachine.WithStateCallHandler(StateRetrying, create),
+		statemachine.WithStateCallHandler(StateRetrying, update),
+		statemachine.WithStateCallHandler(StateRetrying, delete),
 
-		statemachine.WithStateMessageHandler(StateNotStarted, pluginOperatorList),
-		statemachine.WithStateMessageHandler(StateWaitingForResource, pluginOperatorStatus),
-		statemachine.WithStateMessageHandler(StateRetrying, pluginOperatorRetry),
-		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, pluginOperatorShutdown),
-		statemachine.WithStateMessageHandler(StateFinishedWithError, pluginOperatorShutdown),
+		statemachine.WithStateMessageHandler(StateNotStarted, list),
+		statemachine.WithStateMessageHandler(StateWaitingForResource, status),
+		statemachine.WithStateMessageHandler(StateRetrying, retry),
+		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
+		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
 	), nil
 }
 
-func pluginOperatorShutdown(state gen.Atom, data PluginUpdateData, shutdown PluginOperatorShutdown, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown PluginOperatorShutdown, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
@@ -402,7 +405,8 @@ func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process
 	return true
 }
 
-func pluginOperatorRead(state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -449,7 +453,8 @@ func pluginOperatorRead(state gen.Atom, data PluginUpdateData, operation ReadRes
 	return handlePluginResult(data, operation, proc, &progressResult)
 }
 
-func pluginOperatorCreate(state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -469,7 +474,8 @@ func pluginOperatorCreate(state gen.Atom, data PluginUpdateData, operation Creat
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func pluginOperatorUpdate(state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -505,7 +511,8 @@ func pluginOperatorUpdate(state gen.Atom, data PluginUpdateData, operation Updat
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func pluginOperatorDelete(state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -524,7 +531,7 @@ func pluginOperatorDelete(state gen.Atom, data PluginUpdateData, operation Delet
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func pluginOperatorStatus(state gen.Atom, data PluginUpdateData, operation PluginOperatorCheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation PluginOperatorCheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -552,7 +559,7 @@ func pluginOperatorStatus(state gen.Atom, data PluginUpdateData, operation Plugi
 	return nextState, data, actions, pluginErr
 }
 
-func pluginOperatorRetry(state gen.Atom, data PluginUpdateData, operation PluginOperatorRetry, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation PluginOperatorRetry, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	var nextState gen.Atom
 	var newData PluginUpdateData
 	var progress resource.ProgressResult
@@ -563,13 +570,13 @@ func pluginOperatorRetry(state gen.Atom, data PluginUpdateData, operation Plugin
 
 	switch operation.ResourceOperation {
 	case resource.OperationRead:
-		nextState, newData, progress, actions, pluginErr = pluginOperatorRead(state, data, operation.Request.(ReadResource), proc)
+		nextState, newData, progress, actions, pluginErr = read(from, state, data, operation.Request.(ReadResource), proc)
 	case resource.OperationCreate:
-		nextState, newData, progress, actions, pluginErr = pluginOperatorCreate(state, data, operation.Request.(CreateResource), proc)
+		nextState, newData, progress, actions, pluginErr = create(from, state, data, operation.Request.(CreateResource), proc)
 	case resource.OperationUpdate:
-		nextState, newData, progress, actions, pluginErr = pluginOperatorUpdate(state, data, operation.Request.(UpdateResource), proc)
+		nextState, newData, progress, actions, pluginErr = update(from, state, data, operation.Request.(UpdateResource), proc)
 	case resource.OperationDelete:
-		nextState, newData, progress, actions, pluginErr = pluginOperatorDelete(state, data, operation.Request.(DeleteResource), proc)
+		nextState, newData, progress, actions, pluginErr = delete(from, state, data, operation.Request.(DeleteResource), proc)
 	}
 
 	progress.Attempts = data.attempts
@@ -585,7 +592,8 @@ func pluginOperatorRetry(state gen.Atom, data PluginUpdateData, operation Plugin
 	return nextState, newData, actions, pluginErr
 }
 
-func pluginOperatorResume(state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -657,7 +665,8 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 	return StateWaitingForResource, data, progress, []statemachine.Action{statusCheck}, nil
 }
 
-func pluginOperatorList(state gen.Atom, data PluginUpdateData, operation ListResources, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListResources, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, nil, nil
 	}
