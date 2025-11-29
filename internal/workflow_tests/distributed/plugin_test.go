@@ -206,6 +206,14 @@ func setupTestLogger() *logging.TestLogCapture {
 	return capture
 }
 
+// isPluginProcessRunning checks if a process with the given name pattern is running
+func isPluginProcessRunning(processName string) bool {
+	cmd := exec.Command("pgrep", "-f", processName)
+	err := cmd.Run()
+	// pgrep returns exit code 0 if a process is found, non-zero otherwise
+	return err == nil
+}
+
 // TestMetastructure_ApplyForma_DistributedPlugin_HappyPath tests a full apply workflow
 // with FakeAWS running as a separate process.
 //
@@ -230,7 +238,8 @@ func TestMetastructure_ApplyForma_DistributedPlugin_HappyPath(t *testing.T) {
 
 		// Step 4: Create and start metastructure
 		m := newDistributedMetastructure(t, cfg)
-		defer m.Stop(true)
+		// NOTE: We don't use defer m.Stop(true) here because we need to
+		// explicitly test the shutdown behavior
 
 		// Step 5: Wait for the plugin to register
 		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
@@ -291,5 +300,25 @@ func TestMetastructure_ApplyForma_DistributedPlugin_HappyPath(t *testing.T) {
 		assert.Equal(t, json.RawMessage(`{"BucketName":"my-test-bucket"}`), commands[0].ResourceUpdates[0].ProgressResult[0].ResourceProperties)
 
 		t.Logf("✓ Apply command completed successfully")
+
+		// Step 8: Verify the plugin process is running before shutdown
+		require.True(t, isPluginProcessRunning("fake-aws-plugin"),
+			"Plugin process should be running before shutdown")
+		t.Logf("✓ Plugin process is running before shutdown")
+
+		// Step 9: Stop the metastructure
+		m.Stop(true)
+		t.Logf("✓ Metastructure stopped")
+
+		// Step 10: Verify the plugin process has been terminated
+		// Wait a reasonable amount of time for graceful shutdown
+		// With proper graceful shutdown, the plugin should terminate within 2 seconds
+		var pluginStillRunning bool
+		require.Eventually(t, func() bool {
+			pluginStillRunning = isPluginProcessRunning("fake-aws-plugin")
+			return !pluginStillRunning
+		}, 2*time.Second, 100*time.Millisecond,
+			"Plugin process should be terminated within 2 seconds after metastructure stops")
+		t.Logf("✓ Plugin process terminated after shutdown")
 	})
 }

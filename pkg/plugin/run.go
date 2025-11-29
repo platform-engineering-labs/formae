@@ -58,11 +58,10 @@ func Run(rp ResourcePlugin) {
 
 	// Set environment for PluginActor and remotely spawned PluginOperators
 	options.Env = map[gen.Env]any{
+		gen.Env("Context"):   context.Background(),
 		gen.Env("Plugin"):    rp,
 		gen.Env("Namespace"): rp.Namespace(),
 		gen.Env("AgentNode"): gen.Atom(agentNode),
-		// Context for plugin operations (used by remotely spawned PluginOperators)
-		gen.Env("Context"): context.Background(),
 		// Default retry config for plugin operations
 		gen.Env("RetryConfig"): model.RetryConfig{
 			StatusCheckInterval: 5 * time.Second,
@@ -106,6 +105,10 @@ func registerEDFTypes() {
 	// IMPORTANT: Types must be registered in dependency order!
 	// Types that are embedded in other types must be registered first.
 
+	if err := edf.RegisterTypeOf(time.Duration(0)); err != nil {
+		log.Printf("Warning: failed to register Duration type: %v", err)
+	}
+
 	// 1. First register model types that have no dependencies
 	if err := edf.RegisterTypeOf(model.FormaeURI("")); err != nil {
 		log.Printf("Warning: failed to register FormaeURI type: %v", err)
@@ -145,6 +148,9 @@ func registerEDFTypes() {
 	if err := edf.RegisterTypeOf(model.Command("")); err != nil {
 		log.Printf("Warning: failed to register Command type: %v", err)
 	}
+	if err := edf.RegisterTypeOf(model.RetryConfig{}); err != nil {
+		log.Printf("Warning: failed to register RetryConfig type: %v", err)
+	}
 
 	// 6. Resource operation types
 	if err := edf.RegisterTypeOf(resource.OperationStatus("")); err != nil {
@@ -158,6 +164,9 @@ func registerEDFTypes() {
 	}
 	if err := edf.RegisterTypeOf(resource.ProgressResult{}); err != nil {
 		log.Printf("Warning: failed to register ProgressResult type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(resource.Resource{}); err != nil {
+		log.Printf("Warning: failed to register Resource type: %v", err)
 	}
 
 	// 7. Plugin announcement (no external dependencies)

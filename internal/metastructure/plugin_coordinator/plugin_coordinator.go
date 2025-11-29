@@ -29,6 +29,7 @@ type PluginCoordinator struct {
 	plugins                   map[string]*RegisteredPlugin // namespace → plugin info (remote)
 	registeredLocalNamespaces map[string]bool              // namespaces registered with RateLimiter (local)
 	pluginManager             *plugin.Manager              // for local plugin fallback
+	retryConfig               model.RetryConfig
 }
 
 // RegisteredPlugin contains information about a registered plugin
@@ -72,6 +73,17 @@ func (c *PluginCoordinator) Init(args ...any) error {
 				c.Log().Info("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", namespace, maxRPS)
 			}
 		}
+	}
+
+	retryCfg, ok := c.Env("retryConfig")
+	if !ok {
+		c.Log().Error("ResourceUpdater: missing 'RetryConfig' environment variable")
+		return fmt.Errorf("resourceUpdater: missing 'RetryConfig' environment variable")
+	}
+	c.retryConfig = retryCfg.(model.RetryConfig)
+
+	if rc, ok := c.Env("RetryConfig"); ok {
+		c.retryConfig = rc.(model.RetryConfig)
 	}
 
 	c.Log().Info("PluginCoordinator started")
@@ -211,11 +223,14 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 	}
 
 	// Remote spawn with registration
-	// The remote node's environment already has Plugin, Context, and RetryConfig set
+	// The remote node's environment already has Plugin and Context set
 	// (configured in pkg/plugin/run.go)
-	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, gen.ProcessOptions{
-		Env: map[gen.Env]any{},
-	})
+	opts := gen.ProcessOptions{
+		Env: map[gen.Env]any{
+			gen.Env("RetryConfig"): c.retryConfig,
+		},
+	}
+	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, opts)
 	if err != nil {
 		return gen.PID{}, fmt.Errorf("failed to remote spawn on %s: %w", nodeName, err)
 	}
@@ -231,21 +246,12 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, regist
 		ctx = envCtx.(context.Context)
 	}
 
-	retryConfig := model.RetryConfig{
-		StatusCheckInterval: 5 * time.Second,
-		MaxRetries:          3,
-		RetryDelay:          2 * time.Second,
-	}
-	if envConfig, ok := c.Env("RetryConfig"); ok {
-		retryConfig = envConfig.(model.RetryConfig)
-	}
-
 	// Spawn locally with plugin passed via Env
 	opts := gen.ProcessOptions{
 		Env: map[gen.Env]any{
 			gen.Env("Plugin"):      localPlugin,
 			gen.Env("Context"):     ctx,
-			gen.Env("RetryConfig"): retryConfig,
+			gen.Env("RetryConfig"): c.retryConfig,
 		},
 	}
 

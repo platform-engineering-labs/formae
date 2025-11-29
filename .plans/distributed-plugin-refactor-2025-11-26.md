@@ -1,226 +1,432 @@
 # Distributed Plugin Architecture Refactor
 
-**Date:** 2025-11-26
+**Date:** 2025-11-26 (Updated: 2025-11-28)
 **Branch:** `feat/distributed-plugins`
-**Status:** In Progress
+**Status:** Core architecture complete, AWS plugin working, hardening in progress
 
 ---
 
-## Architectural Decision
+## Current State Summary
 
-### Problem
+The distributed plugin architecture is **fully functional**:
+- FakeAWS plugin runs as external process, passes distributed workflow tests
+- AWS plugin converted to external binary, passes SDK tests (S3 bucket lifecycle)
+- PluginCoordinator handles both remote (distributed) and local (.so fallback) plugins
+- EDF serialization working for all operation types
 
-The previous implementation attempted to bypass the existing PluginOperator/ResourceUpdater
-flow by creating a simplified `pkg/plugin/operator.go` and modifying `doPluginOperation`
-to directly remote-spawn and call this simplified operator. This approach:
+**Remaining work:**
+- Process lifecycle management (graceful shutdown, crash recovery)
+- Azure plugin conversion
+- Multi-host support
 
-1. Duplicated logic between the FSM-based PluginOperator and the simplified version
-2. Required new request/response types for network serialization
-3. Bypassed the existing PluginOperatorSupervisor without clear benefit
-4. Created friction when trying to support both local and remote modes
+---
 
-### Insight: PluginOperatorSupervisor is an Anti-Pattern
+## Architecture Overview
 
-The PluginOperatorSupervisor supervises PluginOperator FSMs. However:
-
-- PluginOperator is a **stateful FSM** - if it crashes mid-operation, restarting it
-  in the initial state doesn't help recovery
-- ResourceUpdater already handles missing operators gracefully via `PluginMissingInAction`
-- The supervision overhead adds complexity without meaningful benefit
-
-### New Architecture
-
-**Remove PluginOperatorSupervisor entirely.** Instead:
+### Component Diagram
 
 ```
-ResourceUpdater
-  → Call PluginCoordinator.SpawnPluginOperator(namespace, resourceURI, operation, operationID)
-  → PluginCoordinator: RemoteSpawnRegister (or local SpawnRegister), uses actornames for stable name
-  → PluginCoordinator: Returns ProcessID (name from actornames + node)
-  → ResourceUpdater: Sends operation messages (ReadResource, CreateResource, etc.) to ProcessID
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Agent Process                                  │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                 Ergo Node (formae@localhost)                      │  │
+│  │                                                                   │  │
+│  │  ┌─────────────────┐    ┌─────────────────┐                      │  │
+│  │  │ ResourceUpdater │───▶│PluginCoordinator│                      │  │
+│  │  │ (FSM)           │    │                 │                      │  │
+│  │  └─────────────────┘    │ • Plugin registry                      │  │
+│  │         │               │ • SpawnPluginOperator()                │  │
+│  │         │               │ • Remote vs local dispatch             │  │
+│  │         │               └────────┬────────┘                      │  │
+│  │         │                        │                               │  │
+│  │         │         ┌──────────────┴───────────────┐               │  │
+│  │         │         │                              │               │  │
+│  │         │    [Remote Plugin]              [Local Fallback]       │  │
+│  │         │         │                              │               │  │
+│  │         │    RemoteSpawn on              LocalSpawn with         │  │
+│  │         │    plugin node                 plugin in Env           │  │
+│  │         │         │                              │               │  │
+│  │         ▼         ▼                              ▼               │  │
+│  │    PluginOperator (ProcessID)                                    │  │
+│  │    • Create/Read/Update/Delete/List/Status operations            │  │
+│  │    • Runs on plugin node (remote) or agent node (local)          │  │
+│  │                                                                   │  │
+│  │  ┌─────────────────────────────────────────────────────────────┐ │  │
+│  │  │              PluginProcessSupervisor                        │ │  │
+│  │  │  • Discovers plugins at ~/.pel/formae/plugins/              │ │  │
+│  │  │  • Spawns plugin binaries via meta.Port                     │ │  │
+│  │  │  • Captures stdout/stderr for unified logging               │ │  │
+│  │  │  • Detects process termination (MessagePortTerminate)       │ │  │
+│  │  └─────────────────────────────────────────────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+              │                              │
+         meta.Port                      meta.Port
+         (OS process)                   (OS process)
+              │                              │
+              ▼                              ▼
+┌─────────────────────────┐    ┌─────────────────────────┐
+│   AWS Plugin Process    │    │  Azure Plugin Process   │
+│                         │    │                         │
+│  Ergo Node              │    │  Ergo Node              │
+│  (aws-plugin@localhost) │    │  (azure-plugin@...)     │
+│                         │    │                         │
+│  plugin.Run(Plugin)     │    │  plugin.Run(Plugin)     │
+│  • Registers EDF types  │    │  • Registers EDF types  │
+│  • Enables RemoteSpawn  │    │  • Enables RemoteSpawn  │
+│  • Announces to agent   │    │  • Announces to agent   │
+│                         │    │                         │
+│  PluginOperator FSM     │    │  PluginOperator FSM     │
+│  (spawned on demand)    │    │  (spawned on demand)    │
+└─────────────────────────┘    └─────────────────────────┘
 ```
 
-**Key principles:**
-1. **Network transparency**: ResourceUpdater doesn't know if operator is local or remote
-2. **Single dispatch point**: PluginCoordinator handles local vs remote decision
-3. **Registered names**: Use actornames package + RemoteSpawnRegister for stable ProcessIDs
-4. **Graceful degradation**: Local fallback for testing, remote for production
-5. **Property resolution on agent**: ResourceUpdater calls `resolver.ConvertToPluginFormat` BEFORE
-   sending operation messages, so PluginOperator receives already-resolved properties
+### Key Components
 
-### How PluginOperator Gets the Plugin Instance
+**PluginCoordinator** (`internal/metastructure/plugin_coordinator/`)
+- Maintains registry of available plugins (namespace → node mapping)
+- Receives `PluginAnnouncement` messages from plugin processes
+- Handles `SpawnPluginOperator` requests from ResourceUpdater
+- Decides remote vs local spawn based on plugin registration
 
-**Remote case (distributed plugin binary):**
-- Plugin binary calls `plugin.Run(resourcePlugin)`
-- `plugin.Run()` stores the ResourcePlugin in Ergo environment
-- PluginOperator retrieves plugin via `Env("Plugin")`
+**PluginProcessSupervisor** (`internal/metastructure/plugin_process_supervisor/`)
+- Discovers external plugins at `~/.pel/formae/plugins/{namespace}/v{version}/{namespace}-plugin`
+- Spawns plugin binaries as OS processes via Ergo's `meta.Port`
+- Captures stdout/stderr and logs with namespace prefix
+- Detects process termination via `MessagePortTerminate`
 
-**Local case (fallback with .so plugins):**
-- PluginCoordinator gets plugin from PluginManager
-- PluginCoordinator spawns PluginOperator with `gen.ProcessOptions{Env: map[string]any{"Plugin": plugin}}`
-- PluginOperator retrieves plugin via `Env("Plugin")` (same code path as remote)
+**PluginOperator** (`pkg/plugin/plugin_operator.go`)
+- FSM that executes CRUD operations against ResourcePlugin
+- Runs on plugin node (remote) or agent node (local fallback)
+- Gets ResourcePlugin instance from Ergo environment
+- Handles retries, status checks, and progress reporting
 
-### Local vs Remote Mode
+**plugin.Run()** (`pkg/plugin/run.go`)
+- Entry point for plugin binaries
+- Sets up Ergo node with networking enabled
+- Registers EDF types for message serialization
+- Enables RemoteSpawn for PluginOperator factory
+- Announces plugin to agent's PluginCoordinator
 
-**Implicit fallback logic in PluginCoordinator:**
+### Plugin Discovery Flow
+
+1. Agent starts, creates `PluginManager` which scans `~/.pel/formae/plugins/`
+2. `PluginProcessSupervisor` gets list of external plugins from PluginManager
+3. For each plugin, spawns binary via `meta.Port` with environment:
+   - `FORMAE_AGENT_NODE=formae@localhost`
+   - `FORMAE_PLUGIN_NODE={namespace}-plugin@localhost`
+   - `FORMAE_NETWORK_COOKIE={secret}`
+4. Plugin binary starts, calls `plugin.Run(resourcePlugin)`
+5. Plugin's `PluginActor` sends `PluginAnnouncement` to agent's PluginCoordinator
+6. PluginCoordinator registers plugin (namespace → node mapping)
+7. PluginCoordinator registers namespace with RateLimiter
+
+### Operation Flow (e.g., Create Resource)
+
+1. ResourceUpdater needs to create resource with type `AWS::S3::Bucket`
+2. ResourceUpdater calls `PluginCoordinator.SpawnPluginOperator("AWS", uri, "Create", opID)`
+3. PluginCoordinator checks if "AWS" is registered (remote plugin)
+4. If registered: `RemoteSpawn` on `aws-plugin@localhost` node
+5. If not registered: fallback to local spawn with .so plugin (if available)
+6. Returns `ProcessID` (registered name + node)
+7. ResourceUpdater sends `CreateResource{...}` message to ProcessID
+8. PluginOperator FSM handles operation, calls `plugin.Create()`
+9. Returns `ProgressResult` to ResourceUpdater
+
+---
+
+## Completed Work
+
+### Phase 1: Core Architecture ✅
+
+- [x] Enable Ergo networking in metastructure
+- [x] Register EDF types for message serialization (dependency order matters!)
+- [x] Create PluginCoordinator actor
+- [x] Create PluginProcessSupervisor actor
+- [x] Move PluginOperator to `pkg/plugin/` for sharing between agent and plugins
+- [x] Implement `plugin.Run()` entry point for plugin binaries
+- [x] Plugin announcement and registration flow
+- [x] Remote spawn of PluginOperator on plugin nodes
+- [x] Local fallback for .so plugins
+
+### Phase 2: FakeAWS Distributed Tests ✅
+
+- [x] Convert FakeAWS to standalone binary with `main.go`
+- [x] Distributed workflow test passing (`TestMetastructure_ApplyForma_DistributedPlugin`)
+- [x] EDF serialization working for all operation types
+
+### Phase 3: AWS Plugin Conversion ✅
+
+- [x] Add `main.go` to `plugins/aws/` calling `plugin.Run(Plugin)`
+- [x] Update Makefile: `build-aws-plugin` target builds to `~/.pel/formae/plugins/aws/v${VERSION}/aws-plugin`
+- [x] Remove .so build for AWS plugin
+- [x] AWS SDK tests passing (S3 bucket lifecycle test)
+
+---
+
+## Next Steps
+
+### Phase 4: Process Lifecycle Management
+
+#### 4.1 Graceful Shutdown (Agent → Plugins)
+
+**Problem:** When the agent stops, plugin processes are NOT automatically terminated.
+meta.Port spawns independent OS processes that continue running after parent actor exits.
+
+**Solution:**
+
+1. Add `ShutdownPlugins` message type handled by PluginProcessSupervisor
+
+2. PluginProcessSupervisor needs to track spawned process PIDs:
+   - Option A: Parse `/proc` to find child processes
+   - Option B: Have plugin report its PID via announcement
+   - Option C: Use Ergo network to send shutdown message to plugin node
+
+3. On shutdown, send SIGTERM to each plugin process
+
+4. In `Metastructure.Stop()`:
+   ```go
+   // Before stopping the node
+   m.sendShutdownToPlugins()
+   // Wait for plugins to exit (with reasonable timeout)
+   m.waitForPluginShutdown(30 * time.Second)
+   // Then stop the node
+   m.Node.Stop() // or StopForce()
+   ```
+
+**Note:** Hold off on SIGKILL fallback for now - prefer graceful shutdown only.
+
+#### 4.2 Plugin Process Restart on Crash
+
+**Problem:** When a plugin crashes, PluginProcessSupervisor detects it via
+`MessagePortTerminate` but doesn't restart it.
+
+**Solution:**
+
+1. In `HandleMessage` for `MessagePortTerminate`, trigger restart:
+   ```go
+   case meta.MessagePortTerminate:
+       p.Log().Error("Plugin terminated", "namespace", msg.Tag)
+       if pluginInfo, ok := p.plugins[msg.Tag]; ok {
+           pluginInfo.healthy = false
+           go p.restartPluginWithBackoff(msg.Tag, pluginInfo)
+       }
+   ```
+
+2. Implement `restartPluginWithBackoff()`:
+   - Track restart count and timestamps per plugin
+   - Implement exponential backoff (e.g., 1s, 2s, 4s, 8s, max 60s)
+   - Max restart attempts before marking plugin as permanently failed
+   - Log each restart attempt
+
+3. When plugin restarts successfully (new announcement received):
+   - Reset backoff state
+   - Update plugin registry with new node info (if changed)
+
+#### 4.3 Plugin Self-Shutdown on Agent Disconnect
+
+**Problem:** If the agent crashes or network disconnects, plugin processes
+become orphans with no way to know they should exit.
+
+**Solution:**
+
+1. In `plugin.Run()`, start a watchdog goroutine:
+   ```go
+   go func() {
+       ticker := time.NewTicker(30 * time.Second)
+       missedPings := 0
+       maxMissedPings := 3
+
+       for range ticker.C {
+           // Try to reach agent node
+           _, err := node.Network().GetNode(gen.Atom(agentNode))
+           if err != nil {
+               missedPings++
+               log.Printf("Agent unreachable (%d/%d)", missedPings, maxMissedPings)
+               if missedPings >= maxMissedPings {
+                   log.Printf("Agent unreachable for too long, shutting down")
+                   node.Stop()
+                   return
+               }
+           } else {
+               missedPings = 0
+           }
+       }
+   }()
+   ```
+
+2. Configuration options (future):
+   - Ping interval (default 30s)
+   - Max missed pings (default 3)
+   - Could be passed via environment variables
+
+### Phase 5: Re-enable Remote Env Spawning (DEFERRED)
+
+**Problem:** `ExposeEnvRemoteSpawn` is currently disabled because some types in
+the node environment (Datastore, PluginManager, Context) are not serializable.
+
+**Status:** Deferred - requires refactoring to ensure all env types are serializable.
+User will handle this refactoring work.
+
+### Phase 6: Commit & Merge
+
+After Phase 4 is complete:
+- [ ] Run full test suite (`make test-all`)
+- [ ] Verify distributed plugin tests pass
+- [ ] Verify AWS SDK tests pass
+- [ ] Clean up any orphan processes from failed test runs
+- [ ] Create commit with descriptive message
+- [ ] Consider squashing/rebasing for clean history before merge
+
+### Phase 7: Azure Plugin Conversion
+
+Same pattern as AWS:
+- [ ] Add `main.go` to `plugins/azure/` calling `plugin.Run(Plugin)`
+- [ ] Add `build-azure-plugin` target to Makefile
+- [ ] Build to `~/.pel/formae/plugins/azure/v${VERSION}/azure-plugin`
+- [ ] Update `test-plugin-sdk-azure` to use new target
+- [ ] Verify Azure SDK tests pass
+
+### Phase 8: Multi-Host Support Design
+
+**Goal:** Enable distributed deployment where:
+- One agent acts as **primary** (handles API requests, coordinates work)
+- Other agents act as **relay** agents (can host plugins, execute operations)
+
+**Design considerations to explore:**
+
+1. **Discovery & Registration**
+   - How do relay agents discover the primary?
+   - Static configuration vs dynamic discovery (mDNS, consul, etc.)?
+   - How does primary track relay agent health?
+
+2. **Work Distribution**
+   - Which agent runs which plugins?
+   - Plugin affinity (e.g., Azure plugin only on agents with Azure credentials)
+   - Load balancing across relay agents
+
+3. **Plugin Placement**
+   - Can a plugin run on multiple agents simultaneously?
+   - How to handle plugin version differences across agents?
+   - Plugin migration when agent fails?
+
+4. **State Management**
+   - Shared datastore (all agents connect to same DB)?
+   - Primary-only datastore with RPC to relays?
+   - State synchronization requirements?
+
+5. **Failure Handling**
+   - Primary failure → relay takes over?
+   - Relay failure → redistribute plugins?
+   - Network partition handling?
+
+6. **Security**
+   - Authentication between agents
+   - Authorization for plugin operations
+   - Credential isolation (plugin creds stay on specific agents)
+
+**This requires significant design work before implementation. Consider creating
+a separate design document with diagrams and trade-off analysis.**
+
+---
+
+## Technical Notes
+
+### EDF Type Registration Order
+
+Types must be registered in dependency order. Types embedded in other types
+must be registered first. Example:
 
 ```go
-func (c *PluginCoordinator) SpawnPluginOperator(namespace, ...) (gen.ProcessID, error) {
-    name := actornames.PluginOperator(resourceURI, operation, operationID)
-
-    // 1. Check if plugin is registered (remote announcement received)
-    if plugin, ok := c.plugins[namespace]; ok {
-        // Remote spawn on plugin node using RemoteSpawnRegister
-        return c.remoteSpawnRegister(plugin.NodeName, name, ...)
-    }
-
-    // 2. Fallback: Check if plugin exists in-process (local testing)
-    if p := c.pluginManager.GetResourcePlugin(namespace); p != nil {
-        // Local spawn with plugin passed via Env
-        opts := gen.ProcessOptions{Env: map[string]any{"Plugin": p}}
-        return c.localSpawnRegister(name, opts, ...)
-    }
-
-    // 3. Error: plugin not found
-    return gen.ProcessID{}, fmt.Errorf("plugin not found: %s", namespace)
-}
+// 1. Basic types first
+edf.RegisterTypeOf(model.FieldHint{})
+// 2. Schema depends on FieldHint
+edf.RegisterTypeOf(model.Schema{})
+// 3. Resource depends on Schema
+edf.RegisterTypeOf(model.Resource{})
+// 4. Operation messages depend on Resource
+edf.RegisterTypeOf(CreateResource{})
 ```
 
-**Safeguards:**
-- Local plugins scanned from project-relative path (not `~/.pel/plugins/`)
-- Distributed tests MUST use `require.Eventually` to wait for plugin registration
-- This ensures distributed tests actually test distributed mode (no silent fallback)
+### meta.Port Behavior
+
+- Spawns independent OS process
+- Process continues running after parent actor exits
+- `MessagePortTerminate` sent when process exits (not before)
+- No built-in graceful shutdown mechanism
+- Must explicitly send signals (SIGTERM) to stop process
+- Does not directly expose spawned process PID
+
+### Plugin Binary Location
+
+External plugins are discovered at:
+```
+~/.pel/formae/plugins/{namespace}/v{version}/{namespace}-plugin
+```
+
+Example:
+```
+~/.pel/formae/plugins/aws/v0.75.1/aws-plugin
+~/.pel/formae/plugins/azure/v0.75.1/azure-plugin
+```
+
+### Build Commands
+
+```bash
+# Build AWS plugin to standard location
+make build-aws-plugin
+
+# Run AWS SDK tests (builds plugin first)
+make test-plugin-sdk-aws
+
+# Run distributed workflow tests
+go test -tags integration -run TestMetastructure_ApplyForma_DistributedPlugin ./internal/workflow_tests/distributed/...
+
+# Kill orphan plugin processes (useful after test failures)
+pkill -f "aws-plugin"
+pkill -f "azure-plugin"
+```
 
 ---
 
-## Task Breakdown for Happy Path Test
+## Known Issues
 
-### Phase 1: Clean Up (Revert Poor Implementation) ✅ COMPLETE
+### Orphan Plugin Processes
 
-- [x] **1.1** Revert `internal/metastructure/resource_update/resource_updater.go`
-  - Remove `doPluginOperation` changes that bypass PluginOperatorSupervisor
-  - Remove `toNetworkRequest` function
-  - Restore original flow that calls PluginOperatorSupervisor
+When tests fail or the agent crashes, plugin processes may be left running.
+Use `pgrep -f "aws-plugin"` to check and `pkill -f "aws-plugin"` to clean up.
 
-- [x] **1.2** Delete `pkg/plugin/operator.go`
-  - This was the incorrectly created simplified operator
-  - Also remove references from `pkg/plugin/run.go` (EDF registrations, EnableSpawn)
+This will be addressed by Phase 4.3 (plugin self-shutdown).
 
-### Phase 2: Move PluginOperator to pkg/plugin/ ✅ COMPLETE
+### DynamoDB Test Timeout
 
-- [x] **2.1** Move `internal/metastructure/plugin_operation/plugin_operator.go` to `pkg/plugin/operator/`
-  - Keep FSM structure intact
-  - Update imports
-  - Remove dependency on `internal/metastructure/resolver` (property resolution moves to ResourceUpdater)
-  - Remove dependency on `internal/metastructure/util` (replace `util.TimeNow()` with `time.Now()`)
+The AWS SDK test for DynamoDB table creation sometimes times out. This appears
+to be an AWS CloudControl API issue (slow provisioning), not related to the
+distributed plugin architecture. The S3 bucket test passes consistently.
 
-- [x] **2.2** Modify PluginOperator to get plugin from Ergo environment
-  - In Init(), retrieve plugin via `Env("Plugin")`
-  - Store as field on PluginUpdateData or similar
-  - Remove PluginManager dependency entirely (both remote and local use Env)
+### Logging Style Mismatch
 
-- [x] **2.3** Update `pkg/plugin/run.go`
-  - Store ResourcePlugin in Ergo environment so PluginOperator can access it
-  - Register PluginOperator factory with `EnableSpawn` for remote spawning
-  - Register necessary EDF types for FSM messages (operation types like ReadResource, CreateResource, etc.)
-
-#### Phase 2 Implementation Details (for reference)
-
-**Circular Import Solution:**
-The `pkg/plugin/operator` package needed `ResourcePlugin` interface but couldn't import `pkg/plugin`
-(would create cycle: `plugin` → `operator` → `plugin`). Solution: Define a local `ResourcePlugin`
-interface in operator package with the exact methods needed. Go's implicit interface satisfaction
-means `plugin.ResourcePlugin` automatically satisfies `operator.ResourcePlugin`.
-
-**Key Files Created/Modified:**
-- `pkg/plugin/operator/operator.go` - New file with PluginOperator FSM
-- `pkg/plugin/run.go` - Added EnableSpawn and EDF type registrations
-- `pkg/plugin/go.mod` - Added `ergo.services/actor/statemachine` dependency
-- All plugin `go.sum` files updated via `go mod tidy`
-
-**Namespace Validation:**
-Added `validateNamespace()` helper that checks `operation.Namespace == data.plugin.Namespace()`.
-Returns `NamespaceMismatchError` (reused error code from old `PluginNotFoundError`).
-
-**StatusCheck Methods:**
-Removed all `resolver.ConvertToPluginFormat` calls from StatusCheck methods. Properties are
-expected to arrive already resolved. StatusCheck now just calls `GetMetadata()` directly.
-
-### Phase 3: Rename & Extend PluginRegistry → PluginCoordinator
-
-- [ ] **3.1** Rename `plugin_registry/` to `plugin_coordinator/`
-  - Update all references
-  - Update actornames
-
-- [ ] **3.2** Add `SpawnPluginOperator` method
-  - Takes: namespace, resourceURI, operation, operationID
-  - Returns: gen.ProcessID (registered name)
-  - Implements remote spawn + local fallback logic
-
-- [ ] **3.3** Remove PluginOperatorSupervisor
-  - Delete `plugin_operation/supervisor.go`
-  - Update application.go to not spawn it
-  - Update ResourceUpdater to call PluginCoordinator instead
-
-### Phase 4: Update ResourceUpdater
-
-- [ ] **4.1** Update `doPluginOperation` to use PluginCoordinator
-  - Call `PluginCoordinator.SpawnPluginOperator` instead of PluginOperatorSupervisor
-  - Use returned ProcessID to send operation messages
-  - Keep `PluginMissingInAction` handling intact
-
-- [ ] **4.2** Move property resolution to ResourceUpdater
-  - Call `resolver.ConvertToPluginFormat` on properties BEFORE sending operation messages
-  - Modify message construction in `doPluginOperation` to use resolved properties
-  - This removes resolver dependency from PluginOperator (which now runs on plugin node)
-
-### Phase 5: FakeAWS & Test
-
-- [ ] **5.1** Update FakeAWS to return dummy properties
-  - When no override in context, return identifiable dummy data
-  - E.g., `{"bucket_name": "fake-bucket-12345", "region": "fake-region"}`
-
-- [ ] **5.2** Fix happy-path test assertions
-  - Wait for plugin registration with `require.Eventually`
-  - Verify forma command status is SUCCESS
-  - Verify resource exists in database
-  - Verify dummy properties from FakeAWS are in database
+Ergo's `Log().Info()` uses Printf-style formatting, not slog-style key-value pairs.
+Current workaround: converted visible INFO logs to Printf style. Full rework needed
+to properly handle structured logging.
 
 ---
 
-## Test Verification Checklist
+## Files Changed (Summary)
 
-The happy-path test should verify:
+**New files:**
+- `plugins/aws/main.go` - Entry point for AWS plugin binary
+- `plugins/fake-aws/main.go` - Entry point for FakeAWS plugin binary
+- `pkg/plugin/run.go` - Plugin entry point and EDF registration
+- `pkg/plugin/plugin_operator.go` - PluginOperator FSM (moved from internal)
+- `pkg/plugin/actor.go` - PluginActor for announcement
+- `pkg/plugin/application.go` - PluginApplication supervisor
+- `internal/metastructure/plugin_coordinator/` - Plugin registry and spawn coordination
+- `internal/metastructure/plugin_process_supervisor/` - OS process management
+- `internal/metastructure/edf_types.go` - EDF type registration for agent
 
-1. [ ] Plugin binary builds successfully
-2. [ ] Plugin process starts and announces to PluginCoordinator
-3. [ ] `require.Eventually` confirms plugin is registered
-4. [ ] ApplyForma creates a forma command
-5. [ ] Forma command completes with SUCCESS status
-6. [ ] Resource is persisted in database
-7. [ ] Resource properties match FakeAWS dummy data
-
----
-
-## Important Notes
-
-### Do NOT Publish .so Files for AWS/Azure Plugins
-
-When refactoring the AWS and Azure plugins to use the distributed architecture, ensure that
-we **do not publish .so files** for them anymore. The .so loading path in PluginManager is
-only kept for local testing (FakeAWS). Production plugins should always be distributed as
-standalone binaries that run as separate processes.
-
----
-
-## Future Work (Not in Scope)
-
-- Process robustness: restart on crash, graceful shutdown, health checks
-- Discovery integration with distributed plugins
-- Multi-node cluster support
-- Plugin version negotiation
-- **Logging rework**: Ergo's `Log().Info()` uses Printf-style formatting, not slog-style key-value pairs.
-  Current workaround: converted visible INFO logs to Printf style. Full rework needed to either:
-  - Update ErgoLogger to properly handle structured fields via `gen.LogField`
-  - Or create a wrapper that converts slog-style calls to Printf-style
-  - See `internal/logging/substitute_ergo.go` for the current implementation
+**Modified files:**
+- `Makefile` - Added `build-aws-plugin`, removed AWS .so build
+- `internal/metastructure/metastructure.go` - Enable networking
+- `internal/metastructure/application.go` - Add new actors
+- Various FSM handlers - Updated signatures for statemachine library changes

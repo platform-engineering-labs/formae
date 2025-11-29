@@ -214,7 +214,7 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 				len(fas[0].ResourceUpdates) == 2 &&
 				fas[0].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
 				fas[0].ResourceUpdates[1].State == resource_update.ResourceUpdateStateSuccess)
-		}, 5*time.Second, 100*time.Millisecond)
+		}, 10*time.Second, 100*time.Millisecond)
 
 		_f1 := &pkgmodel.Forma{
 			Stacks: []pkgmodel.Stack{

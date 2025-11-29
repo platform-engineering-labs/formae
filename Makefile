@@ -23,8 +23,8 @@ clean-pel:
 
 build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
-	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws.so
-	#	go build -C plugins/azure -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o azure.so
+	#	go build -C plugins/aws - now built as external plugin, see build-aws-plugin
+	#	go build -C plugins/azure - now built as external plugin, see build-azure-plugin
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	go build -C plugins/json -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json.so
 	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
@@ -32,17 +32,20 @@ build:
 	go build -C plugins/tailscale -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 
+# Build AWS plugin as external executable (distributed plugin architecture)
+build-aws-plugin:
+	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
+	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o ~/.pel/formae/plugins/aws/v${VERSION}/aws-plugin .
+
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
 
-build-aws:
-	go build -C plugins/aws -buildmode=plugin -o aws.so
-	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws-debug.so
+# build-aws: now use build-aws-plugin instead
 
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
-	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws-debug.so
-	#	go build -C plugins/azure ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o azure-debug.so
+	#	go build -C plugins/aws - now built as external plugin
+	#	go build -C plugins/azure - now built as external plugin
 	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
 	go build -C plugins/json ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json-debug.so
 	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
@@ -147,7 +150,7 @@ test-integration:
 	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-plugin-sdk-aws: build
+test-plugin-sdk-aws: build build-aws-plugin
 	@echo "Resolving PKL dependencies for AWS plugin..."
 	@pkl project resolve plugins/aws/testdata
 	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
@@ -241,4 +244,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-aws build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-summary test-integration test-e2e test-property version full-e2e lint lint-reuse add-license all
+.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-summary test-integration test-e2e test-property version full-e2e lint lint-reuse add-license all

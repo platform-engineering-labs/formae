@@ -63,6 +63,7 @@ func registerEDFTypes() error {
 		resource.Operation(""),
 		resource.OperationErrorCode(""),
 		resource.ProgressResult{}, // depends on model.Resource
+		resource.Resource{},
 
 		// 5. Configuration types
 		config.FormaCommandConfig{},
@@ -99,6 +100,7 @@ func registerEDFTypes() error {
 		plugin.PluginOperatorRetry{},
 		plugin.PluginOperatorShutdown{},
 		plugin.ListResources{},
+		plugin.Listing{},
 		plugin.StartPluginOperation{},
 	}
 

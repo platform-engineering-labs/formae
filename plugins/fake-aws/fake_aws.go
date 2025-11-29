@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"strings"
 
 	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -181,8 +180,7 @@ func (s FakeAWS) Delete(context context.Context, request *resource.DeleteRequest
 		}
 	}
 
-	// If the Resource's Id contains "delete", return a success delete result.
-	if strings.Contains(*request.NativeID, "delete") {
+	if request.NativeID != nil {
 		return &resource.DeleteResult{
 			ProgressResult: &resource.ProgressResult{
 				Operation:       resource.OperationDelete,

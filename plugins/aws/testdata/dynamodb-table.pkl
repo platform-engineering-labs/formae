@@ -28,7 +28,7 @@ forma {
 
   new table.Table {
     label = "plugin-sdk-test-table"
-    tableName = "formae-plugin-sdk-test-dynamodb-20250107"
+    tableName = "formae-plugin-sdk-test-dynamodb-20251128"
     billingMode = "PAY_PER_REQUEST"
     keySchema {
       new {

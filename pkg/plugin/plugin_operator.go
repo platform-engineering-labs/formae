@@ -333,26 +333,28 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 		initialState = args[0].(gen.Atom)
 	}
 
-	// Get the plugin from Node's Ergo environment (set by plugin.Run)
-	// For remote spawns, process-level Env() doesn't inherit from the target node,
-	// so we access the node's environment directly.
-	pluginEnv, ok := o.Node().Env("Plugin")
+	pluginEnv, ok := o.Env("Plugin")
 	if !ok {
-		o.Log().Error("PluginOperator: missing 'Plugin' environment variable")
-		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Plugin' environment variable")
+		pluginEnv, ok = o.Node().Env("Plugin")
+		if !ok {
+			o.Log().Error("PluginOperator: missing 'Plugin' environment variable")
+			return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Plugin' environment variable")
+		}
 	}
 	data.plugin = pluginEnv.(ResourcePlugin)
 
-	// Context from node environment
-	ctx, ok := o.Node().Env("Context")
+	ctx, ok := o.Env("Context")
 	if !ok {
-		o.Log().Error("PluginOperator: missing 'Context' environment variable")
-		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Context' environment variable")
+		ctx, ok = o.Node().Env("Context")
+		if !ok {
+			o.Log().Error("PluginOperator: missing 'Context' environment variable")
+			return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Context' environment variable")
+		}
 	}
 	data.context = ctx.(context.Context)
 
 	// RetryConfig from node environment
-	cfg, ok := o.Node().Env("RetryConfig")
+	cfg, ok := o.Env("RetryConfig")
 	if !ok {
 		o.Log().Error("PluginOperator: missing 'RetryConfig' environment variable")
 		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'RetryConfig' environment variable")

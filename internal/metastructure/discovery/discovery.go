@@ -213,13 +213,13 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, pro
 	return newState, data, nil
 }
 
-func pauseDiscovery(state gen.Atom, data DiscoveryData, message messages.PauseDiscovery, proc gen.Process) (gen.Atom, DiscoveryData, messages.PauseDiscoveryResponse, []statemachine.Action, error) {
+func pauseDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message messages.PauseDiscovery, proc gen.Process) (gen.Atom, DiscoveryData, messages.PauseDiscoveryResponse, []statemachine.Action, error) {
 	data.pauseCount++
 	proc.Log().Debug("Discovery paused", "pauseCount", data.pauseCount, "outstandingListOps", len(data.outstandingListOperations), "outstandingSyncCmds", len(data.outstandingSyncCommands))
 	return state, data, messages.PauseDiscoveryResponse{}, nil, nil
 }
 
-func resumeDiscovery(state gen.Atom, data DiscoveryData, message messages.ResumeDiscovery, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+func resumeDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message messages.ResumeDiscovery, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	if data.pauseCount > 0 {
 		data.pauseCount--
 	}

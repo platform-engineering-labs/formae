@@ -101,7 +101,7 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 
 	case meta.MessagePortError:
 		// Plugin error output
-		p.Log().Error("Plugin error", "namespace", msg.Tag)
+		p.Log().Error("Plugin error", "namespace", msg.Tag, "error", msg.Error)
 
 	case meta.MessagePortTerminate:
 		// Plugin process terminated
@@ -137,7 +137,8 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 
 	// Configure meta.Port options
 	portOptions := meta.PortOptions{
-		Cmd: pluginInfo.binaryPath,
+		Cmd:         pluginInfo.binaryPath,
+		EnableEnvOS: true, // Inherit OS environment (PATH, etc.) so plugins can find dependencies like pkl
 		Env: map[gen.Env]string{
 			gen.Env("FORMAE_AGENT_NODE"):     agentNode,
 			gen.Env("FORMAE_PLUGIN_NODE"):    nodeName,

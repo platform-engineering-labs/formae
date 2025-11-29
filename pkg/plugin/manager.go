@@ -245,9 +245,19 @@ func (m *Manager) ListExternalResourcePlugins() []ResourcePluginInfo {
 }
 
 func (m *Manager) PluginVersion(name string) *semver.Version {
+	// First check loaded plugins (.so)
 	for _, plugin := range m.plugins {
 		if (*plugin).Name() == name {
 			return (*plugin).Version()
+		}
+	}
+
+	// Then check external resource plugins (separate processes)
+	for _, info := range m.externalResourcePlugins {
+		if strings.EqualFold(info.Namespace, name) {
+			if v, err := semver.NewVersion(info.Version); err == nil {
+				return v
+			}
 		}
 	}
 

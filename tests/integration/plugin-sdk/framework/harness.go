@@ -7,6 +7,8 @@ package framework
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +39,7 @@ type TestHarness struct {
 	tempDir       string
 	configFile    string
 	logFile       string
+	networkCookie string // Network cookie for distributed plugin communication
 	pluginManager *plugin.Manager
 }
 
@@ -99,6 +102,13 @@ func (h *TestHarness) setupTestEnvironment() error {
 	// Create log file path in temp directory
 	logPath := filepath.Join(tempDir, "formae-test.log")
 
+	// Generate a random network cookie for distributed plugin communication
+	cookieBytes := make([]byte, 16)
+	if _, err := rand.Read(cookieBytes); err != nil {
+		return fmt.Errorf("failed to generate network cookie: %w", err)
+	}
+	h.networkCookie = hex.EncodeToString(cookieBytes)
+
 	// Generate test config file
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
@@ -110,6 +120,9 @@ func (h *TestHarness) setupTestEnvironment() error {
 amends "formae:/Config.pkl"
 
 agent {
+    server {
+        secret = %q
+    }
     datastore {
         sqlite {
             filePath = %q
@@ -131,7 +144,7 @@ agent {
 cli {
 	disableUsageReporting = true
 }
-`, dbPath, logPath)
+`, h.networkCookie, dbPath, logPath)
 
 	// Write config to temp directory
 	configFile := filepath.Join(tempDir, "test-config.pkl")
@@ -196,6 +209,9 @@ func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
 amends "formae:/Config.pkl"
 
 agent {
+    server {
+        secret = %q
+    }
     datastore {
         sqlite {
             filePath = %q
@@ -219,7 +235,7 @@ agent {
 cli {
 	disableUsageReporting = true
 }
-`, dbPath, resourceTypesList, h.logFile)
+`, h.networkCookie, dbPath, resourceTypesList, h.logFile)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {

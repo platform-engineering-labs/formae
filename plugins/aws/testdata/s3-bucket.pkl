@@ -28,6 +28,6 @@ forma {
 
   new bucket.Bucket {
     label = "plugin-sdk-test-bucket"
-    bucketName = "formae-plugin-sdk-test-s3-20250103"
+    bucketName = "formae-plugin-sdk-test-s3-20251128"
   }
 }

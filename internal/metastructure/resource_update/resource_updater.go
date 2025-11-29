@@ -483,7 +483,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			ModifiedTs:         util.TimeNow(),
 		}
 
-		return handleProgressUpdate(state, data, syntheticResult, proc)
+		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
 	// Convert properties to plugin format (extracts $value from opaque structures)
@@ -676,7 +676,6 @@ func nextState(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.A
 		default:
 		}
 		return synchronize(StateSynchronizing, data, proc)
-
 	case StateSynchronizing:
 		if data.resourceUpdate.IsSync() {
 			return StateFinishedSuccessfully, data, nil, nil
