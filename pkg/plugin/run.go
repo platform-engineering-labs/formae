@@ -5,7 +5,10 @@
 package plugin
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -20,12 +23,68 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// PluginAnnouncement is sent by plugins to PluginRegistry on startup.
+// PluginCapabilities contains all plugin capability data.
+// This struct is gzip-compressed for network transfer to work around
+// Ergo's hardcoded 64KB message buffer limit.
+type PluginCapabilities struct {
+	SupportedResources []ResourceDescriptor
+	ResourceSchemas    map[string]model.Schema // key = resource type
+	MatchFilters       []MatchFilter
+}
+
+// PluginAnnouncement is sent by plugins to PluginCoordinator on startup.
 // It contains all information needed for the agent to interact with the plugin.
 type PluginAnnouncement struct {
 	Namespace            string // e.g., "FakeAWS", "AWS", "Azure"
 	NodeName             string // Ergo node name where plugin runs, e.g., "fakeaws-plugin@localhost"
 	MaxRequestsPerSecond int    // Rate limit for this plugin
+
+	// Capabilities contains gzip-compressed JSON of PluginCapabilities.
+	// Use CompressCapabilities() and DecompressCapabilities() helpers.
+	// This compression is required because Ergo has a hardcoded 64KB buffer
+	// limit that cannot be configured via MaxMessageSize.
+	Capabilities []byte
+}
+
+// CompressCapabilities compresses PluginCapabilities to gzip-compressed JSON.
+func CompressCapabilities(caps PluginCapabilities) ([]byte, error) {
+	jsonData, err := json.Marshal(caps)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal capabilities: %w", err)
+	}
+
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
+	}
+
+	if _, err := gz.Write(jsonData); err != nil {
+		return nil, fmt.Errorf("failed to write compressed data: %w", err)
+	}
+
+	if err := gz.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecompressCapabilities decompresses gzip-compressed JSON to PluginCapabilities.
+func DecompressCapabilities(data []byte) (PluginCapabilities, error) {
+	var caps PluginCapabilities
+
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return caps, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	if err := json.NewDecoder(gz).Decode(&caps); err != nil {
+		return caps, fmt.Errorf("failed to decode capabilities: %w", err)
+	}
+
+	return caps, nil
 }
 
 // Run starts the plugin process and announces it to the agent's PluginRegistry.
@@ -50,11 +109,13 @@ func Run(rp ResourcePlugin) {
 		log.Fatal("FORMAE_NETWORK_COOKIE environment variable required")
 	}
 
+	fmt.Printf("Network cookie: %s\n", cookie)
 	// Setup Ergo node options
 	options := gen.NodeOptions{}
 	options.Network.Mode = gen.NetworkModeEnabled
 	options.Network.Cookie = cookie
 	options.Security.ExposeEnvRemoteSpawn = true
+	options.Log.Level = gen.LogLevelDebug
 
 	// Set environment for PluginActor and remotely spawned PluginOperators
 	options.Env = map[gen.Env]any{
@@ -169,12 +230,34 @@ func registerEDFTypes() {
 		log.Printf("Warning: failed to register Resource type: %v", err)
 	}
 
-	// 7. Plugin announcement (no external dependencies)
+	// 7. Plugin types used in coordination messages (must be registered before PluginAnnouncement)
+	if err := edf.RegisterTypeOf(ListParameter{}); err != nil {
+		log.Printf("Warning: failed to register ListParameter type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(ResourceDescriptor{}); err != nil {
+		log.Printf("Warning: failed to register ResourceDescriptor type: %v", err)
+	}
+
+	// Filter types in dependency order
+	if err := edf.RegisterTypeOf(FilterAction("")); err != nil {
+		log.Printf("Warning: failed to register FilterAction type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(ConditionType("")); err != nil {
+		log.Printf("Warning: failed to register ConditionType type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(FilterCondition{}); err != nil {
+		log.Printf("Warning: failed to register FilterCondition type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(MatchFilter{}); err != nil {
+		log.Printf("Warning: failed to register MatchFilter type: %v", err)
+	}
+
+		// 8. Plugin announcement (depends on ResourceDescriptor and filter types)
 	if err := edf.RegisterTypeOf(PluginAnnouncement{}); err != nil {
 		log.Printf("Warning: failed to register PluginAnnouncement type: %v", err)
 	}
 
-	// 8. Finally, register operator message types that depend on model types
+	// 9. Finally, register operator message types that depend on model types
 	if err := edf.RegisterTypeOf(ReadResource{}); err != nil {
 		log.Printf("Warning: failed to register ReadResource type: %v", err)
 	}
@@ -210,5 +293,8 @@ func registerEDFTypes() {
 	}
 	if err := edf.RegisterTypeOf(StartPluginOperation{}); err != nil {
 		log.Printf("Warning: failed to register StartPluginOperation type: %v", err)
+	}
+	if err := edf.RegisterTypeOf(GetFilters{}); err != nil {
+		log.Printf("Warning: failed to register GetFilters type: %v", err)
 	}
 }

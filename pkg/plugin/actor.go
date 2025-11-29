@@ -9,6 +9,8 @@ import (
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
+
+	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // PluginActor handles plugin lifecycle: announcement and heartbeats.
@@ -48,7 +50,25 @@ func (p *PluginActor) Init(args ...any) error {
 		return fmt.Errorf("PluginActor: 'AgentNode' has wrong type")
 	}
 
-	// Send announcement to PluginRegistry on agent node
+	// Build and compress capabilities
+	caps := PluginCapabilities{
+		SupportedResources: p.plugin.SupportedResources(),
+		ResourceSchemas:    buildSchemaMap(p.plugin),
+		MatchFilters:       p.plugin.GetMatchFilters(),
+	}
+
+	compressedCaps, err := CompressCapabilities(caps)
+	if err != nil {
+		p.Log().Error("Failed to compress capabilities", "error", err)
+		return fmt.Errorf("failed to compress capabilities: %w", err)
+	}
+
+	p.Log().Info("Compressed capabilities",
+		"resources", len(caps.SupportedResources),
+		"schemas", len(caps.ResourceSchemas),
+		"compressedSize", len(compressedCaps))
+
+	// Send announcement to PluginCoordinator on agent node
 	registryPID := gen.ProcessID{
 		Name: "PluginCoordinator",
 		Node: p.agentNode,
@@ -57,6 +77,7 @@ func (p *PluginActor) Init(args ...any) error {
 		Namespace:            p.namespace,
 		NodeName:             string(p.Node().Name()),
 		MaxRequestsPerSecond: p.plugin.MaxRequestsPerSecond(),
+		Capabilities:         compressedCaps,
 	}
 
 	if err := p.Send(registryPID, announcement); err != nil {
@@ -75,4 +96,16 @@ func (p *PluginActor) HandleMessage(from gen.PID, message any) error {
 
 func (p *PluginActor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	return nil, fmt.Errorf("unknown request: %T", request)
+}
+
+// buildSchemaMap creates a map of resource type to schema for all supported resources
+func buildSchemaMap(plugin ResourcePlugin) map[string]model.Schema {
+	schemas := make(map[string]model.Schema)
+	for _, rd := range plugin.SupportedResources() {
+		schema, err := plugin.SchemaForResourceType(rd.Type)
+		if err == nil {
+			schemas[rd.Type] = schema
+		}
+	}
+	return schemas
 }

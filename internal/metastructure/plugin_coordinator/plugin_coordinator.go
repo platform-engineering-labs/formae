@@ -38,6 +38,11 @@ type RegisteredPlugin struct {
 	NodeName             gen.Atom // Ergo node where plugin runs (for remote spawn)
 	MaxRequestsPerSecond int
 	RegisteredAt         time.Time
+
+	// Cached capabilities from announcement
+	SupportedResources []plugin.ResourceDescriptor
+	ResourceSchemas    map[string]model.Schema
+	MatchFilters       []plugin.MatchFilter
 }
 
 // NewPluginCoordinator creates a new PluginCoordinator actor
@@ -103,6 +108,9 @@ func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (
 		result := c.spawnPluginOperator(req)
 		return result, nil
 
+	case messages.GetPluginInfo:
+		return c.getPluginInfo(req), nil
+
 	default:
 		return nil, fmt.Errorf("unknown request: %T", request)
 	}
@@ -111,16 +119,36 @@ func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (
 func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case messages.PluginAnnouncement:
+		// Decompress capabilities from the announcement
+		caps, err := plugin.DecompressCapabilities(msg.Capabilities)
+		if err != nil {
+			c.Log().Error("Failed to decompress capabilities",
+				"namespace", msg.Namespace,
+				"error", err)
+			return fmt.Errorf("failed to decompress capabilities: %w", err)
+		}
+
+		c.Log().Info("Decompressed capabilities",
+			"namespace", msg.Namespace,
+			"resources", len(caps.SupportedResources),
+			"schemas", len(caps.ResourceSchemas),
+			"compressedSize", len(msg.Capabilities))
+
 		c.plugins[msg.Namespace] = &RegisteredPlugin{
 			Namespace:            msg.Namespace,
 			NodeName:             gen.Atom(msg.NodeName),
 			MaxRequestsPerSecond: msg.MaxRequestsPerSecond,
 			RegisteredAt:         time.Now(),
+			// Store decompressed capabilities
+			SupportedResources: caps.SupportedResources,
+			ResourceSchemas:    caps.ResourceSchemas,
+			MatchFilters:       caps.MatchFilters,
 		}
-		c.Log().Info("Plugin registered: namespace=%s node=%s rateLimit=%d", msg.Namespace, msg.NodeName, msg.MaxRequestsPerSecond)
+		c.Log().Info("Plugin registered: namespace=%s node=%s rateLimit=%d resources=%d",
+			msg.Namespace, msg.NodeName, msg.MaxRequestsPerSecond, len(caps.SupportedResources))
 
 		// Register the namespace with RateLimiter
-		err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
+		err = c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 			Namespace:            msg.Namespace,
 			MaxRequestsPerSecond: msg.MaxRequestsPerSecond,
 		})
@@ -261,4 +289,54 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, regist
 	}
 
 	return pid, nil
+}
+
+// getPluginInfo retrieves plugin information for the given namespace.
+// It first checks registered external plugins, then falls back to local plugins.
+func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.PluginInfoResponse {
+	// 1. Check external plugins first
+	if registered, ok := c.plugins[req.Namespace]; ok {
+		return messages.PluginInfoResponse{
+			Found:              true,
+			Namespace:          req.Namespace,
+			SupportedResources: registered.SupportedResources,
+			ResourceSchemas:    registered.ResourceSchemas,
+			MatchFilters:       registered.MatchFilters,
+		}
+	}
+
+	// 2. Fall back to local plugins
+	if c.pluginManager == nil {
+		return messages.PluginInfoResponse{
+			Found: false,
+			Error: fmt.Sprintf("plugin not found: %s", req.Namespace),
+		}
+	}
+
+	resourcePlugin, err := c.pluginManager.ResourcePlugin(req.Namespace)
+	if err != nil {
+		return messages.PluginInfoResponse{
+			Found: false,
+			Error: fmt.Sprintf("plugin not found: %s", req.Namespace),
+		}
+	}
+
+	rp := *resourcePlugin
+
+	// Build schema map from local plugin
+	schemas := make(map[string]model.Schema)
+	for _, rd := range rp.SupportedResources() {
+		schema, err := rp.SchemaForResourceType(rd.Type)
+		if err == nil {
+			schemas[rd.Type] = schema
+		}
+	}
+
+	return messages.PluginInfoResponse{
+		Found:              true,
+		Namespace:          req.Namespace,
+		SupportedResources: rp.SupportedResources(),
+		ResourceSchemas:    schemas,
+		MatchFilters:       rp.GetMatchFilters(),
+	}
 }
