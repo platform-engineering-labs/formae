@@ -538,12 +538,18 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           let (label = value.getOrNull("FakeLabel"))
           let (property = value.getOrNull("FakeProperty"))
           let (realValue = if (value.getOrNull("$visibility") == "Clear") value.getOrNull("RealValue") else "Secret")
-          let (comment = if (realValue != null) "\n" + indent + "  // RealValue: \(realValue)" else "")
-            typeDeclaration + " {" +
-            comment + "\n" +
-            (if (stack != null) indent + "  stack = \"\(stack)\".label\n" else "") +
-            (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
-             indent + "}.\(property)"
+
+          // Check if stack is unmanaged
+          if (stack == "$unmanaged")
+            let (comment = "// The target resource with the label = \"\(label)\" of type = \"\(value["FakeType"])\" is not managed yet. Bring it under management first to convert this into a Resolvable.")
+            "\"\(realValue)\" \(comment)"
+          else
+            let (comment = if (realValue != null) "\n" + indent + "  // RealValue: \(realValue)" else "")
+              typeDeclaration + " {" +
+              comment + "\n" +
+              (if (stack != null) indent + "  stack = \"\(stack)\".label\n" else "") +
+              (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
+              indent + "}.\(property)"
         else if (typeName == "FakeValue")
           // Special handling for FakeValue
           let (fakeValue = value.getOrNull("FakeValue"))

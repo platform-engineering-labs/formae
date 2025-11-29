@@ -2798,6 +2798,70 @@
       },
       "NativeId": "TestInlinePolicy-9|pkl-evaluator-execution-role",
       "Ksuid": "33jy2eVgVFkvWj46Q7hCruatDwf"
+    },
+    {
+      "Label": "SysOpsAdmin|developer",
+      "Type": "AWS::IAM::RolePolicy",
+      "Stack": "$unmanaged",
+      "Target": "us-west-2",
+      "Schema": {
+        "Identifier": "PolicyName",
+        "Tags": "",
+        "Fields": [
+          "PolicyDocument",
+          "PolicyName",
+          "RoleName"
+        ],
+        "Nonprovisionable": false,
+        "Hints": {
+          "PolicyDocument": {
+            "CreateOnly": false,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": false,
+            "RequiredOnCreate": false
+          },
+          "PolicyName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true,
+            "RequiredOnCreate": false
+          },
+          "RoleName": {
+            "CreateOnly": true,
+            "Persist": false,
+            "WriteOnly": false,
+            "Required": true,
+            "RequiredOnCreate": false
+          }
+        },
+        "Discoverable": false,
+        "Extractable": false
+      },
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "*",
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SysOpsAdmin",
+        "RoleName": {
+          "$label": "developer",
+          "$property": "RoleName",
+          "$res": true,
+          "$stack": "$unmanaged",
+          "$type": "AWS::IAM::Role",
+          "$value": "developer"
+        }
+      },
+      "NativeID": "SysOpsAdmin|developer",
+      "Ksuid": "363KCYk8M5JahXzZPibwPxwA4Vh"
     }
   ]
 }

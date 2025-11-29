@@ -30,6 +30,6 @@ open class RolePolicy extends formae.Resource {
     policyName: String
 
     @aws.FieldHint{createOnly = true}
-    roleName: String
+    roleName: String|formae.Resolvable
 
 }
