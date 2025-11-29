@@ -26,6 +26,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	internalutil "github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -159,7 +160,7 @@ func newDistributedMetastructure(t *testing.T, cfg *pkgmodel.Config) *metastruct
 
 	// Create plugin manager and load all plugins
 	// Load() discovers both in-process plugins and external resource plugins
-	pluginManager := plugin.NewManager()
+	pluginManager := plugin.NewManager(internalutil.ExpandHomePath("~/.pel/formae/plugins"))
 	pluginManager.Load()
 
 	// Create metastructure

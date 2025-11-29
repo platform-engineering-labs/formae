@@ -187,6 +187,9 @@ func registerEDFTypes() {
 	if err := edf.RegisterTypeOf(DeleteResource{}); err != nil {
 		log.Printf("Warning: failed to register DeleteResource type: %v", err)
 	}
+	if err := edf.RegisterTypeOf(ListParam{}); err != nil {
+		log.Printf("Warning: failed to register ListParam type: %v", err)
+	}
 	if err := edf.RegisterTypeOf(ListResources{}); err != nil {
 		log.Printf("Warning: failed to register ListResources type: %v", err)
 	}

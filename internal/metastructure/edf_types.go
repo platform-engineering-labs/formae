@@ -91,6 +91,7 @@ func registerEDFTypes() error {
 
 		// 8. Plugin operation messages (ResourceUpdater <-> PluginOperator)
 		// These depend on model.Resource and model.Target
+		plugin.ListParam{}, // Must be registered before ListResources which uses map[string]ListParam
 		plugin.ReadResource{},
 		plugin.CreateResource{},
 		plugin.UpdateResource{},

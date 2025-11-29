@@ -27,7 +27,8 @@ type ResourcePluginInfo struct {
 }
 
 type Manager struct {
-	pluginPaths []string
+	pluginPaths       []string
+	externalPluginDir string
 	plugins     []*Plugin
 
 	authenticationPlugins []*AuthenticationPlugin
@@ -39,7 +40,7 @@ type Manager struct {
 	externalResourcePlugins []ResourcePluginInfo
 }
 
-func NewManager(paths ...string) *Manager {
+func NewManager(externalPluginDir string, paths ...string) *Manager {
 	pluginPaths := detectPluginPaths()
 
 	if len(paths) > 0 {
@@ -47,7 +48,8 @@ func NewManager(paths ...string) *Manager {
 		pluginPaths = append(pluginPaths, paths...)
 	}
 	return &Manager{
-		pluginPaths: pluginPaths,
+		pluginPaths:       pluginPaths,
+		externalPluginDir: externalPluginDir,
 	}
 }
 
@@ -176,14 +178,12 @@ func (m *Manager) Load() {
 }
 
 func (m *Manager) discoverExternalResourcePlugins() {
-	// Get user home directory
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		// If we can't get home dir, skip external plugin discovery
+	// Skip discovery if no external plugin directory is configured
+	if m.externalPluginDir == "" {
 		return
 	}
 
-	pluginBaseDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
+	pluginBaseDir := m.externalPluginDir
 
 	// Check if plugin directory exists
 	if _, err := os.Stat(pluginBaseDir); os.IsNotExist(err) {
@@ -245,19 +245,20 @@ func (m *Manager) ListExternalResourcePlugins() []ResourcePluginInfo {
 }
 
 func (m *Manager) PluginVersion(name string) *semver.Version {
-	// First check loaded plugins (.so)
-	for _, plugin := range m.plugins {
-		if (*plugin).Name() == name {
-			return (*plugin).Version()
-		}
-	}
-
-	// Then check external resource plugins (separate processes)
+	// First check external resource plugins (separate processes)
+	// These are the distributed/process plugins like AWS that take precedence
 	for _, info := range m.externalResourcePlugins {
 		if strings.EqualFold(info.Namespace, name) {
 			if v, err := semver.NewVersion(info.Version); err == nil {
 				return v
 			}
+		}
+	}
+
+	// Then check loaded in-process plugins (.so)
+	for _, plugin := range m.plugins {
+		if (*plugin).Name() == name {
+			return (*plugin).Version()
 		}
 	}
 

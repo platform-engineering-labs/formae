@@ -6,6 +6,8 @@
 
 module formae.Config
 
+import "formae:/ext/random.pkl"
+
 typealias Port = Int(this >= 0 && this <= 65535)
 
 typealias CronExpression = String(matches(Regex(#"^((\*|((\d+,)*\d+)|((\d+|\*)/\d+)|(\d+-\d+))\s+){4}(\*|((\d+,)*\d+)|((\d+|\*)/\d+)|(\d+-\d+))$"#)))
@@ -19,7 +21,7 @@ class ServerConfig {
 
     port: Port = 49684
 
-    secret: String = ""
+    secret: String = random.password(16, false)
 
     observerPort: Port = 0
 
@@ -152,6 +154,8 @@ class CliConfig {
 }
 
 class PluginConfig {
+    pluginDir: String = "~/.pel/formae/plugins"
+
     hidden authentication: Dynamic?(
             if (this != null)
                 this.hasProperty("type")

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/api/model"
+	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -144,6 +145,10 @@ agent {
 cli {
 	disableUsageReporting = true
 }
+
+plugins {
+	pluginDir = "~/.pel/formae/plugins"
+}
 `, h.networkCookie, dbPath, logPath)
 
 	// Write config to temp directory
@@ -171,7 +176,7 @@ func (h *TestHarness) setupPluginManager() error {
 	h.t.Logf("Loading plugins from: %s", absPluginPath)
 
 	// Create plugin manager with the plugin path
-	h.pluginManager = plugin.NewManager(absPluginPath)
+	h.pluginManager = plugin.NewManager(util.ExpandHomePath("~/.pel/formae/plugins"), absPluginPath)
 
 	// Load all plugins
 	h.pluginManager.Load()

@@ -26,7 +26,7 @@ func TestMetastructure_NetworkingEnabled(t *testing.T) {
 		},
 	}
 
-	pluginManager := plugin.NewManager()
+	pluginManager := plugin.NewManager("")
 
 	m, err := NewMetastructure(context.Background(), cfg, pluginManager, "test")
 	require.NoError(t, err)

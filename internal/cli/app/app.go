@@ -44,7 +44,7 @@ type Projects struct {
 }
 
 func NewApp() *App {
-	mgr := plugin.NewManager()
+	mgr := plugin.NewManager("")
 	u, err := usage.NewPostHogSender()
 	if err != nil {
 		fmt.Println(display.Red("Error: " + err.Error()))
@@ -556,10 +556,14 @@ func (p *Projects) formatIncludes(format string, include []string) []string {
 	var includes []string
 	switch format {
 	case "pkl":
-		includes = append(includes, "pkl.formae@"+p.pluginManager.PluginVersion("pkl").String())
+		if pklVersion := p.pluginManager.PluginVersion("pkl"); pklVersion != nil {
+			includes = append(includes, "pkl.formae@"+pklVersion.String())
+		}
 
 		if slices.Contains(include, "aws") {
-			includes = append(includes, "aws.aws@"+p.pluginManager.PluginVersion("aws").String())
+			if awsVersion := p.pluginManager.PluginVersion("aws"); awsVersion != nil {
+				includes = append(includes, "aws.aws@"+awsVersion.String())
+			}
 		}
 	default:
 		return []string{}

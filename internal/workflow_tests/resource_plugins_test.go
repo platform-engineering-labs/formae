@@ -18,10 +18,10 @@ func TestMetastructure_ResourcePluginsForNamespace(t *testing.T) {
 		d, def, err := test_helpers.NewTestMetastructure(t, nil)
 		defer def()
 		if err == nil {
-			// Test with a valid namespace (aws)
-			p, err := d.PluginManager.ResourcePlugin("aws")
+			// Test with a valid namespace (FakeAWS - local .so plugin, not external process)
+			p, err := d.PluginManager.ResourcePlugin("FakeAWS")
 			if err != nil {
-				t.Errorf("Couldn't get resource plugin for 'aws' namespace: %v", err)
+				t.Errorf("Couldn't get resource plugin for 'FakeAWS' namespace: %v", err)
 			}
 
 			if p == nil {
