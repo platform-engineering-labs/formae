@@ -2,6 +2,7 @@ package plugin_process_supervisor
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"ergo.services/ergo/act"
@@ -83,21 +84,53 @@ func (p *PluginProcessSupervisor) HandleCall(from gen.PID, ref gen.Ref, request 
 	return nil, nil
 }
 
+// logPluginOutput parses Ergo's log format and logs with appropriate level
+// Format: "timestamp [level] rest_of_message" e.g. "1764458575429677244 [info] <79F4473F.0.1004>: message"
+var pluginLogRegex = regexp.MustCompile(`^\d+\s+\[(trace|debug|info|warning|error)\]\s+(.*)$`)
+
+func (p *PluginProcessSupervisor) logPluginOutput(namespace, output string) {
+	if output == "" {
+		return
+	}
+
+	matches := pluginLogRegex.FindStringSubmatch(output)
+	if matches == nil {
+		// No level found, log as info
+		p.Log().Info("[%s] %s", namespace, output)
+		return
+	}
+
+	level := matches[1]
+	message := matches[2]
+	formattedMsg := fmt.Sprintf("[%s] %s", namespace, message)
+
+	switch level {
+	case "trace":
+		p.Log().Trace(formattedMsg)
+	case "debug":
+		p.Log().Debug(formattedMsg)
+	case "info":
+		p.Log().Info(formattedMsg)
+	case "warning":
+		p.Log().Warning(formattedMsg)
+	case "error":
+		p.Log().Error(formattedMsg)
+	default:
+		p.Log().Info(formattedMsg)
+	}
+}
+
 func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case meta.MessagePortText:
-		// Plugin text output - log with namespace prefix
+		// Plugin text output - parse level and log appropriately
 		output := strings.TrimSpace(msg.Text)
-		if output != "" {
-			p.Log().Info(fmt.Sprintf("[%s] %s", msg.Tag, output))
-		}
+		p.logPluginOutput(msg.Tag, output)
 
 	case meta.MessagePortData:
-		// Plugin binary data - log with namespace prefix
+		// Plugin binary data - parse level and log appropriately
 		output := strings.TrimSpace(string(msg.Data))
-		if output != "" {
-			p.Log().Info(fmt.Sprintf("[%s] %s", msg.Tag, output))
-		}
+		p.logPluginOutput(msg.Tag, output)
 
 	case meta.MessagePortError:
 		// Plugin error output
