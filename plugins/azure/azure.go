@@ -154,7 +154,8 @@ func (a Azure) TargetBehavior() resource.TargetBehavior {
 	return targetBehavior{}
 }
 
-func (a Azure) GetResourceFilters() map[string]plugin.ResourceFilter {
+// GetMatchFilters returns declarative filters for discovery (no filters yet)
+func (a Azure) GetMatchFilters() []plugin.MatchFilter {
 	// TODO: Implement resource filters for discovery
-	return map[string]plugin.ResourceFilter{}
+	return nil
 }

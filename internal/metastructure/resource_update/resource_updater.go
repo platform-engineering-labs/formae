@@ -604,7 +604,25 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	// If the plugin operation has finished successfully, we persist the resource update to the stack, inform the stack updater and exit
 	if message.FinishedSuccessfully() {
 		if data.commandSource == FormaCommandSourceDiscovery {
-			if data.resourceUpdate.Filter(json.RawMessage(data.resourceUpdate.Resource.Properties), data.resourceUpdate.ResourceTarget) {
+			// Merge Properties and ReadOnlyProperties to get complete cloud state for filtering
+			completeProperties, mergeErr := util.MergeJSON(
+				data.resourceUpdate.Resource.Properties,
+				data.resourceUpdate.Resource.ReadOnlyProperties,
+			)
+			if mergeErr != nil {
+				proc.Log().Warning("failed to merge properties for filter, using Properties only", "error", mergeErr)
+				completeProperties = data.resourceUpdate.Resource.Properties
+			}
+
+			// Check if resource should be filtered using MatchFilters (declarative, OR logic)
+			shouldFilter := false
+			for i := range data.resourceUpdate.MatchFilters {
+				if shouldFilterByMatchFilter(&data.resourceUpdate.MatchFilters[i], completeProperties) {
+					shouldFilter = true
+					break
+				}
+			}
+			if shouldFilter {
 				proc.Log().Debug("Skipping discovered resource",
 					"resourceType", data.resourceUpdate.Resource.Type,
 					"nativeID", data.resourceUpdate.Resource.NativeID)
@@ -776,6 +794,60 @@ func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateDa
 	proc.Log().Error("Failed to resolve resource property", "resourceUri", message.ResourceURI)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
+}
+
+// shouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter
+func shouldFilterByMatchFilter(filter *plugin.MatchFilter, properties json.RawMessage) bool {
+	if filter == nil {
+		return false
+	}
+
+	// All conditions must match (AND logic)
+	for _, cond := range filter.Conditions {
+		if !evaluateCondition(cond, properties) {
+			return false
+		}
+	}
+
+	// All conditions matched
+	return filter.Action == plugin.FilterActionExclude
+}
+
+func evaluateCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+	switch cond.Type {
+	case plugin.ConditionTypeTagMatch:
+		return matchesTagCondition(cond, properties)
+	case plugin.ConditionTypePropertyMatch:
+		return matchesPropertyCondition(cond, properties)
+	default:
+		return false
+	}
+}
+
+func matchesTagCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+	tags := pkgmodel.GetTagsFromProperties(properties)
+	for _, tag := range tags {
+		for _, key := range cond.TagKeys {
+			if tag.Key == key && tag.Value == cond.TagValue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchesPropertyCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return false
+	}
+
+	if val, ok := props[cond.PropertyPath]; ok {
+		if strVal, ok := val.(string); ok {
+			return strVal == cond.PropertyValue
+		}
+	}
+	return false
 }
 
 func currentOperation(state gen.Atom) resource.Operation {

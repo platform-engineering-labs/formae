@@ -122,7 +122,7 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 	)
 
 	if synchronizerCfg.Enabled {
-		if err := s.Send(s.PID(), Synchronize{}); err != nil {
+		if _, err := s.SendAfter(s.PID(), Synchronize{}, 10*time.Second); err != nil {
 			return statemachine.StateMachineSpec[SynchronizerData]{}, fmt.Errorf("failed to send initial synchronize message: %s", err)
 		}
 		s.Log().Info("Resource synchronization ready")
@@ -176,7 +176,6 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			resource_update.FormaCommandSourceSynchronize,
 			existingTargets,
 			data.datastore,
-			nil, // No resource filters needed for synchronization
 		)
 		if err != nil {
 			proc.Log().Error("failed to generate resource updates for stack %s: %w", stack.SingleStackLabel(), err)

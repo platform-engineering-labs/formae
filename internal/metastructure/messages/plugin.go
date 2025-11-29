@@ -7,6 +7,7 @@ package messages
 import (
 	"ergo.services/ergo/gen"
 
+	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
@@ -43,4 +44,20 @@ type GetPluginNode struct {
 // PluginNode is the response containing the plugin's Ergo node name
 type PluginNode struct {
 	NodeName gen.Atom
+}
+
+// GetPluginInfo requests plugin metadata from PluginCoordinator
+type GetPluginInfo struct {
+	Namespace      string
+	RefreshFilters bool // If true, fetch fresh filters from plugin before responding
+}
+
+// PluginInfoResponse contains plugin capabilities
+type PluginInfoResponse struct {
+	Found              bool
+	Namespace          string
+	SupportedResources []plugin.ResourceDescriptor
+	ResourceSchemas    map[string]model.Schema
+	MatchFilters       []plugin.MatchFilter
+	Error              string // Set if Found is false
 }

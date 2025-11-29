@@ -6,8 +6,7 @@ package main
 
 import (
 	"context"
-
-	"github.com/masterminds/semver"
+		"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -266,7 +265,27 @@ func (s FakeAWS) TargetBehavior() resource.TargetBehavior {
 	return TargetBehavior
 }
 
-// GetResourceFilters exists to satisfy the ResourcePlugin interface
-func (s FakeAWS) GetResourceFilters() map[string]plugin.ResourceFilter {
-	return make(map[string]plugin.ResourceFilter)
+// GetMatchFilters returns declarative filters matching the existing test behavior
+func (s FakeAWS) GetMatchFilters() []plugin.MatchFilter {
+	return []plugin.MatchFilter{{
+		ResourceTypes: []string{"FakeAWS::S3::Bucket"},
+		Conditions: []plugin.FilterCondition{
+			{
+				Type:          plugin.ConditionTypePropertyMatch,
+				PropertyPath:  "SkipDiscovery",
+				PropertyValue: "true",
+			},
+		},
+		Action: plugin.FilterActionExclude,
+	}, {
+		ResourceTypes: []string{"FakeAWS::S3::Bucket"},
+		Conditions: []plugin.FilterCondition{
+			{
+				Type:     plugin.ConditionTypeTagMatch,
+				TagKeys:  []string{"SkipDiscovery"},
+				TagValue: "true",
+			},
+		},
+		Action: plugin.FilterActionExclude,
+	}}
 }

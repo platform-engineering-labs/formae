@@ -74,7 +74,7 @@ type ResourceUpdate struct {
 	GroupID                  string                    `json:"GroupId,omitempty"`
 	ReferenceLabels          map[string]string         `json:"ReferenceLabels,omitempty"`
 	PreviousProperties       json.RawMessage           `json:"PreviousProperties,omitempty"`
-	Filter                   plugin.ResourceFilter     `json:"-"`
+	MatchFilters             []plugin.MatchFilter      `json:"matchFilters,omitempty"` // Declarative filters (any match = exclude)
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {

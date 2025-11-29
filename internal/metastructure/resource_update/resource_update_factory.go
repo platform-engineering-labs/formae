@@ -15,7 +15,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 func NewResourceUpdateForExisting(
@@ -233,14 +232,13 @@ func NewResourceUpdateForSync(
 	target pkgmodel.Target,
 	source FormaCommandSource,
 ) (ResourceUpdate, error) {
-	return NewResourceUpdateForSyncWithFilter(existingResource, target, source, nil)
+	return NewResourceUpdateForSyncWithFilter(existingResource, target, source)
 }
 
 func NewResourceUpdateForSyncWithFilter(
 	existingResource pkgmodel.Resource,
 	target pkgmodel.Target,
 	source FormaCommandSource,
-	filter plugin.ResourceFilter,
 ) (ResourceUpdate, error) {
 
 	// need to copy the existing resource to avoid modifying it directly
@@ -257,12 +255,6 @@ func NewResourceUpdateForSyncWithFilter(
 		return ResourceUpdate{}, fmt.Errorf("failed to get metadata for new existing %s: %w", existingResource.Label, err)
 	}
 
-	if filter == nil {
-		filter = func(json.RawMessage, pkgmodel.Target) bool {
-			return false
-		}
-	}
-
 	return ResourceUpdate{
 		ExistingResource:   existingResource,
 		ExistingTarget:     target,
@@ -274,6 +266,5 @@ func NewResourceUpdateForSyncWithFilter(
 		Source:             source,
 		StackLabel:         existingResource.Stack,
 		PreviousProperties: existingResource.Properties,
-		Filter:             filter,
 	}, nil
 }

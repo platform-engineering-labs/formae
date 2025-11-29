@@ -841,3 +841,198 @@ func TestDiscovery_ListPropertiesNotPersistedOnlyReadProperties(t *testing.T) {
 		assert.NotContains(t, props, "ListOnlyProp", "LIST-only properties should not be persisted")
 	})
 }
+
+func TestDiscovery_ResourceFiltering(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
+				if request.ResourceType != "FakeAWS::S3::Bucket" {
+					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+				}
+
+				// Return two buckets: one to be filtered out, one to be included
+				return &resource.ListResult{
+					Resources: []resource.Resource{
+						{
+							NativeID:   "bucket-filtered",
+							Properties: `{}`,
+						},
+						{
+							NativeID:   "bucket-included",
+							Properties: `{}`,
+						},
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				switch request.NativeID {
+				case "bucket-filtered":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   `{"BucketName": "bucket-filtered", "SkipDiscovery": "true"}`,
+					}, nil
+				case "bucket-included":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   `{"BucketName": "bucket-included"}`,
+					}, nil
+				default:
+					return nil, fmt.Errorf("unexpected native id: %s", request.NativeID)
+				}
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		target := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target)
+		require.NoError(t, err)
+
+		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
+		require.NoError(t, err)
+
+		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
+		require.NoError(t, err)
+
+		var stack *pkgmodel.Forma
+		require.Eventually(t, func() bool {
+			stack, err = m.Datastore.LoadStack("$unmanaged")
+			if err != nil {
+				t.Logf("Error loading stack: %v", err)
+				return false
+			}
+			if stack == nil {
+				t.Logf("Stack is nil")
+				return false
+			}
+			t.Logf("Found %d resources in $unmanaged stack", len(stack.Resources))
+			for i, r := range stack.Resources {
+				t.Logf("  Resource %d: NativeID=%s, Type=%s", i, r.NativeID, r.Type)
+			}
+			return len(stack.Resources) == 1
+		}, 5*time.Second, 100*time.Millisecond, "Expected only 1 resource (bucket-included) to be discovered")
+
+		// Verify only bucket-included is present
+		require.Len(t, stack.Resources, 1)
+		assert.Equal(t, "bucket-included", stack.Resources[0].NativeID)
+		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
+		assert.False(t, stack.Resources[0].Managed)
+
+		// Verify bucket-filtered is NOT present
+		for _, res := range stack.Resources {
+			assert.NotEqual(t, "bucket-filtered", res.NativeID, "bucket-filtered should have been filtered out")
+		}
+	})
+}
+
+func TestDiscovery_ResourceFiltering_ByTags(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
+				if request.ResourceType != "FakeAWS::S3::Bucket" {
+					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+				}
+
+				// Return three buckets:
+				// 1. One with SkipDiscovery tag in array format - should be filtered out
+				// 2. One with SkipDiscovery tag in map format - should be filtered out
+				// 3. One without the tag - should be included
+				return &resource.ListResult{
+					Resources: []resource.Resource{
+						{
+							NativeID:   "bucket-filtered-by-array-tag",
+							Properties: `{}`,
+						},
+						{
+							NativeID:   "bucket-filtered-by-map-tag",
+							Properties: `{}`,
+						},
+						{
+							NativeID:   "bucket-included-no-tag",
+							Properties: `{}`,
+						},
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				switch request.NativeID {
+				case "bucket-filtered-by-array-tag":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   `{"BucketName": "bucket-filtered-by-array-tag", "Tags": [{"Key": "SkipDiscovery", "Value": "true"}, {"Key": "Environment", "Value": "test"}]}`,
+					}, nil
+				case "bucket-filtered-by-map-tag":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   `{"BucketName": "bucket-filtered-by-map-tag", "Tags": {"SkipDiscovery": "true", "Environment": "test"}}`,
+					}, nil
+				case "bucket-included-no-tag":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   `{"BucketName": "bucket-included-no-tag", "Tags": {"Environment": "test"}}`,
+					}, nil
+				default:
+					return nil, fmt.Errorf("unexpected native id: %s", request.NativeID)
+				}
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		target := &pkgmodel.Target{
+			Label:        "us-east-1",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{"region":"us-east-1"}`),
+			Discoverable: true,
+		}
+		_, err = m.Datastore.CreateTarget(target)
+		require.NoError(t, err)
+
+		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
+		require.NoError(t, err)
+
+		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
+		require.NoError(t, err)
+
+		var stack *pkgmodel.Forma
+		require.Eventually(t, func() bool {
+			stack, err = m.Datastore.LoadStack("$unmanaged")
+			if err != nil {
+				t.Logf("Error loading stack: %v", err)
+				return false
+			}
+			if stack == nil {
+				t.Logf("Stack is nil")
+				return false
+			}
+			t.Logf("Found %d resources in $unmanaged stack", len(stack.Resources))
+			for i, r := range stack.Resources {
+				t.Logf("  Resource %d: NativeID=%s, Type=%s", i, r.NativeID, r.Type)
+			}
+			return len(stack.Resources) == 1
+		}, 5*time.Second, 100*time.Millisecond, "Expected only 1 resource (bucket-included-no-tag) to be discovered")
+
+		// Verify only bucket-included-no-tag is present
+		require.Len(t, stack.Resources, 1)
+		assert.Equal(t, "bucket-included-no-tag", stack.Resources[0].NativeID)
+		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
+		assert.False(t, stack.Resources[0].Managed)
+
+		// Verify filtered buckets are NOT present
+		for _, res := range stack.Resources {
+			assert.NotEqual(t, "bucket-filtered-by-array-tag", res.NativeID, "bucket-filtered-by-array-tag should have been filtered out")
+			assert.NotEqual(t, "bucket-filtered-by-map-tag", res.NativeID, "bucket-filtered-by-map-tag should have been filtered out")
+		}
+	})
+}

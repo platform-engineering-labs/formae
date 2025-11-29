@@ -83,15 +83,34 @@ func registerEDFTypes() error {
 		messages.MarkResourceUpdateAsComplete{},
 		messages.UpdateResourceProgress{},
 
-		// 7. Plugin coordination messages (agent <-> plugins)
+		// 7. Plugin types used in coordination messages
+		// These must be registered BEFORE PluginAnnouncement and PluginInfoResponse
+		plugin.ListParameter{},      // Used in ResourceDescriptor
+		plugin.ResourceDescriptor{}, // Used in PluginAnnouncement and PluginInfoResponse
+		plugin.ListParam{},          // Used in ListResources
+
+		// Filter types (must be registered before messages that use them)
+		plugin.FilterAction(""),
+		plugin.ConditionType(""),
+		plugin.FilterCondition{},
+		plugin.MatchFilter{},
+
+		// Slice and map types for PluginAnnouncement and PluginInfoResponse
+		[]plugin.MatchFilter{},
+		[]plugin.ResourceDescriptor{},
+		[]plugin.FilterCondition{},
+		map[string]model.Schema{},
+
+		// 8. Plugin coordination messages (agent <-> plugins)
+		// These must come AFTER all their component types
 		messages.PluginAnnouncement{},
 		messages.PluginHeartbeat{},
 		messages.SpawnPluginOperator{},
 		messages.SpawnPluginOperatorResult{},
+		messages.GetPluginInfo{},
+		messages.PluginInfoResponse{},
 
-		// 8. Plugin operation messages (ResourceUpdater <-> PluginOperator)
-		// These depend on model.Resource and model.Target
-		plugin.ListParam{}, // Must be registered before ListResources which uses map[string]ListParam
+		// 9. Plugin operation messages (ResourceUpdater <-> PluginOperator)
 		plugin.ReadResource{},
 		plugin.CreateResource{},
 		plugin.UpdateResource{},
