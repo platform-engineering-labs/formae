@@ -129,3 +129,19 @@ func TestPkl_FormaeConfig(t *testing.T) {
 
 	assert.JSONEq(t, `{"Type": "tailscale", "Tls": false, "AuthKey": "someAuthKey"}`, string(config.Plugins.Network))
 }
+
+func TestPkl_DefaultSecretGeneration(t *testing.T) {
+	config, err := Plugin.FormaeConfig("./testdata/config/default_secret_config.pkl")
+	assert.NoError(t, err)
+
+	// Verify that the secret is not empty
+	assert.NotEmpty(t, config.Agent.Server.Secret, "Secret should not be empty when using default random generation")
+
+	// Verify that the secret has the expected length (16 characters as specified in Config.pkl)
+	assert.Equal(t, 16, len(config.Agent.Server.Secret), "Secret should be 16 characters long")
+
+	// Verify that multiple calls generate different secrets (they should be random)
+	config2, err := Plugin.FormaeConfig("./testdata/config/default_secret_config.pkl")
+	assert.NoError(t, err)
+	assert.NotEqual(t, config.Agent.Server.Secret, config2.Agent.Server.Secret, "Each config load should generate a different random secret")
+}
