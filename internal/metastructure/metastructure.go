@@ -91,7 +91,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.Cfg = cfg
 	metastructure.PluginManager = pluginManager
 
-	err := registerEDFTypes()
+	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
 		return nil, err
 	}
