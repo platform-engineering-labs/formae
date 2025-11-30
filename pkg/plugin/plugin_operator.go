@@ -573,15 +573,17 @@ func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugin
 
 	data.attempts++
 
+	// Use data.requestedBy (the original caller) instead of from (which is the PluginOperator's own PID
+	// when retry messages are sent via SendAfter). This preserves the correct recipient for progress updates.
 	switch operation.ResourceOperation {
 	case resource.OperationRead:
-		nextState, newData, progress, actions, pluginErr = read(from, state, data, operation.Request.(ReadResource), proc)
+		nextState, newData, progress, actions, pluginErr = read(data.requestedBy, state, data, operation.Request.(ReadResource), proc)
 	case resource.OperationCreate:
-		nextState, newData, progress, actions, pluginErr = create(from, state, data, operation.Request.(CreateResource), proc)
+		nextState, newData, progress, actions, pluginErr = create(data.requestedBy, state, data, operation.Request.(CreateResource), proc)
 	case resource.OperationUpdate:
-		nextState, newData, progress, actions, pluginErr = update(from, state, data, operation.Request.(UpdateResource), proc)
+		nextState, newData, progress, actions, pluginErr = update(data.requestedBy, state, data, operation.Request.(UpdateResource), proc)
 	case resource.OperationDelete:
-		nextState, newData, progress, actions, pluginErr = delete(from, state, data, operation.Request.(DeleteResource), proc)
+		nextState, newData, progress, actions, pluginErr = delete(data.requestedBy, state, data, operation.Request.(DeleteResource), proc)
 	}
 
 	progress.Attempts = data.attempts
