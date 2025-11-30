@@ -13,6 +13,10 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// setupMonitoring is sent to self after Init completes to defer monitoring setup.
+// MonitorProcessID requires the process to be in Running state, not Init state.
+type setupMonitoring struct{}
+
 // PluginActor handles plugin lifecycle: announcement and heartbeats.
 type PluginActor struct {
 	act.Actor
@@ -86,11 +90,39 @@ func (p *PluginActor) Init(args ...any) error {
 	}
 
 	p.Log().Info("Plugin announced", "namespace", p.namespace, "node", p.Node().Name(), "agent", p.agentNode)
+
+	// Schedule monitoring setup after Init completes.
+	// MonitorProcessID requires the process to be in Running state, not Init state.
+	if err := p.Send(p.PID(), setupMonitoring{}); err != nil {
+		p.Log().Error("Failed to schedule monitoring setup", "error", err)
+	}
+
 	return nil
 }
 
 func (p *PluginActor) HandleMessage(from gen.PID, message any) error {
-	// TODO: Handle heartbeat timer messages
+	switch msg := message.(type) {
+	case setupMonitoring:
+		// Now we're in Running state, MonitorProcessID is allowed
+		registryPID := gen.ProcessID{Name: "PluginCoordinator", Node: p.agentNode}
+		if err := p.MonitorProcessID(registryPID); err != nil {
+			p.Log().Error("Failed to monitor PluginCoordinator", "error", err)
+		} else {
+			p.Log().Info("Monitoring PluginCoordinator", "target", registryPID)
+		}
+
+	case gen.MessageDownProcessID:
+		// PluginCoordinator terminated - shut down the plugin gracefully
+		p.Log().Error("PluginCoordinator down, shutting down plugin", "processID", msg.ProcessID, "reason", msg.Reason)
+		return fmt.Errorf("PluginCoordinator unavailable: %v", msg.Reason)
+
+	case gen.MessageDownNode:
+		// Agent node went down - shut down the plugin gracefully
+		if msg.Name == p.agentNode {
+			p.Log().Error("Agent node down, shutting down plugin", "node", msg.Name)
+			return fmt.Errorf("agent node unavailable: %s", msg.Name)
+		}
+	}
 	return nil
 }
 

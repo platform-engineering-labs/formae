@@ -1,5 +1,7 @@
 # Plan: Fix Ergo 64KB Message Limit for AWS Plugin Registration
 
+**Status:** COMPLETED (2025-11-29)
+
 ## Problem
 
 The AWS plugin fails to register with the Formae agent. The plugin sends a

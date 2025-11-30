@@ -19,6 +19,12 @@ type PluginHeartbeat struct {
 	Namespace string // e.g., "AWS"
 }
 
+// UnregisterPlugin is sent when a plugin becomes unavailable
+type UnregisterPlugin struct {
+	Namespace string
+	Reason    string // "crashed", "shutdown", "node_down"
+}
+
 // SpawnPluginOperator is sent to PluginCoordinator to spawn a PluginOperator for a resource operation.
 // The coordinator will spawn remotely on the plugin node (distributed) or locally (fallback).
 type SpawnPluginOperator struct {

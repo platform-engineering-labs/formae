@@ -155,6 +155,13 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 		if err != nil {
 			c.Log().Error("Failed to register namespace with RateLimiter", "namespace", msg.Namespace, "error", err)
 		}
+
+	case messages.UnregisterPlugin:
+		if _, ok := c.plugins[msg.Namespace]; ok {
+			delete(c.plugins, msg.Namespace)
+			c.Log().Info("Plugin unregistered: namespace=%s reason=%s", msg.Namespace, msg.Reason)
+		}
+
 	default:
 		c.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
 	}

@@ -4,13 +4,18 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/meta"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
+
+const MaxPluginRestarts = 5
 
 type PluginProcessSupervisor struct {
 	act.Actor
@@ -24,6 +29,8 @@ type PluginInfo struct {
 	metaPortAlias gen.Alias
 	nodeName      gen.Atom
 	healthy       bool
+	restartCount  int
+	lastCrashTime time.Time
 }
 
 // NewPluginProcessSupervisor creates a new PluginProcessSupervisor actor
@@ -140,11 +147,47 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 		// Plugin process terminated
 		p.Log().Error("Plugin terminated", "namespace", msg.Tag)
 
-		// Mark plugin as unhealthy
+		// Mark plugin as unhealthy and attempt restart
 		if pluginInfo, ok := p.plugins[msg.Tag]; ok {
 			pluginInfo.healthy = false
-			// TODO: Restart plugin
-			p.Log().Info("Plugin restart not yet implemented", "namespace", msg.Tag)
+			pluginInfo.lastCrashTime = time.Now()
+
+			// Send UnregisterPlugin message to PluginCoordinator first
+			err := p.Send(actornames.PluginCoordinator, messages.UnregisterPlugin{
+				Namespace: msg.Tag,
+				Reason:    "crashed",
+			})
+			if err != nil {
+				p.Log().Error("Failed to send UnregisterPlugin message", "namespace", msg.Tag, "error", err)
+			}
+
+			// Check restart limit
+			if pluginInfo.restartCount >= MaxPluginRestarts {
+				p.Log().Error("Plugin exceeded max restart attempts", 
+					"namespace", msg.Tag, 
+					"restartCount", pluginInfo.restartCount,
+					"maxRestarts", MaxPluginRestarts)
+				return nil
+			}
+
+			// Increment restart count and attempt restart
+			pluginInfo.restartCount++
+			p.Log().Info("Attempting to restart plugin", 
+				"namespace", msg.Tag, 
+				"restartCount", pluginInfo.restartCount,
+				"maxRestarts", MaxPluginRestarts)
+
+			err = p.spawnPlugin(msg.Tag, pluginInfo)
+			if err != nil {
+				p.Log().Error("Failed to restart plugin", 
+					"namespace", msg.Tag, 
+					"restartCount", pluginInfo.restartCount,
+					"error", err)
+			} else {
+				p.Log().Info("Plugin restarted successfully", 
+					"namespace", msg.Tag, 
+					"restartCount", pluginInfo.restartCount)
+			}
 		}
 	}
 
