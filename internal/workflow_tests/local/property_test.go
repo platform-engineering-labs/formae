@@ -13,7 +13,7 @@
 // Other Considerations:
 // - Multi stack?
 
-package workflow_tests
+package workflow_tests_local
 
 import (
 	"context"

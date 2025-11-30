@@ -4,7 +4,7 @@
 
 //go:build unit
 
-package workflow_tests
+package workflow_tests_local
 
 import (
 	"errors"

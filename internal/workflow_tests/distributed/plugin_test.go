@@ -4,7 +4,7 @@
 
 //go:build integration
 
-package distributed
+package workflow_tests_distributed
 
 import (
 	"context"
