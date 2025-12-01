@@ -88,9 +88,6 @@ type PluginOperatorRetry struct {
 	Request           any
 }
 
-// GetFilters requests current filters from the plugin
-type GetFilters struct{}
-
 type ReadResource struct {
 	Namespace        string
 	NativeID         string

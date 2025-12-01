@@ -45,6 +45,15 @@ type PluginAnnouncement struct {
 	Capabilities []byte
 }
 
+// GetFilters requests current match filters from a plugin actor
+type GetFilters struct{}
+
+// GetFiltersResponse contains the plugin's current match filters
+type GetFiltersResponse struct {
+	Filters []MatchFilter
+	Error   string
+}
+
 // CompressCapabilities compresses PluginCapabilities to gzip-compressed JSON.
 func CompressCapabilities(caps PluginCapabilities) ([]byte, error) {
 	jsonData, err := json.Marshal(caps)

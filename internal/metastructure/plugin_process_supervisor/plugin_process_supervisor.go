@@ -163,8 +163,8 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 
 			// Check restart limit
 			if pluginInfo.restartCount >= MaxPluginRestarts {
-				p.Log().Error("Plugin exceeded max restart attempts", 
-					"namespace", msg.Tag, 
+				p.Log().Error("Plugin exceeded max restart attempts",
+					"namespace", msg.Tag,
 					"restartCount", pluginInfo.restartCount,
 					"maxRestarts", MaxPluginRestarts)
 				return nil
@@ -172,20 +172,20 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 
 			// Increment restart count and attempt restart
 			pluginInfo.restartCount++
-			p.Log().Info("Attempting to restart plugin", 
-				"namespace", msg.Tag, 
+			p.Log().Info("Attempting to restart plugin",
+				"namespace", msg.Tag,
 				"restartCount", pluginInfo.restartCount,
 				"maxRestarts", MaxPluginRestarts)
 
 			err = p.spawnPlugin(msg.Tag, pluginInfo)
 			if err != nil {
-				p.Log().Error("Failed to restart plugin", 
-					"namespace", msg.Tag, 
+				p.Log().Error("Failed to restart plugin",
+					"namespace", msg.Tag,
 					"restartCount", pluginInfo.restartCount,
 					"error", err)
 			} else {
-				p.Log().Info("Plugin restarted successfully", 
-					"namespace", msg.Tag, 
+				p.Log().Info("Plugin restarted successfully",
+					"namespace", msg.Tag,
 					"restartCount", pluginInfo.restartCount)
 			}
 		}

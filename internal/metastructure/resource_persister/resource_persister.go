@@ -33,6 +33,7 @@ type ResourcePersister struct {
 
 	datastore               datastore.Datastore
 	persistValueTransformer transformations.ResourceTransformer
+	discoveryEnabled        bool
 }
 
 func NewResourcePersister() gen.ProcessBehavior {
@@ -48,6 +49,15 @@ func (rp *ResourcePersister) Init(args ...any) error {
 		return fmt.Errorf("resource persister: missing 'Datastore' environment variable")
 	}
 	rp.datastore = ds.(datastore.Datastore)
+
+	// Read discovery config to check if discovery is enabled
+	dcfg, ok := rp.Env("DiscoveryConfig")
+	if !ok {
+		rp.Log().Error("ResourcePersister: missing 'DiscoveryConfig' environment variable")
+		return fmt.Errorf("resource persister: missing 'DiscoveryConfig' environment variable")
+	}
+	discoveryConfig := dcfg.(pkgmodel.DiscoveryConfig)
+	rp.discoveryEnabled = discoveryConfig.Enabled
 
 	rp.persistValueTransformer = transformations.NewPersistValueTransformer()
 
@@ -435,8 +445,8 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		"operation", update.Operation,
 		"version", version)
 
-	// Trigger discovery for freshly added discoverable targets
-	if target_update.ShouldTriggerDiscovery(update) {
+	// Trigger discovery for freshly added discoverable targets (if discovery is enabled)
+	if rp.discoveryEnabled && target_update.ShouldTriggerDiscovery(update) {
 		discoveryPID := gen.ProcessID{
 			Name: actornames.Discovery,
 			Node: rp.Node().Name(),

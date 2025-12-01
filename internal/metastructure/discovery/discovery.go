@@ -301,7 +301,7 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 
 	for _, target := range data.targets {
 		// Get plugin info from PluginCoordinator (with filter refresh for fresh filters)
-		pluginInfo, err := getPluginInfo(proc, target.Namespace, true /* refreshFilters */)
+		pluginInfo, err := getPluginInfo(proc, target.Namespace, true)
 		if err != nil {
 			proc.Log().Info("Discovery: no plugin for namespace %s, skipping: %v", target.Namespace, err)
 			continue

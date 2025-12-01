@@ -14,6 +14,12 @@ import (
 // PluginAnnouncement is an alias for plugin.PluginAnnouncement
 type PluginAnnouncement = plugin.PluginAnnouncement
 
+// GetFilters is an alias for plugin.GetFilters
+type GetFilters = plugin.GetFilters
+
+// GetFiltersResponse is an alias for plugin.GetFiltersResponse
+type GetFiltersResponse = plugin.GetFiltersResponse
+
 // PluginHeartbeat is sent periodically by plugins to indicate they're still healthy
 type PluginHeartbeat struct {
 	Namespace string // e.g., "AWS"

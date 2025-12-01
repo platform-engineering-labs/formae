@@ -41,6 +41,7 @@ type TestHarness struct {
 	configFile    string
 	logFile       string
 	networkCookie string // Network cookie for distributed plugin communication
+	testRunID     string // Unique ID for this test run, used by PKL files for resource naming
 	pluginManager *plugin.Manager
 }
 
@@ -109,6 +110,13 @@ func (h *TestHarness) setupTestEnvironment() error {
 		return fmt.Errorf("failed to generate network cookie: %w", err)
 	}
 	h.networkCookie = hex.EncodeToString(cookieBytes)
+
+	// Generate a unique test run ID for resource naming consistency within this test run
+	testRunIDBytes := make([]byte, 4)
+	if _, err := rand.Read(testRunIDBytes); err != nil {
+		return fmt.Errorf("failed to generate test run ID: %w", err)
+	}
+	h.testRunID = hex.EncodeToString(testRunIDBytes)
 
 	// Generate test config file
 	configContent := fmt.Sprintf(`/*
@@ -251,6 +259,12 @@ cli {
 	return nil
 }
 
+// setCommandEnv sets the required environment variables for a command
+// This ensures the FORMAE_TEST_RUN_ID is available to all CLI commands
+func (h *TestHarness) setCommandEnv(cmd *exec.Cmd) {
+	cmd.Env = append(os.Environ(), fmt.Sprintf("FORMAE_TEST_RUN_ID=%s", h.testRunID))
+}
+
 // StartAgent starts the formae agent in the background
 func (h *TestHarness) StartAgent() error {
 	if h.agentStarted {
@@ -266,6 +280,7 @@ func (h *TestHarness) StartAgent() error {
 
 	// Start agent with context and custom config so we can cancel it
 	h.agentCmd = exec.CommandContext(h.agentCtx, h.formaeBinary, "agent", "start", "--config", h.configFile)
+	h.setCommandEnv(h.agentCmd)
 	h.agentCmd.Stdout = os.Stdout
 	h.agentCmd.Stderr = os.Stderr
 
@@ -365,6 +380,7 @@ func (h *TestHarness) ApplyWithMode(pklFile string, mode string) (string, error)
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
+	h.setCommandEnv(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -396,6 +412,7 @@ func (h *TestHarness) Destroy(pklFile string) (string, error) {
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
+	h.setCommandEnv(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -427,6 +444,7 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
+	h.setCommandEnv(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -446,6 +464,7 @@ func (h *TestHarness) Extract(query string, outputFile string) error {
 		"--query", query,
 		outputFile,
 	)
+	h.setCommandEnv(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -122,7 +122,7 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 	)
 
 	if synchronizerCfg.Enabled {
-		if _, err := s.SendAfter(s.PID(), Synchronize{}, 10*time.Second); err != nil {
+		if _, err := s.SendAfter(s.PID(), Synchronize{}, 2*time.Second); err != nil {
 			return statemachine.StateMachineSpec[SynchronizerData]{}, fmt.Errorf("failed to send initial synchronize message: %s", err)
 		}
 		s.Log().Info("Resource synchronization ready")
@@ -196,6 +196,36 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		}
 	}
 	allResourceUpdates = filteredResourceUpdates
+
+	// Filter out resources whose plugins aren't registered yet
+	availableResourceUpdates := make([]resource_update.ResourceUpdate, 0, len(allResourceUpdates))
+	for _, update := range allResourceUpdates {
+		namespace := update.Resource.Namespace()
+
+		// Check if plugin is available via PluginCoordinator
+		response, err := proc.Call(
+			gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
+			messages.GetPluginInfo{Namespace: namespace},
+		)
+		if err != nil {
+			proc.Log().Debug("Failed to check plugin availability, skipping resource",
+				"namespace", namespace,
+				"resourceURI", string(update.URI()),
+				"error", err)
+			continue
+		}
+
+		pluginInfo, ok := response.(messages.PluginInfoResponse)
+		if !ok || !pluginInfo.Found {
+			proc.Log().Debug("Plugin not available yet, skipping resource from sync",
+				"namespace", namespace,
+				"resourceURI", string(update.URI()))
+			continue
+		}
+
+		availableResourceUpdates = append(availableResourceUpdates, update)
+	}
+	allResourceUpdates = availableResourceUpdates
 
 	if len(allResourceUpdates) == 0 {
 		proc.Log().Debug("Synchronizer: no resources found to synchronize")
