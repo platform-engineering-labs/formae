@@ -502,3 +502,125 @@ func Test_mergeRefsPreservingUserRefs_RemovesArrayElements(t *testing.T) {
 	require.Equal(t, "192.168.55.1", resourceRecords[0])
 	require.Equal(t, "192.168.55.3", resourceRecords[1])
 }
+
+func Test_mergeRefsPreservingUserRefs_preservesRefInArrayElements(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	userProps := fmt.Appendf(nil, `{
+        "disks": [
+            {
+                "autoDelete": false,
+                "boot": true,
+                "source": {
+                    "$ref": "formae://%s#/selfLink",
+                    "$visibility": "Clear"
+                }
+            }
+        ]
+    }`, resourceKsuid)
+
+	pluginProps := []byte(`{
+        "disks": [
+            {
+                "autoDelete": false,
+                "boot": true,
+                "source": "https://www.googleapis.com/compute/v1/projects/development-477117/zones/europe-central2-b/disks/formae-demo-boot-disk"
+            }
+        ]
+    }`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	err = json.Unmarshal(merged, &mergedMap)
+	require.NoError(t, err)
+
+	disks := mergedMap["disks"].([]any)
+	require.Len(t, disks, 1)
+
+	disk := disks[0].(map[string]any)
+	require.Equal(t, false, disk["autoDelete"])
+	require.Equal(t, true, disk["boot"])
+
+	source := disk["source"].(map[string]any)
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", resourceKsuid), source["$ref"])
+	require.Equal(t, "Clear", source["$visibility"])
+	require.Equal(t, "https://www.googleapis.com/compute/v1/projects/development-477117/zones/europe-central2-b/disks/formae-demo-boot-disk", source["$value"])
+}
+
+func Test_mergeRefsPreservingUserRefs_preservesRefInNestedArrayInObject(t *testing.T) {
+	networkKsuid := util.NewID()
+	subnetworkKsuid := util.NewID()
+
+	userProps := fmt.Appendf(nil, `{
+        "name": "my-instance",
+        "networkInterfaces": [
+            {
+                "network": {
+                    "$ref": "formae://%s#/selfLink",
+                    "$visibility": "Clear"
+                },
+                "subnetwork": {
+                    "$ref": "formae://%s#/selfLink",
+                    "$visibility": "Clear"
+                },
+                "accessConfigs": [
+                    {
+                        "name": "External NAT",
+                        "type": "ONE_TO_ONE_NAT"
+                    }
+                ]
+            }
+        ]
+    }`, networkKsuid, subnetworkKsuid)
+
+	pluginProps := []byte(`{
+        "name": "my-instance",
+        "networkInterfaces": [
+            {
+                "network": "https://www.googleapis.com/compute/v1/projects/my-project/global/networks/my-network",
+                "subnetwork": "https://www.googleapis.com/compute/v1/projects/my-project/regions/us-central1/subnetworks/my-subnet",
+                "accessConfigs": [
+                    {
+                        "name": "External NAT",
+                        "type": "ONE_TO_ONE_NAT",
+                        "natIP": "34.123.45.67"
+                    }
+                ]
+            }
+        ]
+    }`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	err = json.Unmarshal(merged, &mergedMap)
+	require.NoError(t, err)
+
+	require.Equal(t, "my-instance", mergedMap["name"])
+
+	networkInterfaces := mergedMap["networkInterfaces"].([]any)
+	require.Len(t, networkInterfaces, 1)
+
+	ni := networkInterfaces[0].(map[string]any)
+
+	network := ni["network"].(map[string]any)
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", networkKsuid), network["$ref"])
+	require.Equal(t, "Clear", network["$visibility"])
+	require.Equal(t, "https://www.googleapis.com/compute/v1/projects/my-project/global/networks/my-network", network["$value"])
+
+	subnetwork := ni["subnetwork"].(map[string]any)
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", subnetworkKsuid), subnetwork["$ref"])
+	require.Equal(t, "Clear", subnetwork["$visibility"])
+	require.Equal(t, "https://www.googleapis.com/compute/v1/projects/my-project/regions/us-central1/subnetworks/my-subnet", subnetwork["$value"])
+
+	accessConfigs := ni["accessConfigs"].([]any)
+	require.Len(t, accessConfigs, 1)
+
+	ac := accessConfigs[0].(map[string]any)
+	require.Equal(t, "External NAT", ac["name"])
+	require.Equal(t, "ONE_TO_ONE_NAT", ac["type"])
+	require.Equal(t, "34.123.45.67", ac["natIP"])
+}

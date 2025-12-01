@@ -440,13 +440,19 @@ func (m *propertyMerger) preferNonNullValue(userValue, pluginValue gjson.Result)
 }
 
 // mergeArray handles merging of array values
-// Arrays are completely replaced with plugin data to properly handle element removals
+// Arrays are based on plugin data to properly handle element removals,
+// but user $ref structures are preserved when present at matching indices
 func (m *propertyMerger) mergeArray(path string, userVal, pluginVal gjson.Result) {
-	// Process each element in the plugin array (user array is ignored for removals)
-	for i, arrVal := range pluginVal.Array() {
+	userArray := userVal.Array()
+	// Process each element in the plugin array (plugin array determines the length)
+	for i, pluginArrVal := range pluginVal.Array() {
 		childPath := fmt.Sprintf("%s.%d", path, i)
-		// Use null user value to ensure plugin array is used as-is
-		m.mergeValue(childPath, gjson.Result{Type: gjson.Null}, arrVal)
+		// Look up corresponding user array element to preserve $ref structures
+		var userArrVal gjson.Result
+		if i < len(userArray) {
+			userArrVal = userArray[i]
+		}
+		m.mergeValue(childPath, userArrVal, pluginArrVal)
 	}
 }
 
