@@ -32,6 +32,6 @@ SPDX-License-Identifier = "FSL-1.1-ALv2"
 
 # Third-party files from Pkl project (Apache-2.0)
 [[annotations]]
-path = ["plugins/pkl/schema/ext/URI.pkl"]
+path = ["plugins/pkl/schema/ext/URI.pkl", "plugins/pkl/assets/formae/ext/URI.pkl"]
 SPDX-FileCopyrightText = "Copyright © 2024 Apple Inc. and the Pkl project authors. All rights reserved."
 SPDX-License-Identifier = "Apache-2.0"
