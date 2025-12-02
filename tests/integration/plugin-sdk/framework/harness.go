@@ -21,7 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"ergo.services/ergo"
+	"ergo.services/ergo/gen"
+
 	"github.com/platform-engineering-labs/formae/internal/api/model"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -43,6 +47,17 @@ type TestHarness struct {
 	networkCookie string // Network cookie for distributed plugin communication
 	testRunID     string // Unique ID for this test run, used by PKL files for resource naming
 	pluginManager *plugin.Manager
+
+	// Ergo actor system for direct plugin communication (discovery tests)
+	ergoNode          gen.Node
+	ergoNodeName      gen.Atom
+	testHelperPID     gen.PID
+	pluginCoordinator gen.PID
+	ergoNodeStarted   bool
+
+	// Plugin info for cleanup operations
+	lastPluginBinaryPath string
+	lastPluginNamespace  string
 }
 
 // NewTestHarness creates a new test harness instance
@@ -191,6 +206,236 @@ func (h *TestHarness) setupPluginManager() error {
 
 	h.t.Logf("Plugin manager initialized successfully")
 	return nil
+}
+
+// InitErgoNode initializes the Ergo actor system for direct plugin communication.
+// This is required for discovery tests to communicate with external plugins.
+func (h *TestHarness) InitErgoNode() error {
+	if h.ergoNodeStarted {
+		return nil // Already initialized
+	}
+
+	h.t.Log("Initializing Ergo node for direct plugin communication")
+
+	// Register EDF types for network serialization before starting node
+	if err := plugin.RegisterSharedEDFTypes(); err != nil {
+		return fmt.Errorf("failed to register EDF types: %w", err)
+	}
+
+	// Generate unique node name for this test run
+	h.ergoNodeName = gen.Atom(fmt.Sprintf("test-harness-%s@localhost", h.testRunID))
+
+	// Setup Ergo node options
+	options := gen.NodeOptions{}
+	options.Network.Mode = gen.NetworkModeEnabled
+	options.Network.Cookie = h.networkCookie
+	options.Log.Level = gen.LogLevelWarning
+
+	// Start the Ergo node
+	node, err := ergo.StartNode(h.ergoNodeName, options)
+	if err != nil {
+		return fmt.Errorf("failed to start Ergo node: %w", err)
+	}
+	h.ergoNode = node
+
+	// Spawn TestHelperActor for bridging test code with actor system
+	messages := make(chan any, 100)
+	testHelperPID, err := testutil.StartTestHelperActor(h.ergoNode, messages)
+	if err != nil {
+		h.ergoNode.Stop()
+		return fmt.Errorf("failed to spawn TestHelperActor: %w", err)
+	}
+	h.testHelperPID = testHelperPID
+
+	// Spawn PluginCoordinator to receive plugin announcements
+	// Pass the node name and network cookie so it can spawn plugins
+	coordinatorPID, err := h.ergoNode.SpawnRegister(
+		"PluginCoordinator",
+		NewPluginCoordinator,
+		gen.ProcessOptions{},
+		string(h.ergoNodeName), // agentNodeName
+		h.networkCookie,        // networkCookie
+	)
+	if err != nil {
+		h.ergoNode.Stop()
+		return fmt.Errorf("failed to spawn PluginCoordinator: %w", err)
+	}
+	h.pluginCoordinator = coordinatorPID
+
+	h.ergoNodeStarted = true
+	h.t.Logf("Ergo node initialized: %s", h.ergoNodeName)
+
+	return nil
+}
+
+// StopErgoNode stops the Ergo actor system
+func (h *TestHarness) StopErgoNode() {
+	if h.ergoNodeStarted && h.ergoNode != nil {
+		// First, terminate any spawned plugin processes
+		h.t.Log("Terminating spawned plugins before stopping Ergo node")
+		result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", TerminatePluginsRequest{}, 10)
+		if err != nil {
+			h.t.Logf("Warning: failed to terminate plugins: %v", err)
+		} else if r, ok := result.(TerminatePluginsResult); ok {
+			h.t.Logf("Terminated %d plugin(s)", r.Terminated)
+		}
+
+		// Give plugins a moment to shut down
+		time.Sleep(500 * time.Millisecond)
+
+		h.t.Log("Stopping Ergo node")
+		h.ergoNode.Stop()
+		h.ergoNodeStarted = false
+	}
+}
+
+// LaunchPluginDirect spawns an external plugin process and waits for it to announce itself.
+// This is used by discovery tests to create resources without the formae agent.
+func (h *TestHarness) LaunchPluginDirect(pluginBinaryPath, namespace string) error {
+	if !h.ergoNodeStarted {
+		if err := h.InitErgoNode(); err != nil {
+			return fmt.Errorf("failed to initialize Ergo node: %w", err)
+		}
+	}
+
+	h.t.Logf("Launching plugin directly: %s (namespace: %s)", pluginBinaryPath, namespace)
+
+	// Call the PluginCoordinator to launch the plugin via actor message
+	// This is required because SpawnMeta can only be called from within an actor
+	result, err := testutil.Call(h.ergoNode, "PluginCoordinator", LaunchPluginRequest{
+		PluginBinaryPath: pluginBinaryPath,
+		Namespace:        namespace,
+		TestRunID:        h.testRunID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to call PluginCoordinator: %w", err)
+	}
+
+	if launchResult, ok := result.(LaunchPluginResult); ok {
+		if launchResult.Error != "" {
+			return fmt.Errorf("failed to launch plugin: %s", launchResult.Error)
+		}
+	}
+
+	h.t.Logf("Plugin process spawned, waiting for announcement...")
+	return nil
+}
+
+// WaitForPluginReady waits for a plugin to announce itself to the PluginCoordinator.
+func (h *TestHarness) WaitForPluginReady(namespace string, timeout time.Duration) error {
+	if !h.ergoNodeStarted {
+		return fmt.Errorf("Ergo node not started")
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		result, err := testutil.Call(h.ergoNode, "PluginCoordinator", CheckPluginAvailable{Namespace: namespace})
+		if err == nil {
+			if r, ok := result.(CheckPluginAvailableResult); ok && r.Available {
+				h.t.Logf("Plugin %s is ready", namespace)
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	return fmt.Errorf("timeout waiting for plugin %s to become ready", namespace)
+}
+
+// RegisterTargetForDiscovery registers a target with Discoverable=true via the formae agent API.
+// This must be called after the agent is started.
+func (h *TestHarness) RegisterTargetForDiscovery(evalOutput json.RawMessage) error {
+	// Parse the eval output to get the forma structure
+	var forma pkgmodel.Forma
+	if err := json.Unmarshal(evalOutput, &forma); err != nil {
+		return fmt.Errorf("failed to parse eval output: %w", err)
+	}
+
+	if len(forma.Targets) == 0 {
+		return fmt.Errorf("no targets found in eval output")
+	}
+
+	// Set Discoverable=true on the target
+	discoverableTarget := forma.Targets[0]
+	discoverableTarget.Discoverable = true
+	h.t.Logf("Registering target with Discoverable=true: %s", discoverableTarget.Label)
+
+	targetOnlyForma := pkgmodel.Forma{
+		Targets: []pkgmodel.Target{discoverableTarget},
+	}
+
+	targetJSON, err := json.Marshal(targetOnlyForma)
+	if err != nil {
+		return fmt.Errorf("failed to marshal target-only forma: %w", err)
+	}
+
+	_, err = h.submitForma(targetJSON, "target-registration")
+	if err != nil {
+		return fmt.Errorf("failed to register target for discovery: %w", err)
+	}
+
+	return nil
+}
+
+// waitForOperationProgress polls the PluginCoordinator for operation progress until complete.
+// This is used to wait for async operations (create/delete) to finish.
+func (h *TestHarness) waitForOperationProgress(operatorPID gen.PID, initialProgress resource.ProgressResult, timeout time.Duration) (resource.ProgressResult, error) {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 5 * time.Second
+
+	progress := initialProgress
+
+	for time.Now().Before(deadline) {
+		if progress.OperationStatus != resource.OperationStatusInProgress {
+			return progress, nil
+		}
+
+		time.Sleep(pollInterval)
+
+		// Poll the PluginCoordinator for the latest progress
+		result, err := testutil.Call(h.ergoNode, "PluginCoordinator", GetLatestProgressRequest{
+			OperatorPID: operatorPID,
+		})
+		if err != nil {
+			h.t.Logf("Warning: failed to get progress: %v", err)
+			continue
+		}
+
+		progressResult, ok := result.(GetLatestProgressResult)
+		if !ok {
+			h.t.Logf("Warning: unexpected response type: %T", result)
+			continue
+		}
+
+		if progressResult.Found {
+			h.t.Logf("Progress update: status=%s, nativeID=%s", progressResult.Progress.OperationStatus, progressResult.Progress.NativeID)
+			progress = progressResult.Progress
+		} else {
+			h.t.Logf("No progress update yet, continuing to wait...")
+		}
+	}
+
+	return progress, fmt.Errorf("timeout waiting for operation to complete")
+}
+
+// ConfigureDiscovery updates the config file
+
+// GetPluginBinaryPath returns the path to an external plugin binary.
+// It uses the plugin manager to find installed plugins.
+func (h *TestHarness) GetPluginBinaryPath(namespace string) (string, error) {
+	if h.pluginManager == nil {
+		return "", fmt.Errorf("plugin manager not initialized")
+	}
+
+	// Look up in external resource plugins
+	for _, p := range h.pluginManager.ListExternalResourcePlugins() {
+		if strings.EqualFold(p.Namespace, namespace) {
+			h.t.Logf("Found plugin binary for %s: %s", namespace, p.BinaryPath)
+			return p.BinaryPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("no plugin binary found for namespace: %s", namespace)
 }
 
 // ConfigureDiscovery updates the config file to enable discovery for specific resource types
@@ -351,6 +596,7 @@ func (h *TestHarness) Cleanup() {
 	}
 
 	h.StopAgent()
+	h.StopErgoNode()
 }
 
 // RegisterCleanup adds a cleanup function to be called during Cleanup()
@@ -605,10 +851,13 @@ func (h *TestHarness) WaitForDiscoveryCompletion(timeout time.Duration) error {
 	return fmt.Errorf("timeout waiting for discovery to complete after %v", timeout)
 }
 
-// CreateUnmanagedResource creates an unmanaged resource using the plugin directly,
-// bypassing formae's validation and database storage
+// CreateUnmanagedResource creates an unmanaged resource using the external plugin directly,
+// bypassing formae's validation and database storage. This method handles the full workflow:
+// initializing the Ergo node, launching the plugin, waiting for it to be ready, and creating
+// the resource via the actor system. After calling this method, use StopErgoNode() before
+// starting the formae agent.
 func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, error) {
-	h.t.Log("Creating unmanaged resource via plugin")
+	h.t.Log("Creating unmanaged resource via external plugin")
 
 	// Parse the evaluated JSON into a Forma object
 	var forma pkgmodel.Forma
@@ -631,14 +880,33 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 
 	h.t.Logf("Creating resource of type: %s", cloudResource.Type)
 
-	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
-	namespace := strings.ToLower(strings.Split(cloudResource.Type, "::")[0])
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "AWS")
+	namespace := strings.Split(cloudResource.Type, "::")[0]
 	h.t.Logf("Using plugin namespace: %s", namespace)
 
-	// Get the resource plugin
-	resourcePlugin, err := h.pluginManager.ResourcePlugin(namespace)
+	// Get plugin binary path
+	pluginBinaryPath, err := h.GetPluginBinaryPath(namespace)
 	if err != nil {
-		return "", fmt.Errorf("failed to get resource plugin for namespace %s: %w", namespace, err)
+		return "", fmt.Errorf("failed to get plugin binary path: %w", err)
+	}
+
+	// Store for later cleanup
+	h.lastPluginBinaryPath = pluginBinaryPath
+	h.lastPluginNamespace = namespace
+
+	// Initialize Ergo node if needed
+	if err := h.InitErgoNode(); err != nil {
+		return "", fmt.Errorf("failed to initialize Ergo node: %w", err)
+	}
+
+	// Launch the plugin
+	if err := h.LaunchPluginDirect(pluginBinaryPath, namespace); err != nil {
+		return "", fmt.Errorf("failed to launch plugin: %w", err)
+	}
+
+	// Wait for plugin to be ready
+	if err := h.WaitForPluginReady(namespace, 30*time.Second); err != nil {
+		return "", fmt.Errorf("plugin not ready: %w", err)
 	}
 
 	// Strip Formae metadata tags from the resource properties
@@ -648,110 +916,116 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 	if len(forma.Targets) == 0 {
 		return "", fmt.Errorf("no targets found in forma")
 	}
-	target := &forma.Targets[0]
+	target := forma.Targets[0]
 
-	// Create the resource using the plugin
-	createRequest := &resource.CreateRequest{
-		Resource: cloudResource,
-		Target:   target,
-	}
-
-	h.t.Logf("Calling plugin Create method")
-	createResult, err := (*resourcePlugin).Create(context.Background(), createRequest)
+	// Call PluginCoordinator to create the resource
+	result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", CreateResourceRequest{
+		ResourceType: cloudResource.Type,
+		Namespace:    namespace,
+		Properties:   cloudResource.Properties,
+		Target:       target,
+	}, 120) // 2 minute timeout for the initial call
 	if err != nil {
-		return "", fmt.Errorf("plugin Create failed: %w", err)
+		return "", fmt.Errorf("CreateResource call failed: %w", err)
 	}
 
-	if createResult.ProgressResult == nil {
-		return "", fmt.Errorf("plugin Create returned nil ProgressResult")
+	createResult, ok := result.(CreateResourceResult)
+	if !ok {
+		return "", fmt.Errorf("unexpected response type: %T", result)
 	}
 
-	h.t.Logf("Create initiated, RequestID: %s, Status: %s",
-		createResult.ProgressResult.RequestID,
-		createResult.ProgressResult.OperationStatus)
-
-	// Poll for completion
-	nativeID, err := h.pollPluginStatus(
-		*resourcePlugin,
-		createResult.ProgressResult.RequestID,
-		cloudResource.Type,
-		target,
-	)
-	if err != nil {
-		return "", fmt.Errorf("failed waiting for resource creation: %w", err)
+	if createResult.Error != "" {
+		return "", fmt.Errorf("create failed: %s", createResult.Error)
 	}
 
+	// Wait for the operation to complete by polling
+	progress := createResult.InitialProgress
+	if progress.OperationStatus == resource.OperationStatusInProgress {
+		h.t.Logf("Resource creation in progress, waiting for completion...")
+		progress, err = h.waitForOperationProgress(createResult.OperatorPID, progress, 10*time.Minute)
+		if err != nil {
+			return "", fmt.Errorf("waiting for create to complete: %w", err)
+		}
+	}
+
+	if progress.OperationStatus == resource.OperationStatusFailure {
+		return "", fmt.Errorf("create failed: %s (code: %s)", progress.StatusMessage, progress.ErrorCode)
+	}
+
+	nativeID := progress.NativeID
 	h.t.Logf("Resource created successfully, NativeID: %s", nativeID)
-
-	// Now we need to submit the target via API so it gets stored with Discoverable=true
-	// We create a minimal forma with just the target
-	discoverableTarget := forma.Targets[0]
-	discoverableTarget.Discoverable = true
-	h.t.Logf("Setting Discoverable=true for target: %s", discoverableTarget.Label)
-
-	targetOnlyForma := pkgmodel.Forma{
-		Targets: []pkgmodel.Target{discoverableTarget},
-	}
-
-	targetJSON, err := json.Marshal(targetOnlyForma)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal target-only forma: %w", err)
-	}
-
-	_, err = h.submitForma(targetJSON, "target-registration")
-	if err != nil {
-		h.t.Logf("Warning: failed to register target for discovery: %v", err)
-		// Don't fail completely, as the resource was created successfully
-	}
 
 	return nativeID, nil
 }
 
-// DeleteUnmanagedResource deletes a resource directly via the plugin, bypassing formae.
-// This is useful for cleanup in discovery tests where resources were created outside formae.
+// DeleteUnmanagedResource deletes a resource directly via the external plugin, bypassing formae.
+// This method handles the full workflow: initializing the Ergo node, launching the plugin,
+// waiting for it to be ready, and deleting the resource via the actor system.
+// Uses the plugin binary path and namespace stored from the last CreateUnmanagedResource call.
 func (h *TestHarness) DeleteUnmanagedResource(resourceType, nativeID string, target *pkgmodel.Target) error {
-	h.t.Logf("Deleting unmanaged resource via plugin: type=%s, nativeID=%s", resourceType, nativeID)
+	h.t.Logf("Deleting unmanaged resource via external plugin: type=%s, nativeID=%s", resourceType, nativeID)
 
-	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
-	namespace := strings.ToLower(strings.Split(resourceType, "::")[0])
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "AWS")
+	namespace := strings.Split(resourceType, "::")[0]
 	h.t.Logf("Using plugin namespace: %s", namespace)
 
-	// Get the resource plugin
-	resourcePlugin, err := h.pluginManager.ResourcePlugin(namespace)
-	if err != nil {
-		return fmt.Errorf("failed to get resource plugin for namespace %s: %w", namespace, err)
+	// Use stored plugin binary path, or try to look it up
+	pluginBinaryPath := h.lastPluginBinaryPath
+	if pluginBinaryPath == "" {
+		var err error
+		pluginBinaryPath, err = h.GetPluginBinaryPath(namespace)
+		if err != nil {
+			return fmt.Errorf("failed to get plugin binary path: %w", err)
+		}
 	}
 
-	// Delete the resource using the plugin
-	deleteRequest := &resource.DeleteRequest{
-		NativeID:     &nativeID,
+	// Initialize Ergo node if needed
+	if err := h.InitErgoNode(); err != nil {
+		return fmt.Errorf("failed to initialize Ergo node: %w", err)
+	}
+
+	// Launch the plugin
+	if err := h.LaunchPluginDirect(pluginBinaryPath, namespace); err != nil {
+		return fmt.Errorf("failed to launch plugin: %w", err)
+	}
+
+	// Wait for plugin to be ready
+	if err := h.WaitForPluginReady(namespace, 30*time.Second); err != nil {
+		return fmt.Errorf("plugin not ready: %w", err)
+	}
+
+	// Call PluginCoordinator to delete the resource
+	result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", DeleteResourceRequest{
 		ResourceType: resourceType,
-		Target:       target,
-	}
-
-	h.t.Logf("Calling plugin Delete method")
-	deleteResult, err := (*resourcePlugin).Delete(context.Background(), deleteRequest)
+		Namespace:    namespace,
+		NativeID:     nativeID,
+		Target:       *target,
+	}, 120) // 2 minute timeout for the initial call
 	if err != nil {
-		return fmt.Errorf("plugin Delete failed: %w", err)
+		return fmt.Errorf("DeleteResource call failed: %w", err)
 	}
 
-	if deleteResult.ProgressResult == nil {
-		return fmt.Errorf("plugin Delete returned nil ProgressResult")
+	deleteResult, ok := result.(DeleteResourceResult)
+	if !ok {
+		return fmt.Errorf("unexpected response type: %T", result)
 	}
 
-	h.t.Logf("Delete initiated, RequestID: %s, Status: %s",
-		deleteResult.ProgressResult.RequestID,
-		deleteResult.ProgressResult.OperationStatus)
+	if deleteResult.Error != "" {
+		return fmt.Errorf("delete failed: %s", deleteResult.Error)
+	}
 
-	// Poll for completion
-	_, err = h.pollPluginStatus(
-		*resourcePlugin,
-		deleteResult.ProgressResult.RequestID,
-		resourceType,
-		target,
-	)
-	if err != nil {
-		return fmt.Errorf("failed waiting for resource deletion: %w", err)
+	// Wait for the operation to complete by polling
+	progress := deleteResult.InitialProgress
+	if progress.OperationStatus == resource.OperationStatusInProgress {
+		h.t.Logf("Resource deletion in progress, waiting for completion...")
+		progress, err = h.waitForOperationProgress(deleteResult.OperatorPID, progress, 10*time.Minute)
+		if err != nil {
+			return fmt.Errorf("waiting for delete to complete: %w", err)
+		}
+	}
+
+	if progress.OperationStatus == resource.OperationStatusFailure {
+		return fmt.Errorf("delete failed: %s (code: %s)", progress.StatusMessage, progress.ErrorCode)
 	}
 
 	h.t.Logf("Resource deleted successfully")
@@ -822,58 +1096,6 @@ func (h *TestHarness) stripFormaeTags(resource *pkgmodel.Resource) {
 	}
 
 	resource.Properties = modifiedProperties
-}
-
-// pollPluginStatus polls the plugin's Status method until the operation completes
-func (h *TestHarness) pollPluginStatus(
-	resourcePlugin plugin.ResourcePlugin,
-	requestID string,
-	resourceType string,
-	target *pkgmodel.Target,
-) (string, error) {
-	h.t.Logf("Polling plugin status for RequestID: %s", requestID)
-
-	deadline := time.Now().Add(2 * time.Minute) // 2 minute timeout
-	pollInterval := 2 * time.Second
-
-	for time.Now().Before(deadline) {
-		statusRequest := &resource.StatusRequest{
-			RequestID:    requestID,
-			ResourceType: resourceType,
-			Target:       target,
-		}
-
-		statusResult, err := resourcePlugin.Status(context.Background(), statusRequest)
-		if err != nil {
-			return "", fmt.Errorf("plugin Status call failed: %w", err)
-		}
-
-		if statusResult.ProgressResult == nil {
-			return "", fmt.Errorf("plugin Status returned nil ProgressResult")
-		}
-
-		h.t.Logf("Status check - Operation: %s, Status: %s",
-			statusResult.ProgressResult.Operation,
-			statusResult.ProgressResult.OperationStatus)
-
-		// Check if operation succeeded
-		if statusResult.ProgressResult.OperationStatus == resource.OperationStatusSuccess {
-			h.t.Log("Operation completed successfully")
-			return statusResult.ProgressResult.NativeID, nil
-		}
-
-		// Check if operation failed
-		if statusResult.ProgressResult.OperationStatus == resource.OperationStatusFailure {
-			return "", fmt.Errorf("operation failed: %s (error code: %s)",
-				statusResult.ProgressResult.StatusMessage,
-				statusResult.ProgressResult.ErrorCode)
-		}
-
-		// Operation still in progress, wait and retry
-		time.Sleep(pollInterval)
-	}
-
-	return "", fmt.Errorf("timeout waiting for operation to complete after 2 minutes")
 }
 
 // submitForma is a helper to submit forma JSON to the API
