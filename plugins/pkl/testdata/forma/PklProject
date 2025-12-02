@@ -3,5 +3,4 @@ amends "pkl:Project"
 dependencies {
   ["formae"] = import("../../../pkl/schema/PklProject")
   ["aws"] = import("../../../aws/schema/pkl/PklProject")
-  ["azure"] = import("../../../azure/schema/pkl/PklProject")
 }
