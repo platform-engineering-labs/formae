@@ -444,6 +444,7 @@ func (m *propertyMerger) preferNonNullValue(userValue, pluginValue gjson.Result)
 // Arrays are completely replaced with plugin data to properly handle element removals
 func (m *propertyMerger) mergeArray(path string, userVal, pluginVal gjson.Result) {
 	// Process each element in the plugin array (user array is ignored for removals)
+
 	for i, arrVal := range pluginVal.Array() {
 		childPath := fmt.Sprintf("%s.%d", path, i)
 		// Use null user value to ensure plugin array is used as-is

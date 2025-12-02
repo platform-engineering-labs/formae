@@ -263,17 +263,20 @@ func getPluginInfo(proc gen.Process, namespace string, refreshFilters bool) (*me
 }
 
 func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+	// Check overlap protection FIRST - don't modify any state if discovery is already running
+	// This prevents clearing the pluginInfoCache while a previous cycle still has in-flight messages
+	if state == StateDiscovering {
+		proc.Log().Debug("Discovery already running, consider configuring a longer interval")
+		return state, data, nil, nil
+	}
+
+	// Only initialize new cycle state after confirming we're starting a new cycle
 	data.isScheduledDiscovery = !message.Once
 	data.timeStarted = time.Now()
 	data.summary = make(map[string]int)
 
 	// Clear plugin info cache at start of each discovery cycle
 	data.pluginInfoCache = make(map[string]*messages.PluginInfoResponse)
-
-	if state == StateDiscovering {
-		proc.Log().Debug("Discovery already running, consider configuring a longer interval")
-		return state, data, nil, nil
-	}
 	proc.Log().Debug("Starting resource discovery", "timestamp", data.timeStarted)
 
 	allTargets, err := data.ds.LoadDiscoverableTargets()
