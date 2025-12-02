@@ -21,10 +21,8 @@ clean:
 clean-pel:
 	rm -rf ~/.pel/*
 
-build:
+build: build-aws-plugin
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
-	#	go build -C plugins/aws - now built as external plugin, see build-aws-plugin
-	#	go build -C plugins/azure - now built as external plugin, see build-azure-plugin
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	go build -C plugins/json -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json.so
 	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
@@ -37,15 +35,16 @@ build-aws-plugin:
 	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
 	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o ~/.pel/formae/plugins/aws/v${VERSION}/aws-plugin .
 
+build-aws-plugin-debug:
+	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
+	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -o ~/.pel/formae/plugins/aws/v${VERSION}/aws-plugin .
+
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
 
-# build-aws: now use build-aws-plugin instead
-
-build-debug:
+build-debug: build-aws-plugin-debug
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
 	#	go build -C plugins/aws - now built as external plugin
-	#	go build -C plugins/azure - now built as external plugin
 	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
 	go build -C plugins/json ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json-debug.so
 	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
@@ -155,11 +154,6 @@ test-plugin-sdk-aws: build build-aws-plugin
 	@pkl project resolve plugins/aws/testdata
 	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
 
-test-plugin-sdk-azure: build
-	@echo "Resolving PKL dependencies for Azure plugin..."
-	@pkl project resolve plugins/azure/testdata
-	PLUGIN_NAME=azure go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
-
 test-e2e: gen-pkl pkg-pkl build
 	echo "Resolving PKL project..."
 	pkl project resolve tests/e2e/pkl
@@ -212,7 +206,6 @@ tidy-all:
 	go mod tidy
 	cd ./plugins/auth-basic && go mod tidy
 	cd ./plugins/aws && go mod tidy
-	cd ./plugins/azure && go mod tidy
 	cd ./plugins/fake-aws && go mod tidy
 	cd ./plugins/json && go mod tidy
 	cd ./plugins/yaml && go mod tidy
