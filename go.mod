@@ -10,10 +10,8 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ./pkg/model
 
 replace github.com/platform-engineering-labs/formae/pkg/ppm => ./pkg/ppm
 
-replace ergo.services/actor/statemachine => /home/jeroen/dev/oss/ergo-services/actor/statemachine
-
 require (
-	ergo.services/actor/statemachine v0.0.0-20250718124030-20d1491f2900
+	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
 	ergo.services/ergo v1.999.310
 	github.com/alecthomas/chroma/v2 v2.20.0
@@ -34,7 +32,6 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
-	github.com/platform-engineering-labs/formae/plugins/aws v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20250829141051-c42d0e9b0172
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0
@@ -71,7 +68,6 @@ require (
 	github.com/RoaringBitmap/roaring v0.9.1 // indirect
 	github.com/STARRY-S/zip v0.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
-	github.com/apple/pkl-go v0.12.0 // indirect
 	github.com/axiomhq/hyperloglog v0.0.0-20191112132149-a4c4c47bc57f // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.22.0 // indirect
@@ -146,8 +142,6 @@ require (
 	github.com/ulikunitz/xz v0.5.12 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
-	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
-	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel/log v0.14.0 // indirect
