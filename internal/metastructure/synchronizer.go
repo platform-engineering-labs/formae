@@ -40,21 +40,25 @@ import (
 //			 ---|     Synchronizing     |<---
 //				+-----------------------+
 
-func factory_Synchronizer() gen.ProcessBehavior {
+func NewSynchronizer() gen.ProcessBehavior {
 	return &Synchronizer{}
 }
 
 type SynchronizeSingleResource struct {
-	Uri pkgmodel.FormaeURI
+	URI pkgmodel.FormaeURI
 }
 
 type ResourceSynchronized struct {
-	Uri pkgmodel.FormaeURI
+	URI pkgmodel.FormaeURI
 }
 
 const (
 	StateIdle          = gen.Atom("idle")
 	StateSynchronizing = gen.Atom("synchronizing")
+
+	// InitialDelay is the delay before the first synchronization run to allow
+	// the plugins to register.
+	InitialDelay = 2 * time.Second
 )
 
 type Synchronizer struct {

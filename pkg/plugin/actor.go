@@ -63,14 +63,11 @@ func (p *PluginActor) Init(args ...any) error {
 
 	compressedCaps, err := CompressCapabilities(caps)
 	if err != nil {
-		p.Log().Error("Failed to compress capabilities", "error", err)
+		p.Log().Error("Failed to compress capabilities: %s", err)
 		return fmt.Errorf("failed to compress capabilities: %w", err)
 	}
 
-	p.Log().Info("Compressed capabilities",
-		"resources", len(caps.SupportedResources),
-		"schemas", len(caps.ResourceSchemas),
-		"compressedSize", len(compressedCaps))
+	p.Log().Debug("Compressed capabilities: %d resources, %d schemas, %d bytes compressed", len(caps.SupportedResources), len(caps.ResourceSchemas), len(compressedCaps))
 
 	// Send announcement to PluginCoordinator on agent node
 	registryPID := gen.ProcessID{
@@ -85,16 +82,16 @@ func (p *PluginActor) Init(args ...any) error {
 	}
 
 	if err := p.Send(registryPID, announcement); err != nil {
-		p.Log().Error("Failed to send announcement", "error", err)
+		p.Log().Error("Failed to send announcement: %s", err)
 		return fmt.Errorf("failed to send announcement: %w", err)
 	}
 
-	p.Log().Info("Plugin announced", "namespace", p.namespace, "node", p.Node().Name(), "agent", p.agentNode)
+	p.Log().Debug("Announcement sent for %s plugin from %s to %s", p.namespace, p.Node().Name(), p.agentNode)
 
 	// Schedule monitoring setup after Init completes.
 	// MonitorProcessID requires the process to be in Running state, not Init state.
 	if err := p.Send(p.PID(), setupMonitoring{}); err != nil {
-		p.Log().Error("Failed to schedule monitoring setup", "error", err)
+		p.Log().Error("Failed to schedule monitoring setup: %s", err)
 	}
 
 	return nil
@@ -106,20 +103,20 @@ func (p *PluginActor) HandleMessage(from gen.PID, message any) error {
 		// Now we're in Running state, MonitorProcessID is allowed
 		registryPID := gen.ProcessID{Name: "PluginCoordinator", Node: p.agentNode}
 		if err := p.MonitorProcessID(registryPID); err != nil {
-			p.Log().Error("Failed to monitor PluginCoordinator", "error", err)
+			p.Log().Error("Failed to monitor PluginCoordinator: %s", err)
 		} else {
-			p.Log().Info("Monitoring PluginCoordinator", "target", registryPID)
+			p.Log().Debug("Monitoring PluginCoordinator at %s", registryPID)
 		}
 
 	case gen.MessageDownProcessID:
 		// PluginCoordinator terminated - shut down the plugin gracefully
-		p.Log().Error("PluginCoordinator down, shutting down plugin", "processID", msg.ProcessID, "reason", msg.Reason)
+		p.Log().Error("PluginCoordinator down (processID: %s, reason: %v), shutting down plugin", msg.ProcessID, msg.Reason)
 		return fmt.Errorf("PluginCoordinator unavailable: %v", msg.Reason)
 
 	case gen.MessageDownNode:
 		// Agent node went down - shut down the plugin gracefully
 		if msg.Name == p.agentNode {
-			p.Log().Error("Agent node down, shutting down plugin", "node", msg.Name)
+			p.Log().Error("Agent node %s down, shutting down plugin", msg.Name)
 			return fmt.Errorf("agent node unavailable: %s", msg.Name)
 		}
 	}

@@ -18,7 +18,6 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
-	"ergo.services/ergo/net/edf"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -34,9 +33,9 @@ type PluginCapabilities struct {
 // PluginAnnouncement is sent by plugins to PluginCoordinator on startup.
 // It contains all information needed for the agent to interact with the plugin.
 type PluginAnnouncement struct {
-	Namespace            string // e.g., "FakeAWS", "AWS", "Azure"
-	NodeName             string // Ergo node name where plugin runs, e.g., "fakeaws-plugin@localhost"
-	MaxRequestsPerSecond int    // Rate limit for this plugin
+	Namespace            string
+	NodeName             string
+	MaxRequestsPerSecond int
 
 	// Capabilities contains gzip-compressed JSON of PluginCapabilities.
 	// Use CompressCapabilities() and DecompressCapabilities() helpers.
@@ -117,7 +116,6 @@ func Run(rp ResourcePlugin) {
 		log.Fatal("FORMAE_NETWORK_COOKIE environment variable required")
 	}
 
-	fmt.Printf("Network cookie: %s\n", cookie)
 	// Setup Ergo node options
 	options := gen.NodeOptions{}
 	options.Network.Mode = gen.NetworkModeEnabled
@@ -174,10 +172,5 @@ func registerEDFTypes() {
 	// Register shared types (used by both agent and plugins)
 	if err := RegisterSharedEDFTypes(); err != nil {
 		log.Printf("Warning: failed to register shared EDF types: %v", err)
-	}
-
-	// Register plugin-specific types (not needed by agent)
-	if err := edf.RegisterTypeOf(GetFilters{}); err != nil {
-		log.Printf("Warning: failed to register GetFilters type: %v", err)
 	}
 }

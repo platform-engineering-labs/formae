@@ -20,11 +20,6 @@ type GetFilters = plugin.GetFilters
 // GetFiltersResponse is an alias for plugin.GetFiltersResponse
 type GetFiltersResponse = plugin.GetFiltersResponse
 
-// PluginHeartbeat is sent periodically by plugins to indicate they're still healthy
-type PluginHeartbeat struct {
-	Namespace string // e.g., "AWS"
-}
-
 // UnregisterPlugin is sent when a plugin becomes unavailable
 type UnregisterPlugin struct {
 	Namespace string
@@ -34,23 +29,23 @@ type UnregisterPlugin struct {
 // SpawnPluginOperator is sent to PluginCoordinator to spawn a PluginOperator for a resource operation.
 // The coordinator will spawn remotely on the plugin node (distributed) or locally (fallback).
 type SpawnPluginOperator struct {
-	Namespace   string  // e.g., "AWS", "Azure", "FakeAWS"
-	ResourceURI string  // e.g., "formae://ksuid"
-	Operation   string  // e.g., "Create", "Read", "Update", "Delete"
-	OperationID string  // unique ID for this operation
-	RequestedBy gen.PID // PID of the requester (ResourceUpdater) - passed to PluginOperator Init
+	Namespace   string
+	ResourceURI string
+	Operation   string
+	OperationID string
+	RequestedBy gen.PID
 }
 
 // SpawnPluginOperatorResult is the response from PluginCoordinator after spawning a PluginOperator
 type SpawnPluginOperatorResult struct {
-	PID   gen.PID // PID of the spawned PluginOperator
-	Error string  // Error message if spawn failed (empty on success)
+	PID   gen.PID
+	Error string
 }
 
 // GetPluginNode is sent to PluginCoordinator to get the node name for a plugin namespace.
 // This is used by ResourceUpdater to remote spawn PluginOperator on the plugin's node.
 type GetPluginNode struct {
-	Namespace string // e.g., "AWS", "Azure", "FakeAWS"
+	Namespace string
 }
 
 // PluginNode is the response containing the plugin's Ergo node name

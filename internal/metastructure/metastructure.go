@@ -130,8 +130,8 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.options.Network.Mode = gen.NetworkModeEnabled
 
 	// Disable environment sharing for RemoteSpawn because the agent's environment contains
-	// non-serializable types (Datastore, PluginManager, Context). The plugin node sets up
-	// its own environment with everything PluginOperator needs (see pkg/plugin/run.go).
+	// non-serializable types (Datastore, PluginManager, Context). We inject the relevant
+	// (serializable) parts of the environment during remote spawn in the PluginCoordinator actor.
 	metastructure.options.Security.ExposeEnvRemoteSpawn = false
 
 	//FIXME(discount-elf): enable real TLS if we want it

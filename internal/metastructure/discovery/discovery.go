@@ -82,6 +82,10 @@ type ResumeScanning struct{}
 const (
 	StateIdle        = gen.Atom("Idle")
 	StateDiscovering = gen.Atom("Discovering")
+
+	// InitialDelay is the delay before the first discovery run after startup
+	// to allow the plugins to register.
+	InitialDelay = 10 * time.Second
 )
 
 type DiscoveryData struct {
@@ -193,7 +197,7 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 	)
 
 	if discoveryCfg.Enabled {
-		if _, err := d.SendAfter(d.PID(), Discover{}, 10*time.Second); err != nil {
+		if _, err := d.SendAfter(d.PID(), Discover{}, InitialDelay); err != nil {
 			return statemachine.StateMachineSpec[DiscoveryData]{}, fmt.Errorf("failed to send initial discovery message: %s", err)
 		}
 		d.Log().Info("Resource discovery ready")
@@ -241,10 +245,10 @@ func resumeDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message m
 }
 
 // getPluginInfo fetches plugin info from PluginCoordinator
-func getPluginInfo(proc gen.Process, namespace string, refreshFilters bool) (*messages.PluginInfoResponse, error) {
+func getPluginInfo(proc gen.Process, namespace string) (*messages.PluginInfoResponse, error) {
 	result, err := proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
-		messages.GetPluginInfo{Namespace: namespace, RefreshFilters: refreshFilters},
+		messages.GetPluginInfo{Namespace: namespace, RefreshFilters: true},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get plugin info for %s: %w", namespace, err)
@@ -263,14 +267,12 @@ func getPluginInfo(proc gen.Process, namespace string, refreshFilters bool) (*me
 }
 
 func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
-	// Check overlap protection FIRST - don't modify any state if discovery is already running
-	// This prevents clearing the pluginInfoCache while a previous cycle still has in-flight messages
+	// Check if a discovery cycle is already running
 	if state == StateDiscovering {
 		proc.Log().Debug("Discovery already running, consider configuring a longer interval")
 		return state, data, nil, nil
 	}
 
-	// Only initialize new cycle state after confirming we're starting a new cycle
 	data.isScheduledDiscovery = !message.Once
 	data.timeStarted = time.Now()
 	data.summary = make(map[string]int)
@@ -304,7 +306,7 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 
 	for _, target := range data.targets {
 		// Get plugin info from PluginCoordinator (with filter refresh for fresh filters)
-		pluginInfo, err := getPluginInfo(proc, target.Namespace, true)
+		pluginInfo, err := getPluginInfo(proc, target.Namespace)
 		if err != nil {
 			proc.Log().Info("Discovery: no plugin for namespace %s, skipping: %v", target.Namespace, err)
 			continue
@@ -555,11 +557,8 @@ func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []plugin.Ma
 func findMatchFiltersForType(filters []plugin.MatchFilter, resourceType string) []plugin.MatchFilter {
 	var result []plugin.MatchFilter
 	for i := range filters {
-		for _, rt := range filters[i].ResourceTypes {
-			if rt == resourceType {
-				result = append(result, filters[i])
-				break
-			}
+		if slices.Contains(filters[i].ResourceTypes, resourceType) {
+			result = append(result, filters[i])
 		}
 	}
 	return result
@@ -573,20 +572,14 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		return "", err
 	}
 
-	// For backward compatibility with function-based filters:
-	var nativeIDs []string
-	for _, resource := range resources {
-		nativeIDs = append(nativeIDs, resource.NativeID)
-	}
-
 	var resourcesToSynchronize []pkgmodel.Resource
-	for _, nativeID := range nativeIDs {
+	for _, resource := range resources {
 		resourcesToSynchronize = append(resourcesToSynchronize, pkgmodel.Resource{
-			Label:      url.QueryEscape(nativeID),
+			Label:      url.QueryEscape(resource.NativeID),
 			Type:       op.ResourceType,
 			Stack:      constants.UnmanagedStack,
 			Target:     target.Label,
-			NativeID:   nativeID,
+			NativeID:   resource.NativeID,
 			Properties: injectResolvables("{}", op),
 			Schema:     schema,
 			Managed:    false,

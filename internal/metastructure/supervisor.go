@@ -57,7 +57,7 @@ func (sup *Supervisor) Init(args ...any) (act.SupervisorSpec, error) {
 		},
 		{
 			Name:    "Synchronizer",
-			Factory: factory_Synchronizer,
+			Factory: NewSynchronizer,
 		},
 		{
 			Name:    "Discovery",

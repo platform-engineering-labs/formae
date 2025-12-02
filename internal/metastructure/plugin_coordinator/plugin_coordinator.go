@@ -70,12 +70,10 @@ func (c *PluginCoordinator) Init(args ...any) error {
 				MaxRequestsPerSecond: maxRPS,
 			})
 			if err != nil {
-				c.Log().Error("Failed to register local plugin namespace with RateLimiter",
-					"namespace", namespace,
-					"error", err)
+				c.Log().Error("Failed to register local plugin namespace %s with RateLimiter: %v", namespace, err)
 			} else {
 				c.registeredLocalNamespaces[namespace] = true
-				c.Log().Info("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", namespace, maxRPS)
+				c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", namespace, maxRPS)
 			}
 		}
 	}
@@ -91,7 +89,7 @@ func (c *PluginCoordinator) Init(args ...any) error {
 		c.retryConfig = rc.(model.RetryConfig)
 	}
 
-	c.Log().Info("PluginCoordinator started")
+	c.Log().Debug("PluginCoordinator started")
 	return nil
 }
 
@@ -122,21 +120,15 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 		// Decompress capabilities from the announcement
 		caps, err := plugin.DecompressCapabilities(msg.Capabilities)
 		if err != nil {
-			c.Log().Error("Failed to decompress capabilities",
-				"namespace", msg.Namespace,
-				"error", err)
+			c.Log().Error("Failed to decompress capabilities for namespace %s: %v", msg.Namespace, err)
 			return fmt.Errorf("failed to decompress capabilities: %w", err)
 		}
 
-		c.Log().Info("Decompressed capabilities",
-			"namespace", msg.Namespace,
-			"resources", len(caps.SupportedResources),
-			"schemas", len(caps.ResourceSchemas),
-			"compressedSize", len(msg.Capabilities))
+		c.Log().Debug("Decompressed capabilities for namespace %s: %d resources, %d schemas, %d bytes compressed", msg.Namespace, len(caps.SupportedResources), len(caps.ResourceSchemas), len(msg.Capabilities))
 
 		c.plugins[msg.Namespace] = &RegisteredPlugin{
 			Namespace:            msg.Namespace,
-			NodeName:             gen.Atom(msg.NodeName),
+			NodeName:             from.Node,
 			MaxRequestsPerSecond: msg.MaxRequestsPerSecond,
 			RegisteredAt:         time.Now(),
 			// Store decompressed capabilities
@@ -153,17 +145,17 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			MaxRequestsPerSecond: msg.MaxRequestsPerSecond,
 		})
 		if err != nil {
-			c.Log().Error("Failed to register namespace with RateLimiter", "namespace", msg.Namespace, "error", err)
+			c.Log().Error("Failed to register namespace %s with RateLimiter: %v", msg.Namespace, err)
 		}
 
 	case messages.UnregisterPlugin:
 		if _, ok := c.plugins[msg.Namespace]; ok {
 			delete(c.plugins, msg.Namespace)
-			c.Log().Info("Plugin unregistered: namespace=%s reason=%s", msg.Namespace, msg.Reason)
+			c.Log().Debug("Plugin unregistered: namespace=%s reason=%s", msg.Namespace, msg.Reason)
 		}
 
 	default:
-		c.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
+		c.Log().Debug("Received unknown message type: %T", message)
 	}
 	return nil
 }
@@ -183,16 +175,10 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 	if registeredPlugin, ok := c.plugins[req.Namespace]; ok {
 		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName)
 		if err != nil {
-			c.Log().Error("Failed to remote spawn PluginOperator",
-				"namespace", req.Namespace,
-				"node", registeredPlugin.NodeName,
-				"error", err)
+			c.Log().Error("Failed to remote spawn PluginOperator for namespace %s on node %s: %v", req.Namespace, registeredPlugin.NodeName, err)
 			return messages.SpawnPluginOperatorResult{Error: err.Error()}
 		}
-		c.Log().Debug("Remote spawned PluginOperator",
-			"namespace", req.Namespace,
-			"node", registeredPlugin.NodeName,
-			"pid", pid)
+		c.Log().Debug("Remote spawned PluginOperator for namespace %s on node %s: pid=%s", req.Namespace, registeredPlugin.NodeName, pid)
 		return messages.SpawnPluginOperatorResult{PID: pid}
 	}
 
@@ -217,35 +203,27 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 					MaxRequestsPerSecond: (*localPlugin).MaxRequestsPerSecond(),
 				})
 				if err != nil {
-					c.Log().Error("Failed to register namespace with RateLimiter",
-						"namespace", req.Namespace,
-						"error", err)
+					c.Log().Error("Failed to register namespace %s with RateLimiter: %v", req.Namespace, err)
 					// Don't fail the spawn - rate limiting is not critical
 				} else {
 					c.registeredLocalNamespaces[req.Namespace] = true
-					c.Log().Info("Registered local plugin namespace with RateLimiter",
-						"namespace", req.Namespace,
-						"maxRequestsPerSecond", (*localPlugin).MaxRequestsPerSecond())
+					c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, (*localPlugin).MaxRequestsPerSecond())
 				}
 			}
 
 			pid, err := c.localSpawn(*localPlugin, registerName)
 			if err != nil {
-				c.Log().Error("Failed to local spawn PluginOperator",
-					"namespace", req.Namespace,
-					"error", err)
+				c.Log().Error("Failed to local spawn PluginOperator for namespace %s: %v", req.Namespace, err)
 				return messages.SpawnPluginOperatorResult{Error: err.Error()}
 			}
-			c.Log().Debug("Local spawned PluginOperator",
-				"namespace", req.Namespace,
-				"pid", pid)
+			c.Log().Debug("Local spawned PluginOperator for namespace %s: pid=%s", req.Namespace, pid)
 			return messages.SpawnPluginOperatorResult{PID: pid}
 		}
 	}
 
 	// 3. Plugin not found
 	err := fmt.Errorf("plugin not found: %s", req.Namespace)
-	c.Log().Error("Plugin not found for spawn", "namespace", req.Namespace)
+	c.Log().Error("Plugin not found for spawn: namespace=%s", req.Namespace)
 	return messages.SpawnPluginOperatorResult{Error: err.Error()}
 }
 
@@ -314,27 +292,18 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 
 			resp, err := c.Call(pluginActorPID, messages.GetFilters{})
 			if err != nil {
-				c.Log().Error("Failed to refresh filters from remote plugin, using cached",
-					"namespace", req.Namespace,
-					"node", registered.NodeName,
-					"error", err)
+				c.Log().Error("Failed to refresh filters from remote plugin %s on node %s, using cached: %v", req.Namespace, registered.NodeName, err)
 			} else if filterResp, ok := resp.(messages.GetFiltersResponse); ok {
 				if filterResp.Error != "" {
-					c.Log().Error("Remote plugin returned error for GetFilters, using cached",
-						"namespace", req.Namespace,
-						"error", filterResp.Error)
+					c.Log().Error("Remote plugin %s returned error for GetFilters, using cached: %s", req.Namespace, filterResp.Error)
 				} else {
-					c.Log().Info("Refreshed filters from remote plugin",
-						"namespace", req.Namespace,
-						"filterCount", len(filterResp.Filters))
+					c.Log().Debug("Refreshed filters from remote plugin %s: %d filters", req.Namespace, len(filterResp.Filters))
 					filters = filterResp.Filters
 					// Update cache
 					registered.MatchFilters = filters
 				}
 			} else {
-				c.Log().Error("Unexpected response type from GetFilters, using cached",
-					"namespace", req.Namespace,
-					"responseType", fmt.Sprintf("%T", resp))
+				c.Log().Error("Unexpected response type %T from GetFilters for namespace %s, using cached", resp, req.Namespace)
 			}
 		}
 

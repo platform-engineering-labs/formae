@@ -31,7 +31,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
-// TestMetastructure_ApplyForma_DistributedPlugin tests the distributed plugin workflow
+// TestMetastructure_ExternalPlugin_Registration tests the distributed plugin workflow
 // with FakeAWS running as a separate process that announces itself to PluginCoordinator.
 //
 // This test verifies:
@@ -39,7 +39,7 @@ import (
 // - Starting the plugin process via PluginProcessSupervisor
 // - Plugin announcing itself to PluginCoordinator
 // - Plugin registration being logged
-func TestMetastructure_ApplyForma_DistributedPlugin(t *testing.T) {
+func TestMetastructure_ExternalPlugin_Registration(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// Step 1: Build the fake-aws plugin binary with hardcoded test behavior
 		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
@@ -64,6 +64,115 @@ func TestMetastructure_ApplyForma_DistributedPlugin(t *testing.T) {
 
 		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
 		t.Logf("✓ Plugin registered successfully")
+	})
+}
+
+// TestMetastructure_ExternalPlugin_ApplyForma_HappyPathtests a full apply workflow
+// with FakeAWS running as a separate process.
+//
+// This test verifies the end-to-end flow:
+// - Building and starting the fake-aws plugin as a separate process
+// - Plugin announcing itself to PluginCoordinator with capabilities
+// - Submitting a Forma apply command
+// - PluginOperator routing CRUD operations to the remote plugin
+// - Command completing successfully
+func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Step 1: Build the fake-aws plugin binary
+		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
+		defer os.Remove(pluginBinaryPath)
+
+		// Step 2: Setup test configuration
+		cfg := newDistributedTestConfig(t)
+		defer cleanupTestDatabase(t, cfg)
+
+		// Step 3: Setup test logger to capture logs
+		logCapture := setupTestLogger()
+
+		// Step 4: Create and start metastructure
+		m := newDistributedMetastructure(t, cfg)
+		// NOTE: We don't use defer m.Stop(true) here because we need to
+		// explicitly test the shutdown behavior
+
+		// Step 5: Wait for the plugin to register
+		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
+		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
+		t.Logf("✓ Plugin registered successfully")
+
+		// Step 6: Submit a Forma apply command (mirrors happy_path_test.go)
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{
+				{
+					Label: "test-stack",
+				},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "test-resource",
+					Type:       "FakeAWS::S3::Bucket",
+					Stack:      "test-stack",
+					Target:     "test-target",
+					Properties: json.RawMessage(`{"BucketName":"my-test-bucket"}`),
+					Managed:    true,
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{
+					Label:     "test-target",
+					Namespace: "FakeAWS",
+				},
+			},
+		}
+
+		_, err := m.ApplyForma(
+			forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id",
+		)
+		require.NoError(t, err, "ApplyForma should not return an error")
+
+		// Step 7: Wait for the command to complete successfully
+		var commands []*forma_command.FormaCommand
+		require.Eventually(t, func() bool {
+			var err error
+			commands, err = m.Datastore.LoadFormaCommands()
+			if err != nil {
+				t.Logf("Error loading commands: %v", err)
+				return false
+			}
+			if len(commands) > 0 {
+				t.Logf("Command state: %s", commands[0].State)
+			}
+
+			return len(commands) == 1 && commands[0].State == forma_command.CommandStateSuccess
+		}, 10*time.Second, 100*time.Millisecond, "Command should complete successfully")
+
+		require.Len(t, commands[0].ResourceUpdates[0].ProgressResult, 1)
+		assert.Equal(t, "1234", commands[0].ResourceUpdates[0].ProgressResult[0].RequestID)
+		assert.Equal(t, "5678", commands[0].ResourceUpdates[0].ProgressResult[0].NativeID)
+		assert.Equal(t, json.RawMessage(`{"BucketName":"my-test-bucket"}`), commands[0].ResourceUpdates[0].ProgressResult[0].ResourceProperties)
+
+		t.Logf("✓ Apply command completed successfully")
+
+		// Step 8: Verify the plugin process is running before shutdown
+		require.True(t, isPluginProcessRunning("fake-aws-plugin"),
+			"Plugin process should be running before shutdown")
+		t.Logf("✓ Plugin process is running before shutdown")
+
+		// Step 9: Stop the metastructure
+		m.Stop(true)
+		t.Logf("✓ Metastructure stopped")
+
+		// Step 10: Verify the plugin process has been terminated
+		// Wait a reasonable amount of time for graceful shutdown
+		// With proper graceful shutdown, the plugin should terminate within 2 seconds
+		var pluginStillRunning bool
+		require.Eventually(t, func() bool {
+			pluginStillRunning = isPluginProcessRunning("fake-aws-plugin")
+			return !pluginStillRunning
+		}, 2*time.Second, 100*time.Millisecond,
+			"Plugin process should be terminated within 2 seconds after metastructure stops")
+		t.Logf("✓ Plugin process terminated after shutdown")
 	})
 }
 
@@ -213,113 +322,4 @@ func isPluginProcessRunning(processName string) bool {
 	err := cmd.Run()
 	// pgrep returns exit code 0 if a process is found, non-zero otherwise
 	return err == nil
-}
-
-// TestMetastructure_ApplyForma_DistributedPlugin_HappyPath tests a full apply workflow
-// with FakeAWS running as a separate process.
-//
-// This test verifies the end-to-end flow:
-// - Building and starting the fake-aws plugin as a separate process
-// - Plugin announcing itself to PluginCoordinator with capabilities
-// - Submitting a Forma apply command
-// - PluginOperator routing CRUD operations to the remote plugin
-// - Command completing successfully
-func TestMetastructure_ApplyForma_DistributedPlugin_HappyPath(t *testing.T) {
-	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		// Step 1: Build the fake-aws plugin binary
-		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
-		defer os.Remove(pluginBinaryPath)
-
-		// Step 2: Setup test configuration
-		cfg := newDistributedTestConfig(t)
-		defer cleanupTestDatabase(t, cfg)
-
-		// Step 3: Setup test logger to capture logs
-		logCapture := setupTestLogger()
-
-		// Step 4: Create and start metastructure
-		m := newDistributedMetastructure(t, cfg)
-		// NOTE: We don't use defer m.Stop(true) here because we need to
-		// explicitly test the shutdown behavior
-
-		// Step 5: Wait for the plugin to register
-		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
-		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
-		t.Logf("✓ Plugin registered successfully")
-
-		// Step 6: Submit a Forma apply command (mirrors happy_path_test.go)
-		forma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-				{
-					Label: "test-stack",
-				},
-			},
-			Resources: []pkgmodel.Resource{
-				{
-					Label:      "test-resource",
-					Type:       "FakeAWS::S3::Bucket",
-					Stack:      "test-stack",
-					Target:     "test-target",
-					Properties: json.RawMessage(`{"BucketName":"my-test-bucket"}`),
-					Managed:    true,
-				},
-			},
-			Targets: []pkgmodel.Target{
-				{
-					Label:     "test-target",
-					Namespace: "FakeAWS",
-				},
-			},
-		}
-
-		_, err := m.ApplyForma(
-			forma,
-			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id",
-		)
-		require.NoError(t, err, "ApplyForma should not return an error")
-
-		// Step 7: Wait for the command to complete successfully
-		var commands []*forma_command.FormaCommand
-		require.Eventually(t, func() bool {
-			var err error
-			commands, err = m.Datastore.LoadFormaCommands()
-			if err != nil {
-				t.Logf("Error loading commands: %v", err)
-				return false
-			}
-			if len(commands) > 0 {
-				t.Logf("Command state: %s", commands[0].State)
-			}
-
-			return len(commands) == 1 && commands[0].State == forma_command.CommandStateSuccess
-		}, 10*time.Second, 100*time.Millisecond, "Command should complete successfully")
-
-		require.Len(t, commands[0].ResourceUpdates[0].ProgressResult, 1)
-		assert.Equal(t, "1234", commands[0].ResourceUpdates[0].ProgressResult[0].RequestID)
-		assert.Equal(t, "5678", commands[0].ResourceUpdates[0].ProgressResult[0].NativeID)
-		assert.Equal(t, json.RawMessage(`{"BucketName":"my-test-bucket"}`), commands[0].ResourceUpdates[0].ProgressResult[0].ResourceProperties)
-
-		t.Logf("✓ Apply command completed successfully")
-
-		// Step 8: Verify the plugin process is running before shutdown
-		require.True(t, isPluginProcessRunning("fake-aws-plugin"),
-			"Plugin process should be running before shutdown")
-		t.Logf("✓ Plugin process is running before shutdown")
-
-		// Step 9: Stop the metastructure
-		m.Stop(true)
-		t.Logf("✓ Metastructure stopped")
-
-		// Step 10: Verify the plugin process has been terminated
-		// Wait a reasonable amount of time for graceful shutdown
-		// With proper graceful shutdown, the plugin should terminate within 2 seconds
-		var pluginStillRunning bool
-		require.Eventually(t, func() bool {
-			pluginStillRunning = isPluginProcessRunning("fake-aws-plugin")
-			return !pluginStillRunning
-		}, 2*time.Second, 100*time.Millisecond,
-			"Plugin process should be terminated within 2 seconds after metastructure stops")
-		t.Logf("✓ Plugin process terminated after shutdown")
-	})
 }
