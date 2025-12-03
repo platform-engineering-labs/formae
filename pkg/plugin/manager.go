@@ -210,24 +210,49 @@ func (m *Manager) discoverExternalResourcePlugins() {
 			continue
 		}
 
-		// Use the first version found (version selection can be enhanced later)
+		// Collect all valid versions with their paths
+		type versionCandidate struct {
+			version    *semver.Version
+			versionStr string
+			binaryPath string
+		}
+		var candidates []versionCandidate
+
 		for _, versionEntry := range versionEntries {
 			if !versionEntry.IsDir() {
 				continue
 			}
 
-			version := versionEntry.Name()
-			binaryPath := filepath.Join(namespacePath, version, namespace+"-plugin")
+			versionStr := versionEntry.Name()
+			binaryPath := filepath.Join(namespacePath, versionStr, namespace+"-plugin")
 
 			// Check if binary exists and is executable
 			if info, err := os.Stat(binaryPath); err == nil && !info.IsDir() {
-				m.externalResourcePlugins = append(m.externalResourcePlugins, ResourcePluginInfo{
-					Namespace:  namespace,
-					Version:    version,
-					BinaryPath: binaryPath,
+				// Try to parse as semver
+				v, err := semver.NewVersion(versionStr)
+				if err != nil {
+					// Skip directories that aren't valid semver
+					continue
+				}
+				candidates = append(candidates, versionCandidate{
+					version:    v,
+					versionStr: versionStr,
+					binaryPath: binaryPath,
 				})
-				break // Only use first version
 			}
+		}
+
+		// Pick the highest version
+		if len(candidates) > 0 {
+			sort.Slice(candidates, func(i, j int) bool {
+				return candidates[i].version.GreaterThan(candidates[j].version)
+			})
+			best := candidates[0]
+			m.externalResourcePlugins = append(m.externalResourcePlugins, ResourcePluginInfo{
+				Namespace:  namespace,
+				Version:    best.versionStr,
+				BinaryPath: best.binaryPath,
+			})
 		}
 	}
 }
