@@ -153,10 +153,6 @@ func Run(rp ResourcePlugin) {
 		log.Fatalf("Failed to enable spawn for PluginOperator: %v", err)
 	}
 
-	fmt.Printf("%s plugin started\n", rp.Namespace())
-	fmt.Printf("Plugin node: %s\n", pluginNode)
-	fmt.Printf("Agent node: %s\n", agentNode)
-
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

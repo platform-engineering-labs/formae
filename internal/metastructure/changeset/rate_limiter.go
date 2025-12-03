@@ -80,7 +80,7 @@ func (l *RateLimiter) Init(args ...any) error {
 		}
 	}
 
-	l.Log().Info("RateLimiter started with %d buckets", len(l.buckets))
+	l.Log().Debug("RateLimiter started with %d buckets", len(l.buckets))
 	return nil
 }
 
@@ -110,7 +110,7 @@ func (l *RateLimiter) HandleMessage(from gen.PID, message any) error {
 			Capacity:   msg.MaxRequestsPerSecond,
 			LastRefill: time.Now(),
 		}
-		l.Log().Info("Registered namespace %s with rate limit %d", msg.Namespace, msg.MaxRequestsPerSecond)
+		l.Log().Debug("Registered namespace %s with rate limit %d", msg.Namespace, msg.MaxRequestsPerSecond)
 	default:
 		l.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
 	}

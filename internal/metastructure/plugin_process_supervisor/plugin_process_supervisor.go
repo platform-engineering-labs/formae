@@ -44,7 +44,7 @@ func NewPluginProcessSupervisor() gen.ProcessBehavior {
 
 func (p *PluginProcessSupervisor) Init(args ...any) error {
 	p.plugins = make(map[string]*PluginInfo)
-	p.Log().Info("PluginProcessSupervisor started")
+	p.Log().Debug("PluginProcessSupervisor started")
 
 	// Fetch PluginManager from environment
 	pluginManagerVal, ok := p.Env("PluginManager")
@@ -61,7 +61,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 
 	// Get external resource plugins from PluginManager
 	externalPlugins := pluginManager.ListExternalResourcePlugins()
-	p.Log().Info("Discovered %d external resource plugins", len(externalPlugins))
+	p.Log().Debug("Discovered %d resource plugins", len(externalPlugins))
 
 	// Store plugin info and spawn each plugin
 	for _, pluginInfo := range externalPlugins {
@@ -75,7 +75,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 			healthy:    false,
 		}
 
-		p.Log().Info("Discovered plugin: namespace=%s version=%s path=%s", namespace, version, binaryPath)
+		p.Log().Debug("Discovered plugin: namespace=%s version=%s path=%s", namespace, version, binaryPath)
 
 		// Spawn the plugin
 		err := p.spawnPlugin(namespace, p.plugins[namespace])
@@ -86,13 +86,8 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 		}
 	}
 
-	p.Log().Info("PluginProcessSupervisor initialized with %d plugins", len(p.plugins))
+	p.Log().Debug("PluginProcessSupervisor initialized with %d plugins", len(p.plugins))
 	return nil
-}
-
-func (p *PluginProcessSupervisor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
-	// TODO: Implement message handling in later tasks
-	return nil, nil
 }
 
 // logPluginOutput parses Ergo's log format and logs with appropriate level
@@ -245,6 +240,6 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 	pluginInfo.nodeName = gen.Atom(nodeName)
 	pluginInfo.healthy = true
 
-	p.Log().Info("Spawned plugin", "namespace", namespace, "node", nodeName, "alias", alias)
+	p.Log().Debug("Spawned plugin", "namespace", namespace, "node", nodeName, "alias", alias)
 	return nil
 }
