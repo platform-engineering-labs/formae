@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# AWS plugin binaries (not built as .so)
+plugins/aws/aws
+plugins/aws/aws-debug
+
 # Test binary, built with `go test -c`
 *.test
 
