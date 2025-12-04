@@ -41,13 +41,13 @@ func TestPluginRestart_AfterCrash(t *testing.T) {
 		t.Logf("✓ Plugin registered initially")
 
 		// Step 6: Verify plugin process is running
-		require.True(t, isPluginProcessRunning("fake-aws-plugin"),
+		require.True(t, isPluginProcessRunning("fake-aws"),
 			"Plugin process should be running")
 		t.Logf("✓ Plugin process is running")
 
 		// Step 7: Kill the plugin process with SIGKILL (simulate crash)
-		t.Logf("Killing fake-aws-plugin process...")
-		cmd := exec.Command("pkill", "-9", "-f", "fake-aws-plugin")
+		t.Logf("Killing fake-aws process...")
+		cmd := exec.Command("pkill", "-9", "-f", "fake-aws")
 		err := cmd.Run()
 		require.NoError(t, err, "pkill should succeed")
 		t.Logf("✓ Plugin process killed")
@@ -66,7 +66,7 @@ func TestPluginRestart_AfterCrash(t *testing.T) {
 
 		// Step 10: Verify plugin process is running again
 		require.Eventually(t, func() bool {
-			return isPluginProcessRunning("fake-aws-plugin")
+			return isPluginProcessRunning("fake-aws")
 		}, 5*time.Second, 100*time.Millisecond,
 			"Plugin process should be running after restart")
 		t.Logf("✓ Plugin process is running after restart")
@@ -110,7 +110,7 @@ func TestPluginShutdown_AfterAgentStop(t *testing.T) {
 		t.Logf("✓ Plugin registered")
 
 		// Step 6: Verify plugin process is running
-		require.True(t, isPluginProcessRunning("fake-aws-plugin"),
+		require.True(t, isPluginProcessRunning("fake-aws"),
 			"Plugin process should be running")
 		t.Logf("✓ Plugin process is running")
 
@@ -122,7 +122,7 @@ func TestPluginShutdown_AfterAgentStop(t *testing.T) {
 		// Step 8: Verify the plugin process terminates
 		// Plugin should detect agent node is down via MonitorNode and shut down
 		require.Eventually(t, func() bool {
-			return !isPluginProcessRunning("fake-aws-plugin")
+			return !isPluginProcessRunning("fake-aws")
 		}, 5*time.Second, 100*time.Millisecond,
 			"Plugin process should terminate after agent stops")
 		t.Logf("✓ Plugin process terminated after agent stop")

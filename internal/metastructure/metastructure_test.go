@@ -21,7 +21,7 @@ func TestMetastructure_NetworkingEnabled(t *testing.T) {
 			Server: model.ServerConfig{
 				Nodename: "test-agent",
 				Hostname: "localhost",
-				Secret:   "test-secret",
+				Secret:   "secret",
 			},
 		},
 	}
@@ -39,6 +39,6 @@ func TestMetastructure_NetworkingEnabled(t *testing.T) {
 		"Network mode should be enabled")
 
 	// Verify cookie is set from config
-	assert.Equal(t, "test-secret", m.options.Network.Cookie,
+	assert.Equal(t, "secret", m.options.Network.Cookie,
 		"Network cookie should match config secret")
 }

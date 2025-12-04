@@ -21,7 +21,7 @@ clean:
 clean-pel:
 	rm -rf ~/.pel/*
 
-build:
+build: 
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
 	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o aws .
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
