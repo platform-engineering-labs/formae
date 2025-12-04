@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -302,108 +301,6 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 	executor.ShouldSend().
 		To(newFakeResolveCachePID(commandID)).
 		Message(Shutdown{}).
-		Once().
-		Assert()
-
-	executor.ShouldLog().
-		Level(gen.LogLevelDebug).
-		Containing("Changeset execution finished").
-		Once().
-		Assert()
-}
-
-func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
-	t.Skip("This needs to be written to a workflow test")
-
-	commandID := "test-command-hashing"
-	resourceUpdate := newTestResourceUpdate("test-secret", nil, "AWS::SecretsManager::Secret")
-	updateUri := createOperationURI(resourceUpdate.URI(), resourceUpdate.Operation)
-
-	changeset := Changeset{
-		CommandID: commandID,
-		Pipeline: &ResourceUpdatePipeline{
-			ResourceUpdateGroups: map[pkgmodel.FormaeURI]*ResourceUpdateGroup{
-				updateUri: {
-					Updates: []*resource_update.ResourceUpdate{&resourceUpdate},
-				},
-			},
-		},
-		trackedUpdates: make(map[string]bool),
-	}
-
-	executor, sender, err := newChangesetExecutorForTest(t)
-	assert.NoError(t, err, "Failed to spawn changeset executor")
-
-	executor.SendMessage(sender, Start{Changeset: changeset})
-
-	executor.ShouldCall().
-		To(newFakeSupervisorPID(actornames.ResourceUpdaterSupervisor)).
-		Request(resource_update.EnsureResourceUpdater{
-			ResourceURI: resourceUpdate.URI(),
-			Operation:   string(resourceUpdate.Operation),
-			CommandID:   commandID,
-		}).
-		Once().
-		Assert()
-
-	// Complete with success
-	executor.SendMessage(sender, resource_update.ResourceUpdateFinished{
-		Uri:   resourceUpdate.URI(),
-		State: resource_update.ResourceUpdateStateSuccess,
-	})
-
-	// Verify hashing is called on completion
-	executor.ShouldCall().
-		To(gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: "test@localhost"}).
-		Request(forma_persister.MarkFormaCommandAsComplete{
-			CommandID: commandID,
-		}).
-		Once().
-		Assert()
-
-	executor.ShouldLog().
-		Level(gen.LogLevelDebug).
-		Containing("Changeset execution finished").
-		Once().
-		Assert()
-}
-
-func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
-	t.Skip("This needs to be written to a workflow test")
-
-	commandID := "test-command-hashing-failure"
-	resourceUpdate := newTestResourceUpdate("test-secret", nil, "AWS::SecretsManager::Secret")
-	updateUri := createOperationURI(resourceUpdate.URI(), resourceUpdate.Operation)
-
-	changeset := Changeset{
-		CommandID: commandID,
-		Pipeline: &ResourceUpdatePipeline{
-			ResourceUpdateGroups: map[pkgmodel.FormaeURI]*ResourceUpdateGroup{
-				updateUri: {
-					Updates: []*resource_update.ResourceUpdate{&resourceUpdate},
-				},
-			},
-		},
-		trackedUpdates: make(map[string]bool),
-	}
-
-	executor, sender, err := newChangesetExecutorForTest(t)
-	assert.NoError(t, err, "Failed to spawn changeset executor")
-
-	executor.SendMessage(sender, Start{Changeset: changeset})
-
-	// Complete with failure
-	executor.SendMessage(sender, resource_update.ResourceUpdateFinished{
-		Uri:   resourceUpdate.URI(),
-		State: resource_update.ResourceUpdateStateFailed,
-	})
-
-	// Verify hashing is called, despite failure
-	executor.ShouldCall().
-		To(gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: "test@localhost"}).
-		Request(forma_persister.MarkFormaCommandAsComplete{
-			CommandID: commandID,
-		}).
 		Once().
 		Assert()
 

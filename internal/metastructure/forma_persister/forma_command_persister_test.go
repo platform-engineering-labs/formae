@@ -191,6 +191,166 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 	assert.WithinDuration(t, now, loadedCommand.ResourceUpdates[2].ModifiedTs, 1*time.Second)
 }
 
+func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
+	formaCommand := newSyncFormaCommand()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Store the sync command
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	// Mark the resource update as complete WITHOUT a version (no changes detected)
+	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:                  formaCommand.ID,
+		ResourceURI:                resourceURI,
+		FinalState:                 resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:            util.TimeNow(),
+		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
+		ResourceProperties:         formaCommand.ResourceUpdates[0].Resource.Properties,
+		ResourceReadOnlyProperties: nil,
+		Version:                    "", // No version - no changes detected
+	}
+	res := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, res.Error)
+	assert.True(t, res.Response.(bool))
+
+	// Verify the command was deleted (LoadFormaCommand should return an error)
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.Error(t, loadResult.Error, "Sync command with no versions should be deleted")
+	assert.Contains(t, loadResult.Error.Error(), "forma command not found")
+}
+
+func TestFormaCommandPersister_KeepsSyncCommandWithVersions(t *testing.T) {
+	formaCommand := newSyncFormaCommand()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Store the sync command
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	// Mark the resource update as complete WITH a version (changes detected)
+	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:                  formaCommand.ID,
+		ResourceURI:                resourceURI,
+		FinalState:                 resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:            util.TimeNow(),
+		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
+		ResourceProperties:         formaCommand.ResourceUpdates[0].Resource.Properties,
+		ResourceReadOnlyProperties: nil,
+		Version:                    "test-version-hash", // Has version - changes were detected
+	}
+	res := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, res.Error)
+	assert.True(t, res.Response.(bool))
+
+	// Verify the command was kept
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loadedCommand, ok := loadResult.Response.(*forma_command.FormaCommand)
+	assert.True(t, ok, "Sync command with versions should be kept")
+	assert.NotNil(t, loadedCommand)
+	assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
+	assert.Equal(t, "test-version-hash", loadedCommand.ResourceUpdates[0].Version)
+}
+
+func TestFormaCommandPersister_KeepsApplyCommandWithNoVersions(t *testing.T) {
+	// Apply commands should always be kept, even without versions
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaCommand.Command = pkgmodel.CommandApply
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Store the apply command
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	// Mark the resource update as complete WITHOUT a version
+	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:                  formaCommand.ID,
+		ResourceURI:                resourceURI,
+		FinalState:                 resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:            util.TimeNow(),
+		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
+		ResourceProperties:         formaCommand.ResourceUpdates[0].Resource.Properties,
+		ResourceReadOnlyProperties: nil,
+		Version:                    "", // No version
+	}
+	res := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, res.Error)
+	assert.True(t, res.Response.(bool))
+
+	// Verify the command was kept (apply commands should not be deleted)
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loadedCommand, ok := loadResult.Response.(*forma_command.FormaCommand)
+	assert.True(t, ok, "Apply command should always be kept")
+	assert.NotNil(t, loadedCommand)
+	assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
+}
+
+func newSyncFormaCommand() *forma_command.FormaCommand {
+	resourceKsuid := util.NewID()
+
+	return &forma_command.FormaCommand{
+		ID:      "test-sync-command-id",
+		Command: pkgmodel.CommandSync,
+		Forma: pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{
+				{
+					Label:       "test-stack",
+					Description: "A test stack",
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{
+					Label:     "test-target",
+					Namespace: "test-namespace",
+				},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "test-resource",
+					Type:       "test-type",
+					Stack:      "test-stack",
+					Properties: json.RawMessage("{}"),
+					Ksuid:      resourceKsuid,
+				},
+			},
+		},
+		Config: config.FormaCommandConfig{
+			Mode:     pkgmodel.FormaApplyModeReconcile,
+			Simulate: false,
+		},
+		StartTs: util.TimeNow().Add(-1 * time.Hour),
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				Resource: pkgmodel.Resource{
+					Label:      "test-resource",
+					Type:       "test-type",
+					Stack:      "test-stack",
+					Properties: json.RawMessage(`{"foo":"bar"}`),
+					Ksuid:      resourceKsuid,
+				},
+				ResourceTarget: pkgmodel.Target{
+					Label:     "test-target",
+					Namespace: "test-namespace",
+				},
+				Operation:      resource_update.OperationRead,
+				State:          resource_update.ResourceUpdateStateNotStarted,
+				ProgressResult: []resource.ProgressResult{},
+			},
+		},
+	}
+}
+
 func newFormaCommandWithCreateResourceUpdate() *forma_command.FormaCommand {
 	resourceKsuid := util.NewID()
 

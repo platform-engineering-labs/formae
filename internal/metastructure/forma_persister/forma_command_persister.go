@@ -109,10 +109,6 @@ type BulkUpdateResourceStateByKsuid struct {
 	ResourceModifiedTs time.Time
 }
 
-type MarkFormaCommandAsComplete struct {
-	CommandID string
-}
-
 type MarkResourcesAsCanceled struct {
 	CommandID    string
 	ResourceUris []pkgmodel.FormaeURI
@@ -136,8 +132,6 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markResourcesAsCanceled(&msg)
 	case messages.MarkResourceUpdateAsComplete:
 		return f.markResourceUpdateAsComplete(&msg)
-	case MarkFormaCommandAsComplete:
-		return f.markFormaCommandAsComplete(&msg)
 	default:
 		return nil, fmt.Errorf("unhandled message type: %T", msg)
 	}
@@ -318,6 +312,18 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
 	}
 
+	// Delete sync commands that have no resource versions (no changes detected)
+	if shouldDeleteSyncCommand(cmd) {
+		f.Log().Debug("Deleting sync command with no resource versions", "commandID", msg.CommandID)
+		err = f.datastore.DeleteFormaCommand(cmd, cmd.ID)
+		if err != nil {
+			f.Log().Error("Failed to delete sync command with no versions", "commandID", msg.CommandID, "error", err)
+			return false, fmt.Errorf("failed to delete sync command with no versions: %w", err)
+		}
+		f.Log().Debug("Successfully deleted sync command with no resource versions", "commandID", msg.CommandID)
+		return true, nil
+	}
+
 	err = f.datastore.StoreFormaCommand(cmd, cmd.ID)
 	if err != nil {
 		f.Log().Error("Failed to mark command resource as complete", "commandID", msg.CommandID, "error", err)
@@ -363,6 +369,18 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(bulkUpdate *BulkUpdateRe
 		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
 	}
 
+	// Delete sync commands that have no resource versions (no changes detected)
+	if shouldDeleteSyncCommand(command) {
+		f.Log().Debug("Deleting sync command with no resource versions", "commandID", bulkUpdate.CommandID)
+		err = f.datastore.DeleteFormaCommand(command, command.ID)
+		if err != nil {
+			f.Log().Error("Failed to delete sync command with no versions", "commandID", bulkUpdate.CommandID, "error", err)
+			return false, fmt.Errorf("failed to delete sync command with no versions: %w", err)
+		}
+		f.Log().Debug("Successfully deleted sync command with no resource versions", "commandID", bulkUpdate.CommandID)
+		return true, nil
+	}
+
 	err = f.datastore.StoreFormaCommand(command, command.ID)
 	if err != nil {
 		f.Log().Error("Failed to bulk update resource states", "commandID", bulkUpdate.CommandID, "error", err)
@@ -370,33 +388,6 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(bulkUpdate *BulkUpdateRe
 	}
 
 	f.Log().Debug("Successfully bulk updated resource states by KSUID", "commandID", bulkUpdate.CommandID, "resourceCount", len(bulkUpdate.ResourceUris))
-	return true, nil
-}
-
-// markFormaCommandAsComplete hashes all resources to ensure no sensitive data remains
-func (f *FormaCommandPersister) markFormaCommandAsComplete(msg *MarkFormaCommandAsComplete) (bool, error) {
-	f.Log().Debug("Hashing all forma resources for command completion", "commandID", msg.CommandID)
-
-	command, err := f.datastore.GetFormaCommandByCommandID(msg.CommandID)
-	if err != nil {
-		f.Log().Error("Failed to load Forma command for final hashing", "commandID", msg.CommandID, "error", err)
-		return false, fmt.Errorf("failed to load Forma command for final hashing: %w", err)
-	}
-
-	containsSensitive, err := f.hashSensitiveDataIfComplete(command)
-	if err != nil {
-		f.Log().Error("Failed to hash sensitive data", "commandID", msg.CommandID, "error", err)
-		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
-	}
-
-	if containsSensitive {
-		err = f.datastore.StoreFormaCommand(command, command.ID)
-		if err != nil {
-			f.Log().Error("Failed to store forma command after final hashing", "commandID", msg.CommandID, "error", err)
-			return false, fmt.Errorf("failed to store forma command after final hashing: %w", err)
-		}
-	}
-
 	return true, nil
 }
 
@@ -431,6 +422,31 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 	}
 
 	return forma_command.CommandStateSuccess
+}
+
+// isCommandInFinalState checks if the command is in a final state (Success, Failed, or Canceled)
+func isCommandInFinalState(command *forma_command.FormaCommand) bool {
+	return command.State == forma_command.CommandStateSuccess ||
+		command.State == forma_command.CommandStateFailed ||
+		command.State == forma_command.CommandStateCanceled
+}
+
+// hasResourceVersions checks if any resource updates have a version set
+func hasResourceVersions(command *forma_command.FormaCommand) bool {
+	for _, res := range command.ResourceUpdates {
+		if res.Version != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldDeleteSyncCommand determines if a sync command should be deleted because it has no resource versions.
+// This helps keep the database clean by not retaining sync commands that resulted in no changes.
+func shouldDeleteSyncCommand(command *forma_command.FormaCommand) bool {
+	return command.Command == pkgmodel.CommandSync &&
+		isCommandInFinalState(command) &&
+		!hasResourceVersions(command)
 }
 
 func hasOpaqueValues(props json.RawMessage) bool {
