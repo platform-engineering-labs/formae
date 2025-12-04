@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
@@ -78,7 +79,7 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 			r.Log().Error("Unable to resolve property %s in cached properties for resource %s", resourceURI.PropertyPath(), resourceURI)
 			return "", fmt.Errorf("property %s not found in cached properties for resource %s", resourceURI.PropertyPath(), resourceURI)
 		}
-		return value.String(), nil
+		return resolver.ExtractPropertyValue(value), nil
 	}
 
 	// Load the resource from the stack to get the native id
@@ -139,14 +140,14 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 	enhancedParsed := r.preserveRefMetadata(loadResourceResult.Resource, parsed)
 
 	r.cache[resourceURI.Stripped()] = enhancedParsed
-	r.Log().Debug("Cache hit for resource URI", "uri", resourceURI, "value", enhancedParsed)
+	r.Log().Debug("Cached resource properties", "uri", resourceURI, "value", enhancedParsed)
 	value := enhancedParsed.Get(resourceURI.PropertyPath())
 	if !value.Exists() {
 		r.Log().Error("Unable to resolve property %s in cached properties for resource %s", resourceURI.PropertyPath(), resourceURI)
 		return "", fmt.Errorf("property %s not found in cached properties for resource %s", resourceURI.PropertyPath(), resourceURI)
 	}
 
-	return value.String(), nil
+	return resolver.ExtractPropertyValue(value), nil
 }
 
 func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, pluginResult gjson.Result) gjson.Result {

@@ -65,7 +65,7 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, everything [
 		if targetResource.ReadOnlyProperties != nil {
 			extracted := gjson.GetBytes(targetResource.ReadOnlyProperties, propertyPath)
 			if extracted.Exists() {
-				res.Add(ksuid, propertyPath, extracted.String())
+				res.Add(ksuid, propertyPath, ExtractPropertyValue(extracted))
 				continue
 			}
 		}
@@ -73,7 +73,7 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, everything [
 		if targetResource.Properties != nil {
 			extracted := gjson.GetBytes(targetResource.Properties, propertyPath)
 			if extracted.Exists() {
-				res.Add(ksuid, propertyPath, extracted.String())
+				res.Add(ksuid, propertyPath, ExtractPropertyValue(extracted))
 				continue
 			}
 		}
@@ -82,4 +82,16 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, everything [
 	}
 
 	return res, nil
+}
+
+// ExtractPropertyValue extracts the actual value from a gjson.Result.
+// If the property is itself a $ref object (nested resolvable), it extracts
+// the $value from within it. Otherwise, it returns the string representation.
+// This handles the case where a resource's property references another resource's
+// property that is itself a reference (e.g., Subnet -> VCN -> Compartment).
+func ExtractPropertyValue(extracted gjson.Result) string {
+	if extracted.IsObject() && extracted.Get("$value").Exists() {
+		return extracted.Get("$value").String()
+	}
+	return extracted.String()
 }
