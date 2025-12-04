@@ -109,10 +109,6 @@ type BulkUpdateResourceStateByKsuid struct {
 	ResourceModifiedTs time.Time
 }
 
-type MarkFormaCommandAsComplete struct {
-	CommandID string
-}
-
 type MarkResourcesAsCanceled struct {
 	CommandID    string
 	ResourceUris []pkgmodel.FormaeURI
@@ -136,8 +132,6 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markResourcesAsCanceled(&msg)
 	case messages.MarkResourceUpdateAsComplete:
 		return f.markResourceUpdateAsComplete(&msg)
-	case MarkFormaCommandAsComplete:
-		return f.markFormaCommandAsComplete(&msg)
 	default:
 		return nil, fmt.Errorf("unhandled message type: %T", msg)
 	}
@@ -311,17 +305,8 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 	cmd.ModifiedTs = msg.ResourceModifiedTs
 	cmd.State = overallCommandState(cmd)
 
-	// Hash sensitive data if command is now complete
-	_, err = f.hashSensitiveDataIfComplete(cmd)
-	if err != nil {
-		f.Log().Error("Failed to hash sensitive data", "commandID", msg.CommandID, "error", err)
-		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
-	}
-
-	err = f.datastore.StoreFormaCommand(cmd, cmd.ID)
-	if err != nil {
-		f.Log().Error("Failed to mark command resource as complete", "commandID", msg.CommandID, "error", err)
-		return false, fmt.Errorf("failed to mark command resource as complete: %w", err)
+	if err := f.finalizeAndPersist(cmd); err != nil {
+		return false, err
 	}
 
 	f.Log().Debug("Successfully marked command resource as complete", "commandID", msg.CommandID)
@@ -356,47 +341,11 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(bulkUpdate *BulkUpdateRe
 	command.ModifiedTs = bulkUpdate.ResourceModifiedTs
 	command.State = overallCommandState(command)
 
-	// Hash sensitive data if command is now complete
-	_, err = f.hashSensitiveDataIfComplete(command)
-	if err != nil {
-		f.Log().Error("Failed to hash sensitive data", "commandID", bulkUpdate.CommandID, "error", err)
-		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
-	}
-
-	err = f.datastore.StoreFormaCommand(command, command.ID)
-	if err != nil {
-		f.Log().Error("Failed to bulk update resource states", "commandID", bulkUpdate.CommandID, "error", err)
-		return false, fmt.Errorf("failed to bulk update resource states: %w", err)
+	if err := f.finalizeAndPersist(command); err != nil {
+		return false, err
 	}
 
 	f.Log().Debug("Successfully bulk updated resource states by KSUID", "commandID", bulkUpdate.CommandID, "resourceCount", len(bulkUpdate.ResourceUris))
-	return true, nil
-}
-
-// markFormaCommandAsComplete hashes all resources to ensure no sensitive data remains
-func (f *FormaCommandPersister) markFormaCommandAsComplete(msg *MarkFormaCommandAsComplete) (bool, error) {
-	f.Log().Debug("Hashing all forma resources for command completion", "commandID", msg.CommandID)
-
-	command, err := f.datastore.GetFormaCommandByCommandID(msg.CommandID)
-	if err != nil {
-		f.Log().Error("Failed to load Forma command for final hashing", "commandID", msg.CommandID, "error", err)
-		return false, fmt.Errorf("failed to load Forma command for final hashing: %w", err)
-	}
-
-	containsSensitive, err := f.hashSensitiveDataIfComplete(command)
-	if err != nil {
-		f.Log().Error("Failed to hash sensitive data", "commandID", msg.CommandID, "error", err)
-		return false, fmt.Errorf("failed to hash sensitive data: %w", err)
-	}
-
-	if containsSensitive {
-		err = f.datastore.StoreFormaCommand(command, command.ID)
-		if err != nil {
-			f.Log().Error("Failed to store forma command after final hashing", "commandID", msg.CommandID, "error", err)
-			return false, fmt.Errorf("failed to store forma command after final hashing: %w", err)
-		}
-	}
-
 	return true, nil
 }
 
@@ -433,6 +382,38 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 	return forma_command.CommandStateSuccess
 }
 
+// finalizeAndPersist handles the common finalization logic after updating a command:
+// hashes sensitive data if complete, and either deletes empty sync commands or stores the command.
+func (f *FormaCommandPersister) finalizeAndPersist(command *forma_command.FormaCommand) error {
+	if _, err := f.hashSensitiveDataIfComplete(command); err != nil {
+		f.Log().Error("Failed to hash sensitive data", "commandID", command.ID, "error", err)
+		return fmt.Errorf("failed to hash sensitive data: %w", err)
+	}
+
+	if shouldDeleteSyncCommand(command) {
+		f.Log().Debug("Deleting sync command with no resource versions", "commandID", command.ID)
+		if err := f.datastore.DeleteFormaCommand(command, command.ID); err != nil {
+			f.Log().Error("Failed to delete sync command", "commandID", command.ID, "error", err)
+			return fmt.Errorf("failed to delete sync command: %w", err)
+		}
+		return nil
+	}
+
+	if err := f.datastore.StoreFormaCommand(command, command.ID); err != nil {
+		f.Log().Error("Failed to store command", "commandID", command.ID, "error", err)
+		return fmt.Errorf("failed to store command: %w", err)
+	}
+	return nil
+}
+
+// shouldDeleteSyncCommand determines if a sync command should be deleted because it has no resource versions.
+// This helps keep the database clean by not retaining sync commands that resulted in no changes.
+func shouldDeleteSyncCommand(command *forma_command.FormaCommand) bool {
+	return command.Command == pkgmodel.CommandSync &&
+		command.IsInFinalState() &&
+		!command.HasResourceVersions()
+}
+
 func hasOpaqueValues(props json.RawMessage) bool {
 	return bytes.Contains(props, []byte(`"$visibility"`)) &&
 		bytes.Contains(props, []byte(`"Opaque"`))
@@ -442,9 +423,7 @@ func hasOpaqueValues(props json.RawMessage) bool {
 // This should be called after updating resource states to ensure opaque values are hashed when the command completes.
 func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_command.FormaCommand) (bool, error) {
 	// Only hash if the command is in a final state
-	if command.State != forma_command.CommandStateSuccess &&
-		command.State != forma_command.CommandStateFailed &&
-		command.State != forma_command.CommandStateCanceled {
+	if !command.IsInFinalState() {
 		return false, nil
 	}
 

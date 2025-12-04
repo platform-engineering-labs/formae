@@ -75,3 +75,20 @@ func NewFormaCommand(
 func (fc *FormaCommand) HasChanges() bool {
 	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0
 }
+
+// IsInFinalState returns true if the command is in a final state (Success, Failed, or Canceled)
+func (fc *FormaCommand) IsInFinalState() bool {
+	return fc.State == CommandStateSuccess ||
+		fc.State == CommandStateFailed ||
+		fc.State == CommandStateCanceled
+}
+
+// HasResourceVersions returns true if any resource update has a version set
+func (fc *FormaCommand) HasResourceVersions() bool {
+	for _, res := range fc.ResourceUpdates {
+		if res.Version != "" {
+			return true
+		}
+	}
+	return false
+}

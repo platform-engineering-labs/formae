@@ -445,7 +445,7 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 		})
 
 		// Verify the command completed and hashing happened
-		// The fact that we got ChangesetCompleted means MarkFormaCommandAsComplete was called
+		// Hashing happens automatically in markResourceUpdateAsComplete when the command reaches a final state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
 			CommandID: commandID,
 		})

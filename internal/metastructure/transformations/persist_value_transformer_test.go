@@ -18,7 +18,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-func TestPersistValueTransformer_MarkFormaCommandAsCompleteInProperties(t *testing.T) {
+func TestPersistValueTransformer_HashesOpaqueValuesInProperties(t *testing.T) {
 	transformer := NewPersistValueTransformer()
 	input := &pkgmodel.Resource{
 		Label: "test-resource",
