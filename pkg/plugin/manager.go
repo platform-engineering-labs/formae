@@ -224,7 +224,7 @@ func (m *Manager) discoverExternalResourcePlugins() {
 			}
 
 			versionStr := versionEntry.Name()
-			binaryPath := filepath.Join(namespacePath, versionStr, namespace+"-plugin")
+			binaryPath := filepath.Join(namespacePath, versionStr, namespace)
 
 			// Check if binary exists and is executable
 			if info, err := os.Stat(binaryPath); err == nil && !info.IsDir() {

@@ -21,8 +21,9 @@ clean:
 clean-pel:
 	rm -rf ~/.pel/*
 
-build: build-aws-plugin
+build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
+	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o aws .
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	go build -C plugins/json -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json.so
 	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
@@ -30,21 +31,12 @@ build: build-aws-plugin
 	go build -C plugins/tailscale -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 
-# Build AWS plugin as external executable (distributed plugin architecture)
-build-aws-plugin:
-	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
-	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o ~/.pel/formae/plugins/aws/v${VERSION}/aws-plugin .
-
-build-aws-plugin-debug:
-	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
-	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -o ~/.pel/formae/plugins/aws/v${VERSION}/aws-plugin .
-
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
 
-build-debug: build-aws-plugin-debug
+build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
-	#	go build -C plugins/aws - now built as external plugin
+	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -o aws-debug .
 	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
 	go build -C plugins/json ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json-debug.so
 	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
@@ -56,13 +48,21 @@ build-pkl-local:
 	go build -C plugins/pkl -tags local -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	pkl project resolve plugins/pkl/generator/
 
+install-aws-plugin:
+	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
+	cp plugins/aws/aws ~/.pel/formae/plugins/aws/v${VERSION}/aws
+
 pkg-bin: clean build build-tools
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
 	mkdir -p ./dist/pel/formae/examples
 	cp -Rp ./formae ./dist/pel/formae/bin
-	find ./plugins -name '*.so' -exec cp {} ./dist/pel/formae/plugins/ \;
+	for f in ./plugins/*; do \
+		if file "$$f" | grep -qE "ELF|Mach-O"; then \
+			cp "$$f" ./dist/pel/formae/plugins/; \
+		fi \
+	done
 	rm -rf ./dist/pel/formae/plugins/fake-*
 	cp -Rp ./examples/* ./dist/pel/formae/examples
 	./formae project init ./dist/pel/formae/examples

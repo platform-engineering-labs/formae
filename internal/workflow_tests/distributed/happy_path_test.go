@@ -155,7 +155,7 @@ func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
 		t.Logf("✓ Apply command completed successfully")
 
 		// Step 8: Verify the plugin process is running before shutdown
-		require.True(t, isPluginProcessRunning("fake-aws-plugin"),
+		require.True(t, isPluginProcessRunning("fake-aws"),
 			"Plugin process should be running before shutdown")
 		t.Logf("✓ Plugin process is running before shutdown")
 
@@ -168,7 +168,7 @@ func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
 		// With proper graceful shutdown, the plugin should terminate within 2 seconds
 		var pluginStillRunning bool
 		require.Eventually(t, func() bool {
-			pluginStillRunning = isPluginProcessRunning("fake-aws-plugin")
+			pluginStillRunning = isPluginProcessRunning("fake-aws")
 			return !pluginStillRunning
 		}, 2*time.Second, 100*time.Millisecond,
 			"Plugin process should be terminated within 2 seconds after metastructure stops")
@@ -188,7 +188,7 @@ func buildFakeAWSPlugin(t *testing.T) string {
 	err = os.MkdirAll(pluginDir, 0755)
 	require.NoError(t, err, "Failed to create plugin directory")
 
-	pluginPath := filepath.Join(pluginDir, "fake-aws-plugin")
+	pluginPath := filepath.Join(pluginDir, "fake-aws")
 
 	// Build the plugin binary from its own module directory
 	cmd := exec.Command("go", "build",
