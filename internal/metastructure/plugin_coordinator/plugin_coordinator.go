@@ -78,16 +78,12 @@ func (c *PluginCoordinator) Init(args ...any) error {
 		}
 	}
 
-	retryCfg, ok := c.Env("retryConfig")
+	retryCfg, ok := c.Env("RetryConfig")
 	if !ok {
 		c.Log().Error("ResourceUpdater: missing 'RetryConfig' environment variable")
 		return fmt.Errorf("resourceUpdater: missing 'RetryConfig' environment variable")
 	}
 	c.retryConfig = retryCfg.(model.RetryConfig)
-
-	if rc, ok := c.Env("RetryConfig"); ok {
-		c.retryConfig = rc.(model.RetryConfig)
-	}
 
 	c.Log().Debug("PluginCoordinator started")
 	return nil
