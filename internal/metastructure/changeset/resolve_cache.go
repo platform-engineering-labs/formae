@@ -140,7 +140,7 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 	enhancedParsed := r.preserveRefMetadata(loadResourceResult.Resource, parsed)
 
 	r.cache[resourceURI.Stripped()] = enhancedParsed
-	r.Log().Debug("Cached resource properties", "uri", resourceURI, "value", enhancedParsed)
+	r.Log().Debug("Cache hit for resource URI", "uri", resourceURI, "value", enhancedParsed)
 	value := enhancedParsed.Get(resourceURI.PropertyPath())
 	if !value.Exists() {
 		r.Log().Error("Unable to resolve property %s in cached properties for resource %s", resourceURI.PropertyPath(), resourceURI)
