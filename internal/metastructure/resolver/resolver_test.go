@@ -992,6 +992,180 @@ func TestResolveMultiplePropertiesSameResolverInstance(t *testing.T) {
 	assert.Equal(t, "7c5bfje8c3", parentIdValue)
 }
 
+func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
+	t.Run("extracts plain property value", func(t *testing.T) {
+		vpcKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		vpc := pkgmodel.Resource{
+			Ksuid:              vpcKsuid,
+			Label:              "vpc",
+			ReadOnlyProperties: json.RawMessage(`{"VpcId": "vpc-123456"}`),
+		}
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcId": {
+					"$ref": "formae://%s#/VpcId"
+				}
+			}`, vpcKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{vpc, subnet},
+		}
+
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		require.NoError(t, err)
+		value, found := resolvables.Get(vpcKsuid, "VpcId")
+		assert.True(t, found)
+		assert.Equal(t, "vpc-123456", value)
+	})
+
+	t.Run("extracts $value from nested $ref object", func(t *testing.T) {
+		// This tests the OCI scenario: Subnet -> VCN -> Compartment
+		// where VCN's CompartmentId is itself a $ref pointing to the Compartment
+
+		compartmentKsuid := util.NewID()
+		vcnKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		compartment := pkgmodel.Resource{
+			Ksuid:              compartmentKsuid,
+			Label:              "compartment",
+			ReadOnlyProperties: json.RawMessage(`{"Id": "ocid1.compartment.oc1..abc123"}`),
+		}
+
+		// VCN's CompartmentId is a $ref pointing to the Compartment's Id
+		// This is the nested resolvable scenario
+		vcn := pkgmodel.Resource{
+			Ksuid: vcnKsuid,
+			Label: "vcn",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"CompartmentId": {
+					"$ref": "formae://%s#/Id",
+					"$value": "ocid1.compartment.oc1..abc123"
+				}
+			}`, compartmentKsuid)),
+			ReadOnlyProperties: json.RawMessage(`{"Id": "ocid1.vcn.oc1..xyz789"}`),
+		}
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"CompartmentId": {
+					"$ref": "formae://%s#/CompartmentId"
+				}
+			}`, vcnKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
+		}
+
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		require.NoError(t, err)
+		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
+		assert.True(t, found)
+
+		// Should extract the actual OCID, not the JSON string of the $ref object
+		assert.Equal(t, "ocid1.compartment.oc1..abc123", value)
+	})
+
+	t.Run("extracts value from Properties when not in ReadOnlyProperties", func(t *testing.T) {
+		vpcKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		vpc := pkgmodel.Resource{
+			Ksuid:      vpcKsuid,
+			Label:      "vpc",
+			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
+		}
+
+		// Subnet references the VPC's CidrBlock
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcCidr": {
+					"$ref": "formae://%s#/CidrBlock"
+				}
+			}`, vpcKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{vpc, subnet},
+		}
+
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		require.NoError(t, err)
+		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
+		assert.True(t, found)
+		assert.Equal(t, "10.0.0.0/16", value)
+	})
+
+	t.Run("returns error for missing resource", func(t *testing.T) {
+		missingKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcId": {
+					"$ref": "formae://%s#/VpcId"
+				}
+			}`, missingKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{subnet},
+		}
+
+		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("returns error for missing property", func(t *testing.T) {
+		vpcKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		vpc := pkgmodel.Resource{
+			Ksuid:      vpcKsuid,
+			Label:      "vpc",
+			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
+		}
+
+		// Subnet references a property that doesn't exist on VPC
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcId": {
+					"$ref": "formae://%s#/NonExistentProperty"
+				}
+			}`, vpcKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{vpc, subnet},
+		}
+
+		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+}
+
 // newTestRef creates a test reference with a real KSUID for the given property
 func newTestRef(property string) string {
 	ksuid := util.NewID()
