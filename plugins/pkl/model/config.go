@@ -110,6 +110,7 @@ type CliConfig struct {
 }
 
 type PluginConfig struct {
+	PluginDir string `pkl:"pluginDir"`
 	// Output is postprocessed, hence the key case difference
 	Network        *pkl.Object `pkl:"Network"`
 	Authentication *pkl.Object `pkl:"Authentication"`

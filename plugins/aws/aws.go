@@ -42,19 +42,19 @@ var ResourceTypeDescriptors map[string]descriptors.TypeInformation
 
 // EKSAutomodeResourceTypes lists AWS CloudFormation resource types that EKS Automode manages
 var EKSAutomodeResourceTypes = []string{
-	"AWS::EC2::Instance",                    	 // Worker nodes
-	"AWS::EC2::SecurityGroup",               	 // Pod and node security groups
-	"AWS::EC2::NetworkInterface",            	 // ENIs for pod networking
-	"AWS::EC2::LaunchTemplate",              	 // Instance configuration templates
-	"AWS::AutoScaling::AutoScalingGroup",    	 // For scaling worker nodes
-	"AWS::EC2::VPCEndpoint",                 	 // If using private API access
-	"AWS::EC2::RouteTable",                  	 // If creating custom routing
-	"AWS::EC2::Subnet",                      	 // If creating new subnets 
-	"AWS::EC2::Volume",                      	 // EBS volumes for persistent storage
-	"AWS::EFS::FileSystem",                  	 // If using EFS for persistent storage
-	"AWS::EFS::MountTarget",                 	 // If using EFS
-	"AWS::IAM::Role",                        	 // Service accounts and pod execution roles
-	"AWS::IAM::InstanceProfile",             	 // EC2 instance permissions
+	"AWS::EC2::Instance",                        // Worker nodes
+	"AWS::EC2::SecurityGroup",                   // Pod and node security groups
+	"AWS::EC2::NetworkInterface",                // ENIs for pod networking
+	"AWS::EC2::LaunchTemplate",                  // Instance configuration templates
+	"AWS::AutoScaling::AutoScalingGroup",        // For scaling worker nodes
+	"AWS::EC2::VPCEndpoint",                     // If using private API access
+	"AWS::EC2::RouteTable",                      // If creating custom routing
+	"AWS::EC2::Subnet",                          // If creating new subnets
+	"AWS::EC2::Volume",                          // EBS volumes for persistent storage
+	"AWS::EFS::FileSystem",                      // If using EFS for persistent storage
+	"AWS::EFS::MountTarget",                     // If using EFS
+	"AWS::IAM::Role",                            // Service accounts and pod execution roles
+	"AWS::IAM::InstanceProfile",                 // EC2 instance permissions
 	"AWS::ElasticLoadBalancingV2::LoadBalancer", // If using ALB/NLB
 	"AWS::ElasticLoadBalancingV2::TargetGroup",  // If using ALB/NLB
 	"AWS::Logs::LogGroup",                       // If using CloudWatch logging
@@ -228,16 +228,44 @@ func (a AWS) TargetBehavior() resource.TargetBehavior {
 	return TargetBehavior
 }
 
-// GetResourceFilters returns a map of resource types to filter functions for EKS Automode resources
-func (a AWS) GetResourceFilters() map[string]plugin.ResourceFilter {
-	filters := make(map[string]plugin.ResourceFilter)
-	
-	for _, resourceType := range EKSAutomodeResourceTypes {
-		filters[resourceType] = func(properties json.RawMessage, target model.Target) bool {
-			return a.shouldFilterEKSAutomodeResource(properties, target)
-		}
+// GetMatchFilters returns declarative filters for EKS Automode resources
+func (a AWS) GetMatchFilters() []plugin.MatchFilter {
+	// This method is called during discovery setup, so we can't use dynamic context here.
+	// Instead, we'll create filters that will check for EKS cluster tags dynamically during evaluation.
+	// For now, we return filter definitions for all EKS Automode resource types.
+
+	var filters []plugin.MatchFilter
+
+	// Get cluster names dynamically (if available, otherwise empty list)
+	ctx := context.Background()
+	// We use a default target config here - the actual target will be provided during filter evaluation
+	clusterNames, err := a.GetAutomodeClusterNames(ctx, &config.Config{})
+	if err != nil {
+		slog.Debug("Could not get Automode cluster names for filter setup", "error", err)
+		clusterNames = []string{}
 	}
-	
+
+	// Create tag keys for all known clusters
+	var tagKeys []string
+	for _, clusterName := range clusterNames {
+		tagKeys = append(tagKeys, "kubernetes.io/cluster/"+clusterName)
+	}
+
+	// If we have cluster names, create a filter for all EKS Automode resource types
+	if len(tagKeys) > 0 {
+		filters = append(filters, plugin.MatchFilter{
+			ResourceTypes: EKSAutomodeResourceTypes,
+			Conditions: []plugin.FilterCondition{
+				{
+					Type:     plugin.ConditionTypeTagMatch,
+					TagKeys:  tagKeys,
+					TagValue: "owned",
+				},
+			},
+			Action: plugin.FilterActionExclude,
+		})
+	}
+
 	return filters
 }
 
@@ -247,27 +275,27 @@ func (a AWS) shouldFilterEKSAutomodeResource(properties json.RawMessage, target 
 	if len(tags) == 0 {
 		return false
 	}
-	
+
 	clusterNames, err := a.GetAutomodeClusterNames(context.Background(), config.FromTarget(&target))
 	if err != nil {
 		slog.Debug("Error getting Automode cluster names", "error", err)
 		return false
 	}
-		
+
 	for _, clusterName := range clusterNames {
 		clusterTagKey := "kubernetes.io/cluster/" + clusterName
-		
+
 		// Check for kubernetes.io/cluster/{clusterName} tag
 		for _, tag := range tags {
 			normalizedTagKey := strings.ToLower(tag.Key)
 			normalizedClusterTagKey := strings.ToLower(clusterTagKey)
-			
+
 			if normalizedTagKey == normalizedClusterTagKey && tag.Value == "owned" {
 				return true
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -278,12 +306,12 @@ func (a AWS) GetAutomodeClusterNames(ctx context.Context, targetConfig *config.C
 		return nil, err
 	}
 	eksClient := eks.NewFromConfig(awsCfg)
-	
+
 	listResult, err := eksClient.ListClusters(ctx, &eks.ListClustersInput{})
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var automodeClusters []string
 	for _, clusterName := range listResult.Clusters {
 		describeResult, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
@@ -293,14 +321,14 @@ func (a AWS) GetAutomodeClusterNames(ctx context.Context, targetConfig *config.C
 			slog.Error("Error describing cluster", "clusterName", clusterName, "error", err)
 			continue
 		}
-		
+
 		// Automode is enabled when a cluster has ComputeConfig enabled
-		if describeResult.Cluster.ComputeConfig != nil && 
-		   describeResult.Cluster.ComputeConfig.Enabled != nil && 
-		   *describeResult.Cluster.ComputeConfig.Enabled {
+		if describeResult.Cluster.ComputeConfig != nil &&
+			describeResult.Cluster.ComputeConfig.Enabled != nil &&
+			*describeResult.Cluster.ComputeConfig.Enabled {
 			automodeClusters = append(automodeClusters, clusterName)
 		}
 	}
-	
+
 	return automodeClusters, nil
 }

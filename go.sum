@@ -15,8 +15,8 @@ cloud.google.com/go/pubsub v1.1.0/go.mod h1:EwwdRX2sKPjnvnqCa270oGRyludottCI76h+
 cloud.google.com/go/storage v1.0.0/go.mod h1:IhtSnM/ZTZV8YYJWCY8RULGVqBDmpoyjwiyrjsg+URw=
 cloud.google.com/go/storage v1.5.0/go.mod h1:tpKbwo567HUNpVclU5sGELwQWBDZ8gh0ZeosJ0Rtdos=
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
-ergo.services/actor/statemachine v0.0.0-20250718124030-20d1491f2900 h1:SKXXXU02KhKVbJIN3k2I6eWB3CojHSIg+/WhScfN6eU=
-ergo.services/actor/statemachine v0.0.0-20250718124030-20d1491f2900/go.mod h1:epgQDQTm93L3/plOnIejSYbl/SNhulI78aa1LC0tLn0=
+ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 h1:8b8Y8gLBvQrDIuKFSCwT089l1iltqsTEWXzhm/pSguE=
+ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5/go.mod h1:epgQDQTm93L3/plOnIejSYbl/SNhulI78aa1LC0tLn0=
 ergo.services/application v0.0.0-20240904055159-7f2e1a954c05 h1:EeLfravNUGx3tPsBdP2W9TpgHD34o1WuDO4OQrbMAiw=
 ergo.services/application v0.0.0-20240904055159-7f2e1a954c05/go.mod h1:huT9GXrAFMIHbRwnzXu0zxna7XjXl3tEpXWnW+IVR2o=
 ergo.services/ergo v1.999.310 h1:qHx35J5UxCheNJaFrOK/1K6/p7jir680+NTPZo6bhbI=

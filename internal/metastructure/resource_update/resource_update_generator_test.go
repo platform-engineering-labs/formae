@@ -428,7 +428,7 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -596,7 +596,7 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -648,7 +648,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
 
@@ -685,7 +685,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
 
@@ -738,7 +738,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "test-target", updates[0].ResourceTarget.Label)
@@ -764,7 +764,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -789,7 +789,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -809,7 +809,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 
 		existingTargets := []*pkgmodel.Target{} // No existing targets
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "new-target", updates[0].ResourceTarget.Label)
@@ -930,7 +930,7 @@ func TestGenerateResourceUpdatesForSync_SameLabel_DifferentTypes(t *testing.T) {
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	updates, err := generateResourceUpdatesForSync(forma, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForSync(forma, FormaCommandSourceUser, targetMap, ds)
 	require.NoError(t, err)
 
 	assert.Len(t, updates, 2, "Should create sync operations for both resource types")

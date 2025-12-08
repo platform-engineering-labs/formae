@@ -14,6 +14,8 @@ require (
 )
 
 require (
+	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 // indirect
+	ergo.services/ergo v1.999.310 // indirect
 	github.com/PaesslerAG/gval v1.0.0 // indirect
 	github.com/PaesslerAG/jsonpath v0.1.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect

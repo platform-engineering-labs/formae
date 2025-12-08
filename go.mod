@@ -11,7 +11,7 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ./pkg/model
 replace github.com/platform-engineering-labs/formae/pkg/ppm => ./pkg/ppm
 
 require (
-	ergo.services/actor/statemachine v0.0.0-20250718124030-20d1491f2900
+	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
 	ergo.services/ergo v1.999.310
 	github.com/alecthomas/chroma/v2 v2.20.0
@@ -165,3 +165,5 @@ require (
 	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+replace github.com/platform-engineering-labs/formae/plugins/aws => ./plugins/aws

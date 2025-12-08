@@ -81,11 +81,33 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		}
 	}
 
-	evaluator, err := pkl.NewEvaluator(
-		context.Background(),
-		pkl.WithFs(formaeFs, "formae"),
-		pkl.PreconfiguredOptions,
-	)
+	var evaluator pkl.Evaluator
+
+	// Check if there's a PklProject in the directory tree
+	var projectDir string
+	if path != "" {
+		projectDir = WalkForProjectFile(filepath.Dir(path))
+	}
+
+	if projectDir != "" {
+		// Use NewProjectEvaluator when a PklProject is found
+		evaluator, err = pkl.NewProjectEvaluator(
+			context.Background(),
+			&url.URL{Scheme: "file", Path: projectDir},
+			pkl.WithFs(formaeFs, "formae"),
+			pkl.WithResourceReader(libExtension{}),
+			pkl.PreconfiguredOptions,
+		)
+	} else {
+		// Fall back to regular evaluator
+		evaluator, err = pkl.NewEvaluator(
+			context.Background(),
+			pkl.WithFs(formaeFs, "formae"),
+			pkl.WithResourceReader(libExtension{}),
+			pkl.PreconfiguredOptions,
+		)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +190,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
 		},
 		Plugins: pkgmodel.PluginConfig{
+			PluginDir:      config.Plugins.PluginDir,
 			Network:        translateDynamic(config.Plugins.Network),
 			Authentication: translateDynamic(config.Plugins.Authentication),
 		},

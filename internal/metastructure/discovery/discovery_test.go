@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -197,7 +196,7 @@ func TestInjectResolvables(t *testing.T) {
 			ResourceType: "AWS::ECS::TaskSet",
 			TargetLabel:  "test-target",
 			ParentKSUID:  "35R2vyf6mT5wEs0mTWT5bp1Lf0E",
-			ListParams: util.MapToString(map[string]plugin_operation.ListParam{
+			ListParams: util.MapToString(map[string]plugin.ListParam{
 				"Service": {
 					ParentProperty: "Service",
 					ListParam:      "ServiceName",

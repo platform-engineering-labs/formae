@@ -6,7 +6,6 @@ package plugin
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -34,15 +33,52 @@ type ResourcePlugin interface {
 
 	TargetBehavior() resource.TargetBehavior
 
-	// GetResourceFilters returns a map of resource types to filter functions
-	// If a resource type is in the map, the filter function will be called to determine
-	// if the resource should be filtered out during discovery
-	GetResourceFilters() map[string]ResourceFilter
+	// GetMatchFilters returns declarative filters for discovery (serializable)
+	GetMatchFilters() []MatchFilter
+}
+
+// PluginInfo provides read-only plugin metadata for discovery operations.
+// This interface is implemented by both local ResourcePlugin and remote plugin info proxies.
+type PluginInfo interface {
+	GetNamespace() string
+	SupportedResources() []ResourceDescriptor
+	SchemaForResourceType(resourceType string) (model.Schema, error)
+	GetMatchFilters() []MatchFilter
 }
 
 // ResourceFilter is a function that determines if a resource should be filtered. It
-// returns true if the resource should be excluded from discovery.
-type ResourceFilter func(properties json.RawMessage, target  model.Target) bool
+// MatchFilter is a declarative, serializable filter definition for discovery
+type MatchFilter struct {
+	ResourceTypes []string          // Resource types this filter applies to
+	Conditions    []FilterCondition // All conditions must match (AND logic)
+	Action        FilterAction      // What to do when conditions match
+}
+
+type FilterCondition struct {
+	Type ConditionType // TagMatch, PropertyMatch
+
+	// For TagMatch - check if resource has tag with key in list and matching value
+	TagKeys  []string // Tag keys to look for (e.g., "SkipDiscovery")
+	TagValue string   // Expected tag value (e.g., "true")
+
+	// For PropertyMatch - direct property check
+	PropertyPath  string // Property name (e.g., "SkipDiscovery")
+	PropertyValue string // Expected value (e.g., "true")
+}
+
+type FilterAction string
+
+const (
+	FilterActionExclude FilterAction = "exclude" // Exclude matching resources from discovery
+	FilterActionInclude FilterAction = "include" // Only include matching resources
+)
+
+type ConditionType string
+
+const (
+	ConditionTypeTagMatch      ConditionType = "tag_match"
+	ConditionTypePropertyMatch ConditionType = "property_match"
+)
 
 // used in tests to simulate testable behaviour
 const ResourcePluginOverridesContextKey = "resource-plugin-overrides"

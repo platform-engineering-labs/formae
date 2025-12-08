@@ -29,6 +29,7 @@ type TestCall[T any, R any] struct {
 	Response chan<- R
 	Errors   chan<- error
 	Target   string
+	Timeout  int // Optional timeout in seconds (default 5)
 }
 
 type TestMessage[T any] struct {
@@ -58,8 +59,12 @@ func (a *TestHelperActor) HandleMessage(from gen.PID, message any) error {
 			Name: gen.Atom(msg.Target),
 			Node: a.Node().Name(),
 		}
-		a.Log().Info("Sending %T to %v", msg.Request, target)
-		res, err := a.CallWithTimeout(target, msg.Request, 5)
+		timeout := msg.Timeout
+		if timeout <= 0 {
+			timeout = 5 // Default timeout
+		}
+		a.Log().Info("Sending %T to %v (timeout: %ds)", msg.Request, target, timeout)
+		res, err := a.CallWithTimeout(target, msg.Request, timeout)
 		if err != nil {
 			a.Log().Error("Got error sending %T to %v: %s\n", msg.Request, target, err)
 			msg.Errors <- err
@@ -99,6 +104,12 @@ func StartTestHelperActor(node gen.Node, messages chan<- any) (gen.PID, error) {
 }
 
 func Call(node gen.Node, target string, request any) (any, error) {
+	return CallWithTimeout(node, target, request, 0) // Use default timeout
+}
+
+// CallWithTimeout sends a request to a target process with a custom timeout.
+// If timeoutSecs is <= 0, the default timeout (5 seconds) is used.
+func CallWithTimeout(node gen.Node, target string, request any, timeoutSecs int) (any, error) {
 	res := make(chan any)
 	errs := make(chan error)
 
@@ -107,6 +118,7 @@ func Call(node gen.Node, target string, request any) (any, error) {
 		Response: res,
 		Errors:   errs,
 		Target:   target,
+		Timeout:  timeoutSecs,
 	}
 
 	err := node.Send(testHelperProcess(node), call)

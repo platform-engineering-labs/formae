@@ -15,7 +15,6 @@ import (
 	"ergo.services/application/observer"
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
-	"ergo.services/ergo/lib"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
@@ -92,7 +91,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.Cfg = cfg
 	metastructure.PluginManager = pluginManager
 
-	err := initDelegateMessageTypes()
+	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +110,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.AgentID = agentID
 
 	metastructure.options.Applications = apps
+
 	metastructure.options.Env = map[gen.Env]any{
 		gen.Env("PluginManager"):         metastructure.PluginManager,
 		gen.Env("Datastore"):             metastructure.Datastore,
@@ -126,18 +126,20 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("AgentID"):               agentID,
 	}
 
-	metastructure.options.Network.Mode = gen.NetworkModeDisabled
+	// Enable Ergo networking for distributed plugin architecture
+	metastructure.options.Network.Mode = gen.NetworkModeEnabled
+
+	// Disable environment sharing for RemoteSpawn because the agent's environment contains
+	// non-serializable types (Datastore, PluginManager, Context). We inject the relevant
+	// (serializable) parts of the environment during remote spawn in the PluginCoordinator actor.
+	metastructure.options.Security.ExposeEnvRemoteSpawn = false
 
 	//FIXME(discount-elf): enable real TLS if we want it
 	//cert, _ := lib.GenerateSelfSignedCert("formae node")
 	//metastructure.options.CertManager = gen.CreateCertManager(cert)
 
-	if cfg.Agent.Server.Secret == "" {
-		metastructure.options.Network.Cookie = lib.RandomString(16)
-		slog.Warn("No secret provided, using random secret, nodes will not be able to communicate", "secret", metastructure.options.Network.Cookie)
-	} else {
-		metastructure.options.Network.Cookie = cfg.Agent.Server.Secret
-	}
+	// Use the secret from config which now defaults to a random value via PKL
+	metastructure.options.Network.Cookie = cfg.Agent.Server.Secret
 
 	metastructure.options.Log.DefaultLogger.Disable = true
 	metastructure.options.Log.Level = gen.LogLevelDebug
@@ -917,7 +919,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, nil)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr

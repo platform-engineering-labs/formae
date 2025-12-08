@@ -17,8 +17,8 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -98,26 +98,34 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 		return "", fmt.Errorf("unexpected result type from resource persister: %T", stackerResult)
 	}
 
-	// Ensure the plugin operator for the resource
+	// Spawn the plugin operator via PluginCoordinator
 	operationID := uuid.New().String()
-	_, err = r.Call(
-		gen.ProcessID{Name: actornames.PluginOperatorSupervisor, Node: r.Node().Name()},
-		plugin_operation.EnsurePluginOperator{
-			ResourceURI: resourceURI.Stripped(),
-			Operation:   resource.OperationRead,
+	spawnResult, err := r.Call(
+		gen.ProcessID{Name: actornames.PluginCoordinator, Node: r.Node().Name()},
+		messages.SpawnPluginOperator{
+			Namespace:   loadResourceResult.Resource.Namespace(),
+			ResourceURI: string(resourceURI.Stripped()),
+			Operation:   string(resource.OperationRead),
 			OperationID: operationID,
+			RequestedBy: r.PID(),
 		})
 	if err != nil {
-		r.Log().Error("Failed to ensure plugin operator for resource", "resourceURI", resourceURI, "error", err)
-		return "", fmt.Errorf("failed to ensure plugin operator for resource: %w", err)
+		r.Log().Error("Failed to spawn plugin operator for resource", "resourceURI", resourceURI, "error", err)
+		return "", fmt.Errorf("failed to spawn plugin operator for resource: %w", err)
+	}
+	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
+	if !ok {
+		r.Log().Error("Unexpected result type from PluginCoordinator", "resultType", reflect.TypeOf(spawnResult))
+		return "", fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
+	}
+	if spawnRes.Error != "" {
+		r.Log().Error("Failed to spawn plugin operator", "error", spawnRes.Error)
+		return "", fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
 	}
 
 	progressResult, err := r.Call(
-		gen.ProcessID{
-			Node: r.Node().Name(),
-			Name: actornames.PluginOperator(resourceURI.Stripped(), string(resource.OperationRead), operationID),
-		},
-		plugin_operation.ReadResource{
+		spawnRes.PID,
+		plugin.ReadResource{
 			Namespace:        loadResourceResult.Resource.Namespace(),
 			ExistingResource: loadResourceResult.Resource,
 			Resource:         loadResourceResult.Resource,

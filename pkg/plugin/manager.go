@@ -17,17 +17,30 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// ResourcePluginInfo contains metadata for external resource plugins
+// that run as separate processes (not loaded via plugin.Open).
+// TODO: Move PluginManager out of pkg/plugin package as it should not be exposed to library users.
+type ResourcePluginInfo struct {
+	Namespace  string
+	Version    string
+	BinaryPath string
+}
+
 type Manager struct {
-	pluginPaths []string
+	pluginPaths       []string
+	externalPluginDir string
 	plugins     []*Plugin
 
 	authenticationPlugins []*AuthenticationPlugin
 	networkPlugins        []*NetworkPlugin
 	resourcePlugins       []*ResourcePlugin
 	schemaPlugins         []*SchemaPlugin
+
+	// External resource plugins that run as separate processes
+	externalResourcePlugins []ResourcePluginInfo
 }
 
-func NewManager(paths ...string) *Manager {
+func NewManager(externalPluginDir string, paths ...string) *Manager {
 	pluginPaths := detectPluginPaths()
 
 	if len(paths) > 0 {
@@ -35,7 +48,8 @@ func NewManager(paths ...string) *Manager {
 		pluginPaths = append(pluginPaths, paths...)
 	}
 	return &Manager{
-		pluginPaths: pluginPaths,
+		pluginPaths:       pluginPaths,
+		externalPluginDir: externalPluginDir,
 	}
 }
 
@@ -105,17 +119,22 @@ func (m *Manager) Load() {
 
 		dl, err := goplugin.Open(p)
 		if err != nil {
-			panic(err)
+			// Skip plugins that fail to load (e.g., version mismatch)
+			// This allows the system to continue with other plugins
+			fmt.Fprintf(os.Stderr, "Warning: Failed to load plugin %s: %v\n", p, err)
+			continue
 		}
 
 		lookup, err := dl.Lookup("Plugin")
 		if err != nil {
-			panic(err)
+			fmt.Fprintf(os.Stderr, "Warning: Plugin %s missing 'Plugin' symbol: %v\n", p, err)
+			continue
 		}
 
 		cast, ok := lookup.(Plugin)
 		if !ok {
-			panic("Could not cast plugin")
+			fmt.Fprintf(os.Stderr, "Warning: Could not cast plugin %s\n", p)
+			continue
 		}
 
 		m.plugins = append(m.plugins, &cast)
@@ -123,28 +142,117 @@ func (m *Manager) Load() {
 		case Authentication:
 			cast, ok := lookup.(AuthenticationPlugin)
 			if !ok {
-				panic("Could not cast authentication plugin")
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast authentication plugin %s\n", p)
+				continue
 			}
 			m.authenticationPlugins = append(m.authenticationPlugins, &cast)
 		case Network:
 			cast, ok := lookup.(NetworkPlugin)
 			if !ok {
-				panic("Could not cast network plugin")
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast network plugin %s\n", p)
+				continue
 			}
 			m.networkPlugins = append(m.networkPlugins, &cast)
 		case Resource:
+			// Load in-process resource plugins for local testing (e.g., FakeAWS)
+			// Production plugins run as external processes and are discovered separately
 			cast, ok := lookup.(ResourcePlugin)
 			if !ok {
-				panic("Could not cast resource plugin")
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast resource plugin %s\n", p)
+				continue
 			}
 			m.resourcePlugins = append(m.resourcePlugins, &cast)
 		case Schema:
 			cast, ok := lookup.(SchemaPlugin)
 			if !ok {
-				panic("Could not cast schema plugin")
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast schema plugin %s\n", p)
+				continue
 			}
 			m.schemaPlugins = append(m.schemaPlugins, &cast)
 		default:
+		}
+	}
+
+	// Discover external resource plugins that run as separate processes
+	m.discoverExternalResourcePlugins()
+}
+
+func (m *Manager) discoverExternalResourcePlugins() {
+	// Skip discovery if no external plugin directory is configured
+	if m.externalPluginDir == "" {
+		return
+	}
+
+	pluginBaseDir := m.externalPluginDir
+
+	// Check if plugin directory exists
+	if _, err := os.Stat(pluginBaseDir); os.IsNotExist(err) {
+		return
+	}
+
+	// Walk through namespace directories
+	namespaceEntries, err := os.ReadDir(pluginBaseDir)
+	if err != nil {
+		return
+	}
+
+	for _, namespaceEntry := range namespaceEntries {
+		if !namespaceEntry.IsDir() {
+			continue
+		}
+
+		namespace := namespaceEntry.Name()
+		namespacePath := filepath.Join(pluginBaseDir, namespace)
+
+		// Look for version directories
+		versionEntries, err := os.ReadDir(namespacePath)
+		if err != nil {
+			continue
+		}
+
+		// Collect all valid versions with their paths
+		type versionCandidate struct {
+			version    *semver.Version
+			versionStr string
+			binaryPath string
+		}
+		var candidates []versionCandidate
+
+		for _, versionEntry := range versionEntries {
+			if !versionEntry.IsDir() {
+				continue
+			}
+
+			versionStr := versionEntry.Name()
+			binaryPath := filepath.Join(namespacePath, versionStr, namespace)
+
+			// Check if binary exists and is executable
+			if info, err := os.Stat(binaryPath); err == nil && !info.IsDir() {
+				// Try to parse as semver
+				v, err := semver.NewVersion(versionStr)
+				if err != nil {
+					// Skip directories that aren't valid semver
+					continue
+				}
+				candidates = append(candidates, versionCandidate{
+					version:    v,
+					versionStr: versionStr,
+					binaryPath: binaryPath,
+				})
+			}
+		}
+
+		// Pick the highest version
+		if len(candidates) > 0 {
+			sort.Slice(candidates, func(i, j int) bool {
+				return candidates[i].version.GreaterThan(candidates[j].version)
+			})
+			best := candidates[0]
+			m.externalResourcePlugins = append(m.externalResourcePlugins, ResourcePluginInfo{
+				Namespace:  namespace,
+				Version:    best.versionStr,
+				BinaryPath: best.binaryPath,
+			})
 		}
 	}
 }
@@ -157,7 +265,22 @@ func (m *Manager) ListResourcePlugins() []*ResourcePlugin {
 	return m.resourcePlugins
 }
 
+func (m *Manager) ListExternalResourcePlugins() []ResourcePluginInfo {
+	return m.externalResourcePlugins
+}
+
 func (m *Manager) PluginVersion(name string) *semver.Version {
+	// First check external resource plugins (separate processes)
+	// These are the distributed/process plugins like AWS that take precedence
+	for _, info := range m.externalResourcePlugins {
+		if strings.EqualFold(info.Namespace, name) {
+			if v, err := semver.NewVersion(info.Version); err == nil {
+				return v
+			}
+		}
+	}
+
+	// Then check loaded in-process plugins (.so)
 	for _, plugin := range m.plugins {
 		if (*plugin).Name() == name {
 			return (*plugin).Version()
