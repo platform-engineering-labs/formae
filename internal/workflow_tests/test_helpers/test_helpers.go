@@ -127,7 +127,7 @@ func NewTestMetastructure(t *testing.T, pluginOverrides *plugin.ResourcePluginOv
 
 func NewTestMetastructureWithEverything(t *testing.T, pluginOverrides *plugin.ResourcePluginOverrides, db datastore.Datastore, cfg *pkgmodel.Config) (*metastructure.Metastructure, func(), error) {
 	ctx, cancel := testutil.PluginOverridesContext(pluginOverrides)
-	pluginManager := plugin.NewManager()
+	pluginManager := plugin.NewManager("")
 	pluginManager.Load()
 	m, err := metastructure.NewMetastructureWithDataStoreAndContext(ctx, cfg, pluginManager, db, "test")
 	if err != nil {

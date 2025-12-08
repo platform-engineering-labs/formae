@@ -1,5 +1,9 @@
 9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f h1:1C7nZuxUMNz7eiQALRfiqNOm04+m3edWlRff/BYHf0Q=
 9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f/go.mod h1:hHyrZRryGqVdqrknjq5OWDLGCTJ2NeEvtrpR96mjraM=
+ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 h1:8b8Y8gLBvQrDIuKFSCwT089l1iltqsTEWXzhm/pSguE=
+ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5/go.mod h1:epgQDQTm93L3/plOnIejSYbl/SNhulI78aa1LC0tLn0=
+ergo.services/ergo v1.999.310 h1:qHx35J5UxCheNJaFrOK/1K6/p7jir680+NTPZo6bhbI=
+ergo.services/ergo v1.999.310/go.mod h1:bLQ6PoO6Mz/8gVuzvPv3xfMfo1P9w6rZV1WnMXMeMdg=
 filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
 filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
 filippo.io/mkcert v1.4.4 h1:8eVbbwfVlaqUM7OwuftKc2nuYOoTDQWqsoXmzoXZdbc=

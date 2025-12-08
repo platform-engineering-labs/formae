@@ -17,6 +17,7 @@ const (
 	FormaCommandPersister     = gen.Atom("FormaCommandPersister")
 	MetastructureBridge       = gen.Atom("MetastructureBridge")
 	PluginOperatorSupervisor  = gen.Atom("PluginOperatorSupervisor")
+	PluginCoordinator         = gen.Atom("PluginCoordinator")
 	RateLimiter               = gen.Atom("RateLimiter")
 	ResourcePersister         = gen.Atom("ResourcePersister")
 	ResourceUpdaterSupervisor = gen.Atom("ResourceUpdaterSupervisor")

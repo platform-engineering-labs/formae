@@ -85,7 +85,7 @@ func newRateLimiterForTest(t *testing.T) (*unit.TestActor, gen.PID, error) {
 	assert.NoError(t, err, "Failed to get project root")
 	pluginPath := projectRoot + "/plugins"
 
-	pluginManager := plugin.NewManager(pluginPath)
+	pluginManager := plugin.NewManager("", pluginPath)
 	pluginManager.Load()
 
 	env := map[gen.Env]any{

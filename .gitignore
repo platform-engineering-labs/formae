@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# AWS plugin binaries (not built as .so)
+plugins/aws/aws
+plugins/aws/aws-debug
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -64,11 +68,13 @@ version.semver
 tests/e2e/formae-server.log
 tests/e2e/test-logs
 
-# Claude Code local settings
+# Claude Code files
 .claude/
 CLAUDE.md
 
 .handoffs/
 .research/
-.serena/
+.plans/
 
+# MCP
+.serena/

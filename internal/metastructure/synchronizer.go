@@ -40,21 +40,25 @@ import (
 //			 ---|     Synchronizing     |<---
 //				+-----------------------+
 
-func factory_Synchronizer() gen.ProcessBehavior {
+func NewSynchronizer() gen.ProcessBehavior {
 	return &Synchronizer{}
 }
 
 type SynchronizeSingleResource struct {
-	Uri pkgmodel.FormaeURI
+	URI pkgmodel.FormaeURI
 }
 
 type ResourceSynchronized struct {
-	Uri pkgmodel.FormaeURI
+	URI pkgmodel.FormaeURI
 }
 
 const (
 	StateIdle          = gen.Atom("idle")
 	StateSynchronizing = gen.Atom("synchronizing")
+
+	// InitialDelay is the delay before the first synchronization run to allow
+	// the plugins to register.
+	InitialDelay = 2 * time.Second
 )
 
 type Synchronizer struct {
@@ -122,7 +126,7 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 	)
 
 	if synchronizerCfg.Enabled {
-		if err := s.Send(s.PID(), Synchronize{}); err != nil {
+		if _, err := s.SendAfter(s.PID(), Synchronize{}, 2*time.Second); err != nil {
 			return statemachine.StateMachineSpec[SynchronizerData]{}, fmt.Errorf("failed to send initial synchronize message: %s", err)
 		}
 		s.Log().Info("Resource synchronization ready")
@@ -141,7 +145,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data SynchronizerData, 
 	return newState, data, nil
 }
 
-func synchronize(state gen.Atom, data SynchronizerData, message Synchronize, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func synchronize(from gen.PID, state gen.Atom, data SynchronizerData, message Synchronize, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	data.isScheduledSync = !message.Once
 	data.timeStarted = time.Now()
 
@@ -176,7 +180,6 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			resource_update.FormaCommandSourceSynchronize,
 			existingTargets,
 			data.datastore,
-			nil, // No resource filters needed for synchronization
 		)
 		if err != nil {
 			proc.Log().Error("failed to generate resource updates for stack %s: %w", stack.SingleStackLabel(), err)
@@ -197,6 +200,36 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		}
 	}
 	allResourceUpdates = filteredResourceUpdates
+
+	// Filter out resources whose plugins aren't registered yet
+	availableResourceUpdates := make([]resource_update.ResourceUpdate, 0, len(allResourceUpdates))
+	for _, update := range allResourceUpdates {
+		namespace := update.Resource.Namespace()
+
+		// Check if plugin is available via PluginCoordinator
+		response, err := proc.Call(
+			gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
+			messages.GetPluginInfo{Namespace: namespace},
+		)
+		if err != nil {
+			proc.Log().Debug("Failed to check plugin availability, skipping resource",
+				"namespace", namespace,
+				"resourceURI", string(update.URI()),
+				"error", err)
+			continue
+		}
+
+		pluginInfo, ok := response.(messages.PluginInfoResponse)
+		if !ok || !pluginInfo.Found {
+			proc.Log().Debug("Plugin not available yet, skipping resource from sync",
+				"namespace", namespace,
+				"resourceURI", string(update.URI()))
+			continue
+		}
+
+		availableResourceUpdates = append(availableResourceUpdates, update)
+	}
+	allResourceUpdates = availableResourceUpdates
 
 	if len(allResourceUpdates) == 0 {
 		proc.Log().Debug("Synchronizer: no resources found to synchronize")
@@ -257,7 +290,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	return StateSynchronizing, data, nil, nil
 }
 
-func changesetCompleted(state gen.Atom, data SynchronizerData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func changesetCompleted(from gen.PID, state gen.Atom, data SynchronizerData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	if message.CommandID != data.commandID {
 		proc.Log().Error("Synchronizer received ChangesetCompleted for unknown command ID", "commandID", message.CommandID)
 		return state, data, nil, nil
@@ -266,13 +299,13 @@ func changesetCompleted(state gen.Atom, data SynchronizerData, message changeset
 	return StateIdle, data, nil, nil
 }
 
-func registerInProgressResource(state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func registerInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	data.excludedResources[message.ResourceURI] = struct{}{}
 	proc.Log().Debug("Resource registered as in-progress, excluded from sync", "resourceURI", message.ResourceURI)
 	return state, data, nil, nil
 }
 
-func unregisterInProgressResource(state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
+func unregisterInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	delete(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource unregistered from in-progress, can be synced", "resourceURI", message.ResourceURI)
 	return state, data, nil, nil

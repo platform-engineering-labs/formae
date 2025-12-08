@@ -21,9 +21,9 @@ clean:
 clean-pel:
 	rm -rf ~/.pel/*
 
-build:
+build: 
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
-	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws.so
+	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o aws .
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	go build -C plugins/json -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json.so
 	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
@@ -34,13 +34,9 @@ build:
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
 
-build-aws:
-	go build -C plugins/aws -buildmode=plugin -o aws.so
-	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws-debug.so
-
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
-	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o aws-debug.so
+	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -o aws-debug .
 	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
 	go build -C plugins/json ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json-debug.so
 	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
@@ -52,13 +48,21 @@ build-pkl-local:
 	go build -C plugins/pkl -tags local -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	pkl project resolve plugins/pkl/generator/
 
+install-aws-plugin:
+	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
+	cp plugins/aws/aws ~/.pel/formae/plugins/aws/v${VERSION}/aws
+
 pkg-bin: clean build build-tools
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
 	mkdir -p ./dist/pel/formae/examples
 	cp -Rp ./formae ./dist/pel/formae/bin
-	find ./plugins -name '*.so' -exec cp {} ./dist/pel/formae/plugins/ \;
+	for f in ./plugins/*; do \
+		if file "$$f" | grep -qE "ELF|Mach-O"; then \
+			cp "$$f" ./dist/pel/formae/plugins/; \
+		fi \
+	done
 	rm -rf ./dist/pel/formae/plugins/fake-*
 	cp -Rp ./examples/* ./dist/pel/formae/examples
 	./formae project init ./dist/pel/formae/examples
@@ -90,9 +94,9 @@ gen-aws-pkl-types:
 	cd plugins/aws &&  pkl eval pkg/descriptors/pkl/resources.pkl > pkg/descriptors/pkl/generated_resources.pkl
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		sed -i '' '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-	else \
+		else \
 		sed -i '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-	fi
+		fi
 
 pkg-pkl:
 	pkl project package ./plugins/aws/schema/pkl ./plugins/pkl/schema --skip-publish-check
@@ -143,15 +147,10 @@ test-integration:
 	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-plugin-sdk-aws: build
+test-plugin-sdk-aws: build build-aws-plugin
 	@echo "Resolving PKL dependencies for AWS plugin..."
 	@pkl project resolve plugins/aws/testdata
 	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
-
-test-plugin-sdk-azure: build
-	@echo "Resolving PKL dependencies for Azure plugin..."
-	@pkl project resolve plugins/azure/testdata
-	PLUGIN_NAME=azure go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
 
 test-e2e: gen-pkl pkg-pkl build
 	echo "Resolving PKL project..."
@@ -225,7 +224,7 @@ api-docs:
 
 lint:
 	@echo "Running linter..."
-	@golangci-lint-v2 run
+	@golangci-lint run
 	@echo "Linting completed successfully."
 
 lint-reuse:
@@ -236,4 +235,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-aws build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-summary test-integration test-e2e test-property version full-e2e lint lint-reuse add-license all
+.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-summary test-integration test-e2e test-property version full-e2e lint lint-reuse add-license all

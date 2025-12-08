@@ -23,6 +23,13 @@ type TokensGranted struct {
 	N int
 }
 
+// RegisterNamespace registers a new namespace with its rate limit.
+// Sent by PluginCoordinator when a plugin announces itself.
+type RegisterNamespace struct {
+	Namespace            string
+	MaxRequestsPerSecond int
+}
+
 type TokenBucket struct {
 	Tokens     int
 	Capacity   int
@@ -53,24 +60,27 @@ func NewRateLimiter() gen.ProcessBehavior {
 }
 
 func (l *RateLimiter) Init(args ...any) error {
-	mgr, ok := l.Env("PluginManager")
-	if !ok {
-		l.Log().Error("RateLimiter: missing 'PluginManager' environment variable")
-		return fmt.Errorf("rateLimiter: missing 'PluginManager' environment variable")
-	}
-	l.pluginManager = mgr.(*plugin.Manager)
-
 	l.buckets = make(map[string]*TokenBucket)
-	for _, plugin := range l.pluginManager.ListResourcePlugins() {
-		ns := (*plugin).Namespace()
-		rateLimit := (*plugin).MaxRequestsPerSecond()
-		l.buckets[ns] = &TokenBucket{
-			Tokens:     rateLimit,
-			Capacity:   rateLimit,
-			LastRefill: time.Now(),
+
+	// PluginManager is optional - in distributed mode, namespaces are registered
+	// dynamically via RegisterNamespace messages from PluginCoordinator
+	mgr, ok := l.Env("PluginManager")
+	if ok {
+		l.pluginManager = mgr.(*plugin.Manager)
+		// Register in-process plugins
+		for _, plugin := range l.pluginManager.ListResourcePlugins() {
+			ns := (*plugin).Namespace()
+			rateLimit := (*plugin).MaxRequestsPerSecond()
+			l.buckets[ns] = &TokenBucket{
+				Tokens:     rateLimit,
+				Capacity:   rateLimit,
+				LastRefill: time.Now(),
+			}
+			l.Log().Debug("Registered in-process plugin", "namespace", ns, "rateLimit", rateLimit)
 		}
 	}
 
+	l.Log().Debug("RateLimiter started with %d buckets", len(l.buckets))
 	return nil
 }
 
@@ -89,4 +99,20 @@ func (l *RateLimiter) HandleCall(from gen.PID, ref gen.Ref, message any) (any, e
 	default:
 		return TokensGranted{N: 0}, fmt.Errorf("unhandled message type: %T", msg)
 	}
+}
+
+func (l *RateLimiter) HandleMessage(from gen.PID, message any) error {
+	switch msg := message.(type) {
+	case RegisterNamespace:
+		// Register or update a namespace with its rate limit
+		l.buckets[msg.Namespace] = &TokenBucket{
+			Tokens:     msg.MaxRequestsPerSecond,
+			Capacity:   msg.MaxRequestsPerSecond,
+			LastRefill: time.Now(),
+		}
+		l.Log().Debug("Registered namespace %s with rate limit %d", msg.Namespace, msg.MaxRequestsPerSecond)
+	default:
+		l.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
+	}
+	return nil
 }

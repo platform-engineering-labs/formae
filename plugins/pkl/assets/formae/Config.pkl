@@ -19,7 +19,7 @@ class ServerConfig {
 
     port: Port = 49684
 
-    secret: String = ""
+    secret: String = "secret"
 
     observerPort: Port = 0
 
@@ -152,6 +152,8 @@ class CliConfig {
 }
 
 class PluginConfig {
+    pluginDir: String = "~/.pel/formae/plugins"
+
     hidden authentication: Dynamic?(
             if (this != null)
                 this.hasProperty("type")

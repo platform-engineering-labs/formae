@@ -265,7 +265,7 @@ func generateUpdates(t *testing.T, ds *mockDatastore, forma *pkgmodel.Forma) []R
 	t.Helper()
 	targets := []*pkgmodel.Target{{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}}
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, targets, ds, nil)
+		FormaCommandSourceUser, targets, ds)
 	require.NoError(t, err)
 	return updates
 }

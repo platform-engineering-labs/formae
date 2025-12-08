@@ -12,6 +12,7 @@ import "@aws/aws.pkl"
 import "@aws/dynamodb/table.pkl"
 
 local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
 
 forma {
   new formae.Stack {
@@ -28,7 +29,7 @@ forma {
 
   new table.Table {
     label = "plugin-sdk-test-table"
-    tableName = "formae-plugin-sdk-test-dynamodb-20250107"
+    tableName = "formae-plugin-sdk-test-table-\(testRunID)"
     billingMode = "PAY_PER_REQUEST"
     keySchema {
       new {

@@ -15,6 +15,8 @@ require (
 )
 
 require (
+	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 // indirect
+	ergo.services/ergo v1.999.310 // indirect
 	github.com/PaesslerAG/gval v1.0.0 // indirect
 	github.com/PaesslerAG/jsonpath v0.1.1 // indirect
 	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-00010101000000-000000000000 // indirect

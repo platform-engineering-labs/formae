@@ -6,9 +6,7 @@ package main
 
 import (
 	"context"
-	"strings"
-
-	"github.com/masterminds/semver"
+		"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -142,11 +140,12 @@ func (s FakeAWS) Create(context context.Context, request *resource.CreateRequest
 
 	return &resource.CreateResult{
 		ProgressResult: &resource.ProgressResult{
-			Operation:       resource.OperationCreate,
-			OperationStatus: resource.OperationStatusSuccess,
-			RequestID:       "1234",
-			NativeID:        "5678",
-			ResourceType:    request.Resource.Type,
+			Operation:          resource.OperationCreate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			RequestID:          "1234",
+			NativeID:           "5678",
+			ResourceType:       request.Resource.Type,
+			ResourceProperties: request.Resource.Properties,
 		},
 	}, nil
 }
@@ -180,8 +179,7 @@ func (s FakeAWS) Delete(context context.Context, request *resource.DeleteRequest
 		}
 	}
 
-	// If the Resource's Id contains "delete", return a success delete result.
-	if strings.Contains(*request.NativeID, "delete") {
+	if request.NativeID != nil {
 		return &resource.DeleteResult{
 			ProgressResult: &resource.ProgressResult{
 				Operation:       resource.OperationDelete,
@@ -267,7 +265,27 @@ func (s FakeAWS) TargetBehavior() resource.TargetBehavior {
 	return TargetBehavior
 }
 
-// GetResourceFilters exists to satisfy the ResourcePlugin interface
-func (s FakeAWS) GetResourceFilters() map[string]plugin.ResourceFilter {
-	return make(map[string]plugin.ResourceFilter)
+// GetMatchFilters returns declarative filters matching the existing test behavior
+func (s FakeAWS) GetMatchFilters() []plugin.MatchFilter {
+	return []plugin.MatchFilter{{
+		ResourceTypes: []string{"FakeAWS::S3::Bucket"},
+		Conditions: []plugin.FilterCondition{
+			{
+				Type:          plugin.ConditionTypePropertyMatch,
+				PropertyPath:  "SkipDiscovery",
+				PropertyValue: "true",
+			},
+		},
+		Action: plugin.FilterActionExclude,
+	}, {
+		ResourceTypes: []string{"FakeAWS::S3::Bucket"},
+		Conditions: []plugin.FilterCondition{
+			{
+				Type:     plugin.ConditionTypeTagMatch,
+				TagKeys:  []string{"SkipDiscovery"},
+				TagValue: "true",
+			},
+		},
+		Action: plugin.FilterActionExclude,
+	}}
 }

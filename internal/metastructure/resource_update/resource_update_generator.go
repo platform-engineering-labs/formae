@@ -19,7 +19,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 // GenerateResourceUpdates converts a Forma and command parameters into ResourceUpdates that can be executed
@@ -29,8 +28,7 @@ func GenerateResourceUpdates(
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
 	existingTargets []*pkgmodel.Target,
-	ds ResourceDataLookup,
-	resourceFilters map[string]plugin.ResourceFilter) ([]ResourceUpdate, error) {
+	ds ResourceDataLookup) ([]ResourceUpdate, error) {
 
 	var referenceLabels map[string]string
 	var err error
@@ -84,7 +82,7 @@ func GenerateResourceUpdates(
 	case pkgmodel.CommandApply:
 		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, targetMap, ds)
 	case pkgmodel.CommandSync:
-		resourceUpdates, err = generateResourceUpdatesForSync(forma, source, targetMap, ds, resourceFilters)
+		resourceUpdates, err = generateResourceUpdatesForSync(forma, source, targetMap, ds)
 	default:
 		return nil, fmt.Errorf("unsupported command type: %s", command)
 	}
@@ -247,8 +245,7 @@ func generateResourceUpdatesForSync(
 	forma *pkgmodel.Forma,
 	source FormaCommandSource,
 	targetMap map[string]*pkgmodel.Target,
-	ds ResourceDataLookup,
-	resourceFilters map[string]plugin.ResourceFilter) ([]ResourceUpdate, error) {
+	ds ResourceDataLookup) ([]ResourceUpdate, error) {
 
 	var resourceUpdates []ResourceUpdate
 
@@ -262,14 +259,7 @@ func generateResourceUpdatesForSync(
 		if source == FormaCommandSourceDiscovery {
 			for _, r := range forma.Resources {
 				if r.Stack == stack.SingleStackLabel() {
-					var filter plugin.ResourceFilter
-					if resourceFilters != nil {
-						if f, ok := resourceFilters[r.Type]; ok {
-							filter = f
-						}
-					}
-
-					ru, err := NewResourceUpdateForSyncWithFilter(r, *targetMap[r.Target], source, filter)
+					ru, err := NewResourceUpdateForSyncWithFilter(r, *targetMap[r.Target], source)
 					if err != nil {
 						return nil, fmt.Errorf("failed to create resource update sync for %s: %w", r.Label, err)
 					}

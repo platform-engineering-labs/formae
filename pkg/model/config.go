@@ -102,6 +102,7 @@ type CliConfig struct {
 }
 
 type PluginConfig struct {
+	PluginDir      string
 	Network        json.RawMessage
 	Authentication json.RawMessage
 }

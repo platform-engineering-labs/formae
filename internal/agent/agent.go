@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -69,7 +70,7 @@ func (a *Agent) Start() error {
 			close(a.done)
 		}()
 
-		pluginManager := plugin.NewManager()
+		pluginManager := plugin.NewManager(util.ExpandHomePath(a.cfg.Plugins.PluginDir))
 		pluginManager.Load()
 
 		slog.Info("Starting agent", "id", a.id)

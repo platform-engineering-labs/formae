@@ -15,11 +15,32 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_operation"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
+
+// convertResourceForPlugin converts a resource's properties to plugin format
+// by extracting $value from opaque value structures (e.g., {"$value": "secret", "$visibility": "Opaque"})
+// becomes just "secret". This must be done before sending to the plugin since the resolver
+// lives in the agent and plugins may be remote.
+func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) {
+	if res.Properties == nil {
+		return res, nil
+	}
+
+	convertedProps, err := resolver.ConvertToPluginFormat(res.Properties)
+	if err != nil {
+		return res, err
+	}
+
+	// Return a copy with converted properties
+	result := res
+	result.Properties = convertedProps
+	return result, nil
+}
 
 // ResourceUpdater is the Ergo state machine responsible for executing resource updates in the metastructure.
 // A resource update is a sequence of plugin operations that are applied to a resource in the cloud. Different
@@ -189,25 +210,10 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 	), nil
 }
 
-func pluginOperatorProcess(proc gen.Process, uri pkgmodel.FormaeURI, operation resource.Operation, operationID string) gen.ProcessID {
-	return gen.ProcessID{
-		Name: gen.Atom(fmt.Sprintf("%s/%s/%s", uri, operation, operationID)),
-		Node: proc.Node().Name(),
-	}
-}
-
 // Returns the address (ProcessID) of the global resource persister.
 func resourcePersisterProcess(proc gen.Process) gen.ProcessID {
 	return gen.ProcessID{
 		Name: actornames.ResourcePersister,
-		Node: proc.Node().Name(),
-	}
-}
-
-// Returns the address (ProcessID) of the plugin operator supervisor process.
-func pluginOperatorSupervisorProcess(proc gen.Process) gen.ProcessID {
-	return gen.ProcessID{
-		Name: gen.Atom("PluginOperatorSupervisor"),
 		Node: proc.Node().Name(),
 	}
 }
@@ -220,7 +226,7 @@ func formaCommandPersisterProcess(proc gen.Process) gen.ProcessID {
 	}
 }
 
-func shutdown(state gen.Atom, data ResourceUpdateData, shutdown Shutdown, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Shutdown, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
@@ -266,7 +272,8 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 	return newState, data, nil
 }
 
-func start(state gen.Atom, data ResourceUpdateData, message StartResourceUpdate, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartResourceUpdate, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.requestedBy = from
 	data.resourceUpdate = &message.ResourceUpdate
 	data.commandID = message.CommandID
 	data.commandSource = message.ResourceUpdate.Source
@@ -278,10 +285,24 @@ func start(state gen.Atom, data ResourceUpdateData, message StartResourceUpdate,
 }
 
 func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	progress, err := doPluginOperation(data.resourceUpdate.Resource.URI(), plugin_operation.ReadResource{
-		Namespace:        data.resourceUpdate.ExistingResource.Namespace(),
-		ExistingResource: data.resourceUpdate.ExistingResource,
-		Resource:         data.resourceUpdate.Resource,
+	// Convert properties to plugin format (extracts $value from opaque structures)
+	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.Resource)
+	if err != nil {
+		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	convertedExisting, err := convertResourceForPlugin(data.resourceUpdate.ExistingResource)
+	if err != nil {
+		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
+	progress, err := doPluginOperation(data.resourceUpdate.Resource.URI(), plugin.ReadResource{
+		Namespace:        convertedExisting.Namespace(),
+		ExistingResource: convertedExisting,
+		Resource:         convertedResource,
 		Target:           data.resourceUpdate.ResourceTarget,
 		NativeID:         data.resourceUpdate.Resource.NativeID,
 		IsSync:           data.resourceUpdate.IsSync(),
@@ -296,20 +317,34 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *progress, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *progress, proc)
 }
 
 func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	metadata, err := data.resourceUpdate.ExistingResource.GetMetadata()
+	// Convert properties to plugin format (extracts $value from opaque structures)
+	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.Resource)
 	if err != nil {
-		proc.Log().Error("failed to get metadata for resource update", "error", err, "resourceURI", data.resourceUpdate.Resource.URI())
+		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	convertedExisting, err := convertResourceForPlugin(data.resourceUpdate.ExistingResource)
+	if err != nil {
+		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
+	metadata, err := convertedExisting.GetMetadata()
+	if err != nil {
+		proc.Log().Error("failed to get metadata for resource update: %v, resourceURI: %s", err, data.resourceUpdate.Resource.URI())
 		metadata = json.RawMessage("{}")
 	}
-	deleteOperation := plugin_operation.DeleteResource{
-		Namespace:    data.resourceUpdate.Resource.Namespace(),
-		NativeID:     data.resourceUpdate.Resource.NativeID,
-		Resource:     data.resourceUpdate.Resource,
-		ResourceType: data.resourceUpdate.Resource.Type,
+	deleteOperation := plugin.DeleteResource{
+		Namespace:    convertedResource.Namespace(),
+		NativeID:     convertedResource.NativeID,
+		Resource:     convertedResource,
+		ResourceType: convertedResource.Type,
 		Metadata:     metadata,
 		Target:       data.resourceUpdate.ResourceTarget,
 	}
@@ -330,7 +365,7 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateDeleting, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *result, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
@@ -361,7 +396,7 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 	return StateResolving, data, []statemachine.Action{timeout}, nil
 }
 
-func resourceResolved(state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value)
 	if err != nil {
 		proc.Log().Error("failed to resolve value for resource update", "error", err, "resourceURI", message.ResourceURI)
@@ -373,9 +408,17 @@ func resourceResolved(state gen.Atom, data ResourceUpdateData, message messages.
 }
 
 func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	createOperation := plugin_operation.CreateResource{
-		Namespace: data.resourceUpdate.Resource.Namespace(),
-		Resource:  data.resourceUpdate.Resource,
+	// Convert properties to plugin format (extracts $value from opaque structures)
+	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.Resource)
+	if err != nil {
+		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
+	createOperation := plugin.CreateResource{
+		Namespace: convertedResource.Namespace(),
+		Resource:  convertedResource,
 		Target:    data.resourceUpdate.ResourceTarget,
 	}
 
@@ -395,7 +438,7 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *result, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
@@ -440,14 +483,28 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			ModifiedTs:         util.TimeNow(),
 		}
 
-		return handleProgressUpdate(state, data, syntheticResult, proc)
+		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
-	updateOperation := plugin_operation.UpdateResource{
-		Namespace:        data.resourceUpdate.Resource.Namespace(),
-		NativeID:         data.resourceUpdate.Resource.NativeID,
-		Resource:         data.resourceUpdate.Resource,
-		ExistingResource: data.resourceUpdate.ExistingResource,
+	// Convert properties to plugin format (extracts $value from opaque structures)
+	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.Resource)
+	if err != nil {
+		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	convertedExisting, err := convertResourceForPlugin(data.resourceUpdate.ExistingResource)
+	if err != nil {
+		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
+	updateOperation := plugin.UpdateResource{
+		Namespace:        convertedResource.Namespace(),
+		NativeID:         convertedResource.NativeID,
+		Resource:         convertedResource,
+		ExistingResource: convertedExisting,
 		PatchDocument:    string(data.resourceUpdate.Resource.PatchDocument),
 		Target:           data.resourceUpdate.ResourceTarget,
 	}
@@ -468,13 +525,13 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	return handleProgressUpdate(state, data, *result, proc)
+	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
-func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKnownProgress *resource.ProgressResult, operation plugin_operation.StatusCheck, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKnownProgress *resource.ProgressResult, operation plugin.StatusCheck, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	// If the lastKnownProgress was finished, we can let the progress handler process the result and determine next steps.
 	if lastKnownProgress.HasFinished() {
-		return handleProgressUpdate(state, data, *lastKnownProgress, proc)
+		return handleProgressUpdate(gen.PID{}, state, data, *lastKnownProgress, proc)
 	}
 
 	// Otherwise we retrieve the actual progress by spawning a plugin operator in the WaitingForResource state.
@@ -487,7 +544,7 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 
 	// If the actual progress is finished, again we let the progress handler process the result and determine next steps.
 	if actualProgress.HasFinished() {
-		return handleProgressUpdate(state, data, *actualProgress, proc)
+		return handleProgressUpdate(gen.PID{}, state, data, *actualProgress, proc)
 	}
 
 	// If not, this means that the plugin operator is waiting for the operation to be completed, so we stay in the
@@ -500,8 +557,8 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 	return state, data, []statemachine.Action{timeout}, nil
 }
 
-func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress resource.ProgressResult, operation plugin_operation.StatusCheck, proc gen.Process) (*resource.ProgressResult, error) {
-	actualProgress, err := doPluginOperation(data.resourceUpdate.Resource.URI(), plugin_operation.ResumeWaitingForResource{
+func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress resource.ProgressResult, operation plugin.StatusCheck, proc gen.Process) (*resource.ProgressResult, error) {
+	actualProgress, err := doPluginOperation(data.resourceUpdate.Resource.URI(), plugin.ResumeWaitingForResource{
 		Namespace:         data.resourceUpdate.Resource.Namespace(),
 		ResourceOperation: currentOperation(state),
 		Request:           operation.StatusCheck(&progress),
@@ -518,7 +575,7 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 // handleProgressUpdate handles progress updates from th plugin operator. It persists any progress made, and moves the
 // state machine to the next state when the plugin operation finished successfully. After the last plugin operation, or
 // after the first error, it reports the final state to the stack updater and exits.
-func handleProgressUpdate(state gen.Atom, data ResourceUpdateData, message resource.ProgressResult, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData, message resource.ProgressResult, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
 		proc.Log().Error("failed to record progress for resource update", "error", err)
@@ -547,7 +604,25 @@ func handleProgressUpdate(state gen.Atom, data ResourceUpdateData, message resou
 	// If the plugin operation has finished successfully, we persist the resource update to the stack, inform the stack updater and exit
 	if message.FinishedSuccessfully() {
 		if data.commandSource == FormaCommandSourceDiscovery {
-			if data.resourceUpdate.Filter(json.RawMessage(data.resourceUpdate.Resource.Properties), data.resourceUpdate.ResourceTarget) {
+			// Merge Properties and ReadOnlyProperties to get complete cloud state for filtering
+			completeProperties, mergeErr := util.MergeJSON(
+				data.resourceUpdate.Resource.Properties,
+				data.resourceUpdate.Resource.ReadOnlyProperties,
+			)
+			if mergeErr != nil {
+				proc.Log().Warning("failed to merge properties for filter, using Properties only", "error", mergeErr)
+				completeProperties = data.resourceUpdate.Resource.Properties
+			}
+
+			// Check if resource should be filtered using MatchFilters (declarative, OR logic)
+			shouldFilter := false
+			for i := range data.resourceUpdate.MatchFilters {
+				if shouldFilterByMatchFilter(&data.resourceUpdate.MatchFilters[i], completeProperties) {
+					shouldFilter = true
+					break
+				}
+			}
+			if shouldFilter {
 				proc.Log().Debug("Skipping discovered resource",
 					"resourceType", data.resourceUpdate.Resource.Type,
 					"nativeID", data.resourceUpdate.Resource.NativeID)
@@ -619,7 +694,6 @@ func nextState(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.A
 		default:
 		}
 		return synchronize(StateSynchronizing, data, proc)
-
 	case StateSynchronizing:
 		if data.resourceUpdate.IsSync() {
 			return StateFinishedSuccessfully, data, nil, nil
@@ -653,54 +727,127 @@ func nextState(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.A
 	}
 }
 
-func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin_operation.PluginOperation, proc gen.Process) (*resource.ProgressResult, error) {
-	//generate me a random operationID based on UUID
+func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOperation, proc gen.Process) (*resource.ProgressResult, error) {
+	// Generate a random operationID based on UUID
 	operationID := uuid.New().String()
-	proc.Log().Debug("Ensuring plugin operator is running", "resourceURI", resourceURI, "operation", string(operation.Operation()))
-	_, err := proc.Call(pluginOperatorSupervisorProcess(proc), plugin_operation.EnsurePluginOperator{
-		ResourceURI: resourceURI,
-		Operation:   operation.Operation(),
-		OperationID: operationID,
-	})
+
+	// Spawn a PluginOperator via PluginCoordinator
+	proc.Log().Debug("Spawning plugin operator via PluginCoordinator",
+		"resourceURI", resourceURI,
+		"operation", string(operation.Operation()),
+		"namespace", operation.PluginNamespace())
+
+	spawnResult, err := proc.Call(
+		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
+		messages.SpawnPluginOperator{
+			Namespace:   operation.PluginNamespace(),
+			ResourceURI: string(resourceURI),
+			Operation:   string(operation.Operation()),
+			OperationID: operationID,
+			RequestedBy: proc.PID(),
+		})
 	if err != nil {
-		proc.Log().Error("failed to ensure plugin operator", "error", err)
-		return nil, fmt.Errorf("failed to ensure plugin operator: %w", err)
+		proc.Log().Error("failed to spawn plugin operator", "error", err)
+		return nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
 	}
 
-	proc.Log().Debug("Resource updater: calling plugin operator process", "resourceURI", resourceURI, "operation", operation.Operation())
-	response, err := proc.CallWithTimeout(
-		pluginOperatorProcess(proc, resourceURI, operation.Operation(), operationID),
-		operation,
-		PluginOperationCallTimeout,
-	)
+	result, ok := spawnResult.(messages.SpawnPluginOperatorResult)
+	if !ok {
+		return nil, fmt.Errorf("expected SpawnPluginOperatorResult, got %T", spawnResult)
+	}
+	if result.Error != "" {
+		return nil, fmt.Errorf("spawn plugin operator failed: %s", result.Error)
+	}
+
+	// Call the spawned PluginOperator with the operation
+	proc.Log().Debug("Resource updater: calling plugin operator process",
+		"resourceURI", resourceURI,
+		"operation", operation.Operation(),
+		"pid", result.PID)
+
+	response, err := proc.CallWithTimeout(result.PID, operation, PluginOperationCallTimeout)
 	if err != nil {
 		return nil, err
 	}
 
-	result, ok := response.(resource.ProgressResult)
+	progressResult, ok := response.(resource.ProgressResult)
 	if !ok {
 		return nil, fmt.Errorf("expected ProgressResult, got %T", response)
 	}
 
-	return &result, nil
+	return &progressResult, nil
 }
 
-func pluginOperationMissingInAction(state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Plugin operator is missing in action", "state", state, "data", data)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
-func resolveCacheMissingInAction(state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resolveCacheMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Resolve cache is missing in action", "state", state, "data", data)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
-func resourceFailedToResolve(state gen.Atom, data ResourceUpdateData, message messages.FailedToResolveValue, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.FailedToResolveValue, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Failed to resolve resource property", "resourceUri", message.ResourceURI)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
+}
+
+// shouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter
+func shouldFilterByMatchFilter(filter *plugin.MatchFilter, properties json.RawMessage) bool {
+	if filter == nil {
+		return false
+	}
+
+	// All conditions must match (AND logic)
+	for _, cond := range filter.Conditions {
+		if !evaluateCondition(cond, properties) {
+			return false
+		}
+	}
+
+	// All conditions matched
+	return filter.Action == plugin.FilterActionExclude
+}
+
+func evaluateCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+	switch cond.Type {
+	case plugin.ConditionTypeTagMatch:
+		return matchesTagCondition(cond, properties)
+	case plugin.ConditionTypePropertyMatch:
+		return matchesPropertyCondition(cond, properties)
+	default:
+		return false
+	}
+}
+
+func matchesTagCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+	tags := pkgmodel.GetTagsFromProperties(properties)
+	for _, tag := range tags {
+		for _, key := range cond.TagKeys {
+			if tag.Key == key && tag.Value == cond.TagValue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchesPropertyCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return false
+	}
+
+	if val, ok := props[cond.PropertyPath]; ok {
+		if strVal, ok := val.(string); ok {
+			return strVal == cond.PropertyValue
+		}
+	}
+	return false
 }
 
 func currentOperation(state gen.Atom) resource.Operation {
