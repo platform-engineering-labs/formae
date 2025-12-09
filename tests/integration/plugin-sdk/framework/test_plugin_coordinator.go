@@ -125,6 +125,7 @@ type SpawnPluginOperatorResult struct {
 type CreateResourceRequest struct {
 	ResourceType string
 	Namespace    string
+	Label        string
 	Properties   json.RawMessage
 	Target       model.Target
 }
@@ -348,6 +349,7 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 		Namespace: req.Namespace,
 		Resource: model.Resource{
 			Type:       req.ResourceType,
+			Label:      req.Label,
 			Properties: req.Properties,
 		},
 		Target: req.Target,
@@ -393,7 +395,9 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 
 	// Step 2: Send Delete request to PluginOperator
 	deleteReq := plugin.DeleteResource{
-		Namespace: req.Namespace,
+		Namespace:    req.Namespace,
+		NativeID:     req.NativeID,
+		ResourceType: req.ResourceType,
 		Resource: model.Resource{
 			Type:     req.ResourceType,
 			NativeID: req.NativeID,
