@@ -103,6 +103,12 @@ jobs:
       - name: Build formae
         run: make build
 
+      - name: Create version.semver
+        run: |
+          VERSION=$(git describe --tags --abbrev=0)
+          echo "$VERSION" > ./version.semver
+          echo "Created version.semver with: $VERSION"
+
       - name: Resolve PKL dependencies
         run: pkl project resolve plugins/${{ matrix.plugin }}/testdata
 
