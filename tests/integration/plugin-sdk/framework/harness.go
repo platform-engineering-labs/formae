@@ -922,6 +922,7 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 	result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", CreateResourceRequest{
 		ResourceType: cloudResource.Type,
 		Namespace:    namespace,
+		Label:        cloudResource.Label,
 		Properties:   cloudResource.Properties,
 		Target:       target,
 	}, 120) // 2 minute timeout for the initial call
