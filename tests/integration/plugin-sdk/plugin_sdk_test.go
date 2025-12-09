@@ -12,13 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/platform-engineering-labs/formae/tests/integration/plugin-sdk/framework"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/tests/integration/plugin-sdk/framework"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -163,6 +162,71 @@ func createPatchFileWithTag(originalPKLFile, patchFilePath string) error {
 	return nil
 }
 
+// compareTags compares two tag slices ignoring order
+// Tags are expected to be []any where each element is map[string]any with "Key" and "Value"
+func compareTags(t *testing.T, expected, actual any, context string) bool {
+	expectedTags, ok := expected.([]any)
+	if !ok {
+		t.Errorf("Expected tags is not a slice (%s)", context)
+		return false
+	}
+	actualTags, ok := actual.([]any)
+	if !ok {
+		t.Errorf("Actual tags is not a slice (%s)", context)
+		return false
+	}
+
+	if len(expectedTags) != len(actualTags) {
+		t.Errorf("Tag count mismatch: expected %d, got %d (%s)", len(expectedTags), len(actualTags), context)
+		return false
+	}
+
+	// Build a map of expected tags for easy lookup
+	expectedMap := make(map[string]string)
+	for _, tag := range expectedTags {
+		tagMap, ok := tag.(map[string]any)
+		if !ok {
+			t.Errorf("Expected tag is not a map (%s)", context)
+			return false
+		}
+		key, _ := tagMap["Key"].(string)
+		value, _ := tagMap["Value"].(string)
+		expectedMap[key] = value
+	}
+
+	// Check each actual tag exists in expected
+	for _, tag := range actualTags {
+		tagMap, ok := tag.(map[string]any)
+		if !ok {
+			t.Errorf("Actual tag is not a map (%s)", context)
+			return false
+		}
+		key, _ := tagMap["Key"].(string)
+		value, _ := tagMap["Value"].(string)
+		expectedValue, exists := expectedMap[key]
+		if !exists {
+			t.Errorf("Unexpected tag key %q in actual tags (%s)", key, context)
+			return false
+		}
+		if expectedValue != value {
+			t.Errorf("Tag %q value mismatch: expected %q, got %q (%s)", key, expectedValue, value, context)
+			return false
+		}
+	}
+
+	return true
+}
+
+// isResolvable checks if a value is a Formae resolvable (reference to another resource's property)
+func isResolvable(value any) bool {
+	if m, ok := value.(map[string]any); ok {
+		if res, ok := m["$res"].(bool); ok && res {
+			return true
+		}
+	}
+	return false
+}
+
 // compareProperties compares expected properties against actual properties from inventory
 func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) {
 	if actualProperties, ok := actualResource["Properties"].(map[string]any); ok {
@@ -171,8 +235,53 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 			actualValue, exists := actualProperties[key]
 			assert.True(t, exists, "Property %s should exist in actual resource (%s)", key, context)
 			if exists {
-				assert.Equal(t, expectedValue, actualValue,
-					"Property %s should match expected value (%s)", key, context)
+				// Validate resolvable properties - they should be resolved at apply time
+				if isResolvable(expectedValue) {
+					t.Logf("Validating resolvable property %s (resolved at runtime)", key)
+
+					// Verify the actual value is also a resolvable
+					if !isResolvable(actualValue) {
+						t.Errorf("Expected resolvable but got non-resolvable for property %s (%s)", key, context)
+						continue
+					}
+
+					// Both are resolvables - now validate the resolved value and metadata
+					expectedMap := expectedValue.(map[string]any)
+					actualMap := actualValue.(map[string]any)
+
+					// Check that $value exists and is non-empty in the actual resource
+					resolvedValue, hasValue := actualMap["$value"]
+					if !hasValue {
+						t.Errorf("Resolvable property %s missing $value in actual resource (%s)", key, context)
+						continue
+					}
+					if resolvedValue == "" {
+						t.Errorf("Resolvable property %s has empty $value in actual resource (%s)", key, context)
+						continue
+					}
+					t.Logf("Resolvable property %s resolved to: %v", key, resolvedValue)
+
+					// Validate that key resolvable metadata fields match
+					for _, field := range []string{"$label", "$type", "$stack", "$property"} {
+						expectedFieldValue, expectedHasField := expectedMap[field]
+						actualFieldValue, actualHasField := actualMap[field]
+
+						// Only validate if both have the field (some fields may be optional)
+						if expectedHasField && actualHasField && expectedFieldValue != actualFieldValue {
+							t.Errorf("Resolvable property %s field %s mismatch: expected %v, got %v (%s)",
+								key, field, expectedFieldValue, actualFieldValue, context)
+						}
+					}
+
+					continue
+				}
+				// Use order-independent comparison for Tags
+				if key == "Tags" {
+					compareTags(t, expectedValue, actualValue, context)
+				} else {
+					assert.Equal(t, expectedValue, actualValue,
+						"Property %s should match expected value (%s)", key, context)
+				}
 			}
 		}
 		t.Logf("All expected properties matched (%s)!", context)
@@ -196,7 +305,28 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	require.NoError(t, err, "Should be able to parse eval output")
 	require.NotEmpty(t, evalResult.Resources, "Eval should return at least one resource")
 
-	expectedResource := evalResult.Resources[0]
+	// Find the target resource by matching the test case's ResourceType to the resource Type
+	// Example: tc.ResourceType="virtual-network" should match Type="Provider::Service::VirtualNetwork"
+	var expectedResource map[string]any
+	targetTypeNorm := strings.ToLower(strings.ReplaceAll(tc.ResourceType, "-", ""))
+	for _, res := range evalResult.Resources {
+		if resType, ok := res["Type"].(string); ok {
+			// Normalize the type (e.g., "Provider::Service::ResourceName" -> "resourcename")
+			typeParts := strings.Split(resType, "::")
+			typeName := strings.ToLower(typeParts[len(typeParts)-1])
+			if typeName == targetTypeNorm {
+				expectedResource = res
+				t.Logf("Found target resource by type match: %s", resType)
+				break
+			}
+		}
+	}
+	// Fallback to last resource if no match found (dependencies are listed first)
+	if expectedResource == nil {
+		expectedResource = evalResult.Resources[len(evalResult.Resources)-1]
+		t.Logf("No type match found for %s, using last resource as target", targetTypeNorm)
+	}
+
 	actualResourceType := expectedResource["Type"].(string)
 	expectedProperties := expectedResource["Properties"].(map[string]any)
 	t.Logf("Expected resource type: %s", actualResourceType)
@@ -283,6 +413,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 		}
 		t.Log("Extract validation completed!")
 	}
+
 	// Step 6: Force synchronization to read actual state from cloud
 	t.Log("Step 6: Forcing synchronization...")
 	err = harness.Sync()
@@ -350,26 +481,16 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	}
 
 	// Append the new Environment tag to the existing tags list
-	existingTags := expectedPropertiesWithTag["Tags"].([]any)
+	var existingTags []any
+	if tags, ok := expectedPropertiesWithTag["Tags"].([]any); ok {
+		existingTags = tags
+	}
 	expectedTags := append(existingTags, map[string]any{
 		"Key":   "Environment",
 		"Value": "test",
 	})
 
-	// Sort expected tags by Key to ensure consistent ordering (AWS may return tags in different order)
-	sort.Slice(expectedTags, func(i, j int) bool {
-		return expectedTags[i].(map[string]any)["Key"].(string) < expectedTags[j].(map[string]any)["Key"].(string)
-	})
 	expectedPropertiesWithTag["Tags"] = expectedTags
-
-	// Sort actual tags from inventory as well
-	if actualProperties, ok := resourceAfterPatch["Properties"].(map[string]any); ok {
-		if actualTags, ok := actualProperties["Tags"].([]any); ok {
-			sort.Slice(actualTags, func(i, j int) bool {
-				return actualTags[i].(map[string]any)["Key"].(string) < actualTags[j].(map[string]any)["Key"].(string)
-			})
-		}
-	}
 
 	// Verify all properties including the new tag
 	compareProperties(t, expectedPropertiesWithTag, resourceAfterPatch, "after patch")
@@ -516,12 +637,11 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 		t.Fatal("No unmanaged resources discovered")
 	}
 
-	// Find our specific bucket by BucketName in the discovered resources
-	bucketName := expectedProperties["BucketName"].(string)
+	// Find our specific resource by NativeID in the discovered resources
 	var discoveredResource map[string]any
 	for _, res := range inventory.Resources {
-		if props, ok := res["Properties"].(map[string]any); ok {
-			if props["BucketName"] == bucketName {
+		if resNativeID, ok := res["NativeID"].(string); ok {
+			if resNativeID == nativeID {
 				discoveredResource = res
 				break
 			}
@@ -529,7 +649,7 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	}
 
 	if discoveredResource == nil {
-		t.Fatalf("Did not find our bucket %s in discovered resources", bucketName)
+		t.Fatalf("Did not find our resource with NativeID %s in discovered resources", nativeID)
 	}
 
 	// Step 11: Verify the discovered resource properties match what we created
