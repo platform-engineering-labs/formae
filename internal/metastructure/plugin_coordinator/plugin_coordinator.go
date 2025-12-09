@@ -105,6 +105,9 @@ func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (
 	case messages.GetPluginInfo:
 		return c.getPluginInfo(req), nil
 
+	case messages.GetRegisteredPlugins:
+		return c.getRegisteredPlugins(), nil
+
 	default:
 		return nil, fmt.Errorf("unknown request: %T", request)
 	}
@@ -346,4 +349,20 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 		ResourceSchemas:    schemas,
 		MatchFilters:       rp.GetMatchFilters(),
 	}
+}
+
+// getRegisteredPlugins returns a list of all registered plugins
+func (c *PluginCoordinator) getRegisteredPlugins() messages.GetRegisteredPluginsResult {
+	plugins := make([]messages.RegisteredPluginInfo, 0, len(c.plugins))
+
+	for _, registered := range c.plugins {
+		plugins = append(plugins, messages.RegisteredPluginInfo{
+			Namespace:            registered.Namespace,
+			NodeName:             string(registered.NodeName),
+			MaxRequestsPerSecond: registered.MaxRequestsPerSecond,
+			ResourceCount:        len(registered.SupportedResources),
+		})
+	}
+
+	return messages.GetRegisteredPluginsResult{Plugins: plugins}
 }

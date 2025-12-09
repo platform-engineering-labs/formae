@@ -561,23 +561,30 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	err = harness.RegisterTargetForDiscovery(json.RawMessage(evalOutput))
 	require.NoError(t, err, "Failed to register target for discovery")
 
-	// Step 7: Trigger discovery
-	t.Log("Step 7: Triggering discovery...")
+	// Step 7: Wait for plugin to be registered before triggering discovery
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "AWS")
+	t.Log("Step 7: Waiting for plugin to be registered...")
+	namespace := strings.Split(actualResourceType, "::")[0]
+	err = harness.WaitForPluginRegistered(namespace, 30*time.Second)
+	require.NoError(t, err, "Plugin should register within timeout")
+
+	// Step 8: Trigger discovery
+	t.Log("Step 8: Triggering discovery...")
 	err = harness.TriggerDiscovery()
 	require.NoError(t, err, "Triggering discovery should succeed")
 
-	// Step 8: Wait for discovery to complete
-	t.Log("Step 8: Waiting for discovery to complete...")
+	// Step 9: Wait for discovery to complete
+	t.Log("Step 9: Waiting for discovery to complete...")
 	err = harness.WaitForDiscoveryCompletion(2 * time.Minute)
 	require.NoError(t, err, "Discovery should complete within timeout")
 
-	// Step 9: Query inventory for unmanaged resources
-	t.Log("Step 9: Querying inventory for unmanaged resources...")
+	// Step 10: Query inventory for unmanaged resources
+	t.Log("Step 10: Querying inventory for unmanaged resources...")
 	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", actualResourceType))
 	require.NoError(t, err, "Inventory query should succeed")
 
-	// Step 10: Verify our specific resource was discovered
-	t.Log("Step 10: Verifying discovered resource...")
+	// Step 11: Verify our specific resource was discovered
+	t.Log("Step 11: Verifying discovered resource...")
 	assert.NotEmpty(t, inventory.Resources, "Should discover at least one unmanaged resource")
 
 	if len(inventory.Resources) == 0 {
@@ -599,8 +606,8 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 		t.Fatalf("Did not find our resource with NativeID %s in discovered resources", nativeID)
 	}
 
-	// Step 11: Verify the discovered resource properties match what we created
-	t.Log("Step 11: Verifying discovered resource properties...")
+	// Step 12: Verify the discovered resource properties match what we created
+	t.Log("Step 12: Verifying discovered resource properties...")
 
 	// Verify resource is on the unmanaged stack
 	stack, ok := discoveredResource["Stack"].(string)

@@ -803,6 +803,63 @@ func (h *TestHarness) WaitForSyncCompletion(timeout time.Duration) error {
 	return fmt.Errorf("timeout waiting for synchronization to complete after %v", timeout)
 }
 
+// GetStats fetches the agent stats via the /api/v1/stats endpoint
+func (h *TestHarness) GetStats() (*model.Stats, error) {
+	statsURL := "http://localhost:49684/api/v1/stats"
+
+	resp, err := http.Get(statsURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stats: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("stats endpoint returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stats response: %w", err)
+	}
+
+	var stats model.Stats
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return nil, fmt.Errorf("failed to parse stats response: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// WaitForPluginRegistered polls the /stats endpoint until the specified
+// plugin namespace appears in the registered plugins list.
+// This is used to ensure a plugin is fully registered before triggering discovery.
+func (h *TestHarness) WaitForPluginRegistered(namespace string, timeout time.Duration) error {
+	h.t.Logf("Waiting for plugin %s to be registered...", namespace)
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		stats, err := h.GetStats()
+		if err != nil {
+			// Agent might not be fully ready yet, keep polling
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		for _, plugin := range stats.Plugins {
+			if strings.EqualFold(plugin.Namespace, namespace) {
+				h.t.Logf("Plugin %s registered successfully", namespace)
+				return nil
+			}
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for plugin %s to register", namespace)
+}
+
 // TriggerDiscovery triggers a discovery operation via the admin endpoint
 func (h *TestHarness) TriggerDiscovery() error {
 	h.t.Log("Triggering discovery via /api/v1/admin/discover")

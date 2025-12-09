@@ -951,6 +951,22 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		return nil, fmt.Errorf("failed to get stats from datastore: %w", err)
 	}
 
+	// Get registered plugins from PluginCoordinator
+	var plugins []apimodel.PluginInfo
+	result, err := m.callActor(gen.ProcessID{Name: actornames.PluginCoordinator, Node: m.Node.Name()}, messages.GetRegisteredPlugins{})
+	if err == nil {
+		if pluginsResult, ok := result.(messages.GetRegisteredPluginsResult); ok {
+			for _, p := range pluginsResult.Plugins {
+				plugins = append(plugins, apimodel.PluginInfo{
+					Namespace:            p.Namespace,
+					NodeName:             p.NodeName,
+					MaxRequestsPerSecond: p.MaxRequestsPerSecond,
+					ResourceCount:        p.ResourceCount,
+				})
+			}
+		}
+	}
+
 	return &apimodel.Stats{
 		Version:            formae.Version,
 		AgentID:            m.AgentID,
@@ -963,6 +979,7 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		Targets:            stats.Targets,
 		ResourceTypes:      stats.ResourceTypes,
 		ResourceErrors:     stats.ResourceErrors,
+		Plugins:            plugins,
 	}, nil
 }
 
