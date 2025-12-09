@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -68,100 +67,6 @@ func TestPluginSDK_Lifecycle(t *testing.T) {
 	}
 }
 
-// findMatchingBrace finds the position of the closing brace matching the opening brace at startPos
-func findMatchingBrace(content string, startPos int) int {
-	depth := 1
-	for i := startPos + 1; i < len(content); i++ {
-		if content[i] == '{' {
-			depth++
-		} else if content[i] == '}' {
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-// createPatchFileWithTag creates a patch PKL file by adding a new tag to the resource
-// This function is generic and works with any PKL file structure
-func createPatchFileWithTag(originalPKLFile, patchFilePath string) error {
-	// Read the original PKL file
-	content, err := os.ReadFile(originalPKLFile)
-	if err != nil {
-		return fmt.Errorf("failed to read original PKL file: %w", err)
-	}
-
-	pklContent := string(content)
-
-	// Find all "new <Type>.<Type> {" patterns
-	pattern := regexp.MustCompile(`new\s+(\w+)\.(\w+)\s*\{`)
-	matches := pattern.FindAllStringIndex(pklContent, -1)
-
-	if len(matches) == 0 {
-		return fmt.Errorf("could not find resource definition in PKL file")
-	}
-
-	// Use the last match (the main resource, after Stack and Target)
-	lastMatchEnd := matches[len(matches)-1][1]
-
-	// Find the opening brace position (it's at lastMatchEnd - 1)
-	openBracePos := lastMatchEnd - 1
-
-	// Find the matching closing brace
-	closeBracePos := findMatchingBrace(pklContent, openBracePos)
-	if closeBracePos == -1 {
-		return fmt.Errorf("could not find matching closing brace for resource")
-	}
-
-	// Extract the resource body (between the braces)
-	resourceBody := pklContent[openBracePos+1 : closeBracePos]
-
-	// Check if tags property already exists
-	tagsPattern := regexp.MustCompile(`tags\s*\{`)
-	tagsMatch := tagsPattern.FindStringIndex(resourceBody)
-
-	var modifiedContent string
-	if tagsMatch != nil {
-		// Tags exist - find the tags block and append to it
-		tagsStartInResource := tagsMatch[1] - 1 // Position of '{' in tags block
-		tagsCloseInResource := findMatchingBrace(resourceBody, tagsStartInResource)
-
-		if tagsCloseInResource == -1 {
-			return fmt.Errorf("could not find matching closing brace for tags block")
-		}
-
-		// Insert new tag before the closing brace of tags block
-		newTag := `
-    new {
-      key = "Environment"
-      value = "test"
-    }
-  `
-		modifiedResourceBody := resourceBody[:tagsCloseInResource] + newTag + resourceBody[tagsCloseInResource:]
-		modifiedContent = pklContent[:openBracePos+1] + modifiedResourceBody + pklContent[closeBracePos:]
-	} else {
-		// No tags - add new tags property before the closing brace
-		newTagsBlock := `
-  tags {
-    new {
-      key = "Environment"
-      value = "test"
-    }
-  }
-`
-		modifiedContent = pklContent[:closeBracePos] + newTagsBlock + pklContent[closeBracePos:]
-	}
-
-	// Write the modified content to the patch file
-	if err := os.WriteFile(patchFilePath, []byte(modifiedContent), 0644); err != nil {
-		return fmt.Errorf("failed to write patch file: %w", err)
-	}
-
-	return nil
-}
-
 // compareTags compares two tag slices ignoring order
 // Tags are expected to be []any where each element is map[string]any with "Key" and "Value"
 func compareTags(t *testing.T, expected, actual any, context string) bool {
@@ -215,6 +120,24 @@ func compareTags(t *testing.T, expected, actual any, context string) bool {
 	}
 
 	return true
+}
+
+// findTargetResource finds the resource matching the test case's ResourceType from a list of resources.
+// Returns the matching resource, or falls back to the last resource if no match found (dependencies are listed first).
+func findTargetResource(resources []map[string]any, resourceType string) map[string]any {
+	targetTypeNorm := strings.ToLower(strings.ReplaceAll(resourceType, "-", ""))
+	for _, res := range resources {
+		if resType, ok := res["Type"].(string); ok {
+			// Normalize the type (e.g., "Provider::Service::ResourceName" -> "resourcename")
+			typeParts := strings.Split(resType, "::")
+			typeName := strings.ToLower(typeParts[len(typeParts)-1])
+			if typeName == targetTypeNorm {
+				return res
+			}
+		}
+	}
+	// Fallback to last resource if no match found
+	return resources[len(resources)-1]
 }
 
 // isResolvable checks if a value is a Formae resolvable (reference to another resource's property)
@@ -306,26 +229,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	require.NotEmpty(t, evalResult.Resources, "Eval should return at least one resource")
 
 	// Find the target resource by matching the test case's ResourceType to the resource Type
-	// Example: tc.ResourceType="virtual-network" should match Type="Provider::Service::VirtualNetwork"
-	var expectedResource map[string]any
-	targetTypeNorm := strings.ToLower(strings.ReplaceAll(tc.ResourceType, "-", ""))
-	for _, res := range evalResult.Resources {
-		if resType, ok := res["Type"].(string); ok {
-			// Normalize the type (e.g., "Provider::Service::ResourceName" -> "resourcename")
-			typeParts := strings.Split(resType, "::")
-			typeName := strings.ToLower(typeParts[len(typeParts)-1])
-			if typeName == targetTypeNorm {
-				expectedResource = res
-				t.Logf("Found target resource by type match: %s", resType)
-				break
-			}
-		}
-	}
-	// Fallback to last resource if no match found (dependencies are listed first)
-	if expectedResource == nil {
-		expectedResource = evalResult.Resources[len(evalResult.Resources)-1]
-		t.Logf("No type match found for %s, using last resource as target", targetTypeNorm)
-	}
+	expectedResource := findTargetResource(evalResult.Resources, tc.ResourceType)
 
 	actualResourceType := expectedResource["Type"].(string)
 	expectedProperties := expectedResource["Properties"].(map[string]any)
@@ -436,80 +340,123 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	compareProperties(t, expectedProperties, resourceAfterSync, "after sync")
 	t.Log("Idempotency verified!")
 
-	// Step 9: Update the resource by adding a tag (using patch mode)
-	t.Log("Step 9: Creating patch PKL file to add a tag...")
+	// Step 9: Update test (if update file exists)
+	if tc.UpdateFile != "" {
+		t.Log("Step 9: Running update test using update file...")
 
-	// Create patch file in same directory as original PKL file so it can resolve dependencies
-	pklDir := filepath.Dir(tc.PKLFile)
-	patchFile := filepath.Join(pklDir, "resource-patch.pkl")
+		// Eval update file for expected state
+		updateExpected, err := harness.Eval(tc.UpdateFile)
+		require.NoError(t, err, "Update file eval should succeed")
 
-	// Use generic helper to create patch file by modifying the original
-	err = createPatchFileWithTag(tc.PKLFile, patchFile)
-	require.NoError(t, err, "Should be able to create patch PKL file")
-	t.Logf("Created patch file at: %s", patchFile)
+		// Parse to get expected properties
+		var updateEvalResult framework.InventoryResponse
+		err = json.Unmarshal([]byte(updateExpected), &updateEvalResult)
+		require.NoError(t, err, "Should be able to parse update eval output")
+		require.NotEmpty(t, updateEvalResult.Resources, "Update eval should return at least one resource")
 
-	// Register cleanup to remove the patch file after test
-	harness.RegisterCleanup(func() {
-		_ = os.Remove(patchFile)
-	})
+		// Find the target resource
+		updateExpectedResource := findTargetResource(updateEvalResult.Resources, tc.ResourceType)
 
-	// Step 10: Apply the patch to add the tag
-	t.Log("Step 10: Applying patch to add tag...")
-	patchCommandID, err := harness.ApplyWithMode(patchFile, "patch")
-	require.NoError(t, err, "Patch apply command should succeed")
-	assert.NotEmpty(t, patchCommandID, "Patch apply should return a command ID")
+		updateExpectedProperties := updateExpectedResource["Properties"].(map[string]any)
+		t.Logf("Expected properties after update: %+v", updateExpectedProperties)
 
-	// Step 11: Poll for patch command to complete successfully
-	t.Log("Step 11: Polling for patch command completion...")
-	patchStatus, err := harness.PollStatus(patchCommandID, 5*time.Minute)
-	require.NoError(t, err, "Patch command should complete successfully")
-	assert.Equal(t, "Success", patchStatus, "Patch command should reach Success state")
+		// Apply with patch mode
+		updateCmdID, err := harness.ApplyWithMode(tc.UpdateFile, "patch")
+		require.NoError(t, err, "Update apply should succeed")
+		assert.NotEmpty(t, updateCmdID, "Update apply should return a command ID")
 
-	// Step 12: Verify the tag was added to the resource
-	t.Log("Step 12: Verifying tag was added to resource...")
-	inventoryAfterPatch, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
-	require.NoError(t, err, "Inventory command should succeed after patch")
-	assert.Len(t, inventoryAfterPatch.Resources, 1, "Inventory should still contain exactly 1 resource")
+		// Poll for completion
+		t.Log("Step 10: Polling for update command completion...")
+		updateStatus, err := harness.PollStatus(updateCmdID, 5*time.Minute)
+		require.NoError(t, err, "Update command should complete successfully")
+		assert.Equal(t, "Success", updateStatus, "Update command should reach Success state")
 
-	resourceAfterPatch := inventoryAfterPatch.Resources[0]
+		// Verify inventory matches updated state
+		t.Log("Step 11: Verifying resource properties after update...")
+		inventoryAfterUpdate, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
+		require.NoError(t, err, "Inventory command should succeed after update")
+		assert.Len(t, inventoryAfterUpdate.Resources, 1, "Inventory should still contain exactly 1 resource")
 
-	// Add the expected tag to our expected properties for comparison
-	// Start with the original properties (which include the FormaeResourceLabel and FormaeStackLabel tags)
-	expectedPropertiesWithTag := make(map[string]any)
-	for k, v := range expectedProperties {
-		expectedPropertiesWithTag[k] = v
+		resourceAfterUpdate := inventoryAfterUpdate.Resources[0]
+		compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update")
+		t.Log("Update test completed successfully!")
+	} else {
+		t.Log("No update file found, skipping update test")
 	}
 
-	// Append the new Environment tag to the existing tags list
-	var existingTags []any
-	if tags, ok := expectedPropertiesWithTag["Tags"].([]any); ok {
-		existingTags = tags
+	// Step 12: Replace test (if replace file exists)
+	if tc.ReplaceFile != "" {
+		t.Log("Step 12: Running replace test using replace file...")
+
+		// Store current NativeID for comparison
+		inventoryBeforeReplace, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
+		require.NoError(t, err, "Inventory command should succeed before replace")
+		require.Len(t, inventoryBeforeReplace.Resources, 1, "Inventory should contain exactly 1 resource before replace")
+		oldNativeID := inventoryBeforeReplace.Resources[0]["NativeID"].(string)
+		t.Logf("Current NativeID before replace: %s", oldNativeID)
+
+		// Eval replace file
+		replaceExpected, err := harness.Eval(tc.ReplaceFile)
+		require.NoError(t, err, "Replace file eval should succeed")
+
+		// Parse to get expected properties
+		var replaceEvalResult framework.InventoryResponse
+		err = json.Unmarshal([]byte(replaceExpected), &replaceEvalResult)
+		require.NoError(t, err, "Should be able to parse replace eval output")
+		require.NotEmpty(t, replaceEvalResult.Resources, "Replace eval should return at least one resource")
+
+		// Find the target resource
+		replaceExpectedResource := findTargetResource(replaceEvalResult.Resources, tc.ResourceType)
+
+		replaceExpectedProperties := replaceExpectedResource["Properties"].(map[string]any)
+		t.Logf("Expected properties after replace: %+v", replaceExpectedProperties)
+
+		// Apply with patch mode (createOnly change triggers delete+create)
+		replaceCmdID, err := harness.ApplyWithMode(tc.ReplaceFile, "patch")
+		require.NoError(t, err, "Replace apply should succeed")
+		assert.NotEmpty(t, replaceCmdID, "Replace apply should return a command ID")
+
+		// Poll for completion
+		t.Log("Step 13: Polling for replace command completion...")
+		replaceStatus, err := harness.PollStatus(replaceCmdID, 5*time.Minute)
+		require.NoError(t, err, "Replace command should complete successfully")
+		assert.Equal(t, "Success", replaceStatus, "Replace command should reach Success state")
+
+		// Verify NativeID changed (proves resource was replaced)
+		t.Log("Step 14: Verifying resource was replaced (NativeID changed)...")
+		inventoryAfterReplace, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
+		require.NoError(t, err, "Inventory command should succeed after replace")
+		require.Len(t, inventoryAfterReplace.Resources, 1, "Inventory should still contain exactly 1 resource after replace")
+
+		newNativeID := inventoryAfterReplace.Resources[0]["NativeID"].(string)
+		t.Logf("New NativeID after replace: %s", newNativeID)
+
+		assert.NotEqual(t, oldNativeID, newNativeID,
+			"NativeID should change after replace (old: %s, new: %s)", oldNativeID, newNativeID)
+
+		// Verify properties match expected state
+		resourceAfterReplace := inventoryAfterReplace.Resources[0]
+		compareProperties(t, replaceExpectedProperties, resourceAfterReplace, "after replace")
+
+		t.Log("Replace test completed successfully - resource was recreated with new NativeID!")
+	} else {
+		t.Log("No replace file found, skipping replace test")
 	}
-	expectedTags := append(existingTags, map[string]any{
-		"Key":   "Environment",
-		"Value": "test",
-	})
 
-	expectedPropertiesWithTag["Tags"] = expectedTags
-
-	// Verify all properties including the new tag
-	compareProperties(t, expectedPropertiesWithTag, resourceAfterPatch, "after patch")
-	t.Log("Update test completed successfully - tag was added!")
-
-	// Step 13: Destroy the resource
-	t.Log("Step 13: Destroying resource...")
+	// Step 15: Destroy the resource
+	t.Log("Step 15: Destroying resource...")
 	destroyCommandID, err := harness.Destroy(tc.PKLFile)
 	require.NoError(t, err, "Destroy command should succeed")
 	assert.NotEmpty(t, destroyCommandID, "Destroy should return a command ID")
 
-	// Step 14: Poll for destroy command to complete successfully
-	t.Log("Step 14: Polling for destroy command completion...")
+	// Step 16: Poll for destroy command to complete successfully
+	t.Log("Step 16: Polling for destroy command completion...")
 	destroyStatus, err := harness.PollStatus(destroyCommandID, 5*time.Minute)
 	require.NoError(t, err, "Destroy command should complete successfully")
 	assert.Equal(t, "Success", destroyStatus, "Destroy command should reach Success state")
 
-	// Step 15: Verify resource no longer exists in inventory
-	t.Log("Step 15: Verifying resource removed from inventory...")
+	// Step 17: Verify resource no longer exists in inventory
+	t.Log("Step 17: Verifying resource removed from inventory...")
 	inventoryAfterDestroy, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
 	require.NoError(t, err, "Inventory command should succeed after destroy")
 	assert.Len(t, inventoryAfterDestroy.Resources, 0, "Inventory should be empty after destroy")
