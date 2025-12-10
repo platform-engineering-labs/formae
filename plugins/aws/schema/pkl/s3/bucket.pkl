@@ -611,7 +611,9 @@ open class Bucket extends formae.Resource {
     @aws.FieldHint
     bucketEncryption: BucketEncryption?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        createOnly = true
+    }
     bucketName: String?
 
     @aws.FieldHint

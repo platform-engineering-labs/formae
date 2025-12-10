@@ -11,7 +11,8 @@ import "@aws/aws.pkl"
 
 import "@aws/iam/user.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-iam-user-\(testRunID)"
 
 forma {
   new formae.Stack {
@@ -28,6 +29,6 @@ forma {
 
   new user.User {
     label = "plugin-sdk-test-user"
-    userName = "formae-plugin-sdk-test-user-20250107"
+    userName = "formae-plugin-sdk-test-user-\(testRunID)"
   }
 }

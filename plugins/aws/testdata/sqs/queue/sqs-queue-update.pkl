@@ -11,8 +11,8 @@ import "@aws/aws.pkl"
 
 import "@aws/sqs/queue.pkl"
 
-local stackName = "plugin-sdk-test-stack"
 local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-sqs-queue-\(testRunID)"
 
 forma {
   new formae.Stack {

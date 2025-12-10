@@ -11,7 +11,8 @@ import "@aws/aws.pkl"
 
 import "@aws/iam/role.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-iam-role-\(testRunID)"
 
 forma {
   new formae.Stack {
@@ -28,7 +29,7 @@ forma {
 
   new role.Role {
     label = "plugin-sdk-test-role"
-    roleName = "formae-plugin-sdk-test-role-replaced-20250107"
+    roleName = "formae-plugin-sdk-test-role-replaced-\(testRunID)"
     assumeRolePolicyDocument {
       ["Version"] = "2012-10-17"
       ["Statement"] {

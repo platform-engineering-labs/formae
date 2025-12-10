@@ -11,7 +11,7 @@ import "@aws/aws.pkl"
 
 import "@aws/s3/bucket.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local stackName = "plugin-sdk-test-s3-bucket-\(testRunID)"
 // Read the test run ID from environment variable set by the test harness
 // This ensures consistent naming within a test run but unique names between runs
 local testRunID = read("env:FORMAE_TEST_RUN_ID")
@@ -31,9 +31,9 @@ forma {
 
   new bucket.Bucket {
     label = "plugin-sdk-test-bucket"
-    bucketName = "formae-plugin-sdk-test-\(testRunID)"
     tags {
       new { key = "Environment"; value = "updated" }
+      new { key = "Version"; value = "2.0" }
     }
   }
 }

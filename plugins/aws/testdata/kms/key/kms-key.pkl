@@ -11,7 +11,8 @@ import "@aws/aws.pkl"
 
 import "@aws/kms/key.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-kms-key-\(testRunID)"
 
 forma {
   new formae.Stack {

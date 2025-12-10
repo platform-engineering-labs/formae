@@ -11,8 +11,8 @@ import "@aws/aws.pkl"
 
 import "@aws/dynamodb/table.pkl"
 
-local stackName = "plugin-sdk-test-stack"
 local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-dynamodb-table-\(testRunID)"
 
 forma {
   new formae.Stack {

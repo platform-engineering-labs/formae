@@ -11,7 +11,8 @@ import "@aws/aws.pkl"
 
 import "@aws/ecr/repository.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-ecr-repository-\(testRunID)"
 
 forma {
   new formae.Stack {
@@ -28,6 +29,6 @@ forma {
 
   new repository.Repository {
     label = "plugin-sdk-test-repo"
-    repositoryName = "formae-plugin-sdk-test-repo-replaced-20250107"
+    repositoryName = "formae-plugin-sdk-test-repo-replaced-\(testRunID)"
   }
 }

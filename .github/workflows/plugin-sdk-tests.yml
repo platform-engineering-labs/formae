@@ -22,10 +22,11 @@ on:
         required: false
         default: 'aws'
 
-# Ensure only one SDK test run at a time (creates real cloud resources)
+# Ensure only one test run at a time per cloud provider (creates real cloud resources)
+# Using same concurrency group as e2e tests to prevent parallel runs on same AWS account
 concurrency:
-  group: plugin-sdk-tests
-  cancel-in-progress: true
+  group: aws-cloud-tests
+  cancel-in-progress: false
 
 permissions:
   id-token: write
@@ -77,6 +78,15 @@ jobs:
         uses: pkl-community/setup-pkl@v0
         with:
           pkl-version: 0.30.0
+
+      - name: Install aws-nuke
+        if: matrix.plugin == 'aws'
+        run: |
+          wget -O aws-nuke.tar.gz https://github.com/ekristen/aws-nuke/releases/download/v3.56.2/aws-nuke-v3.56.2-linux-amd64.tar.gz
+          tar -xzf aws-nuke.tar.gz
+          sudo mv aws-nuke /usr/local/bin/
+          sudo chmod +x /usr/local/bin/aws-nuke
+          aws-nuke version
 
       # AWS credentials via OIDC (same role as e2e tests)
       - name: Configure AWS Credentials
@@ -136,6 +146,18 @@ jobs:
           echo "Testing plugin: ${{ matrix.plugin }}"
           echo "Test run ID: $FORMAE_TEST_RUN_ID"
           go test -tags=plugin_sdk -v -timeout 30m ./tests/integration/plugin-sdk/...
+
+      - name: Cleanup AWS resources (Discovery)
+        if: always() && matrix.plugin == 'aws'
+        run: |
+          echo "Running cleanup discovery to identify leftover test resources..."
+          aws-nuke nuke -c plugins/aws/scripts/sdk-nuke-config.yaml --no-prompt --prompt-delay 3
+
+      - name: Cleanup AWS resources (Execute)
+        if: always() && matrix.plugin == 'aws'
+        run: |
+          echo "Cleaning up AWS resources created by SDK tests..."
+          aws-nuke nuke -c plugins/aws/scripts/sdk-nuke-config.yaml --no-prompt --no-dry-run
 
       - name: Report results
         if: always()

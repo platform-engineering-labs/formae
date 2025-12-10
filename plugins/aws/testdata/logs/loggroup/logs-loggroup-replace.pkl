@@ -11,7 +11,8 @@ import "@aws/aws.pkl"
 
 import "@aws/logs/loggroup.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-logs-loggroup-\(testRunID)"
 
 forma {
   new formae.Stack {
@@ -28,6 +29,6 @@ forma {
 
   new loggroup.LogGroup {
     label = "plugin-sdk-test-loggroup"
-    logGroupName = "/formae/plugin-sdk-test/replaced-20250107"
+    logGroupName = "/formae/plugin-sdk-test/replaced-\(testRunID)"
   }
 }
