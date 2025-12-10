@@ -1,0 +1,153 @@
+name: Plugin SDK Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pkg/plugin/**'
+      - 'tests/integration/plugin-sdk/**'
+      - 'plugins/aws/**'
+      - '.github/workflows/plugin-sdk-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pkg/plugin/**'
+      - 'tests/integration/plugin-sdk/**'
+      - 'plugins/aws/**'
+      - '.github/workflows/plugin-sdk-tests.yml'
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: 'Plugin to test (aws, azure, or all)'
+        required: false
+        default: 'aws'
+
+# Ensure only one test run at a time per cloud provider (creates real cloud resources)
+# Using same concurrency group as e2e tests to prevent parallel runs on same AWS account
+concurrency:
+  group: aws-cloud-tests
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # Determine which plugins to test based on changed files or manual input
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.set-matrix.outputs.plugins }}
+    steps:
+      - name: Set plugin matrix
+        id: set-matrix
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PLUGIN="${{ github.event.inputs.plugin }}"
+            if [ "$PLUGIN" = "all" ]; then
+              echo 'plugins=["aws"]' >> $GITHUB_OUTPUT
+            else
+              echo "plugins=[\"$PLUGIN\"]" >> $GITHUB_OUTPUT
+            fi
+          else
+            # For push/PR, test AWS (add more plugins to array as they're ready)
+            echo 'plugins=["aws"]' >> $GITHUB_OUTPUT
+          fi
+
+  test:
+    needs: setup
+    runs-on: ubuntu-latest-m
+    timeout-minutes: 60  # Job timeout > go test timeout to allow graceful test timeout
+    strategy:
+      matrix:
+        plugin: ${{ fromJson(needs.setup.outputs.plugins) }}
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.1'
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      # AWS credentials via OIDC (same role as e2e tests)
+      - name: Configure AWS Credentials
+        if: matrix.plugin == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
+          role-session-name: PluginSDKTests
+
+      - name: Verify AWS access
+        if: matrix.plugin == 'aws'
+        run: aws sts get-caller-identity
+
+      # Future: Azure credentials via OIDC
+      # - name: Configure Azure Credentials
+      #   if: matrix.plugin == 'azure'
+      #   uses: azure/login@v2
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build formae
+        run: make build
+
+      - name: Create version.semver
+        run: |
+          VERSION=$(git describe --tags --abbrev=0)
+          echo "$VERSION" > ./version.semver
+          echo "Created version.semver with: $VERSION"
+
+      - name: Build plugin binary
+        run: |
+          VERSION=$(cat ./version.semver)
+          echo "Building ${{ matrix.plugin }} plugin with version: $VERSION"
+          go build -C plugins/${{ matrix.plugin }} -ldflags="-X 'main.Version=${VERSION}'" -o ${{ matrix.plugin }} .
+
+      - name: Install plugin binary
+        run: |
+          VERSION=$(cat ./version.semver)
+          PLUGIN_DIR=~/.pel/formae/plugins/${{ matrix.plugin }}/${VERSION}
+          mkdir -p ${PLUGIN_DIR}
+          cp plugins/${{ matrix.plugin }}/${{ matrix.plugin }} ${PLUGIN_DIR}/
+          chmod +x ${PLUGIN_DIR}/${{ matrix.plugin }}
+          echo "Installed plugin to: ${PLUGIN_DIR}"
+          ls -la ${PLUGIN_DIR}/
+
+      - name: Resolve PKL dependencies
+        run: pkl project resolve plugins/${{ matrix.plugin }}/testdata
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Run Plugin SDK tests
+        env:
+          PLUGIN_NAME: ${{ matrix.plugin }}
+          FORMAE_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          echo "Testing plugin: ${{ matrix.plugin }}"
+          echo "Test run ID: $FORMAE_TEST_RUN_ID"
+          # Use gotestsum for streaming output in CI (go test -v buffers in non-TTY)
+          # Go test timeout (50m) < job timeout (60m) to allow graceful timeout
+          gotestsum --format standard-verbose -- -tags=plugin_sdk -timeout 50m ./tests/integration/plugin-sdk/...
+
+      - name: Report results
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "::notice title=Plugin SDK Tests::${{ matrix.plugin }} plugin tests passed"
+          else
+            echo "::error title=Plugin SDK Tests::${{ matrix.plugin }} plugin tests failed"
+          fi

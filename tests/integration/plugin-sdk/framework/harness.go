@@ -622,6 +622,7 @@ func (h *TestHarness) ApplyWithMode(pklFile string, mode string) (string, error)
 		h.formaeBinary,
 		"apply",
 		pklFile,
+		"--config", h.configFile,
 		"--mode", mode,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
@@ -655,6 +656,7 @@ func (h *TestHarness) Destroy(pklFile string) (string, error) {
 		h.formaeBinary,
 		"destroy",
 		pklFile,
+		"--config", h.configFile,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
@@ -687,6 +689,7 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 		h.formaeBinary,
 		"eval",
 		pklFile,
+		"--config", h.configFile,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
@@ -707,6 +710,7 @@ func (h *TestHarness) Extract(query string, outputFile string) error {
 	cmd := exec.Command(
 		h.formaeBinary,
 		"extract",
+		"--config", h.configFile,
 		"--query", query,
 		outputFile,
 	)
@@ -735,6 +739,7 @@ func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 		h.formaeBinary,
 		"inventory",
 		"resources", // Need to specify the subcommand
+		"--config", h.configFile,
 		"--query", query,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
@@ -803,6 +808,63 @@ func (h *TestHarness) WaitForSyncCompletion(timeout time.Duration) error {
 	return fmt.Errorf("timeout waiting for synchronization to complete after %v", timeout)
 }
 
+// GetStats fetches the agent stats via the /api/v1/stats endpoint
+func (h *TestHarness) GetStats() (*model.Stats, error) {
+	statsURL := "http://localhost:49684/api/v1/stats"
+
+	resp, err := http.Get(statsURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stats: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("stats endpoint returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stats response: %w", err)
+	}
+
+	var stats model.Stats
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return nil, fmt.Errorf("failed to parse stats response: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// WaitForPluginRegistered polls the /stats endpoint until the specified
+// plugin namespace appears in the registered plugins list.
+// This is used to ensure a plugin is fully registered before triggering discovery.
+func (h *TestHarness) WaitForPluginRegistered(namespace string, timeout time.Duration) error {
+	h.t.Logf("Waiting for plugin %s to be registered...", namespace)
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		stats, err := h.GetStats()
+		if err != nil {
+			// Agent might not be fully ready yet, keep polling
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		for _, plugin := range stats.Plugins {
+			if strings.EqualFold(plugin.Namespace, namespace) {
+				h.t.Logf("Plugin %s registered successfully", namespace)
+				return nil
+			}
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for plugin %s to register", namespace)
+}
+
 // TriggerDiscovery triggers a discovery operation via the admin endpoint
 func (h *TestHarness) TriggerDiscovery() error {
 	h.t.Log("Triggering discovery via /api/v1/admin/discover")
@@ -825,6 +887,8 @@ func (h *TestHarness) TriggerDiscovery() error {
 }
 
 // WaitForDiscoveryCompletion waits for the discovery to complete by polling the agent log file
+// Deprecated: Use WaitForResourceInInventory instead for reliable waiting in CI environments.
+// Log file polling is unreliable due to buffering differences between environments.
 func (h *TestHarness) WaitForDiscoveryCompletion(timeout time.Duration) error {
 	h.t.Log("Waiting for discovery to complete...")
 
@@ -849,6 +913,47 @@ func (h *TestHarness) WaitForDiscoveryCompletion(timeout time.Duration) error {
 	}
 
 	return fmt.Errorf("timeout waiting for discovery to complete after %v", timeout)
+}
+
+// WaitForResourceInInventory polls the inventory API until a resource with the specified
+// type and nativeID appears. This is more reliable than log file polling because it
+// directly queries the data store rather than depending on log file buffering.
+// This is the recommended way to wait for discovery completion in tests.
+func (h *TestHarness) WaitForResourceInInventory(resourceType, nativeID string, managed bool, timeout time.Duration) error {
+	managedStr := "true"
+	if !managed {
+		managedStr = "false"
+	}
+	h.t.Logf("Waiting for resource to appear in inventory: type=%s, nativeID=%s, managed=%s", resourceType, nativeID, managedStr)
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 2 * time.Second
+
+	for time.Now().Before(deadline) {
+		// Query inventory for this specific resource type and managed status
+		inventory, err := h.Inventory(fmt.Sprintf("type: %s managed: %s", resourceType, managedStr))
+		if err != nil {
+			// Inventory query might fail early on, continue polling
+			h.t.Logf("Inventory query failed (will retry): %v", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// Check if our resource is in the results
+		for _, res := range inventory.Resources {
+			if resNativeID, ok := res["NativeID"].(string); ok {
+				if resNativeID == nativeID {
+					h.t.Logf("Resource found in inventory: NativeID=%s", nativeID)
+					return nil
+				}
+			}
+		}
+
+		h.t.Logf("Resource not yet in inventory (found %d resources of type %s), polling...", len(inventory.Resources), resourceType)
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for resource %s (type: %s) to appear in inventory after %v", nativeID, resourceType, timeout)
 }
 
 // CreateUnmanagedResource creates an unmanaged resource using the external plugin directly,
@@ -1188,6 +1293,47 @@ func (h *TestHarness) GetResourceDescriptor(resourceType string) (*plugin.Resour
 	return nil, fmt.Errorf("resource type %s not found in plugin %s", resourceType, namespace)
 }
 
+// GetResourceDescriptorFromCoordinator returns the ResourceDescriptor for a given resource type
+// by querying the TestPluginCoordinator. This requires the Ergo node to be started and the
+// plugin to have announced itself (e.g., after CreateUnmanagedResource has been called).
+func (h *TestHarness) GetResourceDescriptorFromCoordinator(resourceType string) (*plugin.ResourceDescriptor, error) {
+	if !h.ergoNodeStarted {
+		return nil, fmt.Errorf("Ergo node not started - call CreateUnmanagedResource first")
+	}
+
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
+	parts := strings.Split(resourceType, "::")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid resource type format: %s", resourceType)
+	}
+	namespace := parts[0] // Keep original case - plugin announces with original case (e.g., "AWS")
+
+	// Query the TestPluginCoordinator for plugin info
+	result, err := testutil.Call(h.ergoNode, "PluginCoordinator", GetPluginInfoRequest{
+		Namespace: namespace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query PluginCoordinator: %w", err)
+	}
+
+	pluginInfo, ok := result.(GetPluginInfoResult)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type from PluginCoordinator: %T", result)
+	}
+	if !pluginInfo.Found {
+		return nil, fmt.Errorf("plugin not found for namespace %s: %s", namespace, pluginInfo.Error)
+	}
+
+	// Find the descriptor for the requested resource type
+	for i := range pluginInfo.SupportedResources {
+		if pluginInfo.SupportedResources[i].Type == resourceType {
+			return &pluginInfo.SupportedResources[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("resource type %s not found in plugin %s", resourceType, namespace)
+}
+
 // PollStatus polls the command status until it reaches a terminal state or times out
 func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (string, error) {
 	h.t.Logf("Polling status for command %s", commandID)
@@ -1226,6 +1372,7 @@ func (h *TestHarness) GetStatus(commandID string) (string, error) {
 		h.formaeBinary,
 		"status",
 		"command",
+		"--config", h.configFile,
 		"--query", fmt.Sprintf("id:%s", commandID),
 		"--output-consumer", "machine",
 		"--output-schema", "json",

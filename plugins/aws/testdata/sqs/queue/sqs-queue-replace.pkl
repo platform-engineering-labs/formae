@@ -9,14 +9,15 @@ import "@formae/formae.pkl"
 
 import "@aws/aws.pkl"
 
-import "@aws/logs/loggroup.pkl"
+import "@aws/sqs/queue.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-sqs-queue-\(testRunID)"
 
 forma {
   new formae.Stack {
     label = stackName
-    description = "Plugin SDK test for CloudWatch Logs LogGroup"
+    description = "Plugin SDK test for SQS Queue"
   }
 
   new formae.Target {
@@ -26,8 +27,8 @@ forma {
     }
   }
 
-  new loggroup.LogGroup {
-    label = "plugin-sdk-test-loggroup"
-    logGroupName = "/formae/plugin-sdk-test/20250107"
+  new queue.Queue {
+    label = "plugin-sdk-test-queue"
+    queueName = "formae-plugin-sdk-test-queue-replaced-\(testRunID)"
   }
 }

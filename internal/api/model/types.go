@@ -110,4 +110,13 @@ type Stats struct {
 	Targets            int            `json:"Targets"`
 	ResourceTypes      map[string]int `json:"ResourceTypes"`
 	ResourceErrors     map[string]int `json:"ResourceErrors"`
+	Plugins            []PluginInfo   `json:"Plugins"`
+}
+
+// PluginInfo represents information about a registered plugin
+type PluginInfo struct {
+	Namespace            string `json:"Namespace"`
+	NodeName             string `json:"NodeName"`
+	MaxRequestsPerSecond int    `json:"MaxRequestsPerSecond"`
+	ResourceCount        int    `json:"ResourceCount"`
 }

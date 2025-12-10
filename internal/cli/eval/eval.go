@@ -66,7 +66,8 @@ func EvalCmd() *cobra.Command {
 			opts.Colorize, _ = command.Flags().GetBool("colorize")
 			opts.Properties = cmd.PropertiesFromCmd(command)
 
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				return err
 			}
@@ -88,6 +89,7 @@ func EvalCmd() *cobra.Command {
 	command.Flags().Bool("beautify", true, "beautify output (human consumer only)")
 	command.Flags().Bool("colorize", true, "colorize output (human consumer only)")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }

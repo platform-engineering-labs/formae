@@ -59,7 +59,8 @@ func ApplyCmd() *cobra.Command {
 			opts.Yes, _ = command.Flags().GetBool("yes")
 			opts.Properties = cmd.PropertiesFromCmd(command)
 
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				return err
 			}
@@ -84,6 +85,7 @@ func ApplyCmd() *cobra.Command {
 	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }

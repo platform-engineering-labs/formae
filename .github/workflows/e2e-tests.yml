@@ -8,10 +8,10 @@ on:
       - completed
     branches: [ "main" ]
 
-# Ensure only one E2E test runs at a time
+# Ensure only one test runs at a time on AWS account (shared with plugin-sdk-tests)
 concurrency:
-  group: e2e-tests
-  cancel-in-progress: true
+  group: aws-cloud-tests
+  cancel-in-progress: false
 
 permissions:
   id-token: write
