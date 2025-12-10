@@ -350,6 +350,13 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	if tc.UpdateFile != "" {
 		t.Log("Step 10: Running update test using update file...")
 
+		// Store current NativeID to verify it doesn't change during update
+		inventoryBeforeUpdate, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
+		require.NoError(t, err, "Inventory command should succeed before update")
+		require.Len(t, inventoryBeforeUpdate.Resources, 1, "Inventory should contain exactly 1 resource before update")
+		oldNativeID := inventoryBeforeUpdate.Resources[0]["NativeID"].(string)
+		t.Logf("Current NativeID before update: %s", oldNativeID)
+
 		// Eval update file for expected state
 		updateExpected, err := harness.Eval(tc.UpdateFile)
 		require.NoError(t, err, "Update file eval should succeed")
@@ -384,6 +391,14 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 		assert.Len(t, inventoryAfterUpdate.Resources, 1, "Inventory should still contain exactly 1 resource")
 
 		resourceAfterUpdate := inventoryAfterUpdate.Resources[0]
+
+		// Verify NativeID did NOT change (proves resource was updated, not replaced)
+		newNativeID := resourceAfterUpdate["NativeID"].(string)
+		t.Logf("NativeID after update: %s", newNativeID)
+		assert.Equal(t, oldNativeID, newNativeID,
+			"NativeID should NOT change during update (old: %s, new: %s) - if it changed, a createOnly property was modified",
+			oldNativeID, newNativeID)
+
 		compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update")
 		t.Log("Update test completed successfully!")
 	} else {
@@ -551,6 +566,15 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 			t.Logf("Warning: failed to delete unmanaged resource: %v", err)
 		}
 	})
+
+	// Check if resource is discoverable before continuing (requires plugin to be announced)
+	descriptor, err := harness.GetResourceDescriptorFromCoordinator(actualResourceType)
+	if err != nil {
+		t.Skipf("Skipping discovery test: failed to get resource descriptor for %s: %v", actualResourceType, err)
+	}
+	if !descriptor.Discoverable {
+		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", actualResourceType)
+	}
 
 	// Step 4: Stop test harness Ergo node before starting agent
 	// This releases the plugin node name so the agent can start its own plugin

@@ -1245,6 +1245,47 @@ func (h *TestHarness) GetResourceDescriptor(resourceType string) (*plugin.Resour
 	return nil, fmt.Errorf("resource type %s not found in plugin %s", resourceType, namespace)
 }
 
+// GetResourceDescriptorFromCoordinator returns the ResourceDescriptor for a given resource type
+// by querying the TestPluginCoordinator. This requires the Ergo node to be started and the
+// plugin to have announced itself (e.g., after CreateUnmanagedResource has been called).
+func (h *TestHarness) GetResourceDescriptorFromCoordinator(resourceType string) (*plugin.ResourceDescriptor, error) {
+	if !h.ergoNodeStarted {
+		return nil, fmt.Errorf("Ergo node not started - call CreateUnmanagedResource first")
+	}
+
+	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
+	parts := strings.Split(resourceType, "::")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid resource type format: %s", resourceType)
+	}
+	namespace := parts[0] // Keep original case - plugin announces with original case (e.g., "AWS")
+
+	// Query the TestPluginCoordinator for plugin info
+	result, err := testutil.Call(h.ergoNode, "PluginCoordinator", GetPluginInfoRequest{
+		Namespace: namespace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query PluginCoordinator: %w", err)
+	}
+
+	pluginInfo, ok := result.(GetPluginInfoResult)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type from PluginCoordinator: %T", result)
+	}
+	if !pluginInfo.Found {
+		return nil, fmt.Errorf("plugin not found for namespace %s: %s", namespace, pluginInfo.Error)
+	}
+
+	// Find the descriptor for the requested resource type
+	for i := range pluginInfo.SupportedResources {
+		if pluginInfo.SupportedResources[i].Type == resourceType {
+			return &pluginInfo.SupportedResources[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("resource type %s not found in plugin %s", resourceType, namespace)
+}
+
 // PollStatus polls the command status until it reaches a terminal state or times out
 func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (string, error) {
 	h.t.Logf("Polling status for command %s", commandID)
