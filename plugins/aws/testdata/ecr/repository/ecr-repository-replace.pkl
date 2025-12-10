@@ -9,14 +9,15 @@ import "@formae/formae.pkl"
 
 import "@aws/aws.pkl"
 
-import "@aws/iam/user.pkl"
+import "@aws/ecr/repository.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-ecr-repository-\(testRunID)"
 
 forma {
   new formae.Stack {
     label = stackName
-    description = "Plugin SDK test for IAM User"
+    description = "Plugin SDK test for ECR Repository"
   }
 
   new formae.Target {
@@ -26,8 +27,8 @@ forma {
     }
   }
 
-  new user.User {
-    label = "plugin-sdk-test-user"
-    userName = "formae-plugin-sdk-test-user-20250107"
+  new repository.Repository {
+    label = "plugin-sdk-test-repo"
+    repositoryName = "formae-plugin-sdk-test-repo-replaced-\(testRunID)"
   }
 }

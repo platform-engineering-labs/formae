@@ -65,7 +65,8 @@ func CommandCmd() *cobra.Command {
 			outputLayout, _ := command.Flags().GetString("output-layout")
 			opts.OutputLayout = StatusOutput(outputLayout)
 
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				return err
 			}
@@ -86,6 +87,7 @@ func CommandCmd() *cobra.Command {
 	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("output-layout", string(StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", StatusOutputSummary, StatusOutputDetailed))
 	command.Flags().Int("max-results", 10, "Maximum number of command results to return when using a query")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }
@@ -187,7 +189,8 @@ func AgentCmd() *cobra.Command {
 				}
 			}
 
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				return err
 			}
@@ -232,6 +235,7 @@ func AgentCmd() *cobra.Command {
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }

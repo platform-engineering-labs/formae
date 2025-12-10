@@ -9,14 +9,15 @@ import "@formae/formae.pkl"
 
 import "@aws/aws.pkl"
 
-import "@aws/secretsmanager/secret.pkl"
+import "@aws/kms/key.pkl"
 
-local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+local stackName = "plugin-sdk-test-kms-key-\(testRunID)"
 
 forma {
   new formae.Stack {
     label = stackName
-    description = "Plugin SDK test for Secrets Manager Secret"
+    description = "Plugin SDK test for KMS Key"
   }
 
   new formae.Target {
@@ -26,9 +27,11 @@ forma {
     }
   }
 
-  new secret.Secret {
-    label = "plugin-sdk-test-secret"
-    name = "formae-plugin-sdk-test-secret-20250107"
-    description = "Formae plugin SDK test secret"
+  new key.Key {
+    label = "plugin-sdk-test-key"
+    description = "Formae plugin SDK test key"
+    tags {
+      new { key = "Environment"; value = "updated" }
+    }
   }
 }

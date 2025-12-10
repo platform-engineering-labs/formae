@@ -68,3 +68,19 @@ type PluginInfoResponse struct {
 	MatchFilters       []plugin.MatchFilter
 	Error              string // Set if Found is false
 }
+
+// GetRegisteredPlugins requests a list of all registered plugins from PluginCoordinator
+type GetRegisteredPlugins struct{}
+
+// RegisteredPluginInfo contains basic information about a registered plugin
+type RegisteredPluginInfo struct {
+	Namespace            string
+	NodeName             string
+	MaxRequestsPerSecond int
+	ResourceCount        int
+}
+
+// GetRegisteredPluginsResult is the response to GetRegisteredPlugins
+type GetRegisteredPluginsResult struct {
+	Plugins []RegisteredPluginInfo
+}
