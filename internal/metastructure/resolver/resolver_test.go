@@ -992,8 +992,173 @@ func TestResolveMultiplePropertiesSameResolverInstance(t *testing.T) {
 	assert.Equal(t, "7c5bfje8c3", parentIdValue)
 }
 
+func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
+	t.Run("extracts plain property value", func(t *testing.T) {
+		vpcKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		vpc := pkgmodel.Resource{
+			Ksuid:              vpcKsuid,
+			Label:              "vpc",
+			ReadOnlyProperties: json.RawMessage(`{"VpcId": "vpc-123456"}`),
+		}
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcId": {
+					"$ref": "formae://%s#/VpcId"
+				}
+			}`, vpcKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{vpc, subnet},
+		}
+
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		require.NoError(t, err)
+		value, found := resolvables.Get(vpcKsuid, "VpcId")
+		assert.True(t, found)
+		assert.Equal(t, "vpc-123456", value)
+	})
+
+	t.Run("extracts $value from nested $ref object", func(t *testing.T) {
+		compartmentKsuid := util.NewID()
+		vcnKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		compartment := pkgmodel.Resource{
+			Ksuid:              compartmentKsuid,
+			Label:              "compartment",
+			ReadOnlyProperties: json.RawMessage(`{"Id": "ocid1.compartment.oc1..abc123"}`),
+		}
+
+		vcn := pkgmodel.Resource{
+			Ksuid: vcnKsuid,
+			Label: "vcn",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"CompartmentId": {
+					"$ref": "formae://%s#/Id",
+					"$value": "ocid1.compartment.oc1..abc123"
+				}
+			}`, compartmentKsuid)),
+			ReadOnlyProperties: json.RawMessage(`{"Id": "ocid1.vcn.oc1..xyz789"}`),
+		}
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"CompartmentId": {
+					"$ref": "formae://%s#/CompartmentId"
+				}
+			}`, vcnKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
+		}
+
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		require.NoError(t, err)
+		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
+		assert.True(t, found)
+		assert.Equal(t, "ocid1.compartment.oc1..abc123", value)
+	})
+
+	t.Run("extracts value from Properties when not in ReadOnlyProperties", func(t *testing.T) {
+		vpcKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		vpc := pkgmodel.Resource{
+			Ksuid:      vpcKsuid,
+			Label:      "vpc",
+			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
+		}
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcCidr": {
+					"$ref": "formae://%s#/CidrBlock"
+				}
+			}`, vpcKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{vpc, subnet},
+		}
+
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		require.NoError(t, err)
+		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
+		assert.True(t, found)
+		assert.Equal(t, "10.0.0.0/16", value)
+	})
+
+	t.Run("returns error for missing resource", func(t *testing.T) {
+		missingKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcId": {
+					"$ref": "formae://%s#/VpcId"
+				}
+			}`, missingKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{subnet},
+		}
+
+		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("returns error for missing property", func(t *testing.T) {
+		vpcKsuid := util.NewID()
+		subnetKsuid := util.NewID()
+
+		vpc := pkgmodel.Resource{
+			Ksuid:      vpcKsuid,
+			Label:      "vpc",
+			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
+		}
+
+		subnet := pkgmodel.Resource{
+			Ksuid: subnetKsuid,
+			Label: "subnet",
+			Properties: json.RawMessage(fmt.Sprintf(`{
+				"VpcId": {
+					"$ref": "formae://%s#/NonExistentProperty"
+				}
+			}`, vpcKsuid)),
+		}
+
+		forma := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{vpc, subnet},
+		}
+
+		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+}
+
 func TestSameURIMultiplePaths(t *testing.T) {
-	t.Run("resolves same URI at multiple array paths", func(t *testing.T) {
+	t.Run("resolves at multiple array paths", func(t *testing.T) {
 		gwRef := newTestRef("GatewayId")
 		props := fmt.Appendf(nil, `{
 			"RouteRules": [
@@ -1021,7 +1186,7 @@ func TestSameURIMultiplePaths(t *testing.T) {
 		assert.Equal(t, "gw-123456", result.Get("RouteRules.1.NetworkEntityId.$value").String())
 	})
 
-	t.Run("resolves same URI at multiple top-level paths", func(t *testing.T) {
+	t.Run("resolves at multiple top-level paths", func(t *testing.T) {
 		vpcRef := newTestRef("VpcId")
 		props := fmt.Appendf(nil, `{
 			"SourceVpcId": { "$ref": "%s" },
@@ -1041,7 +1206,7 @@ func TestSameURIMultiplePaths(t *testing.T) {
 		assert.Equal(t, "vpc-123456", result.Get("DestinationVpcId.$value").String())
 	})
 
-	t.Run("returns unique URIs when same ref appears multiple times", func(t *testing.T) {
+	t.Run("returns unique URIs for duplicate refs", func(t *testing.T) {
 		sharedRef := newTestRef("SharedId")
 		res := pkgmodel.Resource{
 			Properties: fmt.Appendf(nil, `{
@@ -1057,7 +1222,7 @@ func TestSameURIMultiplePaths(t *testing.T) {
 		assert.Contains(t, uris, pkgmodel.FormaeURI(sharedRef))
 	})
 
-	t.Run("converts all paths when same URI resolved at multiple locations", func(t *testing.T) {
+	t.Run("converts all paths to plugin format", func(t *testing.T) {
 		sgRef := newTestRef("SecurityGroupId")
 		props := fmt.Appendf(nil, `{
 			"SecurityGroupIds": [
@@ -1077,7 +1242,7 @@ func TestSameURIMultiplePaths(t *testing.T) {
 		assert.Equal(t, "sg-123", sgs[1].String())
 	})
 
-	t.Run("resolves same URI in deeply nested structures", func(t *testing.T) {
+	t.Run("resolves in deeply nested structures", func(t *testing.T) {
 		subnetRef := newTestRef("SubnetId")
 		props := fmt.Appendf(nil, `{
 			"Config": {
