@@ -327,13 +327,13 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 			}
 
 			updates, err := GenerateResourceUpdates(
-			tt.forma,
-			pkgmodel.CommandDestroy,
-			pkgmodel.FormaApplyModeReconcile,
-			FormaCommandSourceUser,
-			existingTargets,
-			ds,
-		)
+				tt.forma,
+				pkgmodel.CommandDestroy,
+				pkgmodel.FormaApplyModeReconcile,
+				FormaCommandSourceUser,
+				existingTargets,
+				ds,
+			)
 
 			if tt.expectedError != "" {
 				assert.Error(t, err)
