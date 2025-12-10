@@ -605,8 +605,9 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 
 	// Step 9: Wait for resource to appear in inventory
 	// Uses inventory polling instead of log file polling for reliability in CI
+	// Timeout of 2 minutes should be sufficient for discovery to complete
 	t.Log("Step 9: Waiting for resource to appear in inventory...")
-	err = harness.WaitForResourceInInventory(actualResourceType, nativeID, false, 5*time.Minute)
+	err = harness.WaitForResourceInInventory(actualResourceType, nativeID, false, 2*time.Minute)
 	require.NoError(t, err, "Resource should appear in inventory within timeout")
 
 	// Step 10: Query inventory for unmanaged resources (get full response for assertions)
