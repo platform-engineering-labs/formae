@@ -109,6 +109,22 @@ jobs:
           echo "$VERSION" > ./version.semver
           echo "Created version.semver with: $VERSION"
 
+      - name: Build plugin binary
+        run: |
+          VERSION=$(cat ./version.semver)
+          echo "Building ${{ matrix.plugin }} plugin with version: $VERSION"
+          go build -C plugins/${{ matrix.plugin }} -ldflags="-X 'main.Version=${VERSION}'" -o ${{ matrix.plugin }} .
+
+      - name: Install plugin binary
+        run: |
+          VERSION=$(cat ./version.semver)
+          PLUGIN_DIR=~/.pel/formae/plugins/${{ matrix.plugin }}/${VERSION}
+          mkdir -p ${PLUGIN_DIR}
+          cp plugins/${{ matrix.plugin }}/${{ matrix.plugin }} ${PLUGIN_DIR}/
+          chmod +x ${PLUGIN_DIR}/${{ matrix.plugin }}
+          echo "Installed plugin to: ${PLUGIN_DIR}"
+          ls -la ${PLUGIN_DIR}/
+
       - name: Resolve PKL dependencies
         run: pkl project resolve plugins/${{ matrix.plugin }}/testdata
 
