@@ -603,12 +603,13 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	err = harness.TriggerDiscovery()
 	require.NoError(t, err, "Triggering discovery should succeed")
 
-	// Step 9: Wait for discovery to complete
-	t.Log("Step 9: Waiting for discovery to complete...")
-	err = harness.WaitForDiscoveryCompletion(2 * time.Minute)
-	require.NoError(t, err, "Discovery should complete within timeout")
+	// Step 9: Wait for resource to appear in inventory
+	// Uses inventory polling instead of log file polling for reliability in CI
+	t.Log("Step 9: Waiting for resource to appear in inventory...")
+	err = harness.WaitForResourceInInventory(actualResourceType, nativeID, false, 5*time.Minute)
+	require.NoError(t, err, "Resource should appear in inventory within timeout")
 
-	// Step 10: Query inventory for unmanaged resources
+	// Step 10: Query inventory for unmanaged resources (get full response for assertions)
 	t.Log("Step 10: Querying inventory for unmanaged resources...")
 	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", actualResourceType))
 	require.NoError(t, err, "Inventory query should succeed")

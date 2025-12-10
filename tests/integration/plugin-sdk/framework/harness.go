@@ -882,6 +882,8 @@ func (h *TestHarness) TriggerDiscovery() error {
 }
 
 // WaitForDiscoveryCompletion waits for the discovery to complete by polling the agent log file
+// Deprecated: Use WaitForResourceInInventory instead for reliable waiting in CI environments.
+// Log file polling is unreliable due to buffering differences between environments.
 func (h *TestHarness) WaitForDiscoveryCompletion(timeout time.Duration) error {
 	h.t.Log("Waiting for discovery to complete...")
 
@@ -906,6 +908,47 @@ func (h *TestHarness) WaitForDiscoveryCompletion(timeout time.Duration) error {
 	}
 
 	return fmt.Errorf("timeout waiting for discovery to complete after %v", timeout)
+}
+
+// WaitForResourceInInventory polls the inventory API until a resource with the specified
+// type and nativeID appears. This is more reliable than log file polling because it
+// directly queries the data store rather than depending on log file buffering.
+// This is the recommended way to wait for discovery completion in tests.
+func (h *TestHarness) WaitForResourceInInventory(resourceType, nativeID string, managed bool, timeout time.Duration) error {
+	managedStr := "true"
+	if !managed {
+		managedStr = "false"
+	}
+	h.t.Logf("Waiting for resource to appear in inventory: type=%s, nativeID=%s, managed=%s", resourceType, nativeID, managedStr)
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 2 * time.Second
+
+	for time.Now().Before(deadline) {
+		// Query inventory for this specific resource type and managed status
+		inventory, err := h.Inventory(fmt.Sprintf("type: %s managed: %s", resourceType, managedStr))
+		if err != nil {
+			// Inventory query might fail early on, continue polling
+			h.t.Logf("Inventory query failed (will retry): %v", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// Check if our resource is in the results
+		for _, res := range inventory.Resources {
+			if resNativeID, ok := res["NativeID"].(string); ok {
+				if resNativeID == nativeID {
+					h.t.Logf("Resource found in inventory: NativeID=%s", nativeID)
+					return nil
+				}
+			}
+		}
+
+		h.t.Logf("Resource not yet in inventory (found %d resources of type %s), polling...", len(inventory.Resources), resourceType)
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for resource %s (type: %s) to appear in inventory after %v", nativeID, resourceType, timeout)
 }
 
 // CreateUnmanagedResource creates an unmanaged resource using the external plugin directly,
