@@ -962,7 +962,7 @@ func TestResolveMultiplePropertiesSameResolverInstance(t *testing.T) {
 			"$visibility": "Clear"
 		},
 		"ParentId": {
-			"$ref": "%s", 
+			"$ref": "%s",
 			"$visibility": "Clear"
 		}
 	}`, restApiIdRef, parentIdRef)
@@ -992,177 +992,111 @@ func TestResolveMultiplePropertiesSameResolverInstance(t *testing.T) {
 	assert.Equal(t, "7c5bfje8c3", parentIdValue)
 }
 
-func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
-	t.Run("extracts plain property value", func(t *testing.T) {
-		vpcKsuid := util.NewID()
-		subnetKsuid := util.NewID()
-
-		vpc := pkgmodel.Resource{
-			Ksuid:              vpcKsuid,
-			Label:              "vpc",
-			ReadOnlyProperties: json.RawMessage(`{"VpcId": "vpc-123456"}`),
-		}
-
-		subnet := pkgmodel.Resource{
-			Ksuid: subnetKsuid,
-			Label: "subnet",
-			Properties: json.RawMessage(fmt.Sprintf(`{
-				"VpcId": {
-					"$ref": "formae://%s#/VpcId"
+func TestSameURIMultiplePaths(t *testing.T) {
+	t.Run("resolves same URI at multiple array paths", func(t *testing.T) {
+		gwRef := newTestRef("GatewayId")
+		props := fmt.Appendf(nil, `{
+			"RouteRules": [
+				{
+					"Destination": "10.0.0.0/8",
+					"NetworkEntityId": { "$ref": "%s" }
+				},
+				{
+					"Destination": "172.16.0.0/12",
+					"NetworkEntityId": { "$ref": "%s" }
 				}
-			}`, vpcKsuid)),
-		}
+			]
+		}`, gwRef, gwRef)
 
-		forma := &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{vpc, subnet},
-		}
-
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(gwRef),
+			props,
+			`{"GatewayId": "gw-123456"}`,
+		)
 
 		require.NoError(t, err)
-		value, found := resolvables.Get(vpcKsuid, "VpcId")
-		assert.True(t, found)
-		assert.Equal(t, "vpc-123456", value)
+
+		result := gjson.Parse(string(resolved))
+		assert.Equal(t, "gw-123456", result.Get("RouteRules.0.NetworkEntityId.$value").String())
+		assert.Equal(t, "gw-123456", result.Get("RouteRules.1.NetworkEntityId.$value").String())
 	})
 
-	t.Run("extracts $value from nested $ref object", func(t *testing.T) {
-		// This tests the OCI scenario: Subnet -> VCN -> Compartment
-		// where VCN's CompartmentId is itself a $ref pointing to the Compartment
+	t.Run("resolves same URI at multiple top-level paths", func(t *testing.T) {
+		vpcRef := newTestRef("VpcId")
+		props := fmt.Appendf(nil, `{
+			"SourceVpcId": { "$ref": "%s" },
+			"DestinationVpcId": { "$ref": "%s" }
+		}`, vpcRef, vpcRef)
 
-		compartmentKsuid := util.NewID()
-		vcnKsuid := util.NewID()
-		subnetKsuid := util.NewID()
-
-		compartment := pkgmodel.Resource{
-			Ksuid:              compartmentKsuid,
-			Label:              "compartment",
-			ReadOnlyProperties: json.RawMessage(`{"Id": "ocid1.compartment.oc1..abc123"}`),
-		}
-
-		// VCN's CompartmentId is a $ref pointing to the Compartment's Id
-		// This is the nested resolvable scenario
-		vcn := pkgmodel.Resource{
-			Ksuid: vcnKsuid,
-			Label: "vcn",
-			Properties: json.RawMessage(fmt.Sprintf(`{
-				"CompartmentId": {
-					"$ref": "formae://%s#/Id",
-					"$value": "ocid1.compartment.oc1..abc123"
-				}
-			}`, compartmentKsuid)),
-			ReadOnlyProperties: json.RawMessage(`{"Id": "ocid1.vcn.oc1..xyz789"}`),
-		}
-
-		subnet := pkgmodel.Resource{
-			Ksuid: subnetKsuid,
-			Label: "subnet",
-			Properties: json.RawMessage(fmt.Sprintf(`{
-				"CompartmentId": {
-					"$ref": "formae://%s#/CompartmentId"
-				}
-			}`, vcnKsuid)),
-		}
-
-		forma := &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
-		}
-
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(vpcRef),
+			props,
+			`{"VpcId": "vpc-123456"}`,
+		)
 
 		require.NoError(t, err)
-		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
-		assert.True(t, found)
 
-		// Should extract the actual OCID, not the JSON string of the $ref object
-		assert.Equal(t, "ocid1.compartment.oc1..abc123", value)
+		result := gjson.Parse(string(resolved))
+		assert.Equal(t, "vpc-123456", result.Get("SourceVpcId.$value").String())
+		assert.Equal(t, "vpc-123456", result.Get("DestinationVpcId.$value").String())
 	})
 
-	t.Run("extracts value from Properties when not in ReadOnlyProperties", func(t *testing.T) {
-		vpcKsuid := util.NewID()
-		subnetKsuid := util.NewID()
-
-		vpc := pkgmodel.Resource{
-			Ksuid:      vpcKsuid,
-			Label:      "vpc",
-			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
+	t.Run("returns unique URIs when same ref appears multiple times", func(t *testing.T) {
+		sharedRef := newTestRef("SharedId")
+		res := pkgmodel.Resource{
+			Properties: fmt.Appendf(nil, `{
+				"Field1": { "$ref": "%s" },
+				"Field2": { "$ref": "%s" },
+				"Field3": { "$ref": "%s" }
+			}`, sharedRef, sharedRef, sharedRef),
 		}
 
-		// Subnet references the VPC's CidrBlock
-		subnet := pkgmodel.Resource{
-			Ksuid: subnetKsuid,
-			Label: "subnet",
-			Properties: json.RawMessage(fmt.Sprintf(`{
-				"VpcCidr": {
-					"$ref": "formae://%s#/CidrBlock"
-				}
-			}`, vpcKsuid)),
-		}
+		uris := ExtractResolvableURIs(res)
 
-		forma := &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{vpc, subnet},
-		}
+		assert.Len(t, uris, 1)
+		assert.Contains(t, uris, pkgmodel.FormaeURI(sharedRef))
+	})
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+	t.Run("converts all paths when same URI resolved at multiple locations", func(t *testing.T) {
+		sgRef := newTestRef("SecurityGroupId")
+		props := fmt.Appendf(nil, `{
+			"SecurityGroupIds": [
+				{ "$ref": "%s", "$value": "sg-123" },
+				{ "$ref": "%s", "$value": "sg-123" }
+			]
+		}`, sgRef, sgRef)
+
+		result, err := ConvertToPluginFormat(props)
 
 		require.NoError(t, err)
-		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
-		assert.True(t, found)
-		assert.Equal(t, "10.0.0.0/16", value)
+
+		parsed := gjson.Parse(string(result))
+		sgs := parsed.Get("SecurityGroupIds").Array()
+		assert.Len(t, sgs, 2)
+		assert.Equal(t, "sg-123", sgs[0].String())
+		assert.Equal(t, "sg-123", sgs[1].String())
 	})
 
-	t.Run("returns error for missing resource", func(t *testing.T) {
-		missingKsuid := util.NewID()
-		subnetKsuid := util.NewID()
+	t.Run("resolves same URI in deeply nested structures", func(t *testing.T) {
+		subnetRef := newTestRef("SubnetId")
+		props := fmt.Appendf(nil, `{
+			"Config": {
+				"Primary": { "$ref": "%s" },
+				"Failover": { "$ref": "%s" }
+			}
+		}`, subnetRef, subnetRef)
 
-		subnet := pkgmodel.Resource{
-			Ksuid: subnetKsuid,
-			Label: "subnet",
-			Properties: json.RawMessage(fmt.Sprintf(`{
-				"VpcId": {
-					"$ref": "formae://%s#/VpcId"
-				}
-			}`, missingKsuid)),
-		}
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(subnetRef),
+			props,
+			`{"SubnetId": "subnet-abc"}`,
+		)
 
-		forma := &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{subnet},
-		}
+		require.NoError(t, err)
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
-	})
-
-	t.Run("returns error for missing property", func(t *testing.T) {
-		vpcKsuid := util.NewID()
-		subnetKsuid := util.NewID()
-
-		vpc := pkgmodel.Resource{
-			Ksuid:      vpcKsuid,
-			Label:      "vpc",
-			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
-		}
-
-		// Subnet references a property that doesn't exist on VPC
-		subnet := pkgmodel.Resource{
-			Ksuid: subnetKsuid,
-			Label: "subnet",
-			Properties: json.RawMessage(fmt.Sprintf(`{
-				"VpcId": {
-					"$ref": "formae://%s#/NonExistentProperty"
-				}
-			}`, vpcKsuid)),
-		}
-
-		forma := &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{vpc, subnet},
-		}
-
-		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		result := gjson.Parse(string(resolved))
+		assert.Equal(t, "subnet-abc", result.Get("Config.Primary.$value").String())
+		assert.Equal(t, "subnet-abc", result.Get("Config.Failover.$value").String())
 	})
 }
 
