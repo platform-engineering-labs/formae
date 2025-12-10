@@ -126,13 +126,13 @@ func (pp *propertyParser) CreateValue(result gjson.Result) *pkgmodel.Value {
 // propertyResolver handles resolution of property references and values
 type propertyResolver struct {
 	values map[string]pkgmodel.Value
-	refs   map[pkgmodel.FormaeURI]pkgmodel.Ref
+	refs   map[pkgmodel.FormaeURI][]pkgmodel.Ref
 }
 
 func newPropertyResolver(properties json.RawMessage) *propertyResolver {
 	resolver := &propertyResolver{
 		values: make(map[string]pkgmodel.Value),
-		refs:   make(map[pkgmodel.FormaeURI]pkgmodel.Ref),
+		refs:   make(map[pkgmodel.FormaeURI][]pkgmodel.Ref),
 	}
 
 	result := gjson.Parse(string(properties))
@@ -144,7 +144,7 @@ func newPropertyResolver(properties json.RawMessage) *propertyResolver {
 func newPropertyResolverFromResource(resource pkgmodel.Resource) *propertyResolver {
 	resolver := &propertyResolver{
 		values: make(map[string]pkgmodel.Value),
-		refs:   make(map[pkgmodel.FormaeURI]pkgmodel.Ref),
+		refs:   make(map[pkgmodel.FormaeURI][]pkgmodel.Ref),
 	}
 
 	if resource.Properties != nil {
@@ -188,7 +188,8 @@ func (pr *propertyResolver) extractFromJson(result gjson.Result, currentPath str
 		switch propertyType {
 		case typeReference:
 			ref := parser.CreateRef(currentPath, result)
-			pr.refs[pkgmodel.FormaeURI(ref.PropertyURI)] = ref
+			uri := pkgmodel.FormaeURI(ref.PropertyURI)
+			pr.refs[uri] = append(pr.refs[uri], ref)
 			return
 		case typeValue:
 			value := parser.CreateValue(result)
@@ -233,17 +234,19 @@ func (pr *propertyResolver) extractResolvedValue(ref pkgmodel.Ref) any {
 func (pr *propertyResolver) resolveReferences(properties json.RawMessage) (json.RawMessage, error) {
 	result := properties
 
-	for _, ref := range pr.refs {
-		if ref.ResolvedValue.Value == nil {
-			slog.Debug("No resolved value set for ref", "uri", ref.ResourceURI, "targetPath", ref.TargetPath)
-			continue
-		}
+	for _, refs := range pr.refs {
+		for _, ref := range refs {
+			if ref.ResolvedValue.Value == nil {
+				slog.Debug("No resolved value set for ref", "uri", ref.ResourceURI, "targetPath", ref.TargetPath)
+				continue
+			}
 
-		updated, err := pr.resolveReference(result, ref)
-		if err != nil {
-			return nil, err
+			updated, err := pr.resolveReference(result, ref)
+			if err != nil {
+				return nil, err
+			}
+			result = updated
 		}
-		result = updated
 	}
 
 	return result, nil
@@ -306,39 +309,36 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 		actualValue = value
 	}
 
-	var found bool
-	for propertyURI, ref := range pr.refs {
-		if propertyURI == uri {
-			if ref.ResolvedValue.IsSetOnce() && ref.ResolvedValue.Value != nil {
-				slog.Debug("Skipping update to SetOnce property that already has a value",
-					"uri", uri,
-					"targetPath", ref.TargetPath)
-				found = true
-				continue
-			}
-
-			newValue := pkgmodel.Value{Value: actualValue}
-
-			if ref.ResolvedValue.Strategy != "" {
-				newValue.Strategy = ref.ResolvedValue.Strategy
-			} else if inheritedStrategy != "" {
-				newValue.Strategy = inheritedStrategy
-			}
-
-			if inheritedVisibility == "Opaque" {
-				newValue.Visibility = "Opaque"
-			} else if ref.ResolvedValue.Visibility != "" {
-				newValue.Visibility = ref.ResolvedValue.Visibility
-			}
-
-			ref.ResolvedValue = newValue
-			pr.refs[propertyURI] = ref
-			found = true
-		}
+	refs, exists := pr.refs[uri]
+	if !exists || len(refs) == 0 {
+		return fmt.Errorf("reference not found: %s", uri)
 	}
 
-	if !found {
-		return fmt.Errorf("reference not found: %s", uri)
+	// Update ALL refs for this URI (same URI can appear in multiple paths)
+	for i := range refs {
+		ref := &refs[i] // Use pointer to modify in place
+		if ref.ResolvedValue.IsSetOnce() && ref.ResolvedValue.Value != nil {
+			slog.Debug("Skipping update to SetOnce property that already has a value",
+				"uri", uri,
+				"targetPath", ref.TargetPath)
+			continue
+		}
+
+		newValue := pkgmodel.Value{Value: actualValue}
+
+		if ref.ResolvedValue.Strategy != "" {
+			newValue.Strategy = ref.ResolvedValue.Strategy
+		} else if inheritedStrategy != "" {
+			newValue.Strategy = inheritedStrategy
+		}
+
+		if inheritedVisibility == "Opaque" {
+			newValue.Visibility = "Opaque"
+		} else if ref.ResolvedValue.Visibility != "" {
+			newValue.Visibility = ref.ResolvedValue.Visibility
+		}
+
+		ref.ResolvedValue = newValue
 	}
 
 	return nil
@@ -350,9 +350,11 @@ func (pr *propertyResolver) has(uri pkgmodel.FormaeURI) bool {
 }
 
 func (pr *propertyResolver) isTargetPath(path string) bool {
-	for _, ref := range pr.refs {
-		if ref.TargetPath == path {
-			return true
+	for _, refs := range pr.refs {
+		for _, ref := range refs {
+			if ref.TargetPath == path {
+				return true
+			}
 		}
 	}
 	return false
@@ -363,22 +365,24 @@ func (pr *propertyResolver) toPluginFormat(originalProperties json.RawMessage) (
 	outputJsonString := string(originalProperties)
 	var err error
 
-	for _, ref := range pr.refs {
-		if ref.ResolvedValue.Value == nil {
-			continue
-		}
+	for _, refs := range pr.refs {
+		for _, ref := range refs {
+			if ref.ResolvedValue.Value == nil {
+				continue
+			}
 
-		finalValueToSet := pr.extractResolvedValue(ref)
-		if finalValueToSet == nil {
-			continue
-		}
+			finalValueToSet := pr.extractResolvedValue(ref)
+			if finalValueToSet == nil {
+				continue
+			}
 
-		outputJsonString, err = sjson.Set(outputJsonString, ref.TargetPath, finalValueToSet)
-		if err != nil {
-			slog.Error("ToPluginFormat: failed to set value for ref",
-				"path", ref.TargetPath,
-				"error", err)
-			return nil, err
+			outputJsonString, err = sjson.Set(outputJsonString, ref.TargetPath, finalValueToSet)
+			if err != nil {
+				slog.Error("ToPluginFormat: failed to set value for ref",
+					"path", ref.TargetPath,
+					"error", err)
+				return nil, err
+			}
 		}
 	}
 
@@ -403,8 +407,8 @@ func (pr *propertyResolver) toPluginFormat(originalProperties json.RawMessage) (
 
 func (pr *propertyResolver) getResolvableURIs() []pkgmodel.FormaeURI {
 	uris := make([]pkgmodel.FormaeURI, 0, len(pr.refs))
-	for _, ref := range pr.refs {
-		uris = append(uris, pkgmodel.FormaeURI(ref.PropertyURI))
+	for uri := range pr.refs {
+		uris = append(uris, uri)
 	}
 	return uris
 }

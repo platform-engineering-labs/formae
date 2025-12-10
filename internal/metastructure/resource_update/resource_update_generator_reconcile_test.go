@@ -285,13 +285,13 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 			}
 
 			updates, err := GenerateResourceUpdates(
-			tt.forma,
-			pkgmodel.CommandApply,
-			tt.mode,
-			FormaCommandSourceUser,
-			existingTargets,
-			ds,
-		)
+				tt.forma,
+				pkgmodel.CommandApply,
+				tt.mode,
+				FormaCommandSourceUser,
+				existingTargets,
+				ds,
+			)
 
 			if tt.expectedError != "" {
 				assert.Error(t, err)

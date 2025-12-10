@@ -962,7 +962,7 @@ func TestResolveMultiplePropertiesSameResolverInstance(t *testing.T) {
 			"$visibility": "Clear"
 		},
 		"ParentId": {
-			"$ref": "%s", 
+			"$ref": "%s",
 			"$visibility": "Clear"
 		}
 	}`, restApiIdRef, parentIdRef)
@@ -1026,9 +1026,6 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 	})
 
 	t.Run("extracts $value from nested $ref object", func(t *testing.T) {
-		// This tests the OCI scenario: Subnet -> VCN -> Compartment
-		// where VCN's CompartmentId is itself a $ref pointing to the Compartment
-
 		compartmentKsuid := util.NewID()
 		vcnKsuid := util.NewID()
 		subnetKsuid := util.NewID()
@@ -1039,8 +1036,6 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			ReadOnlyProperties: json.RawMessage(`{"Id": "ocid1.compartment.oc1..abc123"}`),
 		}
 
-		// VCN's CompartmentId is a $ref pointing to the Compartment's Id
-		// This is the nested resolvable scenario
 		vcn := pkgmodel.Resource{
 			Ksuid: vcnKsuid,
 			Label: "vcn",
@@ -1072,8 +1067,6 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 		require.NoError(t, err)
 		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
 		assert.True(t, found)
-
-		// Should extract the actual OCID, not the JSON string of the $ref object
 		assert.Equal(t, "ocid1.compartment.oc1..abc123", value)
 	})
 
@@ -1087,7 +1080,6 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
 		}
 
-		// Subnet references the VPC's CidrBlock
 		subnet := pkgmodel.Resource{
 			Ksuid: subnetKsuid,
 			Label: "subnet",
@@ -1144,7 +1136,6 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
 		}
 
-		// Subnet references a property that doesn't exist on VPC
 		subnet := pkgmodel.Resource{
 			Ksuid: subnetKsuid,
 			Label: "subnet",
@@ -1163,6 +1154,114 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
+	})
+}
+
+func TestSameURIMultiplePaths(t *testing.T) {
+	t.Run("resolves at multiple array paths", func(t *testing.T) {
+		gwRef := newTestRef("GatewayId")
+		props := fmt.Appendf(nil, `{
+			"RouteRules": [
+				{
+					"Destination": "10.0.0.0/8",
+					"NetworkEntityId": { "$ref": "%s" }
+				},
+				{
+					"Destination": "172.16.0.0/12",
+					"NetworkEntityId": { "$ref": "%s" }
+				}
+			]
+		}`, gwRef, gwRef)
+
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(gwRef),
+			props,
+			`{"GatewayId": "gw-123456"}`,
+		)
+
+		require.NoError(t, err)
+
+		result := gjson.Parse(string(resolved))
+		assert.Equal(t, "gw-123456", result.Get("RouteRules.0.NetworkEntityId.$value").String())
+		assert.Equal(t, "gw-123456", result.Get("RouteRules.1.NetworkEntityId.$value").String())
+	})
+
+	t.Run("resolves at multiple top-level paths", func(t *testing.T) {
+		vpcRef := newTestRef("VpcId")
+		props := fmt.Appendf(nil, `{
+			"SourceVpcId": { "$ref": "%s" },
+			"DestinationVpcId": { "$ref": "%s" }
+		}`, vpcRef, vpcRef)
+
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(vpcRef),
+			props,
+			`{"VpcId": "vpc-123456"}`,
+		)
+
+		require.NoError(t, err)
+
+		result := gjson.Parse(string(resolved))
+		assert.Equal(t, "vpc-123456", result.Get("SourceVpcId.$value").String())
+		assert.Equal(t, "vpc-123456", result.Get("DestinationVpcId.$value").String())
+	})
+
+	t.Run("returns unique URIs for duplicate refs", func(t *testing.T) {
+		sharedRef := newTestRef("SharedId")
+		res := pkgmodel.Resource{
+			Properties: fmt.Appendf(nil, `{
+				"Field1": { "$ref": "%s" },
+				"Field2": { "$ref": "%s" },
+				"Field3": { "$ref": "%s" }
+			}`, sharedRef, sharedRef, sharedRef),
+		}
+
+		uris := ExtractResolvableURIs(res)
+
+		assert.Len(t, uris, 1)
+		assert.Contains(t, uris, pkgmodel.FormaeURI(sharedRef))
+	})
+
+	t.Run("converts all paths to plugin format", func(t *testing.T) {
+		sgRef := newTestRef("SecurityGroupId")
+		props := fmt.Appendf(nil, `{
+			"SecurityGroupIds": [
+				{ "$ref": "%s", "$value": "sg-123" },
+				{ "$ref": "%s", "$value": "sg-123" }
+			]
+		}`, sgRef, sgRef)
+
+		result, err := ConvertToPluginFormat(props)
+
+		require.NoError(t, err)
+
+		parsed := gjson.Parse(string(result))
+		sgs := parsed.Get("SecurityGroupIds").Array()
+		assert.Len(t, sgs, 2)
+		assert.Equal(t, "sg-123", sgs[0].String())
+		assert.Equal(t, "sg-123", sgs[1].String())
+	})
+
+	t.Run("resolves in deeply nested structures", func(t *testing.T) {
+		subnetRef := newTestRef("SubnetId")
+		props := fmt.Appendf(nil, `{
+			"Config": {
+				"Primary": { "$ref": "%s" },
+				"Failover": { "$ref": "%s" }
+			}
+		}`, subnetRef, subnetRef)
+
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(subnetRef),
+			props,
+			`{"SubnetId": "subnet-abc"}`,
+		)
+
+		require.NoError(t, err)
+
+		result := gjson.Parse(string(resolved))
+		assert.Equal(t, "subnet-abc", result.Get("Config.Primary.$value").String())
+		assert.Equal(t, "subnet-abc", result.Get("Config.Failover.$value").String())
 	})
 }
 
