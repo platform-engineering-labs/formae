@@ -43,7 +43,8 @@ func ExtractCmd() *cobra.Command {
 			opts.Yes, _ = command.Flags().GetBool("yes")
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
 
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				return err
 			}
@@ -63,6 +64,7 @@ func ExtractCmd() *cobra.Command {
 	command.Flags().String("query", " ", "Query that allows to find resources by their attributes")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
 	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }

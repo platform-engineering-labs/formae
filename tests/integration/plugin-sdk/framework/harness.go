@@ -622,6 +622,7 @@ func (h *TestHarness) ApplyWithMode(pklFile string, mode string) (string, error)
 		h.formaeBinary,
 		"apply",
 		pklFile,
+		"--config", h.configFile,
 		"--mode", mode,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
@@ -655,6 +656,7 @@ func (h *TestHarness) Destroy(pklFile string) (string, error) {
 		h.formaeBinary,
 		"destroy",
 		pklFile,
+		"--config", h.configFile,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
@@ -687,6 +689,7 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 		h.formaeBinary,
 		"eval",
 		pklFile,
+		"--config", h.configFile,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
@@ -707,6 +710,7 @@ func (h *TestHarness) Extract(query string, outputFile string) error {
 	cmd := exec.Command(
 		h.formaeBinary,
 		"extract",
+		"--config", h.configFile,
 		"--query", query,
 		outputFile,
 	)
@@ -735,6 +739,7 @@ func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 		h.formaeBinary,
 		"inventory",
 		"resources", // Need to specify the subcommand
+		"--config", h.configFile,
 		"--query", query,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
@@ -1367,6 +1372,7 @@ func (h *TestHarness) GetStatus(commandID string) (string, error) {
 		h.formaeBinary,
 		"status",
 		"command",
+		"--config", h.configFile,
 		"--query", fmt.Sprintf("id:%s", commandID),
 		"--output-consumer", "machine",
 		"--output-schema", "json",
