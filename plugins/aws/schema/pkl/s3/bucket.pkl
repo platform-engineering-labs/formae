@@ -668,3 +668,8 @@ open class Bucket extends formae.Resource {
         stack = parent.stack?.label
     }
 }
+
+@formae.PatchHint{ forClass = Bucket }
+open class BucketPatch extends formae.ResourcePatch {
+  modify: formae.Patch<Bucket>
+}
