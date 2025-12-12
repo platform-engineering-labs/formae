@@ -896,7 +896,7 @@ func (m *Metastructure) checkIfPatchCanBeApplied(command *forma_command.FormaCom
 		}
 
 		if knownStack == nil {
-			return apimodel.FormaPatchRejectedError{}
+			return apimodel.FormaPatchRejectedError{UnknownStacks: []*pkgmodel.Stack{&stack}}
 		}
 	}
 
