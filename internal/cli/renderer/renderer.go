@@ -32,90 +32,119 @@ func RenderSimulation(s *apimodel.Simulation) (string, error) {
 }
 
 func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, error) {
+	if len(status.Commands) == 0 {
+		return display.Gold("No commands found.\n"), nil
+	}
+
 	var buf strings.Builder
+
+	for cmdIndex, command := range status.Commands {
+		if cmdIndex > 0 {
+			buf.WriteString("\n\n")
+		}
+
+		// Render the unified command status box
+		commandBox, err := renderUnifiedCommandStatus(command)
+		if err != nil {
+			return "", err
+		}
+		buf.WriteString(commandBox)
+	}
+
+	return buf.String(), nil
+}
+
+// renderUnifiedCommandStatus creates a single cohesive box with command metadata and metrics
+func renderUnifiedCommandStatus(command apimodel.Command) (string, error) {
+	var buf strings.Builder
+
+	// Format the status with appropriate color
+	stateStr := display.Grey(string(command.State))
+	switch command.State {
+	case "Success":
+		stateStr = display.Green(string(command.State))
+	case "Failed":
+		stateStr = display.Red(string(command.State))
+	case "Canceled":
+		stateStr = display.Grey(string(command.State))
+	}
+
+	// Calculate status data
+	statusData := countUpdateStates(command.ResourceUpdates, command.TargetUpdates)
+
+	// Write metadata header (simple text above the table)
+	buf.WriteString(fmt.Sprintf("Command: %s\n", command.Command))
+	buf.WriteString(fmt.Sprintf("ID: %s  │  Status: %s  │  Duration: %s\n",
+		display.LightBlue(string(command.CommandID)),
+		stateStr,
+		display.LightBlue(formatDuration(calculateDuration(command)))))
+	buf.WriteString(fmt.Sprintf("Started: %s\n\n", display.LightBlue(command.StartTs.Format("01/02 3:04PM"))))
+
+	// Use tablewriter for the metrics table
 	table := tablewriter.NewTable(&buf,
 		tablewriter.WithHeaderAutoFormat(tw.Off),
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
 			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On}},
 		})))
-	anyFailed := false
-	allSuccess := true
-	for _, c := range status.Commands {
-		if c.State == "Failed" {
-			anyFailed = true
-			allSuccess = false
-			break
-		} else if c.State == "InProgress" {
-			allSuccess = false
-			break
-		}
-	}
 
-	h := display.Grey("Status")
-	if anyFailed {
-		h = display.Red("Status")
-	} else if allSuccess {
-		h = display.Green("Status")
-	}
-
-	table.Header(display.LightBlue("ID"),
-		"Command",
-		h,
-		"Change",
-		display.Grey("Wait"),
-		"Progress",
+	// Set up column headers
+	table.Header(
+		"Total",
+		display.Grey("Queued"),
+		"In Progress",
 		display.Green("Success"),
 		display.Gold("Retry"),
-		display.Red("Fail"),
-		display.Grey("Canceled"),
-		display.LightBlue("Started At"),
-		display.LightBlue("Time"))
+		display.Red("Failed"),
+		display.Grey("Canceled"))
 
-	data := make([][]any, len(status.Commands))
-	for i, command := range status.Commands {
-		data[i] = make([]any, 12)
-		data[i][0] = display.LightBlue(string(command.CommandID))
-		data[i][1] = command.Command
-		status := display.Grey(string(command.State))
-		switch command.State {
-		case "Success":
-			status = display.Green(string(command.State))
-		case "Failed":
-			status = display.Red(string(command.State))
-		case "Canceled":
-			status = display.Grey(string(command.State))
-		}
-
-		data[i][2] = status
-
-		statusData := countUpdateStates(command.ResourceUpdates, command.TargetUpdates)
-
-		data[i][3] = fmt.Sprintf("%d", statusData[0])
-		data[i][4] = display.Grey(fmt.Sprintf("%d", statusData[1]))
-		data[i][5] = fmt.Sprintf("%d", statusData[2])
-		data[i][6] = display.Green(fmt.Sprintf("%d", statusData[3]))
-		data[i][7] = display.Gold(fmt.Sprintf("%d", statusData[4]))
-		data[i][8] = display.Red(fmt.Sprintf("%d", statusData[5]))
-		data[i][9] = display.Grey(fmt.Sprintf("%d", statusData[6]))
-		data[i][10] = display.LightBlue(command.StartTs.Format("01/02/2006 3:04PM"))
-		data[i][11] = display.LightBlue(formatDuration(calculateDuration(command)))
-	}
+	// Add the metrics data row
+	data := [][]any{{
+		fmt.Sprintf("%d", statusData[0]),
+		display.Grey(fmt.Sprintf("%d", statusData[1])),
+		fmt.Sprintf("%d", statusData[2]),
+		display.Green(fmt.Sprintf("%d", statusData[3])),
+		display.Gold(fmt.Sprintf("%d", statusData[4])),
+		display.Red(fmt.Sprintf("%d", statusData[5])),
+		display.Grey(fmt.Sprintf("%d", statusData[6])),
+	}}
 
 	err := table.Bulk(data)
 	if err != nil {
-		return "", fmt.Errorf("error formatting status summary: %v", err)
+		return "", fmt.Errorf("error formatting metrics table: %v", err)
 	}
 
-	if len(status.Commands) == 0 {
-		return display.Gold("No commands found.\n"), nil
-	} else {
-		err := table.Render()
-		if err != nil {
-			return "", fmt.Errorf("error rendering status summary: %v", err)
+	err = table.Render()
+	if err != nil {
+		return "", fmt.Errorf("error rendering metrics table: %v", err)
+	}
+
+	return buf.String(), nil
+}
+
+// visualWidth calculates the visual width of a string, excluding ANSI escape codes
+func visualWidth(s string) int {
+	width := 0
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+		} else if inEscape {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+		} else {
+			width++
 		}
-
-		return buf.String(), nil
 	}
+	return width
+}
+
+// max returns the maximum of two integers
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // countUpdateStates counts states for both resource and target updates
