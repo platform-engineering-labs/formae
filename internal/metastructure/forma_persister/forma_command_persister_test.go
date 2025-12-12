@@ -57,6 +57,7 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 	updateResourceProgress := messages.UpdateResourceProgress{
 		CommandID:          formaCommand.ID,
 		ResourceURI:        resourceURI,
+		Operation:          resource_update.OperationCreate,
 		ResourceStartTs:    util.TimeNow(),
 		ResourceModifiedTs: util.TimeNow().Add(20 * time.Second),
 		ResourceState:      resource_update.ResourceUpdateStateInProgress,
@@ -89,6 +90,7 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 	secondProgressUpdate := messages.UpdateResourceProgress{
 		CommandID:          formaCommand.ID,
 		ResourceURI:        resourceURI,
+		Operation:          resource_update.OperationCreate,
 		ResourceStartTs:    util.TimeNow(),
 		ResourceModifiedTs: util.TimeNow().Add(20 * time.Second),
 		ResourceState:      resource_update.ResourceUpdateStateSuccess,
@@ -125,6 +127,7 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 		ID: "test-bulk-update",
 		ResourceUpdates: []resource_update.ResourceUpdate{
 			{
+				Operation: resource_update.OperationCreate,
 				Resource: pkgmodel.Resource{
 					Label:      "resource0",
 					Type:       "AWS::EC2::VPC",
@@ -135,6 +138,7 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 				State: resource_update.ResourceUpdateStateNotStarted,
 			},
 			{
+				Operation: resource_update.OperationCreate,
 				Resource: pkgmodel.Resource{
 					Label:      "resource1",
 					Type:       "AWS::EC2::Subnet",
@@ -145,6 +149,7 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 				State: resource_update.ResourceUpdateStateNotStarted,
 			},
 			{
+				Operation: resource_update.OperationCreate,
 				Resource: pkgmodel.Resource{
 					Label:      "resource2",
 					Type:       "AWS::EC2::Instance",
@@ -166,9 +171,9 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 	now := util.TimeNow()
 	failResources := MarkResourcesAsFailed{
 		CommandID: formaCommand.ID,
-		ResourceUris: []pkgmodel.FormaeURI{
-			resource1Ksuid,
-			resource2Ksuid,
+		Resources: []ResourceUpdateRef{
+			{URI: resource1Ksuid, Operation: resource_update.OperationCreate},
+			{URI: resource2Ksuid, Operation: resource_update.OperationCreate},
 		},
 		ResourceModifiedTs: now,
 	}
@@ -206,6 +211,7 @@ func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
 	markComplete := messages.MarkResourceUpdateAsComplete{
 		CommandID:                  formaCommand.ID,
 		ResourceURI:                resourceURI,
+		Operation:                  formaCommand.ResourceUpdates[0].Operation,
 		FinalState:                 resource_update.ResourceUpdateStateSuccess,
 		ResourceStartTs:            util.TimeNow(),
 		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
@@ -238,6 +244,7 @@ func TestFormaCommandPersister_KeepsSyncCommandWithVersions(t *testing.T) {
 	markComplete := messages.MarkResourceUpdateAsComplete{
 		CommandID:                  formaCommand.ID,
 		ResourceURI:                resourceURI,
+		Operation:                  formaCommand.ResourceUpdates[0].Operation,
 		FinalState:                 resource_update.ResourceUpdateStateSuccess,
 		ResourceStartTs:            util.TimeNow(),
 		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
@@ -276,6 +283,7 @@ func TestFormaCommandPersister_KeepsApplyCommandWithNoVersions(t *testing.T) {
 	markComplete := messages.MarkResourceUpdateAsComplete{
 		CommandID:                  formaCommand.ID,
 		ResourceURI:                resourceURI,
+		Operation:                  formaCommand.ResourceUpdates[0].Operation,
 		FinalState:                 resource_update.ResourceUpdateStateSuccess,
 		ResourceStartTs:            util.TimeNow(),
 		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
@@ -397,12 +405,200 @@ func newFormaCommandWithCreateResourceUpdate() *forma_command.FormaCommand {
 					Label:     "test-target",
 					Namespace: "test-namespace",
 				},
-				Operation:      resource_update.OperationReplace,
+				Operation:      resource_update.OperationCreate,
 				State:          resource_update.ResourceUpdateStateNotStarted,
 				ProgressResult: []resource.ProgressResult{},
 			},
 		},
 	}
+}
+
+// Test cache helper functions
+func TestBuildResourceUpdateIndex(t *testing.T) {
+	ksuid1 := util.NewID()
+	ksuid2 := util.NewID()
+	ksuid3 := util.NewID()
+
+	cmd := &forma_command.FormaCommand{
+		ID: "test-command",
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{Resource: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationCreate},
+			{Resource: pkgmodel.Resource{Ksuid: ksuid2, Label: "resource2"}, Operation: resource_update.OperationUpdate},
+			{Resource: pkgmodel.Resource{Ksuid: ksuid3, Label: "resource3"}, Operation: resource_update.OperationDelete},
+		},
+	}
+
+	ksuidOpToIndex := buildResourceUpdateIndex(cmd)
+
+	// Composite key index should have 3 entries
+	assert.Len(t, ksuidOpToIndex, 3)
+	assert.Equal(t, 0, ksuidOpToIndex[resourceUpdateKey(ksuid1, resource_update.OperationCreate)])
+	assert.Equal(t, 1, ksuidOpToIndex[resourceUpdateKey(ksuid2, resource_update.OperationUpdate)])
+	assert.Equal(t, 2, ksuidOpToIndex[resourceUpdateKey(ksuid3, resource_update.OperationDelete)])
+}
+
+func TestBuildResourceUpdateIndex_DuplicateKsuids(t *testing.T) {
+	// Test case: Replace operation stores two ResourceUpdates with same ksuid (delete + create)
+	ksuid1 := util.NewID()
+
+	cmd := &forma_command.FormaCommand{
+		ID: "test-command",
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{Resource: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationDelete},
+			{Resource: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationCreate},
+		},
+	}
+
+	ksuidOpToIndex := buildResourceUpdateIndex(cmd)
+
+	// Composite key index should have 2 entries (delete + create for same ksuid)
+	assert.Len(t, ksuidOpToIndex, 2)
+	assert.Equal(t, 0, ksuidOpToIndex[resourceUpdateKey(ksuid1, resource_update.OperationDelete)])
+	assert.Equal(t, 1, ksuidOpToIndex[resourceUpdateKey(ksuid1, resource_update.OperationCreate)])
+}
+
+func TestCachedCommand_FindResourceUpdateIndex(t *testing.T) {
+	ksuid1 := util.NewID()
+	ksuid2 := util.NewID()
+
+	cached := &cachedCommand{
+		command: &forma_command.FormaCommand{
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{Resource: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationCreate},
+				{Resource: pkgmodel.Resource{Ksuid: ksuid2}, Operation: resource_update.OperationUpdate},
+			},
+		},
+		ksuidOpToIndex: map[string]int{
+			resourceUpdateKey(ksuid1, resource_update.OperationCreate): 0,
+			resourceUpdateKey(ksuid2, resource_update.OperationUpdate): 1,
+		},
+	}
+
+	// Test composite key lookup
+	assert.Equal(t, 0, cached.findResourceUpdateIndex(ksuid1, resource_update.OperationCreate))
+	assert.Equal(t, 1, cached.findResourceUpdateIndex(ksuid2, resource_update.OperationUpdate))
+	assert.Equal(t, -1, cached.findResourceUpdateIndex(ksuid1, resource_update.OperationDelete)) // wrong operation
+	assert.Equal(t, -1, cached.findResourceUpdateIndex("nonexistent", resource_update.OperationCreate))
+}
+
+func TestCachedCommand_FindResourceUpdateIndex_DuplicateKsuid(t *testing.T) {
+	// Test case: same ksuid with different operations (replace = delete + create)
+	ksuid1 := util.NewID()
+
+	cached := &cachedCommand{
+		command: &forma_command.FormaCommand{
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{Resource: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationDelete},
+				{Resource: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationCreate},
+			},
+		},
+		ksuidOpToIndex: map[string]int{
+			resourceUpdateKey(ksuid1, resource_update.OperationDelete): 0,
+			resourceUpdateKey(ksuid1, resource_update.OperationCreate): 1,
+		},
+	}
+
+	// Composite key lookup should find the correct entry
+	assert.Equal(t, 0, cached.findResourceUpdateIndex(ksuid1, resource_update.OperationDelete))
+	assert.Equal(t, 1, cached.findResourceUpdateIndex(ksuid1, resource_update.OperationCreate))
+}
+
+func TestFormaCommandPersister_CacheEvictionOnFinalState(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Store the command - this should add it to the cache
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+
+	// Mark the resource as complete - this should trigger cache eviction
+	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        resourceURI,
+		Operation:          formaCommand.ResourceUpdates[0].Operation,
+		FinalState:         resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:    util.TimeNow(),
+		ResourceModifiedTs: util.TimeNow().Add(20 * time.Second),
+		Version:            "test-version",
+	}
+	res := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, res.Error)
+
+	// Load the command again - this should work (from DB since cache was evicted)
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
+	assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
+}
+
+func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) {
+	// Create a command with multiple resources
+	ksuid1 := util.NewID()
+	ksuid2 := util.NewID()
+
+	formaCommand := &forma_command.FormaCommand{
+		ID: "test-multi-resource-cache",
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				Resource: pkgmodel.Resource{
+					Label:      "resource1",
+					Type:       "AWS::EC2::VPC",
+					Stack:      "test-stack",
+					Properties: json.RawMessage(`{}`),
+					Ksuid:      ksuid1,
+				},
+				Operation: resource_update.OperationCreate,
+				State:     resource_update.ResourceUpdateStateNotStarted,
+			},
+			{
+				Resource: pkgmodel.Resource{
+					Label:      "resource2",
+					Type:       "AWS::EC2::Subnet",
+					Stack:      "test-stack",
+					Properties: json.RawMessage(`{}`),
+					Ksuid:      ksuid2,
+				},
+				Operation: resource_update.OperationCreate,
+				State:     resource_update.ResourceUpdateStateNotStarted,
+			},
+		},
+	}
+
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+
+	// Send multiple progress updates for both resources
+	for i := 0; i < 3; i++ {
+		for _, ksuid := range []string{ksuid1, ksuid2} {
+			progress := messages.UpdateResourceProgress{
+				CommandID:          formaCommand.ID,
+				ResourceURI:        pkgmodel.NewFormaeURI(ksuid, ""),
+				Operation:          resource_update.OperationCreate,
+				ResourceStartTs:    util.TimeNow(),
+				ResourceModifiedTs: util.TimeNow(),
+				ResourceState:      resource_update.ResourceUpdateStateInProgress,
+				Progress: resource.ProgressResult{
+					Operation:       resource.OperationCreate,
+					OperationStatus: resource.OperationStatusInProgress,
+				},
+			}
+			res := formaPersister.Call(sender, progress)
+			assert.NoError(t, res.Error)
+		}
+	}
+
+	// Verify both resources are updated
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
+
+	assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loadedCommand.ResourceUpdates[0].State)
+	assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loadedCommand.ResourceUpdates[1].State)
 }
 
 func newFormaCommandPersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, error) {

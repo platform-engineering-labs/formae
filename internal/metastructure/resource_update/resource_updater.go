@@ -232,6 +232,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 			messages.MarkResourceUpdateAsComplete{
 				CommandID:                  data.commandID,
 				ResourceURI:                data.originalResourceKsuidURI,
+				Operation:                  data.resourceUpdate.Operation,
 				FinalState:                 data.resourceUpdate.State,
 				ResourceStartTs:            data.resourceUpdate.StartTs,
 				ResourceModifiedTs:         data.resourceUpdate.ModifiedTs,
@@ -532,6 +533,7 @@ func handleProgressUpdate(state gen.Atom, data ResourceUpdateData, message resou
 		messages.UpdateResourceProgress{
 			CommandID:          data.commandID,
 			ResourceURI:        data.resourceUpdate.Resource.URI(),
+			Operation:          data.resourceUpdate.Operation,
 			ResourceStartTs:    data.resourceUpdate.StartTs,
 			ResourceModifiedTs: message.ModifiedTs,
 			ResourceState:      data.resourceUpdate.State,

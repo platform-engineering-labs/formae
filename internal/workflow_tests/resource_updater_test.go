@@ -166,7 +166,7 @@ func TestResourceUpdater_SuccessfullySynchronizesAResource(t *testing.T) {
 				StartTs: util.TimeNow(),
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
-						Operation: resource_update.OperationUpdate,
+						Operation: resource_update.OperationRead, // Must match the operation used by resourceUpdateReadingS3Bucket
 						Resource: pkgmodel.Resource{
 							Label:      "test-resource",
 							Type:       "FakeAWS::S3::Bucket",
@@ -285,7 +285,7 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 				StartTs: util.TimeNow(),
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
-						Operation: resource_update.OperationUpdate,
+						Operation: resource_update.OperationDelete, // Must match the operation used by resourceUpdateDeletingS3Bucket
 						Resource: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
@@ -710,7 +710,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 				StartTs: util.TimeNow(),
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
-						Operation: resource_update.OperationUpdate,
+						Operation: resource_update.OperationDelete, // Must match partiallyCompletedResourceUpdateDeletingS3Bucket
 						Resource: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
@@ -836,7 +836,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromACreateOperationLeftInInProgres
 				StartTs: util.TimeNow(),
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
-						Operation: resource_update.OperationUpdate,
+						Operation: resource_update.OperationCreate, // Must match partiallyCompletedResourceUpdateCreatingS3Bucket
 						Resource: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",

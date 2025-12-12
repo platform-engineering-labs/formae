@@ -17,7 +17,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -29,6 +28,45 @@ type FormaCommandPersister struct {
 	act.Actor
 
 	datastore datastore.Datastore
+
+	// activeCommands caches in-flight FormaCommands to avoid repeated JSON unmarshaling.
+	// Commands are evicted when they reach a final state (Success, Failed, Canceled).
+	activeCommands map[string]*cachedCommand
+}
+
+// cachedCommand holds an in-memory FormaCommand with optimized lookup structures.
+type cachedCommand struct {
+	command        *forma_command.FormaCommand
+	ksuidOpToIndex map[string]int // O(1) lookup: "ksuid:operation" -> ResourceUpdates index
+}
+
+// resourceUpdateKey creates a composite key for looking up a ResourceUpdate by ksuid and operation.
+// Replace operations are stored as two separate entries (delete + create) with the same ksuid,
+// so we need both ksuid and operation to uniquely identify an entry.
+func resourceUpdateKey(ksuid string, operation types.OperationType) string {
+	return ksuid + ":" + string(operation)
+}
+
+// buildResourceUpdateIndex creates a lookup map for O(1) access to ResourceUpdates.
+// Uses composite key "ksuid:operation" since Replace operations store two entries
+// (delete + create) with the same ksuid.
+func buildResourceUpdateIndex(cmd *forma_command.FormaCommand) map[string]int {
+	ksuidOpToIndex := make(map[string]int, len(cmd.ResourceUpdates))
+	for i, ru := range cmd.ResourceUpdates {
+		key := resourceUpdateKey(ru.Resource.Ksuid, types.OperationType(ru.Operation))
+		ksuidOpToIndex[key] = i
+	}
+	return ksuidOpToIndex
+}
+
+// findResourceUpdateIndex returns the index of the ResourceUpdate with the given ksuid and operation.
+// Returns -1 if not found.
+func (c *cachedCommand) findResourceUpdateIndex(ksuid string, operation types.OperationType) int {
+	key := resourceUpdateKey(ksuid, operation)
+	if idx, ok := c.ksuidOpToIndex[key]; ok {
+		return idx
+	}
+	return -1
 }
 
 func NewFormaCommandPersister() gen.ProcessBehavior {
@@ -71,6 +109,78 @@ func (f *FormaCommandPersister) Init(args ...any) error {
 		return fmt.Errorf("formaCommandPersister: failed to initialize datastore: %w", err)
 	}
 	f.datastore = ds
+	f.activeCommands = make(map[string]*cachedCommand)
+
+	return nil
+}
+
+// getOrLoadCommand retrieves a command from cache or loads it from the database.
+// The command is cached for subsequent accesses until it reaches a final state.
+func (f *FormaCommandPersister) getOrLoadCommand(commandID string) (*cachedCommand, error) {
+	// Check cache first
+	if cached, ok := f.activeCommands[commandID]; ok {
+		return cached, nil
+	}
+
+	// Load from DB
+	cmd, err := f.datastore.GetFormaCommandByCommandID(commandID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build cache entry
+	cached := &cachedCommand{
+		command:        cmd,
+		ksuidOpToIndex: buildResourceUpdateIndex(cmd),
+	}
+	f.activeCommands[commandID] = cached
+
+	return cached, nil
+}
+
+// persistCommand writes the command to the database.
+// For simple progress updates, use this directly.
+func (f *FormaCommandPersister) persistCommand(cached *cachedCommand) error {
+	cmd := cached.command
+
+	if err := f.datastore.StoreFormaCommand(cmd, cmd.ID); err != nil {
+		f.Log().Error("Failed to store command", "commandID", cmd.ID, "error", err)
+		return fmt.Errorf("failed to store command: %w", err)
+	}
+
+	return nil
+}
+
+// finalizeAndPersist handles finalization logic after a command completes:
+// hashes sensitive data, deletes empty sync commands, and evicts from cache.
+// Use this for markResourceUpdateAsComplete and bulkUpdateResourceState.
+func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error {
+	cmd := cached.command
+
+	if _, err := f.hashSensitiveDataIfComplete(cmd); err != nil {
+		f.Log().Error("Failed to hash sensitive data", "commandID", cmd.ID, "error", err)
+		return fmt.Errorf("failed to hash sensitive data: %w", err)
+	}
+
+	if shouldDeleteSyncCommand(cmd) {
+		f.Log().Debug("Deleting sync command with no resource versions", "commandID", cmd.ID)
+		if err := f.datastore.DeleteFormaCommand(cmd, cmd.ID); err != nil {
+			f.Log().Error("Failed to delete sync command", "commandID", cmd.ID, "error", err)
+			return fmt.Errorf("failed to delete sync command: %w", err)
+		}
+		delete(f.activeCommands, cmd.ID)
+		return nil
+	}
+
+	if err := f.datastore.StoreFormaCommand(cmd, cmd.ID); err != nil {
+		f.Log().Error("Failed to store command", "commandID", cmd.ID, "error", err)
+		return fmt.Errorf("failed to store command: %w", err)
+	}
+
+	// Evict from cache if command is complete
+	if cmd.IsInFinalState() {
+		delete(f.activeCommands, cmd.ID)
+	}
 
 	return nil
 }
@@ -83,41 +193,35 @@ type LoadFormaCommand struct {
 	CommandID string
 }
 
+// ResourceUpdateRef identifies a specific ResourceUpdate by URI and operation.
+// This is needed because Replace operations create two entries (delete + create)
+// with the same KSUID, so URI alone is not sufficient.
+type ResourceUpdateRef struct {
+	URI       pkgmodel.FormaeURI
+	Operation types.OperationType
+}
+
 type MarkResourcesAsRejected struct {
 	CommandID          string
-	ResourceUris       []pkgmodel.FormaeURI
+	Resources          []ResourceUpdateRef
 	ResourceModifiedTs time.Time
 }
 
 type MarkResourcesAsFailed struct {
 	CommandID          string
-	ResourceUris       []pkgmodel.FormaeURI
-	ResourceModifiedTs time.Time
-}
-
-// BulkUpdateResourceState is a common structure for rejecting and failing resources.
-type BulkUpdateResourceState struct {
-	CommandID          string
-	ResourceState      types.ResourceUpdateState
-	ResourceModifiedTs time.Time
-}
-
-type BulkUpdateResourceStateByKsuid struct {
-	CommandID          string
-	ResourceUris       []pkgmodel.FormaeURI
-	ResourceState      types.ResourceUpdateState
+	Resources          []ResourceUpdateRef
 	ResourceModifiedTs time.Time
 }
 
 type MarkResourcesAsCanceled struct {
-	CommandID    string
-	ResourceUris []pkgmodel.FormaeURI
+	CommandID string
+	Resources []ResourceUpdateRef
 }
 
 func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message any) (any, error) {
 	switch msg := message.(type) {
 	case StoreNewFormaCommand:
-		return f.storeNewFormaCommand(msg.Command)
+		return f.storeNewFormaCommand(&msg.Command)
 	case LoadFormaCommand:
 		return f.loadFormaCommand(msg.CommandID)
 	case messages.UpdateResourceProgress:
@@ -137,31 +241,35 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 	}
 }
 
-func (f *FormaCommandPersister) storeNewFormaCommand(command forma_command.FormaCommand) (bool, error) {
-	err := f.datastore.StoreFormaCommand(&command, command.ID)
+func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.FormaCommand) (bool, error) {
+	err := f.datastore.StoreFormaCommand(command, command.ID)
 	if err != nil {
 		f.Log().Error("Failed to store new Forma command", "error", err)
 		return false, fmt.Errorf("failed to store new Forma command: %w", err)
 	}
+
 	return true, nil
 }
 
 func (f *FormaCommandPersister) loadFormaCommand(commandID string) (*forma_command.FormaCommand, error) {
-	command, err := f.datastore.GetFormaCommandByCommandID(commandID)
+	cached, err := f.getOrLoadCommand(commandID)
 	if err != nil {
 		f.Log().Error("Failed to load Forma command", "commandID", commandID, "error", err)
 		return nil, fmt.Errorf("failed to load Forma command: %w", err)
 	}
-	return command, nil
+	return cached.command, nil
 }
 
 func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.UpdateResourceProgress) (bool, error) {
 	f.Log().Debug("Updating Forma command from resource progress", "commandID", progress.CommandID, "resourceURI", progress.ResourceURI)
-	command, err := f.datastore.GetFormaCommandByCommandID(progress.CommandID)
+
+	cached, err := f.getOrLoadCommand(progress.CommandID)
 	if err != nil {
 		f.Log().Error("Failed to load Forma command for update", "commandID", progress.CommandID, "error", err)
 		return false, fmt.Errorf("failed to load Forma command for update: %w", err)
 	}
+
+	command := cached.command
 
 	// Don't update if command is already canceled
 	if command.State == forma_command.CommandStateCanceled {
@@ -169,40 +277,34 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		return true, nil
 	}
 
-	for i, res := range command.ResourceUpdates {
-		// Don't update if resource is already canceled
-		if res.State == types.ResourceUpdateStateCanceled {
-			continue
+	// Find matching ResourceUpdate by KSUID and operation
+	idx := cached.findResourceUpdateIndex(progress.ResourceURI.KSUID(), progress.Operation)
+	if idx != -1 {
+		res := &command.ResourceUpdates[idx]
+		res.State = progress.ResourceState
+		res.StartTs = progress.ResourceStartTs
+		res.ModifiedTs = progress.ResourceModifiedTs
+
+		index := slices.IndexFunc(res.ProgressResult, func(p resource.ProgressResult) bool {
+			return p.Operation == progress.Progress.Operation
+		})
+		if index == -1 {
+			res.ProgressResult = append(res.ProgressResult, progress.Progress)
+		} else {
+			res.ProgressResult = slices.Replace(res.ProgressResult, index, index+1, progress.Progress)
 		}
-		if res.Resource.Ksuid == progress.ResourceURI.KSUID() && shouldUpdateResourceUpdate(res, progress.Progress) {
-			res.State = progress.ResourceState
-			res.StartTs = progress.ResourceStartTs
-			res.ModifiedTs = progress.ResourceModifiedTs
+		res.MostRecentProgressResult = progress.Progress
 
-			index := slices.IndexFunc(res.ProgressResult, func(p resource.ProgressResult) bool {
-				return p.Operation == progress.Progress.Operation
-			})
-			if index == -1 {
-				res.ProgressResult = append(res.ProgressResult, progress.Progress)
-			} else {
-				res.ProgressResult = slices.Replace(res.ProgressResult, index, index+1, progress.Progress)
-			}
-			res.MostRecentProgressResult = progress.Progress
+		if progress.ResourceProperties != nil {
+			res.Resource.Properties = progress.ResourceProperties
+		}
 
-			if progress.ResourceProperties != nil {
-				res.Resource.Properties = progress.ResourceProperties
-			}
+		if progress.ResourceReadOnlyProperties != nil {
+			res.Resource.ReadOnlyProperties = progress.ResourceReadOnlyProperties
+		}
 
-			if progress.ResourceReadOnlyProperties != nil {
-				res.Resource.ReadOnlyProperties = progress.ResourceReadOnlyProperties
-			}
-
-			if progress.Version != "" {
-				res.Version = progress.Version
-			}
-
-			command.ResourceUpdates[i] = res
-			break
+		if progress.Version != "" {
+			res.Version = progress.Version
 		}
 	}
 
@@ -213,8 +315,7 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 	command.ModifiedTs = progress.ResourceModifiedTs
 	command.State = overallCommandState(command)
 
-	err = f.datastore.StoreFormaCommand(command, command.ID)
-	if err != nil {
+	if err := f.persistCommand(cached); err != nil {
 		f.Log().Error("Failed to update Forma command from resource progress", "commandID", progress.CommandID, "error", err)
 		return false, fmt.Errorf("failed to update Forma command from resource progress: %w", err)
 	}
@@ -225,17 +326,17 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 func (f *FormaCommandPersister) updateTargetStates(msg *messages.UpdateTargetStates) (bool, error) {
 	f.Log().Debug("Updating Forma command with target states", "commandID", msg.CommandID, "targetCount", len(msg.TargetUpdates))
 
-	command, err := f.datastore.GetFormaCommandByCommandID(msg.CommandID)
+	cached, err := f.getOrLoadCommand(msg.CommandID)
 	if err != nil {
 		f.Log().Error("Failed to load Forma command for target state update", "commandID", msg.CommandID, "error", err)
 		return false, fmt.Errorf("failed to load Forma command for target state update: %w", err)
 	}
 
+	command := cached.command
 	command.TargetUpdates = msg.TargetUpdates
 	command.State = overallCommandState(command)
 
-	err = f.datastore.StoreFormaCommand(command, command.ID)
-	if err != nil {
+	if err := f.persistCommand(cached); err != nil {
 		f.Log().Error("Failed to update Forma command with target states", "commandID", msg.CommandID, "error", err)
 		return false, fmt.Errorf("failed to update Forma command with target states: %w", err)
 	}
@@ -245,45 +346,32 @@ func (f *FormaCommandPersister) updateTargetStates(msg *messages.UpdateTargetSta
 }
 
 func (f *FormaCommandPersister) markResourcesAsRejected(msg *MarkResourcesAsRejected) (bool, error) {
-	return f.bulkUpdateResourceState(&BulkUpdateResourceStateByKsuid{
-		CommandID:          msg.CommandID,
-		ResourceUris:       msg.ResourceUris,
-		ResourceState:      types.ResourceUpdateStateRejected,
-		ResourceModifiedTs: msg.ResourceModifiedTs,
-	})
+	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateRejected, msg.ResourceModifiedTs)
 }
 
 func (f *FormaCommandPersister) markResourcesAsFailed(msg *MarkResourcesAsFailed) (bool, error) {
-	return f.bulkUpdateResourceState(&BulkUpdateResourceStateByKsuid{
-		CommandID:          msg.CommandID,
-		ResourceUris:       msg.ResourceUris,
-		ResourceState:      types.ResourceUpdateStateFailed,
-		ResourceModifiedTs: msg.ResourceModifiedTs,
-	})
+	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateFailed, msg.ResourceModifiedTs)
 }
 
 func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanceled) (bool, error) {
-	return f.bulkUpdateResourceState(&BulkUpdateResourceStateByKsuid{
-		CommandID:          msg.CommandID,
-		ResourceUris:       msg.ResourceUris,
-		ResourceState:      types.ResourceUpdateStateCanceled,
-		ResourceModifiedTs: util.TimeNow(),
-	})
+	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateCanceled, util.TimeNow())
 }
 
 func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkResourceUpdateAsComplete) (bool, error) {
 	f.Log().Debug("Marking command resource as complete", "commandID", msg.CommandID, "resourceURI", msg.ResourceURI)
-	cmd, err := f.datastore.GetFormaCommandByCommandID(msg.CommandID)
+
+	cached, err := f.getOrLoadCommand(msg.CommandID)
 	if err != nil {
 		f.Log().Error("Failed to load Forma command for complete update", "commandID", msg.CommandID, "error", err)
 		return false, fmt.Errorf("failed to load Forma command for complete update: %w", err)
 	}
 
-	for i, res := range cmd.ResourceUpdates {
-		if res.Resource.Ksuid != msg.ResourceURI.KSUID() {
-			continue
-		}
+	cmd := cached.command
 
+	// O(1) lookup by KSUID and operation
+	idx := cached.findResourceUpdateIndex(msg.ResourceURI.KSUID(), msg.Operation)
+	if idx != -1 {
+		res := &cmd.ResourceUpdates[idx]
 		res.State = msg.FinalState
 		res.StartTs = msg.ResourceStartTs
 		res.ModifiedTs = msg.ResourceModifiedTs
@@ -297,15 +385,12 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		if msg.Version != "" {
 			res.Version = msg.Version
 		}
-
-		cmd.ResourceUpdates[i] = res
-		break
 	}
 
 	cmd.ModifiedTs = msg.ResourceModifiedTs
 	cmd.State = overallCommandState(cmd)
 
-	if err := f.finalizeAndPersist(cmd); err != nil {
+	if err := f.finalizeAndPersist(cached); err != nil {
 		return false, err
 	}
 
@@ -313,39 +398,40 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 	return true, nil
 }
 
-func (f *FormaCommandPersister) bulkUpdateResourceState(bulkUpdate *BulkUpdateResourceStateByKsuid) (bool, error) {
-	f.Log().Debug("Bulk updating resource states by KSUID", "commandID", bulkUpdate.CommandID, "resourceCount", len(bulkUpdate.ResourceUris), "state", bulkUpdate.ResourceState)
+func (f *FormaCommandPersister) bulkUpdateResourceState(
+	commandID string,
+	resources []ResourceUpdateRef,
+	state types.ResourceUpdateState,
+	modifiedTs time.Time,
+) (bool, error) {
+	f.Log().Debug("Bulk updating resource states", "commandID", commandID, "count", len(resources), "state", state)
 
-	command, err := f.datastore.GetFormaCommandByCommandID(bulkUpdate.CommandID)
+	cached, err := f.getOrLoadCommand(commandID)
 	if err != nil {
-		f.Log().Error("Failed to load Forma command for bulk update", "commandID", bulkUpdate.CommandID, "error", err)
+		f.Log().Error("Failed to load Forma command for bulk update", "commandID", commandID, "error", err)
 		return false, fmt.Errorf("failed to load Forma command for bulk update: %w", err)
 	}
 
-	// Create a set of KSUIDs for fast lookup
-	ksuidSet := make(map[string]struct{})
-	for _, uri := range bulkUpdate.ResourceUris {
-		ksuidSet[uri.KSUID()] = struct{}{}
-	}
+	command := cached.command
 
-	// Match resources by their KSUID instead of URI
-	for i, res := range command.ResourceUpdates {
-		if _, exists := ksuidSet[res.Resource.Ksuid]; exists {
-			res.State = bulkUpdate.ResourceState
-			res.ModifiedTs = bulkUpdate.ResourceModifiedTs
-			command.ResourceUpdates[i] = res
-			f.Log().Debug("Marked resource as failed due to cascading failure", "resourceKsuid", res.Resource.Ksuid, "state", bulkUpdate.ResourceState)
+	// O(1) lookup by KSUID and operation for each resource
+	for _, ref := range resources {
+		idx := cached.findResourceUpdateIndex(ref.URI.KSUID(), ref.Operation)
+		if idx != -1 {
+			res := &command.ResourceUpdates[idx]
+			res.State = state
+			res.ModifiedTs = modifiedTs
 		}
 	}
 
-	command.ModifiedTs = bulkUpdate.ResourceModifiedTs
+	command.ModifiedTs = modifiedTs
 	command.State = overallCommandState(command)
 
-	if err := f.finalizeAndPersist(command); err != nil {
+	if err := f.finalizeAndPersist(cached); err != nil {
 		return false, err
 	}
 
-	f.Log().Debug("Successfully bulk updated resource states by KSUID", "commandID", bulkUpdate.CommandID, "resourceCount", len(bulkUpdate.ResourceUris))
+	f.Log().Debug("Successfully bulk updated resource states", "commandID", commandID)
 	return true, nil
 }
 
@@ -380,30 +466,6 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 	}
 
 	return forma_command.CommandStateSuccess
-}
-
-// finalizeAndPersist handles the common finalization logic after updating a command:
-// hashes sensitive data if complete, and either deletes empty sync commands or stores the command.
-func (f *FormaCommandPersister) finalizeAndPersist(command *forma_command.FormaCommand) error {
-	if _, err := f.hashSensitiveDataIfComplete(command); err != nil {
-		f.Log().Error("Failed to hash sensitive data", "commandID", command.ID, "error", err)
-		return fmt.Errorf("failed to hash sensitive data: %w", err)
-	}
-
-	if shouldDeleteSyncCommand(command) {
-		f.Log().Debug("Deleting sync command with no resource versions", "commandID", command.ID)
-		if err := f.datastore.DeleteFormaCommand(command, command.ID); err != nil {
-			f.Log().Error("Failed to delete sync command", "commandID", command.ID, "error", err)
-			return fmt.Errorf("failed to delete sync command: %w", err)
-		}
-		return nil
-	}
-
-	if err := f.datastore.StoreFormaCommand(command, command.ID); err != nil {
-		f.Log().Error("Failed to store command", "commandID", command.ID, "error", err)
-		return fmt.Errorf("failed to store command: %w", err)
-	}
-	return nil
 }
 
 // shouldDeleteSyncCommand determines if a sync command should be deleted because it has no resource versions.
@@ -470,25 +532,4 @@ func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_comma
 	}
 
 	return hashedCount > 0, nil
-}
-
-// shouldUpdateResourceUpdate determines if a ResourceUpdate should be updated based on the progress
-func shouldUpdateResourceUpdate(resourceUpdate resource_update.ResourceUpdate, progress resource.ProgressResult) bool {
-	switch progress.Operation {
-	case resource.OperationCreate:
-		return resourceUpdate.Operation == resource_update.OperationCreate || resourceUpdate.Operation == resource_update.OperationReplace
-	case resource.OperationDelete:
-		return resourceUpdate.Operation == resource_update.OperationDelete || resourceUpdate.Operation == resource_update.OperationReplace
-	case resource.OperationUpdate:
-		return resourceUpdate.Operation == resource_update.OperationUpdate || resourceUpdate.Operation == resource_update.OperationReplace
-	case resource.OperationRead:
-		// Read operations can apply to Delete, Update, Replace, or Read ResourceUpdates
-		return resourceUpdate.Operation == resource_update.OperationDelete ||
-			resourceUpdate.Operation == resource_update.OperationUpdate ||
-			resourceUpdate.Operation == resource_update.OperationRead ||
-			resourceUpdate.Operation == resource_update.OperationReplace
-	default:
-		// Default to allowing the update if we can't determine
-		return true
-	}
 }

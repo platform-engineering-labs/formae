@@ -16,7 +16,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 const (
@@ -358,14 +357,17 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 	if len(cascadingFailures) > 0 {
 		proc.Log().Warning("Cascading failures detected", "failedCount", len(cascadingFailures), "commandID", data.changeset.CommandID)
 
-		// Extract URIs of failed resources for bulk update
-		var failedURIs []pkgmodel.FormaeURI
+		// Extract resource refs (URI + operation) for bulk update
+		var failedResources []forma_persister.ResourceUpdateRef
 		for _, failedUpdate := range cascadingFailures {
 			proc.Log().Debug("Resource marked as failed due to cascade",
 				"uri", failedUpdate.URI(),
 				"operation", failedUpdate.Operation,
 				"originalFailure", message.Uri)
-			failedURIs = append(failedURIs, failedUpdate.URI())
+			failedResources = append(failedResources, forma_persister.ResourceUpdateRef{
+				URI:       failedUpdate.URI(),
+				Operation: failedUpdate.Operation,
+			})
 		}
 
 		// Send bulk update to forma command persister
@@ -373,7 +375,7 @@ func resourceUpdateFinished(state gen.Atom, data ChangesetData, message resource
 			gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 			forma_persister.MarkResourcesAsFailed{
 				CommandID:          data.changeset.CommandID,
-				ResourceUris:       failedURIs,
+				Resources:          failedResources,
 				ResourceModifiedTs: util.TimeNow(),
 			})
 		if err != nil {
@@ -439,7 +441,7 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 	proc.Log().Debug("ChangesetExecutor received cancel request", "commandID", message.CommandID)
 
 	// Collect resources by state
-	var urisToCancel []pkgmodel.FormaeURI
+	var resourcesToCancel []forma_persister.ResourceUpdateRef
 	var inProgressCount int
 
 	for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
@@ -447,7 +449,10 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 			// Only cancel resources that haven't started yet (NotStarted state)
 			// Do NOT cancel InProgress resources to avoid orphaned cloud resources
 			if update.State == resource_update.ResourceUpdateStateNotStarted {
-				urisToCancel = append(urisToCancel, update.URI())
+				resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
+					URI:       update.URI(),
+					Operation: update.Operation,
+				})
 			} else if update.State == resource_update.ResourceUpdateStateInProgress {
 				// Count in-progress resources - we need to wait for these to complete
 				inProgressCount++
@@ -456,12 +461,12 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 	}
 
 	// Mark NotStarted resources as canceled
-	if len(urisToCancel) > 0 {
+	if len(resourcesToCancel) > 0 {
 		_, err := proc.Call(
 			gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 			forma_persister.MarkResourcesAsCanceled{
-				CommandID:    data.changeset.CommandID,
-				ResourceUris: urisToCancel,
+				CommandID: data.changeset.CommandID,
+				Resources: resourcesToCancel,
 			},
 		)
 		if err != nil {
@@ -470,7 +475,7 @@ func cancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process
 
 		proc.Log().Debug("Marked NotStarted resources as canceled",
 			"commandID", message.CommandID,
-			"canceledCount", len(urisToCancel))
+			"canceledCount", len(resourcesToCancel))
 	}
 
 	// Determine next state
