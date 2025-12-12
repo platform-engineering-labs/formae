@@ -70,8 +70,7 @@ func (e FormaCyclesDetectedError) Error() string {
 }
 
 type FormaPatchRejectedError struct {
-	UnknownStacks    []*pkgmodel.Stack    `json:"UnknownStacks"`
-	UnknownResources []*pkgmodel.Resource `json:"UnknownResources"`
+	UnknownStacks []*pkgmodel.Stack `json:"UnknownStacks"`
 }
 
 func (e FormaPatchRejectedError) Error() string {
