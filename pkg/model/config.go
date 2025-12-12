@@ -78,7 +78,7 @@ type OTLPConfig struct {
 type OTelConfig struct {
 	Enabled     bool
 	ServiceName string
-	OTLP        OTLPConfig
+	OTLP        OTLPConfig `pkl:"otlp"`
 }
 
 type AgentConfig struct {

@@ -17,6 +17,8 @@ import (
 	"github.com/demula/mksuid/v2"
 	json "github.com/goccy/go-json"
 	_ "github.com/mattn/go-sqlite3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -29,6 +31,12 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
+
+var sqliteTracer trace.Tracer
+
+func init() {
+	sqliteTracer = otel.Tracer("formae/datastore/sqlite")
+}
 
 type DatastoreSQLite struct {
 	conn    *sql.DB
@@ -83,6 +91,9 @@ func (d DatastoreSQLite) ClearCommandsTable() error {
 }
 
 func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	_, span := sqliteTracer.Start(context.Background(), "StoreFormaCommand")
+	defer span.End()
+
 	for _, r := range fa.ResourceUpdates {
 		if r.Resource.Properties == nil {
 			slog.Debug("Resource properties are empty for resource", "resourceLabel", r.Resource.Label, "commandID", commandID)
@@ -368,6 +379,9 @@ func loadFormaCommandsFromJoinedRows(rows *sql.Rows) ([]*forma_command.FormaComm
 }
 
 func (d DatastoreSQLite) LoadFormaCommands() ([]*forma_command.FormaCommand, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadFormaCommands")
+	defer span.End()
+
 	rows, err := d.conn.Query(formaCommandWithResourceUpdatesQueryBase + resourceUpdateOrderBy)
 	if err != nil {
 		return nil, err
@@ -376,6 +390,9 @@ func (d DatastoreSQLite) LoadFormaCommands() ([]*forma_command.FormaCommand, err
 }
 
 func (d DatastoreSQLite) LoadIncompleteFormaCommands() ([]*forma_command.FormaCommand, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadIncompleteFormaCommands")
+	defer span.End()
+
 	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.command != 'sync' AND fc.state = ?" + resourceUpdateOrderBy
 	rows, err := d.conn.Query(query, forma_command.CommandStateInProgress)
 	if err != nil {
@@ -385,6 +402,9 @@ func (d DatastoreSQLite) LoadIncompleteFormaCommands() ([]*forma_command.FormaCo
 }
 
 func (d DatastoreSQLite) DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	_, span := sqliteTracer.Start(context.Background(), "DeleteFormaCommand")
+	defer span.End()
+
 	// Delete resource_updates first (no FK constraint, so we must do this manually)
 	_, err := d.conn.Exec("DELETE FROM resource_updates WHERE command_id = ?", commandID)
 	if err != nil {
@@ -397,6 +417,9 @@ func (d DatastoreSQLite) DeleteFormaCommand(fa *forma_command.FormaCommand, comm
 }
 
 func (d DatastoreSQLite) GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetFormaCommandByCommandID")
+	defer span.End()
+
 	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.command_id = ?" + resourceUpdateOrderBy
 	rows, err := d.conn.Query(query, commandID)
 	if err != nil {
@@ -414,6 +437,9 @@ func (d DatastoreSQLite) GetFormaCommandByCommandID(commandID string) (*forma_co
 }
 
 func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetMostRecentFormaCommandByClientID")
+	defer span.End()
+
 	// Use a subquery to find the most recent command_id, then join with resource_updates
 	query := `
 		SELECT
@@ -450,6 +476,9 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 }
 
 func (d DatastoreSQLite) GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetResourceModificationsSinceLastReconcile")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 SELECT DISTINCT
   T2.type,
@@ -552,6 +581,9 @@ func extendSQLiteQueryString[T any](queryStr string, queryItem *QueryItem[T], sq
 }
 
 func (d DatastoreSQLite) QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error) {
+	_, span := sqliteTracer.Start(context.Background(), "QueryFormaCommands")
+	defer span.End()
+
 	// Build subquery to find matching command IDs with filtering and LIMIT
 	subqueryStr := "SELECT command_id FROM forma_commands WHERE 1=1"
 	args := []any{}
@@ -600,6 +632,9 @@ func (d DatastoreSQLite) QueryFormaCommands(query *StatusQuery) ([]*forma_comman
 }
 
 func (d DatastoreSQLite) QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "QueryResources")
+	defer span.End()
+
 	queryStr := fmt.Sprintf(`
 		SELECT data, ksuid
 		FROM resources r1
@@ -783,6 +818,9 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 }
 
 func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "StoreResource")
+	defer span.End()
+
 	jsonData, err := json.Marshal(resource)
 	if err != nil {
 		return "", err
@@ -792,10 +830,16 @@ func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID st
 }
 
 func (d DatastoreSQLite) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "DeleteResource")
+	defer span.End()
+
 	return d.storeResource(resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
 }
 
 func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadResource")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources
@@ -826,6 +870,9 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 }
 
 func (d DatastoreSQLite) LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadResourceByNativeID")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -860,6 +907,9 @@ func (d DatastoreSQLite) LoadResourceByNativeID(nativeID string, resourceType st
 }
 
 func (d DatastoreSQLite) LoadAllResources() ([]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadAllResources")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -898,6 +948,9 @@ func (d DatastoreSQLite) LoadAllResources() ([]*pkgmodel.Resource, error) {
 }
 
 func (d DatastoreSQLite) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "StoreStack")
+	defer span.End()
+
 	var ret string
 	var err error
 	for _, resource := range stack.Resources {
@@ -910,6 +963,9 @@ func (d DatastoreSQLite) StoreStack(stack *pkgmodel.Forma, commandID string) (st
 }
 
 func (d DatastoreSQLite) LoadAllStacks() ([]*pkgmodel.Forma, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadAllStacks")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -965,6 +1021,9 @@ func (d DatastoreSQLite) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 }
 
 func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadStack")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -1020,6 +1079,9 @@ func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
 }
 
 func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CreateTarget")
+	defer span.End()
+
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
@@ -1036,6 +1098,9 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 }
 
 func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateTarget")
+	defer span.End()
+
 	query := `SELECT MAX(version) FROM targets WHERE label = ?`
 	row := d.conn.QueryRow(query, target.Label)
 
@@ -1066,6 +1131,9 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 }
 
 func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadTarget")
+	defer span.End()
+
 	query := `SELECT version, namespace, config, discoverable FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, label)
 
@@ -1090,6 +1158,9 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 }
 
 func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadAllTargets")
+	defer span.End()
+
 	var targets []*pkgmodel.Target
 
 	query := `
@@ -1130,6 +1201,9 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 }
 
 func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadTargetsByLabels")
+	defer span.End()
+
 	if len(targetNames) == 0 {
 		return []*pkgmodel.Target{}, nil
 	}
@@ -1182,6 +1256,9 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 }
 
 func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadDiscoverableTargets")
+	defer span.End()
+
 	// Get latest version per label where discoverable = true
 	// Deduplicate by config across all namespaces
 	query := `
@@ -1230,6 +1307,9 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 }
 
 func (d DatastoreSQLite) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error) {
+	_, span := sqliteTracer.Start(context.Background(), "QueryTargets")
+	defer span.End()
+
 	queryStr := `
 		SELECT label, version, namespace, config, discoverable
 		FROM targets t1
@@ -1279,6 +1359,9 @@ func (d DatastoreSQLite) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, e
 }
 
 func (d DatastoreSQLite) LatestLabelForResource(label string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LatestLabelForResource")
+	defer span.End()
+
 	query := `
     SELECT label FROM resources
     WHERE label = ? OR label LIKE ? || '-%'
@@ -1299,6 +1382,9 @@ func (d DatastoreSQLite) LatestLabelForResource(label string) (string, error) {
 }
 
 func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
+	_, span := sqliteTracer.Start(context.Background(), "Stats")
+	defer span.End()
+
 	res := stats.Stats{}
 
 	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", CommandsTable)
@@ -1503,6 +1589,9 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 }
 
 func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadResourceById")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources
@@ -1534,6 +1623,9 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 }
 
 func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetKSUIDByTriplet")
+	defer span.End()
+
 	query := `
 	SELECT ksuid
 	FROM resources
@@ -1556,6 +1648,9 @@ func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (s
 }
 
 func (d DatastoreSQLite) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "BatchGetKSUIDsByTriplets")
+	defer span.End()
+
 	if len(triplets) == 0 {
 		return make(map[pkgmodel.TripletKey]string), nil
 	}
@@ -1604,6 +1699,9 @@ func (d DatastoreSQLite) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey
 }
 
 func (d DatastoreSQLite) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]pkgmodel.TripletKey, error) {
+	_, span := sqliteTracer.Start(context.Background(), "BatchGetTripletsByKSUIDs")
+	defer span.End()
+
 	if len(ksuids) == 0 {
 		return make(map[string]pkgmodel.TripletKey), nil
 	}
@@ -1654,6 +1752,9 @@ func (d DatastoreSQLite) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]p
 // BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
 // This is the key performance optimization: insert all updates in one transaction
 func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
+	_, span := sqliteTracer.Start(context.Background(), "BulkStoreResourceUpdates")
+	defer span.End()
+
 	if len(updates) == 0 {
 		return nil
 	}
@@ -1771,6 +1872,9 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 
 // LoadResourceUpdates loads all ResourceUpdates for a given command
 func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadResourceUpdates")
+	defer span.End()
+
 	query := `
 		SELECT ksuid, operation, state, start_ts, modified_ts,
 			retries, remaining, version, stack_label, group_id, source,
@@ -1893,6 +1997,9 @@ func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_updat
 // UpdateResourceUpdateState updates the state of a single ResourceUpdate
 // This is the key performance improvement: updating one row instead of re-serializing entire command
 func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateResourceUpdateState")
+	defer span.End()
+
 	query := `
 		UPDATE resource_updates
 		SET state = ?, modified_ts = ?
@@ -1919,6 +2026,9 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
 func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress resource.ProgressResult) error {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateResourceUpdateProgress")
+	defer span.End()
+
 	// First, load existing progress results to append to
 	var existingProgressJSON []byte
 	query := `SELECT progress_result FROM resource_updates WHERE command_id = ? AND ksuid = ? AND operation = ?`
@@ -1974,6 +2084,9 @@ func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid st
 // BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 // Used for bulk operations like marking dependent resources as failed
 func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	_, span := sqliteTracer.Start(context.Background(), "BatchUpdateResourceUpdateState")
+	defer span.End()
+
 	if len(refs) == 0 {
 		return nil
 	}
@@ -2018,6 +2131,9 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 // without re-writing all ResourceUpdates. This is a performance optimization for
 // progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
 func (d DatastoreSQLite) UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateFormaCommandProgress")
+	defer span.End()
+
 	modifiedTsUTC := modifiedTs.UTC().Format(time.RFC3339Nano)
 
 	result, err := d.conn.Exec(

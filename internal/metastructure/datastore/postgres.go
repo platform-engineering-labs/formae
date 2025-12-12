@@ -14,10 +14,13 @@ import (
 	"time"
 
 	"github.com/demula/mksuid/v2"
+	"github.com/exaring/otelpgx"
 	json "github.com/goccy/go-json"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -29,6 +32,13 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
+
+// tracer is used for creating spans within datastore methods to group SQL queries
+var tracer trace.Tracer
+
+func init() {
+	tracer = otel.Tracer("formae/datastore")
+}
 
 type DatastorePostgres struct {
 	pool    *pgxpool.Pool
@@ -113,7 +123,14 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		return nil, err
 	}
 
-	pool, err := pgxpool.New(ctx, connStr)
+	poolCfg, err := pgxpool.ParseConfig(connStr)
+	if err != nil {
+		slog.Error("failed to parse PostgreSQL connection string", "error", err)
+		return nil, err
+	}
+	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer()
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		slog.Error("failed to connect to PostgreSQL database", "error", err)
 		return nil, err
@@ -127,6 +144,9 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 }
 
 func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	ctx, span := tracer.Start(context.Background(), "StoreFormaCommand")
+	defer span.End()
+
 	for _, r := range fa.ResourceUpdates {
 		if r.Resource.Properties == nil {
 			slog.Debug("Resource properties are empty for resource", "resourceLabel", r.Resource.Label, "commandID", commandID)
@@ -160,7 +180,7 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	modified_ts = EXCLUDED.modified_ts
 	`, CommandsTable)
 
-	_, err = d.pool.Exec(context.Background(), query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
+	_, err = d.pool.Exec(ctx, query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
 		targetUpdatesJSON, fa.ModifiedTs.UTC())
 	if err != nil {
@@ -395,7 +415,10 @@ func loadFormaCommandsFromJoinedRowsPostgres(rows pgx.Rows) ([]*forma_command.Fo
 }
 
 func (d DatastorePostgres) LoadFormaCommands() ([]*forma_command.FormaCommand, error) {
-	rows, err := d.pool.Query(context.Background(), formaCommandWithResourceUpdatesQueryBasePostgres+resourceUpdateOrderByPostgres)
+	ctx, span := tracer.Start(context.Background(), "LoadFormaCommands")
+	defer span.End()
+
+	rows, err := d.pool.Query(ctx, formaCommandWithResourceUpdatesQueryBasePostgres+resourceUpdateOrderByPostgres)
 	if err != nil {
 		return nil, err
 	}
@@ -403,20 +426,26 @@ func (d DatastorePostgres) LoadFormaCommands() ([]*forma_command.FormaCommand, e
 }
 
 func (d DatastorePostgres) DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	ctx, span := tracer.Start(context.Background(), "DeleteFormaCommand")
+	defer span.End()
+
 	// Delete resource_updates first (no FK constraint, so we must do this manually)
-	_, err := d.pool.Exec(context.Background(), "DELETE FROM resource_updates WHERE command_id = $1", commandID)
+	_, err := d.pool.Exec(ctx, "DELETE FROM resource_updates WHERE command_id = $1", commandID)
 	if err != nil {
 		return fmt.Errorf("failed to delete resource_updates: %w", err)
 	}
 
 	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = $1", CommandsTable)
-	_, err = d.pool.Exec(context.Background(), query, commandID)
+	_, err = d.pool.Exec(ctx, query, commandID)
 	return err
 }
 
 func (d DatastorePostgres) GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error) {
+	ctx, span := tracer.Start(context.Background(), "GetFormaCommandByCommandID")
+	defer span.End()
+
 	query := formaCommandWithResourceUpdatesQueryBasePostgres + " WHERE fc.command_id = $1" + resourceUpdateOrderByPostgres
-	rows, err := d.pool.Query(context.Background(), query, commandID)
+	rows, err := d.pool.Query(ctx, query, commandID)
 	if err != nil {
 		return nil, err
 	}
@@ -434,12 +463,15 @@ func (d DatastorePostgres) GetFormaCommandByCommandID(commandID string) (*forma_
 }
 
 func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error) {
+	ctx, span := tracer.Start(context.Background(), "GetMostRecentFormaCommandByClientID")
+	defer span.End()
+
 	// Use subquery to find the most recent command_id first, then fetch all its resource_updates
 	// LIMIT 1 on the joined query would only return 1 row, not 1 command
 	query := formaCommandWithResourceUpdatesQueryBasePostgres +
 		" WHERE fc.command_id = (SELECT command_id FROM forma_commands WHERE client_id = $1 ORDER BY timestamp DESC LIMIT 1)" +
 		resourceUpdateOrderByPostgres
-	rows, err := d.pool.Query(context.Background(), query, clientID)
+	rows, err := d.pool.Query(ctx, query, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -488,6 +520,9 @@ func extendPostgresQueryString[T any](queryStr string, queryItem *QueryItem[T], 
 }
 
 func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error) {
+	ctx, span := tracer.Start(context.Background(), "QueryFormaCommands")
+	defer span.End()
+
 	// Build subquery to find matching command IDs with filtering and LIMIT
 	subqueryStr := "SELECT command_id FROM forma_commands WHERE 1=1"
 	args := []any{}
@@ -528,7 +563,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_comm
 		ORDER BY fc.timestamp DESC, ru.ksuid ASC
 	`, subqueryStr)
 
-	rows, err := d.pool.Query(context.Background(), queryStr, args...)
+	rows, err := d.pool.Query(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -536,6 +571,9 @@ func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_comm
 }
 
 func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "GetKSUIDByTriplet")
+	defer span.End()
+
 	query := `
 	SELECT ksuid
 	FROM resources
@@ -544,7 +582,7 @@ func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) 
 	ORDER BY version DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(context.Background(), query, stack, label, resourceType, resource_update.OperationDelete)
+	row := d.pool.QueryRow(ctx, query, stack, label, resourceType, resource_update.OperationDelete)
 
 	var ksuid string
 	if err := row.Scan(&ksuid); err != nil {
@@ -558,6 +596,9 @@ func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) 
 }
 
 func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error) {
+	ctx, span := tracer.Start(context.Background(), "BatchGetKSUIDsByTriplets")
+	defer span.End()
+
 	if len(triplets) == 0 {
 		return make(map[pkgmodel.TripletKey]string), nil
 	}
@@ -585,7 +626,7 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 	`, strings.Join(placeholders, ","), len(triplets)*3+1)
 
 	args = append(args, resource_update.OperationDelete)
-	rows, err := d.pool.Query(context.Background(), query, args...)
+	rows, err := d.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
@@ -611,6 +652,9 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 }
 
 func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error) {
+	ctx, span := tracer.Start(context.Background(), "GetResourceModificationsSinceLastReconcile")
+	defer span.End()
+
 	query := `
 	SELECT DISTINCT
 	T2.type,
@@ -647,7 +691,7 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	)
 	AND T2.stack = $1;
 	`
-	rows, err := d.pool.Query(context.Background(), query, stack)
+	rows, err := d.pool.Query(ctx, query, stack)
 	if err != nil {
 		return nil, err
 	}
@@ -671,6 +715,9 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 }
 
 func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]pkgmodel.TripletKey, error) {
+	ctx, span := tracer.Start(context.Background(), "BatchGetTripletsByKSUIDs")
+	defer span.End()
+
 	if len(ksuids) == 0 {
 		return make(map[string]pkgmodel.TripletKey), nil
 	}
@@ -699,7 +746,7 @@ func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string
 	// Add operation type to args for the delete check
 	args = append(args, resource_update.OperationDelete)
 
-	rows, err := d.pool.Query(context.Background(), query, args...)
+	rows, err := d.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -719,6 +766,9 @@ func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string
 }
 
 func (d DatastorePostgres) LatestLabelForResource(label string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "LatestLabelForResource")
+	defer span.End()
+
 	query := `
 	SELECT label
 	FROM resources
@@ -726,7 +776,7 @@ func (d DatastorePostgres) LatestLabelForResource(label string) (string, error) 
 	ORDER BY LENGTH(label) DESC, label DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(context.Background(), query, label, label)
+	row := d.pool.QueryRow(ctx, query, label, label)
 
 	var latestLabel string
 	if err := row.Scan(&latestLabel); err != nil {
@@ -740,10 +790,16 @@ func (d DatastorePostgres) LatestLabelForResource(label string) (string, error) 
 }
 
 func (d DatastorePostgres) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
-	return d.storeResource(resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	ctx, span := tracer.Start(context.Background(), "DeleteResource")
+	defer span.End()
+
+	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
 }
 
 func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadAllResources")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -755,7 +811,7 @@ func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	)
 	AND operation != $1
 	`
-	rows, err := d.pool.Query(context.Background(), query, resource_update.OperationDelete)
+	rows, err := d.pool.Query(ctx, query, resource_update.OperationDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -782,6 +838,9 @@ func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
 }
 
 func (d DatastorePostgres) LoadAllStacks() ([]*pkgmodel.Forma, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadAllStacks")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -794,7 +853,7 @@ func (d DatastorePostgres) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 	AND operation != $1
 	`
 
-	rows, err := d.pool.Query(context.Background(), query, resource_update.OperationDelete)
+	rows, err := d.pool.Query(ctx, query, resource_update.OperationDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -837,6 +896,9 @@ func (d DatastorePostgres) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 }
 
 func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadAllTargets")
+	defer span.End()
+
 	query := `
 	SELECT label, version, namespace, config, discoverable
 	FROM targets t1
@@ -848,7 +910,7 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	)
 	`
 
-	rows, err := d.pool.Query(context.Background(), query)
+	rows, err := d.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -877,11 +939,14 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 }
 
 func (d DatastorePostgres) LoadIncompleteFormaCommands() ([]*forma_command.FormaCommand, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadIncompleteFormaCommands")
+	defer span.End()
+
 	query := formaCommandWithResourceUpdatesQueryBasePostgres +
 		" WHERE fc.command != 'sync' AND fc.state = $1" +
 		resourceUpdateOrderByPostgres
 
-	rows, err := d.pool.Query(context.Background(), query, forma_command.CommandStateInProgress)
+	rows, err := d.pool.Query(ctx, query, forma_command.CommandStateInProgress)
 	if err != nil {
 		return nil, err
 	}
@@ -890,6 +955,9 @@ func (d DatastorePostgres) LoadIncompleteFormaCommands() ([]*forma_command.Forma
 }
 
 func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadResource")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources
@@ -898,7 +966,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	ORDER BY version DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(context.Background(), query, uri, resource_update.OperationDelete)
+	row := d.pool.QueryRow(ctx, query, uri, resource_update.OperationDelete)
 
 	var jsonData string
 	var ksuid string
@@ -919,6 +987,9 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 }
 
 func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadResourceById")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources
@@ -927,7 +998,7 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	ORDER BY version DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(context.Background(), query, ksuid, resource_update.OperationDelete)
+	row := d.pool.QueryRow(ctx, query, ksuid, resource_update.OperationDelete)
 
 	var jsonData string
 	var ksuidResult string
@@ -950,6 +1021,9 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 }
 
 func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadResourceByNativeID")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -963,7 +1037,7 @@ func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType 
 	AND r1.operation != $3
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(context.Background(), query, nativeID, resourceType, resource_update.OperationDelete)
+	row := d.pool.QueryRow(ctx, query, nativeID, resourceType, resource_update.OperationDelete)
 
 	var jsonData string
 	var ksuid string
@@ -984,6 +1058,9 @@ func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType 
 }
 
 func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadStack")
+	defer span.End()
+
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -997,7 +1074,7 @@ func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error)
 	AND operation != $2
 	`
 
-	rows, err := d.pool.Query(context.Background(), query, stackLabel, resource_update.OperationDelete)
+	rows, err := d.pool.Query(ctx, query, stackLabel, resource_update.OperationDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -1039,6 +1116,9 @@ func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error)
 }
 
 func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadTarget")
+	defer span.End()
+
 	query := `
 	SELECT version, namespace, config, discoverable
 	FROM targets
@@ -1046,7 +1126,7 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	ORDER BY version DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(context.Background(), query, label)
+	row := d.pool.QueryRow(ctx, query, label)
 
 	var version int
 	var namespace string
@@ -1069,6 +1149,9 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 }
 
 func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadTargetsByLabels")
+	defer span.End()
+
 	if len(targetNames) == 0 {
 		return []*pkgmodel.Target{}, nil
 	}
@@ -1093,7 +1176,7 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	)
 	`, strings.Join(placeholders, ","))
 
-	rows, err := d.pool.Query(context.Background(), query, args...)
+	rows, err := d.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1122,6 +1205,9 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 }
 
 func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadDiscoverableTargets")
+	defer span.End()
+
 	// Get latest version per label where discoverable = true, deduplicated by config using DISTINCT ON
 	query := `
 	WITH latest_targets AS (
@@ -1139,7 +1225,7 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	FROM latest_targets
 	ORDER BY config, version DESC`
 
-	rows, err := d.pool.Query(context.Background(), query)
+	rows, err := d.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -1168,6 +1254,9 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 }
 
 func (d DatastorePostgres) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "QueryTargets")
+	defer span.End()
+
 	queryStr := `
 		SELECT label, version, namespace, config, discoverable
 		FROM targets t1
@@ -1184,7 +1273,7 @@ func (d DatastorePostgres) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target,
 	queryStr = extendPostgresQueryString(queryStr, query.Discoverable, " AND discoverable %s $%d", &args)
 	queryStr += " ORDER BY label"
 
-	rows, err := d.pool.Query(context.Background(), queryStr, args...)
+	rows, err := d.pool.Query(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1213,6 +1302,9 @@ func (d DatastorePostgres) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target,
 }
 
 func (d DatastorePostgres) QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "QueryResources")
+	defer span.End()
+
 	queryStr := `
 	SELECT data, ksuid
 	FROM resources r1
@@ -1235,7 +1327,7 @@ func (d DatastorePostgres) QueryResources(query *ResourceQuery) ([]*pkgmodel.Res
 
 	queryStr += " ORDER BY type, label"
 
-	rows, err := d.pool.Query(context.Background(), queryStr, args...)
+	rows, err := d.pool.Query(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1261,11 +1353,14 @@ func (d DatastorePostgres) QueryResources(query *ResourceQuery) ([]*pkgmodel.Res
 }
 
 func (d DatastorePostgres) Stats() (*stats.Stats, error) {
+	ctx, span := tracer.Start(context.Background(), "Stats")
+	defer span.End()
+
 	res := stats.Stats{}
 
 	// Count distinct clients
 	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", CommandsTable)
-	row := d.pool.QueryRow(context.Background(), clientsQuery)
+	row := d.pool.QueryRow(ctx, clientsQuery)
 	if err := row.Scan(&res.Clients); err != nil {
 		return nil, err
 	}
@@ -1277,7 +1372,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	WHERE command != $1
 	GROUP BY command
 	`, CommandsTable)
-	rows, err := d.pool.Query(context.Background(), commandsQuery, pkgmodel.CommandSync)
+	rows, err := d.pool.Query(ctx, commandsQuery, pkgmodel.CommandSync)
 	if err != nil {
 		return nil, err
 	}
@@ -1300,7 +1395,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	WHERE command != $1
 	GROUP BY state
 	`, CommandsTable)
-	rows, err = d.pool.Query(context.Background(), statusQuery, pkgmodel.CommandSync)
+	rows, err = d.pool.Query(ctx, statusQuery, pkgmodel.CommandSync)
 	if err != nil {
 		return nil, err
 	}
@@ -1330,7 +1425,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		AND r2.version > r1.version
 	)
 	`, constants.UnmanagedStack)
-	row = d.pool.QueryRow(context.Background(), stacksQuery, resource_update.OperationDelete)
+	row = d.pool.QueryRow(ctx, stacksQuery, resource_update.OperationDelete)
 	if err := row.Scan(&res.Stacks); err != nil {
 		return nil, err
 	}
@@ -1349,7 +1444,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		AND r2.version > r1.version
 	)
 	`, constants.UnmanagedStack)
-	row = d.pool.QueryRow(context.Background(), resourcesQuery, resource_update.OperationDelete)
+	row = d.pool.QueryRow(ctx, resourcesQuery, resource_update.OperationDelete)
 	if err := row.Scan(&res.ManagedResources); err != nil {
 		return nil, err
 	}
@@ -1367,7 +1462,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		AND r2.version > r1.version
 	)
 	`, constants.UnmanagedStack)
-	row = d.pool.QueryRow(context.Background(), unmanagedResourcesQuery, resource_update.OperationDelete)
+	row = d.pool.QueryRow(ctx, unmanagedResourcesQuery, resource_update.OperationDelete)
 	if err := row.Scan(&res.UnmanagedResources); err != nil {
 		return nil, err
 	}
@@ -1383,7 +1478,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		AND t2.version > t1.version
 	)
 	`
-	row = d.pool.QueryRow(context.Background(), targetsQuery)
+	row = d.pool.QueryRow(ctx, targetsQuery)
 	if err := row.Scan(&res.Targets); err != nil {
 		return nil, err
 	}
@@ -1402,7 +1497,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	)
 	GROUP BY type
 	`
-	rows, err = d.pool.Query(context.Background(), resourceTypesQuery, resource_update.OperationDelete)
+	rows, err = d.pool.Query(ctx, resourceTypesQuery, resource_update.OperationDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -1425,7 +1520,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	JOIN forma_commands fc ON ru.command_id = fc.command_id
 	WHERE fc.state = $1 AND ru.state = $2
 	`
-	rows, err = d.pool.Query(context.Background(), errorQuery, forma_command.CommandStateFailed, types.ResourceUpdateStateFailed)
+	rows, err = d.pool.Query(ctx, errorQuery, forma_command.CommandStateFailed, types.ResourceUpdateStateFailed)
 	if err != nil {
 		return nil, err
 	}
@@ -1452,22 +1547,25 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 }
 
 func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "StoreResource")
+	defer span.End()
+
 	jsonData, err := json.Marshal(resource)
 	if err != nil {
 		return "", err
 	}
 
-	return d.storeResource(resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate))
 }
 
-func (d DatastorePostgres) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
 	}
 
 	// Check if this resource already exists by native_id and type
 	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = $1 AND type = $2 ORDER BY version DESC LIMIT 1`
-	row := d.pool.QueryRow(context.Background(), query, resource.NativeID, resource.Type)
+	row := d.pool.QueryRow(ctx, query, resource.NativeID, resource.Type)
 
 	var ksuid string
 	var existingData string
@@ -1483,7 +1581,7 @@ func (d DatastorePostgres) storeResource(resource *pkgmodel.Resource, data []byt
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		`
 		_, err = d.pool.Exec(
-			context.Background(),
+			ctx,
 			query,
 			resource.URI(),
 			newVersion,
@@ -1534,7 +1632,7 @@ func (d DatastorePostgres) storeResource(resource *pkgmodel.Resource, data []byt
 		// For delete operations, check if the latest version is already a delete
 		var latestOperation string
 		query = `SELECT operation FROM resources WHERE uri = $1 ORDER BY version DESC LIMIT 1`
-		row = d.pool.QueryRow(context.Background(), query, resource.URI())
+		row = d.pool.QueryRow(ctx, query, resource.URI())
 		err = row.Scan(&latestOperation)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1578,7 +1676,7 @@ func (d DatastorePostgres) storeResource(resource *pkgmodel.Resource, data []byt
 	ksuid = EXCLUDED.ksuid
 	`
 	_, err = d.pool.Exec(
-		context.Background(),
+		ctx,
 		query,
 		resource.URI(),
 		newVersion,
@@ -1602,6 +1700,9 @@ func (d DatastorePostgres) storeResource(resource *pkgmodel.Resource, data []byt
 }
 
 func (d DatastorePostgres) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
+	_, span := tracer.Start(context.Background(), "StoreStack")
+	defer span.End()
+
 	var lastVersionID string
 	for _, resource := range stack.Resources {
 		versionID, err := d.StoreResource(&resource, commandID)
@@ -1615,6 +1716,9 @@ func (d DatastorePostgres) StoreStack(stack *pkgmodel.Forma, commandID string) (
 }
 
 func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "CreateTarget")
+	defer span.End()
+
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
@@ -1624,7 +1728,7 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 	INSERT INTO targets (label, version, namespace, config, discoverable)
 	VALUES ($1, 1, $2, $3, $4)
 	`
-	_, err = d.pool.Exec(context.Background(), query, target.Label, target.Namespace, cfg, target.Discoverable)
+	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, target.Discoverable)
 	if err != nil {
 		slog.Error("failed to create target", "error", err, "label", target.Label)
 		return "", err
@@ -1634,8 +1738,11 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 }
 
 func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "UpdateTarget")
+	defer span.End()
+
 	query := `SELECT MAX(version) FROM targets WHERE label = $1`
-	row := d.pool.QueryRow(context.Background(), query, target.Label)
+	row := d.pool.QueryRow(ctx, query, target.Label)
 
 	var maxVersion sql.NullInt64
 	if err := row.Scan(&maxVersion); err != nil {
@@ -1653,7 +1760,7 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	}
 
 	insertQuery := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES ($1, $2, $3, $4, $5)`
-	_, err = d.pool.Exec(context.Background(), insertQuery, target.Label, newVersion, target.Namespace, cfg, target.Discoverable)
+	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, target.Discoverable)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -1665,11 +1772,13 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 // BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
 // This is the key performance optimization: insert all updates in one transaction
 func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
+	ctx, span := tracer.Start(context.Background(), "BulkStoreResourceUpdates")
+	defer span.End()
+
 	if len(updates) == 0 {
 		return nil
 	}
 
-	ctx := context.Background()
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -1788,6 +1897,9 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 // LoadResourceUpdates loads all ResourceUpdates for a given command
 // ORDER BY ksuid ensures deterministic ordering (KSUIDs are time-sortable)
 func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadResourceUpdates")
+	defer span.End()
+
 	query := `
 		SELECT ksuid, operation, state, start_ts, modified_ts,
 			retries, remaining, version, stack_label, group_id, source,
@@ -1799,7 +1911,7 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 		ORDER BY ksuid ASC
 	`
 
-	rows, err := d.pool.Query(context.Background(), query, commandID)
+	rows, err := d.pool.Query(ctx, query, commandID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query resource updates: %w", err)
 	}
@@ -1909,13 +2021,16 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 // UpdateResourceUpdateState updates the state of a single ResourceUpdate
 // This is the key performance improvement: updating one row instead of re-serializing entire command
 func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	ctx, span := tracer.Start(context.Background(), "UpdateResourceUpdateState")
+	defer span.End()
+
 	query := `
 		UPDATE resource_updates
 		SET state = $1, modified_ts = $2
 		WHERE command_id = $3 AND ksuid = $4 AND operation = $5
 	`
 
-	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTs.UTC(), commandID, ksuid, string(operation))
+	result, err := d.pool.Exec(ctx, query, string(state), modifiedTs.UTC(), commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update state: %w", err)
 	}
@@ -1929,7 +2044,8 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
 func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress resource.ProgressResult) error {
-	ctx := context.Background()
+	ctx, span := tracer.Start(context.Background(), "UpdateResourceUpdateProgress")
+	defer span.End()
 
 	// First, load existing progress results to append to
 	var existingProgressJSON []byte
@@ -1980,11 +2096,13 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 // BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 // Used for bulk operations like marking dependent resources as failed
 func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	ctx, span := tracer.Start(context.Background(), "BatchUpdateResourceUpdateState")
+	defer span.End()
+
 	if len(refs) == 0 {
 		return nil
 	}
 
-	ctx := context.Background()
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -2017,8 +2135,11 @@ func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs
 // without re-writing all ResourceUpdates. This is a performance optimization for
 // progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
 func (d DatastorePostgres) UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
+	ctx, span := tracer.Start(context.Background(), "UpdateFormaCommandProgress")
+	defer span.End()
+
 	query := `UPDATE forma_commands SET state = $1, modified_ts = $2 WHERE command_id = $3`
-	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTs.UTC(), commandID)
+	result, err := d.pool.Exec(ctx, query, string(state), modifiedTs.UTC(), commandID)
 	if err != nil {
 		return fmt.Errorf("failed to update forma command meta: %w", err)
 	}
