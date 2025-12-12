@@ -11,15 +11,20 @@ import (
 	"reflect"
 
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/sdk/metric"
+	otelresource "go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
+
 	"github.com/platform-engineering-labs/formae"
 	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	promcli "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/sdk/metric"
-	otelresource "go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 )
 
 type OTel struct {
@@ -29,6 +34,73 @@ type OTel struct {
 
 func (s *Server) isOTelEnabled() bool {
 	return s.otel != nil && s.otel.otelConfig != nil && s.otel.otelConfig.Enabled
+}
+
+// SetupGlobalTracerProvider initializes the global TracerProvider for OTLP export.
+// This must be called BEFORE any db connections are created, as otelsql requires the
+// TracerProvider at driver registration time.
+//
+// Returns a shutdown function that should be called on app exit.
+func SetupGlobalTracerProvider(otelConfig *pkgmodel.OTelConfig) func() {
+	if otelConfig == nil || !otelConfig.Enabled {
+		return func() {}
+	}
+
+	otlpConfig := otelConfig.OTLP
+
+	res, err := otelresource.New(context.Background(),
+		otelresource.WithAttributes(
+			semconv.ServiceNameKey.String(otelConfig.ServiceName),
+			semconv.ServiceInstanceIDKey.String("formae"),
+			semconv.ServiceVersionKey.String(formae.Version),
+		),
+	)
+	if err != nil {
+		slog.Error("failed to create resource for OTel tracing", "error", err)
+		return func() {}
+	}
+
+	var exporter sdktrace.SpanExporter
+	switch otlpConfig.Protocol {
+	case "grpc":
+		opts := []otlptracegrpc.Option{
+			otlptracegrpc.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlptracegrpc.WithInsecure())
+		}
+		exporter, err = otlptracegrpc.New(context.Background(), opts...)
+	case "http":
+		opts := []otlptracehttp.Option{
+			otlptracehttp.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		exporter, err = otlptracehttp.New(context.Background(), opts...)
+	default:
+		slog.Error("unknown OTLP protocol for tracing", "protocol", otlpConfig.Protocol)
+		return func() {}
+	}
+
+	if err != nil {
+		slog.Error("failed to create OTLP trace exporter", "error", err)
+		return func() {}
+	}
+
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+	)
+
+	otel.SetTracerProvider(tracerProvider)
+	slog.Info("OTel tracing enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
+
+	return func() {
+		if err := tracerProvider.Shutdown(context.Background()); err != nil {
+			slog.Error("failed to shut down TracerProvider", "error", err)
+		}
+	}
 }
 
 func (s *Server) setupOTelMetrics() {
@@ -56,6 +128,9 @@ func (s *Server) setupOTelMetrics() {
 		metric.WithResource(res),
 	)
 
+	// Set as global meter provider so libraries like otelsql can use it
+	otel.SetMeterProvider(meterProvider)
+
 	promcli.MustRegister(promcli.CollectorFunc(func(ch chan<- promcli.Metric) {
 		stats, err := s.metastructure.Stats()
 		if err != nil {
@@ -72,9 +147,12 @@ func (s *Server) setupOTelMetrics() {
 }
 
 func (s *Server) shutdownOTel() {
-	if s.isOTelEnabled() && s.otel.meterProvider != nil {
-		if err := s.otel.meterProvider.Shutdown(context.Background()); err != nil {
-			slog.Error("failed to shut down MeterProvider", "error", err)
+	if s.isOTelEnabled() {
+		// TracerProvider shutdown is handled by the cleanup function returned from SetupGlobalTracerProvider
+		if s.otel.meterProvider != nil {
+			if err := s.otel.meterProvider.Shutdown(context.Background()); err != nil {
+				slog.Error("failed to shut down MeterProvider", "error", err)
+			}
 		}
 	}
 }

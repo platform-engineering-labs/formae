@@ -65,7 +65,11 @@ func (a *Agent) Start() error {
 
 	imwg := imconc.NewConcGroup()
 	go func() {
+		// Important: Setup global tracer provider before db connections are created -
+		// otelsql captures the tracer provider at driver registration time.
+		shutdownTracer := api.SetupGlobalTracerProvider(&a.cfg.Agent.OTel)
 		defer func() {
+			shutdownTracer()
 			a.cleanup()
 			close(a.done)
 		}()
