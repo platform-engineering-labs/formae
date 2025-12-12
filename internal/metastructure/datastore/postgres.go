@@ -7,8 +7,9 @@ package datastore
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
+
+	json "github.com/goccy/go-json"
 	"fmt"
 	"log/slog"
 	"strings"
