@@ -72,3 +72,6 @@ CLAUDE.md
 .research/
 .serena/
 
+# Design docs (local investigation notes)
+docs/design/
+
