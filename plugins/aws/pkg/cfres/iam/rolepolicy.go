@@ -7,10 +7,12 @@ package iam
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/cfres/prov"
@@ -76,6 +78,15 @@ func (r *RolePolicy) listWithClient(ctx context.Context, client iamClientInterfa
 
 	res, err := client.ListRolePolicies(ctx, input)
 	if err != nil {
+		// If the role doesn't exist (deleted during destroy), return an empty list
+		var noSuchEntity *iamtypes.NoSuchEntityException
+		if errors.As(err, &noSuchEntity) {
+			return &resource.ListResult{
+				ResourceType:  request.ResourceType,
+				Resources:     []resource.Resource{},
+				NextPageToken: nil,
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to list role policies for role %s: %w", roleName, err)
 	}
 
