@@ -40,7 +40,7 @@ func (b *MetastructureBridge) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case CallActorRequest:
 		// Make the synchronous call to the target actor
-		response, err := b.Call(msg.TargetPID, msg.Message)
+		response, err := b.CallWithTimeout(msg.TargetPID, msg.Message, 10)
 
 		// Send the result back through the appropriate channel
 		if err != nil {

@@ -56,7 +56,7 @@ class PostgresConfig {
 }
 
 class RetryConfig {
-    statusCheckInterval: Duration = 10.s
+    statusCheckInterval: Duration = 20.s
 
     maxRetries: Int = 9
 
