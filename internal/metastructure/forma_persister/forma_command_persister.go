@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -319,16 +320,19 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		}
 
 		// Update the normalized resource_updates table
-		if err := f.datastore.UpdateResourceUpdateProgress(
-			progress.CommandID,
-			progress.ResourceURI.KSUID(),
-			progress.Operation,
-			progress.ResourceState,
-			progress.ResourceModifiedTs,
-			progress.Progress,
-		); err != nil {
-			f.Log().Error("Failed to update resource update progress in normalized table", "commandID", progress.CommandID, "error", err)
-			// Continue with command meta update even if normalized update fails
+		// Skip for sync commands: resource updates are not stored upfront, progress tracked in-memory only
+		if command.Command != pkgmodel.CommandSync {
+			if err := f.datastore.UpdateResourceUpdateProgress(
+				progress.CommandID,
+				progress.ResourceURI.KSUID(),
+				progress.Operation,
+				progress.ResourceState,
+				progress.ResourceModifiedTs,
+				progress.Progress,
+			); err != nil {
+				f.Log().Error("Failed to update resource update progress in normalized table", "commandID", progress.CommandID, "error", err)
+				// Continue with command meta update even if normalized update fails
+			}
 		}
 	}
 
@@ -413,16 +417,30 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 			res.Version = msg.Version
 		}
 
-		// Update the normalized resource_updates table
-		if err := f.datastore.UpdateResourceUpdateState(
-			msg.CommandID,
-			msg.ResourceURI.KSUID(),
-			msg.Operation,
-			msg.FinalState,
-			msg.ResourceModifiedTs,
-		); err != nil {
-			f.Log().Error("Failed to update resource update state in normalized table", "commandID", msg.CommandID, "error", err)
-			// Continue with command meta update even if normalized update fails
+		// Persist the resource update to the normalized table
+		// For sync commands: resource updates were not stored upfront, so INSERT only if change detected (Version set)
+		// For non-sync commands: resource updates exist in DB, so UPDATE the state
+		if cmd.Command == pkgmodel.CommandSync {
+			// Sync commands only persist resource updates that detected changes
+			if msg.Version != "" {
+				if err := f.datastore.BulkStoreResourceUpdates(msg.CommandID, []resource_update.ResourceUpdate{*res}); err != nil {
+					f.Log().Error("Failed to insert sync resource update with change", "commandID", msg.CommandID, "error", err)
+					// Continue with command meta update even if insert fails
+				}
+			}
+			// If no version (no change), nothing to persist - that's the optimization
+		} else {
+			// Non-sync commands: update the existing resource update state
+			if err := f.datastore.UpdateResourceUpdateState(
+				msg.CommandID,
+				msg.ResourceURI.KSUID(),
+				msg.Operation,
+				msg.FinalState,
+				msg.ResourceModifiedTs,
+			); err != nil {
+				f.Log().Error("Failed to update resource update state in normalized table", "commandID", msg.CommandID, "error", err)
+				// Continue with command meta update even if normalized update fails
+			}
 		}
 	}
 
