@@ -4,12 +4,12 @@
 
 -- Normalize description: was JSON {Text, Confirm}, now separate columns
 ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS description_text TEXT;
-ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS description_confirm INTEGER DEFAULT 0;
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS description_confirm BOOLEAN DEFAULT FALSE;
 
 -- Normalize config: was JSON {Mode, Force, Simulate}, now separate columns
 ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_mode TEXT DEFAULT 'reconcile';
-ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_force INTEGER DEFAULT 0;
-ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_simulate INTEGER DEFAULT 0;
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_force BOOLEAN DEFAULT FALSE;
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_simulate BOOLEAN DEFAULT FALSE;
 
 -- Keep target_updates as JSON (array type, genuinely dynamic)
 ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS target_updates TEXT;
@@ -19,10 +19,10 @@ ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS modified_ts TEXT;
 UPDATE forma_commands
 SET
     description_text = (data::jsonb->'Description')->>'Text',
-    description_confirm = CASE WHEN (data::jsonb->'Description')->>'Confirm' = 'true' THEN 1 ELSE 0 END,
+    description_confirm = (data::jsonb->'Description')->>'Confirm' = 'true',
     config_mode = COALESCE((data::jsonb->'Config')->>'Mode', 'reconcile'),
-    config_force = CASE WHEN (data::jsonb->'Config')->>'Force' = 'true' THEN 1 ELSE 0 END,
-    config_simulate = CASE WHEN (data::jsonb->'Config')->>'Simulate' = 'true' THEN 1 ELSE 0 END,
+    config_force = (data::jsonb->'Config')->>'Force' = 'true',
+    config_simulate = (data::jsonb->'Config')->>'Simulate' = 'true',
     target_updates = (data::jsonb->'TargetUpdates')::text,
     modified_ts = data::jsonb->>'ModifiedTs'
 WHERE data IS NOT NULL;

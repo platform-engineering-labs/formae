@@ -165,22 +165,8 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	startTsStr := fa.StartTs.UTC().Format(time.RFC3339Nano)
 	modifiedTsStr := fa.ModifiedTs.UTC().Format(time.RFC3339Nano)
 
-	// Convert booleans to integers for PostgreSQL
-	descriptionConfirm := 0
-	if fa.Description.Confirm {
-		descriptionConfirm = 1
-	}
-	configForce := 0
-	if fa.Config.Force {
-		configForce = 1
-	}
-	configSimulate := 0
-	if fa.Config.Simulate {
-		configSimulate = 1
-	}
-
 	_, err = d.pool.Exec(context.Background(), query, commandID, startTsStr, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
-		fa.Description.Text, descriptionConfirm, fa.Config.Mode, configForce, configSimulate,
+		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
 		targetUpdatesJSON, modifiedTsStr)
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
@@ -232,9 +218,9 @@ func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error
 	var timestamp time.Time // TIMESTAMP type in PostgreSQL - scan as time.Time
 	var clientID *string
 	var descriptionText *string
-	var descriptionConfirm *int
+	var descriptionConfirm *bool
 	var configMode *string
-	var configForce, configSimulate *int
+	var configForce, configSimulate *bool
 	var targetUpdatesJSON []byte
 	var modifiedTsStr *string // TEXT type - scan as string
 
@@ -257,14 +243,14 @@ func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error
 	if descriptionText != nil {
 		cmd.Description.Text = *descriptionText
 	}
-	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm == 1
+	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm
 
 	// Read config from normalized columns
 	if configMode != nil {
 		cmd.Config.Mode = pkgmodel.FormaApplyMode(*configMode)
 	}
-	cmd.Config.Force = configForce != nil && *configForce == 1
-	cmd.Config.Simulate = configSimulate != nil && *configSimulate == 1
+	cmd.Config.Force = configForce != nil && *configForce
+	cmd.Config.Simulate = configSimulate != nil && *configSimulate
 
 	if modifiedTsStr != nil && *modifiedTsStr != "" {
 		modifiedTs, err := time.Parse(time.RFC3339Nano, *modifiedTsStr)
@@ -291,9 +277,9 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var fcTimestamp time.Time // TIMESTAMP type in PostgreSQL - scan as time.Time
 	var fcClientID *string
 	var descriptionText *string
-	var descriptionConfirm *int
+	var descriptionConfirm *bool
 	var configMode *string
-	var configForce, configSimulate *int
+	var configForce, configSimulate *bool
 	var targetUpdatesJSON []byte
 	var fcModifiedTsStr *string // TEXT type - scan as string
 
@@ -335,14 +321,14 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	if descriptionText != nil {
 		cmd.Description.Text = *descriptionText
 	}
-	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm == 1
+	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm
 
 	// Read config from normalized columns
 	if configMode != nil {
 		cmd.Config.Mode = pkgmodel.FormaApplyMode(*configMode)
 	}
-	cmd.Config.Force = configForce != nil && *configForce == 1
-	cmd.Config.Simulate = configSimulate != nil && *configSimulate == 1
+	cmd.Config.Force = configForce != nil && *configForce
+	cmd.Config.Simulate = configSimulate != nil && *configSimulate
 
 	if fcModifiedTsStr != nil && *fcModifiedTsStr != "" {
 		fcModifiedTs, err := time.Parse(time.RFC3339Nano, *fcModifiedTsStr)
