@@ -294,22 +294,23 @@ func TestApplyForma_ReconcileFormaWithExistingStackAndUnmanagedTaglessResource(t
 		require.NoError(t, err, "ApplyForma should not return an error")
 
 		// Step 4: Wait for the command to complete successfully
+		// Commands are ordered by timestamp DESC, so the newest command is at index 0
 		eventually(func() bool {
 			commands, err := m.Datastore.LoadFormaCommands()
 			if err != nil || len(commands) != 2 {
 				return false
 			}
-			return commands[1].State == forma_command.CommandStateSuccess
+			return commands[0].State == forma_command.CommandStateSuccess
 		}, "Second command should complete successfully")
 
 		// Step 5: Verify the resource was brought under management correctly
 		commands, err := m.Datastore.LoadFormaCommands()
 		require.NoError(t, err)
 		require.Equal(t, 2, len(commands), "Should have exactly two commands")
-		require.Equal(t, forma_command.CommandStateSuccess, commands[1].State, "Second command should be successful")
+		require.Equal(t, forma_command.CommandStateSuccess, commands[0].State, "Second command should be successful")
 
-		// The second command should have one resource update for the VPC Gateway Attachment
-		secondCommand := commands[1]
+		// The second (newest) command should have one resource update for the VPC Gateway Attachment
+		secondCommand := commands[0]
 		t.Logf("Second command has %d resource updates", len(secondCommand.ResourceUpdates))
 
 		// Find the VPC Gateway Attachment resource update

@@ -112,7 +112,7 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 		return "", fmt.Errorf("failed to ensure plugin operator for resource: %w", err)
 	}
 
-	progressResult, err := r.Call(
+	progressResult, err := r.CallWithTimeout(
 		gen.ProcessID{
 			Node: r.Node().Name(),
 			Name: actornames.PluginOperator(resourceURI.Stripped(), string(resource.OperationRead), operationID),
@@ -123,7 +123,8 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 			Resource:         loadResourceResult.Resource,
 			NativeID:         loadResourceResult.Resource.NativeID,
 			Target:           loadResourceResult.Target,
-		})
+		},
+		15)
 
 	if err != nil {
 		r.Log().Error("Failed to read resource", "resourceURI", resourceURI, "error", err)

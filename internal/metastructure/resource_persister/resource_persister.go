@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -93,7 +92,6 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 
 	forma := &forma_command.FormaCommand{
 		ID:      commandID,
-		Forma:   rp.formaFromResourceUpate(pluginOperation, resourceUpdate),
 		Command: formaCommandFromOperation(pluginOperation),
 		ResourceUpdates: []resource_update.ResourceUpdate{
 			{
@@ -105,6 +103,7 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 				ModifiedTs:               relevantProgress.ModifiedTs,
 				MostRecentProgressResult: *relevantProgress,
 				GroupID:                  resourceUpdate.GroupID,
+				StackLabel:               resourceUpdate.StackLabel,
 			},
 		},
 	}
@@ -161,42 +160,47 @@ func validateRequiredFields(resource pkgmodel.Resource) error {
 }
 
 func (rp *ResourcePersister) storeStacks(formaCommand *forma_command.FormaCommand) error {
-	for _, stack := range formaCommand.Forma.SplitByStack() {
-		for i := range formaCommand.ResourceUpdates {
-			rc := &formaCommand.ResourceUpdates[i]
-			if rc.Resource.Stack == stack.SingleStackLabel() && rc.State == resource_update.ResourceUpdateStateSuccess && rc.Version == "" {
-				slog.Debug("Resource command successful, persisting...",
-					"stackLabel", rc.Resource.Stack,
+	// Iterate ResourceUpdates directly - no need to use Forma.Resources/SplitByStack()
+	// since all information needed is in the ResourceUpdate itself
+	for i := range formaCommand.ResourceUpdates {
+		rc := &formaCommand.ResourceUpdates[i]
+		// Only process if the resource's stack matches the expected stack label.
+		// This is important for Update operations where the ExistingResource (with old stack)
+		// may be substituted - we should skip persisting if the stacks don't match,
+		// as this indicates a stack change is in progress and we shouldn't persist the
+		// old stack's resource state.
+		if rc.Resource.Stack != rc.StackLabel {
+			slog.Debug("Skipping resource persist - stack mismatch (stack change in progress)",
+				"resourceStack", rc.Resource.Stack,
+				"stackLabel", rc.StackLabel,
+				"resourceLabel", rc.Resource.Label)
+			continue
+		}
+		if rc.State == resource_update.ResourceUpdateStateSuccess && rc.Version == "" {
+			slog.Debug("Resource command successful, persisting...",
+				"stackLabel", rc.Resource.Stack,
+				"resourceLabel", rc.Resource.Label,
+				"command", rc.Operation)
+
+			hash, err := rp.processResourceUpdate(formaCommand.ID, *rc)
+			if err != nil {
+				slog.Error("Failed to persist resource command",
+					"error", err,
 					"resourceLabel", rc.Resource.Label,
+					"stackLabel", rc.Resource.Stack)
+				return fmt.Errorf("failed to persist resource %s in stack %s: %w", rc.Resource.Label, rc.Resource.Stack, err)
+			}
+			if hash != "" {
+				rc.Version = hash
+				slog.Debug("Resource command persisted",
+					"resourceLabel", rc.Resource.Label,
+					"stackLabel", rc.Resource.Stack,
+					"hash", hash)
+			} else {
+				slog.Debug("No persist needed for resource command",
+					"resourceLabel", rc.Resource.Label,
+					"stackLabel", rc.Resource.Stack,
 					"command", rc.Operation)
-
-				if len(stack.Stacks) == 0 {
-					slog.Error("Stack has no Stacks slice elements",
-						"stackLabel", stack.SingleStackLabel(),
-						"resourceLabel", rc.Resource.Label)
-					return fmt.Errorf("stack %s has no Stacks elements", stack.SingleStackLabel())
-				}
-
-				hash, err := rp.processResourceUpdate(formaCommand.ID, stack.Stacks[0], *rc)
-				if err != nil {
-					slog.Error("Failed to persist resource command",
-						"error", err,
-						"resourceLabel", rc.Resource.Label,
-						"stackLabel", rc.Resource.Stack)
-					return fmt.Errorf("failed to persist resource %s in stack %s: %w", rc.Resource.Label, rc.Resource.Stack, err)
-				}
-				if hash != "" {
-					rc.Version = hash
-					slog.Debug("Resource command persisted",
-						"resourceLabel", rc.Resource.Label,
-						"stackLabel", rc.Resource.Stack,
-						"hash", hash)
-				} else {
-					slog.Debug("No persist needed for resource command",
-						"resourceLabel", rc.Resource.Label,
-						"stackLabel", rc.Resource.Stack,
-						"command", rc.Operation)
-				}
 			}
 		}
 	}
@@ -225,18 +229,6 @@ func (rp *ResourcePersister) loadResource(resourceURI pkgmodel.FormaeURI) (messa
 		Resource: *res,
 		Target:   *currentTarget,
 	}, nil
-}
-
-func (rp *ResourcePersister) formaFromResourceUpate(operation pkgresource.Operation, resourceUpdate *resource_update.ResourceUpdate) pkgmodel.Forma {
-	return pkgmodel.Forma{
-		Stacks: []pkgmodel.Stack{
-			{
-				Label: resourceUpdate.StackLabel,
-			},
-		},
-		Resources: []pkgmodel.Resource{resourceUpdate.Resource},
-		Targets:   []pkgmodel.Target{resourceUpdate.ResourceTarget},
-	}
 }
 
 // Moving forward, every read operation that has a diff will be persisted to the datastore. To not change the existing code,
@@ -268,7 +260,7 @@ func resourceOperationFromPluginOperation(resourceOperation resource_update.Oper
 	}
 }
 
-func (rp *ResourcePersister) processResourceUpdate(commandID string, stack pkgmodel.Stack, rc resource_update.ResourceUpdate) (string, error) {
+func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource_update.ResourceUpdate) (string, error) {
 	stackLabel := rc.Resource.Stack
 
 	var resourceVersion string
@@ -419,7 +411,7 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 	if err != nil {
 		update.State = target_update.TargetUpdateStateFailed
 		update.ErrorMessage = err.Error()
-		update.ModifiedTs = time.Now()
+		update.ModifiedTs = util.TimeNow()
 		slog.Error("Failed to persist target",
 			"label", update.Target.Label,
 			"operation", update.Operation,
@@ -429,7 +421,7 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 
 	update.Version = version
 	update.State = target_update.TargetUpdateStateSuccess
-	update.ModifiedTs = time.Now()
+	update.ModifiedTs = util.TimeNow()
 	slog.Debug("Successfully persisted target",
 		"label", update.Target.Label,
 		"operation", update.Operation,

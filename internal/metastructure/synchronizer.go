@@ -222,6 +222,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		"",
 	)
 	data.commandID = syncCommand.ID
+	proc.Log().Info("Synchronizer: created sync command", "commandID", syncCommand.ID, "resourceUpdateCount", len(allResourceUpdates))
 
 	_, err = proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},

@@ -5,8 +5,12 @@
 package datastore
 
 import (
+	"time"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stats"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -70,6 +74,13 @@ type ResourceModification struct {
 	Operation string
 }
 
+// ResourceUpdateRef identifies a specific ResourceUpdate by its key components
+// Used for batch operations on ResourceUpdates
+type ResourceUpdateRef struct {
+	KSUID     string
+	Operation types.OperationType
+}
+
 type Datastore interface {
 	StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error
 	LoadFormaCommands() ([]*forma_command.FormaCommand, error)
@@ -110,6 +121,32 @@ type Datastore interface {
 
 	CleanUp() error
 	Close()
+
+	// ResourceUpdate methods for normalized schema
+	// These methods work with the resource_updates table for improved write performance
+
+	// BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
+	// Used when creating a new FormaCommand
+	BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error
+
+	// LoadResourceUpdates loads all ResourceUpdates for a given command
+	LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error)
+
+	// UpdateResourceUpdateState updates the state of a single ResourceUpdate
+	// This is the key performance improvement: updating one row instead of re-serializing entire command
+	UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error
+
+	// UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
+	UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress resource.ProgressResult) error
+
+	// BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
+	// Used for bulk operations like marking dependent resources as failed
+	BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error
+
+	// UpdateFormaCommandMeta updates only the command-level metadata (state, modified_ts)
+	// without re-writing all ResourceUpdates. This is a performance optimization for
+	// progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
+	UpdateFormaCommandMeta(commandID string, state forma_command.CommandState, modifiedTs time.Time) error
 }
 
 // resourcesAreEqual compares two resources and returns two booleans: the first one indicating whether the

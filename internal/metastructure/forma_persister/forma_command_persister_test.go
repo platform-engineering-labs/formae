@@ -186,14 +186,21 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 	assert.NoError(t, loadResult.Error)
 	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
 
-	// Verify first command unchanged, second and third commands failed
-	assert.Equal(t, resource_update.ResourceUpdateStateNotStarted, loadedCommand.ResourceUpdates[0].State)
-	assert.Equal(t, resource_update.ResourceUpdateStateFailed, loadedCommand.ResourceUpdates[1].State)
-	assert.Equal(t, resource_update.ResourceUpdateStateFailed, loadedCommand.ResourceUpdates[2].State)
+	// Build a map of KSUID -> ResourceUpdate for order-agnostic assertions
+	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
+	for i := range loadedCommand.ResourceUpdates {
+		ru := &loadedCommand.ResourceUpdates[i]
+		ruByKsuid[ru.Resource.Ksuid] = ru
+	}
 
-	// Ensure ts modified
-	assert.WithinDuration(t, now, loadedCommand.ResourceUpdates[1].ModifiedTs, 1*time.Second)
-	assert.WithinDuration(t, now, loadedCommand.ResourceUpdates[2].ModifiedTs, 1*time.Second)
+	// Verify resource0 unchanged, resource1 and resource2 failed
+	assert.Equal(t, resource_update.ResourceUpdateStateNotStarted, ruByKsuid[resource0Ksuid.KSUID()].State)
+	assert.Equal(t, resource_update.ResourceUpdateStateFailed, ruByKsuid[resource1Ksuid.KSUID()].State)
+	assert.Equal(t, resource_update.ResourceUpdateStateFailed, ruByKsuid[resource2Ksuid.KSUID()].State)
+
+	// Ensure ts modified for failed resources
+	assert.WithinDuration(t, now, ruByKsuid[resource1Ksuid.KSUID()].ModifiedTs, 1*time.Second)
+	assert.WithinDuration(t, now, ruByKsuid[resource2Ksuid.KSUID()].ModifiedTs, 1*time.Second)
 }
 
 func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
@@ -308,31 +315,9 @@ func newSyncFormaCommand() *forma_command.FormaCommand {
 	resourceKsuid := util.NewID()
 
 	return &forma_command.FormaCommand{
-		ID:      "test-sync-command-id",
-		Command: pkgmodel.CommandSync,
-		Forma: pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-				{
-					Label:       "test-stack",
-					Description: "A test stack",
-				},
-			},
-			Targets: []pkgmodel.Target{
-				{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-			},
-			Resources: []pkgmodel.Resource{
-				{
-					Label:      "test-resource",
-					Type:       "test-type",
-					Stack:      "test-stack",
-					Properties: json.RawMessage("{}"),
-					Ksuid:      resourceKsuid,
-				},
-			},
-		},
+		ID:          "test-sync-command-id",
+		Command:     pkgmodel.CommandSync,
+		Description: pkgmodel.Description{},
 		Config: config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: false,
@@ -354,6 +339,7 @@ func newSyncFormaCommand() *forma_command.FormaCommand {
 				Operation:      resource_update.OperationRead,
 				State:          resource_update.ResourceUpdateStateNotStarted,
 				ProgressResult: []resource.ProgressResult{},
+				StackLabel:     "test-stack",
 			},
 		},
 	}
@@ -363,30 +349,8 @@ func newFormaCommandWithCreateResourceUpdate() *forma_command.FormaCommand {
 	resourceKsuid := util.NewID()
 
 	return &forma_command.FormaCommand{
-		ID: "test-forma-id",
-		Forma: pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{
-				{
-					Label:       "test-stack",
-					Description: "A test stack",
-				},
-			},
-			Targets: []pkgmodel.Target{
-				{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-			},
-			Resources: []pkgmodel.Resource{
-				{
-					Label:      "test-resource",
-					Type:       "test-type",
-					Stack:      "test-stack",
-					Properties: json.RawMessage("{}"),
-					Ksuid:      resourceKsuid,
-				},
-			},
-		},
+		ID:          "test-forma-id",
+		Description: pkgmodel.Description{},
 		Config: config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: false,
@@ -408,6 +372,7 @@ func newFormaCommandWithCreateResourceUpdate() *forma_command.FormaCommand {
 				Operation:      resource_update.OperationCreate,
 				State:          resource_update.ResourceUpdateStateNotStarted,
 				ProgressResult: []resource.ProgressResult{},
+				StackLabel:     "test-stack",
 			},
 		},
 	}

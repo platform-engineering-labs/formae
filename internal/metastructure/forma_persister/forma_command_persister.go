@@ -162,6 +162,7 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 		return fmt.Errorf("failed to hash sensitive data: %w", err)
 	}
 
+	f.Log().Debug("Checking if should delete sync command", "commandID", cmd.ID, "command", cmd.Command, "state", cmd.State, "isInFinalState", cmd.IsInFinalState(), "hasResourceVersions", cmd.HasResourceVersions(), "resourceUpdateCount", len(cmd.ResourceUpdates))
 	if shouldDeleteSyncCommand(cmd) {
 		f.Log().Debug("Deleting sync command with no resource versions", "commandID", cmd.ID)
 		if err := f.datastore.DeleteFormaCommand(cmd, cmd.ID); err != nil {
@@ -169,6 +170,7 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 			return fmt.Errorf("failed to delete sync command: %w", err)
 		}
 		delete(f.activeCommands, cmd.ID)
+		f.Log().Info("Deleted sync command", "commandID", cmd.ID, "reason", "sync with no resource versions")
 		return nil
 	}
 
@@ -242,11 +244,20 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 }
 
 func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.FormaCommand) (bool, error) {
+	// Store the command metadata and ResourceUpdates (StoreFormaCommand handles both)
 	err := f.datastore.StoreFormaCommand(command, command.ID)
 	if err != nil {
 		f.Log().Error("Failed to store new Forma command", "error", err)
 		return false, fmt.Errorf("failed to store new Forma command: %w", err)
 	}
+
+	// Cache the command to avoid immediate database reload on next message
+	f.activeCommands[command.ID] = &cachedCommand{
+		command:        command,
+		ksuidOpToIndex: buildResourceUpdateIndex(command),
+	}
+	f.Log().Info("Stored new forma command", "commandID", command.ID, "command", command.Command, "resourceUpdateCount", len(command.ResourceUpdates))
+	f.Log().Debug("Cached newly stored Forma command", "commandID", command.ID)
 
 	return true, nil
 }
@@ -306,6 +317,19 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		if progress.Version != "" {
 			res.Version = progress.Version
 		}
+
+		// Update the normalized resource_updates table
+		if err := f.datastore.UpdateResourceUpdateProgress(
+			progress.CommandID,
+			progress.ResourceURI.KSUID(),
+			progress.Operation,
+			progress.ResourceState,
+			progress.ResourceModifiedTs,
+			progress.Progress,
+		); err != nil {
+			f.Log().Error("Failed to update resource update progress in normalized table", "commandID", progress.CommandID, "error", err)
+			// Continue with command meta update even if normalized update fails
+		}
 	}
 
 	// The first resource update reporting progress sets the start timestamp for the command
@@ -315,9 +339,11 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 	command.ModifiedTs = progress.ResourceModifiedTs
 	command.State = overallCommandState(command)
 
-	if err := f.persistCommand(cached); err != nil {
-		f.Log().Error("Failed to update Forma command from resource progress", "commandID", progress.CommandID, "error", err)
-		return false, fmt.Errorf("failed to update Forma command from resource progress: %w", err)
+	// Only update command-level metadata (state, modified_ts)
+	// ResourceUpdates are already persisted via UpdateResourceUpdateProgress above
+	if err := f.datastore.UpdateFormaCommandMeta(command.ID, command.State, command.ModifiedTs); err != nil {
+		f.Log().Error("Failed to update Forma command meta from resource progress", "commandID", progress.CommandID, "error", err)
+		return false, fmt.Errorf("failed to update Forma command meta from resource progress: %w", err)
 	}
 
 	return true, nil
@@ -358,11 +384,12 @@ func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanc
 }
 
 func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkResourceUpdateAsComplete) (bool, error) {
+	f.Log().Debug("Received MarkResourceUpdateAsComplete", "commandID", msg.CommandID, "resourceKSUID", msg.ResourceURI.KSUID(), "operation", msg.Operation)
 	f.Log().Debug("Marking command resource as complete", "commandID", msg.CommandID, "resourceURI", msg.ResourceURI)
 
 	cached, err := f.getOrLoadCommand(msg.CommandID)
 	if err != nil {
-		f.Log().Error("Failed to load Forma command for complete update", "commandID", msg.CommandID, "error", err)
+		f.Log().Error("Failed to load Forma command for complete update", "commandID", msg.CommandID, "resourceKSUID", msg.ResourceURI.KSUID(), "operation", msg.Operation, "error", err, "cachedCommandCount", len(f.activeCommands))
 		return false, fmt.Errorf("failed to load Forma command for complete update: %w", err)
 	}
 
@@ -385,13 +412,36 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		if msg.Version != "" {
 			res.Version = msg.Version
 		}
+
+		// Update the normalized resource_updates table
+		if err := f.datastore.UpdateResourceUpdateState(
+			msg.CommandID,
+			msg.ResourceURI.KSUID(),
+			msg.Operation,
+			msg.FinalState,
+			msg.ResourceModifiedTs,
+		); err != nil {
+			f.Log().Error("Failed to update resource update state in normalized table", "commandID", msg.CommandID, "error", err)
+			// Continue with command meta update even if normalized update fails
+		}
 	}
 
 	cmd.ModifiedTs = msg.ResourceModifiedTs
 	cmd.State = overallCommandState(cmd)
 
-	if err := f.finalizeAndPersist(cached); err != nil {
-		return false, err
+	// If command is in final state, do full finalization (hash sensitive data, potentially delete, etc.)
+	// Otherwise just update command meta for performance
+	if cmd.IsInFinalState() {
+		if err := f.finalizeAndPersist(cached); err != nil {
+			return false, err
+		}
+	} else {
+		// Only update command-level metadata (state, modified_ts)
+		// ResourceUpdate is already persisted via UpdateResourceUpdateState above
+		if err := f.datastore.UpdateFormaCommandMeta(cmd.ID, cmd.State, cmd.ModifiedTs); err != nil {
+			f.Log().Error("Failed to update Forma command meta", "commandID", msg.CommandID, "error", err)
+			return false, fmt.Errorf("failed to update Forma command meta: %w", err)
+		}
 	}
 
 	f.Log().Debug("Successfully marked command resource as complete", "commandID", msg.CommandID)
@@ -424,11 +474,37 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 		}
 	}
 
+	// Update the normalized resource_updates table in batch
+	if len(resources) > 0 {
+		datastoreRefs := make([]datastore.ResourceUpdateRef, len(resources))
+		for i, ref := range resources {
+			datastoreRefs[i] = datastore.ResourceUpdateRef{
+				KSUID:     ref.URI.KSUID(),
+				Operation: ref.Operation,
+			}
+		}
+		if err := f.datastore.BatchUpdateResourceUpdateState(commandID, datastoreRefs, state, modifiedTs); err != nil {
+			f.Log().Error("Failed to batch update resource states in normalized table", "commandID", commandID, "error", err)
+			// Continue with command meta update even if normalized update fails
+		}
+	}
+
 	command.ModifiedTs = modifiedTs
 	command.State = overallCommandState(command)
 
-	if err := f.finalizeAndPersist(cached); err != nil {
-		return false, err
+	// If command is in final state, do full finalization (hash sensitive data, potentially delete, etc.)
+	// Otherwise just update command meta for performance
+	if command.IsInFinalState() {
+		if err := f.finalizeAndPersist(cached); err != nil {
+			return false, err
+		}
+	} else {
+		// Only update command-level metadata (state, modified_ts)
+		// ResourceUpdates are already persisted via BatchUpdateResourceUpdateState above
+		if err := f.datastore.UpdateFormaCommandMeta(command.ID, command.State, command.ModifiedTs); err != nil {
+			f.Log().Error("Failed to update Forma command meta", "commandID", commandID, "error", err)
+			return false, fmt.Errorf("failed to update Forma command meta: %w", err)
+		}
 	}
 
 	f.Log().Debug("Successfully bulk updated resource states", "commandID", commandID)
@@ -492,23 +568,7 @@ func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_comma
 	t := transformations.NewPersistValueTransformer()
 	hashedCount := 0
 
-	// Hash opaque vals in Forma.Resources array
-	for i, resource := range command.Forma.Resources {
-		if hasOpaqueValues(resource.Properties) {
-			transformed, err := t.ApplyToResource(&resource)
-			if err != nil {
-				f.Log().Error("Failed to hash forma resource during final cleanup",
-					"commandID", command.ID,
-					"resourceLabel", resource.Label,
-					"error", err)
-				return false, fmt.Errorf("failed to hash forma resource %s during final cleanup: %w", resource.Label, err)
-			}
-			command.Forma.Resources[i] = *transformed
-			hashedCount++
-		}
-	}
-
-	// Hash opaque vals in ResourceUpdates array
+	// Hash opaque vals in ResourceUpdates array (Resources are stored in resource_updates table, not forma.Resources)
 	for i, resourceUpdate := range command.ResourceUpdates {
 		if hasOpaqueValues(resourceUpdate.Resource.Properties) {
 			transformed, err := t.ApplyToResource(&resourceUpdate.Resource)

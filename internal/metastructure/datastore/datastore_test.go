@@ -97,7 +97,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 
 		app1 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
-			Forma: pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					ResourceTarget: pkgmodel.Target{Label: "target1", Namespace: "default", Config: json.RawMessage("{}")},
@@ -109,7 +109,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 
 		app2 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
-			Forma: pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target2", Namespace: "default", Config: json.RawMessage("{}")},
@@ -123,7 +123,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 
 		app3 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
-			Forma: pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target3", Namespace: "default", Config: json.RawMessage("{}")},
@@ -137,7 +137,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 
 		app4 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
-			Forma: pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target4", Namespace: "default", Config: json.RawMessage("{}")},
@@ -183,7 +183,7 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 
 		cmd1 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
-			Forma: pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					ResourceTarget: pkgmodel.Target{Label: "cmd1-target", Namespace: "default", Config: json.RawMessage("{}")},
@@ -195,7 +195,7 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 
 		cmd2 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
-			Forma: pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					ResourceTarget: pkgmodel.Target{Label: "cmd2-target", Namespace: "default", Config: json.RawMessage("{}")},
@@ -224,7 +224,7 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 
 		app1 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
-			Forma: pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ExistingResource: pkgmodel.Resource{
@@ -257,7 +257,7 @@ func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 		clientID := "test"
 		olderTime, _ := time.Parse(time.RFC3339, "2023-01-01T10:00:00Z")
 		olderCommand := &forma_command.FormaCommand{
-			Forma:    pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ClientID: clientID,
 			StartTs:  olderTime,
 			Command:  pkgmodel.CommandApply,
@@ -265,7 +265,7 @@ func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 
 		newerTime, _ := time.Parse(time.RFC3339, "2023-01-02T10:00:00Z")
 		newerCommand := &forma_command.FormaCommand{
-			Forma:    pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			ClientID: clientID,
 			StartTs:  newerTime,
 			Command:  pkgmodel.CommandApply,
@@ -307,7 +307,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 
 		reconcileStack1 := &forma_command.FormaCommand{
 			ID:      "reconcile-stack1-id",
-			Forma:   pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			Command: pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
 				Mode: pkgmodel.FormaApplyModeReconcile,
@@ -321,7 +321,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 		}
 		syncStack1 := &forma_command.FormaCommand{
 			ID:      "sync-stack1-id",
-			Forma:   pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			Command: pkgmodel.CommandSync,
 			Config:  config.FormaCommandConfig{},
 			StartTs: util.TimeNow().Add(-3 * time.Minute),
@@ -333,7 +333,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 		}
 		reconcileStack2 := &forma_command.FormaCommand{
 			ID:      "reconcile-stack2-id",
-			Forma:   pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			Command: pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
 				Mode: pkgmodel.FormaApplyModeReconcile,
@@ -347,7 +347,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 		}
 		syncStack2 := &forma_command.FormaCommand{
 			ID:      "sync-stack2-id",
-			Forma:   pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			Command: pkgmodel.CommandSync,
 			Config:  config.FormaCommandConfig{},
 			StartTs: util.TimeNow().Add(-3 * time.Minute),
@@ -359,7 +359,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 		}
 		patchStack2 := &forma_command.FormaCommand{
 			ID:      "patch-stack2-id",
-			Forma:   pkgmodel.Forma{},
+			Description: pkgmodel.Description{},
 			Command: pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
 				Mode: pkgmodel.FormaApplyModePatch,
@@ -443,7 +443,7 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 
 		for i := range 20 {
 			command := &forma_command.FormaCommand{
-				Forma:    pkgmodel.Forma{},
+				Description: pkgmodel.Description{},
 				ClientID: fmt.Sprintf("client-%d", i%5),
 				StartTs:  util.TimeNow().Add(time.Duration(-i) * time.Hour),
 				Command: func() pkgmodel.Command {

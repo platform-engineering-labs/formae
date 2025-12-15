@@ -157,9 +157,26 @@ func TestMetastructure_ApplyFormaFailedAfterRetries(t *testing.T) {
 			fas_incomplete, err := m.Datastore.LoadIncompleteFormaCommands()
 			assert.NoError(t, err)
 
-			return len(fas) == 1 && len(fas_incomplete) == 0 &&
-				fas[0].ResourceUpdates[1].State == resource_update.ResourceUpdateStateFailed &&
-				fas[0].ResourceUpdates[1].ProgressResult[0].Attempts == 4
+			if len(fas) != 1 || len(fas_incomplete) != 0 {
+				return false
+			}
+
+			// Find test-resource2 by label (the one that should fail)
+			var failingResource *resource_update.ResourceUpdate
+			for i := range fas[0].ResourceUpdates {
+				if fas[0].ResourceUpdates[i].Resource.Label == "test-resource2" {
+					failingResource = &fas[0].ResourceUpdates[i]
+					break
+				}
+			}
+
+			if failingResource == nil {
+				return false
+			}
+
+			return failingResource.State == resource_update.ResourceUpdateStateFailed &&
+				len(failingResource.ProgressResult) > 0 &&
+				failingResource.ProgressResult[0].Attempts == 4
 		}, 15*time.Second, 500*time.Millisecond)
 	})
 }

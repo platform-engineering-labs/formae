@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof" // Import for side effects
 	"os"
 	"os/signal"
 	"syscall"
@@ -49,6 +51,11 @@ func (a *Agent) Start() error {
 	if _, err := os.Stat(pidFile); err == nil {
 		return fmt.Errorf("agent appears to be already running (PID file exists)")
 	}
+
+	go func() {
+		fmt.Println("Pprof endpoints available at http://localhost:6060/debug/pprof/")
+		http.ListenAndServe(":6060", nil)
+	}()
 
 	logging.SetupBackendLogging(&a.cfg.Agent.Logging, &a.cfg.Agent.OTel)
 

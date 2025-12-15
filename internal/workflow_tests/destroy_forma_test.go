@@ -101,8 +101,15 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 				return false
 			}
 
-			destroyForma := fas[1]
-			if destroyForma.Command != pkgmodel.CommandDestroy {
+			// Find the destroy command by type (don't rely on order)
+			var destroyForma *forma_command.FormaCommand
+			for _, fc := range fas {
+				if fc.Command == pkgmodel.CommandDestroy {
+					destroyForma = fc
+					break
+				}
+			}
+			if destroyForma == nil {
 				return false
 			}
 
@@ -117,11 +124,20 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 		fas, err := m.Datastore.LoadFormaCommands()
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(fas))
-		applyForma := fas[0]
-		assert.Equal(t, pkgmodel.CommandApply, applyForma.Command)
 
-		destroyForma := fas[1]
-		assert.Equal(t, pkgmodel.CommandDestroy, destroyForma.Command)
+		// Find apply and destroy commands by type (don't rely on order)
+		var applyForma, destroyForma *forma_command.FormaCommand
+		for _, fc := range fas {
+			switch fc.Command {
+			case pkgmodel.CommandApply:
+				applyForma = fc
+			case pkgmodel.CommandDestroy:
+				destroyForma = fc
+			}
+		}
+
+		assert.NotNil(t, applyForma, "should have an apply command")
+		assert.NotNil(t, destroyForma, "should have a destroy command")
 		assert.Equal(t, 1, len(destroyForma.ResourceUpdates))
 
 		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, destroyForma.ResourceUpdates[0].State)

@@ -83,12 +83,16 @@ func TestMetastructure_ApplyFormaSuccess(t *testing.T) {
 			incomplete_commands, err := m.Datastore.LoadIncompleteFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 1 && len(incomplete_commands) == 0 && commands[0].Forma.Resources[0].Managed && commands[0].Forma.Resources[1].Managed
+			return len(commands) == 1 && len(incomplete_commands) == 0 &&
+				len(commands[0].ResourceUpdates) >= 2 &&
+				commands[0].ResourceUpdates[0].Resource.Managed &&
+				commands[0].ResourceUpdates[1].Resource.Managed
 		}, 5*time.Second, 100*time.Millisecond)
 
 		assert.Equal(t, 1, len(commands))
-		assert.True(t, commands[0].Forma.Resources[0].Managed)
-		assert.True(t, commands[0].Forma.Resources[1].Managed)
+		assert.GreaterOrEqual(t, len(commands[0].ResourceUpdates), 2)
+		assert.True(t, commands[0].ResourceUpdates[0].Resource.Managed)
+		assert.True(t, commands[0].ResourceUpdates[1].Resource.Managed)
 	})
 }
 
@@ -241,11 +245,12 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
 			require.NoError(t, err)
+			// Commands are ordered by timestamp DESC, so the newer delete command is at index 0
 			return (len(fas) == 2 &&
-				len(fas[1].ResourceUpdates) == 1 &&
-				fas[1].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
-				fas[1].ResourceUpdates[0].Operation == resource_update.OperationDelete &&
-				fas[1].ResourceUpdates[0].Resource.Label == "test-resource-delete")
+				len(fas[0].ResourceUpdates) == 1 &&
+				fas[0].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
+				fas[0].ResourceUpdates[0].Operation == resource_update.OperationDelete &&
+				fas[0].ResourceUpdates[0].Resource.Label == "test-resource-delete")
 		}, 5*time.Second, 100*time.Millisecond)
 	})
 }
@@ -397,22 +402,40 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 		}, "test")
 
 		// Verify replacement (delete + create)
+		// Commands are ordered by timestamp DESC, so the newest (replace) command is at index 0
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
 			require.NoError(t, err)
 
-			return (len(fas) == 2 &&
-				len(fas[1].ResourceUpdates) == 2 &&
-				fas[1].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
-				fas[1].ResourceUpdates[0].Operation == resource_update.OperationDelete &&
-				fas[1].ResourceUpdates[1].State == resource_update.ResourceUpdateStateSuccess &&
-				fas[1].ResourceUpdates[1].Operation == resource_update.OperationCreate)
+			if len(fas) != 2 || len(fas[0].ResourceUpdates) != 2 {
+				return false
+			}
+			// Check for delete and create operations (order-agnostic within the command)
+			hasDelete := false
+			hasCreate := false
+			for _, ru := range fas[0].ResourceUpdates {
+				if ru.State == resource_update.ResourceUpdateStateSuccess {
+					if ru.Operation == resource_update.OperationDelete {
+						hasDelete = true
+					}
+					if ru.Operation == resource_update.OperationCreate {
+						hasCreate = true
+					}
+				}
+			}
+			return hasDelete && hasCreate
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// Verify the replaced resource has the new name
 		fas, err := m.Datastore.LoadFormaCommands()
 		assert.NoError(t, err)
-		assert.Contains(t, string(fas[1].ResourceUpdates[1].Resource.Properties), "bucket1-renamed")
+		// Find the create operation in the newest command
+		for _, ru := range fas[0].ResourceUpdates {
+			if ru.Operation == resource_update.OperationCreate {
+				assert.Contains(t, string(ru.Resource.Properties), "bucket1-renamed")
+				break
+			}
+		}
 
 		// Step 3: Update resource by changing a non-CreateOnly property (versioning)
 		updateResource := &pkgmodel.Resource{
@@ -456,17 +479,18 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 		}, "test")
 
 		// Verify update
+		// Commands are ordered by timestamp DESC, so the newest (update) command is at index 0
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
 			require.NoError(t, err)
 			return (len(fas) == 3 &&
-				len(fas[2].ResourceUpdates) == 1 &&
-				fas[2].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
-				fas[2].ResourceUpdates[0].Operation == resource_update.OperationUpdate)
+				len(fas[0].ResourceUpdates) == 1 &&
+				fas[0].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
+				fas[0].ResourceUpdates[0].Operation == resource_update.OperationUpdate)
 		}, 5*time.Second, 100*time.Millisecond)
 
 		fas, err = m.Datastore.LoadFormaCommands()
 		require.NoError(t, err)
-		assert.Contains(t, string(fas[2].ResourceUpdates[0].Resource.Properties), "Enabled")
+		assert.Contains(t, string(fas[0].ResourceUpdates[0].Resource.Properties), "Enabled")
 	})
 }

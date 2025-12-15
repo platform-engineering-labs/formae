@@ -227,7 +227,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	if !fa.HasChanges() {
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
-			Description: apimodel.Description(fa.Forma.Description),
+			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: false,
 				Command:         apimodel.Command{},
@@ -246,18 +246,18 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 
 	if config.Mode == pkgmodel.FormaApplyModeReconcile && !config.Force {
 		var modifiedStacks = make(map[string]apimodel.ModifiedStack)
-		for _, stack := range fa.Forma.Stacks {
-			modifications, loadErr := m.Datastore.GetResourceModificationsSinceLastReconcile(stack.Label)
+		for _, stackLabel := range fa.GetStackLabels() {
+			modifications, loadErr := m.Datastore.GetResourceModificationsSinceLastReconcile(stackLabel)
 			if loadErr != nil {
-				slog.Error("Failed to load most recent non-reconcile forma commands by stack", "stack", stack.Label, "error", err)
-				return nil, fmt.Errorf("failed to load most recent forma commands for stack %s: %w", stack.Label, err)
+				slog.Error("Failed to load most recent non-reconcile forma commands by stack", "stack", stackLabel, "error", loadErr)
+				return nil, fmt.Errorf("failed to load most recent forma commands for stack %s: %w", stackLabel, loadErr)
 			}
 			if len(modifications) > 0 {
 				modifiedResources := make([]apimodel.ResourceModification, 0, len(modifications))
 				for _, modification := range modifications {
 					modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
 				}
-				modifiedStacks[stack.Label] = apimodel.ModifiedStack{
+				modifiedStacks[stackLabel] = apimodel.ModifiedStack{
 					ModifiedResources: modifiedResources,
 				}
 			}
@@ -284,7 +284,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	if config.Simulate {
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
-			Description: apimodel.Description(fa.Forma.Description),
+			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: fa.HasChanges(),
 				Command:         translateToAPICommand(fa),
@@ -353,7 +353,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		m.Node.Log().Debug("No resource updates, skipping ChangesetExecutor (target-only forma)", "commandID", fa.ID)
 	}
 
-	return &apimodel.SubmitCommandResponse{CommandID: fa.ID, Description: apimodel.Description(fa.Forma.Description)}, nil
+	return &apimodel.SubmitCommandResponse{CommandID: fa.ID, Description: apimodel.Description(fa.Description)}, nil
 }
 
 func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
@@ -422,7 +422,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	if !fa.HasChanges() {
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
-			Description: apimodel.Description(fa.Forma.Description),
+			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: false,
 				Command:         apimodel.Command{},
@@ -433,7 +433,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	if config.Simulate {
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
-			Description: apimodel.Description(fa.Forma.Description),
+			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: fa.HasChanges(),
 				Command:         translateToAPICommand(fa),
@@ -485,7 +485,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 
 	return &apimodel.SubmitCommandResponse{
 		CommandID:   fa.ID,
-		Description: apimodel.Description(fa.Forma.Description),
+		Description: apimodel.Description(fa.Description),
 		Simulation: apimodel.Simulation{
 			ChangesRequired: fa.HasChanges(),
 			Command:         translateToAPICommand(fa),
@@ -838,8 +838,9 @@ func (m *Metastructure) checkForConflictingCommands(command *forma_command.Forma
 
 	// Group incomplete resource commands by forma command ID
 	incompleteResourceUpdates := make(map[string][]resource_update.ResourceUpdate)
+	commandStackLabels := command.GetStackLabels()
 	for _, incompleteFormaCommand := range incompleteFormaCommands {
-		if formaTouchesStacks(incompleteFormaCommand, command.Forma.Stacks) {
+		if formaTouchesStacks(incompleteFormaCommand, commandStackLabels) {
 			for _, incompleteResourceUpdate := range incompleteFormaCommand.ResourceUpdates {
 				if incompleteResourceUpdate.Operation != resource_update.OperationRead && incompleteResourceUpdate.State != resource_update.ResourceUpdateStateSuccess && incompleteResourceUpdate.State != resource_update.ResourceUpdateStateFailed && incompleteResourceUpdate.State != resource_update.ResourceUpdateStateRejected {
 					incompleteResourceUpdates[incompleteFormaCommand.ID] = append(incompleteResourceUpdates[incompleteFormaCommand.ID], incompleteResourceUpdate)
@@ -865,10 +866,11 @@ func (m *Metastructure) checkForConflictingCommands(command *forma_command.Forma
 	return nil
 }
 
-func formaTouchesStacks(forma *forma_command.FormaCommand, stacks []pkgmodel.Stack) bool {
-	for _, stackTouchedByIncompleteCommand := range forma.Forma.Stacks {
-		for _, stack := range stacks {
-			if stackTouchedByIncompleteCommand.Label == stack.Label {
+func formaTouchesStacks(forma *forma_command.FormaCommand, stackLabels []string) bool {
+	formaStackLabels := forma.GetStackLabels()
+	for _, formaStackLabel := range formaStackLabels {
+		for _, stackLabel := range stackLabels {
+			if formaStackLabel == stackLabel {
 				return true
 			}
 		}
@@ -884,10 +886,10 @@ func (m *Metastructure) checkIfPatchCanBeApplied(command *forma_command.FormaCom
 		return fmt.Errorf("failed to load all stacks: %w", err)
 	}
 
-	for _, stack := range command.Forma.Stacks {
+	for _, stackLabel := range command.GetStackLabels() {
 		var knownStack *pkgmodel.Forma
 		for _, s := range knownStacks {
-			if stack.Label == s.SingleStackLabel() {
+			if stackLabel == s.SingleStackLabel() {
 				knownStack = s
 				break
 			}
