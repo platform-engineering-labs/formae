@@ -81,45 +81,87 @@ type ResourceUpdateRef struct {
 	Operation types.OperationType
 }
 
+// Datastore defines the persistence interface for formae.
+// It handles storage and retrieval of FormaCommands (requested changes),
+// Resources (actual cloud state), Stacks, and Targets.
 type Datastore interface {
-	StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error
-	LoadFormaCommands() ([]*forma_command.FormaCommand, error)
-	LoadIncompleteFormaCommands() ([]*forma_command.FormaCommand, error)
-	DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error
+	// FormaCommand operations - these represent requested changes to infrastructure
 
+	// StoreFormaCommand persists a new FormaCommand with its ResourceUpdates
+	StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error
+	// LoadFormaCommands returns all stored FormaCommands
+	LoadFormaCommands() ([]*forma_command.FormaCommand, error)
+	// LoadIncompleteFormaCommands returns FormaCommands that haven't reached a terminal state
+	LoadIncompleteFormaCommands() ([]*forma_command.FormaCommand, error)
+	// DeleteFormaCommand removes a FormaCommand and its associated ResourceUpdates
+	DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error
+	// GetFormaCommandByCommandID retrieves a single FormaCommand by its ID
 	GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error)
+	// GetMostRecentFormaCommandByClientID returns the latest command for a given client
 	GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error)
+	// GetResourceModificationsSinceLastReconcile returns resources modified since the last reconcile
 	GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error)
+	// QueryFormaCommands searches commands based on filter criteria
 	QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error)
 
+	// Resource operations - these represent actual cloud state
+
+	// QueryResources searches resources based on filter criteria
 	QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error)
+	// StoreResource persists a resource after successful creation/update in the cloud
 	StoreResource(resource *pkgmodel.Resource, commandID string) (string, error)
+	// DeleteResource removes a resource record after successful deletion in the cloud
 	DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error)
+	// LoadResource retrieves a resource by its formae URI
 	LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error)
+	// LoadResourceByNativeID finds a resource by its cloud provider native ID
 	LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error)
+	// LoadAllResources returns all stored resources
 	LoadAllResources() ([]*pkgmodel.Resource, error)
+	// LatestLabelForResource returns the most recent label variant for a resource
 	LatestLabelForResource(label string) (string, error)
-
-	StoreStack(stack *pkgmodel.Forma, commandID string) (string, error)
-	LoadStack(stackLabel string) (*pkgmodel.Forma, error)
-	LoadAllStacks() ([]*pkgmodel.Forma, error)
-
-	CreateTarget(target *pkgmodel.Target) (string, error)
-	UpdateTarget(target *pkgmodel.Target) (string, error)
-	LoadTarget(targetLabel string) (*pkgmodel.Target, error)
-	LoadAllTargets() ([]*pkgmodel.Target, error)
-	LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error)
-	LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
-	QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error)
-
-	Stats() (*stats.Stats, error)
-
-	GetKSUIDByTriplet(stack, label, resourceType string) (string, error)
-	BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error)
-	BatchGetTripletsByKSUIDs(ksuids []string) (map[string]pkgmodel.TripletKey, error)
+	// LoadResourceById retrieves a resource by its KSUID
 	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
 
-	CleanUp() error
+	// Stack operations - logical groupings of resources
+
+	// StoreStack persists a stack definition
+	StoreStack(stack *pkgmodel.Forma, commandID string) (string, error)
+	// LoadStack retrieves a stack by its label
+	LoadStack(stackLabel string) (*pkgmodel.Forma, error)
+	// LoadAllStacks returns all stored stacks
+	LoadAllStacks() ([]*pkgmodel.Forma, error)
+
+	// Target operations - cloud provider configurations
+
+	// CreateTarget persists a new target configuration
+	CreateTarget(target *pkgmodel.Target) (string, error)
+	// UpdateTarget modifies an existing target configuration
+	UpdateTarget(target *pkgmodel.Target) (string, error)
+	// LoadTarget retrieves a target by its label
+	LoadTarget(targetLabel string) (*pkgmodel.Target, error)
+	// LoadAllTargets returns all stored targets
+	LoadAllTargets() ([]*pkgmodel.Target, error)
+	// LoadTargetsByLabels retrieves multiple targets by their labels
+	LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error)
+	// LoadDiscoverableTargets returns targets that have discovery enabled
+	LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
+	// QueryTargets searches targets based on filter criteria
+	QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error)
+
+	// Stats returns aggregated statistics about the datastore contents
+	Stats() (*stats.Stats, error)
+
+	// KSUID/Triplet mapping - conversion between internal IDs and user-facing identifiers
+
+	// GetKSUIDByTriplet converts a (stack, label, type) triplet to a KSUID
+	GetKSUIDByTriplet(stack, label, resourceType string) (string, error)
+	// BatchGetKSUIDsByTriplets converts multiple triplets to KSUIDs in one query
+	BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error)
+	// BatchGetTripletsByKSUIDs converts multiple KSUIDs to triplets in one query
+	BatchGetTripletsByKSUIDs(ksuids []string) (map[string]pkgmodel.TripletKey, error)
+
+	// Close releases database connections
 	Close()
 
 	// ResourceUpdate methods for normalized schema
@@ -143,10 +185,10 @@ type Datastore interface {
 	// Used for bulk operations like marking dependent resources as failed
 	BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error
 
-	// UpdateFormaCommandMeta updates only the command-level metadata (state, modified_ts)
+	// UpdateFormaCommandProgress updates only the command-level metadata (state, modified_ts)
 	// without re-writing all ResourceUpdates. This is a performance optimization for
 	// progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
-	UpdateFormaCommandMeta(commandID string, state forma_command.CommandState, modifiedTs time.Time) error
+	UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error
 }
 
 // resourcesAreEqual compares two resources and returns two booleans: the first one indicating whether the

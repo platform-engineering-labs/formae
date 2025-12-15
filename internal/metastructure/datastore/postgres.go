@@ -2094,10 +2094,10 @@ func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs
 	return nil
 }
 
-// UpdateFormaCommandMeta updates only the command-level metadata (state, modified_ts)
+// UpdateFormaCommandProgress updates only the command-level metadata (state, modified_ts)
 // without re-writing all ResourceUpdates. This is a performance optimization for
 // progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
-func (d DatastorePostgres) UpdateFormaCommandMeta(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
+func (d DatastorePostgres) UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
 	query := `UPDATE forma_commands SET state = $1, modified_ts = $2 WHERE command_id = $3`
 	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTs.UTC(), commandID)
 	if err != nil {

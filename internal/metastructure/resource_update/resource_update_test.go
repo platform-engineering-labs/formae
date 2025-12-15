@@ -372,14 +372,13 @@ func TestUpdateState_FailedAndComplete(t *testing.T) {
 
 // TestUpdateState_RestartRecovery_SuccessProgressDerivesSuccessState tests the restart recovery
 // scenario where a ResourceUpdate has Success progress from before the restart, and UpdateState
-// should correctly derive the Success state. This is critical for Bug 4 (success count lost on restart)
-// where previously ReRunIncompleteCommands() would blindly reset all states to NotStarted.
+// should correctly derive the Success state.
 func TestUpdateState_RestartRecovery_SuccessProgressDerivesSuccessState(t *testing.T) {
 	// Simulate a CREATE operation that completed successfully before restart
 	// The state is NotStarted (as if it was reset), but progress shows Success
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationCreate,
-		State:     ResourceUpdateStateNotStarted, // Simulates being reset by buggy code
+		State:     ResourceUpdateStateNotStarted, // State before UpdateState() is called
 		ProgressResult: []resource.ProgressResult{
 			{
 				Operation:       resource.OperationCreate,
@@ -401,8 +400,8 @@ func TestUpdateState_RestartRecovery_SuccessProgressDerivesSuccessState(t *testi
 func TestUpdateState_RestartRecovery_NoProgressDerivesNotStarted(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		Operation:      OperationCreate,
-		State:         ResourceUpdateStateInProgress, // Some stale state
-		ProgressResult: nil,                          // No progress recorded
+		State:          ResourceUpdateStateInProgress, // Some stale state
+		ProgressResult: nil,                           // No progress recorded
 	}
 
 	resourceUpdate.UpdateState()

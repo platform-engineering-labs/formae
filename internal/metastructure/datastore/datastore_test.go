@@ -64,6 +64,17 @@ func prepareDatastore() (Datastore, error) {
 	}
 }
 
+// cleanupDatastore cleans up test databases after tests complete.
+// For Postgres, this drops the test database. For SQLite in-memory, this is a no-op.
+func cleanupDatastore(ds Datastore) {
+	switch d := ds.(type) {
+	case DatastorePostgres:
+		_ = d.CleanUp()
+	case DatastoreSQLite:
+		_ = d.CleanUp()
+	}
+}
+
 func TestMain(m *testing.M) {
 	flag.StringVar(&dbType, "dbType", pkgmodel.SqliteDatastore, fmt.Sprintf("Specify the database type (e.g., %s, %s)", pkgmodel.SqliteDatastore, pkgmodel.PostgresDatastore))
 	flag.Parse()
@@ -93,7 +104,7 @@ type IAMRole struct {
 
 func TestDatastore_FormaApplyTest(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		app1 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
@@ -179,7 +190,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 
 func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		cmd1 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
@@ -220,7 +231,7 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 
 func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		app1 := &forma_command.FormaCommand{
 			ID:    util.NewID(),
@@ -252,7 +263,7 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 
 func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		clientID := "test"
 		olderTime, _ := time.Parse(time.RFC3339, "2023-01-01T10:00:00Z")
@@ -295,7 +306,7 @@ func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 
 func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		target := &pkgmodel.Target{
 			Label:     "default-target",
@@ -439,7 +450,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 
 func TestDatastore_QueryFormaCommands(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		for i := range 20 {
 			command := &forma_command.FormaCommand{
@@ -609,7 +620,7 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 
 func TestDatastore_StoreResource(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		target := &pkgmodel.Target{
 			Label:     "target-1",
@@ -661,7 +672,7 @@ func TestDatastore_StoreResource(t *testing.T) {
 func TestDatastore_UpdateResource(t *testing.T) {
 	t.Run("Should create a new version if the resource properties changed", func(t *testing.T) {
 		if datastore, err := prepareDatastore(); err == nil {
-			defer datastore.CleanUp()
+			defer cleanupDatastore(datastore)
 			originalResource := &pkgmodel.Resource{
 				Ksuid:    util.NewID(),
 				NativeID: "native-1",
@@ -699,7 +710,7 @@ func TestDatastore_UpdateResource(t *testing.T) {
 
 	t.Run("Should not create a new version if the read-only properties changed", func(t *testing.T) {
 		if datastore, err := prepareDatastore(); err == nil {
-			defer datastore.CleanUp()
+			defer cleanupDatastore(datastore)
 			originalResource := &pkgmodel.Resource{
 				Ksuid:    util.NewID(),
 				NativeID: "native-1",
@@ -744,7 +755,7 @@ func TestDatastore_UpdateResource(t *testing.T) {
 
 func TestDatastore_DeleteResource(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		resource := &pkgmodel.Resource{
 			NativeID: "native-1",
@@ -778,7 +789,7 @@ func TestDatastore_DeleteResource(t *testing.T) {
 
 func TestDatastore_QueryResources(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		for i := range 7 {
 			target := &pkgmodel.Target{
@@ -905,7 +916,7 @@ func TestDatastore_QueryResources(t *testing.T) {
 // Storing the same resource twice should not create duplicates and should return the same version ID
 func TestDatastore_StoreResource_SameResourceTwiceReturnsSameVersionId(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		target := &pkgmodel.Target{
 			Label:     "test-target",
@@ -952,7 +963,7 @@ func TestDatastore_StoreResource_SameResourceTwiceReturnsSameVersionId(t *testin
 
 func TestDatastore_LoadResourceByNativeID(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		resource := &pkgmodel.Resource{
 			NativeID: "native-123",
@@ -1000,7 +1011,7 @@ func TestDatastore_LoadResourceByNativeID(t *testing.T) {
 // with the same native ID but different types are properly distinguished
 func TestDatastore_LoadResourceByNativeID_DifferentTypes(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		// Store two resources with same native ID but different types
 		resource1 := &pkgmodel.Resource{
@@ -1055,7 +1066,7 @@ func TestDatastore_LoadResourceByNativeID_DifferentTypes(t *testing.T) {
 // Store some test resources with known triplets
 func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		resource1 := &pkgmodel.Resource{
 			Stack:      "test-stack",
@@ -1169,7 +1180,7 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 // Create and store initial resource (simulating initial create)
 func TestDatastore_BatchGetKSUIDsByTriplets_PatchScenario(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		initialResource := &pkgmodel.Resource{
 			Stack:      "test-stack",
@@ -1217,7 +1228,7 @@ func TestDatastore_BatchGetKSUIDsByTriplets_PatchScenario(t *testing.T) {
 
 func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		bucket := &pkgmodel.Resource{
 			Stack:    "static-website-stack",
@@ -1307,7 +1318,7 @@ func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
 // modification tracking for the original stack.
 func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCommand(t *testing.T) {
 	if datastore, err := prepareDatastore(); err == nil {
-		defer datastore.CleanUp()
+		defer cleanupDatastore(datastore)
 
 		stackReconcile := &forma_command.FormaCommand{
 			ID:              "stack-reconcile-id",
@@ -1428,7 +1439,7 @@ func TestDatastore_QueryTargets_All(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
-	defer ds.CleanUp()
+	defer cleanupDatastore(ds)
 
 	setupQueryTargetsTestData(ds, t)
 
@@ -1442,7 +1453,7 @@ func TestDatastore_QueryTargets_ByNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
-	defer ds.CleanUp()
+	defer cleanupDatastore(ds)
 
 	setupQueryTargetsTestData(ds, t)
 
@@ -1464,7 +1475,7 @@ func TestDatastore_QueryTargets_ByDiscoverable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
-	defer ds.CleanUp()
+	defer cleanupDatastore(ds)
 
 	setupQueryTargetsTestData(ds, t)
 
@@ -1486,7 +1497,7 @@ func TestDatastore_QueryTargets_ByLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
-	defer ds.CleanUp()
+	defer cleanupDatastore(ds)
 
 	setupQueryTargetsTestData(ds, t)
 
@@ -1506,7 +1517,7 @@ func TestDatastore_QueryTargets_DiscoverableAWS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
-	defer ds.CleanUp()
+	defer cleanupDatastore(ds)
 
 	setupQueryTargetsTestData(ds, t)
 
@@ -1533,7 +1544,7 @@ func TestDatastore_QueryTargets_NonDiscoverable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
-	defer ds.CleanUp()
+	defer cleanupDatastore(ds)
 
 	setupQueryTargetsTestData(ds, t)
 
@@ -1554,7 +1565,7 @@ func TestDatastore_QueryTargets_Versioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
-	defer ds.CleanUp()
+	defer cleanupDatastore(ds)
 
 	target := &pkgmodel.Target{
 		Label:        "version-test",

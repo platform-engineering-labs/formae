@@ -13,10 +13,10 @@ Usage:
 To apply the generated environment:
     cd <output-dir>
     pkl project resolve
-    formae apply main.pkl
+    formae apply --mode reconcile main.pkl
 
 To destroy:
-    formae destroy --stack perf-test-<uuid>
+    formae destroy main.pkl
 """
 
 import argparse

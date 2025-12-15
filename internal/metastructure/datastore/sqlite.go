@@ -2090,10 +2090,10 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 	return nil
 }
 
-// UpdateFormaCommandMeta updates only the command-level metadata (state, modified_ts)
+// UpdateFormaCommandProgress updates only the command-level metadata (state, modified_ts)
 // without re-writing all ResourceUpdates. This is a performance optimization for
 // progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
-func (d DatastoreSQLite) UpdateFormaCommandMeta(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
+func (d DatastoreSQLite) UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
 	modifiedTsUTC := modifiedTs.UTC().Format(time.RFC3339Nano)
 
 	result, err := d.conn.Exec(

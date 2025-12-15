@@ -21,7 +21,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 	t.Run("preserves KSUID when transitioning from unmanaged to managed", func(t *testing.T) {
 		ds, err := prepareDatastore()
 		require.NoError(t, err)
-		defer ds.CleanUp()
+		defer cleanupDatastore(ds)
 
 		unmanagedResource := &pkgmodel.Resource{
 			NativeID: "vpc-12345",
@@ -80,7 +80,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 	t.Run("preserves native ID during stack transition", func(t *testing.T) {
 		ds, err := prepareDatastore()
 		require.NoError(t, err)
-		defer ds.CleanUp()
+		defer cleanupDatastore(ds)
 
 		nativeID := "subnet-abc123"
 		unmanagedResource := &pkgmodel.Resource{
@@ -136,7 +136,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 	t.Run("preserves read only properties during stack transition", func(t *testing.T) {
 		ds, err := prepareDatastore()
 		require.NoError(t, err)
-		defer ds.CleanUp()
+		defer cleanupDatastore(ds)
 
 		readOnlyProps := json.RawMessage(`{
 			"VpcId": "vpc-readonly-test",
@@ -188,7 +188,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 	t.Run("multiple unmanaged resources transition independently", func(t *testing.T) {
 		ds, err := prepareDatastore()
 		require.NoError(t, err)
-		defer ds.CleanUp()
+		defer cleanupDatastore(ds)
 
 		vpc1 := &pkgmodel.Resource{
 			NativeID:           "vpc-independent-1",
@@ -252,7 +252,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 	t.Run("handles property changes during stack transition", func(t *testing.T) {
 		ds, err := prepareDatastore()
 		require.NoError(t, err)
-		defer ds.CleanUp()
+		defer cleanupDatastore(ds)
 
 		unmanagedResource := &pkgmodel.Resource{
 			NativeID: "vpc-prop-change",
@@ -308,7 +308,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 	t.Run("batch get KSUIDs works for resources in different stacks", func(t *testing.T) {
 		ds, err := prepareDatastore()
 		require.NoError(t, err)
-		defer ds.CleanUp()
+		defer cleanupDatastore(ds)
 
 		vpc1 := &pkgmodel.Resource{
 			NativeID:   "vpc-batch-1",

@@ -345,7 +345,7 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 
 	// Only update command-level metadata (state, modified_ts)
 	// ResourceUpdates are already persisted via UpdateResourceUpdateProgress above
-	if err := f.datastore.UpdateFormaCommandMeta(command.ID, command.State, command.ModifiedTs); err != nil {
+	if err := f.datastore.UpdateFormaCommandProgress(command.ID, command.State, command.ModifiedTs); err != nil {
 		f.Log().Error("Failed to update Forma command meta from resource progress", "commandID", progress.CommandID, "error", err)
 		return false, fmt.Errorf("failed to update Forma command meta from resource progress: %w", err)
 	}
@@ -456,7 +456,7 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 	} else {
 		// Only update command-level metadata (state, modified_ts)
 		// ResourceUpdate is already persisted via UpdateResourceUpdateState above
-		if err := f.datastore.UpdateFormaCommandMeta(cmd.ID, cmd.State, cmd.ModifiedTs); err != nil {
+		if err := f.datastore.UpdateFormaCommandProgress(cmd.ID, cmd.State, cmd.ModifiedTs); err != nil {
 			f.Log().Error("Failed to update Forma command meta", "commandID", msg.CommandID, "error", err)
 			return false, fmt.Errorf("failed to update Forma command meta: %w", err)
 		}
@@ -519,7 +519,7 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 	} else {
 		// Only update command-level metadata (state, modified_ts)
 		// ResourceUpdates are already persisted via BatchUpdateResourceUpdateState above
-		if err := f.datastore.UpdateFormaCommandMeta(command.ID, command.State, command.ModifiedTs); err != nil {
+		if err := f.datastore.UpdateFormaCommandProgress(command.ID, command.State, command.ModifiedTs); err != nil {
 			f.Log().Error("Failed to update Forma command meta", "commandID", commandID, "error", err)
 			return false, fmt.Errorf("failed to update Forma command meta: %w", err)
 		}
