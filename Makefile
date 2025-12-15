@@ -237,7 +237,7 @@ api-docs:
 
 lint:
 	@echo "Running linter..."
-	@golangci-lint-v2 run
+	@golangci-lint run
 	@echo "Linting completed successfully."
 
 lint-reuse:
