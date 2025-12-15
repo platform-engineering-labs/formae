@@ -333,7 +333,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	}
 
 	// Check if there's a ResourceUpdate (LEFT JOIN may return NULL)
-	if ruKsuid == nil || *ruKsuid == "" {
+	if ruKsuid == nil {
 		return &cmd, nil, nil
 	}
 
