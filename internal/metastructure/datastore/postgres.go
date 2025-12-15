@@ -161,13 +161,9 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	modified_ts = EXCLUDED.modified_ts
 	`, CommandsTable)
 
-	// Convert time.Time to RFC3339 string for TEXT columns in PostgreSQL
-	startTsStr := fa.StartTs.UTC().Format(time.RFC3339Nano)
-	modifiedTsStr := fa.ModifiedTs.UTC().Format(time.RFC3339Nano)
-
-	_, err = d.pool.Exec(context.Background(), query, commandID, startTsStr, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
+	_, err = d.pool.Exec(context.Background(), query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
-		targetUpdatesJSON, modifiedTsStr)
+		targetUpdatesJSON, fa.ModifiedTs.UTC())
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
 		return err
@@ -215,18 +211,18 @@ const resourceUpdateOrderByPostgres = " ORDER BY fc.timestamp DESC, ru.ksuid ASC
 func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error) {
 	var cmd forma_command.FormaCommand
 	var commandID, command, state string
-	var timestamp time.Time // TIMESTAMP type in PostgreSQL - scan as time.Time
+	var timestamp time.Time
 	var clientID *string
 	var descriptionText *string
 	var descriptionConfirm *bool
 	var configMode *string
 	var configForce, configSimulate *bool
 	var targetUpdatesJSON []byte
-	var modifiedTsStr *string // TEXT type - scan as string
+	var modifiedTs *time.Time
 
 	err := rows.Scan(&commandID, &timestamp, &command, &state, &clientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &modifiedTsStr)
+		&targetUpdatesJSON, &modifiedTs)
 	if err != nil {
 		return nil, err
 	}
@@ -252,12 +248,8 @@ func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error
 	cmd.Config.Force = configForce != nil && *configForce
 	cmd.Config.Simulate = configSimulate != nil && *configSimulate
 
-	if modifiedTsStr != nil && *modifiedTsStr != "" {
-		modifiedTs, err := time.Parse(time.RFC3339Nano, *modifiedTsStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse modified_ts: %w", err)
-		}
-		cmd.ModifiedTs = modifiedTs
+	if modifiedTs != nil {
+		cmd.ModifiedTs = *modifiedTs
 	}
 
 	if len(targetUpdatesJSON) > 0 {
@@ -274,18 +266,18 @@ func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error
 func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resource_update.ResourceUpdate, error) {
 	var cmd forma_command.FormaCommand
 	var commandID, fcCommand, fcState string
-	var fcTimestamp time.Time // TIMESTAMP type in PostgreSQL - scan as time.Time
+	var fcTimestamp time.Time
 	var fcClientID *string
 	var descriptionText *string
 	var descriptionConfirm *bool
 	var configMode *string
 	var configForce, configSimulate *bool
 	var targetUpdatesJSON []byte
-	var fcModifiedTsStr *string // TEXT type - scan as string
+	var fcModifiedTs *time.Time
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
 	var ruKsuid, ruOperation, ruState *string
-	var ruStartTsStr, ruModifiedTsStr *string // TEXT type - scan as string
+	var ruStartTs, ruModifiedTs *time.Time
 	var ruRetries, ruRemaining *uint16
 	var ruVersion, ruStackLabel, ruGroupID, ruSource *string
 	var resourceJSON, resourceTargetJSON, existingResourceJSON, existingTargetJSON []byte
@@ -296,9 +288,9 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &fcModifiedTsStr,
+		&targetUpdatesJSON, &fcModifiedTs,
 		// ResourceUpdate columns
-		&ruKsuid, &ruOperation, &ruState, &ruStartTsStr, &ruModifiedTsStr,
+		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 		&metadataJSON, &progressResultJSON, &mostRecentProgressJSON,
@@ -330,12 +322,8 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	cmd.Config.Force = configForce != nil && *configForce
 	cmd.Config.Simulate = configSimulate != nil && *configSimulate
 
-	if fcModifiedTsStr != nil && *fcModifiedTsStr != "" {
-		fcModifiedTs, err := time.Parse(time.RFC3339Nano, *fcModifiedTsStr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse fc modified_ts: %w", err)
-		}
-		cmd.ModifiedTs = fcModifiedTs
+	if fcModifiedTs != nil {
+		cmd.ModifiedTs = *fcModifiedTs
 	}
 
 	if len(targetUpdatesJSON) > 0 {
@@ -354,19 +342,11 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	ru.Operation = types.OperationType(*ruOperation)
 	ru.State = resource_update.ResourceUpdateState(*ruState)
 
-	if ruStartTsStr != nil && *ruStartTsStr != "" {
-		ruStartTs, err := time.Parse(time.RFC3339Nano, *ruStartTsStr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse ru start_ts: %w", err)
-		}
-		ru.StartTs = ruStartTs
+	if ruStartTs != nil {
+		ru.StartTs = *ruStartTs
 	}
-	if ruModifiedTsStr != nil && *ruModifiedTsStr != "" {
-		ruModifiedTs, err := time.Parse(time.RFC3339Nano, *ruModifiedTsStr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse ru modified_ts: %w", err)
-		}
-		ru.ModifiedTs = ruModifiedTs
+	if ruModifiedTs != nil {
+		ru.ModifiedTs = *ruModifiedTs
 	}
 
 	if ruRetries != nil {
@@ -1805,10 +1785,6 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 			return fmt.Errorf("failed to marshal reference labels: %w", err)
 		}
 
-		// Convert time.Time to RFC3339 string for TEXT columns in PostgreSQL
-		startTsStr := ru.StartTs.UTC().Format(time.RFC3339Nano)
-		modifiedTsStr := ru.ModifiedTs.UTC().Format(time.RFC3339Nano)
-
 		_, err = tx.Exec(ctx, `
 			INSERT INTO resource_updates (
 				command_id, ksuid, operation, state, start_ts, modified_ts,
@@ -1842,8 +1818,8 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 			ru.Resource.Ksuid,
 			string(ru.Operation),
 			string(ru.State),
-			startTsStr,
-			modifiedTsStr,
+			ru.StartTs.UTC(),
+			ru.ModifiedTs.UTC(),
 			ru.Retries,
 			ru.Remaining,
 			ru.Version,
@@ -1897,7 +1873,7 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 	for rows.Next() {
 		var ru resource_update.ResourceUpdate
 		var ksuid, operation, state string
-		var startTsStr, modifiedTsStr *string
+		var startTs, modifiedTs *time.Time
 		var stackLabel, groupID, source, version *string
 		var resourceJSON, resourceTargetJSON, existingResourceJSON, existingTargetJSON []byte
 		var metadataJSON, progressResultJSON, mostRecentProgressJSON []byte
@@ -1907,8 +1883,8 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 			&ksuid,
 			&operation,
 			&state,
-			&startTsStr,
-			&modifiedTsStr,
+			&startTs,
+			&modifiedTs,
 			&ru.Retries,
 			&ru.Remaining,
 			&version,
@@ -1932,19 +1908,11 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 
 		ru.Operation = types.OperationType(operation)
 		ru.State = resource_update.ResourceUpdateState(state)
-		if startTsStr != nil && *startTsStr != "" {
-			startTs, err := time.Parse(time.RFC3339Nano, *startTsStr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse start_ts: %w", err)
-			}
-			ru.StartTs = startTs
+		if startTs != nil {
+			ru.StartTs = *startTs
 		}
-		if modifiedTsStr != nil && *modifiedTsStr != "" {
-			modifiedTs, err := time.Parse(time.RFC3339Nano, *modifiedTsStr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse modified_ts: %w", err)
-			}
-			ru.ModifiedTs = modifiedTs
+		if modifiedTs != nil {
+			ru.ModifiedTs = *modifiedTs
 		}
 		if version != nil {
 			ru.Version = *version
@@ -2022,16 +1990,13 @@ func (d DatastorePostgres) populateResourceUpdatesFromNormalizedTable(cmd *forma
 // UpdateResourceUpdateState updates the state of a single ResourceUpdate
 // This is the key performance improvement: updating one row instead of re-serializing entire command
 func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
-	// Convert time.Time to RFC3339 string for TEXT columns in PostgreSQL
-	modifiedTsStr := modifiedTs.UTC().Format(time.RFC3339Nano)
-
 	query := `
 		UPDATE resource_updates
 		SET state = $1, modified_ts = $2
 		WHERE command_id = $3 AND ksuid = $4 AND operation = $5
 	`
 
-	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTsStr, commandID, ksuid, string(operation))
+	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTs.UTC(), commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update state: %w", err)
 	}
@@ -2075,16 +2040,13 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 		return fmt.Errorf("failed to marshal most recent progress: %w", err)
 	}
 
-	// Convert time.Time to RFC3339 string for TEXT columns in PostgreSQL
-	modifiedTsStr := modifiedTs.UTC().Format(time.RFC3339Nano)
-
 	updateQuery := `
 		UPDATE resource_updates
 		SET state = $1, modified_ts = $2, progress_result = $3, most_recent_progress = $4
 		WHERE command_id = $5 AND ksuid = $6 AND operation = $7
 	`
 
-	result, err := d.pool.Exec(ctx, updateQuery, string(state), modifiedTsStr, progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
+	result, err := d.pool.Exec(ctx, updateQuery, string(state), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)
 	}
@@ -2114,14 +2076,12 @@ func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs
 		}
 	}()
 
-	// Convert time.Time to RFC3339 string for TEXT columns in PostgreSQL
-	modifiedTsStr := modifiedTs.UTC().Format(time.RFC3339Nano)
 	for _, ref := range refs {
 		_, err = tx.Exec(ctx, `
 			UPDATE resource_updates
 			SET state = $1, modified_ts = $2
 			WHERE command_id = $3 AND ksuid = $4 AND operation = $5
-		`, string(state), modifiedTsStr, commandID, ref.KSUID, string(ref.Operation))
+		`, string(state), modifiedTs.UTC(), commandID, ref.KSUID, string(ref.Operation))
 		if err != nil {
 			return fmt.Errorf("failed to update resource update: %w", err)
 		}
@@ -2138,11 +2098,8 @@ func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs
 // without re-writing all ResourceUpdates. This is a performance optimization for
 // progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
 func (d DatastorePostgres) UpdateFormaCommandMeta(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
-	// Convert time.Time to RFC3339 string for TEXT columns in PostgreSQL
-	modifiedTsStr := modifiedTs.UTC().Format(time.RFC3339Nano)
-
 	query := `UPDATE forma_commands SET state = $1, modified_ts = $2 WHERE command_id = $3`
-	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTsStr, commandID)
+	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTs.UTC(), commandID)
 	if err != nil {
 		return fmt.Errorf("failed to update forma command meta: %w", err)
 	}

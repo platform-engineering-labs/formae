@@ -13,7 +13,7 @@ ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_simulate BOOLEAN DEFA
 
 -- Keep target_updates as JSON (array type, genuinely dynamic)
 ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS target_updates TEXT;
-ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS modified_ts TEXT;
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS modified_ts TIMESTAMP;
 
 -- Migrate existing data from the JSON blob to the new columns
 UPDATE forma_commands
@@ -24,7 +24,11 @@ SET
     config_force = (data::jsonb->'Config')->>'Force' = 'true',
     config_simulate = (data::jsonb->'Config')->>'Simulate' = 'true',
     target_updates = (data::jsonb->'TargetUpdates')::text,
-    modified_ts = data::jsonb->>'ModifiedTs'
+    modified_ts = CASE
+        WHEN data::jsonb->>'ModifiedTs' IS NOT NULL AND data::jsonb->>'ModifiedTs' != ''
+        THEN (data::jsonb->>'ModifiedTs')::timestamp
+        ELSE NULL
+    END
 WHERE data IS NOT NULL;
 
 -- Migrate ResourceUpdates from the JSON blob to the resource_updates table
@@ -41,8 +45,8 @@ SELECT
     (ru->'Resource')->>'Ksuid',
     ru->>'Operation',
     ru->>'State',
-    ru->>'StartTs',
-    ru->>'ModifiedTs',
+    CASE WHEN ru->>'StartTs' IS NOT NULL AND ru->>'StartTs' != '' THEN (ru->>'StartTs')::timestamp ELSE NULL END,
+    CASE WHEN ru->>'ModifiedTs' IS NOT NULL AND ru->>'ModifiedTs' != '' THEN (ru->>'ModifiedTs')::timestamp ELSE NULL END,
     COALESCE((ru->>'Retries')::integer, 0),
     COALESCE((ru->>'Remaining')::integer, 0),
     ru->>'Version',
