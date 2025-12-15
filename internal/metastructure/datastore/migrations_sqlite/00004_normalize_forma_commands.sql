@@ -1,17 +1,28 @@
 -- +goose Up
 -- Add new columns to forma_commands for normalized storage
 -- These columns replace the JSON blob in the 'data' column
-ALTER TABLE forma_commands ADD COLUMN description TEXT;
-ALTER TABLE forma_commands ADD COLUMN config TEXT;
+
+-- Normalize description: was JSON {Text, Confirm}, now separate columns
+ALTER TABLE forma_commands ADD COLUMN description_text TEXT;
+ALTER TABLE forma_commands ADD COLUMN description_confirm INTEGER DEFAULT 0;
+
+-- Normalize config: was JSON {Mode, Force, Simulate}, now separate columns
+ALTER TABLE forma_commands ADD COLUMN config_mode TEXT DEFAULT 'reconcile';
+ALTER TABLE forma_commands ADD COLUMN config_force INTEGER DEFAULT 0;
+ALTER TABLE forma_commands ADD COLUMN config_simulate INTEGER DEFAULT 0;
+
+-- Keep target_updates as JSON (array type, genuinely dynamic)
 ALTER TABLE forma_commands ADD COLUMN target_updates TEXT;
 ALTER TABLE forma_commands ADD COLUMN modified_ts TEXT;
 
 -- Migrate existing data from the JSON blob to the new columns
--- Extract Description, Config, and TargetUpdates from the data JSON
 UPDATE forma_commands
 SET
-    description = json_extract(data, '$.Description'),
-    config = json_extract(data, '$.Config'),
+    description_text = json_extract(data, '$.Description.Text'),
+    description_confirm = CASE WHEN json_extract(data, '$.Description.Confirm') = true THEN 1 ELSE 0 END,
+    config_mode = COALESCE(json_extract(data, '$.Config.Mode'), 'reconcile'),
+    config_force = CASE WHEN json_extract(data, '$.Config.Force') = true THEN 1 ELSE 0 END,
+    config_simulate = CASE WHEN json_extract(data, '$.Config.Simulate') = true THEN 1 ELSE 0 END,
     target_updates = json_extract(data, '$.TargetUpdates'),
     modified_ts = json_extract(data, '$.ModifiedTs')
 WHERE data IS NOT NULL;
@@ -62,5 +73,8 @@ DELETE FROM resource_updates WHERE command_id IN (
 
 ALTER TABLE forma_commands DROP COLUMN modified_ts;
 ALTER TABLE forma_commands DROP COLUMN target_updates;
-ALTER TABLE forma_commands DROP COLUMN config;
-ALTER TABLE forma_commands DROP COLUMN description;
+ALTER TABLE forma_commands DROP COLUMN config_simulate;
+ALTER TABLE forma_commands DROP COLUMN config_force;
+ALTER TABLE forma_commands DROP COLUMN config_mode;
+ALTER TABLE forma_commands DROP COLUMN description_confirm;
+ALTER TABLE forma_commands DROP COLUMN description_text;

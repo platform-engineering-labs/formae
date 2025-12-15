@@ -1,17 +1,28 @@
 -- +goose Up
 -- Add new columns to forma_commands for normalized storage
 -- These columns replace the JSON blob in the 'data' column
-ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS description TEXT;
-ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config TEXT;
+
+-- Normalize description: was JSON {Text, Confirm}, now separate columns
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS description_text TEXT;
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS description_confirm INTEGER DEFAULT 0;
+
+-- Normalize config: was JSON {Mode, Force, Simulate}, now separate columns
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_mode TEXT DEFAULT 'reconcile';
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_force INTEGER DEFAULT 0;
+ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS config_simulate INTEGER DEFAULT 0;
+
+-- Keep target_updates as JSON (array type, genuinely dynamic)
 ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS target_updates TEXT;
 ALTER TABLE forma_commands ADD COLUMN IF NOT EXISTS modified_ts TEXT;
 
 -- Migrate existing data from the JSON blob to the new columns
--- Extract Description, Config, and TargetUpdates from the data JSON
 UPDATE forma_commands
 SET
-    description = data::jsonb->>'Description',
-    config = (data::jsonb->'Config')::text,
+    description_text = (data::jsonb->'Description')->>'Text',
+    description_confirm = CASE WHEN (data::jsonb->'Description')->>'Confirm' = 'true' THEN 1 ELSE 0 END,
+    config_mode = COALESCE((data::jsonb->'Config')->>'Mode', 'reconcile'),
+    config_force = CASE WHEN (data::jsonb->'Config')->>'Force' = 'true' THEN 1 ELSE 0 END,
+    config_simulate = CASE WHEN (data::jsonb->'Config')->>'Simulate' = 'true' THEN 1 ELSE 0 END,
     target_updates = (data::jsonb->'TargetUpdates')::text,
     modified_ts = data::jsonb->>'ModifiedTs'
 WHERE data IS NOT NULL;
@@ -64,5 +75,8 @@ DELETE FROM resource_updates WHERE command_id IN (
 
 ALTER TABLE forma_commands DROP COLUMN IF EXISTS modified_ts;
 ALTER TABLE forma_commands DROP COLUMN IF EXISTS target_updates;
-ALTER TABLE forma_commands DROP COLUMN IF EXISTS config;
-ALTER TABLE forma_commands DROP COLUMN IF EXISTS description;
+ALTER TABLE forma_commands DROP COLUMN IF EXISTS config_simulate;
+ALTER TABLE forma_commands DROP COLUMN IF EXISTS config_force;
+ALTER TABLE forma_commands DROP COLUMN IF EXISTS config_mode;
+ALTER TABLE forma_commands DROP COLUMN IF EXISTS description_confirm;
+ALTER TABLE forma_commands DROP COLUMN IF EXISTS description_text;

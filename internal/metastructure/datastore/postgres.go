@@ -134,25 +134,17 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 		}
 	}
 
-	descriptionJSON, err := json.Marshal(fa.Description)
-	if err != nil {
-		return fmt.Errorf("failed to marshal description: %w", err)
-	}
-
-	configJSON, err := json.Marshal(fa.Config)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
 	targetUpdatesJSON, err := json.Marshal(fa.TargetUpdates)
 	if err != nil {
 		return fmt.Errorf("failed to marshal target updates: %w", err)
 	}
 
-	// We no longer store the forma JSON - Description is stored directly, and stack labels are derived from ResourceUpdates
+	// We no longer store the forma JSON - Description and Config are stored as normalized columns
 	query := fmt.Sprintf(`
-	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id, description, config, target_updates, modified_ts)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
+		description_text, description_confirm, config_mode, config_force, config_simulate,
+		target_updates, modified_ts)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -160,8 +152,11 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	agent_version = EXCLUDED.agent_version,
 	client_id = EXCLUDED.client_id,
 	agent_id = EXCLUDED.agent_id,
-	description = EXCLUDED.description,
-	config = EXCLUDED.config,
+	description_text = EXCLUDED.description_text,
+	description_confirm = EXCLUDED.description_confirm,
+	config_mode = EXCLUDED.config_mode,
+	config_force = EXCLUDED.config_force,
+	config_simulate = EXCLUDED.config_simulate,
 	target_updates = EXCLUDED.target_updates,
 	modified_ts = EXCLUDED.modified_ts
 	`, CommandsTable)
@@ -170,15 +165,34 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	startTsStr := fa.StartTs.UTC().Format(time.RFC3339Nano)
 	modifiedTsStr := fa.ModifiedTs.UTC().Format(time.RFC3339Nano)
 
+	// Convert booleans to integers for PostgreSQL
+	descriptionConfirm := 0
+	if fa.Description.Confirm {
+		descriptionConfirm = 1
+	}
+	configForce := 0
+	if fa.Config.Force {
+		configForce = 1
+	}
+	configSimulate := 0
+	if fa.Config.Simulate {
+		configSimulate = 1
+	}
+
 	_, err = d.pool.Exec(context.Background(), query, commandID, startTsStr, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
-		descriptionJSON, configJSON, targetUpdatesJSON, modifiedTsStr)
+		fa.Description.Text, descriptionConfirm, fa.Config.Mode, configForce, configSimulate,
+		targetUpdatesJSON, modifiedTsStr)
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
 		return err
 	}
 
 	// Store ResourceUpdates in the normalized table
-	if len(fa.ResourceUpdates) > 0 {
+	// Skip for sync commands - they don't need upfront storage since:
+	// 1. Sync commands are never resumed after restart (excluded from LoadIncompleteFormaCommands)
+	// 2. Progress is tracked in-memory via the FormaCommandPersister cache
+	// 3. Only resource updates with actual changes (Version set) are inserted on completion
+	if len(fa.ResourceUpdates) > 0 && fa.Command != pkgmodel.CommandSync {
 		if err := d.BulkStoreResourceUpdates(commandID, fa.ResourceUpdates); err != nil {
 			return fmt.Errorf("failed to store resource updates: %w", err)
 		}
@@ -188,7 +202,7 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 }
 
 // formaCommandColumnsPostgres returns the column list for SELECT queries on forma_commands
-const formaCommandColumnsPostgres = "command_id, timestamp, command, state, client_id, description, config, target_updates, modified_ts"
+const formaCommandColumnsPostgres = "command_id, timestamp, command, state, client_id, description_text, description_confirm, config_mode, config_force, config_simulate, target_updates, modified_ts"
 
 const resourceUpdateColumnsPostgres = `ksuid, operation, state, start_ts, modified_ts,
 	retries, remaining, version, stack_label, group_id, source,
@@ -199,7 +213,8 @@ const resourceUpdateColumnsPostgres = `ksuid, operation, state, start_ts, modifi
 const formaCommandWithResourceUpdatesQueryBasePostgres = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
-	fc.description, fc.config, fc.target_updates, fc.modified_ts,
+	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
+	fc.target_updates, fc.modified_ts,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -216,12 +231,16 @@ func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error
 	var commandID, command, state string
 	var timestamp time.Time // TIMESTAMP type in PostgreSQL - scan as time.Time
 	var clientID *string
-	var descriptionJSON []byte
-	var configJSON, targetUpdatesJSON []byte
+	var descriptionText *string
+	var descriptionConfirm *int
+	var configMode *string
+	var configForce, configSimulate *int
+	var targetUpdatesJSON []byte
 	var modifiedTsStr *string // TEXT type - scan as string
 
 	err := rows.Scan(&commandID, &timestamp, &command, &state, &clientID,
-		&descriptionJSON, &configJSON, &targetUpdatesJSON, &modifiedTsStr)
+		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
+		&targetUpdatesJSON, &modifiedTsStr)
 	if err != nil {
 		return nil, err
 	}
@@ -233,11 +252,19 @@ func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error
 	if clientID != nil {
 		cmd.ClientID = *clientID
 	}
-	if len(descriptionJSON) > 0 {
-		if err := json.Unmarshal(descriptionJSON, &cmd.Description); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal description: %w", err)
-		}
+
+	// Read description from normalized columns
+	if descriptionText != nil {
+		cmd.Description.Text = *descriptionText
 	}
+	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm == 1
+
+	// Read config from normalized columns
+	if configMode != nil {
+		cmd.Config.Mode = pkgmodel.FormaApplyMode(*configMode)
+	}
+	cmd.Config.Force = configForce != nil && *configForce == 1
+	cmd.Config.Simulate = configSimulate != nil && *configSimulate == 1
 
 	if modifiedTsStr != nil && *modifiedTsStr != "" {
 		modifiedTs, err := time.Parse(time.RFC3339Nano, *modifiedTsStr)
@@ -245,12 +272,6 @@ func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error
 			return nil, fmt.Errorf("failed to parse modified_ts: %w", err)
 		}
 		cmd.ModifiedTs = modifiedTs
-	}
-
-	if len(configJSON) > 0 {
-		if err := json.Unmarshal(configJSON, &cmd.Config); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal config: %w", err)
-		}
 	}
 
 	if len(targetUpdatesJSON) > 0 {
@@ -269,8 +290,11 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var commandID, fcCommand, fcState string
 	var fcTimestamp time.Time // TIMESTAMP type in PostgreSQL - scan as time.Time
 	var fcClientID *string
-	var descriptionJSON []byte
-	var configJSON, targetUpdatesJSON []byte
+	var descriptionText *string
+	var descriptionConfirm *int
+	var configMode *string
+	var configForce, configSimulate *int
+	var targetUpdatesJSON []byte
 	var fcModifiedTsStr *string // TEXT type - scan as string
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
@@ -285,7 +309,8 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	err := rows.Scan(
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
-		&descriptionJSON, &configJSON, &targetUpdatesJSON, &fcModifiedTsStr,
+		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
+		&targetUpdatesJSON, &fcModifiedTsStr,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTsStr, &ruModifiedTsStr,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -305,11 +330,19 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	if fcClientID != nil {
 		cmd.ClientID = *fcClientID
 	}
-	if len(descriptionJSON) > 0 {
-		if err := json.Unmarshal(descriptionJSON, &cmd.Description); err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal description: %w", err)
-		}
+
+	// Read description from normalized columns
+	if descriptionText != nil {
+		cmd.Description.Text = *descriptionText
 	}
+	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm == 1
+
+	// Read config from normalized columns
+	if configMode != nil {
+		cmd.Config.Mode = pkgmodel.FormaApplyMode(*configMode)
+	}
+	cmd.Config.Force = configForce != nil && *configForce == 1
+	cmd.Config.Simulate = configSimulate != nil && *configSimulate == 1
 
 	if fcModifiedTsStr != nil && *fcModifiedTsStr != "" {
 		fcModifiedTs, err := time.Parse(time.RFC3339Nano, *fcModifiedTsStr)
@@ -319,11 +352,6 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		cmd.ModifiedTs = fcModifiedTs
 	}
 
-	if len(configJSON) > 0 {
-		if err := json.Unmarshal(configJSON, &cmd.Config); err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal config: %w", err)
-		}
-	}
 	if len(targetUpdatesJSON) > 0 {
 		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
 			return nil, nil, fmt.Errorf("failed to unmarshal target updates: %w", err)
@@ -585,7 +613,8 @@ func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_comm
 	queryStr := fmt.Sprintf(`
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
-			fc.description, fc.config, fc.target_updates, fc.modified_ts,
+			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
+			fc.target_updates, fc.modified_ts,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -704,7 +733,7 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	AND T1.timestamp > (
 		SELECT fc.timestamp
 		FROM forma_commands fc
-		WHERE fc.config::jsonb->>'Mode' = 'reconcile'
+		WHERE fc.config_mode = 'reconcile'
 		AND EXISTS (
 			SELECT 1
 			FROM resources r

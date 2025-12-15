@@ -11,8 +11,11 @@ CREATE TABLE forma_commands_new (
     agent_version TEXT,
     client_id TEXT,
     agent_id TEXT,
-    description TEXT,
-    config TEXT,
+    description_text TEXT,
+    description_confirm INTEGER DEFAULT 0,
+    config_mode TEXT DEFAULT 'reconcile',
+    config_force INTEGER DEFAULT 0,
+    config_simulate INTEGER DEFAULT 0,
     target_updates TEXT,
     modified_ts TEXT,
     PRIMARY KEY (command_id)
@@ -21,11 +24,13 @@ CREATE TABLE forma_commands_new (
 -- Copy data from old table to new table
 INSERT INTO forma_commands_new (
     command_id, timestamp, command, state, agent_version, client_id, agent_id,
-    description, config, target_updates, modified_ts
+    description_text, description_confirm, config_mode, config_force, config_simulate,
+    target_updates, modified_ts
 )
 SELECT
     command_id, timestamp, command, state, agent_version, client_id, agent_id,
-    description, config, target_updates, modified_ts
+    description_text, description_confirm, config_mode, config_force, config_simulate,
+    target_updates, modified_ts
 FROM forma_commands;
 
 -- Drop old table
@@ -41,6 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_state ON forma_commands (state);
 CREATE INDEX IF NOT EXISTS idx_agent_version ON forma_commands (agent_version);
 CREATE INDEX IF NOT EXISTS idx_agent_id ON forma_commands (agent_id);
 CREATE INDEX IF NOT EXISTS idx_client_id ON forma_commands (client_id);
+CREATE INDEX IF NOT EXISTS idx_config_mode ON forma_commands (config_mode);
 
 -- +goose Down
 -- Add back the data column
@@ -56,8 +62,11 @@ CREATE TABLE forma_commands_old (
     client_id TEXT,
     agent_id TEXT,
     data TEXT,
-    description TEXT,
-    config TEXT,
+    description_text TEXT,
+    description_confirm INTEGER DEFAULT 0,
+    config_mode TEXT DEFAULT 'reconcile',
+    config_force INTEGER DEFAULT 0,
+    config_simulate INTEGER DEFAULT 0,
     target_updates TEXT,
     modified_ts TEXT,
     PRIMARY KEY (command_id)
@@ -65,11 +74,13 @@ CREATE TABLE forma_commands_old (
 
 INSERT INTO forma_commands_old (
     command_id, timestamp, command, state, agent_version, client_id, agent_id,
-    description, config, target_updates, modified_ts
+    description_text, description_confirm, config_mode, config_force, config_simulate,
+    target_updates, modified_ts
 )
 SELECT
     command_id, timestamp, command, state, agent_version, client_id, agent_id,
-    description, config, target_updates, modified_ts
+    description_text, description_confirm, config_mode, config_force, config_simulate,
+    target_updates, modified_ts
 FROM forma_commands;
 
 DROP TABLE forma_commands;

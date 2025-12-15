@@ -90,38 +90,49 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		}
 	}
 
-	configJSON, err := json.Marshal(fa.Config)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
 	targetUpdatesJSON, err := json.Marshal(fa.TargetUpdates)
 	if err != nil {
 		return fmt.Errorf("failed to marshal target updates: %w", err)
 	}
 
-	descriptionJSON, err := json.Marshal(fa.Description)
-	if err != nil {
-		return fmt.Errorf("failed to marshal description: %w", err)
-	}
-
-	// We no longer store the forma JSON - Description is stored as JSON, and stack labels are derived from ResourceUpdates
+	// We no longer store the forma JSON - Description and Config are stored as normalized columns
 	// Normalize timestamps to UTC for consistent TEXT-based sorting in SQLite
 	startTsUTC := fa.StartTs.UTC()
 	modifiedTsUTC := fa.ModifiedTs.UTC()
 
+	// Convert booleans to integers for SQLite
+	descriptionConfirm := 0
+	if fa.Description.Confirm {
+		descriptionConfirm = 1
+	}
+	configForce := 0
+	if fa.Config.Force {
+		configForce = 1
+	}
+	configSimulate := 0
+	if fa.Config.Simulate {
+		configSimulate = 1
+	}
+
 	query := fmt.Sprintf(`INSERT OR REPLACE INTO %s
-		(command_id, timestamp, command, state, agent_version, client_id, agent_id, description, config, target_updates, modified_ts)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, CommandsTable)
+		(command_id, timestamp, command, state, agent_version, client_id, agent_id,
+		 description_text, description_confirm, config_mode, config_force, config_simulate,
+		 target_updates, modified_ts)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, CommandsTable)
 	_, err = d.conn.Exec(query, commandID, startTsUTC, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
-		descriptionJSON, configJSON, targetUpdatesJSON, modifiedTsUTC)
+		fa.Description.Text, descriptionConfirm, fa.Config.Mode, configForce, configSimulate,
+		targetUpdatesJSON, modifiedTsUTC)
 	if err != nil {
 		slog.Error("Query", "query", query, "error", err)
 		return err
 	}
 
 	// Store ResourceUpdates in the normalized table
-	if len(fa.ResourceUpdates) > 0 {
+	// Skip for sync commands - they don't need upfront storage since:
+	// 1. Sync commands are never resumed after restart (excluded from LoadIncompleteFormaCommands)
+	// 2. Progress is tracked in-memory via the FormaCommandPersister cache
+	// 3. Only resource updates with actual changes (Version set) are inserted on completion
+	if len(fa.ResourceUpdates) > 0 && fa.Command != pkgmodel.CommandSync {
 		if err := d.BulkStoreResourceUpdates(commandID, fa.ResourceUpdates); err != nil {
 			return fmt.Errorf("failed to store resource updates: %w", err)
 		}
@@ -131,7 +142,7 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 }
 
 // formaCommandColumns returns the column list for SELECT queries on forma_commands
-const formaCommandColumns = "command_id, timestamp, command, state, client_id, description, config, target_updates, modified_ts"
+const formaCommandColumns = "command_id, timestamp, command, state, client_id, description_text, description_confirm, config_mode, config_force, config_simulate, target_updates, modified_ts"
 
 // resourceUpdateColumns for the resource_updates table (without command_id)
 const resourceUpdateColumns = `ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
@@ -144,7 +155,8 @@ const resourceUpdateColumns = `ru.ksuid, ru.operation, ru.state, ru.start_ts, ru
 const formaCommandWithResourceUpdatesQueryBase = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
-	fc.description, fc.config, fc.target_updates, fc.modified_ts,
+	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
+	fc.target_updates, fc.modified_ts,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -161,12 +173,16 @@ func scanFormaCommand(rows *sql.Rows) (*forma_command.FormaCommand, error) {
 	var cmd forma_command.FormaCommand
 	var commandID, timestamp, command, state string
 	var clientID sql.NullString
-	var descriptionJSON []byte
-	var configJSON, targetUpdatesJSON []byte
+	var descriptionText sql.NullString
+	var descriptionConfirm sql.NullInt64
+	var configMode sql.NullString
+	var configForce, configSimulate sql.NullInt64
+	var targetUpdatesJSON []byte
 	var modifiedTs sql.NullString
 
 	err := rows.Scan(&commandID, &timestamp, &command, &state, &clientID,
-		&descriptionJSON, &configJSON, &targetUpdatesJSON, &modifiedTs)
+		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
+		&targetUpdatesJSON, &modifiedTs)
 	if err != nil {
 		return nil, err
 	}
@@ -177,11 +193,19 @@ func scanFormaCommand(rows *sql.Rows) (*forma_command.FormaCommand, error) {
 	if clientID.Valid {
 		cmd.ClientID = clientID.String
 	}
-	if len(descriptionJSON) > 0 {
-		if err := json.Unmarshal(descriptionJSON, &cmd.Description); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal description: %w", err)
-		}
+
+	// Read description from normalized columns
+	if descriptionText.Valid {
+		cmd.Description.Text = descriptionText.String
 	}
+	cmd.Description.Confirm = descriptionConfirm.Valid && descriptionConfirm.Int64 == 1
+
+	// Read config from normalized columns
+	if configMode.Valid {
+		cmd.Config.Mode = pkgmodel.FormaApplyMode(configMode.String)
+	}
+	cmd.Config.Force = configForce.Valid && configForce.Int64 == 1
+	cmd.Config.Simulate = configSimulate.Valid && configSimulate.Int64 == 1
 
 	// Parse timestamp - convert to UTC to ensure consistent timezone handling
 	// The timestamp column is TEXT, so we need to handle multiple formats:
@@ -202,12 +226,6 @@ func scanFormaCommand(rows *sql.Rows) (*forma_command.FormaCommand, error) {
 		}
 	}
 
-	if len(configJSON) > 0 {
-		if err := json.Unmarshal(configJSON, &cmd.Config); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal config: %w", err)
-		}
-	}
-
 	if len(targetUpdatesJSON) > 0 {
 		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal target updates: %w", err)
@@ -223,8 +241,11 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var cmd forma_command.FormaCommand
 	var commandID, fcTimestamp, command, fcState string
 	var clientID sql.NullString
-	var descriptionJSON []byte
-	var configJSON, targetUpdatesJSON []byte
+	var descriptionText sql.NullString
+	var descriptionConfirm sql.NullInt64
+	var configMode sql.NullString
+	var configForce, configSimulate sql.NullInt64
+	var targetUpdatesJSON []byte
 	var fcModifiedTs sql.NullString
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
@@ -239,7 +260,8 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	err := rows.Scan(
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &command, &fcState, &clientID,
-		&descriptionJSON, &configJSON, &targetUpdatesJSON, &fcModifiedTs,
+		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
+		&targetUpdatesJSON, &fcModifiedTs,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -258,11 +280,19 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	if clientID.Valid {
 		cmd.ClientID = clientID.String
 	}
-	if len(descriptionJSON) > 0 {
-		if err := json.Unmarshal(descriptionJSON, &cmd.Description); err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal description: %w", err)
-		}
+
+	// Read description from normalized columns
+	if descriptionText.Valid {
+		cmd.Description.Text = descriptionText.String
 	}
+	cmd.Description.Confirm = descriptionConfirm.Valid && descriptionConfirm.Int64 == 1
+
+	// Read config from normalized columns
+	if configMode.Valid {
+		cmd.Config.Mode = pkgmodel.FormaApplyMode(configMode.String)
+	}
+	cmd.Config.Force = configForce.Valid && configForce.Int64 == 1
+	cmd.Config.Simulate = configSimulate.Valid && configSimulate.Int64 == 1
 
 	// Parse timestamp - convert to UTC
 	// SQLite stores time.Time as "2006-01-02 15:04:05.999999999-07:00" format
@@ -281,11 +311,6 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		}
 	}
 
-	if len(configJSON) > 0 {
-		if err := json.Unmarshal(configJSON, &cmd.Config); err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal config: %w", err)
-		}
-	}
 	if len(targetUpdatesJSON) > 0 {
 		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
 			return nil, nil, fmt.Errorf("failed to unmarshal target updates: %w", err)
@@ -469,7 +494,8 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 	query := `
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
-			fc.description, fc.config, fc.target_updates, fc.modified_ts,
+			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
+			fc.target_updates, fc.modified_ts,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -526,7 +552,7 @@ WHERE
       fc.timestamp
     FROM forma_commands fc
     WHERE
-      json_extract(fc.config, '$.Mode') = 'reconcile'
+      fc.config_mode = 'reconcile'
       AND EXISTS (
         SELECT 1
         FROM resources r
@@ -629,7 +655,8 @@ func (d DatastoreSQLite) QueryFormaCommands(query *StatusQuery) ([]*forma_comman
 	queryStr := fmt.Sprintf(`
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
-			fc.description, fc.config, fc.target_updates, fc.modified_ts,
+			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
+			fc.target_updates, fc.modified_ts,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
