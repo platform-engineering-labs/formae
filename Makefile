@@ -71,6 +71,18 @@ pkg-bin: clean build build-tools
 publish-bin: pkg-bin
 	./ppm repo publish ./dist/packages/*.tgz
 
+postgres-up:
+	docker rm -f formae-test-postgres 2>/dev/null || true
+	docker run -d --name formae-test-postgres \
+		-e POSTGRES_USER=formae \
+		-e POSTGRES_PASSWORD=formae \
+		-e POSTGRES_DB=formae \
+		-p 5433:5432 \
+		postgres:15-alpine
+
+postgres-down:
+	docker rm -f formae-test-postgres
+
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
 	pkl project resolve plugins/pkl/schema
@@ -90,9 +102,9 @@ gen-aws-pkl-types:
 	cd plugins/aws &&  pkl eval pkg/descriptors/pkl/resources.pkl > pkg/descriptors/pkl/generated_resources.pkl
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		sed -i '' '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-	else \
+		else \
 		sed -i '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-	fi
+		fi
 
 pkg-pkl:
 	pkl project package ./plugins/aws/schema/pkl ./plugins/pkl/schema --skip-publish-check
