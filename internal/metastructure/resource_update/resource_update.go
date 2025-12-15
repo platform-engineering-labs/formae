@@ -156,7 +156,7 @@ func (ru *ResourceUpdate) RecordProgress(progress *resource.ProgressResult) erro
 }
 
 func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.ProgressResult) error {
-	ru.updateState()
+	ru.UpdateState()
 	slog.Debug("Updating resource state for " + string(ru.URI()) + " to " + string(ru.State))
 
 	ru.Resource.NativeID = progress.NativeID
@@ -231,7 +231,10 @@ func (ru *ResourceUpdate) FilterProgressMessage(filter func(resource.ProgressRes
 	return ""
 }
 
-func (ru *ResourceUpdate) updateState() {
+// UpdateState derives the ResourceUpdate state from its ProgressResult.
+// This is used during restart recovery to restore the correct state based on
+// the progress that was persisted before the restart.
+func (ru *ResourceUpdate) UpdateState() {
 	if len(ru.ProgressResult) == 0 {
 		ru.State = ResourceUpdateStateNotStarted
 		return

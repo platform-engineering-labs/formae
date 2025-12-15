@@ -760,9 +760,18 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 	}
 
 	for _, fa := range commands {
-		// Reset state to not started
+		// Derive state from progress and prepare for re-execution.
+		// - Success: Keep as Success (completed, don't re-execute)
+		// - Failed: Keep as Failed (completed with error, don't re-execute)
+		// - InProgress: Reset to NotStarted (was interrupted, needs retry)
+		// - NotStarted: Keep as NotStarted (never started, needs execution)
 		for i := range fa.ResourceUpdates {
-			fa.ResourceUpdates[i].State = resource_update.ResourceUpdateStateNotStarted
+			fa.ResourceUpdates[i].UpdateState()
+			// InProgress means the operation was in progress when the agent crashed/restarted.
+			// We need to reset it to NotStarted so the changeset executor will re-queue it.
+			if fa.ResourceUpdates[i].State == resource_update.ResourceUpdateStateInProgress {
+				fa.ResourceUpdates[i].State = resource_update.ResourceUpdateStateNotStarted
+			}
 		}
 
 		var pendingTargetUpdates []target_update.TargetUpdate

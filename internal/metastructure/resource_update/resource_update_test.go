@@ -315,7 +315,7 @@ func TestResolveValue_UpdatesResolvedValueInProperties(t *testing.T) {
 	assert.JSONEq(t, expectedJson, string(resourceUpdate.Resource.Properties))
 }
 
-func Test_updateState_InProgress(t *testing.T) {
+func TestUpdateState_InProgress(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		State: ResourceUpdateStateNotStarted,
 		ProgressResult: []resource.ProgressResult{
@@ -326,12 +326,12 @@ func Test_updateState_InProgress(t *testing.T) {
 			},
 		},
 	}
-	resourceUpdate.updateState()
+	resourceUpdate.UpdateState()
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
 }
 
-func Test_updateState_FailedButIncomplete(t *testing.T) {
+func TestUpdateState_FailedButIncomplete(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationUpdate,
 		State:     ResourceUpdateStateNotStarted,
@@ -343,12 +343,12 @@ func Test_updateState_FailedButIncomplete(t *testing.T) {
 			},
 		},
 	}
-	resourceUpdate.updateState()
+	resourceUpdate.UpdateState()
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
 }
 
-func Test_updateState_FailedAndComplete(t *testing.T) {
+func TestUpdateState_FailedAndComplete(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationDelete,
 		State:     ResourceUpdateStateNotStarted,
@@ -365,9 +365,50 @@ func Test_updateState_FailedAndComplete(t *testing.T) {
 			},
 		},
 	}
-	resourceUpdate.updateState()
+	resourceUpdate.UpdateState()
 
 	assert.Equal(t, ResourceUpdateStateFailed, resourceUpdate.State)
+}
+
+// TestUpdateState_RestartRecovery_SuccessProgressDerivesSuccessState tests the restart recovery
+// scenario where a ResourceUpdate has Success progress from before the restart, and UpdateState
+// should correctly derive the Success state. This is critical for Bug 4 (success count lost on restart)
+// where previously ReRunIncompleteCommands() would blindly reset all states to NotStarted.
+func TestUpdateState_RestartRecovery_SuccessProgressDerivesSuccessState(t *testing.T) {
+	// Simulate a CREATE operation that completed successfully before restart
+	// The state is NotStarted (as if it was reset), but progress shows Success
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted, // Simulates being reset by buggy code
+		ProgressResult: []resource.ProgressResult{
+			{
+				Operation:       resource.OperationCreate,
+				OperationStatus: resource.OperationStatusSuccess,
+				MaxAttempts:     3,
+			},
+		},
+	}
+
+	// UpdateState should derive Success from the progress, not keep NotStarted
+	resourceUpdate.UpdateState()
+
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State,
+		"UpdateState should derive Success state from Success progress, not keep NotStarted")
+}
+
+// TestUpdateState_RestartRecovery_NoProgressDerivesNotStarted tests that resources
+// without any progress are correctly set to NotStarted after restart.
+func TestUpdateState_RestartRecovery_NoProgressDerivesNotStarted(t *testing.T) {
+	resourceUpdate := &ResourceUpdate{
+		Operation:      OperationCreate,
+		State:         ResourceUpdateStateInProgress, // Some stale state
+		ProgressResult: nil,                          // No progress recorded
+	}
+
+	resourceUpdate.UpdateState()
+
+	assert.Equal(t, ResourceUpdateStateNotStarted, resourceUpdate.State,
+		"UpdateState should set NotStarted when there's no progress")
 }
 
 func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityWithoutValue(t *testing.T) {
