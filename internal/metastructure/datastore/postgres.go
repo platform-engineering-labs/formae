@@ -8,14 +8,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
-
 	"fmt"
-	json "github.com/goccy/go-json"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/demula/mksuid/v2"
+	json "github.com/goccy/go-json"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -183,15 +182,6 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	return nil
 }
 
-// formaCommandColumnsPostgres returns the column list for SELECT queries on forma_commands
-const formaCommandColumnsPostgres = "command_id, timestamp, command, state, client_id, description_text, description_confirm, config_mode, config_force, config_simulate, target_updates, modified_ts"
-
-const resourceUpdateColumnsPostgres = `ksuid, operation, state, start_ts, modified_ts,
-	retries, remaining, version, stack_label, group_id, source,
-	resource, resource_target, existing_resource, existing_target,
-	metadata, progress_result, most_recent_progress,
-	remaining_resolvables, reference_labels, previous_properties`
-
 const formaCommandWithResourceUpdatesQueryBasePostgres = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
@@ -206,60 +196,6 @@ FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
 const resourceUpdateOrderByPostgres = " ORDER BY fc.timestamp DESC, ru.ksuid ASC"
-
-// scanFormaCommandPostgres scans a FormaCommand from a pgx row with the columns defined in formaCommandColumnsPostgres
-func scanFormaCommandPostgres(rows pgx.Rows) (*forma_command.FormaCommand, error) {
-	var cmd forma_command.FormaCommand
-	var commandID, command, state string
-	var timestamp time.Time
-	var clientID *string
-	var descriptionText *string
-	var descriptionConfirm *bool
-	var configMode *string
-	var configForce, configSimulate *bool
-	var targetUpdatesJSON []byte
-	var modifiedTs *time.Time
-
-	err := rows.Scan(&commandID, &timestamp, &command, &state, &clientID,
-		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &modifiedTs)
-	if err != nil {
-		return nil, err
-	}
-
-	cmd.ID = commandID
-	cmd.StartTs = timestamp
-	cmd.Command = pkgmodel.Command(command)
-	cmd.State = forma_command.CommandState(state)
-	if clientID != nil {
-		cmd.ClientID = *clientID
-	}
-
-	// Read description from normalized columns
-	if descriptionText != nil {
-		cmd.Description.Text = *descriptionText
-	}
-	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm
-
-	// Read config from normalized columns
-	if configMode != nil {
-		cmd.Config.Mode = pkgmodel.FormaApplyMode(*configMode)
-	}
-	cmd.Config.Force = configForce != nil && *configForce
-	cmd.Config.Simulate = configSimulate != nil && *configSimulate
-
-	if modifiedTs != nil {
-		cmd.ModifiedTs = *modifiedTs
-	}
-
-	if len(targetUpdatesJSON) > 0 {
-		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal target updates: %w", err)
-		}
-	}
-
-	return &cmd, nil
-}
 
 // scanJoinedRowPostgres scans a row from the joined FormaCommand + ResourceUpdate query
 // Returns the FormaCommand and optionally a ResourceUpdate (nil if LEFT JOIN has no match)
@@ -1968,23 +1904,6 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 	}
 
 	return updates, rows.Err()
-}
-
-// populateResourceUpdatesFromNormalizedTable loads ResourceUpdates from the normalized table
-// and replaces the ones embedded in the FormaCommand's data column.
-// This ensures we always get the most current state of ResourceUpdates.
-func (d DatastorePostgres) populateResourceUpdatesFromNormalizedTable(cmd *forma_command.FormaCommand) error {
-	updates, err := d.LoadResourceUpdates(cmd.ID)
-	if err != nil {
-		// If the normalized table doesn't have the data yet (e.g., old commands),
-		// fall back to the embedded ResourceUpdates
-		slog.Debug("falling back to embedded ResourceUpdates", "commandID", cmd.ID, "error", err)
-		return nil
-	}
-	if len(updates) > 0 {
-		cmd.ResourceUpdates = updates
-	}
-	return nil
 }
 
 // UpdateResourceUpdateState updates the state of a single ResourceUpdate

@@ -8,15 +8,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
-
-	json "github.com/goccy/go-json"
 	"log/slog"
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/demula/mksuid/v2"
+	json "github.com/goccy/go-json"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/platform-engineering-labs/formae"
@@ -141,16 +140,6 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 	return nil
 }
 
-// formaCommandColumns returns the column list for SELECT queries on forma_commands
-const formaCommandColumns = "command_id, timestamp, command, state, client_id, description_text, description_confirm, config_mode, config_force, config_simulate, target_updates, modified_ts"
-
-// resourceUpdateColumns for the resource_updates table (without command_id)
-const resourceUpdateColumns = `ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
-	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
-	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
-	ru.metadata, ru.progress_result, ru.most_recent_progress,
-	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties`
-
 // formaCommandWithResourceUpdatesQueryBase is the base LEFT JOIN query without WHERE or ORDER BY
 const formaCommandWithResourceUpdatesQueryBase = `
 SELECT
@@ -167,73 +156,6 @@ LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
 // resourceUpdateOrderBy ensures deterministic ordering of resource updates (KSUIDs are time-sortable)
 const resourceUpdateOrderBy = " ORDER BY fc.timestamp DESC, ru.ksuid ASC"
-
-// scanFormaCommand scans a FormaCommand from a row with the columns defined in formaCommandColumns
-func scanFormaCommand(rows *sql.Rows) (*forma_command.FormaCommand, error) {
-	var cmd forma_command.FormaCommand
-	var commandID, timestamp, command, state string
-	var clientID sql.NullString
-	var descriptionText sql.NullString
-	var descriptionConfirm sql.NullInt64
-	var configMode sql.NullString
-	var configForce, configSimulate sql.NullInt64
-	var targetUpdatesJSON []byte
-	var modifiedTs sql.NullString
-
-	err := rows.Scan(&commandID, &timestamp, &command, &state, &clientID,
-		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &modifiedTs)
-	if err != nil {
-		return nil, err
-	}
-
-	cmd.ID = commandID
-	cmd.Command = pkgmodel.Command(command)
-	cmd.State = forma_command.CommandState(state)
-	if clientID.Valid {
-		cmd.ClientID = clientID.String
-	}
-
-	// Read description from normalized columns
-	if descriptionText.Valid {
-		cmd.Description.Text = descriptionText.String
-	}
-	cmd.Description.Confirm = descriptionConfirm.Valid && descriptionConfirm.Int64 == 1
-
-	// Read config from normalized columns
-	if configMode.Valid {
-		cmd.Config.Mode = pkgmodel.FormaApplyMode(configMode.String)
-	}
-	cmd.Config.Force = configForce.Valid && configForce.Int64 == 1
-	cmd.Config.Simulate = configSimulate.Valid && configSimulate.Int64 == 1
-
-	// Parse timestamp - convert to UTC to ensure consistent timezone handling
-	// The timestamp column is TEXT, so we need to handle multiple formats:
-	// - RFC3339Nano: 2006-01-02T15:04:05.999999999Z07:00
-	// SQLite stores time.Time as "2006-01-02 15:04:05.999999999-07:00" format
-	if ts, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
-		cmd.StartTs = ts.UTC()
-	} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", timestamp); err == nil {
-		cmd.StartTs = ts.UTC()
-	}
-
-	// Parse modified_ts (TIMESTAMP column - go-sqlite3 handles conversion, but we still parse for safety)
-	if modifiedTs.Valid && modifiedTs.String != "" {
-		if ts, err := time.Parse(time.RFC3339Nano, modifiedTs.String); err == nil {
-			cmd.ModifiedTs = ts.UTC()
-		} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", modifiedTs.String); err == nil {
-			cmd.ModifiedTs = ts.UTC()
-		}
-	}
-
-	if len(targetUpdatesJSON) > 0 {
-		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal target updates: %w", err)
-		}
-	}
-
-	return &cmd, nil
-}
 
 // scanJoinedRow scans a row from a FormaCommand LEFT JOIN ResourceUpdate query.
 // Returns the command fields and optionally a ResourceUpdate (nil if no resource update for this row).
@@ -407,7 +329,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 // loadFormaCommandsFromJoinedRows processes rows from a LEFT JOIN query and groups ResourceUpdates by command.
 // This is the preferred method as it uses a single query and allows safe use of defer rows.Close().
 func loadFormaCommandsFromJoinedRows(rows *sql.Rows) ([]*forma_command.FormaCommand, error) {
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Use a map to collect ResourceUpdates for each command
 	commandMap := make(map[string]*forma_command.FormaCommand)
@@ -1756,7 +1678,7 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, ru := range updates {
 		resourceJSON, err := json.Marshal(ru.Resource)
@@ -2072,7 +1994,7 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	// Normalize timestamp to UTC for consistent TEXT-based sorting in SQLite
 	modifiedTsUTC := modifiedTs.UTC()
