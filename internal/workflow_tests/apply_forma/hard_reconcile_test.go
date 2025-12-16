@@ -167,7 +167,7 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 2 && commands[1].State == forma_command.CommandStateSuccess
+			return len(commands) == 2 && commands[0].State == forma_command.CommandStateSuccess
 		}, 5*time.Second, 100*time.Millisecond, "patch command should complete before submitting reconcile")
 
 		// reconcile the stack to a new state, forcing a hard reconcile
@@ -218,7 +218,7 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 3 && commands[2].State == forma_command.CommandStateSuccess
+			return len(commands) == 3 && commands[0].State == forma_command.CommandStateSuccess
 		}, 5*time.Second, 100*time.Millisecond)
 
 	})
