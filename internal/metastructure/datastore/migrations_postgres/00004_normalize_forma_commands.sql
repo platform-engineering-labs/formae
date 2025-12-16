@@ -68,6 +68,10 @@ FROM forma_commands fc,
 WHERE fc.data IS NOT NULL
   AND fc.data::jsonb->'ResourceUpdates' IS NOT NULL
   AND jsonb_array_length(fc.data::jsonb->'ResourceUpdates') > 0
+  -- Only migrate ResourceUpdates with a version set (matching production behavior)
+  -- Sync commands without detected changes have empty versions and don't need persistence
+  AND ru->>'Version' IS NOT NULL
+  AND ru->>'Version' != ''
 ON CONFLICT (command_id, ksuid, operation) DO NOTHING;
 
 -- +goose Down

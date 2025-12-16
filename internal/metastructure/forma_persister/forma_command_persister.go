@@ -163,15 +163,12 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 		return fmt.Errorf("failed to hash sensitive data: %w", err)
 	}
 
-	f.Log().Debug("Checking if should delete sync command", "commandID", cmd.ID, "command", cmd.Command, "state", cmd.State, "isInFinalState", cmd.IsInFinalState(), "hasResourceVersions", cmd.HasResourceVersions(), "resourceUpdateCount", len(cmd.ResourceUpdates))
 	if shouldDeleteSyncCommand(cmd) {
-		f.Log().Debug("Deleting sync command with no resource versions", "commandID", cmd.ID)
 		if err := f.datastore.DeleteFormaCommand(cmd, cmd.ID); err != nil {
 			f.Log().Error("Failed to delete sync command", "commandID", cmd.ID, "error", err)
 			return fmt.Errorf("failed to delete sync command: %w", err)
 		}
 		delete(f.activeCommands, cmd.ID)
-		f.Log().Info("Deleted sync command", "commandID", cmd.ID, "reason", "sync with no resource versions")
 		return nil
 	}
 
@@ -257,8 +254,6 @@ func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.Form
 		command:        command,
 		ksuidOpToIndex: buildResourceUpdateIndex(command),
 	}
-	f.Log().Info("Stored new forma command", "commandID", command.ID, "command", command.Command, "resourceUpdateCount", len(command.ResourceUpdates))
-	f.Log().Debug("Cached newly stored Forma command", "commandID", command.ID)
 
 	return true, nil
 }
@@ -388,9 +383,6 @@ func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanc
 }
 
 func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkResourceUpdateAsComplete) (bool, error) {
-	f.Log().Debug("Received MarkResourceUpdateAsComplete", "commandID", msg.CommandID, "resourceKSUID", msg.ResourceURI.KSUID(), "operation", msg.Operation)
-	f.Log().Debug("Marking command resource as complete", "commandID", msg.CommandID, "resourceURI", msg.ResourceURI)
-
 	cached, err := f.getOrLoadCommand(msg.CommandID)
 	if err != nil {
 		f.Log().Error("Failed to load Forma command for complete update", "commandID", msg.CommandID, "resourceKSUID", msg.ResourceURI.KSUID(), "operation", msg.Operation, "error", err, "cachedCommandCount", len(f.activeCommands))
@@ -462,7 +454,6 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		}
 	}
 
-	f.Log().Debug("Successfully marked command resource as complete", "commandID", msg.CommandID)
 	return true, nil
 }
 
@@ -472,7 +463,6 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 	state types.ResourceUpdateState,
 	modifiedTs time.Time,
 ) (bool, error) {
-	f.Log().Debug("Bulk updating resource states", "commandID", commandID, "count", len(resources), "state", state)
 
 	cached, err := f.getOrLoadCommand(commandID)
 	if err != nil {
@@ -525,7 +515,6 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 		}
 	}
 
-	f.Log().Debug("Successfully bulk updated resource states", "commandID", commandID)
 	return true, nil
 }
 

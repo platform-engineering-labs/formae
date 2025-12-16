@@ -62,7 +62,11 @@ SELECT
 FROM forma_commands fc, json_each(json_extract(fc.data, '$.ResourceUpdates')) ru
 WHERE fc.data IS NOT NULL
   AND json_extract(fc.data, '$.ResourceUpdates') IS NOT NULL
-  AND json_array_length(json_extract(fc.data, '$.ResourceUpdates')) > 0;
+  AND json_array_length(json_extract(fc.data, '$.ResourceUpdates')) > 0
+  -- Only migrate ResourceUpdates with a version set (matching production behavior)
+  -- Sync commands without detected changes have empty versions and don't need persistence
+  AND json_extract(ru.value, '$.Version') IS NOT NULL
+  AND json_extract(ru.value, '$.Version') != '';
 
 -- +goose Down
 -- Remove the migrated resource_updates (only those that came from migration)
