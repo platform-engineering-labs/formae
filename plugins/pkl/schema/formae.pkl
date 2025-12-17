@@ -19,6 +19,8 @@ open class Description {
     fixed Confirm: Boolean = confirm
 }
 
+typealias Patch<T> = Mixin<T | Dynamic>
+
 open class Resource {
     label: String
     group: String?
@@ -45,6 +47,47 @@ open class Resource {
         Schema = self.schema()
         Properties = self.props()
     }
+}
+
+open class ResourceSparse extends Resource {
+  forClass: Class
+  patch: Dynamic(hasProperty("label"))
+
+  label: String = patch.getPropertyOrNull("label")
+  group: String? = patch.getPropertyOrNull("group")
+  target: TargetResolvable? = patch.getPropertyOrNull("target")
+  stack: StackResolvable? = patch.getPropertyOrNull("stack")
+  hidden tags: (Listing<Tag>)? = patch.getPropertyOrNull("tags")
+  fixed managed: Boolean = patch.getPropertyOrNull("managed") ?? true
+
+  local self = this
+  function fields(): Listing<String> = module.fq.fields(reflect.Class(forClass))
+  function hints(): Mapping<String, FieldHint> = module.fq.hints(reflect.Class(forClass))
+  function schema(): Schema = module.fq.schema(reflect.Class(forClass))
+  function type(): String = module.fq.type(reflect.Class(forClass))
+  function props(): Dynamic = module.fq.sparseProps(reflect.Class(forClass), patch)
+
+  function render(): Dynamic = new {
+    Label = self.label
+    Group = self.group
+    Target = self.target
+    Stack = self.stack
+    Managed = self.managed
+
+    Type = self.type()
+    Schema = self.schema()
+    Properties = self.props()
+  }
+}
+
+open class ResourcePatch {
+  hidden modify: Patch
+
+  local self = this
+  function toSparse(): ResourceSparse = new ResourceSparse {
+    forClass = reflect.Class(self.getClass()).annotations.filterIsInstance(PatchHint).first.forClass
+    patch = new Dynamic{} |> self.modify
+  }
 }
 
 open class SubResource {
@@ -120,6 +163,10 @@ open class ListProperty {
 
     fixed ParentProperty: String = parentProperty
     fixed ListParameter: String = listParameter
+}
+
+open class PatchHint extends Annotation {
+  forClass: Class
 }
 
 open class FieldHint extends Annotation {
@@ -466,6 +513,17 @@ class Fq {
             else
                 Pair(key, resource.getPropertyOrNull(k))
         ).toDynamic()
+
+  function sparseProps(resourceClass: reflect.Class, resource: Dynamic): Dynamic =
+    let(resourceHint = findResourceHint(resourceClass))
+      resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).filter((k, _) -> resource.hasProperty(k)).map((k, v) ->
+        let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+          let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            if (fieldHint.outputTransformation != null && resource.getPropertyOrNull(k) != null && fieldHint.outputCondition.apply(resource.getPropertyOrNull(k)))
+              Pair(key, fieldHint.outputTransformation.apply(resource.getPropertyOrNull(k)))
+            else
+              Pair(key, resource.getPropertyOrNull(k))
+      ).toDynamic()
 
     function schema(resourceClass: reflect.Class): Schema =
         let (hint = findResourceHint(resourceClass))

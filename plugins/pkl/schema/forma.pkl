@@ -10,7 +10,7 @@ import "formae.pkl"
 
 description: formae.Description?
 properties: Dynamic?
-hidden forma: Listing<formae.Resource|formae.Resolvable|formae.Stack|formae.Target>
+hidden forma: Listing<formae.Resource|formae.ResourcePatch|formae.Resolvable|formae.Stack|formae.Target>
 
 /// defaultStack: returns the first defined Stack
 hidden defaultStack: formae.StackResolvable =
@@ -31,40 +31,47 @@ output {
             }
         else
             new formae.FormaRender {
-                Description = module.description
-                Properties = module.properties
-                Stacks = forma.toList().filterIsInstance(formae.Stack).toListing()
-                Targets = forma.toList().filterIsInstance(formae.Target).toListing()
-                Resolvables = forma.toList().filterIsInstance(formae.Resolvable).toListing()
-                Resources = new Listing {
-                    for (res in forma.toList().filterIsInstance(formae.Resource).toListing()) {
-                        (res) {
-                            when (res.stack == null) {
-                                stack = defaultStack
-                            }
-                            when (res.target == null) {
-                                target = defaultTarget
-                            }
-                            tags = (res.tags) {
-                                new {
-                                    key = formae.Tags.FormaeResourceLabel
-                                    value = res.label
-                                }
-                                when (res.group != null) {
-                                    new {
-                                        key = formae.Tags.FormaeResourceGroup
-                                        value = res.group
-                                    }
-                                }
-                                new {
-                                    key = formae.Tags.FormaeStackLabel
-                                    value = res.stack?.label ?? defaultStack.label
-                                }
-                            }
-                        }
+              Description = module.description
+              Properties = module.properties
+              Stacks = forma.toList().filterIsInstance(formae.Stack).toListing()
+              Targets = forma.toList().filterIsInstance(formae.Target).toListing()
+              Resolvables = forma.toList().filterIsInstance(formae.Resolvable).toListing()
+              Resources =
+                let (resources = new Listing {
+                  ...forma.toList().filterIsInstance(formae.Resource).toListing()
+                  ...forma.toList().filterIsInstance(formae.ResourcePatch).map((patch) -> patch.toSparse())
+                })
+                new Listing {
+                for (res in resources) {
+                  (res) {
+                    when (res.stack == null) {
+                      stack = defaultStack
                     }
+                    when (res.target == null) {
+                      target = defaultTarget
+                    }
+                    tags = (res.tags) {
+                      new {
+                        key = formae.Tags.FormaeResourceLabel
+                        value = res.label
+                      }
+                      when (res.group != null) {
+                        new {
+                          key = formae.Tags.FormaeResourceGroup
+                          value = res.group
+                        }
+                      }
+                      new {
+                        key = formae.Tags.FormaeStackLabel
+                        value = res.stack?.label ?? defaultStack.label
+                      }
+                    }
+                  }
                 }
+              }
             }
+
+
     // NOTE: this is needed currently due to the immutability of pkl values on assignment, and the lack of a Reference type
     // when this is addressed we can use a PKL native reference type: https://github.com/apple/pkl/issues/912
     // this is a workaround required to enable the addition of default stack and target support
@@ -75,6 +82,7 @@ output {
             [formae.TargetResolvable] = (it) -> it.label
             [formae.Resolvable] = (it) -> if (it.stack == null && it.type != "Formae::Stack" && it.type != "Formae::Target") (it) { stack = output.value.getResource(it.label, it.type).stack.label } else it
             [formae.Resource] = (it) -> it.render()
+            [formae.ResourcePatch] = (it) -> it.render()
             [formae.SubResource] = (it) -> it.render()
         }
     }
