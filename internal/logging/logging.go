@@ -60,7 +60,7 @@ func SetupClientLogging(logFilePath string) {
 	log.SetOutput(lw)
 }
 
-func SetupBackendLogging(loggingConfig *pkgmodel.LoggingConfig, otelConfig *pkgmodel.OTelConfig) {
+func SetupBackendLogging(loggingConfig *pkgmodel.LoggingConfig, otelHandler slog.Handler) {
 	if err := util.EnsureFileFolderHierarchy(loggingConfig.FilePath); err != nil {
 		slog.Error("Failed to create log folder hierarchy", "error", err)
 		return
@@ -77,14 +77,6 @@ func SetupBackendLogging(loggingConfig *pkgmodel.LoggingConfig, otelConfig *pkgm
 			Level:      loggingConfig.ConsoleLogLevel,
 			TimeFormat: time.RFC3339,
 		})
-	}
-
-	var otelHandler slog.Handler = nil
-	if otelConfig != nil && otelConfig.Enabled {
-		otelHandler = setupOTelHandler(otelConfig.ServiceName,
-			otelConfig.OTLP.Endpoint,
-			otelConfig.OTLP.Protocol,
-			otelConfig.OTLP.Insecure)
 	}
 
 	handler := &MultiLevelHandler{
@@ -111,8 +103,16 @@ type MultiLevelHandler struct {
 }
 
 func (h *MultiLevelHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.fileHandler.Enabled(ctx, level) ||
-		h.consoleHandler.Enabled(ctx, level)
+	if h.fileHandler.Enabled(ctx, level) {
+		return true
+	}
+	if h.consoleHandler != nil && h.consoleHandler.Enabled(ctx, level) {
+		return true
+	}
+	if h.otelHandler != nil && h.otelHandler.Enabled(ctx, level) {
+		return true
+	}
+	return false
 }
 
 func (h *MultiLevelHandler) Handle(ctx context.Context, r slog.Record) error {
@@ -138,17 +138,33 @@ func (h *MultiLevelHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func (h *MultiLevelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &MultiLevelHandler{
-		fileHandler:    h.fileHandler.WithAttrs(attrs),
-		consoleHandler: h.consoleHandler.WithAttrs(attrs),
-		otelHandler:    h.otelHandler.WithAttrs(attrs),
+	newHandler := &MultiLevelHandler{
+		fileHandler: h.fileHandler.WithAttrs(attrs),
 	}
+
+	if h.consoleHandler != nil {
+		newHandler.consoleHandler = h.consoleHandler.WithAttrs(attrs)
+	}
+
+	if h.otelHandler != nil {
+		newHandler.otelHandler = h.otelHandler.WithAttrs(attrs)
+	}
+
+	return newHandler
 }
 
 func (h *MultiLevelHandler) WithGroup(name string) slog.Handler {
-	return &MultiLevelHandler{
-		fileHandler:    h.fileHandler.WithGroup(name),
-		consoleHandler: h.consoleHandler.WithGroup(name),
-		otelHandler:    h.otelHandler.WithGroup(name),
+	newHandler := &MultiLevelHandler{
+		fileHandler: h.fileHandler.WithGroup(name),
 	}
+
+	if h.consoleHandler != nil {
+		newHandler.consoleHandler = h.consoleHandler.WithGroup(name)
+	}
+
+	if h.otelHandler != nil {
+		newHandler.otelHandler = h.otelHandler.WithGroup(name)
+	}
+
+	return newHandler
 }

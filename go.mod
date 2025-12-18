@@ -57,7 +57,6 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.15.0
 	go.opentelemetry.io/otel/sdk/metric v1.39.0
 	go.opentelemetry.io/otel/trace v1.39.0
-	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 	pgregory.net/rapid v1.2.0
