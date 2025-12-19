@@ -563,6 +563,23 @@ const docTemplate = `{
                 }
             }
         },
+        "model.PluginInfo": {
+            "type": "object",
+            "properties": {
+                "MaxRequestsPerSecond": {
+                    "type": "integer"
+                },
+                "Namespace": {
+                    "type": "string"
+                },
+                "NodeName": {
+                    "type": "string"
+                },
+                "ResourceCount": {
+                    "type": "integer"
+                }
+            }
+        },
         "model.Prop": {
             "type": "object",
             "properties": {
@@ -764,6 +781,12 @@ const docTemplate = `{
                     "type": "object",
                     "additionalProperties": {
                         "type": "integer"
+                    }
+                },
+                "Plugins": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.PluginInfo"
                     }
                 },
                 "ResourceErrors": {

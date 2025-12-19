@@ -132,7 +132,7 @@ func statsToPrometheusMetrics(stats *apimodel.Stats) []promcli.Metric {
 						processNumber(element, elementName, labels)
 
 					default:
-						slog.Warn("skipping unsupported slice/array element type", "elementName", elementName, "elementType", element.Kind())
+						slog.Debug("skipping unsupported slice/array element type", "elementName", elementName, "elementType", element.Kind())
 					}
 				}
 

@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Hard reconcile means applying a forma with the `--force` flag. Any changes to resources in the stack since the last
@@ -121,12 +122,12 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 		assert.NoError(t, err)
 
 		var commands []*forma_command.FormaCommand
-		assert.Eventually(t, func() bool {
+		require.Eventually(t, func() bool {
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
 			return len(commands) == 1 && commands[0].State == forma_command.CommandStateSuccess
-		}, 5*time.Second, 100*time.Millisecond)
+		}, 5*time.Second, 100*time.Millisecond, "first apply command should complete")
 
 		// patch one of the resources
 		patch := &pkgmodel.Forma{
@@ -162,12 +163,12 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 			"test-client-id")
 		assert.NoError(t, err)
 
-		assert.Eventually(t, func() bool {
+		require.Eventually(t, func() bool {
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 2 && commands[1].State == forma_command.CommandStateSuccess
-		}, 5*time.Second, 100*time.Millisecond)
+			return len(commands) == 2 && commands[0].State == forma_command.CommandStateSuccess
+		}, 5*time.Second, 100*time.Millisecond, "patch command should complete before submitting reconcile")
 
 		// reconcile the stack to a new state, forcing a hard reconcile
 		reconcile := &pkgmodel.Forma{
@@ -217,7 +218,7 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 3 && commands[2].State == forma_command.CommandStateSuccess
+			return len(commands) == 3 && commands[0].State == forma_command.CommandStateSuccess
 		}, 5*time.Second, 100*time.Millisecond)
 
 	})

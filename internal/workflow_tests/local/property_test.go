@@ -262,6 +262,10 @@ func (pt *PropertyTest) WaitForCommandSuccess(commandID string, clientId string)
 				pt.Log("GetFormaCommandsStatus error: %v", err)
 				return false
 			}
+			if len(result.Commands) == 0 {
+				pt.Log("GetFormaCommandsStatus returned no commands for id:%s", commandID)
+				return false
+			}
 			return result.Commands[0].State == "Success"
 		},
 		10*time.Second,

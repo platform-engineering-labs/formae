@@ -29,7 +29,7 @@ const (
 
 type FormaCommand struct {
 	ID              string                           `json:"ID"`
-	Forma           pkgmodel.Forma                   `json:"Forma"`
+	Description     pkgmodel.Description             `json:"Description"`
 	State           CommandState                     `json:"State"`
 	StartTs         time.Time                        `json:"StartTs"`
 	ModifiedTs      time.Time                        `json:"ModifiedTs"`
@@ -65,7 +65,7 @@ func NewFormaCommand(
 		TargetUpdates:   targetUpdates,
 		Config:          *formaCommandConfig,
 		Command:         command,
-		Forma:           *forma,
+		Description:     forma.Description,
 		State:           CommandStateNotStarted,
 		ClientID:        clientID,
 	}
@@ -91,4 +91,18 @@ func (fc *FormaCommand) HasResourceVersions() bool {
 		}
 	}
 	return false
+}
+
+// GetStackLabels returns unique stack labels from all ResourceUpdates.
+// This derives stack information from ResourceUpdates rather than storing it separately.
+func (fc *FormaCommand) GetStackLabels() []string {
+	seen := make(map[string]bool)
+	var labels []string
+	for _, ru := range fc.ResourceUpdates {
+		if !seen[ru.StackLabel] {
+			seen[ru.StackLabel] = true
+			labels = append(labels, ru.StackLabel)
+		}
+	}
+	return labels
 }
