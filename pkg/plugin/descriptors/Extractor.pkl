@@ -1,0 +1,64 @@
+module formae.descriptors
+
+import "@formae/formae.pkl"
+import "pkl:reflect"
+import "./ResourceDescriptor.pkl" as resourceDescriptor
+import "./imports.pkl"
+
+/// Extract all resource descriptors from the schema
+function extractDescriptors(): Listing<resourceDescriptor.ResourceDescriptor> = new Listing {
+    // Iterate through each package (e.g., "@aws")
+    for (_packageName, packageModules in imports.packages) {
+        // Iterate through each module in the package
+        for (_modulePath, moduleValue in packageModules) {
+            when (reflect.Module(moduleValue).classes.length > 0) {
+                for (_className, clazz in reflect.Module(moduleValue).classes) {
+                    // Check for ResourceHint annotation
+                    when (clazz.annotations.length > 0 &&
+                          clazz.annotations[0].getClass().simpleName == "ResourceHint") {
+
+                        new resourceDescriptor.ResourceDescriptor {
+                            Type = clazz.annotations[0].getProperty("type")
+                            Schema = new formae.Schema {
+                                Nonprovisionable = clazz.annotations[0].getProperty("nonprovisionable")
+                                Identifier = clazz.annotations[0].getProperty("identifier")
+                                Tags = clazz.annotations[0].getProperty("tags")
+                                Hints = new Mapping<String, formae.FieldHint> {
+                                    for (fieldName, fieldHint in formae.fq.hints(clazz)) {
+                                        [fieldName] = fieldHint
+                                    }
+                                }
+                                Fields = formae.fq.fields(clazz)
+                            }
+                            ParentResourceTypesWithMappingProperties = extractParentMappings(clazz.annotations[0])
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Extract parent resource type mappings
+local function extractParentMappings(resourceHint): Mapping<String, Listing<formae.ListProperty>>? =
+    let (parent = resourceHint.getProperty("parent"))
+    let (listParam = resourceHint.getProperty("listParam"))
+    if (parent != null && listParam != null)
+        new Mapping {
+            [parent] = if (listParam is Listing)
+                listParam
+            else if (listParam is List)
+                // Convert List to Listing
+                new Listing { for (item in listParam) { item } }
+            else
+                // Single ListProperty - wrap in a Listing
+                new Listing { listParam }
+        }
+    else
+        null
+
+output {
+    value = new resourceDescriptor.ResourceDescriptors {
+        descriptors = extractDescriptors()
+    }
+}

@@ -6,7 +6,8 @@ package main
 
 import (
 	"context"
-		"github.com/masterminds/semver"
+
+	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -51,23 +52,31 @@ func (s FakeAWS) overrides(context context.Context) *plugin.ResourcePluginOverri
 func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	return []plugin.ResourceDescriptor{
 		{
-			Type:         "FakeAWS::S3::Bucket",
-			Discoverable: true,
+			Type: "FakeAWS::S3::Bucket",
+			Schema: model.Schema{
+				Discoverable: true,
+			},
 		},
 		{
-			Type:         "FakeAWS::EC2::VPC",
-			Discoverable: true,
+			Type: "FakeAWS::EC2::VPC",
+			Schema: model.Schema{
+				Discoverable: true,
+			},
 		},
 		{
 			Type: "FakeAWS::EC2::VPCCidrBlock",
 			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
 				"FakeAWS::EC2::VPC": {{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
 			},
-			Discoverable: true,
+			Schema: model.Schema{
+				Discoverable: true,
+			},
 		},
 		{
-			Type:         "FakeAWS::EC2::Instance",
-			Discoverable: true,
+			Type: "FakeAWS::EC2::Instance",
+			Schema: model.Schema{
+				Discoverable: true,
+			},
 		},
 	}
 }

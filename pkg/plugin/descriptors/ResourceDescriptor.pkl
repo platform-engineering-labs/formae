@@ -1,0 +1,12 @@
+module formae.plugin
+import "@formae/formae.pkl"
+
+class ResourceDescriptor {
+    Type: String
+    Schema: formae.Schema
+    ParentResourceTypesWithMappingProperties: Mapping<String, Listing<formae.ListProperty>>?
+}
+
+class ResourceDescriptors {
+    descriptors: Listing<ResourceDescriptor>
+}

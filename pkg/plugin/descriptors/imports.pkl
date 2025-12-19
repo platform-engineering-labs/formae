@@ -1,0 +1,13 @@
+// DONT EDIT THIS FILE MANUALLY
+// imports.pkl - Imports schema packages for resource descriptor extraction
+//
+// Note: import*() is resolved at parse time, so we cannot dynamically determine
+// which packages to import. Each provider must be explicitly listed here.
+// When adding a new provider, add its import*() call below.
+
+/// Import all PKL files from each known schema package
+packages: Mapping<String, Mapping<String, Module>> = new Mapping {
+    // ["@aws"] = import*("@aws/**/*.pkl")
+    // ["@gcp"] = import*("@gcp/**/*.pkl")
+    // ["@azure"] = import*("@azure/**/*.pkl")
+}
