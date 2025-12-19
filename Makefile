@@ -75,6 +75,18 @@ pkg-bin: clean build build-tools
 publish-bin: pkg-bin
 	./ppm repo publish ./dist/packages/*.tgz
 
+postgres-up:
+	docker rm -f formae-test-postgres 2>/dev/null || true
+	docker run -d --name formae-test-postgres \
+		-e POSTGRES_USER=formae \
+		-e POSTGRES_PASSWORD=formae \
+		-e POSTGRES_DB=formae \
+		-p 5433:5432 \
+		postgres:15-alpine
+
+postgres-down:
+	docker rm -f formae-test-postgres
+
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
 	pkl project resolve plugins/pkl/schema
@@ -184,7 +196,7 @@ test-e2e: gen-pkl pkg-pkl build
 		exit $$E2E_EXIT_CODE
 
 test-property:
-	go test -tags=property -failfast ./internal/workflow_tests -run 'TestMetastructure_Property.*'
+	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
 
 test-schema-pkl:
 	cd plugins/pkl/schema && pkl test tests/formae.pkl
