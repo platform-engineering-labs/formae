@@ -83,6 +83,17 @@ definitions:
           $ref: '#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command'
         type: array
     type: object
+  model.PluginInfo:
+    properties:
+      MaxRequestsPerSecond:
+        type: integer
+      Namespace:
+        type: string
+      NodeName:
+        type: string
+      ResourceCount:
+        type: integer
+    type: object
   model.Prop:
     properties:
       Default: {}
@@ -218,6 +229,10 @@ definitions:
         additionalProperties:
           type: integer
         type: object
+      Plugins:
+        items:
+          $ref: '#/definitions/model.PluginInfo'
+        type: array
       ResourceErrors:
         additionalProperties:
           type: integer

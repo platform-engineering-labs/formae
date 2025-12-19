@@ -7,8 +7,8 @@ package target_update
 import (
 	"fmt"
 	"log/slog"
-	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -56,7 +56,7 @@ func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target
 }
 
 func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target) (TargetUpdate, bool, error) {
-	now := time.Now()
+	now := util.TimeNow()
 
 	existing, err := tp.datastore.LoadTarget(target.Label)
 	if err != nil {

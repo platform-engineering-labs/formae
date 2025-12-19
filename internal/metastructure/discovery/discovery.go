@@ -354,6 +354,21 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 		}
 	}
 
+	// If no work was queued (e.g., all plugins failed to register), return to Idle
+	// to allow future Discover messages to be processed
+	if !data.HasOutstandingWork() {
+		proc.Log().Debug("No targets could be processed (plugins not available), completing discovery")
+		if data.isScheduledDiscovery {
+			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
+			if err != nil {
+				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				return StateIdle, data, nil, gen.TerminateReasonPanic
+			}
+			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
+		}
+		return StateIdle, data, nil, nil
+	}
+
 	return StateDiscovering, data, nil, nil
 }
 

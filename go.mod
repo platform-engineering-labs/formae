@@ -14,12 +14,12 @@ require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
 	ergo.services/ergo v1.999.310
-	github.com/alecthomas/chroma/v2 v2.20.0
 	github.com/blugelabs/bluge v0.1.7
 	github.com/blugelabs/query_string v0.3.0
 	github.com/ddddddO/gtree v1.11.3
 	github.com/demula/mksuid/v2 v2.0.1
 	github.com/fatih/color v1.18.0
+	github.com/goccy/go-json v0.10.5
 	github.com/google/uuid v1.6.0
 	github.com/gookit/color v1.5.4
 	github.com/jackc/pgx/v5 v5.7.6
@@ -86,7 +86,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
-	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

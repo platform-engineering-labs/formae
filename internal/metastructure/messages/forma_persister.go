@@ -17,6 +17,7 @@ import (
 type MarkResourceUpdateAsComplete struct {
 	CommandID                  string
 	ResourceURI                pkgmodel.FormaeURI
+	Operation                  types.OperationType // The ResourceUpdate operation (create, delete, update, etc.)
 	FinalState                 types.ResourceUpdateState
 	ResourceStartTs            time.Time
 	ResourceModifiedTs         time.Time
@@ -28,6 +29,7 @@ type MarkResourceUpdateAsComplete struct {
 type UpdateResourceProgress struct {
 	CommandID                  string
 	ResourceURI                pkgmodel.FormaeURI
+	Operation                  types.OperationType // The ResourceUpdate operation (create, delete, update, etc.)
 	ResourceStartTs            time.Time
 	ResourceModifiedTs         time.Time
 	ResourceState              types.ResourceUpdateState
