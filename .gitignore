@@ -76,5 +76,8 @@ CLAUDE.md
 .research/
 .plans/
 
+# Design docs (local investigation notes)
+docs/design/
+
 # MCP
 .serena/

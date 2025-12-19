@@ -7,13 +7,14 @@ package datastore
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/demula/mksuid/v2"
+	json "github.com/goccy/go-json"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -23,8 +24,10 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stats"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	metautil "github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 type DatastorePostgres struct {
@@ -124,20 +127,23 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 }
 
 func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
-	jsonData, err := json.Marshal(fa)
-	if err != nil {
-		return err
-	}
-
 	for _, r := range fa.ResourceUpdates {
 		if r.Resource.Properties == nil {
 			slog.Debug("Resource properties are empty for resource", "resourceLabel", r.Resource.Label, "commandID", commandID)
 		}
 	}
 
+	targetUpdatesJSON, err := json.Marshal(fa.TargetUpdates)
+	if err != nil {
+		return fmt.Errorf("failed to marshal target updates: %w", err)
+	}
+
+	// We no longer store the forma JSON - Description and Config are stored as normalized columns
 	query := fmt.Sprintf(`
-	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id, data)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
+		description_text, description_confirm, config_mode, config_force, config_simulate,
+		target_updates, modified_ts)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -145,93 +151,309 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	agent_version = EXCLUDED.agent_version,
 	client_id = EXCLUDED.client_id,
 	agent_id = EXCLUDED.agent_id,
-	data = EXCLUDED.data
+	description_text = EXCLUDED.description_text,
+	description_confirm = EXCLUDED.description_confirm,
+	config_mode = EXCLUDED.config_mode,
+	config_force = EXCLUDED.config_force,
+	config_simulate = EXCLUDED.config_simulate,
+	target_updates = EXCLUDED.target_updates,
+	modified_ts = EXCLUDED.modified_ts
 	`, CommandsTable)
 
-	_, err = d.pool.Exec(context.Background(), query, commandID, fa.StartTs, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID, jsonData)
+	_, err = d.pool.Exec(context.Background(), query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
+		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
+		targetUpdatesJSON, fa.ModifiedTs.UTC())
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
 		return err
 	}
 
+	// Store ResourceUpdates in the normalized table
+	// Skip for sync commands - they don't need upfront storage since:
+	// 1. Sync commands are never resumed after restart (excluded from LoadIncompleteFormaCommands)
+	// 2. Progress is tracked in-memory via the FormaCommandPersister cache
+	// 3. Only resource updates with actual changes (Version set) are inserted on completion
+	if len(fa.ResourceUpdates) > 0 && fa.Command != pkgmodel.CommandSync {
+		if err := d.BulkStoreResourceUpdates(commandID, fa.ResourceUpdates); err != nil {
+			return fmt.Errorf("failed to store resource updates: %w", err)
+		}
+	}
+
 	return nil
 }
 
+const formaCommandWithResourceUpdatesQueryBasePostgres = `
+SELECT
+	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
+	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
+	fc.target_updates, fc.modified_ts,
+	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
+	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
+	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
+	ru.metadata, ru.progress_result, ru.most_recent_progress,
+	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties
+FROM forma_commands fc
+LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
+
+const resourceUpdateOrderByPostgres = " ORDER BY fc.timestamp DESC, ru.ksuid ASC"
+
+// scanJoinedRowPostgres scans a row from the joined FormaCommand + ResourceUpdate query
+// Returns the FormaCommand and optionally a ResourceUpdate (nil if LEFT JOIN has no match)
+func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resource_update.ResourceUpdate, error) {
+	var cmd forma_command.FormaCommand
+	var commandID, fcCommand, fcState string
+	var fcTimestamp time.Time
+	var fcClientID *string
+	var descriptionText *string
+	var descriptionConfirm *bool
+	var configMode *string
+	var configForce, configSimulate *bool
+	var targetUpdatesJSON []byte
+	var fcModifiedTs *time.Time
+
+	// ResourceUpdate fields (all nullable due to LEFT JOIN)
+	var ruKsuid, ruOperation, ruState *string
+	var ruStartTs, ruModifiedTs *time.Time
+	var ruRetries, ruRemaining *uint16
+	var ruVersion, ruStackLabel, ruGroupID, ruSource *string
+	var resourceJSON, resourceTargetJSON, existingResourceJSON, existingTargetJSON []byte
+	var metadataJSON, progressResultJSON, mostRecentProgressJSON []byte
+	var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
+
+	err := rows.Scan(
+		// FormaCommand columns
+		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
+		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
+		&targetUpdatesJSON, &fcModifiedTs,
+		// ResourceUpdate columns
+		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
+		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
+		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
+		&metadataJSON, &progressResultJSON, &mostRecentProgressJSON,
+		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Populate FormaCommand
+	cmd.ID = commandID
+	cmd.StartTs = fcTimestamp
+	cmd.Command = pkgmodel.Command(fcCommand)
+	cmd.State = forma_command.CommandState(fcState)
+	if fcClientID != nil {
+		cmd.ClientID = *fcClientID
+	}
+
+	// Read description from normalized columns
+	if descriptionText != nil {
+		cmd.Description.Text = *descriptionText
+	}
+	cmd.Description.Confirm = descriptionConfirm != nil && *descriptionConfirm
+
+	// Read config from normalized columns
+	if configMode != nil {
+		cmd.Config.Mode = pkgmodel.FormaApplyMode(*configMode)
+	}
+	cmd.Config.Force = configForce != nil && *configForce
+	cmd.Config.Simulate = configSimulate != nil && *configSimulate
+
+	if fcModifiedTs != nil {
+		cmd.ModifiedTs = *fcModifiedTs
+	}
+
+	if len(targetUpdatesJSON) > 0 {
+		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal target updates: %w", err)
+		}
+	}
+
+	// Check if there's a ResourceUpdate (LEFT JOIN may return NULL)
+	if ruKsuid == nil {
+		return &cmd, nil, nil
+	}
+
+	// Populate ResourceUpdate
+	var ru resource_update.ResourceUpdate
+	ru.Operation = types.OperationType(*ruOperation)
+	ru.State = resource_update.ResourceUpdateState(*ruState)
+
+	if ruStartTs != nil {
+		ru.StartTs = *ruStartTs
+	}
+	if ruModifiedTs != nil {
+		ru.ModifiedTs = *ruModifiedTs
+	}
+
+	if ruRetries != nil {
+		ru.Retries = *ruRetries
+	}
+	if ruRemaining != nil {
+		ru.Remaining = int16(*ruRemaining)
+	}
+	if ruVersion != nil {
+		ru.Version = *ruVersion
+	}
+	if ruStackLabel != nil {
+		ru.StackLabel = *ruStackLabel
+	}
+	if ruGroupID != nil {
+		ru.GroupID = *ruGroupID
+	}
+	if ruSource != nil {
+		ru.Source = resource_update.FormaCommandSource(*ruSource)
+	}
+
+	if len(resourceJSON) > 0 {
+		if err := json.Unmarshal(resourceJSON, &ru.Resource); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal resource: %w", err)
+		}
+		ru.Resource.Ksuid = *ruKsuid
+	}
+	if len(resourceTargetJSON) > 0 {
+		if err := json.Unmarshal(resourceTargetJSON, &ru.ResourceTarget); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal resource target: %w", err)
+		}
+	}
+	if len(existingResourceJSON) > 0 {
+		if err := json.Unmarshal(existingResourceJSON, &ru.ExistingResource); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal existing resource: %w", err)
+		}
+	}
+	if len(existingTargetJSON) > 0 {
+		if err := json.Unmarshal(existingTargetJSON, &ru.ExistingTarget); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal existing target: %w", err)
+		}
+	}
+
+	ru.MetaData = metadataJSON
+
+	if len(progressResultJSON) > 0 {
+		if err := json.Unmarshal(progressResultJSON, &ru.ProgressResult); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal progress result: %w", err)
+		}
+	}
+	if len(mostRecentProgressJSON) > 0 {
+		if err := json.Unmarshal(mostRecentProgressJSON, &ru.MostRecentProgressResult); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal most recent progress: %w", err)
+		}
+	}
+	if len(remainingResolvablesJSON) > 0 {
+		if err := json.Unmarshal(remainingResolvablesJSON, &ru.RemainingResolvables); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal remaining resolvables: %w", err)
+		}
+	}
+	if len(referenceLabelsJSON) > 0 {
+		if err := json.Unmarshal(referenceLabelsJSON, &ru.ReferenceLabels); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal reference labels: %w", err)
+		}
+	}
+
+	ru.PreviousProperties = previousPropertiesJSON
+
+	return &cmd, &ru, nil
+}
+
+// loadFormaCommandsFromJoinedRowsPostgres processes rows from a joined query
+// and groups ResourceUpdates by FormaCommand ID
+func loadFormaCommandsFromJoinedRowsPostgres(rows pgx.Rows) ([]*forma_command.FormaCommand, error) {
+	defer rows.Close()
+
+	// Use a map to collect ResourceUpdates for each command
+	commandMap := make(map[string]*forma_command.FormaCommand)
+	var commandOrder []string // Preserve order
+
+	for rows.Next() {
+		cmd, ru, err := scanJoinedRowPostgres(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		existing, found := commandMap[cmd.ID]
+		if !found {
+			commandMap[cmd.ID] = cmd
+			commandOrder = append(commandOrder, cmd.ID)
+			existing = cmd
+		}
+
+		if ru != nil {
+			existing.ResourceUpdates = append(existing.ResourceUpdates, *ru)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Return commands in original order
+	result := make([]*forma_command.FormaCommand, 0, len(commandOrder))
+	for _, id := range commandOrder {
+		result = append(result, commandMap[id])
+	}
+
+	return result, nil
+}
+
 func (d DatastorePostgres) LoadFormaCommands() ([]*forma_command.FormaCommand, error) {
-	query := fmt.Sprintf("SELECT data FROM %s", CommandsTable)
-	rows, err := d.pool.Query(context.Background(), query)
+	rows, err := d.pool.Query(context.Background(), formaCommandWithResourceUpdatesQueryBasePostgres+resourceUpdateOrderByPostgres)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var commands []*forma_command.FormaCommand
-	for rows.Next() {
-		var jsonData string
-		if err := rows.Scan(&jsonData); err != nil {
-			return nil, err
-		}
-
-		var app forma_command.FormaCommand
-		if err := json.Unmarshal([]byte(jsonData), &app); err != nil {
-			return nil, err
-		}
-
-		commands = append(commands, &app)
-	}
-
-	return commands, rows.Err()
+	return loadFormaCommandsFromJoinedRowsPostgres(rows)
 }
 
 func (d DatastorePostgres) DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	// Delete resource_updates first (no FK constraint, so we must do this manually)
+	_, err := d.pool.Exec(context.Background(), "DELETE FROM resource_updates WHERE command_id = $1", commandID)
+	if err != nil {
+		return fmt.Errorf("failed to delete resource_updates: %w", err)
+	}
+
 	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = $1", CommandsTable)
-	_, err := d.pool.Exec(context.Background(), query, commandID)
+	_, err = d.pool.Exec(context.Background(), query, commandID)
 	return err
 }
 
 func (d DatastorePostgres) GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error) {
-	query := fmt.Sprintf("SELECT data FROM %s WHERE command_id = $1", CommandsTable)
-	row := d.pool.QueryRow(context.Background(), query, commandID)
-
-	var jsonData string
-	if err := row.Scan(&jsonData); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("forma command not found: %v", commandID)
-		}
+	query := formaCommandWithResourceUpdatesQueryBasePostgres + " WHERE fc.command_id = $1" + resourceUpdateOrderByPostgres
+	rows, err := d.pool.Query(context.Background(), query, commandID)
+	if err != nil {
 		return nil, err
 	}
 
-	var app forma_command.FormaCommand
-	if err := json.Unmarshal([]byte(jsonData), &app); err != nil {
+	commands, err := loadFormaCommandsFromJoinedRowsPostgres(rows)
+	if err != nil {
 		return nil, err
 	}
 
-	return &app, nil
+	if len(commands) == 0 {
+		return nil, fmt.Errorf("forma command not found: %v", commandID)
+	}
+
+	return commands[0], nil
 }
 
 func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error) {
-	query := fmt.Sprintf(`
-	SELECT data FROM %s
-	WHERE client_id = $1
-	ORDER BY timestamp DESC
-	LIMIT 1
-	`, CommandsTable)
-	row := d.pool.QueryRow(context.Background(), query, clientID)
-
-	var jsonData string
-	if err := row.Scan(&jsonData); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
-		}
+	// Use subquery to find the most recent command_id first, then fetch all its resource_updates
+	// LIMIT 1 on the joined query would only return 1 row, not 1 command
+	query := formaCommandWithResourceUpdatesQueryBasePostgres +
+		" WHERE fc.command_id = (SELECT command_id FROM forma_commands WHERE client_id = $1 ORDER BY timestamp DESC LIMIT 1)" +
+		resourceUpdateOrderByPostgres
+	rows, err := d.pool.Query(context.Background(), query, clientID)
+	if err != nil {
 		return nil, err
 	}
 
-	var command forma_command.FormaCommand
-	if err := json.Unmarshal([]byte(jsonData), &command); err != nil {
+	commands, err := loadFormaCommandsFromJoinedRowsPostgres(rows)
+	if err != nil {
 		return nil, err
 	}
 
-	return &command, nil
+	if len(commands) == 0 {
+		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+	}
+
+	return commands[0], nil
 }
 
 func extendPostgresQueryString[T any](queryStr string, queryItem *QueryItem[T], sqlPart string, args *[]any) string {
@@ -266,47 +488,51 @@ func extendPostgresQueryString[T any](queryStr string, queryItem *QueryItem[T], 
 }
 
 func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error) {
-	queryStr := fmt.Sprintf("SELECT data FROM %s WHERE 1=1", CommandsTable)
+	// Build subquery to find matching command IDs with filtering and LIMIT
+	subqueryStr := "SELECT command_id FROM forma_commands WHERE 1=1"
 	args := []any{}
 
-	queryStr = extendPostgresQueryString(queryStr, query.CommandID, " AND command_id %s $%d", &args)
-	queryStr = extendPostgresQueryString(queryStr, query.ClientID, " AND client_id %s $%d", &args)
-	queryStr = extendPostgresQueryString(queryStr, query.Command, " AND LOWER(command) %s LOWER($%d)", &args)
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.CommandID, " AND command_id %s $%d", &args)
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.ClientID, " AND client_id %s $%d", &args)
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER($%d)", &args)
 	if query.Command == nil {
-		queryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
+		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
 	}
 
-	queryStr = extendPostgresQueryString(queryStr, query.Stack, " AND EXISTS (SELECT 1 FROM jsonb_array_elements(data->'ResourceUpdates') AS elem WHERE elem->'Resource'->>'Stack' %s $%d)", &args)
-	queryStr = extendPostgresQueryString(queryStr, query.Status, " AND LOWER(state) %s LOWER($%d)", &args)
+	// Stack filter uses the normalized resource_updates table
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s $%d)", &args)
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER($%d)", &args)
 
-	queryStr += " ORDER BY timestamp DESC"
+	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {
-		queryStr += fmt.Sprintf(" LIMIT $%d", len(args)+1)
-		args = append(args, query.N)
+		subqueryStr += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, min(DefaultFormaCommandsQueryLimit, query.N))
+	} else {
+		subqueryStr += fmt.Sprintf(" LIMIT %d", DefaultFormaCommandsQueryLimit)
 	}
+
+	// Main query joins with resource_updates for commands matching the subquery
+	queryStr := fmt.Sprintf(`
+		SELECT
+			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
+			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
+			fc.target_updates, fc.modified_ts,
+			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
+			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
+			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
+			ru.metadata, ru.progress_result, ru.most_recent_progress,
+			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties
+		FROM forma_commands fc
+		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
+		WHERE fc.command_id IN (%s)
+		ORDER BY fc.timestamp DESC, ru.ksuid ASC
+	`, subqueryStr)
 
 	rows, err := d.pool.Query(context.Background(), queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var commands []*forma_command.FormaCommand
-	for rows.Next() {
-		var jsonData string
-		if err := rows.Scan(&jsonData); err != nil {
-			return nil, err
-		}
-
-		var app forma_command.FormaCommand
-		if err := json.Unmarshal([]byte(jsonData), &app); err != nil {
-			return nil, err
-		}
-
-		commands = append(commands, &app)
-	}
-
-	return commands, rows.Err()
+	return loadFormaCommandsFromJoinedRowsPostgres(rows)
 }
 
 func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {
@@ -350,13 +576,15 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 	SELECT stack, label, type, ksuid
 	FROM resources r1
 	WHERE (stack, label, type) IN (%s)
+	AND r1.operation != $%d
 	AND NOT EXISTS (
 		SELECT 1 FROM resources r2
 		WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
 		AND r2.version > r1.version
 	)
-	`, strings.Join(placeholders, ","))
+	`, strings.Join(placeholders, ","), len(triplets)*3+1)
 
+	args = append(args, resource_update.OperationDelete)
 	rows, err := d.pool.Query(context.Background(), query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
@@ -407,7 +635,7 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	AND T1.timestamp > (
 		SELECT fc.timestamp
 		FROM forma_commands fc
-		WHERE fc.data->'Config'->>'Mode' = 'reconcile'
+		WHERE fc.config_mode = 'reconcile'
 		AND EXISTS (
 			SELECT 1
 			FROM resources r
@@ -649,34 +877,16 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 }
 
 func (d DatastorePostgres) LoadIncompleteFormaCommands() ([]*forma_command.FormaCommand, error) {
-	query := fmt.Sprintf(`
-	SELECT data
-	FROM %s
-	WHERE command != 'sync' AND state = $1
-	`, CommandsTable)
+	query := formaCommandWithResourceUpdatesQueryBasePostgres +
+		" WHERE fc.command != 'sync' AND fc.state = $1" +
+		resourceUpdateOrderByPostgres
 
 	rows, err := d.pool.Query(context.Background(), query, forma_command.CommandStateInProgress)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var commands []*forma_command.FormaCommand
-	for rows.Next() {
-		var jsonData string
-		if err := rows.Scan(&jsonData); err != nil {
-			return nil, err
-		}
-
-		var command forma_command.FormaCommand
-		if err := json.Unmarshal([]byte(jsonData), &command); err != nil {
-			return nil, err
-		}
-
-		commands = append(commands, &command)
-	}
-
-	return commands, rows.Err()
+	return loadFormaCommandsFromJoinedRowsPostgres(rows)
 }
 
 func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
@@ -1207,32 +1417,32 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		res.ResourceTypes[resourceType] = count
 	}
 
-	// Count resource errors
+	// Count resource errors from resource_updates table
 	res.ResourceErrors = make(map[string]int)
-	errorQuery := fmt.Sprintf(`
-	SELECT data
-	FROM %s
-	WHERE state = $1
-	`, CommandsTable)
-	rows, err = d.pool.Query(context.Background(), errorQuery, forma_command.CommandStateFailed)
+	errorQuery := `
+	SELECT ru.progress_result
+	FROM resource_updates ru
+	JOIN forma_commands fc ON ru.command_id = fc.command_id
+	WHERE fc.state = $1 AND ru.state = $2
+	`
+	rows, err = d.pool.Query(context.Background(), errorQuery, forma_command.CommandStateFailed, types.ResourceUpdateStateFailed)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var jsonData string
-		if err := rows.Scan(&jsonData); err != nil {
+		var progressResultJSON sql.NullString
+		if err := rows.Scan(&progressResultJSON); err != nil {
 			return nil, err
 		}
 
-		var command forma_command.FormaCommand
-		if err := json.Unmarshal([]byte(jsonData), &command); err != nil {
-			return nil, err
-		}
-
-		for _, ru := range command.ResourceUpdates {
-			if failureMessage := findFailureMessage(ru.ProgressResult); failureMessage != "" {
+		if progressResultJSON.Valid && progressResultJSON.String != "" {
+			var progressResults []resource.ProgressResult
+			if err := json.Unmarshal([]byte(progressResultJSON.String), &progressResults); err != nil {
+				continue // Skip invalid JSON
+			}
+			if failureMessage := findFailureMessage(progressResults); failureMessage != "" {
 				res.ResourceErrors[failureMessage]++
 			}
 		}
@@ -1450,6 +1660,374 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	}
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
+}
+
+// BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
+// This is the key performance optimization: insert all updates in one transaction
+func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	ctx := context.Background()
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	for _, ru := range updates {
+		resourceJSON, err := json.Marshal(ru.Resource)
+		if err != nil {
+			return fmt.Errorf("failed to marshal resource: %w", err)
+		}
+
+		resourceTargetJSON, err := json.Marshal(ru.ResourceTarget)
+		if err != nil {
+			return fmt.Errorf("failed to marshal resource target: %w", err)
+		}
+
+		existingResourceJSON, err := json.Marshal(ru.ExistingResource)
+		if err != nil {
+			return fmt.Errorf("failed to marshal existing resource: %w", err)
+		}
+
+		existingTargetJSON, err := json.Marshal(ru.ExistingTarget)
+		if err != nil {
+			return fmt.Errorf("failed to marshal existing target: %w", err)
+		}
+
+		progressResultJSON, err := json.Marshal(ru.ProgressResult)
+		if err != nil {
+			return fmt.Errorf("failed to marshal progress result: %w", err)
+		}
+
+		mostRecentProgressJSON, err := json.Marshal(ru.MostRecentProgressResult)
+		if err != nil {
+			return fmt.Errorf("failed to marshal most recent progress: %w", err)
+		}
+
+		remainingResolvablesJSON, err := json.Marshal(ru.RemainingResolvables)
+		if err != nil {
+			return fmt.Errorf("failed to marshal remaining resolvables: %w", err)
+		}
+
+		referenceLabelsJSON, err := json.Marshal(ru.ReferenceLabels)
+		if err != nil {
+			return fmt.Errorf("failed to marshal reference labels: %w", err)
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO resource_updates (
+				command_id, ksuid, operation, state, start_ts, modified_ts,
+				retries, remaining, version, stack_label, group_id, source,
+				resource, resource_target, existing_resource, existing_target,
+				metadata, progress_result, most_recent_progress,
+				remaining_resolvables, reference_labels, previous_properties
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
+				state = EXCLUDED.state,
+				start_ts = EXCLUDED.start_ts,
+				modified_ts = EXCLUDED.modified_ts,
+				retries = EXCLUDED.retries,
+				remaining = EXCLUDED.remaining,
+				version = EXCLUDED.version,
+				stack_label = EXCLUDED.stack_label,
+				group_id = EXCLUDED.group_id,
+				source = EXCLUDED.source,
+				resource = EXCLUDED.resource,
+				resource_target = EXCLUDED.resource_target,
+				existing_resource = EXCLUDED.existing_resource,
+				existing_target = EXCLUDED.existing_target,
+				metadata = EXCLUDED.metadata,
+				progress_result = EXCLUDED.progress_result,
+				most_recent_progress = EXCLUDED.most_recent_progress,
+				remaining_resolvables = EXCLUDED.remaining_resolvables,
+				reference_labels = EXCLUDED.reference_labels,
+				previous_properties = EXCLUDED.previous_properties
+		`,
+			commandID,
+			ru.Resource.Ksuid,
+			string(ru.Operation),
+			string(ru.State),
+			ru.StartTs.UTC(),
+			ru.ModifiedTs.UTC(),
+			ru.Retries,
+			ru.Remaining,
+			ru.Version,
+			ru.StackLabel,
+			ru.GroupID,
+			string(ru.Source),
+			resourceJSON,
+			resourceTargetJSON,
+			existingResourceJSON,
+			existingTargetJSON,
+			ru.MetaData,
+			progressResultJSON,
+			mostRecentProgressJSON,
+			remainingResolvablesJSON,
+			referenceLabelsJSON,
+			ru.PreviousProperties,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert resource update: %w", err)
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// LoadResourceUpdates loads all ResourceUpdates for a given command
+// ORDER BY ksuid ensures deterministic ordering (KSUIDs are time-sortable)
+func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
+	query := `
+		SELECT ksuid, operation, state, start_ts, modified_ts,
+			retries, remaining, version, stack_label, group_id, source,
+			resource, resource_target, existing_resource, existing_target,
+			metadata, progress_result, most_recent_progress,
+			remaining_resolvables, reference_labels, previous_properties
+		FROM resource_updates
+		WHERE command_id = $1
+		ORDER BY ksuid ASC
+	`
+
+	rows, err := d.pool.Query(context.Background(), query, commandID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query resource updates: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []resource_update.ResourceUpdate
+	for rows.Next() {
+		var ru resource_update.ResourceUpdate
+		var ksuid, operation, state string
+		var startTs, modifiedTs *time.Time
+		var stackLabel, groupID, source, version *string
+		var resourceJSON, resourceTargetJSON, existingResourceJSON, existingTargetJSON []byte
+		var metadataJSON, progressResultJSON, mostRecentProgressJSON []byte
+		var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
+
+		err := rows.Scan(
+			&ksuid,
+			&operation,
+			&state,
+			&startTs,
+			&modifiedTs,
+			&ru.Retries,
+			&ru.Remaining,
+			&version,
+			&stackLabel,
+			&groupID,
+			&source,
+			&resourceJSON,
+			&resourceTargetJSON,
+			&existingResourceJSON,
+			&existingTargetJSON,
+			&metadataJSON,
+			&progressResultJSON,
+			&mostRecentProgressJSON,
+			&remainingResolvablesJSON,
+			&referenceLabelsJSON,
+			&previousPropertiesJSON,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan resource update: %w", err)
+		}
+
+		ru.Operation = types.OperationType(operation)
+		ru.State = resource_update.ResourceUpdateState(state)
+		if startTs != nil {
+			ru.StartTs = *startTs
+		}
+		if modifiedTs != nil {
+			ru.ModifiedTs = *modifiedTs
+		}
+		if version != nil {
+			ru.Version = *version
+		}
+		if stackLabel != nil {
+			ru.StackLabel = *stackLabel
+		}
+		if groupID != nil {
+			ru.GroupID = *groupID
+		}
+		if source != nil {
+			ru.Source = resource_update.FormaCommandSource(*source)
+		}
+
+		if err := json.Unmarshal(resourceJSON, &ru.Resource); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal resource: %w", err)
+		}
+		ru.Resource.Ksuid = ksuid
+
+		if err := json.Unmarshal(resourceTargetJSON, &ru.ResourceTarget); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal resource target: %w", err)
+		}
+
+		if err := json.Unmarshal(existingResourceJSON, &ru.ExistingResource); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal existing resource: %w", err)
+		}
+
+		if err := json.Unmarshal(existingTargetJSON, &ru.ExistingTarget); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal existing target: %w", err)
+		}
+
+		ru.MetaData = metadataJSON
+
+		if err := json.Unmarshal(progressResultJSON, &ru.ProgressResult); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal progress result: %w", err)
+		}
+
+		if err := json.Unmarshal(mostRecentProgressJSON, &ru.MostRecentProgressResult); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal most recent progress: %w", err)
+		}
+
+		if err := json.Unmarshal(remainingResolvablesJSON, &ru.RemainingResolvables); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal remaining resolvables: %w", err)
+		}
+
+		if err := json.Unmarshal(referenceLabelsJSON, &ru.ReferenceLabels); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal reference labels: %w", err)
+		}
+
+		ru.PreviousProperties = previousPropertiesJSON
+
+		updates = append(updates, ru)
+	}
+
+	return updates, rows.Err()
+}
+
+// UpdateResourceUpdateState updates the state of a single ResourceUpdate
+// This is the key performance improvement: updating one row instead of re-serializing entire command
+func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	query := `
+		UPDATE resource_updates
+		SET state = $1, modified_ts = $2
+		WHERE command_id = $3 AND ksuid = $4 AND operation = $5
+	`
+
+	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTs.UTC(), commandID, ksuid, string(operation))
+	if err != nil {
+		return fmt.Errorf("failed to update resource update state: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+	}
+
+	return nil
+}
+
+// UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
+func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress resource.ProgressResult) error {
+	ctx := context.Background()
+
+	// First, load existing progress results to append to
+	var existingProgressJSON []byte
+	query := `SELECT progress_result FROM resource_updates WHERE command_id = $1 AND ksuid = $2 AND operation = $3`
+	err := d.pool.QueryRow(ctx, query, commandID, ksuid, string(operation)).Scan(&existingProgressJSON)
+	if err != nil {
+		return fmt.Errorf("failed to load existing progress: %w", err)
+	}
+
+	var existingProgress []resource.ProgressResult
+	if len(existingProgressJSON) > 0 {
+		if err := json.Unmarshal(existingProgressJSON, &existingProgress); err != nil {
+			return fmt.Errorf("failed to unmarshal existing progress: %w", err)
+		}
+	}
+
+	// Append new progress
+	existingProgress = append(existingProgress, progress)
+
+	progressJSON, err := json.Marshal(existingProgress)
+	if err != nil {
+		return fmt.Errorf("failed to marshal progress: %w", err)
+	}
+
+	mostRecentJSON, err := json.Marshal(progress)
+	if err != nil {
+		return fmt.Errorf("failed to marshal most recent progress: %w", err)
+	}
+
+	updateQuery := `
+		UPDATE resource_updates
+		SET state = $1, modified_ts = $2, progress_result = $3, most_recent_progress = $4
+		WHERE command_id = $5 AND ksuid = $6 AND operation = $7
+	`
+
+	result, err := d.pool.Exec(ctx, updateQuery, string(state), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
+	if err != nil {
+		return fmt.Errorf("failed to update resource update progress: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+	}
+
+	return nil
+}
+
+// BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
+// Used for bulk operations like marking dependent resources as failed
+func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	if len(refs) == 0 {
+		return nil
+	}
+
+	ctx := context.Background()
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	for _, ref := range refs {
+		_, err = tx.Exec(ctx, `
+			UPDATE resource_updates
+			SET state = $1, modified_ts = $2
+			WHERE command_id = $3 AND ksuid = $4 AND operation = $5
+		`, string(state), modifiedTs.UTC(), commandID, ref.KSUID, string(ref.Operation))
+		if err != nil {
+			return fmt.Errorf("failed to update resource update: %w", err)
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateFormaCommandProgress updates only the command-level metadata (state, modified_ts)
+// without re-writing all ResourceUpdates. This is a performance optimization for
+// progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
+func (d DatastorePostgres) UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
+	query := `UPDATE forma_commands SET state = $1, modified_ts = $2 WHERE command_id = $3`
+	result, err := d.pool.Exec(context.Background(), query, string(state), modifiedTs.UTC(), commandID)
+	if err != nil {
+		return fmt.Errorf("failed to update forma command meta: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("forma command not found: %s", commandID)
+	}
+
+	return nil
 }
 
 func (d DatastorePostgres) Close() {
