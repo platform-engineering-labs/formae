@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudcontrol"
@@ -16,12 +18,12 @@ import (
 
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/descriptors"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/ccx"
 	_ "github.com/platform-engineering-labs/formae/plugins/aws/pkg/cfres"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/cfres/registry"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/config"
-	descriptors "github.com/platform-engineering-labs/formae/plugins/aws/pkg/descriptors"
 )
 
 type AWS struct{}
@@ -38,7 +40,7 @@ var Plugin = AWS{}
 
 var Descriptors []plugin.ResourceDescriptor
 
-var ResourceTypeDescriptors map[string]descriptors.TypeInformation
+var ResourceTypeDescriptors map[string]plugin.ResourceDescriptor
 
 // EKSAutomodeResourceTypes lists AWS CloudFormation resource types that EKS Automode manages
 var EKSAutomodeResourceTypes = []string{
@@ -61,23 +63,30 @@ var EKSAutomodeResourceTypes = []string{
 }
 
 func init() {
-	// Load descriptors from PKL file
+	//TODO temp solution - need to include schema package information here
+	// Get the path to the AWS schema PKL directory relative to this file
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("Failed to get current file path for AWS plugin")
+	}
+	awsSchemaPath := filepath.Join(filepath.Dir(thisFile), "schema", "pkl", "PklProject")
+
 	ctx := context.Background()
-	var err error
-	ResourceTypeDescriptors, err = descriptors.LoadDescriptors(ctx)
-	if err != nil {
-		panic("Failed to load resource descriptors: " + err.Error())
+	dependencies := []descriptors.Dependency{
+		{Name: "formae", Value: "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.75.1"},
+		{Name: "aws", Value: awsSchemaPath},
 	}
 
-	// Convert to plugin.ResourceDescriptor
-	Descriptors = make([]plugin.ResourceDescriptor, 0, len(ResourceTypeDescriptors))
-	for typeName := range ResourceTypeDescriptors {
-		Descriptors = append(Descriptors, plugin.ResourceDescriptor{
-			Type:                                     typeName,
-			Discoverable:                             ResourceTypeDescriptors[typeName].Discoverable,
-			Extractable:                              ResourceTypeDescriptors[typeName].Extractable,
-			ParentResourceTypesWithMappingProperties: ResourceTypeDescriptors[typeName].ParentResourcesWithMappingProperties,
-		})
+	descriptorSlice, err := descriptors.ExtractSchema(ctx, dependencies)
+	if err != nil {
+		panic("Failed to extract resource descriptors: " + err.Error())
+	}
+
+	ResourceTypeDescriptors = make(map[string]plugin.ResourceDescriptor, len(descriptorSlice))
+	Descriptors = make([]plugin.ResourceDescriptor, 0, len(descriptorSlice))
+	for _, desc := range descriptorSlice {
+		ResourceTypeDescriptors[desc.Type] = desc
+		Descriptors = append(Descriptors, desc)
 	}
 }
 

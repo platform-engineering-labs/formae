@@ -11,37 +11,30 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
+// newDiscoverableDescriptor creates a ResourceDescriptor with Schema.Discoverable set
+func newDiscoverableDescriptor(resourceType string, discoverable bool, parentMappings map[string][]plugin.ListParameter) plugin.ResourceDescriptor {
+	return plugin.ResourceDescriptor{
+		Type:   resourceType,
+		Schema: model.Schema{Discoverable: discoverable},
+		ParentResourceTypesWithMappingProperties: parentMappings,
+	}
+}
+
 func TestBuildResourceHierarchy(t *testing.T) {
 	supportedResources := []plugin.ResourceDescriptor{
-		{
-			Type:         "FakeAWS::S3::Bucket",
-			Discoverable: true,
-		},
-		{
-			Type:         "FakeAWS::EC2::VPC",
-			Discoverable: true,
-		},
-		{
-			Type:         "FakeAWS::EC2::VPCCidrBlock",
-			Discoverable: true,
-			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
-				"FakeAWS::EC2::VPC": {{ParentProperty: "Id", ListProperty: "VpcId", QueryPath: "$.Id"}},
-			},
-		},
-		{
-			Type:         "FakeAWS::EC2::LegacyVPCCidrBlock",
-			Discoverable: false,
-			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
-				"FakeAWS::EC2::VPC": {{ParentProperty: "Id", ListProperty: "VpcId", QueryPath: "$.Id"}},
-			},
-		},
-		{
-			Type:         "FakeAWS::EC2::Instance",
-			Discoverable: false,
-		},
+		newDiscoverableDescriptor("FakeAWS::S3::Bucket", true, nil),
+		newDiscoverableDescriptor("FakeAWS::EC2::VPC", true, nil),
+		newDiscoverableDescriptor("FakeAWS::EC2::VPCCidrBlock", true, map[string][]plugin.ListParameter{
+			"FakeAWS::EC2::VPC": {{ParentProperty: "Id", ListProperty: "VpcId", QueryPath: "$.Id"}},
+		}),
+		newDiscoverableDescriptor("FakeAWS::EC2::LegacyVPCCidrBlock", false, map[string][]plugin.ListParameter{
+			"FakeAWS::EC2::VPC": {{ParentProperty: "Id", ListProperty: "VpcId", QueryPath: "$.Id"}},
+		}),
+		newDiscoverableDescriptor("FakeAWS::EC2::Instance", false, nil),
 	}
 
 	hierarchy := buildResourceHierarchy(supportedResources)
@@ -64,32 +57,18 @@ func TestBuildResourceHierarchy(t *testing.T) {
 
 func TestBuildResourceHierarchyMultiLevel(t *testing.T) {
 	supportedResources := []plugin.ResourceDescriptor{
-		{
-			Type:         "FakeAWS::EC2::VPC",
-			Discoverable: true,
-			// VPC is a root (no parents)
-		},
-		{
-			Type:         "FakeAWS::EC2::Subnet",
-			Discoverable: true,
-			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
-				"FakeAWS::EC2::VPC": {{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
-			},
-			// Subnet is both a child (of VPC) AND a parent (of NetworkInterface)
-		},
-		{
-			Type:         "FakeAWS::EC2::NetworkInterface",
-			Discoverable: true,
-			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
-				"FakeAWS::EC2::Subnet": {{ParentProperty: "SubnetId", ListProperty: "SubnetId", QueryPath: "$.SubnetId"}},
-			},
-			// NetworkInterface is a child of subnet
-		},
-		{
-			Type:         "FakeAWS::S3::Bucket",
-			Discoverable: true,
-			// Bucket is a separate root (no parents)
-		},
+		// VPC is a root (no parents)
+		newDiscoverableDescriptor("FakeAWS::EC2::VPC", true, nil),
+		// Subnet is both a child (of VPC) AND a parent (of NetworkInterface)
+		newDiscoverableDescriptor("FakeAWS::EC2::Subnet", true, map[string][]plugin.ListParameter{
+			"FakeAWS::EC2::VPC": {{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
+		}),
+		// NetworkInterface is a child of subnet
+		newDiscoverableDescriptor("FakeAWS::EC2::NetworkInterface", true, map[string][]plugin.ListParameter{
+			"FakeAWS::EC2::Subnet": {{ParentProperty: "SubnetId", ListProperty: "SubnetId", QueryPath: "$.SubnetId"}},
+		}),
+		// Bucket is a separate root (no parents)
+		newDiscoverableDescriptor("FakeAWS::S3::Bucket", true, nil),
 	}
 
 	hierarchy := buildResourceHierarchy(supportedResources)
@@ -133,31 +112,17 @@ func TestBuildResourceHierarchyMultiLevel(t *testing.T) {
 
 func TestMultipleNamespacesMerge(t *testing.T) {
 	awsResources := []plugin.ResourceDescriptor{
-		{
-			Type:         "AWS::EC2::VPC",
-			Discoverable: true,
-		},
-		{
-			Type:         "AWS::EC2::Subnet",
-			Discoverable: true,
-			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
-				"AWS::EC2::VPC": {{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
-			},
-		},
+		newDiscoverableDescriptor("AWS::EC2::VPC", true, nil),
+		newDiscoverableDescriptor("AWS::EC2::Subnet", true, map[string][]plugin.ListParameter{
+			"AWS::EC2::VPC": {{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
+		}),
 	}
 
 	ociResources := []plugin.ResourceDescriptor{
-		{
-			Type:         "OCI::VCN::VCN",
-			Discoverable: true,
-		},
-		{
-			Type:         "OCI::VCN::Subnet",
-			Discoverable: true,
-			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
-				"OCI::VCN::VCN": {{ParentProperty: "Id", ListProperty: "VcnId", QueryPath: "$.Id"}},
-			},
-		},
+		newDiscoverableDescriptor("OCI::VCN::VCN", true, nil),
+		newDiscoverableDescriptor("OCI::VCN::Subnet", true, map[string][]plugin.ListParameter{
+			"OCI::VCN::VCN": {{ParentProperty: "Id", ListProperty: "VcnId", QueryPath: "$.Id"}},
+		}),
 	}
 
 	hierarchy := make(map[string]*hierarchyNode)
