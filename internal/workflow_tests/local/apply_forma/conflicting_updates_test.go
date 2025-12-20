@@ -55,8 +55,8 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 		}
 
 		executingFormaResourceUpdates := []resource_update.ResourceUpdate{
-			newTestResourceUpdate("test-resource1", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),  // conflicting
-			newTestResourceUpdate("test-resource2", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStatePending, resource_update.OperationCreate),     // conflicting
+			newTestResourceUpdate("test-resource1", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate), // conflicting
+			newTestResourceUpdate("test-resource2", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStatePending, resource_update.OperationCreate),    // conflicting
 			newTestResourceUpdate("test-resource3", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateCanceled, resource_update.OperationCreate),   // conflicting
 			newTestResourceUpdate("test-resource4", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateInProgress, resource_update.OperationCreate), // conflicting
 			newTestResourceUpdate("test-resource5", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateSuccess, resource_update.OperationCreate),    // not conflicting
@@ -141,8 +141,8 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 		}
 
 		executingFormaResourceUpdates := []resource_update.ResourceUpdate{
-			newTestResourceUpdate("test-resource1", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),  // conflicting
-			newTestResourceUpdate("test-resource2", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStatePending, resource_update.OperationCreate),     // conflicting
+			newTestResourceUpdate("test-resource1", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate), // conflicting
+			newTestResourceUpdate("test-resource2", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStatePending, resource_update.OperationCreate),    // conflicting
 			newTestResourceUpdate("test-resource3", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateInProgress, resource_update.OperationCreate), // conflicting
 		}
 
