@@ -11,23 +11,22 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
-
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	echoSwagger "github.com/swaggo/echo-swagger"
+
+	_ "github.com/platform-engineering-labs/formae/docs"
 	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
-	"golang.org/x/exp/slog"
-
-	_ "github.com/platform-engineering-labs/formae/docs"
-	echoSwagger "github.com/swaggo/echo-swagger"
 )
 
 const (
@@ -73,7 +72,7 @@ func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI
 			otelConfig: otelConfig,
 		}
 
-		server.setupOTelMetrics()
+		RegisterPrometheusStatsCollector(metastructure)
 	}
 
 	server.echo = server.configureEcho()
@@ -150,10 +149,6 @@ func (s *Server) Start() {
 
 // Stop gracefully shuts down the server, waiting for ongoing requests to complete
 func (s *Server) Stop(_ bool) {
-	if s.isOTelEnabled() {
-		s.shutdownOTel()
-	}
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	slog.Info("API server received shutdown")

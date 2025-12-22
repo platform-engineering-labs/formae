@@ -9,46 +9,150 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/prometheus"
+	otellog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/metric"
+	otelresource "go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
+
 	"github.com/platform-engineering-labs/formae"
 	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	promcli "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/sdk/metric"
-	otelresource "go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 )
 
 type OTel struct {
-	otelConfig    *pkgmodel.OTelConfig
-	meterProvider *metric.MeterProvider
+	otelConfig *pkgmodel.OTelConfig
 }
 
 func (s *Server) isOTelEnabled() bool {
 	return s.otel != nil && s.otel.otelConfig != nil && s.otel.otelConfig.Enabled
 }
 
-func (s *Server) setupOTelMetrics() {
-	exporter, err := prometheus.New()
-	if err != nil {
-		slog.Error("failed to create Prometheus exporter", "error", err)
-		return
-	}
-
-	res, err := otelresource.New(context.Background(),
+// newOTelResource creates a standard OTel resource with service metadata
+func newOTelResource(serviceName string) (*otelresource.Resource, error) {
+	return otelresource.New(context.Background(),
 		otelresource.WithAttributes(
-			semconv.ServiceNameKey.String("formae-agent"),
+			semconv.ServiceNameKey.String(serviceName),
 			semconv.ServiceInstanceIDKey.String("formae"),
 			semconv.ServiceVersionKey.String(formae.Version),
 		),
 	)
+}
+
+// SetupOTelProviders initializes all OTel providers (traces, metrics, logs)
+// Must be called BEFORE db connections are created, as otelsql requires the
+// TracerProvider at driver registration time.
+// Returns:
+//   - slog.Handler for logging integration (can be nil if disabled)
+//   - shutdown function that must be called on app exit
+func SetupOTelProviders(otelConfig *pkgmodel.OTelConfig) (slog.Handler, func()) {
+	if otelConfig == nil || !otelConfig.Enabled {
+		return nil, func() {}
+	}
+
+	tracerProvider := setupTracerProvider(otelConfig)
+	if tracerProvider != nil {
+		otel.SetTracerProvider(tracerProvider)
+	}
+
+	meterProvider := setupMeterProvider(otelConfig)
+	if meterProvider != nil {
+		otel.SetMeterProvider(meterProvider)
+	}
+
+	loggerProvider, logHandler := setupLoggerProvider(otelConfig)
+
+	return logHandler, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if loggerProvider != nil {
+			if err := loggerProvider.Shutdown(ctx); err != nil {
+				slog.Error("failed to shut down LoggerProvider", "error", err)
+			}
+		}
+		if meterProvider != nil {
+			if err := meterProvider.Shutdown(ctx); err != nil {
+				slog.Error("failed to shut down MeterProvider", "error", err)
+			}
+		}
+		if tracerProvider != nil {
+			if err := tracerProvider.Shutdown(ctx); err != nil {
+				slog.Error("failed to shut down TracerProvider", "error", err)
+			}
+		}
+	}
+}
+
+func setupTracerProvider(otelConfig *pkgmodel.OTelConfig) *sdktrace.TracerProvider {
+	otlpConfig := otelConfig.OTLP
+
+	res, err := newOTelResource(otelConfig.ServiceName)
+	if err != nil {
+		slog.Error("failed to create resource for OTel tracing", "error", err)
+		return nil
+	}
+
+	var exporter sdktrace.SpanExporter
+	switch otlpConfig.Protocol {
+	case "grpc":
+		opts := []otlptracegrpc.Option{
+			otlptracegrpc.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlptracegrpc.WithInsecure())
+		}
+		exporter, err = otlptracegrpc.New(context.Background(), opts...)
+	case "http":
+		opts := []otlptracehttp.Option{
+			otlptracehttp.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		exporter, err = otlptracehttp.New(context.Background(), opts...)
+	default:
+		slog.Error("unknown OTLP protocol for tracing", "protocol", otlpConfig.Protocol)
+		return nil
+	}
 
 	if err != nil {
-		slog.Error("failed to create resource for OTel", "error", err)
-		return
+		slog.Error("failed to create OTLP trace exporter", "error", err)
+		return nil
+	}
+
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+	)
+
+	slog.Info("OTel tracing enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
+	return tracerProvider
+}
+
+func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) *metric.MeterProvider {
+	exporter, err := prometheus.New()
+	if err != nil {
+		slog.Error("failed to create Prometheus exporter", "error", err)
+		return nil
+	}
+
+	res, err := newOTelResource(otelConfig.ServiceName)
+	if err != nil {
+		slog.Error("failed to create resource for OTel metrics", "error", err)
+		return nil
 	}
 
 	meterProvider := metric.NewMeterProvider(
@@ -56,8 +160,66 @@ func (s *Server) setupOTelMetrics() {
 		metric.WithResource(res),
 	)
 
+	slog.Info("OTel metrics enabled")
+	return meterProvider
+}
+
+func setupLoggerProvider(otelConfig *pkgmodel.OTelConfig) (*otellog.LoggerProvider, slog.Handler) {
+	otlpConfig := otelConfig.OTLP
+
+	res, err := newOTelResource(otelConfig.ServiceName)
+	if err != nil {
+		slog.Error("could not set up OTel resource for logging", "error", err)
+		return nil, nil
+	}
+
+	var exporter otellog.Exporter
+	switch otlpConfig.Protocol {
+	case "grpc":
+		opts := []otlploggrpc.Option{
+			otlploggrpc.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlploggrpc.WithInsecure())
+		}
+		exporter, err = otlploggrpc.New(context.Background(), opts...)
+	case "http":
+		opts := []otlploghttp.Option{
+			otlploghttp.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlploghttp.WithInsecure())
+		}
+		exporter, err = otlploghttp.New(context.Background(), opts...)
+	default:
+		slog.Error("unknown OTLP protocol for logging", "protocol", otlpConfig.Protocol)
+		return nil, nil
+	}
+
+	if err != nil {
+		slog.Error("could not set up OTLP exporter for logging", "error", err, "protocol", otlpConfig.Protocol)
+		return nil, nil
+	}
+
+	loggerProvider := otellog.NewLoggerProvider(
+		otellog.WithResource(res),
+		otellog.WithProcessor(
+			otellog.NewBatchProcessor(exporter),
+		),
+	)
+
+	handler := otelslog.NewHandler(otelConfig.ServiceName, otelslog.WithLoggerProvider(loggerProvider))
+	slog.Info("OTel logging enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
+	return loggerProvider, handler
+}
+
+// RegisterPrometheusStatsCollector registers a Prometheus collector for formae stats
+// This should be called once during server initialization
+func RegisterPrometheusStatsCollector(metastructure interface {
+	Stats() (*apimodel.Stats, error)
+}) {
 	promcli.MustRegister(promcli.CollectorFunc(func(ch chan<- promcli.Metric) {
-		stats, err := s.metastructure.Stats()
+		stats, err := metastructure.Stats()
 		if err != nil {
 			slog.Error("failed to get stats from metastructure", "error", err)
 			return
@@ -67,16 +229,6 @@ func (s *Server) setupOTelMetrics() {
 			ch <- metric
 		}
 	}))
-
-	s.otel.meterProvider = meterProvider
-}
-
-func (s *Server) shutdownOTel() {
-	if s.isOTelEnabled() && s.otel.meterProvider != nil {
-		if err := s.otel.meterProvider.Shutdown(context.Background()); err != nil {
-			slog.Error("failed to shut down MeterProvider", "error", err)
-		}
-	}
 }
 
 func setupOTelMetricsHandler() echo.HandlerFunc {
