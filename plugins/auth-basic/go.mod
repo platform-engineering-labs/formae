@@ -11,7 +11,7 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 require (
 	github.com/masterminds/semver v1.5.0
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
-	golang.org/x/crypto v0.42.0
+	golang.org/x/crypto v0.44.0
 )
 
 require (
