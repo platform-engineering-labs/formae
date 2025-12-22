@@ -14,10 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/XSAM/otelsql"
 	"github.com/demula/mksuid/v2"
 	json "github.com/goccy/go-json"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"go.opentelemetry.io/otel"
+	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/platform-engineering-labs/formae"
@@ -34,8 +36,20 @@ import (
 
 var sqliteTracer trace.Tracer
 
+const sqliteOtelDriverName = "sqlite3-otel"
+
 func init() {
 	sqliteTracer = otel.Tracer("formae/datastore/sqlite")
+
+	// Register otelsql-instrumented SQLite driver for automatic query tracing
+	sql.Register(sqliteOtelDriverName, otelsql.WrapDriver(&sqlite3.SQLiteDriver{},
+		otelsql.WithAttributes(
+			semconv.DBSystemSqlite,
+		),
+		otelsql.WithSpanOptions(otelsql.SpanOptions{
+			DisableErrSkip: true,
+		}),
+	))
 }
 
 type DatastoreSQLite struct {
@@ -60,9 +74,9 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 		}
 	}
 
-	conn, err := sql.Open("sqlite3", cfg.Sqlite.FilePath)
+	conn, err := sql.Open(sqliteOtelDriverName, cfg.Sqlite.FilePath)
 	if err != nil {
-		slog.Error("Failed to connect to database", "error", err)
+		slog.Error("Failed to connect to sqlite database", "error", err)
 		return nil, err
 	}
 

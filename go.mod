@@ -14,6 +14,7 @@ require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
 	ergo.services/ergo v1.999.310
+	github.com/XSAM/otelsql v0.41.0
 	github.com/blugelabs/bluge v0.1.7
 	github.com/blugelabs/query_string v0.3.0
 	github.com/ddddddO/gtree v1.11.3
@@ -47,6 +48,7 @@ require (
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	go.opentelemetry.io/contrib/bridges/otelslog v0.14.0
+	go.opentelemetry.io/contrib/instrumentation/runtime v0.64.0
 	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.15.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.15.0

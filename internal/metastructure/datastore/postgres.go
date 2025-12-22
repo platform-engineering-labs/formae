@@ -125,7 +125,7 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 
 	poolCfg, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
-		slog.Error("failed to parse postgresmak connection string", "error", err)
+		slog.Error("failed to parse postgres connection string", "error", err)
 		return nil, err
 	}
 	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer(

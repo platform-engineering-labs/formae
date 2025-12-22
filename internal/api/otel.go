@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/prometheus"
@@ -159,6 +160,13 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) *metric.MeterProvider {
 		metric.WithReader(exporter),
 		metric.WithResource(res),
 	)
+
+	// Start Go runtime metrics collection (goroutines, memory, GC, etc.)
+	if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(time.Second)); err != nil {
+		slog.Error("failed to start Go runtime metrics", "error", err)
+	} else {
+		slog.Info("Go runtime metrics collection started")
+	}
 
 	slog.Info("OTel metrics enabled")
 	return meterProvider
