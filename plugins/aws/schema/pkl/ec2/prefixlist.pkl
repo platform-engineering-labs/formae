@@ -40,6 +40,9 @@ open class PrefixList extends formae.Resource {
     @aws.FieldHint
     prefixListName: String
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

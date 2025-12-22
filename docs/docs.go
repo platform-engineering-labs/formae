@@ -506,6 +506,9 @@ const docTemplate = `{
                 "createOnly": {
                     "type": "boolean"
                 },
+                "indexField": {
+                    "type": "string"
+                },
                 "persist": {
                     "type": "boolean"
                 },
@@ -515,10 +518,28 @@ const docTemplate = `{
                 "requiredOnCreate": {
                     "type": "boolean"
                 },
+                "updateMethod": {
+                    "$ref": "#/definitions/model.FieldUpdateMethod"
+                },
                 "writeOnly": {
                     "type": "boolean"
                 }
             }
+        },
+        "model.FieldUpdateMethod": {
+            "type": "string",
+            "enum": [
+                "Array",
+                "EntitySet",
+                "Set",
+                ""
+            ],
+            "x-enum-varnames": [
+                "FieldUpdateMethodArray",
+                "FieldUpdateMethodEntitySet",
+                "FieldUpdateMethodSet",
+                "FieldUpdateMethodNone"
+            ]
         },
         "model.Forma": {
             "type": "object",

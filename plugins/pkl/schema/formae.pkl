@@ -143,6 +143,8 @@ open class FieldHint extends Annotation {
     fixed WriteOnly: Boolean = writeOnly
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
+    fixed UpdateMethod: String = updateMethod ?? ""
+    fixed IndexField: String = indexField ?? ""
 }
 
 // Schema output class

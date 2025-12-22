@@ -654,6 +654,8 @@ open class Bucket extends formae.Resource {
 
     @aws.FieldHint {
         outputTransformation = formae.transform.capitalizeMemberKeys
+        updateMethod = "EntitySet"
+        indexField = "Key"
     }
     tags: Listing<formae.Tag>?
 

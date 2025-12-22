@@ -27,6 +27,10 @@ open class PlacementGroup extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     strategy: String?
 
-    @aws.FieldHint{createOnly = true}
+    @aws.FieldHint {
+        createOnly = true
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

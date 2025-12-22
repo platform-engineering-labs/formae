@@ -65,6 +65,9 @@ open class NetworkInsightsAccessScope extends formae.Resource {
     }
     matchPaths: Listing<ScopeAccessScopePathRequest>?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }
