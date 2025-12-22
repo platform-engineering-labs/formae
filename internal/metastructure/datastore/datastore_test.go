@@ -107,7 +107,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		defer cleanupDatastore(datastore)
 
 		app1 := &forma_command.FormaCommand{
-			ID:    util.NewID(),
+			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
@@ -119,7 +119,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app2 := &forma_command.FormaCommand{
-			ID:    util.NewID(),
+			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
@@ -133,7 +133,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app3 := &forma_command.FormaCommand{
-			ID:    util.NewID(),
+			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
@@ -147,7 +147,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 		}
 
 		app4 := &forma_command.FormaCommand{
-			ID:    util.NewID(),
+			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
@@ -193,7 +193,7 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 		defer cleanupDatastore(datastore)
 
 		cmd1 := &forma_command.FormaCommand{
-			ID:    util.NewID(),
+			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
@@ -205,7 +205,7 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 		}
 
 		cmd2 := &forma_command.FormaCommand{
-			ID:    util.NewID(),
+			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
@@ -234,7 +234,7 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 		defer cleanupDatastore(datastore)
 
 		app1 := &forma_command.FormaCommand{
-			ID:    util.NewID(),
+			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
@@ -269,17 +269,17 @@ func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 		olderTime, _ := time.Parse(time.RFC3339, "2023-01-01T10:00:00Z")
 		olderCommand := &forma_command.FormaCommand{
 			Description: pkgmodel.Description{},
-			ClientID: clientID,
-			StartTs:  olderTime,
-			Command:  pkgmodel.CommandApply,
+			ClientID:    clientID,
+			StartTs:     olderTime,
+			Command:     pkgmodel.CommandApply,
 		}
 
 		newerTime, _ := time.Parse(time.RFC3339, "2023-01-02T10:00:00Z")
 		newerCommand := &forma_command.FormaCommand{
 			Description: pkgmodel.Description{},
-			ClientID: clientID,
-			StartTs:  newerTime,
-			Command:  pkgmodel.CommandApply,
+			ClientID:    clientID,
+			StartTs:     newerTime,
+			Command:     pkgmodel.CommandApply,
 		}
 
 		// Store both commands
@@ -317,9 +317,9 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 		assert.NoError(t, err)
 
 		reconcileStack1 := &forma_command.FormaCommand{
-			ID:      "reconcile-stack1-id",
+			ID:          "reconcile-stack1-id",
 			Description: pkgmodel.Description{},
-			Command: pkgmodel.CommandApply,
+			Command:     pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
 				Mode: pkgmodel.FormaApplyModeReconcile,
 			},
@@ -331,11 +331,11 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		syncStack1 := &forma_command.FormaCommand{
-			ID:      "sync-stack1-id",
+			ID:          "sync-stack1-id",
 			Description: pkgmodel.Description{},
-			Command: pkgmodel.CommandSync,
-			Config:  config.FormaCommandConfig{},
-			StartTs: util.TimeNow().Add(-3 * time.Minute),
+			Command:     pkgmodel.CommandSync,
+			Config:      config.FormaCommandConfig{},
+			StartTs:     util.TimeNow().Add(-3 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					StackLabel: "stack-1",
@@ -343,9 +343,9 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		reconcileStack2 := &forma_command.FormaCommand{
-			ID:      "reconcile-stack2-id",
+			ID:          "reconcile-stack2-id",
 			Description: pkgmodel.Description{},
-			Command: pkgmodel.CommandApply,
+			Command:     pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
 				Mode: pkgmodel.FormaApplyModeReconcile,
 			},
@@ -357,11 +357,11 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		syncStack2 := &forma_command.FormaCommand{
-			ID:      "sync-stack2-id",
+			ID:          "sync-stack2-id",
 			Description: pkgmodel.Description{},
-			Command: pkgmodel.CommandSync,
-			Config:  config.FormaCommandConfig{},
-			StartTs: util.TimeNow().Add(-3 * time.Minute),
+			Command:     pkgmodel.CommandSync,
+			Config:      config.FormaCommandConfig{},
+			StartTs:     util.TimeNow().Add(-3 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					StackLabel: "stack-2",
@@ -369,9 +369,9 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 		patchStack2 := &forma_command.FormaCommand{
-			ID:      "patch-stack2-id",
+			ID:          "patch-stack2-id",
 			Description: pkgmodel.Description{},
-			Command: pkgmodel.CommandApply,
+			Command:     pkgmodel.CommandApply,
 			Config: config.FormaCommandConfig{
 				Mode: pkgmodel.FormaApplyModePatch,
 			},
@@ -455,8 +455,8 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 		for i := range 20 {
 			command := &forma_command.FormaCommand{
 				Description: pkgmodel.Description{},
-				ClientID: fmt.Sprintf("client-%d", i%5),
-				StartTs:  util.TimeNow().Add(time.Duration(-i) * time.Hour),
+				ClientID:    fmt.Sprintf("client-%d", i%5),
+				StartTs:     util.TimeNow().Add(time.Duration(-i) * time.Hour),
 				Command: func() pkgmodel.Command {
 					if i%2 == 0 {
 						return pkgmodel.CommandApply

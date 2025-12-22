@@ -51,8 +51,6 @@ func (a *Agent) Start() error {
 		return fmt.Errorf("agent appears to be already running (PID file exists)")
 	}
 
-	logging.SetupBackendLogging(&a.cfg.Agent.Logging, &a.cfg.Agent.OTel)
-
 	// Set up signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
@@ -65,10 +63,17 @@ func (a *Agent) Start() error {
 
 	imwg := imconc.NewConcGroup()
 	go func() {
+		// Important: Setup all OTel providers before db connections are created -
+		// otelsql captures the tracer provider at driver registration time.
+		otelLogHandler, shutdownOTel := api.SetupOTelProviders(&a.cfg.Agent.OTel)
 		defer func() {
+			shutdownOTel()
 			a.cleanup()
 			close(a.done)
 		}()
+
+		// Setup logging with OTel handler
+		logging.SetupBackendLogging(&a.cfg.Agent.Logging, otelLogHandler)
 
 		pluginManager := plugin.NewManager(util.ExpandHomePath(a.cfg.Plugins.PluginDir))
 		pluginManager.Load()
