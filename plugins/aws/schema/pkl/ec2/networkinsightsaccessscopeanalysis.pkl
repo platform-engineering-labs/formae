@@ -21,6 +21,9 @@ open class NetworkInsightsAccessScopeAnalysis extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     networkInsightsAccessScopeId: String
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

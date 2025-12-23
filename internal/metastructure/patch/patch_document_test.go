@@ -11,7 +11,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	"github.com/platform-engineering-labs/formae/pkg/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/jsonpatch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,7 +157,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 
 	for _, tc := range testCases[1:2] {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{}, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -229,7 +229,7 @@ func TestCreatePatchDocument_ObjectArrayWithKeyValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -303,7 +303,7 @@ func TestCreatePatchDocument_ObjectArrayWithValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{}, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -326,17 +326,17 @@ func TestGeneratePatch(t *testing.T) {
 	resourceKsuid := util.NewID()
 
 	document := []byte(`{
-    "stack": "s",
-    "label": "l",
-    "ips": [1, 2, 3],
-    "val1": {
-		"$ref": "somepath",
-		"$value": "123"
-    },
-    "val2": "abc",
-    "not_in_forma": "xyz"
-    }
-    `)
+		"stack": "s",
+		"label": "l",
+		"ips": [1, 2, 3],
+		"val1": {
+			"$ref": "somepath",
+			"$value": "123"
+		},
+		"val2": "abc",
+		"not_in_forma": "xyz"
+	}
+	`)
 	patch := fmt.Appendf(nil, `{
 		"stack": "s1",
 		"label": "l1",
@@ -345,14 +345,20 @@ func TestGeneratePatch(t *testing.T) {
 		"val2": {
 			"$ref": "formae://%s#/id"
 		}
-    }`, resourceKsuid)
+	}`, resourceKsuid)
 
-	schemaFields := []string{"stack", "label", "ips", "val1", "val2", "not_in_forma"}
-	createOnlyFields := []string{"val2"}
+	schema := pkgmodel.Schema{
+		Fields: []string{"stack", "label", "ips", "val1", "val2", "not_in_forma"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"val2": {
+				CreateOnly: true,
+			},
+		},
+	}
 	resProps := resolver.NewResolvableProperties()
 	resProps.Add(resourceKsuid, "id", "def")
 
-	patchDoc, needsReplacement, err := generatePatch(document, patch, resProps, schemaFields, createOnlyFields, model.FormaApplyModePatch)
+	patchDoc, needsReplacement, err := generatePatch(document, patch, resProps, schema, pkgmodel.FormaApplyModePatch)
 
 	assert.NoError(t, err)
 	assert.True(t, needsReplacement)
@@ -372,30 +378,32 @@ func TestGeneratePatch_ShouldResolveRefs(t *testing.T) {
 	{
 		"val1": "123",
 		"val2": []
-    }
-    `)
+	}
+	`)
 	patch := fmt.Appendf(nil, `
 	{
 		"val1": {
 			"$ref": "formae://%s#/id"
 		},
 		"val2": [
-			{
-				"$ref": "formae://%s#/other-id"
-			},
-			{
-				"$ref": "formae://%s#/notha-id"
-			}
+		{
+			"$ref": "formae://%s#/other-id"
+		},
+		{
+			"$ref": "formae://%s#/notha-id"
+		}
 		]
 	}`, resourceKsuid, resourceKsuid, resourceKsuid)
 
-	schemaFields := []string{"val1", "val2"}
+	schema := pkgmodel.Schema{
+		Fields: []string{"val1", "val2"},
+	}
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "id", "abc")
 	props.Add(resourceKsuid, "other-id", "def")
 	props.Add(resourceKsuid, "notha-id", "ghi")
 
-	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schemaFields, nil, model.FormaApplyModePatch)
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
 	assert.NoError(t, err)
 	assert.False(t, needsReplacement)
 
@@ -436,75 +444,77 @@ func TestGeneratePatch_MixedNestedAndFlattenedStructures(t *testing.T) {
 	document := []byte(`{
 		"Integration": {
 			"IntegrationResponses": [
-				{
-					"ResponseParameters": {
-						"method": {
-							"response": {
-								"header": {
-									"Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-									"Access-Control-Allow-Methods": "'POST,OPTIONS'",
-									"Access-Control-Allow-Origin": "'*'"
-								}
-							}
-						},
-						"method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-						"method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
-						"method.response.header.Access-Control-Allow-Origin": "'*'"
-					},
-					"StatusCode": "200"
-				}
-			]
-		},
-		"MethodResponses": [
 			{
 				"ResponseParameters": {
 					"method": {
 						"response": {
 							"header": {
-								"Access-Control-Allow-Headers": false,
-								"Access-Control-Allow-Methods": false,
-								"Access-Control-Allow-Origin": false
+								"Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+								"Access-Control-Allow-Methods": "'POST,OPTIONS'",
+								"Access-Control-Allow-Origin": "'*'"
 							}
 						}
 					},
-					"method.response.header.Access-Control-Allow-Headers": false,
-					"method.response.header.Access-Control-Allow-Methods": false,
-					"method.response.header.Access-Control-Allow-Origin": false
+					"method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+					"method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
+					"method.response.header.Access-Control-Allow-Origin": "'*'"
 				},
 				"StatusCode": "200"
 			}
+			]
+		},
+		"MethodResponses": [
+		{
+			"ResponseParameters": {
+				"method": {
+					"response": {
+						"header": {
+							"Access-Control-Allow-Headers": false,
+							"Access-Control-Allow-Methods": false,
+							"Access-Control-Allow-Origin": false
+						}
+					}
+				},
+				"method.response.header.Access-Control-Allow-Headers": false,
+				"method.response.header.Access-Control-Allow-Methods": false,
+				"method.response.header.Access-Control-Allow-Origin": false
+			},
+			"StatusCode": "200"
+		}
 		]
 	}`)
 
 	patch := []byte(`{
 		"Integration": {
 			"IntegrationResponses": [
-				{
-					"ResponseParameters": {
-						"method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-						"method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
-						"method.response.header.Access-Control-Allow-Origin": "'*'"
-					},
-					"StatusCode": "200"
-				}
-			]
-		},
-		"MethodResponses": [
 			{
 				"ResponseParameters": {
-					"method.response.header.Access-Control-Allow-Headers": false,
-					"method.response.header.Access-Control-Allow-Methods": false,
-					"method.response.header.Access-Control-Allow-Origin": false
+					"method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+					"method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
+					"method.response.header.Access-Control-Allow-Origin": "'*'"
 				},
 				"StatusCode": "200"
 			}
+			]
+		},
+		"MethodResponses": [
+		{
+			"ResponseParameters": {
+				"method.response.header.Access-Control-Allow-Headers": false,
+				"method.response.header.Access-Control-Allow-Methods": false,
+				"method.response.header.Access-Control-Allow-Origin": false
+			},
+			"StatusCode": "200"
+		}
 		]
 	}`)
 
-	schemaFields := []string{"Integration", "MethodResponses"}
+	schema := pkgmodel.Schema{
+		Fields: []string{"Integration", "MethodResponses"},
+	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schemaFields, nil, model.FormaApplyModePatch)
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
 
 	assert.NoError(t, err)
 	assert.False(t, needsReplacement)
@@ -522,4 +532,31 @@ func TestGeneratePatch_MixedNestedAndFlattenedStructures(t *testing.T) {
 	}
 
 	assert.Empty(t, patchDoc, "Expected no patch operations for logically equivalent documents")
+}
+
+func TestCollectionSemanticsFromFieldHints(t *testing.T) {
+	hints := map[string]pkgmodel.FieldHint{
+		"simpleArray": {
+			UpdateMethod: pkgmodel.FieldUpdateMethodArray,
+		},
+		"entitySet": {
+			UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet,
+			IndexField:   "id",
+		},
+		"setField": {
+			UpdateMethod: pkgmodel.FieldUpdateMethodSet,
+		},
+		"normalField": {
+			UpdateMethod: pkgmodel.FieldUpdateMethodNone,
+		},
+	}
+
+	collections := collectionSemanticsFromFieldHints(hints)
+
+	expectedCollections := jsonpatch.Collections{
+		Arrays:     []jsonpatch.Path{jsonpatch.Path("$.simpleArray")},
+		EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.entitySet"): jsonpatch.Key("id")},
+	}
+
+	assert.Equal(t, expectedCollections, collections)
 }

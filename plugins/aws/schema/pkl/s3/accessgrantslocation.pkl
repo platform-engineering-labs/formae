@@ -25,7 +25,11 @@ open class AccessGrantsLocation extends formae.Resource {
     @aws.FieldHint
     locationScope: String?
 
-    @aws.FieldHint{createOnly = true}
+    @aws.FieldHint {
+        createOnly = true
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
 }

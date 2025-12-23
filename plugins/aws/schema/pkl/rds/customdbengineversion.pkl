@@ -66,7 +66,10 @@ open class CustomDBEngineVersion extends formae.Resource {
     @aws.FieldHint
     status: VersionStatus?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
     @aws.FieldHint{

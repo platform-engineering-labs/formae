@@ -69,6 +69,8 @@ open class HostedZone extends formae.Resource {
     @aws.FieldHint{
         outputField = "HostedZoneTags"
         outputTransformation = formae.transform.capitalizeMemberKeys
+        updateMethod = "EntitySet"
+        indexField = "Key"
     }
     tags: Listing<formae.Tag>?
 

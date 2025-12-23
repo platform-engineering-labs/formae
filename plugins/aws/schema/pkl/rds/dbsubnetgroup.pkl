@@ -44,7 +44,10 @@ open class DBSubnetGroup extends formae.Resource {
     @aws.FieldHint
     subnetIds: Listing<String|formae.Resolvable>
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
     hidden parent = this

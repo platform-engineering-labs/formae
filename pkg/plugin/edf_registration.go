@@ -27,6 +27,7 @@ func RegisterSharedEDFTypes() error {
 		// 2. Model types in dependency order
 		// First: types with no external dependencies
 		model.FormaeURI(""),
+		model.FieldUpdateMethod(""),
 		model.FieldHint{},
 		model.Description{},
 		model.Prop{},

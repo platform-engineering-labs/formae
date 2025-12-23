@@ -22,6 +22,10 @@ open class AccessGrantsInstance extends formae.Resource {
     @aws.FieldHint
     identityCenterArn: (String|formae.Resolvable)?
 
-    @aws.FieldHint{createOnly = true}
+    @aws.FieldHint {
+        createOnly = true
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

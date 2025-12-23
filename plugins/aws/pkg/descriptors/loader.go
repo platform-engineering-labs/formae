@@ -66,10 +66,12 @@ func LoadDescriptors(ctx context.Context) (map[string]TypeInformation, error) {
 		hints := make(map[string]model.FieldHint)
 		for k, v := range resourceType.GetSchema().GetHints() {
 			hints[k] = model.FieldHint{
-				CreateOnly: v.GetCreateOnly(),
-				Persist:    v.GetPersist(),
-				WriteOnly:  v.GetWriteOnly(),
-				Required:   v.GetRequired(),
+				CreateOnly:   v.GetCreateOnly(),
+				Persist:      v.GetPersist(),
+				WriteOnly:    v.GetWriteOnly(),
+				Required:     v.GetRequired(),
+				UpdateMethod: model.FieldUpdateMethod(v.GetUpdateMethod()),
+				IndexField:   v.GetIndexField(),
 			}
 		}
 		schema := model.Schema{
@@ -128,10 +130,12 @@ func LoadDescriptorsFromPath(ctx context.Context, path string) (map[string]model
 		hints := make(map[string]model.FieldHint)
 		for k, v := range resourceType.GetSchema().GetHints() {
 			hints[k] = model.FieldHint{
-				CreateOnly: v.GetCreateOnly(),
-				Persist:    v.GetPersist(),
-				WriteOnly:  v.GetWriteOnly(),
-				Required:   v.GetRequired(),
+				CreateOnly:   v.GetCreateOnly(),
+				Persist:      v.GetPersist(),
+				WriteOnly:    v.GetWriteOnly(),
+				Required:     v.GetRequired(),
+				UpdateMethod: model.FieldUpdateMethod(v.GetUpdateMethod()),
+				IndexField:   v.GetIndexField(),
 			}
 		}
 		schema := model.Schema{

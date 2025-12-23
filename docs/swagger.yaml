@@ -46,15 +46,31 @@ definitions:
     properties:
       createOnly:
         type: boolean
+      indexField:
+        type: string
       persist:
         type: boolean
       required:
         type: boolean
       requiredOnCreate:
         type: boolean
+      updateMethod:
+        $ref: '#/definitions/model.FieldUpdateMethod'
       writeOnly:
         type: boolean
     type: object
+  model.FieldUpdateMethod:
+    enum:
+    - Array
+    - EntitySet
+    - Set
+    - ""
+    type: string
+    x-enum-varnames:
+    - FieldUpdateMethodArray
+    - FieldUpdateMethodEntitySet
+    - FieldUpdateMethodSet
+    - FieldUpdateMethodNone
   model.Forma:
     properties:
       Description:

@@ -55,7 +55,11 @@ open class AccessGrant extends formae.Resource {
     }
     s3PrefixType: AccessGrantS3PrefixType?
 
-    @aws.FieldHint{createOnly = true}
+    @aws.FieldHint {
+        createOnly = true
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
 }

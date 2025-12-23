@@ -33,6 +33,9 @@ open class VPCEndpointService extends formae.Resource {
     @aws.FieldHint
     payerResponsibility: String?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

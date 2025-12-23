@@ -88,6 +88,8 @@ examples {
         WriteOnly = false
         Required = true
         RequiredOnCreate = false
+        UpdateMethod = ""
+        IndexField = ""
       }
       ["Region"] {
         CreateOnly = true
@@ -95,6 +97,8 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        UpdateMethod = ""
+        IndexField = ""
       }
       ["Tags"] {
         CreateOnly = false
@@ -102,6 +106,8 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        UpdateMethod = ""
+        IndexField = ""
       }
     }
   }
@@ -122,6 +128,8 @@ examples {
           WriteOnly = false
           Required = true
           RequiredOnCreate = false
+          UpdateMethod = ""
+          IndexField = ""
         }
         ["Region"] {
           CreateOnly = true
@@ -129,6 +137,8 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          UpdateMethod = ""
+          IndexField = ""
         }
         ["Tags"] {
           CreateOnly = false
@@ -136,6 +146,8 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          UpdateMethod = ""
+          IndexField = ""
         }
       }
       Discoverable = true
@@ -183,6 +195,8 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["Region"] {
             CreateOnly = true
@@ -190,6 +204,8 @@ examples {
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["Tags"] {
             CreateOnly = false
@@ -197,6 +213,8 @@ examples {
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
         }
         Discoverable = true
@@ -242,6 +260,8 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["nested"] {
             CreateOnly = false
@@ -249,6 +269,8 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["nested.configName"] {
             CreateOnly = false
@@ -256,6 +278,8 @@ examples {
             WriteOnly = true
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["nested.TestConfigValue"] {
             CreateOnly = false
@@ -263,6 +287,8 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["nested.setting"] {
             CreateOnly = false
@@ -270,6 +296,8 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["nested.setting.setting1"] {
             CreateOnly = false
@@ -277,6 +305,8 @@ examples {
             WriteOnly = true
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
           ["nested.setting.SettingTwo"] {
             CreateOnly = false
@@ -284,6 +314,8 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            UpdateMethod = ""
+            IndexField = ""
           }
         }
         Discoverable = true
@@ -317,6 +349,8 @@ examples {
         WriteOnly = false
         Required = true
         RequiredOnCreate = false
+        UpdateMethod = ""
+        IndexField = ""
       }
       ["Region"] {
         CreateOnly = true
@@ -324,6 +358,8 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        UpdateMethod = ""
+        IndexField = ""
       }
       ["Tags"] {
         CreateOnly = false
@@ -331,6 +367,8 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        UpdateMethod = ""
+        IndexField = ""
       }
     }
   }
@@ -351,6 +389,8 @@ examples {
           WriteOnly = false
           Required = true
           RequiredOnCreate = false
+          UpdateMethod = ""
+          IndexField = ""
         }
         ["Region"] {
           CreateOnly = true
@@ -358,6 +398,8 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          UpdateMethod = ""
+          IndexField = ""
         }
         ["Tags"] {
           CreateOnly = false
@@ -365,6 +407,8 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          UpdateMethod = ""
+          IndexField = ""
         }
       }
       Discoverable = true
