@@ -6,18 +6,28 @@
 """
 Generate a large-scale AWS infrastructure environment for performance testing formae.
 
-This script generates PKL files that create a realistic production-like AWS environment
-with a configurable number of resources. The distribution of resource types mimics
-typical enterprise production environments.
+This script generates either PKL files (for formae) or CloudFormation templates
+(for creating resources outside formae, useful for discovery testing).
+
+The distribution of resource types mimics typical enterprise production environments.
 
 Usage:
+    # Generate PKL files for formae
     python3 scripts/generate-perf-test-env.py --count 1000 --region us-east-1
     python3 scripts/generate-perf-test-env.py --count 3000 --region eu-west-1 --output ./perf-test
 
-To apply the generated environment:
+    # Generate CloudFormation templates (for discovery testing)
+    python3 scripts/generate-perf-test-env.py --format cloudformation --count 500 --region us-east-1
+
+To apply PKL environment:
     cd <output-dir>
     pkl project resolve
     formae apply --mode reconcile main.pkl
+
+To apply CloudFormation environment:
+    cd <output-dir>
+    ./deploy.sh                    # Deploy all stacks
+    ./destroy.sh                   # Destroy all stacks
 
 To destroy:
     formae destroy main.pkl
@@ -1660,16 +1670,861 @@ This environment creates real AWS resources that will incur costs:
 '''
 
 
+# ============================================================================
+# CloudFormation Generators
+# ============================================================================
+
+CFN_HEADER = """AWSTemplateFormatVersion: '2010-09-09'
+Description: '{description}'
+
+"""
+
+
+def cfn_tags(name: str, extra: dict = None) -> str:
+    """Generate CloudFormation tags block."""
+    tags = [
+        f"        - Key: Name\n          Value: {name}",
+        "        - Key: Environment\n          Value: perf-test",
+        "        - Key: ManagedBy\n          Value: cloudformation",
+    ]
+    if extra:
+        for k, v in extra.items():
+            tags.append(f"        - Key: {k}\n          Value: {v}")
+    return "\n".join(tags)
+
+
+def generate_cfn_networking(counts: ResourceCounts, env_id: str, region: str) -> str:
+    """Generate CloudFormation template for networking resources."""
+    azs = ["a", "b", "c"]
+
+    template = CFN_HEADER.format(description=f"Networking stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    # Track outputs for cross-stack references
+    outputs = []
+
+    # VPCs
+    for i in range(counts.vpcs):
+        vpc_cidr = f"10.{i}.0.0/16"
+        template += f"""
+  VPC{i}:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: {vpc_cidr}
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+{cfn_tags(f'{env_id}-vpc-{i}')}
+
+  IGW{i}:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+{cfn_tags(f'{env_id}-igw-{i}')}
+
+  IGWAttachment{i}:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC{i}
+      InternetGatewayId: !Ref IGW{i}
+
+  PublicRouteTable{i}:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC{i}
+      Tags:
+{cfn_tags(f'{env_id}-public-rt-{i}')}
+
+  PrivateRouteTable{i}:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC{i}
+      Tags:
+{cfn_tags(f'{env_id}-private-rt-{i}')}
+
+  PublicRoute{i}:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment{i}
+    Properties:
+      RouteTableId: !Ref PublicRouteTable{i}
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW{i}
+"""
+        outputs.append(f"  VPC{i}Id:\n    Value: !Ref VPC{i}\n    Export:\n      Name: !Sub '${{AWS::StackName}}-VPC{i}Id'")
+        outputs.append(f"  PublicRouteTable{i}Id:\n    Value: !Ref PublicRouteTable{i}\n    Export:\n      Name: !Sub '${{AWS::StackName}}-PublicRT{i}Id'")
+        outputs.append(f"  PrivateRouteTable{i}Id:\n    Value: !Ref PrivateRouteTable{i}\n    Export:\n      Name: !Sub '${{AWS::StackName}}-PrivateRT{i}Id'")
+
+        # Subnets for this VPC
+        for j in range(counts.subnets_per_vpc):
+            az = azs[j % len(azs)]
+            is_public = j < counts.subnets_per_vpc // 2
+            subnet_type = "public" if is_public else "private"
+            subnet_cidr = f"10.{i}.{j}.0/24"
+            rt_ref = f"PublicRouteTable{i}" if is_public else f"PrivateRouteTable{i}"
+
+            template += f"""
+  Subnet{i}x{j}:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC{i}
+      CidrBlock: {subnet_cidr}
+      AvailabilityZone: {region}{az}
+      MapPublicIpOnLaunch: {str(is_public).lower()}
+      Tags:
+{cfn_tags(f'{env_id}-{subnet_type}-subnet-{i}-{j}', {'Type': subnet_type})}
+
+  SubnetRTAssoc{i}x{j}:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet{i}x{j}
+      RouteTableId: !Ref {rt_ref}
+"""
+            outputs.append(f"  Subnet{i}x{j}Id:\n    Value: !Ref Subnet{i}x{j}\n    Export:\n      Name: !Sub '${{AWS::StackName}}-Subnet{i}x{j}Id'")
+
+    # Add outputs section
+    if outputs:
+        template += "\nOutputs:\n" + "\n".join(outputs)
+
+    return template
+
+
+def generate_cfn_security_groups(counts: ResourceCounts, env_id: str, networking_stack: str) -> str:
+    """Generate CloudFormation template for security groups."""
+    template = CFN_HEADER.format(description=f"Security groups stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    outputs = []
+
+    # Security groups distributed across VPCs
+    for i in range(counts.security_groups):
+        vpc_idx = i % counts.vpcs
+        template += f"""
+  SG{i}:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group {i} for perf test
+      VpcId: !ImportValue {networking_stack}-VPC{vpc_idx}Id
+      Tags:
+{cfn_tags(f'{env_id}-sg-{i}')}
+"""
+        outputs.append(f"  SG{i}Id:\n    Value: !GetAtt SG{i}.GroupId\n    Export:\n      Name: !Sub '${{AWS::StackName}}-SG{i}Id'")
+
+    # Ingress rules
+    for i in range(counts.sg_ingress_rules):
+        sg_idx = i % counts.security_groups
+        port = 80 + (i % 20) * 100
+        template += f"""
+  SGIngress{i}:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt SG{sg_idx}.GroupId
+      IpProtocol: tcp
+      FromPort: {port}
+      ToPort: {port}
+      CidrIp: 10.0.0.0/8
+      Description: Ingress rule {i}
+"""
+
+    # Egress rules
+    for i in range(counts.sg_egress_rules):
+        sg_idx = i % counts.security_groups
+        template += f"""
+  SGEgress{i}:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt SG{sg_idx}.GroupId
+      IpProtocol: '-1'
+      CidrIp: 0.0.0.0/0
+"""
+
+    if outputs:
+        template += "\nOutputs:\n" + "\n".join(outputs)
+
+    return template
+
+
+def generate_cfn_iam(counts: ResourceCounts, env_id: str) -> str:
+    """Generate CloudFormation template for IAM resources."""
+    template = CFN_HEADER.format(description=f"IAM stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    outputs = []
+    services = ["ec2.amazonaws.com", "ecs-tasks.amazonaws.com", "sagemaker.amazonaws.com", "states.amazonaws.com"]
+
+    # Calculate Lambda roles count same as PKL
+    min_other_roles = 1 if (counts.iam_policies > 0 or counts.instance_profiles > 0) else 0
+    lambda_roles_count = min(
+        max(5, int(counts.iam_roles * 0.2)),
+        counts.iam_roles - min_other_roles
+    )
+    other_roles_count = counts.iam_roles - lambda_roles_count
+
+    # Lambda execution roles
+    for i in range(lambda_roles_count):
+        template += f"""
+  LambdaRole{i}:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: {env_id}-lambda-role-{i}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+{cfn_tags(f'{env_id}-lambda-role-{i}', {'Type': 'lambda-execution'})}
+"""
+        outputs.append(f"  LambdaRole{i}Arn:\n    Value: !GetAtt LambdaRole{i}.Arn\n    Export:\n      Name: !Sub '${{AWS::StackName}}-LambdaRole{i}Arn'")
+
+    # Other IAM roles
+    for i in range(other_roles_count):
+        service = services[i % len(services)]
+        template += f"""
+  Role{i}:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: {env_id}-role-{i}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: {service}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Tags:
+{cfn_tags(f'{env_id}-role-{i}')}
+"""
+
+    # IAM Policies
+    for i in range(counts.iam_policies):
+        template += f"""
+  Policy{i}:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: {env_id}-policy-{i}
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+"""
+
+    # Instance profiles
+    for i in range(counts.instance_profiles):
+        template += f"""
+  InstanceProfile{i}:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: {env_id}-instance-profile-{i}
+      Roles: []
+"""
+
+    if outputs:
+        template += "\nOutputs:\n" + "\n".join(outputs)
+
+    return template
+
+
+def generate_cfn_storage(counts: ResourceCounts, env_id: str, networking_stack: str, sg_stack: str) -> str:
+    """Generate CloudFormation template for storage resources."""
+    template = CFN_HEADER.format(description=f"Storage stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    # S3 Buckets
+    for i in range(counts.s3_buckets):
+        template += f"""
+  Bucket{i}:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: {env_id}-bucket-{i}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+{cfn_tags(f'{env_id}-bucket-{i}')}
+"""
+
+    # DynamoDB Tables
+    for i in range(counts.dynamodb_tables):
+        template += f"""
+  DynamoTable{i}:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: {env_id}-table-{i}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      DeletionProtectionEnabled: false
+      Tags:
+{cfn_tags(f'{env_id}-table-{i}')}
+"""
+
+    # EFS File Systems
+    for i in range(counts.efs_filesystems):
+        template += f"""
+  EFS{i}:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      PerformanceMode: generalPurpose
+      Encrypted: true
+      FileSystemTags:
+{cfn_tags(f'{env_id}-efs-{i}')}
+"""
+
+    # EFS Mount Targets
+    for i in range(min(counts.efs_mount_targets, counts.efs_filesystems)):
+        vpc_idx = i % counts.vpcs
+        private_subnet_idx = counts.subnets_per_vpc // 2  # First private subnet
+        template += f"""
+  EFSMountTarget{i}:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFS{i}
+      SubnetId: !ImportValue {networking_stack}-Subnet{vpc_idx}x{private_subnet_idx}Id
+      SecurityGroups:
+        - !ImportValue {sg_stack}-SG0Id
+"""
+
+    return template
+
+
+def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, networking_stack: str, sg_stack: str) -> str:
+    """Generate CloudFormation template for compute resources."""
+    # AMI map (same as PKL)
+    ami_map = {
+        "us-east-1": "ami-0c02fb55b2c6c5bdc",
+        "us-east-2": "ami-06ba60a55dcbf8bf2",
+        "us-west-1": "ami-0ecb7bb3a2c9a8b9d",
+        "us-west-2": "ami-0c2ab3b8efb09f272",
+        "eu-west-1": "ami-0c1c30571d2dae5c9",
+        "eu-central-1": "ami-0a49b025fffbbdac6",
+        "ap-southeast-1": "ami-0c802847a7dd848c0",
+    }
+    ami_id = ami_map.get(region, ami_map["us-east-1"])
+
+    template = CFN_HEADER.format(description=f"Compute stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    # Launch templates
+    for i in range(counts.launch_templates):
+        template += f"""
+  LaunchTemplate{i}:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: {env_id}-lt-{i}
+      LaunchTemplateData:
+        ImageId: {ami_id}
+        InstanceType: t3.micro
+        Monitoring:
+          Enabled: true
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 8
+              VolumeType: gp3
+              DeleteOnTermination: true
+"""
+
+    # EC2 Instances
+    instance_types = ["t3.micro", "t3.small", "t3.medium"]
+    for i in range(counts.ec2_instances):
+        vpc_idx = i % counts.vpcs
+        sg_idx = i % counts.security_groups
+        instance_type = instance_types[i % len(instance_types)]
+        private_subnet_idx = counts.subnets_per_vpc // 2
+
+        template += f"""
+  Instance{i}:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: {ami_id}
+      InstanceType: {instance_type}
+      SubnetId: !ImportValue {networking_stack}-Subnet{vpc_idx}x{private_subnet_idx}Id
+      SecurityGroupIds:
+        - !ImportValue {sg_stack}-SG{sg_idx}Id
+      Monitoring: true
+      Tags:
+{cfn_tags(f'{env_id}-instance-{i}')}
+"""
+
+    # EBS Volumes
+    azs = ["a", "b", "c"]
+    private_subnet_idx = counts.subnets_per_vpc // 2
+    private_subnet_az = azs[private_subnet_idx % 3]
+
+    standalone_volumes = counts.ebs_volumes // 2
+    for i in range(counts.ebs_volumes):
+        if i < standalone_volumes:
+            az_suffix = azs[i % 3]
+        else:
+            az_suffix = private_subnet_az
+
+        vol_type = ["gp3", "gp2"][i % 2]
+        encrypted = str(i % 2 == 0).lower()
+
+        template += f"""
+  Volume{i}:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: {region}{az_suffix}
+      Size: {20 + (i % 5) * 10}
+      VolumeType: {vol_type}
+      Encrypted: {encrypted}
+      Tags:
+{cfn_tags(f'{env_id}-volume-{i}')}
+"""
+
+    return template
+
+
+def generate_cfn_observability(counts: ResourceCounts, env_id: str) -> str:
+    """Generate CloudFormation template for observability resources."""
+    template = CFN_HEADER.format(description=f"Observability stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    # CloudWatch Log Groups
+    for i in range(counts.log_groups):
+        template += f"""
+  LogGroup{i}:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /perf-test/{env_id}/app-{i}
+      RetentionInDays: 7
+      Tags:
+{cfn_tags(f'{env_id}-log-group-{i}')}
+"""
+
+    # SQS Queues
+    for i in range(counts.sqs_queues):
+        template += f"""
+  SQSQueue{i}:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: {env_id}-queue-{i}
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 345600
+      Tags:
+{cfn_tags(f'{env_id}-sqs-queue-{i}')}
+"""
+
+    return template
+
+
+def generate_cfn_secrets(counts: ResourceCounts, env_id: str) -> str:
+    """Generate CloudFormation template for secrets."""
+    template = CFN_HEADER.format(description=f"Secrets stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    for i in range(counts.secrets):
+        template += f"""
+  Secret{i}:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: {env_id}/secret-{i}
+      Description: Secret {i} for perf test
+      GenerateSecretString:
+        SecretStringTemplate: '{{"username": "admin-{i}"}}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+      Tags:
+{cfn_tags(f'{env_id}-secret-{i}')}
+"""
+
+    return template
+
+
+def generate_cfn_kms(counts: ResourceCounts, env_id: str) -> str:
+    """Generate CloudFormation template for KMS resources."""
+    template = CFN_HEADER.format(description=f"KMS stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    outputs = []
+
+    for i in range(counts.kms_keys):
+        template += f"""
+  KMSKey{i}:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key {i} for perf test
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${{AWS::AccountId}}:root'
+            Action: kms:*
+            Resource: '*'
+      Tags:
+{cfn_tags(f'{env_id}-kms-key-{i}')}
+"""
+        outputs.append(f"  KMSKey{i}Arn:\n    Value: !GetAtt KMSKey{i}.Arn\n    Export:\n      Name: !Sub '${{AWS::StackName}}-KMSKey{i}Arn'")
+
+    for i in range(min(counts.kms_aliases, counts.kms_keys)):
+        template += f"""
+  KMSAlias{i}:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/{env_id}-key-{i}
+      TargetKeyId: !Ref KMSKey{i}
+"""
+
+    if outputs:
+        template += "\nOutputs:\n" + "\n".join(outputs)
+
+    return template
+
+
+def generate_cfn_application(counts: ResourceCounts, env_id: str, iam_stack: str) -> str:
+    """Generate CloudFormation template for application resources."""
+    template = CFN_HEADER.format(description=f"Application stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    # Calculate lambda_roles_count same as PKL
+    min_other_roles = 1 if (counts.iam_policies > 0 or counts.instance_profiles > 0) else 0
+    lambda_roles_count = min(
+        max(5, int(counts.iam_roles * 0.2)),
+        counts.iam_roles - min_other_roles
+    )
+
+    # Lambda functions
+    for i in range(counts.lambdas):
+        role_idx = i % lambda_roles_count
+        template += f"""
+  Lambda{i}:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: {env_id}-lambda-{i}
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !ImportValue {iam_stack}-LambdaRole{role_idx}Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {{'statusCode': 200}}
+      MemorySize: 128
+      Timeout: 30
+      Tags:
+{cfn_tags(f'{env_id}-lambda-{i}')}
+"""
+
+    # ECR Repositories
+    for i in range(counts.ecr_repos):
+        template += f"""
+  ECRRepo{i}:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: {env_id}-repo-{i}
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      Tags:
+{cfn_tags(f'{env_id}-ecr-repo-{i}')}
+"""
+
+    return template
+
+
+def generate_cfn_route53(counts: ResourceCounts, env_id: str) -> str:
+    """Generate CloudFormation template for Route53 resources."""
+    template = CFN_HEADER.format(description=f"Route53 stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    outputs = []
+
+    for i in range(counts.route53_zones):
+        template += f"""
+  HostedZone{i}:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: {env_id}-zone-{i}.perftest.internal
+      HostedZoneConfig:
+        Comment: Hosted zone {i} for perf test
+      HostedZoneTags:
+{cfn_tags(f'{env_id}-zone-{i}')}
+"""
+        outputs.append(f"  HostedZone{i}Id:\n    Value: !Ref HostedZone{i}\n    Export:\n      Name: !Sub '${{AWS::StackName}}-HostedZone{i}Id'")
+
+    record_types = ["A", "CNAME", "TXT"]
+    for i in range(counts.route53_records):
+        zone_idx = i % counts.route53_zones
+        record_type = record_types[i % len(record_types)]
+
+        if record_type == "A":
+            resource_records = "        - 1.2.3.4\n        - 5.6.7.8"
+        elif record_type == "CNAME":
+            resource_records = "        - target.perftest.internal"
+        else:  # TXT
+            resource_records = '        - \'"v=spf1 -all"\''
+
+        template += f"""
+  Record{i}:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone{zone_idx}
+      Name: record-{i}.{env_id}-zone-{zone_idx}.perftest.internal
+      Type: {record_type}
+      TTL: 300
+      ResourceRecords:
+{resource_records}
+"""
+
+    if outputs:
+        template += "\nOutputs:\n" + "\n".join(outputs)
+
+    return template
+
+
+def generate_cfn_api_gateway(counts: ResourceCounts, env_id: str) -> str:
+    """Generate CloudFormation template for API Gateway resources."""
+    template = CFN_HEADER.format(description=f"API Gateway stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    for i in range(counts.api_gateways):
+        template += f"""
+  RestApi{i}:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: {env_id}-api-{i}
+      Description: API Gateway {i} for perf test
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+{cfn_tags(f'{env_id}-api-{i}')}
+"""
+
+    return template
+
+
+def generate_cfn_rds(counts: ResourceCounts, env_id: str, networking_stack: str, sg_stack: str) -> str:
+    """Generate CloudFormation template for RDS resources."""
+    template = CFN_HEADER.format(description=f"RDS stack for perf test {env_id}")
+    template += "Resources:\n"
+
+    # DB Parameter Groups
+    engines = ["mysql8.0", "postgres14", "mariadb10.6"]
+    for i in range(counts.db_parameter_groups):
+        engine_family = engines[i % len(engines)]
+        template += f"""
+  DBParamGroup{i}:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      DBParameterGroupName: {env_id}-db-param-group-{i}
+      Description: DB parameter group {i} for perf test
+      Family: {engine_family}
+      Tags:
+{cfn_tags(f'{env_id}-db-param-group-{i}')}
+"""
+
+    return template
+
+
+def generate_cfn_deploy_script(env_id: str, region: str, stacks: list) -> str:
+    """Generate deployment shell script."""
+    deploy_commands = []
+    for stack in stacks:
+        deploy_commands.append(f"""
+echo "Deploying {stack['name']}..."
+aws cloudformation deploy \\
+    --stack-name {env_id}-{stack['name']} \\
+    --template-file {stack['file']} \\
+    --capabilities CAPABILITY_NAMED_IAM \\
+    --region {region} \\
+    --no-fail-on-empty-changeset
+""")
+
+    return f"""#!/bin/bash
+# Deploy script for {env_id}
+# Generated by generate-perf-test-env.py
+
+set -e
+
+REGION="{region}"
+ENV_ID="{env_id}"
+
+echo "Deploying CloudFormation stacks for $ENV_ID in $REGION"
+echo "=========================================="
+{"".join(deploy_commands)}
+echo "=========================================="
+echo "Deployment complete!"
+echo ""
+echo "To destroy all stacks, run: ./destroy.sh"
+"""
+
+
+def generate_cfn_destroy_script(env_id: str, region: str, stacks: list) -> str:
+    """Generate destruction shell script."""
+    # Reverse order for deletion
+    reversed_stacks = list(reversed(stacks))
+    destroy_commands = []
+    for stack in reversed_stacks:
+        destroy_commands.append(f"""
+echo "Deleting {stack['name']}..."
+aws cloudformation delete-stack \\
+    --stack-name {env_id}-{stack['name']} \\
+    --region {region}
+aws cloudformation wait stack-delete-complete \\
+    --stack-name {env_id}-{stack['name']} \\
+    --region {region} || true
+""")
+
+    return f"""#!/bin/bash
+# Destroy script for {env_id}
+# Generated by generate-perf-test-env.py
+
+set -e
+
+REGION="{region}"
+ENV_ID="{env_id}"
+
+echo "Destroying CloudFormation stacks for $ENV_ID in $REGION"
+echo "=========================================="
+{"".join(destroy_commands)}
+echo "=========================================="
+echo "Destruction complete!"
+"""
+
+
+def generate_cfn_readme(env_id: str, region: str, counts: ResourceCounts) -> str:
+    """Generate README for CloudFormation deployment."""
+    return f"""# Performance Test Environment: {env_id} (CloudFormation)
+
+## Overview
+
+This directory contains CloudFormation templates that create a large-scale AWS infrastructure
+environment for testing formae's discovery feature. The environment creates approximately
+**{counts.total} resources** distributed across various AWS services.
+
+## Deployment
+
+### Prerequisites
+
+1. AWS CLI configured with appropriate credentials
+2. Sufficient IAM permissions to create resources
+
+### Deploy All Stacks
+
+```bash
+chmod +x deploy.sh destroy.sh
+./deploy.sh
+```
+
+### Destroy All Stacks
+
+```bash
+./destroy.sh
+```
+
+## Testing Discovery
+
+After deployment, you can test formae's discovery feature:
+
+```bash
+# Start the formae agent
+formae agent start
+
+# Run discovery for AWS
+formae discover --target aws --region {region}
+
+# View discovered resources
+formae inventory --unmanaged
+```
+
+## Stack Order
+
+The stacks are deployed in dependency order:
+1. `networking` - VPCs, Subnets, Route Tables
+2. `security-groups` - Security Groups (depends on networking)
+3. `iam` - IAM Roles and Policies
+4. `kms` - KMS Keys
+5. `storage` - S3, DynamoDB, EFS (depends on networking, security-groups)
+6. `compute` - EC2, EBS (depends on networking, security-groups)
+7. `observability` - CloudWatch, SQS
+8. `secrets` - Secrets Manager
+9. `application` - Lambda, ECR (depends on iam)
+10. `route53` - DNS
+11. `api-gateway` - API Gateway
+12. `rds` - RDS Parameter Groups
+
+## Resource Distribution
+
+| Category | Count |
+|----------|-------|
+| Networking | {counts.vpcs + counts.vpcs * counts.subnets_per_vpc + counts.route_tables + counts.igws + counts.nat_gws} |
+| Security Groups | {counts.security_groups + counts.sg_ingress_rules + counts.sg_egress_rules} |
+| Compute | {counts.ec2_instances + counts.ebs_volumes + counts.launch_templates} |
+| IAM | {counts.iam_roles + counts.iam_policies + counts.instance_profiles} |
+| Storage | {counts.s3_buckets + counts.dynamodb_tables + counts.efs_filesystems + counts.efs_mount_targets} |
+| Observability | {counts.log_groups + counts.sqs_queues} |
+| Application | {counts.lambdas + counts.ecr_repos} |
+| DNS & API | {counts.route53_zones + counts.route53_records + counts.api_gateways} |
+| RDS | {counts.db_parameter_groups} |
+| Secrets | {counts.secrets} |
+| KMS | {counts.kms_keys + counts.kms_aliases} |
+
+## Cost Warning
+
+This environment creates real AWS resources that will incur costs.
+**Always destroy the environment when testing is complete!**
+
+## Configuration
+
+- **Environment ID**: `{env_id}`
+- **Region**: `{region}`
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a large-scale AWS infrastructure environment for performance testing formae.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Generate PKL files for formae
   %(prog)s --count 100 --region us-east-1
   %(prog)s --count 1000 --region eu-west-1 --output ./perf-test
-  %(prog)s --count 3000 --region us-west-2 --output /tmp/large-env
+
+  # Generate CloudFormation templates for discovery testing
+  %(prog)s --format cloudformation --count 100 --region us-east-1
+  %(prog)s -f cfn -c 500 -r eu-west-1 -o ./discovery-test
         """
+    )
+
+    parser.add_argument(
+        "--format", "-f",
+        type=str,
+        choices=["pkl", "cloudformation", "cfn"],
+        default="pkl",
+        help="Output format: 'pkl' for formae, 'cloudformation'/'cfn' for AWS CloudFormation (default: pkl)"
     )
 
     parser.add_argument(
@@ -1785,47 +2640,120 @@ Examples:
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
-    # Generate all files
-    files = {
-        "PklProject": generate_pkl_project(formae_path),
-        "vars.pkl": generate_vars_pkl(env_id, args.region, stack_name),
-        "networking.pkl": generate_networking_pkl(counts, args.region),
-        "security_groups.pkl": generate_security_groups_pkl(counts),
-        "compute.pkl": generate_compute_pkl(counts, args.region),
-        "iam.pkl": generate_iam_pkl(counts),
-        "kms.pkl": generate_kms_pkl(counts),
-        "storage.pkl": generate_storage_pkl(counts),
-        "observability.pkl": generate_observability_pkl(counts),
-        "secrets.pkl": generate_secrets_pkl(counts),
-        "application.pkl": generate_application_pkl(counts),
-        "route53.pkl": generate_route53_pkl(counts),
-        "api_gateway.pkl": generate_api_gateway_pkl(counts),
-        "rds.pkl": generate_rds_pkl(counts),
-        "main.pkl": generate_main_pkl(env_id, stack_name, counts),
-        "README.md": generate_readme(env_id, stack_name, args.region, counts),
-    }
+    # Normalize format
+    output_format = args.format if args.format != "cfn" else "cloudformation"
 
-    for filename, content in files.items():
-        filepath = os.path.join(output_dir, filename)
-        with open(filepath, "w") as f:
-            f.write(content)
-        print(f"Generated: {filepath}")
+    if output_format == "pkl":
+        # Generate PKL files for formae
+        files = {
+            "PklProject": generate_pkl_project(formae_path),
+            "vars.pkl": generate_vars_pkl(env_id, args.region, stack_name),
+            "networking.pkl": generate_networking_pkl(counts, args.region),
+            "security_groups.pkl": generate_security_groups_pkl(counts),
+            "compute.pkl": generate_compute_pkl(counts, args.region),
+            "iam.pkl": generate_iam_pkl(counts),
+            "kms.pkl": generate_kms_pkl(counts),
+            "storage.pkl": generate_storage_pkl(counts),
+            "observability.pkl": generate_observability_pkl(counts),
+            "secrets.pkl": generate_secrets_pkl(counts),
+            "application.pkl": generate_application_pkl(counts),
+            "route53.pkl": generate_route53_pkl(counts),
+            "api_gateway.pkl": generate_api_gateway_pkl(counts),
+            "rds.pkl": generate_rds_pkl(counts),
+            "main.pkl": generate_main_pkl(env_id, stack_name, counts),
+            "README.md": generate_readme(env_id, stack_name, args.region, counts),
+        }
 
-    print(f"\n{'=' * 60}")
-    print(f"Performance test environment generated successfully!")
-    print(f"{'=' * 60}")
-    print(f"\nEnvironment ID: {env_id}")
-    print(f"Stack Name: {stack_name}")
-    print(f"Region: {args.region}")
-    print(f"Target Resources: {args.count}")
-    print(f"Calculated Resources: {counts.total}")
-    print(f"Output Directory: {output_dir}")
-    print(f"\nNext steps:")
-    print(f"  1. cd {output_dir}")
-    print(f"  2. pkl project resolve")
-    print(f"  3. formae apply --simulate main.pkl  # dry-run")
-    print(f"  4. formae apply main.pkl             # deploy")
-    print(f"  5. formae destroy --stack {stack_name}  # cleanup")
+        for filename, content in files.items():
+            filepath = os.path.join(output_dir, filename)
+            with open(filepath, "w") as f:
+                f.write(content)
+            print(f"Generated: {filepath}")
+
+        print(f"\n{'=' * 60}")
+        print(f"Performance test environment generated successfully!")
+        print(f"{'=' * 60}")
+        print(f"\nFormat: PKL (for formae)")
+        print(f"Environment ID: {env_id}")
+        print(f"Stack Name: {stack_name}")
+        print(f"Region: {args.region}")
+        print(f"Target Resources: {args.count}")
+        print(f"Calculated Resources: {counts.total}")
+        print(f"Output Directory: {output_dir}")
+        print(f"\nNext steps:")
+        print(f"  1. cd {output_dir}")
+        print(f"  2. pkl project resolve")
+        print(f"  3. formae apply --simulate main.pkl  # dry-run")
+        print(f"  4. formae apply main.pkl             # deploy")
+        print(f"  5. formae destroy --stack {stack_name}  # cleanup")
+
+    else:
+        # Generate CloudFormation templates
+        networking_stack = f"{env_id}-networking"
+        sg_stack = f"{env_id}-security-groups"
+        iam_stack = f"{env_id}-iam"
+
+        # Define stacks in deployment order
+        stacks = [
+            {"name": "networking", "file": "networking.yaml"},
+            {"name": "security-groups", "file": "security-groups.yaml"},
+            {"name": "iam", "file": "iam.yaml"},
+            {"name": "kms", "file": "kms.yaml"},
+            {"name": "storage", "file": "storage.yaml"},
+            {"name": "compute", "file": "compute.yaml"},
+            {"name": "observability", "file": "observability.yaml"},
+            {"name": "secrets", "file": "secrets.yaml"},
+            {"name": "application", "file": "application.yaml"},
+            {"name": "route53", "file": "route53.yaml"},
+            {"name": "api-gateway", "file": "api-gateway.yaml"},
+            {"name": "rds", "file": "rds.yaml"},
+        ]
+
+        files = {
+            "networking.yaml": generate_cfn_networking(counts, env_id, args.region),
+            "security-groups.yaml": generate_cfn_security_groups(counts, env_id, networking_stack),
+            "iam.yaml": generate_cfn_iam(counts, env_id),
+            "kms.yaml": generate_cfn_kms(counts, env_id),
+            "storage.yaml": generate_cfn_storage(counts, env_id, networking_stack, sg_stack),
+            "compute.yaml": generate_cfn_compute(counts, env_id, args.region, networking_stack, sg_stack),
+            "observability.yaml": generate_cfn_observability(counts, env_id),
+            "secrets.yaml": generate_cfn_secrets(counts, env_id),
+            "application.yaml": generate_cfn_application(counts, env_id, iam_stack),
+            "route53.yaml": generate_cfn_route53(counts, env_id),
+            "api-gateway.yaml": generate_cfn_api_gateway(counts, env_id),
+            "rds.yaml": generate_cfn_rds(counts, env_id, networking_stack, sg_stack),
+            "deploy.sh": generate_cfn_deploy_script(env_id, args.region, stacks),
+            "destroy.sh": generate_cfn_destroy_script(env_id, args.region, stacks),
+            "README.md": generate_cfn_readme(env_id, args.region, counts),
+        }
+
+        for filename, content in files.items():
+            filepath = os.path.join(output_dir, filename)
+            with open(filepath, "w") as f:
+                f.write(content)
+            print(f"Generated: {filepath}")
+
+        # Make scripts executable
+        os.chmod(os.path.join(output_dir, "deploy.sh"), 0o755)
+        os.chmod(os.path.join(output_dir, "destroy.sh"), 0o755)
+
+        print(f"\n{'=' * 60}")
+        print(f"Performance test environment generated successfully!")
+        print(f"{'=' * 60}")
+        print(f"\nFormat: CloudFormation (for discovery testing)")
+        print(f"Environment ID: {env_id}")
+        print(f"Region: {args.region}")
+        print(f"Target Resources: {args.count}")
+        print(f"Calculated Resources: {counts.total}")
+        print(f"Output Directory: {output_dir}")
+        print(f"\nNext steps:")
+        print(f"  1. cd {output_dir}")
+        print(f"  2. ./deploy.sh             # deploy all stacks")
+        print(f"  3. # Test formae discovery:")
+        print(f"     formae agent start")
+        print(f"     formae discover --target aws --region {args.region}")
+        print(f"     formae inventory --unmanaged")
+        print(f"  4. ./destroy.sh            # cleanup")
 
 
 if __name__ == "__main__":
