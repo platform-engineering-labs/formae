@@ -703,10 +703,15 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 			for _, param := range mappingProps {
 				value, found := parent.GetProperty(param.ParentProperty)
 				if found {
+					// Extract the actual value if this is a JSON reference object.
+					// This handles cases like OCI resources where parent properties (e.g. CompartmentID)
+					// are serialized as {"$ref":"...","$value":"..."} reference objects.
+					// We need only the value for the List API call.
+					actualValue := extractActualValue(value)
 					listParams[param.ListProperty] = plugin.ListParam{
 						ParentProperty: param.ParentProperty,
 						ListParam:      param.ListProperty,
-						ListValue:      value,
+						ListValue:      actualValue,
 					}
 				} else {
 					proc.Log().Error("Missing parent property", "property", param.ParentProperty, "parent_id", parent.NativeID)
@@ -854,6 +859,23 @@ func renderSummary(summary map[string]int) string {
 	}
 
 	return builder.String()
+}
+
+// extractActualValue extracts the actual value from a property that may be a JSON reference object.
+// If the value is a JSON string containing {"$ref":"...","$value":"..."}, it extracts the $value.
+// Otherwise, it returns the value as-is.
+func extractActualValue(value string) string {
+	// Try to parse as JSON to see if it's a JSON reference
+	var jsonRef struct {
+		Ref   string `json:"$ref"`
+		Value string `json:"$value"`
+	}
+
+	if err := json.Unmarshal([]byte(value), &jsonRef); err == nil && jsonRef.Value != "" {
+		return jsonRef.Value
+	}
+
+	return value
 }
 
 func injectResolvables(props string, op ListOperation) json.RawMessage {
