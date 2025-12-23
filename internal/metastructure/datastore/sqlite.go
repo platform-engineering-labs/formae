@@ -1480,8 +1480,9 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 
 	res.Stacks = stackCount
 
-	resourcesQuery := fmt.Sprintf(`
-		SELECT COUNT(*)
+	res.ManagedResources = make(map[string]int)
+	managedResourcesQuery := fmt.Sprintf(`
+		SELECT SUBSTR(type, 1, INSTR(type, '::') - 1) as namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
@@ -1491,18 +1492,29 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			FROM resources r2
 			WHERE r1.uri = r2.uri
 			AND r2.version > r1.version
-		)`, constants.UnmanagedStack)
-	row = d.conn.QueryRow(resourcesQuery, resource_update.OperationDelete)
+		)
+		GROUP BY namespace`, constants.UnmanagedStack)
+	rows, err = d.conn.Query(managedResourcesQuery, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
 
-	var resourceCount int
-	if err = row.Scan(&resourceCount); err != nil {
+	for rows.Next() {
+		var namespace string
+		var count int
+		if err = rows.Scan(&namespace, &count); err != nil {
+			return nil, err
+		}
+		res.ManagedResources[namespace] = count
+	}
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	res.ManagedResources = resourceCount
-
+	res.UnmanagedResources = make(map[string]int)
 	unmanagedResourcesQuery := fmt.Sprintf(`
-		SELECT COUNT(*)
+		SELECT SUBSTR(type, 1, INSTR(type, '::') - 1) as namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack = '%s'
 		AND operation != ?
@@ -1511,18 +1523,29 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			FROM resources r2
 			WHERE r1.uri = r2.uri
 			AND r2.version > r1.version
-		)`, constants.UnmanagedStack)
-	row = d.conn.QueryRow(unmanagedResourcesQuery, resource_update.OperationDelete)
+		)
+		GROUP BY namespace`, constants.UnmanagedStack)
+	rows, err = d.conn.Query(unmanagedResourcesQuery, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
 
-	var unmanagedResourceCount int
-	if err = row.Scan(&unmanagedResourceCount); err != nil {
+	for rows.Next() {
+		var namespace string
+		var count int
+		if err = rows.Scan(&namespace, &count); err != nil {
+			return nil, err
+		}
+		res.UnmanagedResources[namespace] = count
+	}
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	res.UnmanagedResources = unmanagedResourceCount
-
+	res.Targets = make(map[string]int)
 	targetsQuery := `
-		SELECT COUNT(*)
+		SELECT namespace, COUNT(*)
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -1530,15 +1553,25 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
 		)
+		GROUP BY namespace
 	`
-	row = d.conn.QueryRow(targetsQuery)
-
-	var targetCount int
-	if err := row.Scan(&targetCount); err != nil {
+	rows, err = d.conn.Query(targetsQuery)
+	if err != nil {
 		return nil, err
 	}
+	defer closeRows(rows)
 
-	res.Targets = targetCount
+	for rows.Next() {
+		var namespace string
+		var count int
+		if err = rows.Scan(&namespace, &count); err != nil {
+			return nil, err
+		}
+		res.Targets[namespace] = count
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
 
 	res.ResourceTypes = make(map[string]int)
 	resourceTypesQuery := `
@@ -1575,28 +1608,31 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	}
 
 	res.ResourceErrors = make(map[string]int)
-	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.state = ?" + resourceUpdateOrderBy
-	rows, err = d.conn.Query(query, forma_command.CommandStateFailed)
+	resourceErrorsQuery := `
+		SELECT json_extract(resource, '$.Type') as resource_type, COUNT(*)
+		FROM resource_updates
+		WHERE state = ?
+		AND resource IS NOT NULL
+		GROUP BY resource_type
+	`
+	rows, err = d.conn.Query(resourceErrorsQuery, types.ResourceUpdateStateFailed)
 	if err != nil {
 		return nil, err
 	}
+	defer closeRows(rows)
 
-	failedCommands, err := loadFormaCommandsFromJoinedRows(rows)
-	if err != nil {
-		return nil, err
-	}
-
-	// Count errors from ResourceUpdates
-	for _, cmd := range failedCommands {
-		for _, ru := range cmd.ResourceUpdates {
-			if failureMessage := findFailureMessage(ru.ProgressResult); failureMessage != "" {
-				if _, exists := res.ResourceErrors[failureMessage]; !exists {
-					res.ResourceErrors[failureMessage] = 0
-				}
-
-				res.ResourceErrors[failureMessage]++
-			}
+	for rows.Next() {
+		var resourceType string
+		var count int
+		if err = rows.Scan(&resourceType, &count); err != nil {
+			return nil, err
 		}
+		if resourceType != "" {
+			res.ResourceErrors[resourceType] = count
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return &res, nil

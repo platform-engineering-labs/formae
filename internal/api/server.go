@@ -43,9 +43,9 @@ const (
 	SyncRoute     = AdminBasePath + "/synchronize"
 	DiscoverRoute = AdminBasePath + "/discover"
 
-	HealthRoute   = BasePath + "/health"
-	MetricsRoute  = "/metrics"
-	APIDocsRoute  = "/swagger/*"
+	HealthRoute  = BasePath + "/health"
+	MetricsRoute = "/metrics"
+	APIDocsRoute = "/swagger/*"
 )
 
 type Server struct {

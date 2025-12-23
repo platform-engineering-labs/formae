@@ -98,6 +98,12 @@ func (a *Agent) Start() error {
 				slog.Error("Failed to start Ergo metrics", "error", err)
 				// Non-fatal - continue without Ergo metrics
 			}
+
+			// Start Formae stats metrics collection
+			if err := api.StartFormaeMetrics(ms); err != nil {
+				slog.Error("Failed to start Formae metrics", "error", err)
+				// Non-fatal - continue without Formae metrics
+			}
 		}
 
 		slog.Info("Agent started")

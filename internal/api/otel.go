@@ -36,6 +36,7 @@ import (
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae"
+	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -607,3 +608,189 @@ func StartErgoMetrics(node gen.Node) error {
 	return nil
 }
 
+// StatsProvider is an interface for retrieving formae stats.
+// Implemented by the metastructure or datastore.
+type StatsProvider interface {
+	Stats() (*apimodel.Stats, error)
+}
+
+// StartFormaeMetrics registers formae-specific metrics with OTel.
+// This should be called after the metastructure is ready.
+func StartFormaeMetrics(statsProvider StatsProvider) error {
+	meter := otel.Meter("formae/stats")
+
+	// Client connections
+	clientsConnected, err := meter.Int64ObservableGauge(
+		"formae.clients.connected",
+		otelmetric.WithDescription("Number of connected clients"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create clients connected gauge: %w", err)
+	}
+
+	// Commands by type
+	commandsTotal, err := meter.Int64ObservableGauge(
+		"formae.commands.total",
+		otelmetric.WithDescription("Total commands by type"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create commands total gauge: %w", err)
+	}
+
+	// Commands by state
+	commandsByState, err := meter.Int64ObservableGauge(
+		"formae.commands.by_state",
+		otelmetric.WithDescription("Commands by state"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create commands by state gauge: %w", err)
+	}
+
+	// Stacks
+	stacksTotal, err := meter.Int64ObservableGauge(
+		"formae.stacks.total",
+		otelmetric.WithDescription("Total number of stacks"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create stacks total gauge: %w", err)
+	}
+
+	// Managed resources by namespace
+	resourcesManaged, err := meter.Int64ObservableGauge(
+		"formae.resources.managed",
+		otelmetric.WithDescription("Managed resources by namespace"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create resources managed gauge: %w", err)
+	}
+
+	// Unmanaged resources by namespace
+	resourcesUnmanaged, err := meter.Int64ObservableGauge(
+		"formae.resources.unmanaged",
+		otelmetric.WithDescription("Unmanaged resources by namespace"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create resources unmanaged gauge: %w", err)
+	}
+
+	// Targets by namespace
+	targetsTotal, err := meter.Int64ObservableGauge(
+		"formae.targets.total",
+		otelmetric.WithDescription("Targets by namespace"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create targets total gauge: %w", err)
+	}
+
+	// Resources by type
+	resourcesByType, err := meter.Int64ObservableGauge(
+		"formae.resources.by_type",
+		otelmetric.WithDescription("Resources by type"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create resources by type gauge: %w", err)
+	}
+
+	// Resource errors by type
+	resourceErrors, err := meter.Int64ObservableGauge(
+		"formae.resource.errors",
+		otelmetric.WithDescription("Resource errors by type"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create resource errors gauge: %w", err)
+	}
+
+	// Register callback to collect all formae metrics
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, observer otelmetric.Observer) error {
+			stats, err := statsProvider.Stats()
+			if err != nil {
+				slog.Debug("failed to get formae stats", "error", err)
+				return nil // Don't fail the callback
+			}
+
+			// Clients
+			observer.ObserveInt64(clientsConnected, int64(stats.Clients))
+
+			// Stacks
+			observer.ObserveInt64(stacksTotal, int64(stats.Stacks))
+
+			// Commands by type
+			for commandType, count := range stats.Commands {
+				observer.ObserveInt64(commandsTotal, int64(count),
+					otelmetric.WithAttributes(attribute.String("command_type", commandType)))
+			}
+
+			// Commands by state
+			for state, count := range stats.States {
+				observer.ObserveInt64(commandsByState, int64(count),
+					otelmetric.WithAttributes(attribute.String("state", state)))
+			}
+
+			// Managed resources by plugin
+			for plugin, count := range stats.ManagedResources {
+				observer.ObserveInt64(resourcesManaged, int64(count),
+					otelmetric.WithAttributes(attribute.String("plugin", plugin)))
+			}
+
+			// Unmanaged resources by plugin
+			for plugin, count := range stats.UnmanagedResources {
+				observer.ObserveInt64(resourcesUnmanaged, int64(count),
+					otelmetric.WithAttributes(attribute.String("plugin", plugin)))
+			}
+
+			// Targets by plugin
+			for plugin, count := range stats.Targets {
+				observer.ObserveInt64(targetsTotal, int64(count),
+					otelmetric.WithAttributes(attribute.String("plugin", plugin)))
+			}
+
+			// Resources by type (extract plugin from type)
+			for resourceType, count := range stats.ResourceTypes {
+				plugin := extractNamespace(resourceType)
+				observer.ObserveInt64(resourcesByType, int64(count),
+					otelmetric.WithAttributes(
+						attribute.String("plugin", plugin),
+						attribute.String("resource_type", resourceType),
+					))
+			}
+
+			// Resource errors by type
+			for resourceType, count := range stats.ResourceErrors {
+				plugin := extractNamespace(resourceType)
+				observer.ObserveInt64(resourceErrors, int64(count),
+					otelmetric.WithAttributes(
+						attribute.String("plugin", plugin),
+						attribute.String("resource_type", resourceType),
+					))
+			}
+
+			return nil
+		},
+		clientsConnected,
+		commandsTotal,
+		commandsByState,
+		stacksTotal,
+		resourcesManaged,
+		resourcesUnmanaged,
+		targetsTotal,
+		resourcesByType,
+		resourceErrors,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to register formae metrics callback: %w", err)
+	}
+
+	slog.Info("Formae stats metrics collection started")
+	return nil
+}
+
+// extractNamespace extracts the namespace (e.g., "AWS") from a resource type (e.g., "AWS::S3::Bucket")
+func extractNamespace(resourceType string) string {
+	for i, c := range resourceType {
+		if c == ':' {
+			return resourceType[:i]
+		}
+	}
+	return resourceType
+}
