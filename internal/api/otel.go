@@ -8,38 +8,36 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"reflect"
+	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/shirou/gopsutil/v4/disk"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
+	"go.opentelemetry.io/contrib/instrumentation/host"
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
-	"go.opentelemetry.io/contrib/instrumentation/runtime"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/prometheus"
+	otelmetric "go.opentelemetry.io/otel/metric"
 	otellog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
 	otelresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 
+	"ergo.services/ergo/gen"
+
 	"github.com/platform-engineering-labs/formae"
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	promcli "github.com/prometheus/client_golang/prometheus"
 )
-
-type OTel struct {
-	otelConfig *pkgmodel.OTelConfig
-}
-
-func (s *Server) isOTelEnabled() bool {
-	return s.otel != nil && s.otel.otelConfig != nil && s.otel.otelConfig.Enabled
-}
 
 // newOTelResource creates a standard OTel resource with service metadata
 func newOTelResource(serviceName string) (*otelresource.Resource, error) {
@@ -57,10 +55,11 @@ func newOTelResource(serviceName string) (*otelresource.Resource, error) {
 // TracerProvider at driver registration time.
 // Returns:
 //   - slog.Handler for logging integration (can be nil if disabled)
+//   - http.Handler for Prometheus /metrics endpoint (can be nil if disabled)
 //   - shutdown function that must be called on app exit
-func SetupOTelProviders(otelConfig *pkgmodel.OTelConfig) (slog.Handler, func()) {
+func SetupOTelProviders(otelConfig *pkgmodel.OTelConfig) (slog.Handler, http.Handler, func()) {
 	if otelConfig == nil || !otelConfig.Enabled {
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 
 	tracerProvider := setupTracerProvider(otelConfig)
@@ -68,14 +67,14 @@ func SetupOTelProviders(otelConfig *pkgmodel.OTelConfig) (slog.Handler, func()) 
 		otel.SetTracerProvider(tracerProvider)
 	}
 
-	meterProvider := setupMeterProvider(otelConfig)
+	meterProvider, metricsHandler := setupMeterProvider(otelConfig)
 	if meterProvider != nil {
 		otel.SetMeterProvider(meterProvider)
 	}
 
 	loggerProvider, logHandler := setupLoggerProvider(otelConfig)
 
-	return logHandler, func() {
+	return logHandler, metricsHandler, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -143,33 +142,173 @@ func setupTracerProvider(otelConfig *pkgmodel.OTelConfig) *sdktrace.TracerProvid
 	return tracerProvider
 }
 
-func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) *metric.MeterProvider {
-	exporter, err := prometheus.New()
-	if err != nil {
-		slog.Error("failed to create Prometheus exporter", "error", err)
-		return nil
-	}
+func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider, http.Handler) {
+	otlpConfig := otelConfig.OTLP
 
 	res, err := newOTelResource(otelConfig.ServiceName)
 	if err != nil {
 		slog.Error("failed to create resource for OTel metrics", "error", err)
-		return nil
+		return nil, nil
 	}
 
-	meterProvider := metric.NewMeterProvider(
-		metric.WithReader(exporter),
-		metric.WithResource(res),
-	)
+	// Collect metric readers
+	var readers []metric.Option
+
+	// Create OTLP exporter for pushing metrics
+	// Default is delta temporality (OTel-native).
+	// For Prometheus/Mimir backends without deltatocumulative processor, set temporality to "cumulative"
+	var otlpExporter metric.Exporter
+	switch otlpConfig.Protocol {
+	case "grpc":
+		opts := []otlpmetricgrpc.Option{
+			otlpmetricgrpc.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlpmetricgrpc.WithInsecure())
+		}
+		if otlpConfig.Temporality == "cumulative" {
+			opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
+		}
+		otlpExporter, err = otlpmetricgrpc.New(context.Background(), opts...)
+	case "http":
+		opts := []otlpmetrichttp.Option{
+			otlpmetrichttp.WithEndpoint(otlpConfig.Endpoint),
+		}
+		if otlpConfig.Insecure {
+			opts = append(opts, otlpmetrichttp.WithInsecure())
+		}
+		if otlpConfig.Temporality == "cumulative" {
+			opts = append(opts, otlpmetrichttp.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
+		}
+		otlpExporter, err = otlpmetrichttp.New(context.Background(), opts...)
+	default:
+		slog.Error("unknown OTLP protocol for metrics", "protocol", otlpConfig.Protocol)
+		return nil, nil
+	}
+
+	if err != nil {
+		slog.Error("failed to create OTLP metric exporter", "error", err)
+		return nil, nil
+	}
+
+	// Add OTLP push exporter with 10s interval
+	readers = append(readers, metric.WithReader(metric.NewPeriodicReader(otlpExporter, metric.WithInterval(10*time.Second))))
+
+	// Create Prometheus exporter for /metrics scraping (if enabled)
+	var metricsHandler http.Handler
+	if otelConfig.Prometheus.Enabled {
+		// Create a new prometheus registry for OTel metrics
+		promRegistry := promclient.NewRegistry()
+		promExporter, err := prometheus.New(prometheus.WithRegisterer(promRegistry))
+		if err != nil {
+			slog.Error("failed to create Prometheus exporter", "error", err)
+		} else {
+			readers = append(readers, metric.WithReader(promExporter))
+			metricsHandler = promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
+			slog.Info("Prometheus /metrics endpoint enabled")
+		}
+	}
+
+	// Build meter provider with all readers
+	opts := append(readers, metric.WithResource(res))
+	meterProvider := metric.NewMeterProvider(opts...)
 
 	// Start Go runtime metrics collection (goroutines, memory, GC, etc.)
-	if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(time.Second)); err != nil {
+	// Must pass meterProvider explicitly since global provider isn't set yet
+	if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(time.Second), runtime.WithMeterProvider(meterProvider)); err != nil {
 		slog.Error("failed to start Go runtime metrics", "error", err)
 	} else {
 		slog.Info("Go runtime metrics collection started")
 	}
 
-	slog.Info("OTel metrics enabled")
-	return meterProvider
+	// Start host/process metrics collection (CPU, memory, network I/O)
+	// Must pass meterProvider explicitly since global provider isn't set yet
+	if err := host.Start(host.WithMeterProvider(meterProvider)); err != nil {
+		slog.Error("failed to start host metrics", "error", err)
+	} else {
+		slog.Info("Host metrics collection started")
+	}
+
+	// Start disk I/O metrics collection (not included in standard host package)
+	if err := startDiskMetrics(meterProvider); err != nil {
+		slog.Error("failed to start disk I/O metrics", "error", err)
+	} else {
+		slog.Info("Disk I/O metrics collection started")
+	}
+
+	slog.Info("OTel metrics enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
+	return meterProvider, metricsHandler
+}
+
+// startDiskMetrics registers disk I/O metrics using gopsutil
+func startDiskMetrics(provider *metric.MeterProvider) error {
+	meter := provider.Meter("formae/disk")
+
+	// Disk read bytes counter
+	diskReadBytes, err := meter.Int64ObservableCounter(
+		"system.disk.io.read_bytes",
+		otelmetric.WithDescription("Total bytes read from disk"),
+		otelmetric.WithUnit("By"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create disk read bytes counter: %w", err)
+	}
+
+	// Disk write bytes counter
+	diskWriteBytes, err := meter.Int64ObservableCounter(
+		"system.disk.io.write_bytes",
+		otelmetric.WithDescription("Total bytes written to disk"),
+		otelmetric.WithUnit("By"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create disk write bytes counter: %w", err)
+	}
+
+	// Disk read operations counter
+	diskReadOps, err := meter.Int64ObservableCounter(
+		"system.disk.io.read_ops",
+		otelmetric.WithDescription("Total disk read operations"),
+		otelmetric.WithUnit("{operation}"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create disk read ops counter: %w", err)
+	}
+
+	// Disk write operations counter
+	diskWriteOps, err := meter.Int64ObservableCounter(
+		"system.disk.io.write_ops",
+		otelmetric.WithDescription("Total disk write operations"),
+		otelmetric.WithUnit("{operation}"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create disk write ops counter: %w", err)
+	}
+
+	// Register callback for all disk metrics
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, observer otelmetric.Observer) error {
+			counters, err := disk.IOCounters()
+			if err != nil {
+				slog.Debug("failed to get disk I/O counters", "error", err)
+				return nil // Don't fail the callback
+			}
+
+			for device, counter := range counters {
+				attrs := attribute.String("device", device)
+				observer.ObserveInt64(diskReadBytes, int64(counter.ReadBytes), otelmetric.WithAttributes(attrs))
+				observer.ObserveInt64(diskWriteBytes, int64(counter.WriteBytes), otelmetric.WithAttributes(attrs))
+				observer.ObserveInt64(diskReadOps, int64(counter.ReadCount), otelmetric.WithAttributes(attrs))
+				observer.ObserveInt64(diskWriteOps, int64(counter.WriteCount), otelmetric.WithAttributes(attrs))
+			}
+			return nil
+		},
+		diskReadBytes, diskWriteBytes, diskReadOps, diskWriteOps,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to register disk metrics callback: %w", err)
+	}
+
+	return nil
 }
 
 func setupLoggerProvider(otelConfig *pkgmodel.OTelConfig) (*otellog.LoggerProvider, slog.Handler) {
@@ -221,115 +360,250 @@ func setupLoggerProvider(otelConfig *pkgmodel.OTelConfig) (*otellog.LoggerProvid
 	return loggerProvider, handler
 }
 
-// RegisterPrometheusStatsCollector registers a Prometheus collector for formae stats
-// This should be called once during server initialization
-func RegisterPrometheusStatsCollector(metastructure interface {
-	Stats() (*apimodel.Stats, error)
-}) {
-	promcli.MustRegister(promcli.CollectorFunc(func(ch chan<- promcli.Metric) {
-		stats, err := metastructure.Stats()
-		if err != nil {
-			slog.Error("failed to get stats from metastructure", "error", err)
-			return
-		}
+// StartErgoMetrics registers Ergo actor framework metrics with OTel.
+// This should be called after the Ergo node is started.
+func StartErgoMetrics(node gen.Node) error {
+	meter := otel.Meter("formae/ergo")
 
-		for _, metric := range statsToPrometheusMetrics(stats) {
-			ch <- metric
-		}
-	}))
-}
-
-func setupOTelMetricsHandler() echo.HandlerFunc {
-	return echo.WrapHandler(promhttp.Handler())
-}
-
-func statsToPrometheusMetrics(stats *apimodel.Stats) []promcli.Metric {
-	var metrics []promcli.Metric
-
-	processNumber := func(fieldValue reflect.Value, fieldName string, labels map[string]string) float64 {
-		numericValue := fieldValue.Convert(reflect.TypeOf(float64(0))).Float()
-
-		desc := promcli.NewDesc(
-			"formae_stats_"+fieldName,
-			"formae stats",
-			nil, labels,
-		)
-		metric, err := promcli.NewConstMetric(desc, promcli.GaugeValue, numericValue)
-		if err != nil {
-			slog.Error("failed to create Prometheus metric", "fieldName", fieldName, "error", err)
-			return 0
-		}
-
-		metrics = append(metrics, metric)
-		return numericValue
+	// Node uptime
+	uptimeSeconds, err := meter.Int64ObservableGauge(
+		"ergo.node.uptime_seconds",
+		otelmetric.WithDescription("Node uptime in seconds"),
+		otelmetric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create uptime gauge: %w", err)
 	}
 
-	var processFields func(statsValue reflect.Value, prefix string, labels map[string]string)
-	processFields = func(statsValue reflect.Value, prefix string, labels map[string]string) {
-		statsType := statsValue.Type()
-		for i := 0; i < statsType.NumField(); i++ {
-			field := statsType.Field(i)
-			fieldValue := statsValue.Field(i)
-			fieldName := prefix + field.Name
-			switch fieldValue.Kind() {
-			case reflect.Struct:
-				processFields(fieldValue, fieldName+"_", labels)
+	// Process metrics
+	processesTotal, err := meter.Int64ObservableGauge(
+		"ergo.processes.total",
+		otelmetric.WithDescription("Total number of processes"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create processes total gauge: %w", err)
+	}
 
-			case reflect.Ptr:
-				if !fieldValue.IsNil() && fieldValue.Elem().Kind() == reflect.Struct {
-					processFields(fieldValue.Elem(), fieldName+"_", labels)
-				}
+	processesRunning, err := meter.Int64ObservableGauge(
+		"ergo.processes.running",
+		otelmetric.WithDescription("Number of running processes"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create processes running gauge: %w", err)
+	}
 
-			case reflect.Slice, reflect.Array:
-				for j := 0; j < fieldValue.Len(); j++ {
-					element := fieldValue.Index(j)
-					elementName := fieldName + fmt.Sprintf("[%d]", j)
-					switch element.Kind() {
-					case reflect.String:
-						labels[elementName] = element.String()
+	processesZombie, err := meter.Int64ObservableGauge(
+		"ergo.processes.zombie",
+		otelmetric.WithDescription("Number of zombie processes"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create processes zombie gauge: %w", err)
+	}
 
-					case reflect.Int, reflect.Int64, reflect.Float64, reflect.Float32:
-						processNumber(element, elementName, labels)
+	// Memory metrics
+	memoryUsed, err := meter.Int64ObservableGauge(
+		"ergo.memory.used_bytes",
+		otelmetric.WithDescription("Memory used by the node"),
+		otelmetric.WithUnit("By"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create memory used gauge: %w", err)
+	}
 
-					default:
-						slog.Debug("skipping unsupported slice/array element type", "elementName", elementName, "elementType", element.Kind())
-					}
-				}
+	memoryAlloc, err := meter.Int64ObservableGauge(
+		"ergo.memory.alloc_bytes",
+		otelmetric.WithDescription("Memory allocated by the node"),
+		otelmetric.WithUnit("By"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create memory alloc gauge: %w", err)
+	}
 
-			case reflect.Map:
-				for _, key := range fieldValue.MapKeys() {
-					value := fieldValue.MapIndex(key)
-					keyStr := fmt.Sprintf("%v", key.Interface())
-					valueName := fieldName + "[" + keyStr + "]"
-					switch value.Kind() {
-					case reflect.String:
-						labels[valueName] = value.String()
+	// CPU metrics
+	cpuUser, err := meter.Int64ObservableCounter(
+		"ergo.cpu.user_seconds",
+		otelmetric.WithDescription("User CPU time in seconds"),
+		otelmetric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create cpu user counter: %w", err)
+	}
 
-					case reflect.Int, reflect.Int64, reflect.Float64, reflect.Float32:
-						processNumber(value, valueName, labels)
+	cpuSystem, err := meter.Int64ObservableCounter(
+		"ergo.cpu.system_seconds",
+		otelmetric.WithDescription("System CPU time in seconds"),
+		otelmetric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create cpu system counter: %w", err)
+	}
 
-					default:
-						slog.Warn("skipping unsupported map value type", "valueName", valueName, "valueType", value.Kind())
-					}
-				}
-			case reflect.String:
-				labels[fieldName] = fieldValue.String()
+	// Application metrics
+	applicationsTotal, err := meter.Int64ObservableGauge(
+		"ergo.applications.total",
+		otelmetric.WithDescription("Total number of applications"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create applications total gauge: %w", err)
+	}
 
-			case reflect.Int, reflect.Int64, reflect.Float64, reflect.Float32:
-				processNumber(fieldValue, fieldName, labels)
+	applicationsRunning, err := meter.Int64ObservableGauge(
+		"ergo.applications.running",
+		otelmetric.WithDescription("Number of running applications"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create applications running gauge: %w", err)
+	}
 
-			default:
-				slog.Warn("skipping unsupported field type", "fieldName", fieldName, "fieldType", fieldValue.Kind())
+	// Registry metrics
+	registeredNames, err := meter.Int64ObservableGauge(
+		"ergo.registered.names",
+		otelmetric.WithDescription("Number of registered process names"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create registered names gauge: %w", err)
+	}
+
+	registeredAliases, err := meter.Int64ObservableGauge(
+		"ergo.registered.aliases",
+		otelmetric.WithDescription("Number of registered aliases"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create registered aliases gauge: %w", err)
+	}
+
+	registeredEvents, err := meter.Int64ObservableGauge(
+		"ergo.registered.events",
+		otelmetric.WithDescription("Number of registered events"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create registered events gauge: %w", err)
+	}
+
+	// Network metrics
+	connectedNodes, err := meter.Int64ObservableGauge(
+		"ergo.connected.nodes_total",
+		otelmetric.WithDescription("Total connected nodes"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create connected nodes gauge: %w", err)
+	}
+
+	remoteNodeUptime, err := meter.Int64ObservableGauge(
+		"ergo.remote.node_uptime_seconds",
+		otelmetric.WithDescription("Remote node uptime"),
+		otelmetric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create remote node uptime gauge: %w", err)
+	}
+
+	remoteMessagesIn, err := meter.Int64ObservableCounter(
+		"ergo.remote.messages_in",
+		otelmetric.WithDescription("Messages received from node"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create remote messages in counter: %w", err)
+	}
+
+	remoteMessagesOut, err := meter.Int64ObservableCounter(
+		"ergo.remote.messages_out",
+		otelmetric.WithDescription("Messages sent to node"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create remote messages out counter: %w", err)
+	}
+
+	remoteBytesIn, err := meter.Int64ObservableCounter(
+		"ergo.remote.bytes_in",
+		otelmetric.WithDescription("Bytes received from node"),
+		otelmetric.WithUnit("By"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create remote bytes in counter: %w", err)
+	}
+
+	remoteBytesOut, err := meter.Int64ObservableCounter(
+		"ergo.remote.bytes_out",
+		otelmetric.WithDescription("Bytes sent to node"),
+		otelmetric.WithUnit("By"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create remote bytes out counter: %w", err)
+	}
+
+	// Register callback to collect all metrics
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, observer otelmetric.Observer) error {
+			info, err := node.Info()
+			if err != nil {
+				slog.Debug("failed to get Ergo node info", "error", err)
+				return nil // Don't fail the callback
 			}
-		}
+
+			observer.ObserveInt64(uptimeSeconds, info.Uptime)
+			observer.ObserveInt64(processesTotal, info.ProcessesTotal)
+			observer.ObserveInt64(processesRunning, info.ProcessesRunning)
+			observer.ObserveInt64(processesZombie, info.ProcessesZombee)
+			observer.ObserveInt64(memoryUsed, int64(info.MemoryUsed))
+			observer.ObserveInt64(memoryAlloc, int64(info.MemoryAlloc))
+			observer.ObserveInt64(cpuUser, info.UserTime)
+			observer.ObserveInt64(cpuSystem, info.SystemTime)
+			observer.ObserveInt64(applicationsTotal, info.ApplicationsTotal)
+			observer.ObserveInt64(applicationsRunning, info.ApplicationsRunning)
+			observer.ObserveInt64(registeredNames, info.RegisteredNames)
+			observer.ObserveInt64(registeredAliases, info.RegisteredAliases)
+			observer.ObserveInt64(registeredEvents, info.RegisteredEvents)
+
+			// Network metrics
+			network := node.Network()
+			if network != nil {
+				connectedNodesList := network.Nodes()
+				observer.ObserveInt64(connectedNodes, int64(len(connectedNodesList)))
+
+				for _, nodeName := range connectedNodesList {
+					remoteNode, err := network.Node(nodeName)
+					if err != nil {
+						continue
+					}
+					remoteInfo := remoteNode.Info()
+					nodeAttr := otelmetric.WithAttributes(attribute.String("node", string(nodeName)))
+
+					observer.ObserveInt64(remoteNodeUptime, remoteInfo.ConnectionUptime, nodeAttr)
+					observer.ObserveInt64(remoteMessagesIn, int64(remoteInfo.MessagesIn), nodeAttr)
+					observer.ObserveInt64(remoteMessagesOut, int64(remoteInfo.MessagesOut), nodeAttr)
+					observer.ObserveInt64(remoteBytesIn, int64(remoteInfo.BytesIn), nodeAttr)
+					observer.ObserveInt64(remoteBytesOut, int64(remoteInfo.BytesOut), nodeAttr)
+				}
+			}
+
+			return nil
+		},
+		uptimeSeconds,
+		processesTotal,
+		processesRunning,
+		processesZombie,
+		memoryUsed,
+		memoryAlloc,
+		cpuUser,
+		cpuSystem,
+		applicationsTotal,
+		applicationsRunning,
+		registeredNames,
+		registeredAliases,
+		registeredEvents,
+		connectedNodes,
+		remoteNodeUptime,
+		remoteMessagesIn,
+		remoteMessagesOut,
+		remoteBytesIn,
+		remoteBytesOut,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to register Ergo metrics callback: %w", err)
 	}
 
-	statsValue := reflect.ValueOf(stats)
-	if statsValue.Kind() == reflect.Ptr {
-		statsValue = statsValue.Elem()
-	}
-
-	processFields(statsValue, "", map[string]string{})
-
-	return metrics
+	slog.Info("Ergo actor metrics collection started")
+	return nil
 }
+

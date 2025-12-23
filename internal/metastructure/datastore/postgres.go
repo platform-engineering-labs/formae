@@ -129,8 +129,8 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		return nil, err
 	}
 	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer(
-		otelpgx.WithDisableSQLStatementInAttributes(),
-		otelpgx.WithTrimSQLInSpanName(),
+		// Include SQL statement in db.statement attribute and span name
+		// Connection details are still disabled for security
 		otelpgx.WithDisableConnectionDetailsInAttributes(),
 	)
 
@@ -138,6 +138,12 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 	if err != nil {
 		slog.Error("failed to connect to PostgreSQL database", "error", err)
 		return nil, err
+	}
+
+	// Record pool statistics as OTel metrics (connections idle/in-use/waiting, acquire time, etc.)
+	if err := otelpgx.RecordStats(pool); err != nil {
+		slog.Error("failed to start recording pool stats", "error", err)
+		// Non-fatal - continue without pool metrics
 	}
 
 	d := DatastorePostgres{pool: pool, agentID: agentID, cfg: cfg, ctx: ctx}
