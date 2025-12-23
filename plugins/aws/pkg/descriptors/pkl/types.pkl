@@ -39,6 +39,8 @@ open class FieldHint {
     WriteOnly: Boolean = false
     Required: Boolean = false
     RequiredOnCreate: Boolean = false
+    UpdateMethod: String = ""
+    IndexField: String = ""
 }
 
 //copy from plugins/pkl/schema/formae.pkl

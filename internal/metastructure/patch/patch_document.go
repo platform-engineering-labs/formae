@@ -15,24 +15,37 @@ import (
 	"github.com/platform-engineering-labs/jsonpatch"
 )
 
-var defaultCollections = jsonpatch.Collections{
-	EntitySets: jsonpatch.EntitySets{
-		jsonpatch.Path("$.Tags"): jsonpatch.Key("Key"),
-	},
-	Arrays: []jsonpatch.Path{},
-	IgnoredFields: []jsonpatch.Path{
-		"$.SecurityGroupIngress[*].SourceSecurityGroupOwnerId",
-		"$.BucketEncryption.ServerSideEncryptionConfiguration",
-		"$.SecurityGroupIngress",
-		"$.SecurityGroupEgress",
-	},
+var defaultIgnoredFields = []jsonpatch.Path{
+	"$.SecurityGroupIngress[*].SourceSecurityGroupOwnerId",
+	"$.BucketEncryption.ServerSideEncryptionConfiguration",
+	"$.SecurityGroupIngress",
+	"$.SecurityGroupEgress",
 }
 
-func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schemaFields []string, createOnlyFields []string, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
-	return generatePatch(document, patch, properties, schemaFields, createOnlyFields, mode)
+func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
+	return generatePatch(document, patch, properties, schema, mode)
 }
 
-func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schemaFields []string, createOnlyFields []string, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
+func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {
+	collections := jsonpatch.Collections{
+		EntitySets: jsonpatch.EntitySets{},
+		Arrays:     []jsonpatch.Path{},
+	}
+
+	for field, hint := range hints {
+		path := jsonpatch.Path(fmt.Sprintf("$.%s", field))
+		switch hint.UpdateMethod {
+		case pkgmodel.FieldUpdateMethodEntitySet:
+			collections.EntitySets[path] = jsonpatch.Key(hint.IndexField)
+		case pkgmodel.FieldUpdateMethodArray:
+			collections.Arrays = append(collections.Arrays, path)
+		}
+	}
+
+	return collections
+}
+
+func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, properties)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to flatten and resolve refs: %w", err)
@@ -48,7 +61,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schemaFields, defaultCollections, strategy)
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -57,7 +70,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, nil
 	}
 
-	needsReplacement, _ := containsCreateOnlyFields(patchOps, createOnlyFields)
+	needsReplacement, _ := containsCreateOnlyFields(patchOps, schema.CreateOnly())
 	patchJson, err := json.Marshal(patchOps)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to serialize patch document: %w", err)
@@ -66,14 +79,14 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	return json.RawMessage(patchJson), needsReplacement, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, collections jsonpatch.Collections, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
 	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create the actual patch document
-	patchDoc, err := jsonpatch.CreatePatch(document, patchWithSchemaFieldsOnly, collections, strategy)
+	patchDoc, err := jsonpatch.CreatePatch(document, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JSON patch: %w", err)
 	}

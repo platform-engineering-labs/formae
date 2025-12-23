@@ -36,6 +36,9 @@ open class DHCPOptions extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     ntpServers: Listing<String>?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

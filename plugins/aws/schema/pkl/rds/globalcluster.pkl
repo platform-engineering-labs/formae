@@ -48,6 +48,9 @@ open class GlobalCluster extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     storageEncrypted: Boolean?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

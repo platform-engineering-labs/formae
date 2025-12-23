@@ -45,7 +45,10 @@ open class VerifiedAccessInstance extends formae.Resource {
     @aws.FieldHint
     loggingConfigurations: LoggingConfiguration?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
     @aws.FieldHint

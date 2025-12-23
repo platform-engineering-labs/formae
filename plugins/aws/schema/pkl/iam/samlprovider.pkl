@@ -24,6 +24,9 @@ open class SAMLProvider extends formae.Resource {
     @aws.FieldHint
     samlMetadataDocument: String
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

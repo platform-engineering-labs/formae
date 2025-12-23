@@ -143,7 +143,10 @@ open class StorageLens extends formae.Resource {
     @aws.FieldHint
     storageLensConfiguration: StorageLensConfiguration
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
 }

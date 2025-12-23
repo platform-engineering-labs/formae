@@ -15,6 +15,10 @@ type FieldHint interface {
 	GetRequired() bool
 
 	GetRequiredOnCreate() bool
+
+	GetUpdateMethod() string
+
+	GetIndexField() string
 }
 
 var _ FieldHint = FieldHintImpl{}
@@ -29,6 +33,10 @@ type FieldHintImpl struct {
 	Required bool `pkl:"Required"`
 
 	RequiredOnCreate bool `pkl:"RequiredOnCreate"`
+
+	UpdateMethod string `pkl:"UpdateMethod"`
+
+	IndexField string `pkl:"IndexField"`
 }
 
 func (rcv FieldHintImpl) GetCreateOnly() bool {
@@ -49,4 +57,12 @@ func (rcv FieldHintImpl) GetRequired() bool {
 
 func (rcv FieldHintImpl) GetRequiredOnCreate() bool {
 	return rcv.RequiredOnCreate
+}
+
+func (rcv FieldHintImpl) GetUpdateMethod() string {
+	return rcv.UpdateMethod
+}
+
+func (rcv FieldHintImpl) GetIndexField() string {
+	return rcv.IndexField
 }

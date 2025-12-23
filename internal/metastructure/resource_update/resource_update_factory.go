@@ -68,8 +68,7 @@ func NewResourceUpdateForExisting(
 			existingPluginProps,
 			newPluginProps,
 			resolvableProperties,
-			existingResource.Schema.Fields,
-			existingResource.Schema.CreateOnly(),
+			newResource.Schema,
 			mode,
 		)
 		if err != nil {
