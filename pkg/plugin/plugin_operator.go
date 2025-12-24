@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"ergo.services/actor/statemachine"
@@ -165,7 +166,6 @@ type Listing struct {
 	Target         model.Target
 	Error          error
 }
-
 
 // CompressListedResources compresses a slice of ListedResource to gzip-compressed JSON.
 // This is required because Ergo has a hardcoded 64KB buffer limit.
@@ -696,6 +696,42 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 	return handlePluginResult(data, operation.Request, proc, result.ProgressResult)
 }
 
+// calculateExponentialBackoff returns a delay that doubles with each attempt.
+// For throttling errors, this prevents the "thundering herd" problem where
+// all throttled operations retry simultaneously after a fixed delay.
+// Formula: baseDelay * 2^(attempt-1), capped at 30 seconds.
+func calculateExponentialBackoff(attempt int, baseDelay time.Duration) time.Duration {
+	const maxBackoff = 30 * time.Second
+
+	if attempt <= 1 {
+		return baseDelay
+	}
+
+	// Calculate 2^(attempt-1)
+	multiplier := 1 << (attempt - 1) // 1, 2, 4, 8, ...
+	backoff := baseDelay * time.Duration(multiplier)
+
+	if backoff > maxBackoff {
+		return maxBackoff
+	}
+	return backoff
+}
+
+// isThrottlingError checks if an error is a throttling/rate limit error.
+// This checks for common throttling indicators in error messages since
+// the AWS SDK wraps errors when retries are exhausted.
+func isThrottlingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "ThrottlingException") ||
+		strings.Contains(errStr, "Throttling") ||
+		strings.Contains(errStr, "Rate exceeded") ||
+		strings.Contains(errStr, "TooManyRequestsException") ||
+		strings.Contains(errStr, "RequestLimitExceeded")
+}
+
 func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.Process, result *resource.ProgressResult) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
 	maxAttempts := int(data.config.MaxRetries) + 1
 	progress := *result
@@ -718,7 +754,14 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 	}
 	if progress.OperationStatus == resource.OperationStatusFailure {
 		if resource.IsRecoverable(progress.ErrorCode) && data.attempts <= maxAttempts {
-			proc.Log().Info("PluginOperator: %T operation failed with recoverable error code %s. Status message: %s. Retrying (%d/%d)", operation, progress.ErrorCode, progress.StatusMessage, data.attempts, maxAttempts)
+			// Use exponential backoff for throttling errors to avoid thundering herd
+			retryDelay := data.config.RetryDelay
+			if progress.ErrorCode == resource.OperationErrorCodeThrottling {
+				retryDelay = calculateExponentialBackoff(data.attempts, data.config.RetryDelay)
+				proc.Log().Debug("PluginOperator: %T throttled, backing off for %v before retry (%d/%d)", operation, retryDelay, data.attempts, maxAttempts)
+			} else {
+				proc.Log().Info("PluginOperator: %T operation failed with recoverable error code %s. Status message: %s. Retrying (%d/%d)", operation, progress.ErrorCode, progress.StatusMessage, data.attempts, maxAttempts)
+			}
 			data.LastStatusMessage = progress.StatusMessage
 			var retryMessage PluginOperatorRetry
 			if val, ok := operation.(PluginOperatorCheckStatus); ok {
@@ -727,7 +770,7 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 				retryMessage = PluginOperatorRetry{ResourceOperation: operation.Operation(), Request: operation}
 			}
 
-			_, err := proc.SendAfter(proc.PID(), retryMessage, data.config.RetryDelay)
+			_, err := proc.SendAfter(proc.PID(), retryMessage, retryDelay)
 			if err != nil {
 				proc.Log().Error("PluginOperator: failed to send retry message: %v", err)
 				return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
@@ -761,18 +804,44 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 	var nextPageToken *string
 	pagenr := 1
 	var listedResources []ListedResource
+
+	const maxListAttempts = 4 // Total attempts including initial
+
 	for {
 		additionalProps := make(map[string]string)
 		for _, v := range operation.ListParameters {
 			additionalProps[v.ListParam] = v.ListValue
 		}
-		result, err := data.plugin.List(data.context, &resource.ListRequest{
-			ResourceType:         operation.ResourceType,
-			Target:               &operation.Target,
-			PageSize:             100,
-			PageToken:            nextPageToken,
-			AdditionalProperties: additionalProps,
-		})
+
+		var result *resource.ListResult
+		var err error
+
+		// Retry loop with exponential backoff for throttling
+		for attempt := 1; attempt <= maxListAttempts; attempt++ {
+			result, err = data.plugin.List(data.context, &resource.ListRequest{
+				ResourceType:         operation.ResourceType,
+				Target:               &operation.Target,
+				PageSize:             100,
+				PageToken:            nextPageToken,
+				AdditionalProperties: additionalProps,
+			})
+			if err == nil {
+				break // Success
+			}
+
+			// Check if this is a throttling error worth retrying
+			if isThrottlingError(err) && attempt < maxListAttempts {
+				backoff := calculateExponentialBackoff(attempt, data.config.RetryDelay)
+				proc.Log().Debug("PluginOperator: list %s throttled, backing off for %v before retry (%d/%d)",
+					operation.ResourceType, backoff, attempt, maxListAttempts)
+				time.Sleep(backoff)
+				continue
+			}
+
+			// Non-throttling error or max attempts reached
+			break
+		}
+
 		if err != nil {
 			proc.Log().Error("PluginOperator: failed to list resources of type %s in target %s with list parameters %v: %v", operation.ResourceType, operation.Target.Label, operation.ListParameters, err)
 
