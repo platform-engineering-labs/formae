@@ -190,18 +190,18 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider,
 			}
 			otlpExporter, err = otlpmetrichttp.New(context.Background(), opts...)
 		default:
-			slog.Error("unknown OTLP protocol for metrics", "protocol", otlpConfig.Protocol)
-			return nil, nil
+			slog.Error("unknown OTLP protocol for metrics, continuing with Prometheus if enabled", "protocol", otlpConfig.Protocol)
+			// Don't return - allow Prometheus to be set up if enabled
 		}
 
 		if err != nil {
-			slog.Error("failed to create OTLP metric exporter", "error", err)
-			return nil, nil
+			slog.Error("failed to create OTLP metric exporter, continuing with Prometheus if enabled", "error", err)
+			// Don't return - allow Prometheus to be set up if enabled
+		} else if otlpExporter != nil {
+			// Only add OTLP reader if exporter was successfully created
+			readers = append(readers, metric.WithReader(metric.NewPeriodicReader(otlpExporter, metric.WithInterval(10*time.Second))))
+			slog.Info("OTel OTLP metrics export enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
 		}
-
-		// Add OTLP push exporter with 10s interval
-		readers = append(readers, metric.WithReader(metric.NewPeriodicReader(otlpExporter, metric.WithInterval(10*time.Second))))
-		slog.Info("OTel OTLP metrics export enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
 	} else {
 		slog.Info("OTLP metrics export disabled")
 	}
