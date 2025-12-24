@@ -5,6 +5,8 @@
 package plugin
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +17,9 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetric "go.opentelemetry.io/otel/metric"
 )
 
 // PluginOperator is the Ergo state machine responsible for operations on cloud resources. The operator handles the
@@ -142,13 +147,69 @@ type ListResources struct {
 	ListParameters map[string]ListParam
 }
 
+// ListedResource is a lightweight representation of a discovered resource,
+// containing only the NativeID needed for discovery. This keeps the Listing
+// message small to avoid exceeding Ergo's message size limits.
+type ListedResource struct {
+	NativeID     string
+	ResourceType string
+}
+
+// Listing is the response from a List operation, containing discovered resources.
+// Uses ListedResource instead of full resource.Resource to minimize message size.
 type Listing struct {
 	Namespace      string
-	Resources      []resource.Resource
+	Resources      []byte // gzip-compressed JSON of []ListedResource
 	ResourceType   string
 	ListParameters map[string]ListParam
 	Target         model.Target
 	Error          error
+}
+
+
+// CompressListedResources compresses a slice of ListedResource to gzip-compressed JSON.
+// This is required because Ergo has a hardcoded 64KB buffer limit.
+func CompressListedResources(resources []ListedResource) ([]byte, error) {
+	jsonData, err := json.Marshal(resources)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal listed resources: %w", err)
+	}
+
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
+	}
+
+	if _, err := gz.Write(jsonData); err != nil {
+		return nil, fmt.Errorf("failed to write compressed data: %w", err)
+	}
+
+	if err := gz.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecompressListedResources decompresses gzip-compressed JSON to a slice of ListedResource.
+func DecompressListedResources(data []byte) ([]ListedResource, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	var resources []ListedResource
+	if err := json.NewDecoder(gz).Decode(&resources); err != nil {
+		return nil, fmt.Errorf("failed to decode listed resources: %w", err)
+	}
+
+	return resources, nil
 }
 
 type PluginOperatorCheckStatus struct {
@@ -304,6 +365,12 @@ type PluginUpdateData struct {
 	plugin      ResourcePlugin
 	context     context.Context
 	requestedBy gen.PID
+
+	// Metrics
+	operationStartTime time.Time
+	operationDuration  otelmetric.Float64Histogram
+	operationCounter   otelmetric.Int64Counter
+	retryCounter       otelmetric.Int64Counter
 }
 
 // NamespaceMismatchError is returned when an operation targets a different namespace than the plugin handles
@@ -361,6 +428,12 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 	}
 	data.config = cfg.(model.RetryConfig)
 
+	// Initialize OTel metrics
+	if err := setupPluginOperatorMetrics(&data); err != nil {
+		o.Log().Error("Failed to setup plugin operator metrics: %v", err)
+		// Don't fail initialization if metrics setup fails
+	}
+
 	return statemachine.NewStateMachineSpec(initialState,
 		statemachine.WithData(data),
 
@@ -409,6 +482,7 @@ func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process
 
 func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
 	data.requestedBy = from
+	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -457,6 +531,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 
 func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
 	data.requestedBy = from
+	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -478,6 +553,7 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 
 func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
 	data.requestedBy = from
+	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -515,6 +591,7 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 
 func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
 	data.requestedBy = from
+	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
@@ -630,6 +707,11 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 		progress.StatusMessage = data.LastStatusMessage
 	}
 
+	// Record metrics when operation finishes (success or final failure)
+	if progress.FinishedSuccessfully() || (progress.OperationStatus == resource.OperationStatusFailure && data.attempts >= maxAttempts) {
+		recordPluginMetrics(data, operation, &progress)
+	}
+
 	if progress.FinishedSuccessfully() {
 		proc.Log().Debug("PluginOperator: %T operation finished successfully", operation)
 		return StateFinishedSuccessfully, data, progress, nil, nil
@@ -677,7 +759,8 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 
 	proc.Log().Debug("PluginOperator: listing resources of type %s in target %s with list parameters %v", operation.ResourceType, operation.Target.Label, operation.ListParameters)
 	var nextPageToken *string
-	var resources []resource.Resource
+	pagenr := 1
+	var listedResources []ListedResource
 	for {
 		additionalProps := make(map[string]string)
 		for _, v := range operation.ListParameters {
@@ -694,29 +777,45 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 			proc.Log().Error("PluginOperator: failed to list resources of type %s in target %s with list parameters %v: %v", operation.ResourceType, operation.Target.Label, operation.ListParameters, err)
 
 			// Important: Retain resource type + target so discovery can remove the resource (and eventually return to idle)
-			err = proc.Send(data.requestedBy, Listing{
+			sendErr := proc.Send(data.requestedBy, Listing{
 				Namespace:      operation.Namespace,
-				Resources:      []resource.Resource{},
+				Resources:      nil, // Empty compressed data on error
 				ResourceType:   operation.ResourceType,
 				ListParameters: operation.ListParameters,
 				Target:         operation.Target,
 				Error:          err,
 			})
-			if err != nil {
-				proc.Log().Error("PluginOperator: failed to send empty list result: %v", err)
+			if sendErr != nil {
+				proc.Log().Error("PluginOperator: failed to send empty list result: %v", sendErr)
 			}
 			return StateFinishedWithError, data, nil, nil
 		}
-		resources = append(resources, result.Resources...)
+		proc.Log().Debug("PluginOperator: received %d resources in page %d for resources of type %s in target %s", len(result.Resources), pagenr, operation.ResourceType, operation.Target.Label)
+		pagenr++
+		// Convert full resources to lightweight ListedResource (only NativeID and ResourceType needed for discovery)
+		for _, res := range result.Resources {
+			listedResources = append(listedResources, ListedResource{
+				NativeID:     res.NativeID,
+				ResourceType: operation.ResourceType,
+			})
+		}
 		nextPageToken = result.NextPageToken
 		if nextPageToken == nil || *nextPageToken == "" {
 			break
 		}
 	}
 
-	err := proc.Send(data.requestedBy, Listing{
+	// Compress resources to work around Ergo's 64KB message size limit
+	compressedResources, err := CompressListedResources(listedResources)
+	if err != nil {
+		proc.Log().Error("PluginOperator: failed to compress list result: %v", err)
+		return StateFinishedWithError, data, nil, fmt.Errorf("pluginOperator: failed to compress list result: %v", err)
+	}
+	proc.Log().Debug("PluginOperator: compressed %d resources from JSON to %d bytes", len(listedResources), len(compressedResources))
+
+	err = proc.Send(data.requestedBy, Listing{
 		Namespace:      operation.Namespace,
-		Resources:      resources,
+		Resources:      compressedResources,
 		ResourceType:   operation.ResourceType,
 		ListParameters: operation.ListParameters,
 		Target:         operation.Target,
@@ -727,4 +826,84 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 	}
 
 	return StateFinishedSuccessfully, data, nil, nil
+}
+
+// setupPluginOperatorMetrics initializes OTel metrics for plugin operations
+func setupPluginOperatorMetrics(data *PluginUpdateData) error {
+	meter := otel.Meter("formae/plugin_operator")
+
+	var err error
+	data.operationDuration, err = meter.Float64Histogram(
+		"formae.plugin.operation.duration_ms",
+		otelmetric.WithDescription("Duration of plugin operations"),
+		otelmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create operation duration histogram: %w", err)
+	}
+
+	data.operationCounter, err = meter.Int64Counter(
+		"formae.plugin.operation.total",
+		otelmetric.WithDescription("Total plugin operations"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create operation counter: %w", err)
+	}
+
+	data.retryCounter, err = meter.Int64Counter(
+		"formae.plugin.operation.retries.total",
+		otelmetric.WithDescription("Total plugin operation retries"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create retry counter: %w", err)
+	}
+
+	return nil
+}
+
+// recordPluginMetrics records metrics for a completed plugin operation
+func recordPluginMetrics(data PluginUpdateData, operation StatusCheck, progress *resource.ProgressResult) {
+	if !data.operationStartTime.IsZero() {
+		duration := time.Since(data.operationStartTime).Milliseconds()
+
+		// Determine result status
+		var result string
+		if progress.FinishedSuccessfully() {
+			result = "success"
+		} else if progress.OperationStatus == resource.OperationStatusFailure {
+			result = "failure"
+		} else {
+			result = "unknown"
+		}
+
+		attrs := []attribute.KeyValue{
+			attribute.String("plugin", data.plugin.Namespace()),
+			attribute.String("operation", string(operation.Operation())),
+			attribute.String("result", result),
+		}
+
+		// Add resource type if available
+		if progress.ResourceType != "" {
+			attrs = append(attrs, attribute.String("resource_type", progress.ResourceType))
+		}
+
+		// Record duration
+		if data.operationDuration != nil {
+			data.operationDuration.Record(data.context, float64(duration), otelmetric.WithAttributes(attrs...))
+		}
+
+		// Record operation count
+		if data.operationCounter != nil {
+			data.operationCounter.Add(data.context, 1, otelmetric.WithAttributes(attrs...))
+		}
+
+		// Record retries if there were any
+		if data.attempts > 1 && data.retryCounter != nil {
+			retryAttrs := append(attrs, attribute.Int("attempts", data.attempts))
+			if progress.ErrorCode != "" {
+				retryAttrs = append(retryAttrs, attribute.String("error_code", string(progress.ErrorCode)))
+			}
+			data.retryCounter.Add(data.context, int64(data.attempts-1), otelmetric.WithAttributes(retryAttrs...))
+		}
+	}
 }

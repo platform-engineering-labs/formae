@@ -176,6 +176,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 				Enabled:     config.Agent.OTel.Enabled,
 				ServiceName: config.Agent.OTel.ServiceName,
 				OTLP: pkgmodel.OTLPConfig{
+					Enabled:     config.Agent.OTel.OTLP.Enabled,
 					Endpoint:    config.Agent.OTel.OTLP.Endpoint,
 					Protocol:    config.Agent.OTel.OTLP.Protocol,
 					Insecure:    config.Agent.OTel.OTLP.Insecure,
