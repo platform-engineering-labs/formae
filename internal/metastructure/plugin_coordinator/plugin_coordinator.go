@@ -30,7 +30,6 @@ type PluginCoordinator struct {
 	registeredLocalNamespaces map[string]bool              // namespaces registered with RateLimiter (local)
 	pluginManager             *plugin.Manager              // for local plugin fallback
 	retryConfig               model.RetryConfig
-	otelConfig                model.OTelConfig
 }
 
 // RegisteredPlugin contains information about a registered plugin
@@ -85,14 +84,6 @@ func (c *PluginCoordinator) Init(args ...any) error {
 		return fmt.Errorf("resourceUpdater: missing 'RetryConfig' environment variable")
 	}
 	c.retryConfig = retryCfg.(model.RetryConfig)
-
-	otelCfg, ok := c.Env("OTelConfig")
-	if !ok {
-		c.Log().Debug("OTelConfig not found in environment, plugins will not export metrics")
-		c.otelConfig = model.OTelConfig{Enabled: false}
-	} else {
-		c.otelConfig = otelCfg.(model.OTelConfig)
-	}
 
 	c.Log().Debug("PluginCoordinator started")
 	return nil
@@ -244,12 +235,11 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 	}
 
 	// Remote spawn with registration
-	// The remote node's environment already has Plugin and Context set
+	// The remote node's environment already has Plugin, Context, and OTelConfig set
 	// (configured in pkg/plugin/run.go)
 	opts := gen.ProcessOptions{
 		Env: map[gen.Env]any{
 			gen.Env("RetryConfig"): c.retryConfig,
-			gen.Env("OTelConfig"):  c.otelConfig,
 		},
 	}
 	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, opts)
