@@ -78,6 +78,7 @@ type DiscoveryConfig struct {
 }
 
 type OTLPConfig struct {
+	Enabled     bool   `pkl:"enabled"`
 	Endpoint    string `pkl:"endpoint"`
 	Protocol    string `pkl:"protocol"`
 	Insecure    bool   `pkl:"insecure"`

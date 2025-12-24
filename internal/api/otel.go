@@ -100,6 +100,12 @@ func SetupOTelProviders(otelConfig *pkgmodel.OTelConfig) (slog.Handler, http.Han
 func setupTracerProvider(otelConfig *pkgmodel.OTelConfig) *sdktrace.TracerProvider {
 	otlpConfig := otelConfig.OTLP
 
+	// Skip OTLP exporter if not enabled
+	if !otlpConfig.Enabled {
+		slog.Info("OTLP trace export disabled")
+		return nil
+	}
+
 	res, err := newOTelResource(otelConfig.ServiceName)
 	if err != nil {
 		slog.Error("failed to create resource for OTel tracing", "error", err)
@@ -155,45 +161,50 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider,
 	// Collect metric readers
 	var readers []metric.Option
 
-	// Create OTLP exporter for pushing metrics
+	// Create OTLP exporter for pushing metrics (if enabled)
 	// Default is delta temporality (OTel-native).
 	// For Prometheus/Mimir backends without deltatocumulative processor, set temporality to "cumulative"
-	var otlpExporter metric.Exporter
-	switch otlpConfig.Protocol {
-	case "grpc":
-		opts := []otlpmetricgrpc.Option{
-			otlpmetricgrpc.WithEndpoint(otlpConfig.Endpoint),
+	if otlpConfig.Enabled {
+		var otlpExporter metric.Exporter
+		switch otlpConfig.Protocol {
+		case "grpc":
+			opts := []otlpmetricgrpc.Option{
+				otlpmetricgrpc.WithEndpoint(otlpConfig.Endpoint),
+			}
+			if otlpConfig.Insecure {
+				opts = append(opts, otlpmetricgrpc.WithInsecure())
+			}
+			if otlpConfig.Temporality == "cumulative" {
+				opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
+			}
+			otlpExporter, err = otlpmetricgrpc.New(context.Background(), opts...)
+		case "http":
+			opts := []otlpmetrichttp.Option{
+				otlpmetrichttp.WithEndpoint(otlpConfig.Endpoint),
+			}
+			if otlpConfig.Insecure {
+				opts = append(opts, otlpmetrichttp.WithInsecure())
+			}
+			if otlpConfig.Temporality == "cumulative" {
+				opts = append(opts, otlpmetrichttp.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
+			}
+			otlpExporter, err = otlpmetrichttp.New(context.Background(), opts...)
+		default:
+			slog.Error("unknown OTLP protocol for metrics", "protocol", otlpConfig.Protocol)
+			return nil, nil
 		}
-		if otlpConfig.Insecure {
-			opts = append(opts, otlpmetricgrpc.WithInsecure())
-		}
-		if otlpConfig.Temporality == "cumulative" {
-			opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
-		}
-		otlpExporter, err = otlpmetricgrpc.New(context.Background(), opts...)
-	case "http":
-		opts := []otlpmetrichttp.Option{
-			otlpmetrichttp.WithEndpoint(otlpConfig.Endpoint),
-		}
-		if otlpConfig.Insecure {
-			opts = append(opts, otlpmetrichttp.WithInsecure())
-		}
-		if otlpConfig.Temporality == "cumulative" {
-			opts = append(opts, otlpmetrichttp.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
-		}
-		otlpExporter, err = otlpmetrichttp.New(context.Background(), opts...)
-	default:
-		slog.Error("unknown OTLP protocol for metrics", "protocol", otlpConfig.Protocol)
-		return nil, nil
-	}
 
-	if err != nil {
-		slog.Error("failed to create OTLP metric exporter", "error", err)
-		return nil, nil
-	}
+		if err != nil {
+			slog.Error("failed to create OTLP metric exporter", "error", err)
+			return nil, nil
+		}
 
-	// Add OTLP push exporter with 10s interval
-	readers = append(readers, metric.WithReader(metric.NewPeriodicReader(otlpExporter, metric.WithInterval(10*time.Second))))
+		// Add OTLP push exporter with 10s interval
+		readers = append(readers, metric.WithReader(metric.NewPeriodicReader(otlpExporter, metric.WithInterval(10*time.Second))))
+		slog.Info("OTel OTLP metrics export enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
+	} else {
+		slog.Info("OTLP metrics export disabled")
+	}
 
 	// Create Prometheus exporter for /metrics scraping (if enabled)
 	var metricsHandler http.Handler
@@ -208,6 +219,12 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider,
 			metricsHandler = promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
 			slog.Info("Prometheus /metrics endpoint enabled")
 		}
+	}
+
+	// If no readers are configured (both OTLP and Prometheus disabled), return nil
+	if len(readers) == 0 {
+		slog.Info("No metric readers configured, skipping MeterProvider setup")
+		return nil, nil
 	}
 
 	// Build meter provider with all readers
@@ -237,7 +254,6 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider,
 		slog.Info("Disk I/O metrics collection started")
 	}
 
-	slog.Info("OTel metrics enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
 	return meterProvider, metricsHandler
 }
 
@@ -314,6 +330,12 @@ func startDiskMetrics(provider *metric.MeterProvider) error {
 
 func setupLoggerProvider(otelConfig *pkgmodel.OTelConfig) (*otellog.LoggerProvider, slog.Handler) {
 	otlpConfig := otelConfig.OTLP
+
+	// Skip OTLP exporter if not enabled
+	if !otlpConfig.Enabled {
+		slog.Info("OTLP log export disabled")
+		return nil, nil
+	}
 
 	res, err := newOTelResource(otelConfig.ServiceName)
 	if err != nil {

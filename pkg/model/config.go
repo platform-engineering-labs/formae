@@ -70,6 +70,7 @@ type DiscoveryConfig struct {
 }
 
 type OTLPConfig struct {
+	Enabled     bool
 	Endpoint    string
 	Protocol    string
 	Insecure    bool

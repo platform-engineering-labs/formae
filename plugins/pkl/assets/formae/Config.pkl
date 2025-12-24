@@ -108,6 +108,9 @@ class LoggingConfig {
 }
 
 class OTLPConfig {
+    /// Whether to enable OTLP push export (for traces, metrics, and logs)
+    enabled: Boolean = true
+
     endpoint: String = "http://localhost:4317"
 
     protocol: "grpc" | "http" = "grpc"
