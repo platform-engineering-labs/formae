@@ -103,7 +103,7 @@ func (f *FormaCommandPersister) Init(args ...any) error {
 	f.datastore = ds.(datastore.Datastore)
 	f.activeCommands = make(map[string]*cachedCommand)
 
-	f.Log().Info("FormaCommandPersister initialized", "datastoreType", fmt.Sprintf("%T", f.datastore))
+	f.Log().Debug("FormaCommandPersister initialized: datastoreType=%s", fmt.Sprintf("%T", f.datastore))
 
 	return nil
 }
