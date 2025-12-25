@@ -58,11 +58,12 @@ pkg-bin: clean build build-tools
 	mkdir -p ./dist/pel/formae/plugins
 	mkdir -p ./dist/pel/formae/examples
 	cp -Rp ./formae ./dist/pel/formae/bin
-	for f in ./plugins/*/*.so ./plugins/aws/aws; do \
+	for f in ./plugins/*/*.so; do \
 		if [ -f "$$f" ] && file "$$f" | grep -qE "ELF|Mach-O"; then \
 			cp "$$f" ./dist/pel/formae/plugins/; \
 		fi \
 	done
+	cp ./plugins/aws/aws ./dist/pel/formae/plugins/
 	rm -f ./dist/pel/formae/plugins/fake-*.so
 	cp -Rp ./examples/* ./dist/pel/formae/examples
 	./formae project init ./dist/pel/formae/examples
