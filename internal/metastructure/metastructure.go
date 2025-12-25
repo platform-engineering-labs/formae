@@ -123,6 +123,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("SynchronizationConfig"): cfg.Agent.Synchronization,
 		gen.Env("DiscoveryConfig"):       cfg.Agent.Discovery,
 		gen.Env("LoggingConfig"):         cfg.Agent.Logging,
+		gen.Env("OTelConfig"):            cfg.Agent.OTel,
 		gen.Env("AgentID"):               agentID,
 	}
 

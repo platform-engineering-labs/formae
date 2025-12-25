@@ -65,7 +65,7 @@ func (a *Agent) Start() error {
 	go func() {
 		// Important: Setup all OTel providers before db connections are created -
 		// otelsql captures the tracer provider at driver registration time.
-		otelLogHandler, shutdownOTel := api.SetupOTelProviders(&a.cfg.Agent.OTel)
+		otelLogHandler, metricsHandler, shutdownOTel := api.SetupOTelProviders(&a.cfg.Agent.OTel)
 		defer func() {
 			shutdownOTel()
 			a.cleanup()
@@ -92,9 +92,23 @@ func (a *Agent) Start() error {
 			return
 		}
 
+		// Start Ergo actor metrics collection (only if OTel is enabled)
+		if a.cfg.Agent.OTel.Enabled {
+			if err := api.StartErgoMetrics(ms.Node); err != nil {
+				slog.Error("Failed to start Ergo metrics", "error", err)
+				// Non-fatal - continue without Ergo metrics
+			}
+
+			// Start Formae stats metrics collection
+			if err := api.StartFormaeMetrics(ms); err != nil {
+				slog.Error("Failed to start Formae metrics", "error", err)
+				// Non-fatal - continue without Formae metrics
+			}
+		}
+
 		slog.Info("Agent started")
 
-		apiServer := api.NewServer(a.ctx, ms, pluginManager, &a.cfg.Agent.Server, &a.cfg.Plugins, &a.cfg.Agent.OTel)
+		apiServer := api.NewServer(a.ctx, ms, pluginManager, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()

@@ -235,7 +235,7 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 	}
 
 	// Remote spawn with registration
-	// The remote node's environment already has Plugin and Context set
+	// The remote node's environment already has Plugin, Context, and OTelConfig set
 	// (configured in pkg/plugin/run.go)
 	opts := gen.ProcessOptions{
 		Env: map[gen.Env]any{

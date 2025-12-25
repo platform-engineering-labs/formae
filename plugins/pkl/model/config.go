@@ -78,15 +78,22 @@ type DiscoveryConfig struct {
 }
 
 type OTLPConfig struct {
-	Endpoint string `pkl:"endpoint"`
-	Protocol string `pkl:"protocol"`
-	Insecure bool   `pkl:"insecure"`
+	Enabled     bool   `pkl:"enabled"`
+	Endpoint    string `pkl:"endpoint"`
+	Protocol    string `pkl:"protocol"`
+	Insecure    bool   `pkl:"insecure"`
+	Temporality string `pkl:"temporality"` // "delta" (default/OTel-native) or "cumulative"
+}
+
+type PrometheusConfig struct {
+	Enabled bool `pkl:"enabled"`
 }
 
 type OTelConfig struct {
-	Enabled     bool       `pkl:"enabled"`
-	ServiceName string     `pkl:"serviceName"`
-	OTLP        OTLPConfig `pkl:"otlp"`
+	Enabled     bool             `pkl:"enabled"`
+	ServiceName string           `pkl:"serviceName"`
+	OTLP        OTLPConfig       `pkl:"otlp"`
+	Prometheus  PrometheusConfig `pkl:"prometheus"`
 }
 
 type AgentConfig struct {

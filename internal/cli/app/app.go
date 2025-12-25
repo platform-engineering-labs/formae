@@ -396,14 +396,23 @@ func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *a
 	return true, stats, a.calculateNags(stats), nil
 }
 
+func sumMapValues(m map[string]int) int {
+	total := 0
+	for _, v := range m {
+		total += v
+	}
+	return total
+}
+
 func (a *App) calculateNags(stats *apimodel.Stats) []string {
 	nags := []string{}
-	if stats.UnmanagedResources > 0 {
+	totalUnmanaged := sumMapValues(stats.UnmanagedResources)
+	if totalUnmanaged > 0 {
 		plural := "s"
-		if stats.UnmanagedResources == 1 {
+		if totalUnmanaged == 1 {
 			plural = ""
 		}
-		nags = append(nags, fmt.Sprintf("You have %d unmanaged resource%s. You can extract them using %s, adjust and apply the changes.", stats.UnmanagedResources, plural, display.LightBlue("formae extract --query='managed:false'")))
+		nags = append(nags, fmt.Sprintf("You have %d unmanaged resource%s. You can extract them using %s, adjust and apply the changes.", totalUnmanaged, plural, display.LightBlue("formae extract --query='managed:false'")))
 	}
 
 	return nags

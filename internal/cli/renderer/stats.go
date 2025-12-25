@@ -16,12 +16,22 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 )
 
+func sumMap(m map[string]int) int {
+	total := 0
+	for _, v := range m {
+		total += v
+	}
+	return total
+}
+
 func RenderStats(stats *apimodel.Stats) (string, error) {
 	var tablesLine1 []struct {
 		Headline string
 		Headers  []string
 		Rows     [][]string
 	}
+
+	totalTargets := sumMap(stats.Targets)
 
 	tablesLine1 = append(tablesLine1, struct {
 		Headline string
@@ -31,7 +41,7 @@ func RenderStats(stats *apimodel.Stats) (string, error) {
 		Headline: "Structure",
 		Rows: [][]string{
 			{"Stacks", fmt.Sprintf("%d", stats.Stacks)},
-			{"Targets", fmt.Sprintf("%d", stats.Targets)},
+			{"Targets", fmt.Sprintf("%d", totalTargets)},
 		},
 	})
 
@@ -54,23 +64,28 @@ func RenderStats(stats *apimodel.Stats) (string, error) {
 		},
 	})
 
-	totalResources := stats.ManagedResources + stats.UnmanagedResources
+	totalManagedResources := sumMap(stats.ManagedResources)
+	totalUnmanagedResources := sumMap(stats.UnmanagedResources)
+	totalResources := totalManagedResources + totalUnmanagedResources
 
 	managedColor := display.Green
-	if stats.ManagedResources < totalResources {
+	if totalManagedResources < totalResources {
 		managedColor = display.Gold
 	}
-	managedString := managedColor(fmt.Sprintf("%d", stats.ManagedResources))
+	managedString := managedColor(fmt.Sprintf("%d", totalManagedResources))
 	managedTitle := managedColor("Managed")
 
 	unmanagedColor := display.Green
-	if stats.UnmanagedResources > 0 {
+	if totalUnmanagedResources > 0 {
 		unmanagedColor = display.Gold
 	}
-	unmanagedString := unmanagedColor(fmt.Sprintf("%d", stats.UnmanagedResources))
+	unmanagedString := unmanagedColor(fmt.Sprintf("%d", totalUnmanagedResources))
 	unmanagedTitle := unmanagedColor("Unmanaged")
 
-	p := int((float64(stats.UnmanagedResources)/float64(totalResources))*100 + 0.5)
+	p := 0
+	if totalResources > 0 {
+		p = int((float64(totalUnmanagedResources)/float64(totalResources))*100 + 0.5)
+	}
 	unmanagedPercentage := fmt.Sprintf("%d%%", p)
 	unmanagedPercentageTitle := "Unmanaged %"
 	if p == 0 {

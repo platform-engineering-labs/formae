@@ -811,19 +811,25 @@ const docTemplate = `{
                     }
                 },
                 "ResourceErrors": {
+                    "description": "key: resource type",
                     "type": "object",
                     "additionalProperties": {
                         "type": "integer"
                     }
                 },
                 "ResourceTypes": {
+                    "description": "key: resource type (e.g., \"AWS::S3::Bucket\")",
                     "type": "object",
                     "additionalProperties": {
                         "type": "integer"
                     }
                 },
                 "Resources": {
-                    "type": "integer"
+                    "description": "key: namespace (e.g., \"AWS\", \"Azure\")",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
                 "Stacks": {
                     "type": "integer"
@@ -835,10 +841,18 @@ const docTemplate = `{
                     }
                 },
                 "Targets": {
-                    "type": "integer"
+                    "description": "key: namespace",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
                 "UnmanagedResources": {
-                    "type": "integer"
+                    "description": "key: namespace",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
                 "Version": {
                     "type": "string"

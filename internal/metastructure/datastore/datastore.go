@@ -222,26 +222,3 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
-
-func findFailureMessage(progressResults []resource.ProgressResult) string {
-	// Account for non-recoverable errors or max attempts reached
-	if msg := filterProgressMessage(progressResults, func(p resource.ProgressResult) bool {
-		return p.Failed() && p.StatusMessage != ""
-	}); msg != "" {
-		return msg
-	}
-
-	// Account for recoverable errors
-	return filterProgressMessage(progressResults, func(p resource.ProgressResult) bool {
-		return p.OperationStatus == resource.OperationStatusFailure && p.StatusMessage != ""
-	})
-}
-
-func filterProgressMessage(progressResults []resource.ProgressResult, filter func(resource.ProgressResult) bool) string {
-	for _, progress := range progressResults {
-		if filter(progress) {
-			return progress.StatusMessage
-		}
-	}
-	return ""
-}

@@ -252,13 +252,18 @@ definitions:
       ResourceErrors:
         additionalProperties:
           type: integer
+        description: 'key: resource type'
         type: object
       ResourceTypes:
         additionalProperties:
           type: integer
+        description: 'key: resource type (e.g., "AWS::S3::Bucket")'
         type: object
       Resources:
-        type: integer
+        additionalProperties:
+          type: integer
+        description: 'key: namespace (e.g., "AWS", "Azure")'
+        type: object
       Stacks:
         type: integer
       States:
@@ -266,9 +271,15 @@ definitions:
           type: integer
         type: object
       Targets:
-        type: integer
+        additionalProperties:
+          type: integer
+        description: 'key: namespace'
+        type: object
       UnmanagedResources:
-        type: integer
+        additionalProperties:
+          type: integer
+        description: 'key: namespace'
+        type: object
       Version:
         type: string
     type: object
