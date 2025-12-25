@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 export INSTALLPREFIX="/opt/pel"
-export PLUGINDIR="~/.pel/formae/plugins"
+export PLUGINDIR="$HOME/.pel/formae/plugins"
 export OS=$(uname | tr '[:upper:]' '[:lower:]')
 export ARCH=$(uname -m |  tr -d '_')
 
@@ -99,13 +99,18 @@ else
   tar -zxf ${pkgname} -C "${INSTALLPREFIX}"
 fi
 
-# Install plugin executables to user directory
+# Install plugin executables to user directory and remove from system dir
 for f in "${INSTALLPREFIX}/formae/plugins/"*; do
   if file "$f" | grep -q "executable"; then
     name=$(basename "$f")
-    dest="$HOME/.pel/formae/plugins/${name}/v${version}"
+    dest="${PLUGINDIR}/${name}/v${version}"
     mkdir -p "$dest"
     cp "$f" "$dest/"
+    if ! [ $(id -u) = 0 ]; then
+      sudo rm "$f"
+    else
+      rm "$f"
+    fi
   fi
 done
 
