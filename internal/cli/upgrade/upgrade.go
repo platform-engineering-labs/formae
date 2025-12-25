@@ -5,7 +5,14 @@
 package upgrade
 
 import (
+	"debug/elf"
+	"debug/macho"
 	"fmt"
+	"io"
+	"os"
+	"os/user"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/masterminds/semver"
@@ -92,6 +99,12 @@ func UpgradeCmd() *cobra.Command {
 				return err
 			}
 
+			// Install plugin executables to user directory
+			err = installPluginExecutables(formae.DefaultInstallPrefix, candidate.Version.String())
+			if err != nil {
+				return fmt.Errorf("failed to install plugin executables: %w", err)
+			}
+
 			fmt.Println("done.")
 
 			return nil
@@ -139,4 +152,140 @@ func UpgradeListCmd() *cobra.Command {
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
 	return command
+}
+
+// getOriginalUserHome returns the home directory of the user who invoked sudo,
+// or the current user's home directory if not running under sudo.
+func getOriginalUserHome() (string, error) {
+	// Check if running under sudo - SUDO_USER contains the original username
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		u, err := user.Lookup(sudoUser)
+		if err != nil {
+			return "", fmt.Errorf("failed to lookup sudo user %s: %w", sudoUser, err)
+		}
+		return u.HomeDir, nil
+	}
+
+	// Not running under sudo, use current user
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return home, nil
+}
+
+// isExecutable checks if the file is an executable binary.
+func isExecutable(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	// Check for executable based on OS
+	switch runtime.GOOS {
+	case "darwin":
+		_, err := macho.NewFile(f)
+		return err == nil
+	default: // linux and others
+		_, err := elf.NewFile(f)
+		return err == nil
+	}
+}
+
+// installPluginExecutables copies plugin executables from the system install
+// directory to the user's plugin directory, then removes them from the system
+// directory. This matches what setup.sh does for fresh installs.
+func installPluginExecutables(installPrefix, version string) error {
+	homeDir, err := getOriginalUserHome()
+	if err != nil {
+		return err
+	}
+
+	pluginsDir := filepath.Join(installPrefix, "formae", "plugins")
+	entries, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No plugins directory, nothing to do
+		}
+		return fmt.Errorf("failed to read plugins directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		srcPath := filepath.Join(pluginsDir, entry.Name())
+
+		// Skip .so files - they are shared libraries, not standalone executables
+		if strings.HasSuffix(entry.Name(), ".so") {
+			continue
+		}
+
+		if !isExecutable(srcPath) {
+			continue
+		}
+
+		// Create destination directory: ~/.pel/formae/plugins/<name>/v<version>/
+		name := entry.Name()
+		destDir := filepath.Join(homeDir, ".pel", "formae", "plugins", name, "v"+version)
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return fmt.Errorf("failed to create plugin directory %s: %w", destDir, err)
+		}
+
+		// Copy the executable
+		destPath := filepath.Join(destDir, name)
+		if err := copyFile(srcPath, destPath); err != nil {
+			return fmt.Errorf("failed to copy plugin %s: %w", name, err)
+		}
+
+		// Set ownership to the original user if running as root
+		if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+			if u, err := user.Lookup(sudoUser); err == nil {
+				var uid, gid int
+				fmt.Sscanf(u.Uid, "%d", &uid)
+				fmt.Sscanf(u.Gid, "%d", &gid)
+				// Chown the plugin directory and file
+				os.Chown(filepath.Join(homeDir, ".pel"), uid, gid)
+				os.Chown(filepath.Join(homeDir, ".pel", "formae"), uid, gid)
+				os.Chown(filepath.Join(homeDir, ".pel", "formae", "plugins"), uid, gid)
+				os.Chown(filepath.Join(homeDir, ".pel", "formae", "plugins", name), uid, gid)
+				os.Chown(destDir, uid, gid)
+				os.Chown(destPath, uid, gid)
+			}
+		}
+
+		// Remove from system directory
+		if err := os.Remove(srcPath); err != nil {
+			return fmt.Errorf("failed to remove plugin from system directory: %w", err)
+		}
+
+		fmt.Printf("installed plugin: %s\n", name)
+	}
+
+	return nil
+}
+
+// copyFile copies a file from src to dst, preserving the executable permission.
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
 }
