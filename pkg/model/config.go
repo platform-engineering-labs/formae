@@ -70,15 +70,22 @@ type DiscoveryConfig struct {
 }
 
 type OTLPConfig struct {
-	Endpoint string
-	Protocol string
-	Insecure bool
+	Enabled     bool
+	Endpoint    string
+	Protocol    string
+	Insecure    bool
+	Temporality string // "delta" (default/OTel-native) or "cumulative" (for Prometheus backends without delta support)
+}
+
+type PrometheusConfig struct {
+	Enabled bool `pkl:"enabled"`
 }
 
 type OTelConfig struct {
 	Enabled     bool
 	ServiceName string
-	OTLP        OTLPConfig `pkl:"otlp"`
+	OTLP        OTLPConfig       `pkl:"otlp"`
+	Prometheus  PrometheusConfig `pkl:"prometheus"`
 }
 
 type AgentConfig struct {

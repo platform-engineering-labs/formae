@@ -108,11 +108,22 @@ class LoggingConfig {
 }
 
 class OTLPConfig {
+    /// Whether to enable OTLP push export (for traces, metrics, and logs)
+    enabled: Boolean = true
+
     endpoint: String = "http://localhost:4317"
 
     protocol: "grpc" | "http" = "grpc"
 
     insecure: Boolean = true
+
+    /// Metric temporality: "delta" (OTel-native, default) or "cumulative" (for Prometheus/Mimir without delta support)
+    temporality: "delta" | "cumulative" = "delta"
+}
+
+class PrometheusConfig {
+    /// Whether to expose a /metrics endpoint for Prometheus scraping
+    enabled: Boolean = true
 }
 
 class OTelConfig {
@@ -121,6 +132,8 @@ class OTelConfig {
     serviceName: String = "formae-agent"
 
     otlp: OTLPConfig = new OTLPConfig{}
+
+    prometheus: PrometheusConfig = new PrometheusConfig{}
 }
 
 class AgentConfig {

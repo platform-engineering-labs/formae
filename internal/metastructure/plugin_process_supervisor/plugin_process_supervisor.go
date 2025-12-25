@@ -210,17 +210,35 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 	nodeName := fmt.Sprintf("%s-plugin@%s", strings.ToLower(namespace), serverConfig.Hostname)
 	agentNode := fmt.Sprintf("%s@%s", serverConfig.Nodename, serverConfig.Hostname)
 
+	// Build environment variables for the plugin process
+	env := map[gen.Env]string{
+		gen.Env("FORMAE_AGENT_NODE"):     agentNode,
+		gen.Env("FORMAE_PLUGIN_NODE"):    nodeName,
+		gen.Env("FORMAE_NETWORK_COOKIE"): serverConfig.Secret,
+	}
+
+	// Add OTel configuration if available
+	if otelConfigVal, ok := p.Env("OTelConfig"); ok {
+		if otelConfig, ok := otelConfigVal.(pkgmodel.OTelConfig); ok && otelConfig.Enabled {
+			env[gen.Env("FORMAE_OTEL_ENABLED")] = "true"
+			env[gen.Env("FORMAE_OTEL_ENDPOINT")] = otelConfig.OTLP.Endpoint
+			env[gen.Env("FORMAE_OTEL_PROTOCOL")] = otelConfig.OTLP.Protocol
+			if otelConfig.OTLP.Insecure {
+				env[gen.Env("FORMAE_OTEL_INSECURE")] = "true"
+			} else {
+				env[gen.Env("FORMAE_OTEL_INSECURE")] = "false"
+			}
+			p.Log().Debug("OTel config passed to plugin", "namespace", namespace, "endpoint", otelConfig.OTLP.Endpoint)
+		}
+	}
+
 	// Configure meta.Port options
 	portOptions := meta.PortOptions{
 		Cmd:         pluginInfo.binaryPath,
 		EnableEnvOS: true, // Inherit OS environment (PATH, etc.) so plugins can find dependencies like pkl
-		Env: map[gen.Env]string{
-			gen.Env("FORMAE_AGENT_NODE"):     agentNode,
-			gen.Env("FORMAE_PLUGIN_NODE"):    nodeName,
-			gen.Env("FORMAE_NETWORK_COOKIE"): serverConfig.Secret,
-		},
-		Tag:     namespace,
-		Process: gen.Atom("PluginProcessSupervisor"), // Send messages to the PluginProcessSupervisor actor
+		Env:         env,
+		Tag:         namespace,
+		Process:     gen.Atom("PluginProcessSupervisor"), // Send messages to the PluginProcessSupervisor actor
 	}
 
 	// Create meta.Port

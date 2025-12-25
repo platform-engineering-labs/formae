@@ -45,6 +45,11 @@ func RegisterSharedEDFTypes() error {
 		model.Forma{},
 		model.RetryConfig{},
 
+		// Fifth: OTel config types (for passing to remote plugin spawns)
+		model.OTLPConfig{},
+		model.PrometheusConfig{},
+		model.OTelConfig{}, // depends on OTLPConfig and PrometheusConfig
+
 		// 3. Resource operation types (some depend on model types)
 		resource.OperationStatus(""),
 		resource.Operation(""),
@@ -81,6 +86,7 @@ func RegisterSharedEDFTypes() error {
 		PluginOperatorRetry{},
 		PluginOperatorShutdown{},
 		ListResources{},
+		ListedResource{},
 		Listing{},
 		StartPluginOperation{},
 	}

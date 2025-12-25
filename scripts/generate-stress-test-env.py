@@ -42,6 +42,9 @@ from dataclasses import dataclass
 from typing import List, Dict, Tuple
 
 
+# CloudFormation limits
+MAX_RESOURCES_PER_STACK = 400  # CloudFormation limit is 500, leave margin for safety
+
 # Resource distribution percentages for a realistic production environment
 # Based on typical enterprise AWS usage patterns
 # NOTE: VPC-related resources are capped to stay within AWS quotas (max 5 VPCs, IGWs, NAT GWs)
@@ -97,6 +100,37 @@ DISTRIBUTION = {
     "rds_instance": 0.02,   # RDS instances
     "db_subnet_group": 0.01, # DB subnet groups
     "db_parameter_group": 0.02, # DB parameter groups
+}
+
+# Quota-safe distribution - avoids resources with tight default quotas
+# Skips: EC2, EBS, EIP, NAT GW, VPC, Subnets, Security Groups, EFS (requires VPC)
+# Focuses on: S3, IAM, KMS, Secrets, DynamoDB, CloudWatch, SQS, Lambda, ECR, Route53, API GW
+DISTRIBUTION_QUOTA_SAFE = {
+    # IAM & Security (25%)
+    "iam_role": 0.10,           # IAM roles (limit 1000)
+    "iam_policy": 0.08,         # IAM policies (limit 1500)
+    "instance_profile": 0.04,   # Instance profiles
+    "kms_key": 0.02,            # KMS keys (limit 10000)
+    "kms_alias": 0.02,          # KMS aliases
+    "secret": 0.04,             # Secrets (limit 500K)
+
+    # Storage (25%)
+    "s3_bucket": 0.15,          # S3 buckets (soft limit, easily increased)
+    "dynamodb_table": 0.10,     # DynamoDB tables (limit 2500)
+
+    # Observability (20%)
+    "log_group": 0.12,          # CloudWatch log groups (limit 1M)
+    "sqs_queue": 0.08,          # SQS queues (no practical limit)
+
+    # Application (20%)
+    "lambda": 0.12,             # Lambda functions (code storage limit, not count)
+    "ecr_repo": 0.08,           # ECR repositories (limit 10K)
+
+    # DNS & API Gateway (10%)
+    "route53_zone": 0.03,       # Route53 hosted zones (limit 500)
+    "route53_record": 0.04,     # Route53 records
+    "api_gateway": 0.02,        # API Gateway REST APIs (limit 600)
+    "api_stage": 0.01,          # API Gateway stages
 }
 
 
@@ -260,6 +294,73 @@ def calculate_counts(total: int) -> ResourceCounts:
         rds_instances=0,  # Disabled: requires db_subnet_groups to work properly
         db_subnet_groups=0,  # Disabled: requires subnets in multiple AZs (need vpcs >= 2)
         db_parameter_groups=max(1, int(total * DISTRIBUTION["db_parameter_group"])),
+    )
+
+
+def calculate_counts_quota_safe(total: int) -> ResourceCounts:
+    """Calculate resource counts for quota-safe profile.
+
+    This profile avoids resources with tight default AWS quotas:
+    - No EC2 instances (default 5 vCPU quota)
+    - No Elastic IPs (default 5 quota)
+    - No NAT Gateways (require EIPs)
+    - No VPCs/Subnets (avoid networking complexity)
+    - No EFS (requires VPC/subnets)
+
+    Focus on high-limit resources: S3, IAM, KMS, DynamoDB, CloudWatch, SQS, Lambda, ECR, Route53, API GW
+
+    Caps applied to stay within default quotas:
+    - IAM Roles: 950 (default limit 1000)
+    - IAM Policies: 1400 (default limit 1500)
+    - DynamoDB Tables: 2400 (default limit 2500)
+    - Route53 Hosted Zones: 450 (default limit 500)
+    - API Gateways: 550 (default limit 600)
+    """
+    d = DISTRIBUTION_QUOTA_SAFE
+    return ResourceCounts(
+        # Networking - all zeroed out
+        vpcs=0,
+        subnets_per_vpc=0,
+        route_tables=0,
+        routes=0,
+        igws=0,
+        nat_gws=0,
+        eips=0,
+        security_groups=0,
+        sg_ingress_rules=0,
+        sg_egress_rules=0,
+        vpc_endpoints=0,
+        # Compute - all zeroed out
+        ec2_instances=0,
+        ebs_volumes=0,
+        launch_templates=0,
+        # IAM & Security - use quota-safe distribution with caps
+        iam_roles=min(950, max(5, int(total * d["iam_role"]))),
+        iam_policies=min(1400, max(5, int(total * d["iam_policy"]))),
+        instance_profiles=max(2, int(total * d["instance_profile"])),
+        kms_keys=max(1, int(total * d["kms_key"])),
+        kms_aliases=max(1, int(total * d["kms_alias"])),
+        secrets=max(2, int(total * d["secret"])),
+        # Storage - S3 and DynamoDB only (no EFS - requires VPC)
+        s3_buckets=max(5, int(total * d["s3_bucket"])),
+        dynamodb_tables=min(2400, max(2, int(total * d["dynamodb_table"]))),
+        efs_filesystems=0,
+        efs_mount_targets=0,
+        # Observability
+        log_groups=max(5, int(total * d["log_group"])),
+        sqs_queues=max(2, int(total * d["sqs_queue"])),
+        # Application
+        lambdas=max(2, int(total * d["lambda"])),
+        ecr_repos=max(2, int(total * d["ecr_repo"])),
+        # DNS & API Gateway - with caps
+        route53_zones=min(450, max(1, int(total * d["route53_zone"]))),
+        route53_records=max(5, int(total * d["route53_record"])),
+        api_gateways=min(550, max(1, int(total * d["api_gateway"]))),
+        api_stages=max(1, int(total * d["api_stage"])),
+        # RDS - all zeroed out (requires VPC)
+        rds_instances=0,
+        db_subnet_groups=0,
+        db_parameter_groups=0,
     )
 
 
@@ -1680,6 +1781,27 @@ Description: '{description}'
 """
 
 
+def split_into_chunks(items: list, chunk_size: int) -> List[Tuple[int, list]]:
+    """Split a list into chunks and return (chunk_index, chunk_items) tuples."""
+    chunks = []
+    for i in range(0, len(items), chunk_size):
+        chunk_idx = i // chunk_size
+        chunk_items = items[i:i + chunk_size]
+        chunks.append((chunk_idx, chunk_items))
+    return chunks
+
+
+def count_cfn_resources_in_template(template: str) -> int:
+    """Count the number of resources in a CloudFormation template."""
+    # Simple heuristic: count lines that define a resource type
+    count = 0
+    lines = template.split('\n')
+    for i, line in enumerate(lines):
+        if line.strip().startswith('Type: AWS::'):
+            count += 1
+    return count
+
+
 def cfn_tags(name: str, extra: dict = None) -> str:
     """Generate CloudFormation tags block."""
     tags = [
@@ -1789,16 +1911,34 @@ def generate_cfn_networking(counts: ResourceCounts, env_id: str, region: str) ->
 
 
 def generate_cfn_security_groups(counts: ResourceCounts, env_id: str, networking_stack: str) -> str:
-    """Generate CloudFormation template for security groups."""
-    template = CFN_HEADER.format(description=f"Security groups stack for perf test {env_id}")
-    template += "Resources:\n"
+    """Generate CloudFormation template for security groups (legacy single template)."""
+    templates = generate_cfn_security_groups_split(counts, env_id, networking_stack)
+    if len(templates) == 1:
+        return templates[0][1]
+    return templates[0][1]
 
-    outputs = []
 
-    # Security groups distributed across VPCs
-    for i in range(counts.security_groups):
-        vpc_idx = i % counts.vpcs
-        template += f"""
+def generate_cfn_security_groups_split(counts: ResourceCounts, env_id: str, networking_stack: str) -> List[Tuple[str, str]]:
+    """Generate CloudFormation templates for security groups, splitting into multiple stacks if needed.
+
+    Security groups are split with their corresponding rules to avoid cross-stack !GetAtt references.
+    """
+    templates = []
+
+    # Calculate how many SGs per stack (to stay under MAX_RESOURCES_PER_STACK including rules)
+    # Each SG has ~3 rules on average (ingress_rules/sgs + egress_rules/sgs)
+    avg_rules_per_sg = ((counts.sg_ingress_rules + counts.sg_egress_rules) / max(1, counts.security_groups)) + 1
+    sgs_per_stack = int(MAX_RESOURCES_PER_STACK / avg_rules_per_sg)
+
+    if counts.security_groups <= sgs_per_stack:
+        # Single stack
+        template = CFN_HEADER.format(description=f"Security groups stack for perf test {env_id}")
+        template += "Resources:\n"
+        outputs = []
+
+        for i in range(counts.security_groups):
+            vpc_idx = i % counts.vpcs
+            template += f"""
   SG{i}:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -1807,13 +1947,12 @@ def generate_cfn_security_groups(counts: ResourceCounts, env_id: str, networking
       Tags:
 {cfn_tags(f'{env_id}-sg-{i}')}
 """
-        outputs.append(f"  SG{i}Id:\n    Value: !GetAtt SG{i}.GroupId\n    Export:\n      Name: !Sub '${{AWS::StackName}}-SG{i}Id'")
+            outputs.append(f"  SG{i}Id:\n    Value: !GetAtt SG{i}.GroupId\n    Export:\n      Name: !Sub '${{AWS::StackName}}-SG{i}Id'")
 
-    # Ingress rules
-    for i in range(counts.sg_ingress_rules):
-        sg_idx = i % counts.security_groups
-        port = 80 + (i % 20) * 100
-        template += f"""
+        for i in range(counts.sg_ingress_rules):
+            sg_idx = i % counts.security_groups
+            port = 80 + (i % 20) * 100
+            template += f"""
   SGIngress{i}:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
@@ -1825,10 +1964,9 @@ def generate_cfn_security_groups(counts: ResourceCounts, env_id: str, networking
       Description: Ingress rule {i}
 """
 
-    # Egress rules
-    for i in range(counts.sg_egress_rules):
-        sg_idx = i % counts.security_groups
-        template += f"""
+        for i in range(counts.sg_egress_rules):
+            sg_idx = i % counts.security_groups
+            template += f"""
   SGEgress{i}:
     Type: AWS::EC2::SecurityGroupEgress
     Properties:
@@ -1837,18 +1975,83 @@ def generate_cfn_security_groups(counts: ResourceCounts, env_id: str, networking
       CidrIp: 0.0.0.0/0
 """
 
-    if outputs:
-        template += "\nOutputs:\n" + "\n".join(outputs)
+        if outputs:
+            template += "\nOutputs:\n" + "\n".join(outputs)
+        templates.append(("security-groups.yaml", template))
+    else:
+        # Split into multiple stacks - each stack has a contiguous range of SGs with their rules
+        num_stacks = (counts.security_groups + sgs_per_stack - 1) // sgs_per_stack
 
-    return template
+        for stack_idx in range(num_stacks):
+            sg_start = stack_idx * sgs_per_stack
+            sg_end = min(sg_start + sgs_per_stack, counts.security_groups)
+
+            template = CFN_HEADER.format(description=f"Security groups stack {stack_idx} for perf test {env_id}")
+            template += "Resources:\n"
+            outputs = []
+
+            # Security groups for this stack
+            for i in range(sg_start, sg_end):
+                vpc_idx = i % counts.vpcs
+                template += f"""
+  SG{i}:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group {i} for perf test
+      VpcId: !ImportValue {networking_stack}-VPC{vpc_idx}Id
+      Tags:
+{cfn_tags(f'{env_id}-sg-{i}')}
+"""
+                outputs.append(f"  SG{i}Id:\n    Value: !GetAtt SG{i}.GroupId\n    Export:\n      Name: !Sub '${{AWS::StackName}}-SG{i}Id'")
+
+            # Ingress rules for SGs in this stack
+            for i in range(counts.sg_ingress_rules):
+                sg_idx = i % counts.security_groups
+                if sg_start <= sg_idx < sg_end:
+                    port = 80 + (i % 20) * 100
+                    template += f"""
+  SGIngress{i}:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt SG{sg_idx}.GroupId
+      IpProtocol: tcp
+      FromPort: {port}
+      ToPort: {port}
+      CidrIp: 10.0.0.0/8
+      Description: Ingress rule {i}
+"""
+
+            # Egress rules for SGs in this stack
+            for i in range(counts.sg_egress_rules):
+                sg_idx = i % counts.security_groups
+                if sg_start <= sg_idx < sg_end:
+                    template += f"""
+  SGEgress{i}:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt SG{sg_idx}.GroupId
+      IpProtocol: '-1'
+      CidrIp: 0.0.0.0/0
+"""
+
+            if outputs:
+                template += "\nOutputs:\n" + "\n".join(outputs)
+            templates.append((f"security-groups-{stack_idx}.yaml", template))
+
+    return templates
 
 
 def generate_cfn_iam(counts: ResourceCounts, env_id: str) -> str:
-    """Generate CloudFormation template for IAM resources."""
-    template = CFN_HEADER.format(description=f"IAM stack for perf test {env_id}")
-    template += "Resources:\n"
+    """Generate CloudFormation template for IAM resources (legacy single template)."""
+    templates = generate_cfn_iam_split(counts, env_id)
+    if len(templates) == 1:
+        return templates[0][1]
+    return templates[0][1]
 
-    outputs = []
+
+def generate_cfn_iam_split(counts: ResourceCounts, env_id: str) -> List[Tuple[str, str]]:
+    """Generate CloudFormation templates for IAM resources, splitting into multiple stacks if needed."""
+    templates = []
     services = ["ec2.amazonaws.com", "ecs-tasks.amazonaws.com", "sagemaker.amazonaws.com", "states.amazonaws.com"]
 
     # Calculate Lambda roles count same as PKL
@@ -1859,9 +2062,12 @@ def generate_cfn_iam(counts: ResourceCounts, env_id: str) -> str:
     )
     other_roles_count = counts.iam_roles - lambda_roles_count
 
+    # Collect all IAM resources as (type, index, content, output_line)
+    all_resources = []
+
     # Lambda execution roles
     for i in range(lambda_roles_count):
-        template += f"""
+        content = f"""
   LambdaRole{i}:
     Type: AWS::IAM::Role
     Properties:
@@ -1878,12 +2084,13 @@ def generate_cfn_iam(counts: ResourceCounts, env_id: str) -> str:
       Tags:
 {cfn_tags(f'{env_id}-lambda-role-{i}', {'Type': 'lambda-execution'})}
 """
-        outputs.append(f"  LambdaRole{i}Arn:\n    Value: !GetAtt LambdaRole{i}.Arn\n    Export:\n      Name: !Sub '${{AWS::StackName}}-LambdaRole{i}Arn'")
+        output = f"  LambdaRole{i}Arn:\n    Value: !GetAtt LambdaRole{i}.Arn\n    Export:\n      Name: !Sub '${{AWS::StackName}}-LambdaRole{i}Arn'"
+        all_resources.append(('lambda_role', i, content, output))
 
     # Other IAM roles
     for i in range(other_roles_count):
         service = services[i % len(services)]
-        template += f"""
+        content = f"""
   Role{i}:
     Type: AWS::IAM::Role
     Properties:
@@ -1900,10 +2107,11 @@ def generate_cfn_iam(counts: ResourceCounts, env_id: str) -> str:
       Tags:
 {cfn_tags(f'{env_id}-role-{i}')}
 """
+        all_resources.append(('role', i, content, None))
 
     # IAM Policies
     for i in range(counts.iam_policies):
-        template += f"""
+        content = f"""
   Policy{i}:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -1918,31 +2126,73 @@ def generate_cfn_iam(counts: ResourceCounts, env_id: str) -> str:
               - logs:PutLogEvents
             Resource: '*'
 """
+        all_resources.append(('policy', i, content, None))
 
     # Instance profiles
     for i in range(counts.instance_profiles):
-        template += f"""
+        content = f"""
   InstanceProfile{i}:
     Type: AWS::IAM::InstanceProfile
     Properties:
       InstanceProfileName: {env_id}-instance-profile-{i}
       Roles: []
 """
+        all_resources.append(('instance_profile', i, content, None))
 
-    if outputs:
-        template += "\nOutputs:\n" + "\n".join(outputs)
+    # Split into stacks
+    total_resources = len(all_resources)
+    if total_resources <= MAX_RESOURCES_PER_STACK:
+        # Single stack
+        template = CFN_HEADER.format(description=f"IAM stack for perf test {env_id}")
+        template += "Resources:\n"
+        outputs = []
+        for _, _, content, output in all_resources:
+            template += content
+            if output:
+                outputs.append(output)
+        if outputs:
+            template += "\nOutputs:\n" + "\n".join(outputs)
+        templates.append(("iam.yaml", template))
+    else:
+        # Split into multiple stacks
+        chunks = split_into_chunks(all_resources, MAX_RESOURCES_PER_STACK)
+        for chunk_idx, chunk_resources in chunks:
+            template = CFN_HEADER.format(description=f"IAM stack {chunk_idx} for perf test {env_id}")
+            template += "Resources:\n"
+            outputs = []
+            for _, _, content, output in chunk_resources:
+                template += content
+                if output:
+                    outputs.append(output)
+            if outputs:
+                template += "\nOutputs:\n" + "\n".join(outputs)
+            templates.append((f"iam-{chunk_idx}.yaml", template))
 
-    return template
+    return templates
 
 
 def generate_cfn_storage(counts: ResourceCounts, env_id: str, networking_stack: str, sg_stack: str) -> str:
-    """Generate CloudFormation template for storage resources."""
-    template = CFN_HEADER.format(description=f"Storage stack for perf test {env_id}")
-    template += "Resources:\n"
+    """Generate CloudFormation template for storage resources (legacy single template)."""
+    templates = generate_cfn_storage_split(counts, env_id, networking_stack, sg_stack)
+    if len(templates) == 1:
+        return templates[0][1]
+    # For backwards compatibility, return first template (but this shouldn't be used for large counts)
+    return templates[0][1]
+
+
+def generate_cfn_storage_split(counts: ResourceCounts, env_id: str, networking_stack: str, sg_stack: str) -> List[Tuple[str, str]]:
+    """Generate CloudFormation templates for storage resources, splitting into multiple stacks if needed.
+
+    Returns a list of (filename, content) tuples.
+    """
+    templates = []
+
+    # Collect all storage resources
+    all_resources = []
 
     # S3 Buckets
     for i in range(counts.s3_buckets):
-        template += f"""
+        all_resources.append(('bucket', i, f"""
   Bucket{i}:
     Type: AWS::S3::Bucket
     Properties:
@@ -1960,11 +2210,11 @@ def generate_cfn_storage(counts: ResourceCounts, env_id: str, networking_stack: 
               SSEAlgorithm: AES256
       Tags:
 {cfn_tags(f'{env_id}-bucket-{i}')}
-"""
+"""))
 
     # DynamoDB Tables
     for i in range(counts.dynamodb_tables):
-        template += f"""
+        all_resources.append(('dynamo', i, f"""
   DynamoTable{i}:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -1983,11 +2233,13 @@ def generate_cfn_storage(counts: ResourceCounts, env_id: str, networking_stack: 
       DeletionProtectionEnabled: false
       Tags:
 {cfn_tags(f'{env_id}-table-{i}')}
-"""
+"""))
 
-    # EFS File Systems
+    # EFS File Systems and Mount Targets (keep together due to !Ref dependency)
     for i in range(counts.efs_filesystems):
-        template += f"""
+        vpc_idx = i % counts.vpcs
+        private_subnet_idx = counts.subnets_per_vpc // 2
+        efs_content = f"""
   EFS{i}:
     Type: AWS::EFS::FileSystem
     Properties:
@@ -1996,12 +2248,8 @@ def generate_cfn_storage(counts: ResourceCounts, env_id: str, networking_stack: 
       FileSystemTags:
 {cfn_tags(f'{env_id}-efs-{i}')}
 """
-
-    # EFS Mount Targets
-    for i in range(min(counts.efs_mount_targets, counts.efs_filesystems)):
-        vpc_idx = i % counts.vpcs
-        private_subnet_idx = counts.subnets_per_vpc // 2  # First private subnet
-        template += f"""
+        if i < counts.efs_mount_targets:
+            efs_content += f"""
   EFSMountTarget{i}:
     Type: AWS::EFS::MountTarget
     Properties:
@@ -2010,12 +2258,43 @@ def generate_cfn_storage(counts: ResourceCounts, env_id: str, networking_stack: 
       SecurityGroups:
         - !ImportValue {sg_stack}-SG0Id
 """
+        # EFS counts as 2 resources if it has a mount target
+        all_resources.append(('efs', i, efs_content))
 
-    return template
+    # Split into chunks
+    total_resources = len(all_resources)
+    if total_resources <= MAX_RESOURCES_PER_STACK:
+        # Single template
+        template = CFN_HEADER.format(description=f"Storage stack for perf test {env_id}")
+        template += "Resources:\n"
+        for _, _, content in all_resources:
+            template += content
+        templates.append(("storage.yaml", template))
+    else:
+        # Split into multiple templates
+        chunks = split_into_chunks(all_resources, MAX_RESOURCES_PER_STACK)
+        for chunk_idx, chunk_resources in chunks:
+            template = CFN_HEADER.format(description=f"Storage stack {chunk_idx} for perf test {env_id}")
+            template += "Resources:\n"
+            for _, _, content in chunk_resources:
+                template += content
+            templates.append((f"storage-{chunk_idx}.yaml", template))
+
+    return templates
 
 
-def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, networking_stack: str, sg_stack: str) -> str:
-    """Generate CloudFormation template for compute resources."""
+def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, networking_stack: str, sg_stack_base: str) -> str:
+    """Generate CloudFormation template for compute resources (legacy single template)."""
+    templates = generate_cfn_compute_split(counts, env_id, region, networking_stack, sg_stack_base)
+    if len(templates) == 1:
+        return templates[0][1]
+    return templates[0][1]
+
+
+def generate_cfn_compute_split(counts: ResourceCounts, env_id: str, region: str, networking_stack: str, sg_stack_base: str) -> List[Tuple[str, str]]:
+    """Generate CloudFormation templates for compute resources, splitting if needed."""
+    templates = []
+
     # AMI map (same as PKL)
     ami_map = {
         "us-east-1": "ami-0c02fb55b2c6c5bdc",
@@ -2028,12 +2307,17 @@ def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, netwo
     }
     ami_id = ami_map.get(region, ami_map["us-east-1"])
 
-    template = CFN_HEADER.format(description=f"Compute stack for perf test {env_id}")
-    template += "Resources:\n"
+    # Determine if SGs are split
+    total_sg_resources = counts.security_groups + counts.sg_ingress_rules + counts.sg_egress_rules
+    avg_rules_per_sg = ((counts.sg_ingress_rules + counts.sg_egress_rules) / max(1, counts.security_groups)) + 1
+    sgs_per_stack = int(MAX_RESOURCES_PER_STACK / avg_rules_per_sg)
+    sg_is_split = counts.security_groups > sgs_per_stack
+
+    all_resources = []
 
     # Launch templates
     for i in range(counts.launch_templates):
-        template += f"""
+        content = f"""
   LaunchTemplate{i}:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -2050,16 +2334,24 @@ def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, netwo
               VolumeType: gp3
               DeleteOnTermination: true
 """
+        all_resources.append(('launch_template', i, content))
 
     # EC2 Instances
     instance_types = ["t3.micro", "t3.small", "t3.medium"]
+    private_subnet_idx = counts.subnets_per_vpc // 2
     for i in range(counts.ec2_instances):
         vpc_idx = i % counts.vpcs
         sg_idx = i % counts.security_groups
         instance_type = instance_types[i % len(instance_types)]
-        private_subnet_idx = counts.subnets_per_vpc // 2
 
-        template += f"""
+        # Calculate which SG stack the security group is in
+        if sg_is_split:
+            sg_stack_idx = sg_idx // sgs_per_stack
+            sg_stack = f"{sg_stack_base}-{sg_stack_idx}"
+        else:
+            sg_stack = sg_stack_base
+
+        content = f"""
   Instance{i}:
     Type: AWS::EC2::Instance
     Properties:
@@ -2072,10 +2364,10 @@ def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, netwo
       Tags:
 {cfn_tags(f'{env_id}-instance-{i}')}
 """
+        all_resources.append(('instance', i, content))
 
     # EBS Volumes
     azs = ["a", "b", "c"]
-    private_subnet_idx = counts.subnets_per_vpc // 2
     private_subnet_az = azs[private_subnet_idx % 3]
 
     standalone_volumes = counts.ebs_volumes // 2
@@ -2088,7 +2380,7 @@ def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, netwo
         vol_type = ["gp3", "gp2"][i % 2]
         encrypted = str(i % 2 == 0).lower()
 
-        template += f"""
+        content = f"""
   Volume{i}:
     Type: AWS::EC2::Volume
     Properties:
@@ -2099,18 +2391,43 @@ def generate_cfn_compute(counts: ResourceCounts, env_id: str, region: str, netwo
       Tags:
 {cfn_tags(f'{env_id}-volume-{i}')}
 """
+        all_resources.append(('volume', i, content))
 
-    return template
+    # Split into stacks
+    if len(all_resources) <= MAX_RESOURCES_PER_STACK:
+        template = CFN_HEADER.format(description=f"Compute stack for perf test {env_id}")
+        template += "Resources:\n"
+        for _, _, content in all_resources:
+            template += content
+        templates.append(("compute.yaml", template))
+    else:
+        chunks = split_into_chunks(all_resources, MAX_RESOURCES_PER_STACK)
+        for chunk_idx, chunk_resources in chunks:
+            template = CFN_HEADER.format(description=f"Compute stack {chunk_idx} for perf test {env_id}")
+            template += "Resources:\n"
+            for _, _, content in chunk_resources:
+                template += content
+            templates.append((f"compute-{chunk_idx}.yaml", template))
+
+    return templates
 
 
 def generate_cfn_observability(counts: ResourceCounts, env_id: str) -> str:
-    """Generate CloudFormation template for observability resources."""
-    template = CFN_HEADER.format(description=f"Observability stack for perf test {env_id}")
-    template += "Resources:\n"
+    """Generate CloudFormation template for observability resources (legacy single template)."""
+    templates = generate_cfn_observability_split(counts, env_id)
+    if len(templates) == 1:
+        return templates[0][1]
+    return templates[0][1]
+
+
+def generate_cfn_observability_split(counts: ResourceCounts, env_id: str) -> List[Tuple[str, str]]:
+    """Generate CloudFormation templates for observability resources, splitting if needed."""
+    templates = []
+    all_resources = []
 
     # CloudWatch Log Groups
     for i in range(counts.log_groups):
-        template += f"""
+        content = f"""
   LogGroup{i}:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -2119,10 +2436,11 @@ def generate_cfn_observability(counts: ResourceCounts, env_id: str) -> str:
       Tags:
 {cfn_tags(f'{env_id}-log-group-{i}')}
 """
+        all_resources.append(('log_group', i, content))
 
     # SQS Queues
     for i in range(counts.sqs_queues):
-        template += f"""
+        content = f"""
   SQSQueue{i}:
     Type: AWS::SQS::Queue
     Properties:
@@ -2132,8 +2450,25 @@ def generate_cfn_observability(counts: ResourceCounts, env_id: str) -> str:
       Tags:
 {cfn_tags(f'{env_id}-sqs-queue-{i}')}
 """
+        all_resources.append(('sqs_queue', i, content))
 
-    return template
+    # Split into stacks
+    if len(all_resources) <= MAX_RESOURCES_PER_STACK:
+        template = CFN_HEADER.format(description=f"Observability stack for perf test {env_id}")
+        template += "Resources:\n"
+        for _, _, content in all_resources:
+            template += content
+        templates.append(("observability.yaml", template))
+    else:
+        chunks = split_into_chunks(all_resources, MAX_RESOURCES_PER_STACK)
+        for chunk_idx, chunk_resources in chunks:
+            template = CFN_HEADER.format(description=f"Observability stack {chunk_idx} for perf test {env_id}")
+            template += "Resources:\n"
+            for _, _, content in chunk_resources:
+                template += content
+            templates.append((f"observability-{chunk_idx}.yaml", template))
+
+    return templates
 
 
 def generate_cfn_secrets(counts: ResourceCounts, env_id: str) -> str:
@@ -2161,14 +2496,25 @@ def generate_cfn_secrets(counts: ResourceCounts, env_id: str) -> str:
 
 
 def generate_cfn_kms(counts: ResourceCounts, env_id: str) -> str:
-    """Generate CloudFormation template for KMS resources."""
-    template = CFN_HEADER.format(description=f"KMS stack for perf test {env_id}")
-    template += "Resources:\n"
+    """Generate CloudFormation template for KMS resources (legacy single template)."""
+    templates = generate_cfn_kms_split(counts, env_id)
+    if len(templates) == 1:
+        return templates[0][1]
+    return templates[0][1]
 
-    outputs = []
 
+def generate_cfn_kms_split(counts: ResourceCounts, env_id: str) -> List[Tuple[str, str]]:
+    """Generate CloudFormation templates for KMS resources, splitting if needed.
+
+    Keys and their aliases are kept together since aliases reference keys via !Ref.
+    Each key+alias pair counts as 2 resources.
+    """
+    templates = []
+    all_resources = []
+
+    # Each key+alias pair is kept together
     for i in range(counts.kms_keys):
-        template += f"""
+        key_content = f"""
   KMSKey{i}:
     Type: AWS::KMS::Key
     Properties:
@@ -2186,27 +2532,59 @@ def generate_cfn_kms(counts: ResourceCounts, env_id: str) -> str:
       Tags:
 {cfn_tags(f'{env_id}-kms-key-{i}')}
 """
-        outputs.append(f"  KMSKey{i}Arn:\n    Value: !GetAtt KMSKey{i}.Arn\n    Export:\n      Name: !Sub '${{AWS::StackName}}-KMSKey{i}Arn'")
-
-    for i in range(min(counts.kms_aliases, counts.kms_keys)):
-        template += f"""
+        # Add alias if we have one for this key
+        if i < counts.kms_aliases:
+            key_content += f"""
   KMSAlias{i}:
     Type: AWS::KMS::Alias
     Properties:
       AliasName: alias/{env_id}-key-{i}
       TargetKeyId: !Ref KMSKey{i}
 """
+        all_resources.append(('kms', i, key_content))
 
-    if outputs:
-        template += "\nOutputs:\n" + "\n".join(outputs)
+    # Each key+alias pair counts as 2 resources, so use 200 pairs per stack (400 resources)
+    max_pairs_per_stack = MAX_RESOURCES_PER_STACK // 2
 
-    return template
+    if len(all_resources) <= max_pairs_per_stack:
+        # Single template
+        template = CFN_HEADER.format(description=f"KMS stack for perf test {env_id}")
+        template += "Resources:\n"
+        for _, _, content in all_resources:
+            template += content
+        templates.append(("kms.yaml", template))
+    else:
+        # Split into multiple templates
+        for chunk_idx in range((len(all_resources) + max_pairs_per_stack - 1) // max_pairs_per_stack):
+            start = chunk_idx * max_pairs_per_stack
+            end = min(start + max_pairs_per_stack, len(all_resources))
+            chunk = all_resources[start:end]
+
+            template = CFN_HEADER.format(description=f"KMS stack {chunk_idx} for perf test {env_id}")
+            template += "Resources:\n"
+            for _, _, content in chunk:
+                template += content
+            templates.append((f"kms-{chunk_idx}.yaml", template))
+
+    return templates
 
 
 def generate_cfn_application(counts: ResourceCounts, env_id: str, iam_stack: str) -> str:
-    """Generate CloudFormation template for application resources."""
-    template = CFN_HEADER.format(description=f"Application stack for perf test {env_id}")
-    template += "Resources:\n"
+    """Generate CloudFormation template for application resources (legacy single template)."""
+    templates = generate_cfn_application_split(counts, env_id, iam_stack)
+    if len(templates) == 1:
+        return templates[0][1]
+    return templates[0][1]
+
+
+def generate_cfn_application_split(counts: ResourceCounts, env_id: str, iam_stack_base: str) -> List[Tuple[str, str]]:
+    """Generate CloudFormation templates for application resources, splitting if needed.
+
+    Lambda functions reference IAM roles from split IAM stacks. The iam_stack_base is the base name
+    (e.g., "perf-xxx-iam"), and we append the stack index if IAM is split.
+    """
+    templates = []
+    all_resources = []
 
     # Calculate lambda_roles_count same as PKL
     min_other_roles = 1 if (counts.iam_policies > 0 or counts.instance_profiles > 0) else 0
@@ -2215,10 +2593,21 @@ def generate_cfn_application(counts: ResourceCounts, env_id: str, iam_stack: str
         counts.iam_roles - min_other_roles
     )
 
+    # Determine if IAM is split
+    total_iam_resources = counts.iam_roles + counts.iam_policies + counts.instance_profiles
+    iam_is_split = total_iam_resources > MAX_RESOURCES_PER_STACK
+
     # Lambda functions
     for i in range(counts.lambdas):
         role_idx = i % lambda_roles_count
-        template += f"""
+        # Calculate which IAM stack the role is in
+        if iam_is_split:
+            iam_stack_idx = role_idx // MAX_RESOURCES_PER_STACK
+            iam_stack = f"{iam_stack_base}-{iam_stack_idx}"
+        else:
+            iam_stack = iam_stack_base
+
+        content = f"""
   Lambda{i}:
     Type: AWS::Lambda::Function
     Properties:
@@ -2235,10 +2624,11 @@ def generate_cfn_application(counts: ResourceCounts, env_id: str, iam_stack: str
       Tags:
 {cfn_tags(f'{env_id}-lambda-{i}')}
 """
+        all_resources.append(('lambda', i, content))
 
     # ECR Repositories
     for i in range(counts.ecr_repos):
-        template += f"""
+        content = f"""
   ECRRepo{i}:
     Type: AWS::ECR::Repository
     Properties:
@@ -2249,8 +2639,25 @@ def generate_cfn_application(counts: ResourceCounts, env_id: str, iam_stack: str
       Tags:
 {cfn_tags(f'{env_id}-ecr-repo-{i}')}
 """
+        all_resources.append(('ecr_repo', i, content))
 
-    return template
+    # Split into stacks
+    if len(all_resources) <= MAX_RESOURCES_PER_STACK:
+        template = CFN_HEADER.format(description=f"Application stack for perf test {env_id}")
+        template += "Resources:\n"
+        for _, _, content in all_resources:
+            template += content
+        templates.append(("application.yaml", template))
+    else:
+        chunks = split_into_chunks(all_resources, MAX_RESOURCES_PER_STACK)
+        for chunk_idx, chunk_resources in chunks:
+            template = CFN_HEADER.format(description=f"Application stack {chunk_idx} for perf test {env_id}")
+            template += "Resources:\n"
+            for _, _, content in chunk_resources:
+                template += content
+            templates.append((f"application-{chunk_idx}.yaml", template))
+
+    return templates
 
 
 def generate_cfn_route53(counts: ResourceCounts, env_id: str) -> str:
@@ -2349,7 +2756,7 @@ def generate_cfn_rds(counts: ResourceCounts, env_id: str, networking_stack: str,
 
 
 def generate_cfn_deploy_script(env_id: str, region: str, stacks: list) -> str:
-    """Generate deployment shell script."""
+    """Generate deployment shell script with S3 support for large templates."""
     deploy_commands = []
     for stack in stacks:
         deploy_commands.append(f"""
@@ -2359,6 +2766,7 @@ aws cloudformation deploy \\
     --template-file {stack['file']} \\
     --capabilities CAPABILITY_NAMED_IAM \\
     --region {region} \\
+    $S3_BUCKET_ARG \\
     --no-fail-on-empty-changeset
 """)
 
@@ -2371,7 +2779,18 @@ set -e
 REGION="{region}"
 ENV_ID="{env_id}"
 
-echo "Deploying CloudFormation stacks for $ENV_ID in $REGION"
+# S3 bucket for large templates (>51KB) - set this if deployment fails with size error
+# Create bucket: aws s3 mb s3://your-bucket-name --region $REGION
+S3_BUCKET="${{S3_BUCKET:-}}"
+if [ -n "$S3_BUCKET" ]; then
+    S3_BUCKET_ARG="--s3-bucket $S3_BUCKET"
+    echo "Using S3 bucket: $S3_BUCKET for large templates"
+else
+    S3_BUCKET_ARG=""
+    echo "No S3 bucket set. If templates exceed 51KB, set S3_BUCKET env var."
+fi
+
+echo "Deploying CloudFormation stacks ({len(stacks)} stacks) for $ENV_ID in $REGION"
 echo "=========================================="
 {"".join(deploy_commands)}
 echo "=========================================="
@@ -2561,16 +2980,28 @@ Examples:
         help="Print resource counts without generating files"
     )
 
+    parser.add_argument(
+        "--profile", "-p",
+        type=str,
+        choices=["default", "quota-safe"],
+        default="default",
+        help="Resource profile: 'default' for full resources, 'quota-safe' to avoid resources with tight quotas (EC2, EIP, VPC, etc.)"
+    )
+
     args = parser.parse_args()
 
     # Generate unique environment ID
     env_id = f"perf-{uuid.uuid4().hex[:8]}"
     stack_name = f"perf-test-{env_id}"
 
-    # Calculate resource counts
-    counts = calculate_counts(args.count)
+    # Calculate resource counts based on profile
+    if args.profile == "quota-safe":
+        counts = calculate_counts_quota_safe(args.count)
+    else:
+        counts = calculate_counts(args.count)
 
     if args.dry_run:
+        print(f"Profile: {args.profile}")
         print(f"Target count: {args.count}")
         print(f"Calculated total: {counts.total}")
         print(f"\nResource breakdown:")
@@ -2688,44 +3119,98 @@ Examples:
         print(f"  5. formae destroy --stack {stack_name}  # cleanup")
 
     else:
-        # Generate CloudFormation templates
+        # Generate CloudFormation templates with automatic stack splitting
         networking_stack = f"{env_id}-networking"
-        sg_stack = f"{env_id}-security-groups"
-        iam_stack = f"{env_id}-iam"
+        sg_stack_base = f"{env_id}-security-groups"
+        iam_stack_base = f"{env_id}-iam"
 
-        # Define stacks in deployment order
-        stacks = [
-            {"name": "networking", "file": "networking.yaml"},
-            {"name": "security-groups", "file": "security-groups.yaml"},
-            {"name": "iam", "file": "iam.yaml"},
-            {"name": "kms", "file": "kms.yaml"},
-            {"name": "storage", "file": "storage.yaml"},
-            {"name": "compute", "file": "compute.yaml"},
-            {"name": "observability", "file": "observability.yaml"},
-            {"name": "secrets", "file": "secrets.yaml"},
-            {"name": "application", "file": "application.yaml"},
-            {"name": "route53", "file": "route53.yaml"},
-            {"name": "api-gateway", "file": "api-gateway.yaml"},
-            {"name": "rds", "file": "rds.yaml"},
-        ]
+        # Collect all templates and track stacks for deploy/destroy scripts
+        files = {}
+        stacks = []
 
-        files = {
-            "networking.yaml": generate_cfn_networking(counts, env_id, args.region),
-            "security-groups.yaml": generate_cfn_security_groups(counts, env_id, networking_stack),
-            "iam.yaml": generate_cfn_iam(counts, env_id),
-            "kms.yaml": generate_cfn_kms(counts, env_id),
-            "storage.yaml": generate_cfn_storage(counts, env_id, networking_stack, sg_stack),
-            "compute.yaml": generate_cfn_compute(counts, env_id, args.region, networking_stack, sg_stack),
-            "observability.yaml": generate_cfn_observability(counts, env_id),
-            "secrets.yaml": generate_cfn_secrets(counts, env_id),
-            "application.yaml": generate_cfn_application(counts, env_id, iam_stack),
-            "route53.yaml": generate_cfn_route53(counts, env_id),
-            "api-gateway.yaml": generate_cfn_api_gateway(counts, env_id),
-            "rds.yaml": generate_cfn_rds(counts, env_id, networking_stack, sg_stack),
-            "deploy.sh": generate_cfn_deploy_script(env_id, args.region, stacks),
-            "destroy.sh": generate_cfn_destroy_script(env_id, args.region, stacks),
-            "README.md": generate_cfn_readme(env_id, args.region, counts),
-        }
+        # Check if we're in quota-safe mode (no VPC-dependent resources)
+        is_quota_safe = args.profile == "quota-safe"
+
+        # Networking (single stack - skip in quota-safe mode)
+        if not is_quota_safe:
+            files["networking.yaml"] = generate_cfn_networking(counts, env_id, args.region)
+            stacks.append({"name": "networking", "file": "networking.yaml"})
+
+        # Security groups (may be split - skip in quota-safe mode)
+        sg_stack = None
+        if not is_quota_safe:
+            sg_templates = generate_cfn_security_groups_split(counts, env_id, networking_stack)
+            for filename, content in sg_templates:
+                files[filename] = content
+                # Extract stack name from filename: security-groups.yaml or security-groups-0.yaml
+                stack_name = filename.replace(".yaml", "")
+                stacks.append({"name": stack_name, "file": filename})
+            sg_stack = sg_stack_base if len(sg_templates) == 1 else f"{sg_stack_base}-0"
+
+        # IAM (may be split)
+        iam_templates = generate_cfn_iam_split(counts, env_id)
+        for filename, content in iam_templates:
+            files[filename] = content
+            stack_name = filename.replace(".yaml", "")
+            stacks.append({"name": stack_name, "file": filename})
+
+        # KMS (may be split if many keys)
+        kms_templates = generate_cfn_kms_split(counts, env_id)
+        for filename, content in kms_templates:
+            files[filename] = content
+            stack_name = filename.replace(".yaml", "")
+            stacks.append({"name": stack_name, "file": filename})
+
+        # Storage (may be split) - generates S3/DynamoDB (always) and EFS (skip in quota-safe)
+        storage_templates = generate_cfn_storage_split(counts, env_id, networking_stack, sg_stack or "")
+        for filename, content in storage_templates:
+            files[filename] = content
+            stack_name = filename.replace(".yaml", "")
+            stacks.append({"name": stack_name, "file": filename})
+
+        # Compute (may be split - skip in quota-safe mode)
+        if not is_quota_safe:
+            compute_templates = generate_cfn_compute_split(counts, env_id, args.region, networking_stack, sg_stack_base)
+            for filename, content in compute_templates:
+                files[filename] = content
+                stack_name = filename.replace(".yaml", "")
+                stacks.append({"name": stack_name, "file": filename})
+
+        # Observability (may be split)
+        obs_templates = generate_cfn_observability_split(counts, env_id)
+        for filename, content in obs_templates:
+            files[filename] = content
+            stack_name = filename.replace(".yaml", "")
+            stacks.append({"name": stack_name, "file": filename})
+
+        # Secrets (single stack - usually small)
+        files["secrets.yaml"] = generate_cfn_secrets(counts, env_id)
+        stacks.append({"name": "secrets", "file": "secrets.yaml"})
+
+        # Application (may be split)
+        app_templates = generate_cfn_application_split(counts, env_id, iam_stack_base)
+        for filename, content in app_templates:
+            files[filename] = content
+            stack_name = filename.replace(".yaml", "")
+            stacks.append({"name": stack_name, "file": filename})
+
+        # Route53 (single stack - usually small)
+        files["route53.yaml"] = generate_cfn_route53(counts, env_id)
+        stacks.append({"name": "route53", "file": "route53.yaml"})
+
+        # API Gateway (single stack)
+        files["api-gateway.yaml"] = generate_cfn_api_gateway(counts, env_id)
+        stacks.append({"name": "api-gateway", "file": "api-gateway.yaml"})
+
+        # RDS (single stack - skip in quota-safe mode, requires VPC)
+        if not is_quota_safe:
+            files["rds.yaml"] = generate_cfn_rds(counts, env_id, networking_stack, sg_stack)
+            stacks.append({"name": "rds", "file": "rds.yaml"})
+
+        # Generate deploy and destroy scripts
+        files["deploy.sh"] = generate_cfn_deploy_script(env_id, args.region, stacks)
+        files["destroy.sh"] = generate_cfn_destroy_script(env_id, args.region, stacks)
+        files["README.md"] = generate_cfn_readme(env_id, args.region, counts)
 
         for filename, content in files.items():
             filepath = os.path.join(output_dir, filename)
@@ -2746,6 +3231,7 @@ Examples:
         print(f"Target Resources: {args.count}")
         print(f"Calculated Resources: {counts.total}")
         print(f"Output Directory: {output_dir}")
+        print(f"CloudFormation Stacks: {len(stacks)}")
         print(f"\nNext steps:")
         print(f"  1. cd {output_dir}")
         print(f"  2. ./deploy.sh             # deploy all stacks")

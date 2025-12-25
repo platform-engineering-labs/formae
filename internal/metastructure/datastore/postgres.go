@@ -125,12 +125,12 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 
 	poolCfg, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
-		slog.Error("failed to parse postgresmak connection string", "error", err)
+		slog.Error("failed to parse postgres connection string", "error", err)
 		return nil, err
 	}
 	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer(
-		otelpgx.WithDisableSQLStatementInAttributes(),
-		otelpgx.WithTrimSQLInSpanName(),
+		// Include SQL statement in db.statement attribute and span name
+		// Connection details are still disabled for security
 		otelpgx.WithDisableConnectionDetailsInAttributes(),
 	)
 
@@ -138,6 +138,12 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 	if err != nil {
 		slog.Error("failed to connect to PostgreSQL database", "error", err)
 		return nil, err
+	}
+
+	// Record pool statistics as OTel metrics (connections idle/in-use/waiting, acquire time, etc.)
+	if err := otelpgx.RecordStats(pool); err != nil {
+		slog.Error("failed to start recording pool stats", "error", err)
+		// Non-fatal - continue without pool metrics
 	}
 
 	d := DatastorePostgres{pool: pool, agentID: agentID, cfg: cfg, ctx: ctx}
@@ -1434,9 +1440,10 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		return nil, err
 	}
 
-	// Count managed resources
-	resourcesQuery := fmt.Sprintf(`
-	SELECT COUNT(*)
+	// Count managed resources by namespace
+	res.ManagedResources = make(map[string]int)
+	managedResourcesQuery := fmt.Sprintf(`
+	SELECT SPLIT_PART(type, '::', 1) as namespace, COUNT(*)
 	FROM resources r1
 	WHERE stack IS NOT NULL
 	AND stack != '%s'
@@ -1447,15 +1454,27 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
+	GROUP BY namespace
 	`, constants.UnmanagedStack)
-	row = d.pool.QueryRow(ctx, resourcesQuery, resource_update.OperationDelete)
-	if err := row.Scan(&res.ManagedResources); err != nil {
+	rows, err = d.pool.Query(ctx, managedResourcesQuery, resource_update.OperationDelete)
+	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	// Count unmanaged resources
+	for rows.Next() {
+		var namespace string
+		var count int
+		if err := rows.Scan(&namespace, &count); err != nil {
+			return nil, err
+		}
+		res.ManagedResources[namespace] = count
+	}
+
+	// Count unmanaged resources by namespace
+	res.UnmanagedResources = make(map[string]int)
 	unmanagedResourcesQuery := fmt.Sprintf(`
-	SELECT COUNT(*)
+	SELECT SPLIT_PART(type, '::', 1) as namespace, COUNT(*)
 	FROM resources r1
 	WHERE stack = '%s'
 	AND operation != $1
@@ -1465,15 +1484,27 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
+	GROUP BY namespace
 	`, constants.UnmanagedStack)
-	row = d.pool.QueryRow(ctx, unmanagedResourcesQuery, resource_update.OperationDelete)
-	if err := row.Scan(&res.UnmanagedResources); err != nil {
+	rows, err = d.pool.Query(ctx, unmanagedResourcesQuery, resource_update.OperationDelete)
+	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	// Count targets
+	for rows.Next() {
+		var namespace string
+		var count int
+		if err := rows.Scan(&namespace, &count); err != nil {
+			return nil, err
+		}
+		res.UnmanagedResources[namespace] = count
+	}
+
+	// Count targets by namespace
+	res.Targets = make(map[string]int)
 	targetsQuery := `
-	SELECT COUNT(*)
+	SELECT namespace, COUNT(*)
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -1481,10 +1512,21 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		WHERE t1.label = t2.label
 		AND t2.version > t1.version
 	)
+	GROUP BY namespace
 	`
-	row = d.pool.QueryRow(ctx, targetsQuery)
-	if err := row.Scan(&res.Targets); err != nil {
+	rows, err = d.pool.Query(ctx, targetsQuery)
+	if err != nil {
 		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var namespace string
+		var count int
+		if err := rows.Scan(&namespace, &count); err != nil {
+			return nil, err
+		}
+		res.Targets[namespace] = count
 	}
 
 	// Count resource types
@@ -1516,34 +1558,29 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		res.ResourceTypes[resourceType] = count
 	}
 
-	// Count resource errors from resource_updates table
+	// Count resource errors by resource type
 	res.ResourceErrors = make(map[string]int)
 	errorQuery := `
-	SELECT ru.progress_result
-	FROM resource_updates ru
-	JOIN forma_commands fc ON ru.command_id = fc.command_id
-	WHERE fc.state = $1 AND ru.state = $2
+	SELECT resource::jsonb->>'Type' as resource_type, COUNT(*)
+	FROM resource_updates
+	WHERE state = $1
+	AND resource IS NOT NULL
+	GROUP BY resource_type
 	`
-	rows, err = d.pool.Query(ctx, errorQuery, forma_command.CommandStateFailed, types.ResourceUpdateStateFailed)
+	rows, err = d.pool.Query(ctx, errorQuery, types.ResourceUpdateStateFailed)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var progressResultJSON sql.NullString
-		if err := rows.Scan(&progressResultJSON); err != nil {
+		var resourceType string
+		var count int
+		if err := rows.Scan(&resourceType, &count); err != nil {
 			return nil, err
 		}
-
-		if progressResultJSON.Valid && progressResultJSON.String != "" {
-			var progressResults []resource.ProgressResult
-			if err := json.Unmarshal([]byte(progressResultJSON.String), &progressResults); err != nil {
-				continue // Skip invalid JSON
-			}
-			if failureMessage := findFailureMessage(progressResults); failureMessage != "" {
-				res.ResourceErrors[failureMessage]++
-			}
+		if resourceType != "" {
+			res.ResourceErrors[resourceType] = count
 		}
 	}
 

@@ -499,14 +499,25 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 		return state, data, nil, nil
 	}
 
+	// Decompress the resources from the gzip-compressed message
+	listedResources, err := plugin.DecompressListedResources(message.Resources)
+	if err != nil {
+		proc.Log().Error("Failed to decompress resources for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+		if !data.HasOutstandingWork() {
+			return StateIdle, data, nil, nil
+		}
+		return state, data, nil, nil
+	}
+	proc.Log().Debug("Decompressed %d resources for %s in target %s", len(listedResources), message.ResourceType, message.Target.Label)
+
 	// De-duplicate resources already under management
-	var newResources []resource.Resource
-	for _, resource := range message.Resources {
-		if !resourceExists(resource.NativeID, message.ResourceType, data) {
-			newResources = append(newResources, resource)
-			key := fmt.Sprintf("%s::%s", message.ResourceType, resource.NativeID)
+	var newResources []plugin.ListedResource
+	for _, res := range listedResources {
+		if !resourceExists(res.NativeID, res.ResourceType, data) {
+			newResources = append(newResources, res)
+			key := fmt.Sprintf("%s::%s", res.ResourceType, res.NativeID)
 			data.recentlyDiscoveredResourceIDs[key] = struct{}{}
-			data.summary[message.ResourceType]++
+			data.summary[res.ResourceType]++
 		}
 	}
 
@@ -587,7 +598,7 @@ func findMatchFiltersForType(filters []plugin.MatchFilter, resourceType string) 
 	return result
 }
 
-func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []resource.Resource, data DiscoveryData, proc gen.Process) (string, error) {
+func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []plugin.ListedResource, data DiscoveryData, proc gen.Process) (string, error) {
 	// Get schema from cache instead of calling plugin directly
 	schema, err := getSchemaFromCache(&data, namespace, op.ResourceType)
 	if err != nil {
@@ -596,13 +607,13 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	}
 
 	var resourcesToSynchronize []pkgmodel.Resource
-	for _, resource := range resources {
+	for _, res := range resources {
 		resourcesToSynchronize = append(resourcesToSynchronize, pkgmodel.Resource{
-			Label:      url.QueryEscape(resource.NativeID),
-			Type:       op.ResourceType,
+			Label:      url.QueryEscape(res.NativeID),
+			Type:       res.ResourceType,
 			Stack:      constants.UnmanagedStack,
 			Target:     target.Label,
-			NativeID:   resource.NativeID,
+			NativeID:   res.NativeID,
 			Properties: injectResolvables("{}", op),
 			Schema:     schema,
 			Managed:    false,
