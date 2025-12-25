@@ -6,13 +6,20 @@ package agent
 
 import (
 	"context"
+	"debug/elf"
+	"debug/macho"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/api"
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -74,6 +81,14 @@ func (a *Agent) Start() error {
 
 		// Setup logging with OTel handler
 		logging.SetupBackendLogging(&a.cfg.Agent.Logging, otelLogHandler)
+
+		// Migrate plugin executables from system directory to user directory
+		// This is a one-time migration for users who upgraded from older versions
+		// where the upgrade command didn't copy plugins to the user directory.
+		if err := migratePluginExecutables(a.cfg.Plugins.PluginDir); err != nil {
+			slog.Warn("Failed to migrate plugin executables", "error", err)
+			// Non-fatal - continue anyway, plugins might already be in place
+		}
 
 		pluginManager := plugin.NewManager(util.ExpandHomePath(a.cfg.Plugins.PluginDir))
 		pluginManager.Load()
@@ -228,4 +243,103 @@ func waitForPidFileRemoval(timeout time.Duration) bool {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return false
+}
+
+// migratePluginExecutables checks for plugin executables in the system install
+// directory and copies them to the user's plugin directory if not already present.
+// This handles the case where users upgraded from older versions that didn't
+// properly install plugins to the user directory.
+func migratePluginExecutables(userPluginDir string) error {
+	systemPluginsDir := filepath.Join(formae.DefaultInstallPath, "plugins")
+
+	entries, err := os.ReadDir(systemPluginsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No system plugins directory, nothing to migrate
+		}
+		return fmt.Errorf("failed to read system plugins directory: %w", err)
+	}
+
+	userPluginDir = util.ExpandHomePath(userPluginDir)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		srcPath := filepath.Join(systemPluginsDir, entry.Name())
+
+		// Skip .so files - they are shared libraries, not standalone executables
+		if strings.HasSuffix(entry.Name(), ".so") {
+			continue
+		}
+
+		if !isExecutable(srcPath) {
+			continue
+		}
+
+		name := entry.Name()
+		destDir := filepath.Join(userPluginDir, name, "v"+formae.Version)
+
+		// Check if already migrated
+		destPath := filepath.Join(destDir, name)
+		if _, err := os.Stat(destPath); err == nil {
+			continue // Already exists, skip
+		}
+
+		// Create destination directory
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return fmt.Errorf("failed to create plugin directory %s: %w", destDir, err)
+		}
+
+		// Copy the executable
+		if err := copyFile(srcPath, destPath); err != nil {
+			return fmt.Errorf("failed to copy plugin %s: %w", name, err)
+		}
+
+		slog.Info("Migrated plugin executable", "name", name, "dest", destPath)
+	}
+
+	return nil
+}
+
+// isExecutable checks if the file is an executable binary.
+func isExecutable(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	switch runtime.GOOS {
+	case "darwin":
+		_, err := macho.NewFile(f)
+		return err == nil
+	default:
+		_, err := elf.NewFile(f)
+		return err == nil
+	}
+}
+
+// copyFile copies a file from src to dst, preserving the executable permission.
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
 }
