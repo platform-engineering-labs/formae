@@ -75,6 +75,8 @@ func SetupOTelProviders(otelConfig *pkgmodel.OTelConfig) (slog.Handler, http.Han
 
 	loggerProvider, logHandler := setupLoggerProvider(otelConfig)
 
+	slog.Info("OpenTelemetry enabled", "endpoint", otelConfig.OTLP.Endpoint)
+
 	return logHandler, metricsHandler, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -102,7 +104,6 @@ func setupTracerProvider(otelConfig *pkgmodel.OTelConfig) *sdktrace.TracerProvid
 
 	// Skip OTLP exporter if not enabled
 	if !otlpConfig.Enabled {
-		slog.Info("OTLP trace export disabled")
 		return nil
 	}
 
@@ -145,7 +146,6 @@ func setupTracerProvider(otelConfig *pkgmodel.OTelConfig) *sdktrace.TracerProvid
 		sdktrace.WithResource(res),
 	)
 
-	slog.Info("OTel tracing enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
 	return tracerProvider
 }
 
@@ -200,10 +200,7 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider,
 		} else if otlpExporter != nil {
 			// Only add OTLP reader if exporter was successfully created
 			readers = append(readers, metric.WithReader(metric.NewPeriodicReader(otlpExporter, metric.WithInterval(10*time.Second))))
-			slog.Info("OTel OTLP metrics export enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
 		}
-	} else {
-		slog.Info("OTLP metrics export disabled")
 	}
 
 	// Create Prometheus exporter for /metrics scraping (if enabled)
@@ -223,7 +220,6 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider,
 
 	// If no readers are configured (both OTLP and Prometheus disabled), return nil
 	if len(readers) == 0 {
-		slog.Info("No metric readers configured, skipping MeterProvider setup")
 		return nil, nil
 	}
 
@@ -235,23 +231,17 @@ func setupMeterProvider(otelConfig *pkgmodel.OTelConfig) (*metric.MeterProvider,
 	// Must pass meterProvider explicitly since global provider isn't set yet
 	if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(time.Second), runtime.WithMeterProvider(meterProvider)); err != nil {
 		slog.Error("failed to start Go runtime metrics", "error", err)
-	} else {
-		slog.Info("Go runtime metrics collection started")
 	}
 
 	// Start host/process metrics collection (CPU, memory, network I/O)
 	// Must pass meterProvider explicitly since global provider isn't set yet
 	if err := host.Start(host.WithMeterProvider(meterProvider)); err != nil {
 		slog.Error("failed to start host metrics", "error", err)
-	} else {
-		slog.Info("Host metrics collection started")
 	}
 
 	// Start disk I/O metrics collection (not included in standard host package)
 	if err := startDiskMetrics(meterProvider); err != nil {
 		slog.Error("failed to start disk I/O metrics", "error", err)
-	} else {
-		slog.Info("Disk I/O metrics collection started")
 	}
 
 	return meterProvider, metricsHandler
@@ -333,7 +323,6 @@ func setupLoggerProvider(otelConfig *pkgmodel.OTelConfig) (*otellog.LoggerProvid
 
 	// Skip OTLP exporter if not enabled
 	if !otlpConfig.Enabled {
-		slog.Info("OTLP log export disabled")
 		return nil, nil
 	}
 
@@ -379,7 +368,6 @@ func setupLoggerProvider(otelConfig *pkgmodel.OTelConfig) (*otellog.LoggerProvid
 	)
 
 	handler := otelslog.NewHandler(otelConfig.ServiceName, otelslog.WithLoggerProvider(loggerProvider))
-	slog.Info("OTel logging enabled", "endpoint", otlpConfig.Endpoint, "protocol", otlpConfig.Protocol)
 	return loggerProvider, handler
 }
 
@@ -626,7 +614,7 @@ func StartErgoMetrics(node gen.Node) error {
 		return fmt.Errorf("failed to register Ergo metrics callback: %w", err)
 	}
 
-	slog.Info("Ergo actor metrics collection started")
+	slog.Debug("Ergo actor metrics collection started")
 	return nil
 }
 
@@ -803,7 +791,7 @@ func StartFormaeMetrics(statsProvider StatsProvider) error {
 		return fmt.Errorf("failed to register formae metrics callback: %w", err)
 	}
 
-	slog.Info("Formae stats metrics collection started")
+	slog.Debug("Formae stats metrics collection started")
 	return nil
 }
 
