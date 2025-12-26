@@ -180,7 +180,7 @@ func isExecutable(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Check for executable based on OS
 	switch runtime.GOOS {
@@ -244,15 +244,15 @@ func installPluginExecutables(installPrefix, version string) error {
 		if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
 			if u, err := user.Lookup(sudoUser); err == nil {
 				var uid, gid int
-				fmt.Sscanf(u.Uid, "%d", &uid)
-				fmt.Sscanf(u.Gid, "%d", &gid)
-				// Chown the plugin directory and file
-				os.Chown(filepath.Join(homeDir, ".pel"), uid, gid)
-				os.Chown(filepath.Join(homeDir, ".pel", "formae"), uid, gid)
-				os.Chown(filepath.Join(homeDir, ".pel", "formae", "plugins"), uid, gid)
-				os.Chown(filepath.Join(homeDir, ".pel", "formae", "plugins", name), uid, gid)
-				os.Chown(destDir, uid, gid)
-				os.Chown(destPath, uid, gid)
+				_, _ = fmt.Sscanf(u.Uid, "%d", &uid)
+				_, _ = fmt.Sscanf(u.Gid, "%d", &gid)
+				// Chown the plugin directory and file (best-effort, ignore errors)
+				_ = os.Chown(filepath.Join(homeDir, ".pel"), uid, gid)
+				_ = os.Chown(filepath.Join(homeDir, ".pel", "formae"), uid, gid)
+				_ = os.Chown(filepath.Join(homeDir, ".pel", "formae", "plugins"), uid, gid)
+				_ = os.Chown(filepath.Join(homeDir, ".pel", "formae", "plugins", name), uid, gid)
+				_ = os.Chown(destDir, uid, gid)
+				_ = os.Chown(destPath, uid, gid)
 			}
 		}
 
@@ -268,12 +268,12 @@ func installPluginExecutables(installPrefix, version string) error {
 }
 
 // copyFile copies a file from src to dst, preserving the executable permission.
-func copyFile(src, dst string) error {
+func copyFile(src, dst string) (err error) {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	srcInfo, err := srcFile.Stat()
 	if err != nil {
@@ -284,7 +284,11 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	defer func() {
+		if cerr := dstFile.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err
