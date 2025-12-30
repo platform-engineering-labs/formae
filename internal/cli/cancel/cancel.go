@@ -82,11 +82,11 @@ before transitioning to 'Canceled' state to avoid orphaned resources.`,
 
 func Validate(opts *CancelOptions) error {
 	if opts.OutputConsumer != printer.ConsumerHuman && opts.OutputConsumer != printer.ConsumerMachine {
-		return fmt.Errorf("output consumer must be either 'human' or 'machine'")
+		return cmd.FlagErrorf("output consumer must be either 'human' or 'machine'")
 	}
 	if opts.OutputConsumer == printer.ConsumerMachine {
 		if opts.OutputSchema != "json" && opts.OutputSchema != "yaml" {
-			return fmt.Errorf("output schema must be either 'json' or 'yaml' for machine consumer")
+			return cmd.FlagErrorf("output schema must be either 'json' or 'yaml' for machine consumer")
 		}
 	}
 

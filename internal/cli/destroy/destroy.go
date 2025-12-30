@@ -90,17 +90,17 @@ func DestroyCmd() *cobra.Command {
 
 func validateDestroyOptions(opts *DestroyOptions) error {
 	if opts.FormaFile == "" && opts.Query == "" {
-		return fmt.Errorf("either a forma file needs to be provided, or --query must be specified")
+		return cmd.FlagErrorf("either a forma file needs to be provided, or --query must be specified")
 	}
 	if opts.FormaFile != "" && opts.Query != "" {
-		return fmt.Errorf("either a forma file needs to be provided, or --query must be specified, but not both")
+		return cmd.FlagErrorf("either a forma file needs to be provided, or --query must be specified, but not both")
 	}
 	if opts.OutputConsumer != printer.ConsumerHuman && opts.OutputConsumer != printer.ConsumerMachine {
-		return fmt.Errorf("output consumer must be either 'human' or 'machine'")
+		return cmd.FlagErrorf("output consumer must be either 'human' or 'machine'")
 	}
 	if opts.OutputConsumer == printer.ConsumerMachine {
 		if opts.OutputSchema != "json" && opts.OutputSchema != "yaml" {
-			return fmt.Errorf("output schema must be either 'json' or 'yaml' for machine consumer")
+			return cmd.FlagErrorf("output schema must be either 'json' or 'yaml' for machine consumer")
 		}
 	}
 

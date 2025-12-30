@@ -103,20 +103,20 @@ func runApply(app *app.App, opts *ApplyOptions) error {
 
 func validateApplyOptions(opts *ApplyOptions) error {
 	if opts.FormaFile == "" {
-		return fmt.Errorf("forma file is required")
+		return cmd.FlagErrorf("forma file is required")
 	}
 	if opts.Mode == "" {
-		return fmt.Errorf("the --mode flag is required")
+		return cmd.FlagErrorf("the --mode flag is required")
 	}
 	if opts.Mode != pkgmodel.FormaApplyModeReconcile && opts.Mode != pkgmodel.FormaApplyModePatch {
-		return fmt.Errorf("invalid mode: %s. Should be either reconcile or patch", opts.Mode)
+		return cmd.FlagErrorf("invalid mode: %s. Should be either reconcile or patch", opts.Mode)
 	}
 	if opts.OutputConsumer != printer.ConsumerHuman && opts.OutputConsumer != printer.ConsumerMachine {
-		return fmt.Errorf("output consumer must be either 'human' or 'machine'")
+		return cmd.FlagErrorf("output consumer must be either 'human' or 'machine'")
 	}
 	if opts.OutputConsumer == printer.ConsumerMachine {
 		if opts.OutputSchema != "json" && opts.OutputSchema != "yaml" {
-			return fmt.Errorf("output schema must be either 'json' or 'yaml' for machine consumer")
+			return cmd.FlagErrorf("output schema must be either 'json' or 'yaml' for machine consumer")
 		}
 	}
 

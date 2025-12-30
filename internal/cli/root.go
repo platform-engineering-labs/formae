@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -36,6 +37,15 @@ func longDescription() string {
 	return display.Tool + ": " + display.Green("A modern infrastructure as code tool that platform engineers deserve")
 }
 
+// setSilenceUsageRecursive sets SilenceUsage on a command and all its subcommands.
+// This ensures Cobra doesn't print usage on runtime errors (only FlagError should show usage).
+func setSilenceUsageRecursive(cmd *cobra.Command) {
+	cmd.SilenceUsage = true
+	for _, sub := range cmd.Commands() {
+		setSilenceUsageRecursive(sub)
+	}
+}
+
 var rootCmd = &cobra.Command{
 	Use:     display.Tool,
 	Short:   display.Tool + " CLI",
@@ -46,6 +56,13 @@ var rootCmd = &cobra.Command{
 		devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 		slog.SetDefault(slog.New(slog.NewTextHandler(devNull, nil)))
 	},
+	// SilenceUsage prevents Cobra from printing usage on every error.
+	// Usage is only shown for FlagError (validation errors), not for runtime errors.
+	// See Start() for the error handling logic.
+	SilenceUsage: true,
+	// SilenceErrors prevents Cobra from printing errors, so we can handle
+	// error display ourselves with consistent formatting.
+	SilenceErrors: true,
 }
 
 func init() {
@@ -202,6 +219,9 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("help", "h", false, "Show help for "+rootCmd.Use)
 	for _, cmd := range rootCmd.Commands() {
 		cmd.PersistentFlags().BoolP("help", "h", false, fmt.Sprintf("Show help for %s command", cmd.Name()))
+		// Ensure all subcommands have SilenceUsage set so Cobra doesn't print
+		// usage on runtime errors (only FlagError should show usage)
+		setSilenceUsageRecursive(cmd)
 	}
 
 	rootCmd.PersistentFlags().BoolP("version", "v", false, "Show "+rootCmd.Use+" version information")
@@ -221,13 +241,41 @@ func Start() {
 		os.Exit(1)
 	}
 
-	cmd, err := cmd.InitCommandWithContext(rootCmd)
+	rootCommand, err := cmd.InitCommandWithContext(rootCmd)
 	if err != nil {
 		fmt.Println(display.Red("Error: " + err.Error()))
 		os.Exit(1)
 	}
 
-	if err := cmd.Execute(); err != nil {
+	if err := rootCommand.Execute(); err != nil {
+		// Check if this is a FlagError (validation/usage error).
+		// In this case, show usage information to help the user.
+		var flagError *cmd.FlagError
+		if errors.As(err, &flagError) {
+			fmt.Println(display.Red("Error: " + err.Error()))
+			fmt.Println()
+			// Find the command that failed and print its usage
+			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
+				fmt.Println(activeCmd.UsageString())
+			}
+			os.Exit(1)
+		}
+
+		// For unknown command errors, show the parent command's usage
+		// to help the user find the correct command.
+		if strings.HasPrefix(err.Error(), "unknown command") {
+			fmt.Println(display.Red("Error: " + err.Error()))
+			fmt.Println()
+			// Find the parent command and show its usage
+			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
+				fmt.Println(activeCmd.UsageString())
+			} else {
+				fmt.Println(rootCommand.UsageString())
+			}
+			os.Exit(1)
+		}
+
+		// For other errors (runtime errors), just print the error.
 		fmt.Println(display.Red("Error: " + err.Error()))
 		os.Exit(1)
 	}
