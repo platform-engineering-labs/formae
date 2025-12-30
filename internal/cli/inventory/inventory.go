@@ -28,14 +28,14 @@ type InventoryOptions struct {
 
 func validateInventoryOptions(opts *InventoryOptions) error {
 	if opts.MaxResults < 0 {
-		return fmt.Errorf("max-results must be 0 (unlimited) or a positive number")
+		return cmd.FlagErrorf("max-results must be 0 (unlimited) or a positive number")
 	}
 	if opts.OutputConsumer != printer.ConsumerHuman && opts.OutputConsumer != printer.ConsumerMachine {
-		return fmt.Errorf("output-consumer must be 'human' or 'machine'")
+		return cmd.FlagErrorf("output-consumer must be 'human' or 'machine'")
 	}
 	if opts.OutputConsumer == printer.ConsumerMachine {
 		if opts.OutputSchema != "json" && opts.OutputSchema != "yaml" {
-			return fmt.Errorf("output-schema must be 'json' or 'yaml' for machine consumer")
+			return cmd.FlagErrorf("output-schema must be 'json' or 'yaml' for machine consumer")
 		}
 	}
 

@@ -105,15 +105,15 @@ func runStatus(app *app.App, opts *StatusOptions) error {
 
 func validateStatusOptions(options *StatusOptions) error {
 	if options.OutputConsumer != printer.ConsumerHuman && options.OutputConsumer != printer.ConsumerMachine {
-		return fmt.Errorf("output consumer must be either 'human' or 'machine'")
+		return cmd.FlagErrorf("output consumer must be either 'human' or 'machine'")
 	}
 	if options.OutputConsumer == printer.ConsumerMachine {
 		if options.OutputSchema != "json" && options.OutputSchema != "yaml" {
-			return fmt.Errorf("output schema must be either 'json' or 'yaml' for machine consumer")
+			return cmd.FlagErrorf("output schema must be either 'json' or 'yaml' for machine consumer")
 		}
 	}
 	if options.OutputLayout != StatusOutputDetailed && options.OutputLayout != StatusOutputSummary {
-		return fmt.Errorf("output layout must be either 'detailed' or 'summary'")
+		return cmd.FlagErrorf("output layout must be either 'detailed' or 'summary'")
 	}
 
 	return nil
