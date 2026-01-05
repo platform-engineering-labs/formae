@@ -354,6 +354,21 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 		}
 	}
 
+	// If no work was queued (e.g., all plugins failed to register), return to Idle
+	// to allow future Discover messages to be processed
+	if !data.HasOutstandingWork() {
+		proc.Log().Debug("No targets could be processed (plugins not available), completing discovery")
+		if data.isScheduledDiscovery {
+			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
+			if err != nil {
+				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				return StateIdle, data, nil, gen.TerminateReasonPanic
+			}
+			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
+		}
+		return StateIdle, data, nil, nil
+	}
+
 	return StateDiscovering, data, nil, nil
 }
 
@@ -484,14 +499,25 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 		return state, data, nil, nil
 	}
 
+	// Decompress the resources from the gzip-compressed message
+	listedResources, err := plugin.DecompressListedResources(message.Resources)
+	if err != nil {
+		proc.Log().Error("Failed to decompress resources for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+		if !data.HasOutstandingWork() {
+			return StateIdle, data, nil, nil
+		}
+		return state, data, nil, nil
+	}
+	proc.Log().Debug("Decompressed %d resources for %s in target %s", len(listedResources), message.ResourceType, message.Target.Label)
+
 	// De-duplicate resources already under management
-	var newResources []resource.Resource
-	for _, resource := range message.Resources {
-		if !resourceExists(resource.NativeID, message.ResourceType, data) {
-			newResources = append(newResources, resource)
-			key := fmt.Sprintf("%s::%s", message.ResourceType, resource.NativeID)
+	var newResources []plugin.ListedResource
+	for _, res := range listedResources {
+		if !resourceExists(res.NativeID, res.ResourceType, data) {
+			newResources = append(newResources, res)
+			key := fmt.Sprintf("%s::%s", res.ResourceType, res.NativeID)
 			data.recentlyDiscoveredResourceIDs[key] = struct{}{}
-			data.summary[message.ResourceType]++
+			data.summary[res.ResourceType]++
 		}
 	}
 
@@ -572,7 +598,7 @@ func findMatchFiltersForType(filters []plugin.MatchFilter, resourceType string) 
 	return result
 }
 
-func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []resource.Resource, data DiscoveryData, proc gen.Process) (string, error) {
+func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []plugin.ListedResource, data DiscoveryData, proc gen.Process) (string, error) {
 	// Get schema from cache instead of calling plugin directly
 	schema, err := getSchemaFromCache(&data, namespace, op.ResourceType)
 	if err != nil {
@@ -581,13 +607,13 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	}
 
 	var resourcesToSynchronize []pkgmodel.Resource
-	for _, resource := range resources {
+	for _, res := range resources {
 		resourcesToSynchronize = append(resourcesToSynchronize, pkgmodel.Resource{
-			Label:      url.QueryEscape(resource.NativeID),
-			Type:       op.ResourceType,
+			Label:      url.QueryEscape(res.NativeID),
+			Type:       res.ResourceType,
 			Stack:      constants.UnmanagedStack,
 			Target:     target.Label,
-			NativeID:   resource.NativeID,
+			NativeID:   res.NativeID,
 			Properties: injectResolvables("{}", op),
 			Schema:     schema,
 			Managed:    false,
@@ -688,10 +714,15 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 			for _, param := range mappingProps {
 				value, found := parent.GetProperty(param.ParentProperty)
 				if found {
+					// Extract the actual value if this is a JSON reference object.
+					// This handles cases like OCI resources where parent properties (e.g. CompartmentID)
+					// are serialized as {"$ref":"...","$value":"..."} reference objects.
+					// We need only the value for the List API call.
+					actualValue := extractActualValue(value)
 					listParams[param.ListProperty] = plugin.ListParam{
 						ParentProperty: param.ParentProperty,
 						ListParam:      param.ListProperty,
-						ListValue:      value,
+						ListValue:      actualValue,
 					}
 				} else {
 					proc.Log().Error("Missing parent property", "property", param.ParentProperty, "parent_id", parent.NativeID)
@@ -839,6 +870,23 @@ func renderSummary(summary map[string]int) string {
 	}
 
 	return builder.String()
+}
+
+// extractActualValue extracts the actual value from a property that may be a JSON reference object.
+// If the value is a JSON string containing {"$ref":"...","$value":"..."}, it extracts the $value.
+// Otherwise, it returns the value as-is.
+func extractActualValue(value string) string {
+	// Try to parse as JSON to see if it's a JSON reference
+	var jsonRef struct {
+		Ref   string `json:"$ref"`
+		Value string `json:"$value"`
+	}
+
+	if err := json.Unmarshal([]byte(value), &jsonRef); err == nil && jsonRef.Value != "" {
+		return jsonRef.Value
+	}
+
+	return value
 }
 
 func injectResolvables(props string, op ListOperation) json.RawMessage {

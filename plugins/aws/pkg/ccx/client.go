@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/service/cloudcontrol"
 	cctypes "github.com/aws/aws-sdk-go-v2/service/cloudcontrol/types"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -38,9 +40,19 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
 
-	// Create Cloud Control Client
+	// Create Cloud Control Client with custom retry configuration for throttling.
+	// AWS CloudControl API has strict rate limits, so we use:
+	// - Fewer max attempts (let PluginOperator handle retries at a higher level)
+	// - Longer max backoff to give AWS time to recover from throttling
+	retryer := retry.NewStandard(func(o *retry.StandardOptions) {
+		o.MaxAttempts = 2            // Reduce from default 3 to fail faster to PluginOperator
+		o.MaxBackoff = 30 * time.Second // Allow longer backoff for throttling
+	})
+
 	return &Client{
-		Client: cloudcontrol.NewFromConfig(awsCfg),
+		Client: cloudcontrol.NewFromConfig(awsCfg, func(o *cloudcontrol.Options) {
+			o.Retryer = retryer
+		}),
 	}, nil
 }
 

@@ -66,6 +66,9 @@ open class StorageLensGroup extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     name: String
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }

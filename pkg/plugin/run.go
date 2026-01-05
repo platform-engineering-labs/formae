@@ -13,12 +13,20 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 	"github.com/platform-engineering-labs/formae/pkg/model"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/sdk/metric"
+	otelresource "go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 )
 
 // PluginCapabilities contains all plugin capability data.
@@ -116,6 +124,13 @@ func Run(rp ResourcePlugin) {
 		log.Fatal("FORMAE_NETWORK_COOKIE environment variable required")
 	}
 
+	// Read OTel config from environment variables for initial setup
+	otelConfigForSetup := readOTelConfigFromEnv()
+
+	// Setup OTel metrics if enabled
+	shutdown := setupPluginOTel(rp.Namespace(), otelConfigForSetup)
+	defer shutdown()
+
 	// Setup Ergo node options
 	options := gen.NodeOptions{}
 	options.Network.Mode = gen.NetworkModeEnabled
@@ -123,12 +138,17 @@ func Run(rp ResourcePlugin) {
 	options.Security.ExposeEnvRemoteSpawn = true
 	options.Log.Level = gen.LogLevelDebug
 
+	// Read OTel config from environment variables (for standalone plugin process startup)
+	// This will be overridden by agent when spawning PluginOperator actors remotely
+	otelConfig := readOTelConfigFromEnv()
+
 	// Set environment for PluginActor and remotely spawned PluginOperators
 	options.Env = map[gen.Env]any{
 		gen.Env("Context"):   context.Background(),
 		gen.Env("Plugin"):    rp,
 		gen.Env("Namespace"): rp.Namespace(),
 		gen.Env("AgentNode"): gen.Atom(agentNode),
+		gen.Env("OTelConfig"): otelConfig,
 		// Default retry config for plugin operations
 		gen.Env("RetryConfig"): model.RetryConfig{
 			StatusCheckInterval: 5 * time.Second,
@@ -168,5 +188,121 @@ func registerEDFTypes() {
 	// Register shared types (used by both agent and plugins)
 	if err := RegisterSharedEDFTypes(); err != nil {
 		log.Printf("Warning: failed to register shared EDF types: %v", err)
+	}
+}
+
+// readOTelConfigFromEnv reads OTel configuration from environment variables.
+// This is used when the plugin process starts standalone.
+func readOTelConfigFromEnv() model.OTelConfig {
+	enabled, _ := strconv.ParseBool(os.Getenv("FORMAE_OTEL_ENABLED"))
+	if !enabled {
+		return model.OTelConfig{Enabled: false}
+	}
+
+	endpoint := os.Getenv("FORMAE_OTEL_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "localhost:4317"
+	}
+
+	protocol := os.Getenv("FORMAE_OTEL_PROTOCOL")
+	if protocol == "" {
+		protocol = "grpc"
+	}
+
+	insecure, _ := strconv.ParseBool(os.Getenv("FORMAE_OTEL_INSECURE"))
+	if os.Getenv("FORMAE_OTEL_INSECURE") == "" {
+		insecure = true
+	}
+
+	return model.OTelConfig{
+		Enabled:     true,
+		ServiceName: "formae-plugin",
+		OTLP: model.OTLPConfig{
+			Endpoint:    endpoint,
+			Protocol:    protocol,
+			Insecure:    insecure,
+			Temporality: "delta",
+		},
+	}
+}
+
+// setupPluginOTel initializes OpenTelemetry metrics for the plugin process.
+// Returns a shutdown function that should be called on exit.
+func setupPluginOTel(namespace string, config model.OTelConfig) func() {
+	if !config.Enabled {
+		return func() {}
+	}
+
+	endpoint := config.OTLP.Endpoint
+	if endpoint == "" {
+		endpoint = "localhost:4317"
+	}
+
+	protocol := config.OTLP.Protocol
+	if protocol == "" {
+		protocol = "grpc"
+	}
+
+	insecure := config.OTLP.Insecure
+
+	// Create resource with plugin-specific attributes
+	res, err := otelresource.New(context.Background(),
+		otelresource.WithAttributes(
+			semconv.ServiceNameKey.String("formae-plugin-"+namespace),
+			attribute.String("plugin.namespace", namespace),
+		),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "Warning: failed to create OTel resource: %v\n", err)
+		return func() {}
+	}
+
+	// Create OTLP exporter
+	var exporter metric.Exporter
+	switch protocol {
+	case "grpc":
+		opts := []otlpmetricgrpc.Option{
+			otlpmetricgrpc.WithEndpoint(endpoint),
+		}
+		if insecure {
+			opts = append(opts, otlpmetricgrpc.WithInsecure())
+		}
+		exporter, err = otlpmetricgrpc.New(context.Background(), opts...)
+	case "http":
+		opts := []otlpmetrichttp.Option{
+			otlpmetrichttp.WithEndpoint(endpoint),
+		}
+		if insecure {
+			opts = append(opts, otlpmetrichttp.WithInsecure())
+		}
+		exporter, err = otlpmetrichttp.New(context.Background(), opts...)
+	default:
+		fmt.Fprintf(os.Stdout, "Warning: unknown OTLP protocol: %s, skipping OTel setup\n", protocol)
+		return func() {}
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "Warning: failed to create OTLP exporter: %v\n", err)
+		return func() {}
+	}
+
+	// Create meter provider with periodic reader
+	meterProvider := metric.NewMeterProvider(
+		metric.WithResource(res),
+		metric.WithReader(metric.NewPeriodicReader(exporter, metric.WithInterval(10*time.Second))),
+	)
+
+	// Set global meter provider
+	otel.SetMeterProvider(meterProvider)
+
+	fmt.Fprintf(os.Stdout, "OTel metrics enabled for plugin %s (endpoint: %s, protocol: %s)\n", namespace, endpoint, protocol)
+
+	// Return shutdown function
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := meterProvider.Shutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stdout, "Warning: failed to shutdown meter provider: %v\n", err)
+		}
 	}
 }

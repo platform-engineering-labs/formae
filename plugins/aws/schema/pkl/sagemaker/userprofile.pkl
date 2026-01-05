@@ -183,7 +183,11 @@ open class UserProfile extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     singleSignOnUserValue: String?
 
-    @aws.FieldHint{writeOnly = true}
+    @aws.FieldHint {
+        writeOnly = true
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
     @aws.FieldHint{createOnly = true}

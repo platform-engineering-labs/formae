@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudcontrol"
+	cctypes "github.com/aws/aws-sdk-go-v2/service/cloudcontrol/types"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/masterminds/semver"
 
@@ -21,6 +22,7 @@ import (
 	_ "github.com/platform-engineering-labs/formae/plugins/aws/pkg/cfres"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/cfres/registry"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/config"
+	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/helper"
 )
 
 type AWS struct{}
@@ -202,6 +204,15 @@ func (a AWS) List(context context.Context, request *resource.ListRequest) (*reso
 	var resources []resource.Resource
 	result, err := client.ListResources(context, &cloudcontrol.ListResourcesInput{TypeName: &request.ResourceType, MaxResults: &request.PageSize, NextToken: request.PageToken, ResourceModel: resourceModel})
 	if err != nil {
+		// If the parent resource doesn't exist (404), return an empty list instead of an error
+		errorCode, isCloudControlError := helper.HandleCloudControlError(err)
+		if isCloudControlError && errorCode == cctypes.HandlerErrorCodeNotFound {
+			return &resource.ListResult{
+				ResourceType:  request.ResourceType,
+				Resources:     []resource.Resource{},
+				NextPageToken: nil,
+			}, nil
+		}
 		return nil, err
 	}
 	for _, r := range result.ResourceDescriptions {

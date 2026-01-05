@@ -58,12 +58,13 @@ pkg-bin: clean build build-tools
 	mkdir -p ./dist/pel/formae/plugins
 	mkdir -p ./dist/pel/formae/examples
 	cp -Rp ./formae ./dist/pel/formae/bin
-	for f in ./plugins/*; do \
-		if file "$$f" | grep -qE "ELF|Mach-O"; then \
+	for f in ./plugins/*/*.so; do \
+		if [ -f "$$f" ] && file "$$f" | grep -qE "ELF|Mach-O"; then \
 			cp "$$f" ./dist/pel/formae/plugins/; \
 		fi \
 	done
-	rm -rf ./dist/pel/formae/plugins/fake-*
+	cp ./plugins/aws/aws ./dist/pel/formae/plugins/
+	rm -f ./dist/pel/formae/plugins/fake-*.so
 	cp -Rp ./examples/* ./dist/pel/formae/examples
 	./formae project init ./dist/pel/formae/examples
 	rm -rf ./dist/pel/formae/examples/main.pkl
@@ -134,6 +135,18 @@ test-unit:
 	go test -C ./pkg/plugin -tags=unit -failfast ./
 	go test -tags=unit -failfast ./...
 
+postgres-up:
+	docker rm -f formae-test-postgres 2>/dev/null || true
+	docker run -d --name formae-test-postgres \
+		-e POSTGRES_USER=formae \
+		-e POSTGRES_PASSWORD=formae \
+		-e POSTGRES_DB=formae \
+		-p 5433:5432 \
+		postgres:15-alpine
+
+postgres-down:
+	docker rm -f formae-test-postgres
+
 test-unit-postgres:
 	go test -v -tags=unit -failfast ./internal/metastructure/datastore -args -dbType=postgres
 
@@ -184,7 +197,7 @@ test-e2e: gen-pkl pkg-pkl build
 		exit $$E2E_EXIT_CODE
 
 test-property:
-	go test -tags=property -failfast ./internal/workflow_tests -run 'TestMetastructure_Property.*'
+	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
 
 test-schema-pkl:
 	cd plugins/pkl/schema && pkl test tests/formae.pkl
@@ -239,4 +252,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license all
+.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all

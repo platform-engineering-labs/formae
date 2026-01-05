@@ -1021,22 +1021,27 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 			}
 
 			ksuid, err = ds.GetKSUIDByTriplet(resolvable.Stack, resolvable.Label, resolvable.Type)
-			if err != nil {
-				slog.Warn("Failed to get KSUID for triplet",
-					"path", resolvable.Path,
-					"stack", resolvable.Stack,
-					"label", resolvable.Label,
-					"type", resolvable.Type,
-					"error", err)
-				continue
-			}
-			if ksuid == "" {
-				slog.Warn("Resource not found for triplet",
-					"path", resolvable.Path,
-					"stack", resolvable.Stack,
-					"label", resolvable.Label,
-					"type", resolvable.Type)
-				continue
+			if err != nil || ksuid == "" {
+				// Fallback: This handles the case where we're bringing unmanaged resources under management
+				// and the resolvable points to the target stack but the resource still exists in $unmanaged
+				ksuid, err = ds.GetKSUIDByTriplet(constants.UnmanagedStack, resolvable.Label, resolvable.Type)
+				if err != nil {
+					slog.Warn("Failed to get KSUID for triplet (including $unmanaged fallback)",
+						"path", resolvable.Path,
+						"stack", resolvable.Stack,
+						"label", resolvable.Label,
+						"type", resolvable.Type,
+						"error", err)
+					continue
+				}
+				if ksuid == "" {
+					slog.Warn("Resource not found for triplet (including $unmanaged fallback)",
+						"path", resolvable.Path,
+						"stack", resolvable.Stack,
+						"label", resolvable.Label,
+						"type", resolvable.Type)
+					continue
+				}
 			}
 			formaeURI = resolvable.ToFormaeURI(ksuid)
 		}

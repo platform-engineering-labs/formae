@@ -87,7 +87,8 @@ func TestMetastructure_Stats(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{
 				{
-					Label: "test-target",
+					Label:     "test-target",
+					Namespace: "FakeAWS",
 				},
 			},
 		}
@@ -117,10 +118,10 @@ func TestMetastructure_Stats(t *testing.T) {
 		assert.Equal(t, 1, stats.States[string(forma_command.CommandStateFailed)])
 
 		assert.Equal(t, 1, stats.Stacks)
-		assert.Equal(t, 1, stats.ManagedResources)
-		assert.Equal(t, 0, stats.UnmanagedResources)
+		assert.Equal(t, 1, stats.ManagedResources["FakeAWS"])
+		assert.Equal(t, 0, stats.UnmanagedResources["FakeAWS"])
 
-		assert.Equal(t, 1, stats.Targets)
+		assert.Equal(t, 1, stats.Targets["FakeAWS"])
 
 		assert.Equal(t, 1, len(stats.ResourceTypes))
 
@@ -147,12 +148,13 @@ func TestMetastructure_Stats(t *testing.T) {
 		assert.Equal(t, 1, stats.States[string(forma_command.CommandStateFailed)])
 
 		assert.Equal(t, 0, stats.Stacks)
-		assert.Equal(t, 0, stats.ManagedResources)
-		assert.Equal(t, 0, stats.UnmanagedResources)
+		assert.Equal(t, 0, stats.ManagedResources["FakeAWS"])
+		assert.Equal(t, 0, stats.UnmanagedResources["FakeAWS"])
 
-		assert.Equal(t, 1, stats.Targets)
+		assert.Equal(t, 1, stats.Targets["FakeAWS"])
 
+		// ResourceErrors are now keyed by resource type, not error message
 		assert.Equal(t, 1, len(stats.ResourceErrors))
-		assert.Contains(t, stats.ResourceErrors, "Simulated failure")
+		assert.Contains(t, stats.ResourceErrors, "FakeAWS::S3::Bucket")
 	})
 }

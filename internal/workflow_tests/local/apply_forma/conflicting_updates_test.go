@@ -22,6 +22,29 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// newTestResourceUpdate creates a ResourceUpdate with a generated KSUID for testing.
+// In production, KSUIDs are assigned by the resource_update_generator, but tests that
+// bypass that flow need to set KSUIDs explicitly to avoid PRIMARY KEY collisions
+// in the normalized resource_updates table.
+func newTestResourceUpdate(label, resourceType, stack, target string, state resource_update.ResourceUpdateState, operation resource_update.OperationType) resource_update.ResourceUpdate {
+	return resource_update.ResourceUpdate{
+		Resource: pkgmodel.Resource{
+			Label:  label,
+			Type:   resourceType,
+			Stack:  stack,
+			Target: target,
+			Ksuid:  util.NewID(),
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     target,
+			Namespace: "test-namespace",
+		},
+		StartTs:   util.TimeNow(),
+		State:     state,
+		Operation: operation,
+	}
+}
+
 func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflictingResourcesError(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, stop, err := test_helpers.NewTestMetastructure(t, nil)
@@ -32,111 +55,13 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 		}
 
 		executingFormaResourceUpdates := []resource_update.ResourceUpdate{
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource1",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource2",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStatePending, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource3",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateCanceled, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource4",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateInProgress, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource5",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateSuccess, // not conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource6",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateFailed, // not conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource7",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateInProgress,
-				Operation: resource_update.OperationRead, // not conflicting
-			},
+			newTestResourceUpdate("test-resource1", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate), // conflicting
+			newTestResourceUpdate("test-resource2", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStatePending, resource_update.OperationCreate),    // conflicting
+			newTestResourceUpdate("test-resource3", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateCanceled, resource_update.OperationCreate),   // conflicting
+			newTestResourceUpdate("test-resource4", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateInProgress, resource_update.OperationCreate), // conflicting
+			newTestResourceUpdate("test-resource5", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateSuccess, resource_update.OperationCreate),    // not conflicting
+			newTestResourceUpdate("test-resource6", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateFailed, resource_update.OperationCreate),     // not conflicting
+			newTestResourceUpdate("test-resource7", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateInProgress, resource_update.OperationRead),   // not conflicting
 		}
 
 		executingForma := forma_command.NewFormaCommand(
@@ -161,21 +86,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 		executingForma.State = forma_command.CommandStateInProgress
 
 		newFormaResourceUpdates := []resource_update.ResourceUpdate{
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource8",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
+			newTestResourceUpdate("test-resource8", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
 		}
 
 		newForma := &pkgmodel.Forma{
@@ -195,7 +106,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 				},
 			},
 		}
-		newFormaCommand := forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
+		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
 		err = m.Datastore.StoreFormaCommand(executingForma, "1")
 		if err != nil {
 			t.Fatalf("Failed to store forma command: %v", err)
@@ -207,7 +118,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 			Simulate: false,
 		}
 
-		_, err = m.ApplyForma(&newFormaCommand.Forma, &cfg, "test")
+		_, err = m.ApplyForma(newForma, &cfg, "test")
 		assert.Error(t, err)
 
 		var conflictErr apimodel.FormaConflictingCommandsError
@@ -230,51 +141,9 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 		}
 
 		executingFormaResourceUpdates := []resource_update.ResourceUpdate{
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource1",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource2",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStatePending, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource3",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateInProgress, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
+			newTestResourceUpdate("test-resource1", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate), // conflicting
+			newTestResourceUpdate("test-resource2", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStatePending, resource_update.OperationCreate),    // conflicting
+			newTestResourceUpdate("test-resource3", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateInProgress, resource_update.OperationCreate), // conflicting
 		}
 
 		executingForma := forma_command.NewFormaCommand(
@@ -304,66 +173,10 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 		}
 
 		anotherExecutingFormaResourceUpdates := []resource_update.ResourceUpdate{
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource4",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateInProgress, // conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource5",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateSuccess, // not conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource6",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateFailed, // not conflicting
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource7",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateInProgress,
-				Operation: resource_update.OperationRead, // not conflicting
-			},
+			newTestResourceUpdate("test-resource4", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateInProgress, resource_update.OperationCreate), // conflicting
+			newTestResourceUpdate("test-resource5", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateSuccess, resource_update.OperationCreate),    // not conflicting
+			newTestResourceUpdate("test-resource6", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateFailed, resource_update.OperationCreate),     // not conflicting
+			newTestResourceUpdate("test-resource7", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateInProgress, resource_update.OperationRead),   // not conflicting
 		}
 
 		anotherExecutingForma := forma_command.NewFormaCommand(
@@ -446,128 +259,35 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			},
 		}
 		newFormaResourceUpdates := []resource_update.ResourceUpdate{
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource1",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource2",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource3",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack1",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource4",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource5",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource6",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
-			{
-				Resource: pkgmodel.Resource{
-					Label:  "test-resource7",
-					Type:   "FakeAWS::S3::Bucket",
-					Stack:  "test-stack2",
-					Target: "test-target",
-				},
-				ResourceTarget: pkgmodel.Target{
-					Label:     "test-target",
-					Namespace: "test-namespace",
-				},
-				StartTs:   util.TimeNow(),
-				State:     resource_update.ResourceUpdateStateNotStarted,
-				Operation: resource_update.OperationCreate,
-			},
+			newTestResourceUpdate("test-resource1", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
+			newTestResourceUpdate("test-resource2", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
+			newTestResourceUpdate("test-resource3", "FakeAWS::S3::Bucket", "test-stack1", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
+			newTestResourceUpdate("test-resource4", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
+			newTestResourceUpdate("test-resource5", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
+			newTestResourceUpdate("test-resource6", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
+			newTestResourceUpdate("test-resource7", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
 		}
 
-		newFormaCommand := forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
+		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
 
 		cfg := config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: false,
 		}
 
-		_, err = m.ApplyForma(&newFormaCommand.Forma, &cfg, "test")
+		_, err = m.ApplyForma(newForma, &cfg, "test")
 		assert.Error(t, err)
 
 		var conflictErr apimodel.FormaConflictingCommandsError
 		if errors.As(err, &conflictErr) {
 			assert.Equal(t, 2, len(conflictErr.ConflictingCommands))
-			assert.Equal(t, 3, len(conflictErr.ConflictingCommands[0].ResourceUpdates))
-			assert.Equal(t, 1, len(conflictErr.ConflictingCommands[1].ResourceUpdates))
+			// Check that we have one command with 3 updates and one with 1, regardless of order
+			counts := []int{
+				len(conflictErr.ConflictingCommands[0].ResourceUpdates),
+				len(conflictErr.ConflictingCommands[1].ResourceUpdates),
+			}
+			assert.Contains(t, counts, 3, "Expected one command with 3 conflicting resource updates")
+			assert.Contains(t, counts, 1, "Expected one command with 1 conflicting resource update")
 		} else {
 			t.Errorf("Expected a ConflctingResourcesError, got: %T", err)
 		}

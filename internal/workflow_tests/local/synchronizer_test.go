@@ -427,7 +427,18 @@ func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
-			return len(fas) == 2 && fas[1].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess
+			if len(fas) != 2 {
+				return false
+			}
+			// Find the sync command by type (don't rely on order)
+			for _, fc := range fas {
+				if fc.Command == pkgmodel.CommandSync && len(fc.ResourceUpdates) > 0 {
+					if fc.ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess {
+						return true
+					}
+				}
+			}
+			return false
 		}, 2*time.Second, 100*time.Millisecond)
 		require.True(t, readCalled, "Read should have been called")
 
@@ -440,8 +451,20 @@ func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
 
 		assert.Equal(t, 2, len(formaCommands), "There should be two forma command recorded")
 
-		assert.Equal(t, pkgmodel.CommandSync, formaCommands[1].Command, "The second command should be a sync command")
-		assert.Equal(t, 1, len(formaCommands[0].ResourceUpdates), "There should be one resource update in the sync command")
+		// Find apply and sync commands by type (don't rely on order)
+		var applyCmd, syncCmd *forma_command.FormaCommand
+		for _, fc := range formaCommands {
+			switch fc.Command {
+			case pkgmodel.CommandApply:
+				applyCmd = fc
+			case pkgmodel.CommandSync:
+				syncCmd = fc
+			}
+		}
+
+		assert.NotNil(t, syncCmd, "The sync command should exist")
+		assert.NotNil(t, applyCmd, "The apply command should exist")
+		assert.Equal(t, 1, len(syncCmd.ResourceUpdates), "There should be one resource update in the sync command")
 	})
 
 }

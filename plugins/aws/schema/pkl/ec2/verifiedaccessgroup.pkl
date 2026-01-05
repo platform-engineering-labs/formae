@@ -36,7 +36,10 @@ open class VerifiedAccessGroup extends formae.Resource {
     @aws.FieldHint
     sseSpecification: SSESpecification?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
     @aws.FieldHint

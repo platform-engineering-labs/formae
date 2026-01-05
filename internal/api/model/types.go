@@ -105,11 +105,11 @@ type Stats struct {
 	Commands           map[string]int `json:"Commands"`
 	States             map[string]int `json:"States"`
 	Stacks             int            `json:"Stacks"`
-	ManagedResources   int            `json:"Resources"`
-	UnmanagedResources int            `json:"UnmanagedResources"`
-	Targets            int            `json:"Targets"`
-	ResourceTypes      map[string]int `json:"ResourceTypes"`
-	ResourceErrors     map[string]int `json:"ResourceErrors"`
+	ManagedResources   map[string]int `json:"Resources"`          // key: namespace (e.g., "AWS", "Azure")
+	UnmanagedResources map[string]int `json:"UnmanagedResources"` // key: namespace
+	Targets            map[string]int `json:"Targets"`            // key: namespace
+	ResourceTypes      map[string]int `json:"ResourceTypes"`      // key: resource type (e.g., "AWS::S3::Bucket")
+	ResourceErrors     map[string]int `json:"ResourceErrors"`     // key: resource type
 	Plugins            []PluginInfo   `json:"Plugins"`
 }
 

@@ -119,7 +119,10 @@ open class Nodegroup extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     subnets: Listing<String|formae.Resolvable>
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 
     @aws.FieldHint

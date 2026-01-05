@@ -122,12 +122,16 @@ open class ListProperty {
     fixed ListParameter: String = listParameter
 }
 
+typealias FieldUpdateMethod = "Array"|"EntitySet"|"Set"
+
 open class FieldHint extends Annotation {
     hidden createOnly: Boolean = false
     hidden persist: Boolean = false
     hidden writeOnly: Boolean = false
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
+    hidden indexField: String?
+    hidden updateMethod: FieldUpdateMethod?
 
     hidden outputField: String?
     hidden outputTransformation: ((Any) -> Any)?
@@ -139,6 +143,8 @@ open class FieldHint extends Annotation {
     fixed WriteOnly: Boolean = writeOnly
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
+    fixed UpdateMethod: String = updateMethod ?? ""
+    fixed IndexField: String = indexField ?? ""
 }
 
 // Schema output class

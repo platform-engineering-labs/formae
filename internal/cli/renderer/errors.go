@@ -42,6 +42,13 @@ func RenderErrorMessage(err error) (string, error) {
 		}
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaPatchRejectedError]); ok {
+		msg, err = renderPatchRejectedError(&errResp.Data)
+		if err != nil {
+			return "", err
+		}
+	}
+
 	if _, ok := err.(*apimodel.ErrorResponse[apimodel.FormaCyclesDetectedError]); ok {
 		msg = display.Red("forma rejected because one or more cycles were found in the resolvables\n")
 	}
@@ -132,6 +139,23 @@ func renderReferencedResourcesNotFoundError(referencesNotFound *apimodel.FormaRe
 	if err := gtree.OutputFromRoot(&buf, root); err != nil {
 		return "", err
 	}
+
+	return buf.String(), nil
+}
+
+func renderPatchRejectedError(patchRejected *apimodel.FormaPatchRejectedError) (string, error) {
+	var buf strings.Builder
+
+	root := gtree.NewRoot(display.Red("forma patch rejected because the following stacks do not exist:"))
+	for _, stack := range patchRejected.UnknownStacks {
+		root.Add(stack.Label)
+	}
+	if err := gtree.OutputFromRoot(&buf, root); err != nil {
+		return "", err
+	}
+
+	buf.WriteString("\n")
+	buf.WriteString(display.Gold("A patch can only modify existing stacks. Use '--mode reconcile' to create new stacks.\n"))
 
 	return buf.String(), nil
 }

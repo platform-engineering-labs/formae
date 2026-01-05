@@ -23,6 +23,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// allCommandsSuccessful returns true if all commands in the slice have succeeded
+func allCommandsSuccessful(commands []*forma_command.FormaCommand) bool {
+	for _, cmd := range commands {
+		if cmd.State != forma_command.CommandStateSuccess {
+			return false
+		}
+	}
+	return true
+}
+
 // Soft reconcile means applying a forma without the `--force` flag. If the resources in the stack have been altered
 // since the last reconcile, the apply will be rejected and the last update to the resource will be returned.
 func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T) {
@@ -184,7 +194,8 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 2 && commands[1].State == forma_command.CommandStateSuccess
+			// Check all commands are successful (don't rely on order)
+			return len(commands) == 2 && allCommandsSuccessful(commands)
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// patch both resources
@@ -239,7 +250,8 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 3 && commands[2].State == forma_command.CommandStateSuccess
+			// Check all commands are successful (don't rely on order)
+			return len(commands) == 3 && allCommandsSuccessful(commands)
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// reconcile the stack to a new state, forcing a hard reconcile
@@ -473,7 +485,8 @@ func TestApplyForma_SoftReconcile_ReturnsEmtpyFormaCommandNoChangesAreDetected(t
 			commands, err = m.Datastore.LoadFormaCommands()
 			assert.NoError(t, err)
 
-			return len(commands) == 2 && commands[1].State == forma_command.CommandStateSuccess
+			// Check all commands are successful (don't rely on order)
+			return len(commands) == 2 && allCommandsSuccessful(commands)
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// reconcile the stack with a forma that incorporates the patch (should result in no changes)

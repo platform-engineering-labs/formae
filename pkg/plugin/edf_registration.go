@@ -27,6 +27,7 @@ func RegisterSharedEDFTypes() error {
 		// 2. Model types in dependency order
 		// First: types with no external dependencies
 		model.FormaeURI(""),
+		model.FieldUpdateMethod(""),
 		model.FieldHint{},
 		model.Description{},
 		model.Prop{},
@@ -43,6 +44,11 @@ func RegisterSharedEDFTypes() error {
 		model.Stack{},
 		model.Forma{},
 		model.RetryConfig{},
+
+		// Fifth: OTel config types (for passing to remote plugin spawns)
+		model.OTLPConfig{},
+		model.PrometheusConfig{},
+		model.OTelConfig{}, // depends on OTLPConfig and PrometheusConfig
 
 		// 3. Resource operation types (some depend on model types)
 		resource.OperationStatus(""),
@@ -80,6 +86,7 @@ func RegisterSharedEDFTypes() error {
 		PluginOperatorRetry{},
 		PluginOperatorShutdown{},
 		ListResources{},
+		ListedResource{},
 		Listing{},
 		StartPluginOperation{},
 	}

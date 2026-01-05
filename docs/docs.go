@@ -506,6 +506,9 @@ const docTemplate = `{
                 "createOnly": {
                     "type": "boolean"
                 },
+                "indexField": {
+                    "type": "string"
+                },
                 "persist": {
                     "type": "boolean"
                 },
@@ -515,10 +518,28 @@ const docTemplate = `{
                 "requiredOnCreate": {
                     "type": "boolean"
                 },
+                "updateMethod": {
+                    "$ref": "#/definitions/model.FieldUpdateMethod"
+                },
                 "writeOnly": {
                     "type": "boolean"
                 }
             }
+        },
+        "model.FieldUpdateMethod": {
+            "type": "string",
+            "enum": [
+                "Array",
+                "EntitySet",
+                "Set",
+                ""
+            ],
+            "x-enum-varnames": [
+                "FieldUpdateMethodArray",
+                "FieldUpdateMethodEntitySet",
+                "FieldUpdateMethodSet",
+                "FieldUpdateMethodNone"
+            ]
         },
         "model.Forma": {
             "type": "object",
@@ -560,6 +581,23 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command"
                     }
+                }
+            }
+        },
+        "model.PluginInfo": {
+            "type": "object",
+            "properties": {
+                "MaxRequestsPerSecond": {
+                    "type": "integer"
+                },
+                "Namespace": {
+                    "type": "string"
+                },
+                "NodeName": {
+                    "type": "string"
+                },
+                "ResourceCount": {
+                    "type": "integer"
                 }
             }
         },
@@ -766,20 +804,32 @@ const docTemplate = `{
                         "type": "integer"
                     }
                 },
+                "Plugins": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.PluginInfo"
+                    }
+                },
                 "ResourceErrors": {
+                    "description": "key: resource type",
                     "type": "object",
                     "additionalProperties": {
                         "type": "integer"
                     }
                 },
                 "ResourceTypes": {
+                    "description": "key: resource type (e.g., \"AWS::S3::Bucket\")",
                     "type": "object",
                     "additionalProperties": {
                         "type": "integer"
                     }
                 },
                 "Resources": {
-                    "type": "integer"
+                    "description": "key: namespace (e.g., \"AWS\", \"Azure\")",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
                 "Stacks": {
                     "type": "integer"
@@ -791,10 +841,18 @@ const docTemplate = `{
                     }
                 },
                 "Targets": {
-                    "type": "integer"
+                    "description": "key: namespace",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
                 "UnmanagedResources": {
-                    "type": "integer"
+                    "description": "key: namespace",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
                 "Version": {
                     "type": "string"

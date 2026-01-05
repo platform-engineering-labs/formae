@@ -53,30 +53,23 @@ func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	return []plugin.ResourceDescriptor{
 		{
 			Type: "FakeAWS::S3::Bucket",
-			Schema: model.Schema{
-				Discoverable: true,
-			},
+
+			Discoverable: true,
 		},
 		{
-			Type: "FakeAWS::EC2::VPC",
-			Schema: model.Schema{
-				Discoverable: true,
-			},
+			Type:         "FakeAWS::EC2::VPC",
+			Discoverable: true,
 		},
 		{
 			Type: "FakeAWS::EC2::VPCCidrBlock",
 			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
 				"FakeAWS::EC2::VPC": {{ParentProperty: "VpcId", ListProperty: "VpcId", QueryPath: "$.VpcId"}},
 			},
-			Schema: model.Schema{
-				Discoverable: true,
-			},
+			Discoverable: true,
 		},
 		{
-			Type: "FakeAWS::EC2::Instance",
-			Schema: model.Schema{
-				Discoverable: true,
-			},
+			Type:         "FakeAWS::EC2::Instance",
+			Discoverable: true,
 		},
 	}
 }

@@ -20,7 +20,17 @@ type FieldHint struct {
 	WriteOnly        bool `json:"WriteOnly" pkl:"WriteOnly"`
 	Required         bool `json:"Required" pkl:"Required"`
 	RequiredOnCreate bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
+
+	IndexField   string            `json:"IndexField" pkl:"IndexField"`
+	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
 }
+
+type FieldUpdateMethod string
+
+const FieldUpdateMethodArray FieldUpdateMethod = "Array"
+const FieldUpdateMethodEntitySet FieldUpdateMethod = "EntitySet"
+const FieldUpdateMethodSet FieldUpdateMethod = "Set"
+const FieldUpdateMethodNone FieldUpdateMethod = ""
 
 func filterFields[T bool](s Schema, selector func(FieldHint) T, value T) []string {
 	var result []string

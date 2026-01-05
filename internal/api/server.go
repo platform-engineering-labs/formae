@@ -11,23 +11,22 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
-
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	echoSwagger "github.com/swaggo/echo-swagger"
+
+	_ "github.com/platform-engineering-labs/formae/docs"
 	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
-	"golang.org/x/exp/slog"
-
-	_ "github.com/platform-engineering-labs/formae/docs"
-	echoSwagger "github.com/swaggo/echo-swagger"
 )
 
 const (
@@ -39,41 +38,34 @@ const (
 	ListResourcesRoute     = BasePath + "/resources"
 	ListTargetsRoute       = BasePath + "/targets"
 	StatsRoute             = BasePath + "/stats"
-	MetricsRoute           = BasePath + "/metrics"
 
 	AdminBasePath = BasePath + "/admin"
 	SyncRoute     = AdminBasePath + "/synchronize"
 	DiscoverRoute = AdminBasePath + "/discover"
 
 	HealthRoute  = BasePath + "/health"
+	MetricsRoute = "/metrics"
 	APIDocsRoute = "/swagger/*"
 )
 
 type Server struct {
-	echo          *echo.Echo
-	metastructure metastructure.MetastructureAPI
-	ctx           context.Context
-	pluginManager *plugin.Manager
-	serverConfig  *pkgmodel.ServerConfig
-	pluginConfig  *pkgmodel.PluginConfig
-	otel          *OTel
+	echo           *echo.Echo
+	metastructure  metastructure.MetastructureAPI
+	ctx            context.Context
+	pluginManager  *plugin.Manager
+	serverConfig   *pkgmodel.ServerConfig
+	pluginConfig   *pkgmodel.PluginConfig
+	metricsHandler http.Handler
 }
 
-func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, pluginManager *plugin.Manager, serverConfig *pkgmodel.ServerConfig, pluginConfig *pkgmodel.PluginConfig, otelConfig *pkgmodel.OTelConfig) *Server {
+func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, pluginManager *plugin.Manager, serverConfig *pkgmodel.ServerConfig, pluginConfig *pkgmodel.PluginConfig, metricsHandler http.Handler) *Server {
 	server := &Server{
-		metastructure: metastructure,
-		ctx:           ctx,
-		pluginManager: pluginManager,
-		serverConfig:  serverConfig,
-		pluginConfig:  pluginConfig,
-	}
-
-	if otelConfig != nil && otelConfig.Enabled {
-		server.otel = &OTel{
-			otelConfig: otelConfig,
-		}
-
-		server.setupOTelMetrics()
+		metastructure:  metastructure,
+		ctx:            ctx,
+		pluginManager:  pluginManager,
+		serverConfig:   serverConfig,
+		pluginConfig:   pluginConfig,
+		metricsHandler: metricsHandler,
 	}
 
 	server.echo = server.configureEcho()
@@ -150,10 +142,6 @@ func (s *Server) Start() {
 
 // Stop gracefully shuts down the server, waiting for ongoing requests to complete
 func (s *Server) Stop(_ bool) {
-	if s.isOTelEnabled() {
-		s.shutdownOTel()
-	}
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	slog.Info("API server received shutdown")
@@ -191,17 +179,17 @@ func (s *Server) configureEcho() *echo.Echo {
 	// Usage stats endpoint
 	e.GET(StatsRoute, s.Stats)
 
-	// Metrics endpoint
-	if s.isOTelEnabled() {
-		e.GET(MetricsRoute, setupOTelMetricsHandler())
-	}
-
 	// Health endpoint
 	e.GET(HealthRoute, s.Health)
 
 	// Admin endpoints
 	e.POST(SyncRoute, s.ForceSync)
 	e.POST(DiscoverRoute, s.ForceDiscover)
+
+	// Prometheus metrics endpoint (if enabled)
+	if s.metricsHandler != nil {
+		e.GET(MetricsRoute, echo.WrapHandler(s.metricsHandler))
+	}
 
 	// API docs endpoint
 	e.GET(APIDocsRoute, echoSwagger.WrapHandler)

@@ -52,6 +52,9 @@ open class OptionGroup extends formae.Resource {
     @aws.FieldHint{createOnly = true}
     optionGroupName: String?
 
-    @aws.FieldHint
+    @aws.FieldHint {
+        updateMethod = "EntitySet"
+        indexField = "Key"
+    }
     tags: Listing<formae.Tag>?
 }
