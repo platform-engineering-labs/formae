@@ -1,3 +1,9 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
 /// Tests for PklProjectGenerator.pkl
 module formae.plugin.test.PklProjectGeneratorTest
 

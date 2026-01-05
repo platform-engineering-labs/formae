@@ -1,3 +1,9 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
 /// These tests verify the output format and logic of the ImportsGenerator.
 /// Since we can't easily mock the PklProject import, we test the output
 /// structure and verify it matches expected patterns.
