@@ -18,8 +18,8 @@ import (
 // newDiscoverableDescriptor creates a ResourceDescriptor with Schema.Discoverable set
 func newDiscoverableDescriptor(resourceType string, discoverable bool, parentMappings map[string][]plugin.ListParameter) plugin.ResourceDescriptor {
 	return plugin.ResourceDescriptor{
-		Type:   resourceType,
-		Schema: model.Schema{Discoverable: discoverable},
+		Type:                                     resourceType,
+		Schema:                                   model.Schema{Discoverable: discoverable},
 		ParentResourceTypesWithMappingProperties: parentMappings,
 	}
 }
