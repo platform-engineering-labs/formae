@@ -35,6 +35,12 @@ type ResourceDescriptors struct {
 	Descriptors []plugin.ResourceDescriptor `json:"descriptors" pkl:"descriptors"`
 }
 
+// ExtractSchemaFromDependencies extracts ResourceDescriptors from a list of dependencies.
+// Each dependency is a Dependency struct with Name and Value (package URI or absolute path).
+func ExtractSchemaFromDependencies(ctx context.Context, dependencies []Dependency) ([]plugin.ResourceDescriptor, error) {
+	return ExtractSchema(ctx, dependencies)
+}
+
 // ExtractSchema extracts ResourceDescriptors from PKL schema packages.
 // It orchestrates the PKL evaluation pipeline:
 // 1. Generates a PklProject file from the provided dependencies

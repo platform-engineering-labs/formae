@@ -1,6 +1,6 @@
 module formae.descriptors
 
-import "@formae/formae.pkl"
+import "@formae/formae.pkl" // The plugin package needs to import formae
 import "pkl:reflect"
 import "./ResourceDescriptor.pkl" as resourceDescriptor
 import "./imports.pkl"

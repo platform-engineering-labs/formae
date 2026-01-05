@@ -1,0 +1,47 @@
+examples {
+  ["generates PklProject with single remote dependency"] {
+    """
+    amends "pkl:Project"
+    
+    dependencies {
+      ["formae"] {
+        uri = "package://hub.platform.engineering/formae@0.1.0"
+      }
+    }
+    """
+  }
+  ["generates PklProject with single local dependency"] {
+    """
+    amends "pkl:Project"
+    
+    dependencies {
+      ["aws"] = import("../plugins/aws/PklProject")
+    }
+    """
+  }
+  ["generates PklProject with mixed dependencies"] {
+    """
+    amends "pkl:Project"
+    
+    dependencies {
+      ["formae"] {
+        uri = "package://hub.platform.engineering/formae@0.1.0"
+      }
+      ["aws"] = import("../plugins/aws/PklProject")
+    }
+    """
+  }
+  ["generates PklProject matching AWS plugin format"] {
+    """
+    amends "pkl:Project"
+    
+    dependencies {
+      ["go"] {
+        uri = "package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.11.0"
+      }
+      ["formae"] = import("../pkl/schema/PklProject")
+      ["aws"] = import("schema/pkl/PklProject")
+    }
+    """
+  }
+}

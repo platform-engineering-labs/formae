@@ -1,0 +1,94 @@
+/// Tests for PklProjectGenerator.pkl
+module formae.plugin.test.PklProjectGeneratorTest
+
+amends "pkl:test"
+
+import "../PklProjectGenerator.pkl"
+
+// Test helper to create a generator with specific dependencies
+local function createGenerator(deps: String): PklProjectGenerator =
+    (PklProjectGenerator) { dependencies = deps }
+
+facts {
+    ["single remote dependency generates correct uri block"] {
+        local gen = createGenerator("formae,package://hub.platform.engineering/formae@0.1.0")
+        local output = gen.output.text
+        output.contains("[\"formae\"] {")
+        output.contains("uri = \"package://hub.platform.engineering/formae@0.1.0\"")
+    }
+
+    ["single local dependency generates import statement"] {
+        local gen = createGenerator("aws,../plugins/aws/PklProject")
+        local output = gen.output.text
+        output.contains("[\"aws\"] = import(\"../plugins/aws/PklProject\")")
+    }
+
+    ["multiple dependencies are all included"] {
+        local gen = createGenerator("formae,package://example.com/formae@0.1.0,aws,./aws/PklProject,gcp,./gcp/PklProject")
+        local output = gen.output.text
+        output.contains("[\"formae\"]")
+        output.contains("[\"aws\"]")
+        output.contains("[\"gcp\"]")
+        output.contains("package://example.com/formae@0.1.0")
+        output.contains("import(\"./aws/PklProject\")")
+        output.contains("import(\"./gcp/PklProject\")")
+    }
+
+    ["remote dependencies use uri block format"] {
+        local gen = createGenerator("pkg,package://example.com/pkg@2.0.0")
+        local output = gen.output.text
+        // Remote deps should have uri = "..." format, not import()
+        output.contains("uri = \"package://example.com/pkg@2.0.0\"")
+        !output.contains("import(\"package://")
+    }
+
+    ["local dependencies use import format"] {
+        local gen = createGenerator("local,./path/to/PklProject")
+        local output = gen.output.text
+        // Local deps should use import(), not uri
+        output.contains("import(\"./path/to/PklProject\")")
+        !output.contains("uri = \"./path/to/PklProject\"")
+    }
+
+    ["whitespace in dependencies is trimmed"] {
+        local gen = createGenerator("  formae  ,  package://example.com/formae@0.1.0  ")
+        local output = gen.output.text
+        output.contains("[\"formae\"]")
+        output.contains("package://example.com/formae@0.1.0")
+    }
+
+    ["output starts with amends pkl:Project"] {
+        local gen = createGenerator("test,package://example.com/test@1.0.0")
+        local output = gen.output.text
+        output.startsWith("amends \"pkl:Project\"")
+    }
+
+    ["output contains dependencies block"] {
+        local gen = createGenerator("test,package://example.com/test@1.0.0")
+        local output = gen.output.text
+        output.contains("dependencies {")
+        output.endsWith("}")
+    }
+}
+
+examples {
+    ["generates PklProject with single remote dependency"] {
+        local gen = createGenerator("formae,package://hub.platform.engineering/formae@0.1.0")
+        gen.output.text
+    }
+
+    ["generates PklProject with single local dependency"] {
+        local gen = createGenerator("aws,../plugins/aws/PklProject")
+        gen.output.text
+    }
+
+    ["generates PklProject with mixed dependencies"] {
+        local gen = createGenerator("formae,package://hub.platform.engineering/formae@0.1.0,aws,../plugins/aws/PklProject")
+        gen.output.text
+    }
+
+    ["generates PklProject matching AWS plugin format"] {
+        local gen = createGenerator("go,package://pkg.pkl-lang.org/pkl-go/pkl.golang@0.11.0,formae,../pkl/schema/PklProject,aws,schema/pkl/PklProject")
+        gen.output.text
+    }
+}

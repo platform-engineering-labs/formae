@@ -1,4 +1,5 @@
 module formae.plugin
+
 import "@formae/formae.pkl"
 
 class ResourceDescriptor {
