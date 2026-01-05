@@ -37,7 +37,7 @@ var Plugin = AWS{}
 
 var Descriptors []plugin.ResourceDescriptor
 
-var ResourceTypeDescriptors map[string]plugin.ResourceDescriptor
+var ResourceTypeDescriptors map[string]plugin.ResourceTypeDescriptor
 
 // EKSAutomodeResourceTypes lists AWS CloudFormation resource types that EKS Automode manages
 var EKSAutomodeResourceTypes = []string{
@@ -61,12 +61,17 @@ var EKSAutomodeResourceTypes = []string{
 
 // initDescriptors initializes the descriptor maps from a slice of descriptors.
 // Called from init_local.go or init_prod.go depending on build tags.
-func initDescriptors(descriptorSlice []plugin.ResourceDescriptor) {
-	ResourceTypeDescriptors = make(map[string]plugin.ResourceDescriptor, len(descriptorSlice))
-	Descriptors = make([]plugin.ResourceDescriptor, 0, len(descriptorSlice))
-	for _, desc := range descriptorSlice {
+func initDescriptors(resourceTypeDescriptorSlice []plugin.ResourceTypeDescriptor) {
+	ResourceTypeDescriptors = make(map[string]plugin.ResourceTypeDescriptor, len(resourceTypeDescriptorSlice))
+	Descriptors = make([]plugin.ResourceDescriptor, 0, len(resourceTypeDescriptorSlice))
+	for _, desc := range resourceTypeDescriptorSlice {
 		ResourceTypeDescriptors[desc.Type] = desc
-		Descriptors = append(Descriptors, desc)
+		Descriptors = append(Descriptors, plugin.ResourceDescriptor{
+			Type:                                     desc.Type,
+			ParentResourceTypesWithMappingProperties: desc.ParentResourceTypesWithMappingProperties,
+			Extractable:                              desc.Schema.Extractable,
+			Discoverable:                             desc.Schema.Discoverable,
+		})
 	}
 }
 

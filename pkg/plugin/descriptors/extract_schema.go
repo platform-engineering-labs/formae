@@ -30,14 +30,9 @@ type Dependency struct {
 	Value string
 }
 
-// ResourceDescriptors is the wrapper struct for PKL extraction results.
-type ResourceDescriptors struct {
-	Descriptors []plugin.ResourceDescriptor `json:"descriptors" pkl:"descriptors"`
-}
-
 // ExtractSchemaFromDependencies extracts ResourceDescriptors from a list of dependencies.
 // Each dependency is a Dependency struct with Name and Value (package URI or absolute path).
-func ExtractSchemaFromDependencies(ctx context.Context, dependencies []Dependency) ([]plugin.ResourceDescriptor, error) {
+func ExtractSchemaFromDependencies(ctx context.Context, dependencies []Dependency) ([]plugin.ResourceTypeDescriptor, error) {
 	return ExtractSchema(ctx, dependencies)
 }
 
@@ -46,7 +41,7 @@ func ExtractSchemaFromDependencies(ctx context.Context, dependencies []Dependenc
 // 1. Generates a PklProject file from the provided dependencies
 // 2. Generates the imports.pkl file
 // 3. Runs Extractor.pkl to extract ResourceDescriptors
-func ExtractSchema(ctx context.Context, dependencies []Dependency) ([]plugin.ResourceDescriptor, error) {
+func ExtractSchema(ctx context.Context, dependencies []Dependency) ([]plugin.ResourceTypeDescriptor, error) {
 	if len(dependencies) == 0 {
 		return nil, fmt.Errorf("at least one dependency is required")
 	}
@@ -191,7 +186,7 @@ func generateImports(ctx context.Context, workDir string) error {
 }
 
 // runExtractor runs the Extractor.pkl to extract ResourceDescriptors
-func runExtractor(ctx context.Context, workDir string) ([]plugin.ResourceDescriptor, error) {
+func runExtractor(ctx context.Context, workDir string) ([]plugin.ResourceTypeDescriptor, error) {
 	// NewProjectEvaluator expects the directory containing PklProject, not the file itself
 	evaluator, err := pkl.NewProjectEvaluator(
 		ctx,
@@ -215,7 +210,9 @@ func runExtractor(ctx context.Context, workDir string) ([]plugin.ResourceDescrip
 	}
 
 	// Parse JSON into Go structs
-	var pklResult ResourceDescriptors
+	var pklResult struct {
+		Descriptors []plugin.ResourceTypeDescriptor `json:"descriptors"`
+	}
 	if err := json.Unmarshal([]byte(jsonOutput), &pklResult); err != nil {
 		return nil, fmt.Errorf("failed to parse Extractor JSON output: %w", err)
 	}

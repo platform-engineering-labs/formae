@@ -411,7 +411,7 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 }
 
 func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data DiscoveryData, proc gen.Process) error {
-	if !data.resourceDescriptors[op.ResourceType].Schema.Discoverable {
+	if !data.resourceDescriptors[op.ResourceType].Discoverable {
 		proc.Log().Debug("Skipping non-discoverable resource type %s in target %s", op.ResourceType, target.Label)
 		return nil
 	}
@@ -771,13 +771,13 @@ func buildResourceHierarchy(descriptors []plugin.ResourceDescriptor) map[string]
 	childDescriptors := make(map[string]plugin.ResourceDescriptor)
 
 	for _, desc := range descriptors {
-		if !desc.Schema.Discoverable {
+		if !desc.Discoverable {
 			continue
 		}
 
 		hierarchy[desc.Type] = &hierarchyNode{
 			resourceType: desc.Type,
-			discoverable: desc.Schema.Discoverable,
+			discoverable: desc.Discoverable,
 			children:     make(map[*hierarchyNode][]plugin.ListParameter),
 		}
 

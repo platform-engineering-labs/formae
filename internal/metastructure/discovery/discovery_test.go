@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
@@ -19,7 +18,7 @@ import (
 func newDiscoverableDescriptor(resourceType string, discoverable bool, parentMappings map[string][]plugin.ListParameter) plugin.ResourceDescriptor {
 	return plugin.ResourceDescriptor{
 		Type:                                     resourceType,
-		Schema:                                   model.Schema{Discoverable: discoverable},
+		Discoverable:                             discoverable,
 		ParentResourceTypesWithMappingProperties: parentMappings,
 	}
 }

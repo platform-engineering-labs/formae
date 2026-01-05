@@ -1,6 +1,5 @@
 amends "pkl:Project"
 
 dependencies {
-  //TODO need to put in formae version here or we leave it to the package
   ["formae"] = import("../../../plugins/pkl/schema/PklProject")
 }

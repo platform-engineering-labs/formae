@@ -279,7 +279,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 		// The extracted PKL files require proper PklProject context which isn't available in temp dir
 		t.Logf("Skipping extract validation: failed to get resource descriptor for %s: %v", actualResourceType, err)
 		shouldSkipExtract = true
-	} else if !descriptor.Schema.Extractable {
+	} else if !descriptor.Extractable {
 		t.Logf("Skipping extract validation: resource type %s has extractable=false", actualResourceType)
 		shouldSkipExtract = true
 	}
@@ -572,7 +572,7 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	if err != nil {
 		t.Skipf("Skipping discovery test: failed to get resource descriptor for %s: %v", actualResourceType, err)
 	}
-	if !descriptor.Schema.Discoverable {
+	if !descriptor.Discoverable {
 		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", actualResourceType)
 	}
 
