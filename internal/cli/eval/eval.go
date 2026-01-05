@@ -31,17 +31,17 @@ type EvalOptions struct {
 
 func validateEvalOptions(opts *EvalOptions) error {
 	if opts.FormaFile == "" {
-		return fmt.Errorf("forma file is required")
+		return cmd.FlagErrorf("forma file is required")
 	}
 	if opts.Mode != pkgmodel.FormaApplyModePatch && opts.Mode != pkgmodel.FormaApplyModeReconcile {
-		return fmt.Errorf("mode must be 'patch' or 'reconcile'")
+		return cmd.FlagErrorf("mode must be 'patch' or 'reconcile'")
 	}
 	if opts.OutputConsumer != printer.ConsumerHuman && opts.OutputConsumer != printer.ConsumerMachine {
-		return fmt.Errorf("output-consumer must be 'human' or 'machine'")
+		return cmd.FlagErrorf("output-consumer must be 'human' or 'machine'")
 	}
 	if opts.OutputConsumer == printer.ConsumerMachine {
 		if opts.OutputSchema != "json" && opts.OutputSchema != "yaml" {
-			return fmt.Errorf("output-schema must be 'json' or 'yaml' for machine consumer")
+			return cmd.FlagErrorf("output-schema must be 'json' or 'yaml' for machine consumer")
 		}
 	}
 	return nil

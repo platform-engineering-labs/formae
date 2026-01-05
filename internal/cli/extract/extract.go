@@ -132,11 +132,11 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 
 func validateExtractOptions(opts *ExtractOptions) error {
 	if opts.TargetPath == "" {
-		return fmt.Errorf("target file is required")
+		return cmd.FlagErrorf("target file is required")
 	}
 
 	if strings.TrimSpace(opts.Query) == "" {
-		return fmt.Errorf("query is required")
+		return cmd.FlagErrorf("query is required")
 	}
 
 	return nil
