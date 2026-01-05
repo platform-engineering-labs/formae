@@ -79,11 +79,11 @@ publish-bin: pkg-bin
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
 	pkl project resolve plugins/pkl/schema
-	pkl project resolve plugins/pkl/schema
 	pkl project resolve plugins/pkl/generator
 	pkl project resolve plugins/aws/schema/pkl
 	pkl project resolve plugins/pkl/testdata/forma
 	pkl project resolve plugins/pkl/verify
+	pkl project resolve pkg/plugin/descriptors/
 	pkl project resolve examples/
 	pkl project resolve tests/e2e/pkl
 
