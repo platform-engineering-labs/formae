@@ -66,7 +66,7 @@ func TestStackTransition_Integration(t *testing.T) {
 
 			update := updates[0]
 			assert.Equal(t, resource_update.OperationUpdate, update.Operation)
-			assert.Equal(t, origVpcKsuid, update.Resource.Ksuid)
+			assert.Equal(t, origVpcKsuid, update.DesiredState.Ksuid)
 			assert.Equal(t, "managed-stack", update.StackLabel)
 		})
 	})
@@ -113,12 +113,12 @@ func TestStackTransition_Integration(t *testing.T) {
 
 			update := updates[0]
 			assert.Equal(t, resource_update.OperationUpdate, update.Operation)
-			assert.Equal(t, "transition-vpc", update.Resource.Label)
+			assert.Equal(t, "transition-vpc", update.DesiredState.Label)
 			assert.Equal(t, "production", update.StackLabel)
 
 			if len(allStacks) > 0 && len(allStacks[0].Resources) > 0 {
 				origKsuid := allStacks[0].Resources[0].Ksuid
-				assert.Equal(t, origKsuid, update.Resource.Ksuid)
+				assert.Equal(t, origKsuid, update.DesiredState.Ksuid)
 			}
 		})
 	})

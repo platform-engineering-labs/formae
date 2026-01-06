@@ -62,17 +62,17 @@ func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
 						Operation: resource_update.OperationUpdate,
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
 							Stack: "test-stack",
-							Ksuid: initialResource.Resource.Ksuid,
+							Ksuid: initialResource.DesiredState.Ksuid,
 						},
-						ExistingResource: pkgmodel.Resource{
+						PriorState: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
 							Stack: "test-stack",
-							Ksuid: initialResource.Resource.Ksuid,
+							Ksuid: initialResource.DesiredState.Ksuid,
 						},
 					},
 				},
@@ -88,28 +88,28 @@ func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 		assert.NotEmpty(t, hash)
 
 		// start the resource updater
-		updateResource := resourceUpdateModifyingS3Bucket(initialResource.Resource.Ksuid)
+		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.Resource.URI(),
+			ResourceURI: initialResource.DesiredState.URI(),
 			Operation:   string(updateResource.Operation),
 			CommandID:   "test-forma-command",
 		})
 		assert.NoError(t, err)
 
 		// send any update to the resource updater, which should be rejected
-		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.Resource.URI(), string(updateResource.Operation), "test-forma-command"), resource_update.StartResourceUpdate{
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command"), resource_update.StartResourceUpdate{
 			ResourceUpdate: *updateResource,
 			CommandID:      "test-forma-command",
 		})
 
 		// assert that we receive a message that the resource update was rejected
 		testutil.ExpectMessageWithPredicate(t, messages, 5*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
-			return msg.Uri == initialResource.Resource.URI() &&
+			return msg.Uri == initialResource.DesiredState.URI() &&
 				msg.State == resource_update.ResourceUpdateStateRejected
 		})
 
 		// assert that the resource is correctly updated
-		stack, err := m.Datastore.LoadStack(initialResource.Resource.Stack)
+		stack, err := m.Datastore.LoadStack(initialResource.DesiredState.Stack)
 		assert.NoError(t, err)
 
 		assert.Len(t, stack.Resources, 1)
@@ -167,12 +167,12 @@ func TestResourceUpdater_SuccessfullySynchronizesAResource(t *testing.T) {
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
 						Operation: resource_update.OperationRead, // Must match the operation used by resourceUpdateReadingS3Bucket
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Label:      "test-resource",
 							Type:       "FakeAWS::S3::Bucket",
 							Stack:      "test-stack",
 							Properties: json.RawMessage(`{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`),
-							Ksuid:      initialResource.Resource.Ksuid,
+							Ksuid:      initialResource.DesiredState.Ksuid,
 						},
 					},
 				},
@@ -180,23 +180,23 @@ func TestResourceUpdater_SuccessfullySynchronizesAResource(t *testing.T) {
 		})
 
 		// start the resource update
-		syncResource := resourceUpdateReadingS3Bucket(initialResource.Resource.Ksuid)
+		syncResource := resourceUpdateReadingS3Bucket(initialResource.DesiredState.Ksuid)
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.Resource.URI(),
+			ResourceURI: initialResource.DesiredState.URI(),
 			CommandID:   "test-forma-command-sync",
 			Operation:   string(syncResource.Operation),
 		})
 		assert.NoError(t, err)
 
 		// send the sync operation to the resource updater
-		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.Resource.URI(), string(syncResource.Operation), "test-forma-command-sync"), resource_update.StartResourceUpdate{
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(syncResource.Operation), "test-forma-command-sync"), resource_update.StartResourceUpdate{
 			ResourceUpdate: *syncResource,
 			CommandID:      "test-forma-command-sync",
 		})
 
 		// assert that the resource updater has sent a resource updated finished message with the state success
 		testutil.ExpectMessageWithPredicate(t, messages, 5*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
-			return msg.Uri == initialResource.Resource.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
+			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
 		})
 
 		// assert that the resource is created
@@ -286,11 +286,11 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
 						Operation: resource_update.OperationDelete, // Must match the operation used by resourceUpdateDeletingS3Bucket
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
 							Stack: "test-stack",
-							Ksuid: initialResource.Resource.Ksuid,
+							Ksuid: initialResource.DesiredState.Ksuid,
 						},
 					},
 				},
@@ -306,28 +306,28 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 		assert.NotEmpty(t, hash)
 
 		// start the resource updater
-		updateResource := resourceUpdateDeletingS3Bucket(initialResource.Resource.Ksuid)
+		updateResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.Resource.URI(),
+			ResourceURI: initialResource.DesiredState.URI(),
 			CommandID:   "test-forma-command-delete",
 			Operation:   string(updateResource.Operation),
 		})
 		assert.NoError(t, err)
 
 		// send the delete operation to the resource updater
-		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.Resource.URI(), string(updateResource.Operation), "test-forma-command-delete"), resource_update.StartResourceUpdate{
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-delete"), resource_update.StartResourceUpdate{
 			ResourceUpdate: *updateResource,
 			CommandID:      "test-forma-command-delete",
 		})
 
 		// assert that the resource updater has sent a resource updated finished message with the state success
 		testutil.ExpectMessageWithPredicate(t, messages, 5*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
-			return msg.Uri == initialResource.Resource.URI() &&
+			return msg.Uri == initialResource.DesiredState.URI() &&
 				msg.State == resource_update.ResourceUpdateStateSuccess
 		})
 
 		// assert that the resource is deleted
-		stack, err := m.Datastore.LoadStack(initialResource.Resource.Stack)
+		stack, err := m.Datastore.LoadStack(initialResource.DesiredState.Stack)
 		assert.NoError(t, err)
 		// there was only one resource in the stack, so the stack should be deleted
 		assert.Nil(t, stack)
@@ -362,7 +362,7 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 						OperationStatus:    resource.OperationStatusInProgress,
 						RequestID:          "test-request-id",
 						ResourceType:       "FakeAWS::S3::Bucket",
-						ResourceProperties: request.Resource.Properties,
+						ResourceProperties: request.DesiredState.Properties,
 						StartTs:            util.TimeNow(),
 						ModifiedTs:         util.TimeNow(),
 						Attempts:           1,
@@ -421,7 +421,7 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 
 		// store the ref resource on the stack
 		referencedResource := resource_update.ResourceUpdate{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label:      "test-vpc",
 				Type:       "FakeAWS::EC2::VPC",
 				Stack:      "test-stack",
@@ -463,7 +463,7 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					Operation: resource_update.OperationCreate,
-					Resource: pkgmodel.Resource{
+					DesiredState: pkgmodel.Resource{
 						Label:      "test-resource",
 						Type:       "FakeAWS::S3::Bucket",
 						Stack:      "test-stack",
@@ -485,17 +485,17 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 		})
 
 		// start the resource update
-		newResourceUri := command.ResourceUpdates[0].Resource.URI()
+		newResourceUri := command.ResourceUpdates[0].DesiredState.URI()
 		createResource := resourceUpdateCreatingS3Bucket(bucketKsuid, vpcKsuid)
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: createResource.Resource.URI(),
+			ResourceURI: createResource.DesiredState.URI(),
 			CommandID:   "test-forma-command-create",
 			Operation:   string(createResource.Operation),
 		})
 		assert.NoError(t, err)
 
 		// send the create operation to the resource updater
-		testutil.Send(m.Node, actornames.ResourceUpdater(createResource.Resource.URI(), string(createResource.Operation), "test-forma-command-create"), resource_update.StartResourceUpdate{
+		testutil.Send(m.Node, actornames.ResourceUpdater(createResource.DesiredState.URI(), string(createResource.Operation), "test-forma-command-create"), resource_update.StartResourceUpdate{
 			ResourceUpdate: *createResource,
 			CommandID:      "test-forma-command-create",
 		})
@@ -599,12 +599,12 @@ func TestResourceUpdater_SuccessfullyUpdatesAResource(t *testing.T) {
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
 						Operation: resource_update.OperationUpdate,
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Label:      "test-resource",
 							Type:       "FakeAWS::S3::Bucket",
 							Stack:      "test-stack",
 							Properties: json.RawMessage(`{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`),
-							Ksuid:      initialResource.Resource.Ksuid,
+							Ksuid:      initialResource.DesiredState.Ksuid,
 						},
 					},
 				},
@@ -612,23 +612,23 @@ func TestResourceUpdater_SuccessfullyUpdatesAResource(t *testing.T) {
 		})
 
 		// start the resource update
-		updateResource := resourceUpdateModifyingS3Bucket(initialResource.Resource.Ksuid)
+		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.Resource.URI(),
+			ResourceURI: initialResource.DesiredState.URI(),
 			CommandID:   "test-forma-command-update",
 			Operation:   string(updateResource.Operation),
 		})
 		assert.NoError(t, err)
 
 		// send the create operation to the resource updater
-		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.Resource.URI(), string(updateResource.Operation), "test-forma-command-update"), resource_update.StartResourceUpdate{
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-update"), resource_update.StartResourceUpdate{
 			ResourceUpdate: *updateResource,
 			CommandID:      "test-forma-command-update",
 		})
 
 		// assert that the resource updater has sent a resource updated finished message with the state success
 		testutil.ExpectMessageWithPredicate(t, messages, 5*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
-			return msg.Uri == initialResource.Resource.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
+			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
 		})
 
 		// assert that the resource is created
@@ -711,11 +711,11 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
 						Operation: resource_update.OperationDelete, // Must match partiallyCompletedResourceUpdateDeletingS3Bucket
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
 							Stack: "test-stack",
-							Ksuid: initialResource.Resource.Ksuid,
+							Ksuid: initialResource.DesiredState.Ksuid,
 						},
 						ProgressResult: []resource.ProgressResult{
 							{
@@ -737,23 +737,23 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 		})
 
 		// start the resource update
-		updateResource := partiallyCompletedResourceUpdateDeletingS3Bucket(initialResource.Resource.Ksuid)
+		updateResource := partiallyCompletedResourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.Resource.URI(),
+			ResourceURI: initialResource.DesiredState.URI(),
 			CommandID:   "test-forma-command-recover-delete",
 			Operation:   string(updateResource.Operation),
 		})
 		assert.NoError(t, err)
 
 		// send the delete operation to the resource updater
-		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.Resource.URI(), string(updateResource.Operation), "test-forma-command-recover-delete"), resource_update.StartResourceUpdate{
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-recover-delete"), resource_update.StartResourceUpdate{
 			ResourceUpdate: *updateResource,
 			CommandID:      "test-forma-command-recover-delete",
 		})
 
 		// assert that the resource updater has sent a resource updated finished message with the state success
 		testutil.ExpectMessageWithPredicate(t, messages, 5*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
-			return msg.Uri == initialResource.Resource.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
+			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
 		})
 
 		// assert that the resource is created
@@ -837,11 +837,11 @@ func TestResourceUpdater_SuccessfullyRecoversFromACreateOperationLeftInInProgres
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
 						Operation: resource_update.OperationCreate, // Must match partiallyCompletedResourceUpdateCreatingS3Bucket
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
 							Stack: "test-stack",
-							Ksuid: updateResource.Resource.Ksuid,
+							Ksuid: updateResource.DesiredState.Ksuid,
 						},
 						ProgressResult: []resource.ProgressResult{
 							{
@@ -864,7 +864,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromACreateOperationLeftInInProgres
 		testutil.Call(m.Node, "FormaCommandPersister", command)
 
 		// start the resource update
-		resourceURI := command.Command.ResourceUpdates[0].Resource.URI()
+		resourceURI := command.Command.ResourceUpdates[0].DesiredState.URI()
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
 			ResourceURI: resourceURI,
 			Operation:   string(updateResource.Operation),
@@ -986,7 +986,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 
 		// store the forma command in the database
 		updateResource := partiallyCompletedResourceUpdateModifyingS3Bucket()
-		updateResource.Resource.Ksuid = initialResource.Resource.Ksuid
+		updateResource.DesiredState.Ksuid = initialResource.DesiredState.Ksuid
 
 		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
 			Command: forma_command.FormaCommand{
@@ -996,11 +996,11 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
 						Operation: resource_update.OperationUpdate,
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Label: "test-resource",
 							Type:  "FakeAWS::S3::Bucket",
 							Stack: "test-stack",
-							Ksuid: updateResource.Resource.Ksuid,
+							Ksuid: updateResource.DesiredState.Ksuid,
 						},
 						ProgressResult: []resource.ProgressResult{
 							{
@@ -1023,21 +1023,21 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 
 		// start the resource update
 		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.Resource.URI(),
+			ResourceURI: initialResource.DesiredState.URI(),
 			Operation:   string(updateResource.Operation),
 			CommandID:   "test-forma-command-recover-update",
 		})
 		assert.NoError(t, err)
 
 		// send the update operation to the resource updater
-		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.Resource.URI(), string(updateResource.Operation), "test-forma-command-recover-update"), resource_update.StartResourceUpdate{
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-recover-update"), resource_update.StartResourceUpdate{
 			ResourceUpdate: *updateResource,
 			CommandID:      "test-forma-command-recover-update",
 		})
 
 		// assert that the resource updater has sent a resource updated finished message with the state success
 		testutil.ExpectMessageWithPredicate(t, messages, 500*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
-			return msg.Uri == initialResource.Resource.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
+			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
 		})
 
 		// assert that the resource is created
@@ -1072,7 +1072,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 
 func successfullyFinishedResourceUpdateCreatingS3Bucket() *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1110,7 +1110,7 @@ func successfullyFinishedResourceUpdateCreatingS3Bucket() *resource_update.Resou
 
 func resourceUpdateModifyingS3Bucket(ksuid string) *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1121,7 +1121,7 @@ func resourceUpdateModifyingS3Bucket(ksuid string) *resource_update.ResourceUpda
 			Stack:         "test-stack",
 			Ksuid:         ksuid,
 		},
-		ExistingResource: pkgmodel.Resource{
+		PriorState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1147,7 +1147,7 @@ func resourceUpdateModifyingS3Bucket(ksuid string) *resource_update.ResourceUpda
 
 func resourceUpdateDeletingS3Bucket(ksuid string) *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1157,7 +1157,7 @@ func resourceUpdateDeletingS3Bucket(ksuid string) *resource_update.ResourceUpdat
 			Stack:      "test-stack",
 			Ksuid:      ksuid,
 		},
-		ExistingResource: pkgmodel.Resource{
+		PriorState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1181,7 +1181,7 @@ func resourceUpdateDeletingS3Bucket(ksuid string) *resource_update.ResourceUpdat
 
 func resourceUpdateReadingS3Bucket(ksuid string) *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1191,7 +1191,7 @@ func resourceUpdateReadingS3Bucket(ksuid string) *resource_update.ResourceUpdate
 			Stack:      "test-stack",
 			Ksuid:      ksuid,
 		},
-		ExistingResource: pkgmodel.Resource{
+		PriorState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1215,7 +1215,7 @@ func resourceUpdateReadingS3Bucket(ksuid string) *resource_update.ResourceUpdate
 
 func resourceUpdateCreatingS3Bucket(bucketKsuid, vpcKsuid string) *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1242,7 +1242,7 @@ func resourceUpdateCreatingS3Bucket(bucketKsuid, vpcKsuid string) *resource_upda
 
 func partiallyCompletedResourceUpdateDeletingS3Bucket(ksuid string) *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1280,7 +1280,7 @@ func partiallyCompletedResourceUpdateDeletingS3Bucket(ksuid string) *resource_up
 
 func partiallyCompletedResourceUpdateCreatingS3Bucket() *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{
@@ -1318,7 +1318,7 @@ func partiallyCompletedResourceUpdateCreatingS3Bucket() *resource_update.Resourc
 
 func partiallyCompletedResourceUpdateModifyingS3Bucket() *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{

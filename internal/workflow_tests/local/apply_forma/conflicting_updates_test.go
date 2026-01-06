@@ -28,7 +28,7 @@ import (
 // in the normalized resource_updates table.
 func newTestResourceUpdate(label, resourceType, stack, target string, state resource_update.ResourceUpdateState, operation resource_update.OperationType) resource_update.ResourceUpdate {
 	return resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:  label,
 			Type:   resourceType,
 			Stack:  stack,

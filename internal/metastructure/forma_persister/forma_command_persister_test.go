@@ -53,7 +53,7 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 	assert.True(t, storeResult.Response.(bool))
 
 	// Use the KSUID from the resource
-	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
 
 	updateResourceProgress := messages.UpdateResourceProgress{
 		CommandID:          formaCommand.ID,
@@ -129,7 +129,7 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 		ResourceUpdates: []resource_update.ResourceUpdate{
 			{
 				Operation: resource_update.OperationCreate,
-				Resource: pkgmodel.Resource{
+				DesiredState: pkgmodel.Resource{
 					Label:      "resource0",
 					Type:       "AWS::EC2::VPC",
 					Stack:      "test-stack",
@@ -140,7 +140,7 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 			},
 			{
 				Operation: resource_update.OperationCreate,
-				Resource: pkgmodel.Resource{
+				DesiredState: pkgmodel.Resource{
 					Label:      "resource1",
 					Type:       "AWS::EC2::Subnet",
 					Stack:      "test-stack",
@@ -151,7 +151,7 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 			},
 			{
 				Operation: resource_update.OperationCreate,
-				Resource: pkgmodel.Resource{
+				DesiredState: pkgmodel.Resource{
 					Label:      "resource2",
 					Type:       "AWS::EC2::Instance",
 					Stack:      "test-stack",
@@ -191,7 +191,7 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
 	for i := range loadedCommand.ResourceUpdates {
 		ru := &loadedCommand.ResourceUpdates[i]
-		ruByKsuid[ru.Resource.Ksuid] = ru
+		ruByKsuid[ru.DesiredState.Ksuid] = ru
 	}
 
 	// Verify resource0 unchanged, resource1 and resource2 failed
@@ -215,7 +215,7 @@ func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
 	assert.True(t, storeResult.Response.(bool))
 
 	// Mark the resource update as complete WITHOUT a version (no changes detected)
-	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
 	markComplete := messages.MarkResourceUpdateAsComplete{
 		CommandID:                  formaCommand.ID,
 		ResourceURI:                resourceURI,
@@ -223,7 +223,7 @@ func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
 		FinalState:                 resource_update.ResourceUpdateStateSuccess,
 		ResourceStartTs:            util.TimeNow(),
 		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
-		ResourceProperties:         formaCommand.ResourceUpdates[0].Resource.Properties,
+		ResourceProperties:         formaCommand.ResourceUpdates[0].DesiredState.Properties,
 		ResourceReadOnlyProperties: nil,
 		Version:                    "", // No version - no changes detected
 	}
@@ -248,7 +248,7 @@ func TestFormaCommandPersister_KeepsSyncCommandWithVersions(t *testing.T) {
 	assert.True(t, storeResult.Response.(bool))
 
 	// Mark the resource update as complete WITH a version (changes detected)
-	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
 	markComplete := messages.MarkResourceUpdateAsComplete{
 		CommandID:                  formaCommand.ID,
 		ResourceURI:                resourceURI,
@@ -256,7 +256,7 @@ func TestFormaCommandPersister_KeepsSyncCommandWithVersions(t *testing.T) {
 		FinalState:                 resource_update.ResourceUpdateStateSuccess,
 		ResourceStartTs:            util.TimeNow(),
 		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
-		ResourceProperties:         formaCommand.ResourceUpdates[0].Resource.Properties,
+		ResourceProperties:         formaCommand.ResourceUpdates[0].DesiredState.Properties,
 		ResourceReadOnlyProperties: nil,
 		Version:                    "test-version-hash", // Has version - changes were detected
 	}
@@ -287,7 +287,7 @@ func TestFormaCommandPersister_KeepsApplyCommandWithNoVersions(t *testing.T) {
 	assert.True(t, storeResult.Response.(bool))
 
 	// Mark the resource update as complete WITHOUT a version
-	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
 	markComplete := messages.MarkResourceUpdateAsComplete{
 		CommandID:                  formaCommand.ID,
 		ResourceURI:                resourceURI,
@@ -295,7 +295,7 @@ func TestFormaCommandPersister_KeepsApplyCommandWithNoVersions(t *testing.T) {
 		FinalState:                 resource_update.ResourceUpdateStateSuccess,
 		ResourceStartTs:            util.TimeNow(),
 		ResourceModifiedTs:         util.TimeNow().Add(20 * time.Second),
-		ResourceProperties:         formaCommand.ResourceUpdates[0].Resource.Properties,
+		ResourceProperties:         formaCommand.ResourceUpdates[0].DesiredState.Properties,
 		ResourceReadOnlyProperties: nil,
 		Version:                    "", // No version
 	}
@@ -326,7 +326,7 @@ func newSyncFormaCommand() *forma_command.FormaCommand {
 		StartTs: util.TimeNow().Add(-1 * time.Hour),
 		ResourceUpdates: []resource_update.ResourceUpdate{
 			{
-				Resource: pkgmodel.Resource{
+				DesiredState: pkgmodel.Resource{
 					Label:      "test-resource",
 					Type:       "test-type",
 					Stack:      "test-stack",
@@ -359,7 +359,7 @@ func newFormaCommandWithCreateResourceUpdate() *forma_command.FormaCommand {
 		StartTs: util.TimeNow().Add(-1 * time.Hour),
 		ResourceUpdates: []resource_update.ResourceUpdate{
 			{
-				Resource: pkgmodel.Resource{
+				DesiredState: pkgmodel.Resource{
 					Label:      "test-resource",
 					Type:       "test-type",
 					Stack:      "test-stack",
@@ -388,9 +388,9 @@ func TestBuildResourceUpdateIndex(t *testing.T) {
 	cmd := &forma_command.FormaCommand{
 		ID: "test-command",
 		ResourceUpdates: []resource_update.ResourceUpdate{
-			{Resource: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationCreate},
-			{Resource: pkgmodel.Resource{Ksuid: ksuid2, Label: "resource2"}, Operation: resource_update.OperationUpdate},
-			{Resource: pkgmodel.Resource{Ksuid: ksuid3, Label: "resource3"}, Operation: resource_update.OperationDelete},
+			{DesiredState: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationCreate},
+			{DesiredState: pkgmodel.Resource{Ksuid: ksuid2, Label: "resource2"}, Operation: resource_update.OperationUpdate},
+			{DesiredState: pkgmodel.Resource{Ksuid: ksuid3, Label: "resource3"}, Operation: resource_update.OperationDelete},
 		},
 	}
 
@@ -410,8 +410,8 @@ func TestBuildResourceUpdateIndex_DuplicateKsuids(t *testing.T) {
 	cmd := &forma_command.FormaCommand{
 		ID: "test-command",
 		ResourceUpdates: []resource_update.ResourceUpdate{
-			{Resource: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationDelete},
-			{Resource: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationCreate},
+			{DesiredState: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationDelete},
+			{DesiredState: pkgmodel.Resource{Ksuid: ksuid1, Label: "resource1"}, Operation: resource_update.OperationCreate},
 		},
 	}
 
@@ -430,8 +430,8 @@ func TestCachedCommand_FindResourceUpdateIndex(t *testing.T) {
 	cached := &cachedCommand{
 		command: &forma_command.FormaCommand{
 			ResourceUpdates: []resource_update.ResourceUpdate{
-				{Resource: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationCreate},
-				{Resource: pkgmodel.Resource{Ksuid: ksuid2}, Operation: resource_update.OperationUpdate},
+				{DesiredState: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationCreate},
+				{DesiredState: pkgmodel.Resource{Ksuid: ksuid2}, Operation: resource_update.OperationUpdate},
 			},
 		},
 		ksuidOpToIndex: map[string]int{
@@ -454,8 +454,8 @@ func TestCachedCommand_FindResourceUpdateIndex_DuplicateKsuid(t *testing.T) {
 	cached := &cachedCommand{
 		command: &forma_command.FormaCommand{
 			ResourceUpdates: []resource_update.ResourceUpdate{
-				{Resource: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationDelete},
-				{Resource: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationCreate},
+				{DesiredState: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationDelete},
+				{DesiredState: pkgmodel.Resource{Ksuid: ksuid1}, Operation: resource_update.OperationCreate},
 			},
 		},
 		ksuidOpToIndex: map[string]int{
@@ -479,7 +479,7 @@ func TestFormaCommandPersister_CacheEvictionOnFinalState(t *testing.T) {
 	assert.NoError(t, storeResult.Error)
 
 	// Mark the resource as complete - this should trigger cache eviction
-	resourceURI := formaCommand.ResourceUpdates[0].Resource.URI()
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
 	markComplete := messages.MarkResourceUpdateAsComplete{
 		CommandID:          formaCommand.ID,
 		ResourceURI:        resourceURI,
@@ -508,7 +508,7 @@ func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) 
 		ID: "test-multi-resource-cache",
 		ResourceUpdates: []resource_update.ResourceUpdate{
 			{
-				Resource: pkgmodel.Resource{
+				DesiredState: pkgmodel.Resource{
 					Label:      "resource1",
 					Type:       "AWS::EC2::VPC",
 					Stack:      "test-stack",
@@ -519,7 +519,7 @@ func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) 
 				State:     resource_update.ResourceUpdateStateNotStarted,
 			},
 			{
-				Resource: pkgmodel.Resource{
+				DesiredState: pkgmodel.Resource{
 					Label:      "resource2",
 					Type:       "AWS::EC2::Subnet",
 					Stack:      "test-stack",

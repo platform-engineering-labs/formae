@@ -132,7 +132,7 @@ func (r RecordSet) Create(ctx context.Context, request *resource.CreateRequest) 
 
 	// Parse properties from JSON
 	var properties map[string]any
-	if err := json.Unmarshal(request.Resource.Properties, &properties); err != nil {
+	if err := json.Unmarshal(request.DesiredState.Properties, &properties); err != nil {
 		return nil, fmt.Errorf("failed to parse properties: %w", err)
 	}
 
@@ -226,17 +226,13 @@ func (r RecordSet) Create(ctx context.Context, request *resource.CreateRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create record set: %w", err)
 	}
-	metadata, err := request.Resource.GetMetadata()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get metadata: %w", err)
-	}
 
 	return &resource.CreateResult{
 		ProgressResult: &resource.ProgressResult{
 			Operation:       resource.OperationCreate,
 			OperationStatus: resource.OperationStatusInProgress,
 			RequestID:       *result.ChangeInfo.Id,
-			Metadata:        metadata,
+			NativeID:        nativeID(hostedZoneID, name, recordType),
 		},
 	}, nil
 }
@@ -249,156 +245,156 @@ func (r RecordSet) Update(ctx context.Context, request *resource.UpdateRequest) 
 
 	client := route53.NewFromConfig(cfg)
 
-	// Parse metadata from JSON for both old and new states
-	var oldMetadata, newMetadata map[string]any
-	if err := json.Unmarshal(request.OldMetadata, &oldMetadata); err != nil {
-		return nil, fmt.Errorf("failed to parse old metadata: %w", err)
+	// Parse properties from JSON for both prior and desired states
+	var priorProperties, desiredProperties map[string]any
+	if err := json.Unmarshal(request.PriorState.Properties, &priorProperties); err != nil {
+		return nil, fmt.Errorf("failed to parse prior state properties: %w", err)
 	}
-	if err := json.Unmarshal(request.Metadata, &newMetadata); err != nil {
-		return nil, fmt.Errorf("failed to parse new metadata: %w", err)
+	if err := json.Unmarshal(request.DesiredState.Properties, &desiredProperties); err != nil {
+		return nil, fmt.Errorf("failed to parse desired state properties: %w", err)
 	}
 
-	// Extract required metadata for both states
-	oldHostedZoneID, err := utils.GetStringProperty(oldMetadata, "HostedZoneId")
+	// Extract required properties for both states
+	priorHostedZoneID, err := utils.GetStringProperty(priorProperties, "HostedZoneId")
 	if err != nil {
-		return nil, fmt.Errorf("invalid old HostedZoneId: %w", err)
+		return nil, fmt.Errorf("invalid prior HostedZoneId: %w", err)
 	}
-	newHostedZoneID, err := utils.GetStringProperty(newMetadata, "HostedZoneId")
+	desiredHostedZoneID, err := utils.GetStringProperty(desiredProperties, "HostedZoneId")
 	if err != nil {
-		return nil, fmt.Errorf("invalid new HostedZoneId: %w", err)
+		return nil, fmt.Errorf("invalid desired HostedZoneId: %w", err)
 	}
 
 	// Verify hosted zone IDs match (can't move between zones)
-	if oldHostedZoneID != newHostedZoneID {
+	if priorHostedZoneID != desiredHostedZoneID {
 		return nil, fmt.Errorf("cannot update record between different hosted zones")
 	}
 
-	// Create old ResourceRecordSet
-	oldName, err := utils.GetStringProperty(oldMetadata, "Name")
+	// Create prior ResourceRecordSet
+	priorName, err := utils.GetStringProperty(priorProperties, "Name")
 	if err != nil {
-		return nil, fmt.Errorf("invalid old Name: %w", err)
+		return nil, fmt.Errorf("invalid prior Name: %w", err)
 	}
-	oldType, err := utils.GetStringProperty(oldMetadata, "Type")
+	priorType, err := utils.GetStringProperty(priorProperties, "Type")
 	if err != nil {
-		return nil, fmt.Errorf("invalid old Type: %w", err)
+		return nil, fmt.Errorf("invalid prior Type: %w", err)
 	}
-	oldTTL := utils.GetInt64Property(oldMetadata, "TTL", 300)
+	priorTTL := utils.GetInt64Property(priorProperties, "TTL", 300)
 
-	// Create new ResourceRecordSet
-	newName, err := utils.GetStringProperty(newMetadata, "Name")
+	// Create desired ResourceRecordSet
+	desiredName, err := utils.GetStringProperty(desiredProperties, "Name")
 	if err != nil {
-		return nil, fmt.Errorf("invalid new Name: %w", err)
+		return nil, fmt.Errorf("invalid desired Name: %w", err)
 	}
-	newType, err := utils.GetStringProperty(newMetadata, "Type")
+	desiredType, err := utils.GetStringProperty(desiredProperties, "Type")
 	if err != nil {
-		return nil, fmt.Errorf("invalid new Type: %w", err)
+		return nil, fmt.Errorf("invalid desired Type: %w", err)
 	}
-	newTTL := utils.GetInt64Property(newMetadata, "TTL", 300)
+	desiredTTL := utils.GetInt64Property(desiredProperties, "TTL", 300)
 
-	// Handle old AliasTarget
-	var oldAliasTarget *types.AliasTarget
-	if oldAliasTargetRaw, hasAlias := oldMetadata["AliasTarget"].(map[string]any); hasAlias {
-		dnsName, err := utils.GetStringProperty(oldAliasTargetRaw, "DNSName")
+	// Handle prior AliasTarget
+	var priorAliasTarget *types.AliasTarget
+	if priorAliasTargetRaw, hasAlias := priorProperties["AliasTarget"].(map[string]any); hasAlias {
+		dnsName, err := utils.GetStringProperty(priorAliasTargetRaw, "DNSName")
 		if err != nil {
-			return nil, fmt.Errorf("invalid old AliasTarget DNSName: %w", err)
+			return nil, fmt.Errorf("invalid prior AliasTarget DNSName: %w", err)
 		}
-		hostedZoneID, err := utils.GetStringProperty(oldAliasTargetRaw, "HostedZoneId")
+		hostedZoneID, err := utils.GetStringProperty(priorAliasTargetRaw, "HostedZoneId")
 		if err != nil {
-			return nil, fmt.Errorf("invalid old AliasTarget HostedZoneId: %w", err)
+			return nil, fmt.Errorf("invalid prior AliasTarget HostedZoneId: %w", err)
 		}
-		oldAliasTarget = &types.AliasTarget{
+		priorAliasTarget = &types.AliasTarget{
 			DNSName:              aws.String(dnsName),
 			HostedZoneId:         aws.String(hostedZoneID),
 			EvaluateTargetHealth: false,
 		}
 	}
 
-	// Handle new AliasTarget
-	var newAliasTarget *types.AliasTarget
-	if newAliasTargetRaw, hasAlias := newMetadata["AliasTarget"].(map[string]any); hasAlias {
-		dnsName, err := utils.GetStringProperty(newAliasTargetRaw, "DNSName")
+	// Handle desired AliasTarget
+	var desiredAliasTarget *types.AliasTarget
+	if desiredAliasTargetRaw, hasAlias := desiredProperties["AliasTarget"].(map[string]any); hasAlias {
+		dnsName, err := utils.GetStringProperty(desiredAliasTargetRaw, "DNSName")
 		if err != nil {
-			return nil, fmt.Errorf("invalid new AliasTarget DNSName: %w", err)
+			return nil, fmt.Errorf("invalid desired AliasTarget DNSName: %w", err)
 		}
-		hostedZoneID, err := utils.GetStringProperty(newAliasTargetRaw, "HostedZoneId")
+		hostedZoneID, err := utils.GetStringProperty(desiredAliasTargetRaw, "HostedZoneId")
 		if err != nil {
-			return nil, fmt.Errorf("invalid new AliasTarget HostedZoneId: %w", err)
+			return nil, fmt.Errorf("invalid desired AliasTarget HostedZoneId: %w", err)
 		}
-		newAliasTarget = &types.AliasTarget{
+		desiredAliasTarget = &types.AliasTarget{
 			DNSName:              aws.String(dnsName),
 			HostedZoneId:         aws.String(hostedZoneID),
 			EvaluateTargetHealth: false,
 		}
 	}
 
-	// Handle ResourceRecords for old and new if not using AliasTarget
-	var oldRecords, newRecords []types.ResourceRecord
-	if oldAliasTarget == nil {
-		if oldResourceRecordsRaw, ok := oldMetadata["ResourceRecords"].([]any); ok {
-			oldRecords = make([]types.ResourceRecord, 0, len(oldResourceRecordsRaw))
+	// Handle ResourceRecords for prior and desired if not using AliasTarget
+	var priorRecords, desiredRecords []types.ResourceRecord
+	if priorAliasTarget == nil {
+		if oldResourceRecordsRaw, ok := priorProperties["ResourceRecords"].([]any); ok {
+			priorRecords = make([]types.ResourceRecord, 0, len(oldResourceRecordsRaw))
 			for _, record := range oldResourceRecordsRaw {
 				if value, ok := record.(string); ok && value != "" {
-					oldRecords = append(oldRecords, types.ResourceRecord{
+					priorRecords = append(priorRecords, types.ResourceRecord{
 						Value: aws.String(value),
 					})
 				}
 			}
 		}
-		if len(oldRecords) == 0 {
-			return nil, fmt.Errorf("at least one valid ResourceRecord is required for old record when not using AliasTarget")
+		if len(priorRecords) == 0 {
+			return nil, fmt.Errorf("at least one valid ResourceRecord is required for prior record when not using AliasTarget")
 		}
 	}
 
-	if newAliasTarget == nil {
-		if newResourceRecordsRaw, ok := newMetadata["ResourceRecords"].([]any); ok {
-			newRecords = make([]types.ResourceRecord, 0, len(newResourceRecordsRaw))
+	if desiredAliasTarget == nil {
+		if newResourceRecordsRaw, ok := desiredProperties["ResourceRecords"].([]any); ok {
+			desiredRecords = make([]types.ResourceRecord, 0, len(newResourceRecordsRaw))
 			for _, record := range newResourceRecordsRaw {
 				if value, ok := record.(string); ok && value != "" {
-					newRecords = append(newRecords, types.ResourceRecord{
+					desiredRecords = append(desiredRecords, types.ResourceRecord{
 						Value: aws.String(value),
 					})
 				}
 			}
 		}
-		if len(newRecords) == 0 {
-			return nil, fmt.Errorf("at least one valid ResourceRecord is required for new record when not using AliasTarget")
+		if len(desiredRecords) == 0 {
+			return nil, fmt.Errorf("at least one valid ResourceRecord is required for desired record when not using AliasTarget")
 		}
 	}
 
-	// Create the old and new ResourceRecordSets
-	oldRrs := &types.ResourceRecordSet{
-		Name: aws.String(oldName),
-		Type: types.RRType(oldType),
+	// Create the old and desired ResourceRecordSets
+	priorRrs := &types.ResourceRecordSet{
+		Name: aws.String(priorName),
+		Type: types.RRType(priorType),
 	}
-	if oldAliasTarget != nil {
-		oldRrs.AliasTarget = oldAliasTarget
+	if priorAliasTarget != nil {
+		priorRrs.AliasTarget = priorAliasTarget
 	} else {
-		oldRrs.ResourceRecords = oldRecords
-		oldRrs.TTL = aws.Int64(oldTTL)
+		priorRrs.ResourceRecords = priorRecords
+		priorRrs.TTL = aws.Int64(priorTTL)
 	}
 
-	newRrs := &types.ResourceRecordSet{
-		Name: aws.String(newName),
-		Type: types.RRType(newType),
+	desiredRrs := &types.ResourceRecordSet{
+		Name: aws.String(desiredName),
+		Type: types.RRType(desiredType),
 	}
-	if newAliasTarget != nil {
-		newRrs.AliasTarget = newAliasTarget
+	if desiredAliasTarget != nil {
+		desiredRrs.AliasTarget = desiredAliasTarget
 	} else {
-		newRrs.ResourceRecords = newRecords
-		newRrs.TTL = aws.Int64(newTTL)
+		desiredRrs.ResourceRecords = desiredRecords
+		desiredRrs.TTL = aws.Int64(desiredTTL)
 	}
 
 	input := &route53.ChangeResourceRecordSetsInput{
-		HostedZoneId: aws.String(newHostedZoneID),
+		HostedZoneId: aws.String(desiredHostedZoneID),
 		ChangeBatch: &types.ChangeBatch{
 			Changes: []types.Change{
 				{
 					Action:            types.ChangeActionDelete,
-					ResourceRecordSet: oldRrs,
+					ResourceRecordSet: priorRrs,
 				},
 				{
 					Action:            types.ChangeActionCreate,
-					ResourceRecordSet: newRrs,
+					ResourceRecordSet: desiredRrs,
 				},
 			},
 		},
@@ -414,6 +410,7 @@ func (r RecordSet) Update(ctx context.Context, request *resource.UpdateRequest) 
 			Operation:       resource.OperationUpdate,
 			OperationStatus: resource.OperationStatusInProgress,
 			RequestID:       *result.ChangeInfo.Id,
+			NativeID:        nativeID(desiredHostedZoneID, desiredName, desiredType),
 		},
 	}, nil
 }
@@ -429,7 +426,6 @@ func (r RecordSet) Delete(ctx context.Context, request *resource.DeleteRequest) 
 	// Always read the current record before attempting delete to get the exact state
 	readRes, err := r.Read(ctx, &resource.ReadRequest{
 		NativeID: *request.NativeID,
-		Metadata: request.Metadata,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to read record before delete: %w", err)
@@ -535,36 +531,21 @@ func (r RecordSet) Status(ctx context.Context, request *resource.StatusRequest) 
 		return nil, fmt.Errorf("failed to get change status: %w", err)
 	}
 
-	nativeID := ""
 	status := resource.OperationStatusInProgress
 	var resourceProperties json.RawMessage
 
 	if result.ChangeInfo.Status == types.ChangeStatusInsync {
 		status = resource.OperationStatusSuccess
-		// Use MetaDataRecordSet for nativeID and read
-		if len(request.Metadata) > 0 && string(request.Metadata) != "{}" {
-			meta, err := ParseMetaDataRecordSet(request.Metadata)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse metadata: %w", err)
-			}
-			if meta.HostedZoneID != "" && meta.Name != "" && meta.Type != "" {
-				nativeID = meta.NativeID()
-				readRes, readErr := r.Read(ctx, &resource.ReadRequest{
-					NativeID: nativeID,
-					Metadata: request.Metadata,
-				})
-				if readErr == nil && readRes != nil {
-					resourceProperties = json.RawMessage(readRes.Properties)
-					return &resource.StatusResult{
-						ProgressResult: &resource.ProgressResult{
-							OperationStatus:    status,
-							RequestID:          *result.ChangeInfo.Id,
-							NativeID:           nativeID,
-							ResourceProperties: resourceProperties,
-							ResourceType:       request.ResourceType,
-						},
-					}, nil
-				}
+
+		// On success, read the resource to get the final properties
+		if request.NativeID != "" {
+			readRes, readErr := r.Read(ctx, &resource.ReadRequest{
+				NativeID:     request.NativeID,
+				ResourceType: request.ResourceType,
+				Target:       request.Target,
+			})
+			if readErr == nil && readRes != nil {
+				resourceProperties = json.RawMessage(readRes.Properties)
 			}
 		}
 	}
@@ -573,9 +554,9 @@ func (r RecordSet) Status(ctx context.Context, request *resource.StatusRequest) 
 		ProgressResult: &resource.ProgressResult{
 			OperationStatus:    status,
 			RequestID:          *result.ChangeInfo.Id,
-			NativeID:           nativeID,
-			ResourceProperties: resourceProperties,
+			NativeID:           request.NativeID,
 			ResourceType:       request.ResourceType,
+			ResourceProperties: resourceProperties,
 		},
 	}, nil
 }
@@ -587,31 +568,14 @@ func (r RecordSet) Read(ctx context.Context, request *resource.ReadRequest) (*re
 	}
 	client := route53.NewFromConfig(cfg)
 
-	var hostedZoneID, name, recordType string
-
-	// Prefer metadata if available
-	if len(request.Metadata) > 0 && string(request.Metadata) != "{}" {
-		meta, err := ParseMetaDataRecordSet(request.Metadata)
-		if err == nil {
-			hostedZoneID = meta.HostedZoneID
-			name = meta.Name
-			recordType = meta.Type
-			if !strings.HasSuffix(name, ".") {
-				name = name + "."
-			}
-		}
+	// Parse NativeID: format is "zoneId|name|type"
+	parts := strings.SplitN(request.NativeID, "|", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid NativeID format: expected 'zoneId|name|type', got: %s", request.NativeID)
 	}
-
-	// Fallback to NativeID if needed
-	if hostedZoneID == "" || name == "" || recordType == "" {
-		parts := strings.SplitN(request.NativeID, "|", 3)
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("invalid NativeID format: expected 'zoneId|name|type', got: %s", request.NativeID)
-		}
-		hostedZoneID = parts[0]
-		name = parts[1]
-		recordType = parts[2]
-	}
+	hostedZoneID := parts[0]
+	name := parts[1]
+	recordType := parts[2]
 
 	// Query the record set
 	resp, err := client.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{

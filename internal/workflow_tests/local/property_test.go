@@ -678,20 +678,20 @@ func (p *FakePlugin) getMutex(resourceType, resourceLabel string) *sync.Mutex {
 }
 
 func (p *FakePlugin) Create(request *resource.CreateRequest) (*resource.CreateResult, error) {
-	mutex := p.getMutex(request.Resource.Type, request.Resource.Label)
+	mutex := p.getMutex(request.DesiredState.Type, request.DesiredState.Label)
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	nativeID := fmt.Sprintf("id-%s", request.Resource.Label)
-	p.resourceState.Store(nativeID, string(request.Resource.Properties))
+	nativeID := fmt.Sprintf("id-%s", request.DesiredState.Label)
+	p.resourceState.Store(nativeID, string(request.DesiredState.Properties))
 
 	return &resource.CreateResult{
 		ProgressResult: &resource.ProgressResult{
 			Operation:       resource.OperationCreate,
 			OperationStatus: resource.OperationStatusSuccess,
-			RequestID:       request.Resource.Label,
+			RequestID:       request.DesiredState.Label,
 			NativeID:        nativeID,
-			ResourceType:    request.Resource.Type,
+			ResourceType:    request.DesiredState.Type,
 		},
 	}, nil
 }
@@ -716,11 +716,11 @@ func (p *FakePlugin) Read(request *resource.ReadRequest) (*resource.ReadResult, 
 }
 
 func (p *FakePlugin) Update(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
-	mutex := p.getMutex(request.Resource.Type, request.Resource.Label)
+	mutex := p.getMutex(request.DesiredState.Type, request.DesiredState.Label)
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	nativeID := fmt.Sprintf("id-%s", request.Resource.Label)
+	nativeID := fmt.Sprintf("id-%s", request.DesiredState.Label)
 
 	existingPropsRaw, exists := p.resourceState.Load(nativeID)
 	if !exists {
@@ -771,10 +771,10 @@ func (p *FakePlugin) Update(request *resource.UpdateRequest) (*resource.UpdateRe
 		ProgressResult: &resource.ProgressResult{
 			Operation:          resource.OperationUpdate,
 			OperationStatus:    resource.OperationStatusSuccess,
-			RequestID:          request.Resource.Label,
+			RequestID:          request.DesiredState.Label,
 			ResourceProperties: []byte(patchStr),
 			NativeID:           nativeID,
-			ResourceType:       request.Resource.Type,
+			ResourceType:       request.DesiredState.Type,
 		},
 	}, nil
 }

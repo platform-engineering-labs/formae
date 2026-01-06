@@ -33,7 +33,7 @@ func TestMetastructure_ApplyFormaWithRes(t *testing.T) {
 					OperationStatus:    resource.OperationStatusSuccess,
 					RequestID:          "1234",
 					NativeID:           "5678",
-					ResourceType:       request.Resource.Type,
+					ResourceType:       request.DesiredState.Type,
 					ResourceProperties: json.RawMessage(`{"Id": "1234"}`),
 				}}, nil
 			},
@@ -154,7 +154,7 @@ func TestMetastructure_ApplyFormaWithRes(t *testing.T) {
 		assert.Equal(t, resource_update.OperationCreate, bucketUpdate.Operation)
 
 		var props map[string]any
-		err = json.Unmarshal(bucketUpdate.Resource.Properties, &props)
+		err = json.Unmarshal(bucketUpdate.DesiredState.Properties, &props)
 		require.NoError(t, err)
 
 		snarfHostID, ok := props["snarf-host-id"].(map[string]any)

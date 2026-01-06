@@ -58,12 +58,12 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 // CreateResource creates a resource using CloudControl with full request handling
 func (c *Client) CreateResource(ctx context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
-	resourceProps := request.Resource.Properties
+	resourceProps := request.DesiredState.Properties
 
 	// Handle map tags transformation if required
-	if props.RequiresMapTags(request.Resource.Type) {
+	if props.RequiresMapTags(request.DesiredState.Type) {
 		var properties map[string]any
-		if err := json.Unmarshal(request.Resource.Properties, &properties); err != nil {
+		if err := json.Unmarshal(request.DesiredState.Properties, &properties); err != nil {
 			return nil, err
 		}
 
@@ -80,7 +80,7 @@ func (c *Client) CreateResource(ctx context.Context, request *resource.CreateReq
 
 	result, err := c.Client.CreateResource(ctx, &cloudcontrol.CreateResourceInput{
 		DesiredState: ptr.Of(string(resourceProps)),
-		TypeName:     &request.Resource.Type,
+		TypeName:     &request.DesiredState.Type,
 	})
 	if err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (c *Client) CreateResource(ctx context.Context, request *resource.CreateReq
 			RequestID:       *result.ProgressEvent.RequestToken,
 			StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 			ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode),
-			ResourceType:    request.Resource.Type,
+			ResourceType:    request.DesiredState.Type,
 		},
 	}, nil
 }
@@ -103,14 +103,14 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 	// Check if resource exists first
 	_, err := c.GetResource(ctx, &cloudcontrol.GetResourceInput{
 		Identifier: request.NativeID,
-		TypeName:   &request.Resource.Type,
+		TypeName:   &request.DesiredState.Type,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	// For resources where tags are maps, we do not support updates with patch documents
-	if props.RequiresMapTags(request.Resource.Type) && request.PatchDocument != nil {
+	if props.RequiresMapTags(request.DesiredState.Type) && request.PatchDocument != nil {
 		errMsg := "Update operations for resources with map tags are not supported"
 		return &resource.UpdateResult{
 			ProgressResult: &resource.ProgressResult{
@@ -123,7 +123,7 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 	}
 
 	patchDoc := request.PatchDocument
-	if request.Resource.Type == "AWS::SecretsManager::Secret" && patchDoc != nil {
+	if request.DesiredState.Type == "AWS::SecretsManager::Secret" && patchDoc != nil {
 		transformedPatch, err := transformSecretStringPatch([]byte(*patchDoc))
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform SecretString patch: %w", err)
@@ -134,7 +134,7 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 	result, err := c.Client.UpdateResource(ctx, &cloudcontrol.UpdateResourceInput{
 		Identifier:    request.NativeID,
 		PatchDocument: patchDoc,
-		TypeName:      ptr.Of(request.Resource.Type),
+		TypeName:      ptr.Of(request.DesiredState.Type),
 	})
 	if err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 			RequestID:       *result.ProgressEvent.RequestToken,
 			StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 			ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode),
-			ResourceType:    request.Resource.Type,
+			ResourceType:    request.DesiredState.Type,
 		},
 	}, nil
 }

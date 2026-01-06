@@ -33,7 +33,7 @@ func TestMetastructure_StoreNewStack(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.Resource.Type,
+					ResourceType:    request.DesiredState.Type,
 				}}, nil
 			},
 		}
@@ -98,8 +98,8 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 					OperationStatus:    resource.OperationStatusSuccess,
 					RequestID:          "1234",
 					NativeID:           "5678",
-					ResourceType:       request.Resource.Type,
-					ResourceProperties: request.Resource.Properties,
+					ResourceType:       request.DesiredState.Type,
+					ResourceProperties: request.DesiredState.Properties,
 				}}, nil
 			},
 			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
@@ -108,7 +108,7 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 					OperationStatus: resource.OperationStatusInProgress,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.Resource.Type,
+					ResourceType:    request.DesiredState.Type,
 				}}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -228,8 +228,8 @@ func TestMetastructure_StorePatchAddResourceToStack(t *testing.T) {
 					Operation:          resource.OperationCreate,
 					OperationStatus:    resource.OperationStatusSuccess,
 					NativeID:           "1234",
-					ResourceType:       request.Resource.Type,
-					ResourceProperties: request.Resource.Properties,
+					ResourceType:       request.DesiredState.Type,
+					ResourceProperties: request.DesiredState.Properties,
 				}}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -243,8 +243,8 @@ func TestMetastructure_StorePatchAddResourceToStack(t *testing.T) {
 					Operation:          resource.OperationUpdate,
 					OperationStatus:    resource.OperationStatusSuccess,
 					NativeID:           "1234",
-					ResourceType:       request.Resource.Type,
-					ResourceProperties: request.Resource.Properties,
+					ResourceType:       request.DesiredState.Type,
+					ResourceProperties: request.DesiredState.Properties,
 				}}, nil
 			},
 		}

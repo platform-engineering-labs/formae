@@ -84,7 +84,6 @@ func awsSupportedTypes() *cobra.Command {
 				fmt.Printf("Nonprovisionable: %t\n", schema.Nonprovisionable)
 				fmt.Printf("CreateOnly: %v\n", schema.CreateOnly())
 				fmt.Printf("Fields: %v\n", schema.Fields)
-				fmt.Printf("Metadata: %v\n", schema.Metadata())
 
 				return nil
 			}

@@ -44,7 +44,7 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationCreate,
 						OperationStatus:    resource.OperationStatusSuccess,
-						NativeID:           request.Resource.Label,
+						NativeID:           request.DesiredState.Label,
 						ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
 					},
 				}, nil
@@ -87,7 +87,7 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationUpdate,
 						OperationStatus:    resource.OperationStatusSuccess,
-						NativeID:           request.Resource.NativeID,
+						NativeID:           request.DesiredState.NativeID,
 						ResourceProperties: json.RawMessage(`{"foo":"baz"}`),
 					},
 				}, nil
@@ -338,7 +338,7 @@ func TestApplyForma_SoftReconcile_ReturnsEmtpyFormaCommandNoChangesAreDetected(t
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationCreate,
 						OperationStatus:    resource.OperationStatusSuccess,
-						NativeID:           request.Resource.Label,
+						NativeID:           request.DesiredState.Label,
 						ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
 					},
 				}, nil
@@ -381,7 +381,7 @@ func TestApplyForma_SoftReconcile_ReturnsEmtpyFormaCommandNoChangesAreDetected(t
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationUpdate,
 						OperationStatus:    resource.OperationStatusSuccess,
-						NativeID:           request.Resource.NativeID,
+						NativeID:           request.DesiredState.NativeID,
 						ResourceProperties: json.RawMessage(`{"foo":"baz"}`),
 					},
 				}, nil

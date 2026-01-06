@@ -110,7 +110,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
-				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
+				{DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					ResourceTarget: pkgmodel.Target{Label: "target1", Namespace: "default", Config: json.RawMessage("{}")},
 					State:          resource_update.ResourceUpdateStateSuccess},
 			},
@@ -125,7 +125,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target2", Namespace: "default", Config: json.RawMessage("{}")},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
-					Resource:                 pkgmodel.Resource{Properties: json.RawMessage("{}")},
+					DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateRejected},
 			},
 			Command: pkgmodel.CommandApply,
@@ -139,7 +139,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target3", Namespace: "default", Config: json.RawMessage("{}")},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
-					Resource:                 pkgmodel.Resource{Properties: json.RawMessage("{}")},
+					DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateFailed},
 			},
 			Command: pkgmodel.CommandApply,
@@ -153,7 +153,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target4", Namespace: "default", Config: json.RawMessage("{}")},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
-					Resource: pkgmodel.Resource{
+					DesiredState: pkgmodel.Resource{
 						Properties:         json.RawMessage("{}"),
 						ReadOnlyProperties: json.RawMessage("{}"),
 					},
@@ -196,7 +196,7 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
-				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
+				{DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					ResourceTarget: pkgmodel.Target{Label: "cmd1-target", Namespace: "default", Config: json.RawMessage("{}")},
 					State:          resource_update.ResourceUpdateStateInProgress},
 			},
@@ -208,7 +208,7 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 			ID:          util.NewID(),
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
-				{Resource: pkgmodel.Resource{Properties: json.RawMessage("{}")},
+				{DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					ResourceTarget: pkgmodel.Target{Label: "cmd2-target", Namespace: "default", Config: json.RawMessage("{}")},
 					State:          resource_update.ResourceUpdateStateInProgress},
 			},
@@ -238,14 +238,13 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 			Description: pkgmodel.Description{},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
-					ExistingResource: pkgmodel.Resource{
+					PriorState: pkgmodel.Resource{
 						Properties: json.RawMessage("null"),
 					},
 					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
 					ResourceTarget:           pkgmodel.Target{Label: "hash-target", Namespace: "default", Config: json.RawMessage("{}")},
-					Resource:                 pkgmodel.Resource{Properties: json.RawMessage("{}")},
+					DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateSuccess,
-					MetaData:                 json.RawMessage("null"),
 				},
 			},
 		}
@@ -466,14 +465,14 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 				State: forma_command.CommandStateInProgress,
 				ResourceUpdates: []resource_update.ResourceUpdate{
 					{
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Properties: json.RawMessage(fmt.Sprintf(`{"key": "value-%d"}`, i)),
 							Stack:      fmt.Sprintf("stack-%d", i%2),
 						},
 						State: resource_update.ResourceUpdateStateSuccess,
 					},
 					{
-						Resource: pkgmodel.Resource{
+						DesiredState: pkgmodel.Resource{
 							Properties: json.RawMessage(fmt.Sprintf(`{"key": "value-%d"}`, i)),
 							Stack:      fmt.Sprintf("stack-%d", i%2),
 						},
@@ -586,7 +585,7 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 		for _, result := range results {
 			found := false
 			for _, rc := range result.ResourceUpdates {
-				if string(rc.Resource.Stack) == "stack-1" {
+				if string(rc.DesiredState.Stack) == "stack-1" {
 					found = true
 					break
 				}
@@ -606,7 +605,7 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 		for _, result := range results {
 			found := false
 			for _, rc := range result.ResourceUpdates {
-				if string(rc.Resource.Stack) == "stack-1" {
+				if string(rc.DesiredState.Stack) == "stack-1" {
 					found = true
 					break
 				}

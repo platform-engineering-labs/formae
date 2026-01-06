@@ -29,7 +29,7 @@ func TestResourcePersister_StoresResourceUpdate(t *testing.T) {
 	assert.NoError(t, err)
 
 	resourceUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-resource",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"foo":"bar"}`),
@@ -94,7 +94,7 @@ func TestResourcePersister_LoadsResource(t *testing.T) {
 	resourceURI := pkgmodel.NewFormaeURI(resourceKsuid, "")
 
 	resourceUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-resource",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"foo":"bar"}`),
@@ -145,7 +145,7 @@ func TestResourcePersister_Create(t *testing.T) {
 	assert.NoError(t, err)
 
 	resourceUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-resource",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
@@ -202,7 +202,7 @@ func TestResourcePersister_Update(t *testing.T) {
 
 	resourceKsuid := util.NewID()
 	initialResource := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-resource",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
@@ -247,7 +247,7 @@ func TestResourcePersister_Update(t *testing.T) {
 
 	// Now update with different properties
 	updateResource := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-resource",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"foo":"barbar","a":[7,8]}`),
@@ -317,7 +317,7 @@ func TestResourcePersister_Delete(t *testing.T) {
 
 	// Create two resources
 	createResource1 := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "resource-1",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"name":"bucket1"}`),
@@ -356,7 +356,7 @@ func TestResourcePersister_Delete(t *testing.T) {
 	assert.NoError(t, result1.Error)
 
 	createResource2 := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "resource-2",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"name":"bucket2"}`),
@@ -400,7 +400,7 @@ func TestResourcePersister_Delete(t *testing.T) {
 
 	// Delete resource-2
 	deleteResource2 := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "resource-2",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"name":"bucket2"}`),
@@ -444,7 +444,7 @@ func TestResourcePersister_Delete(t *testing.T) {
 
 	// Delete resource-1
 	deleteResource1 := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "resource-1",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"name":"bucket1"}`),
@@ -493,7 +493,7 @@ func TestResourcePersister_MissingRequiredFields(t *testing.T) {
 
 	resourceKsuid := util.NewID()
 	resourceUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "resource-1",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"name":"bucket1"}`),
@@ -555,7 +555,7 @@ func TestResourcePersister_IdempotentCreate(t *testing.T) {
 	assert.NoError(t, err)
 
 	resourceUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-resource",
 			Type:       "FakeAWS::S3::Bucket",
 			Properties: json.RawMessage(`{"foo":"bar"}`),
@@ -989,7 +989,7 @@ func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
 	resourceKsuid := util.NewID()
 
 	initialResource := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-vpc",
 			Type:       "AWS::EC2::VPC",
 			Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
@@ -1025,7 +1025,7 @@ func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
 	assert.NoError(t, createResult.Error)
 
 	syncUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      "test-vpc",
 			Type:       "AWS::EC2::VPC",
 			Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16","VpcId":"vpc-123"}`),

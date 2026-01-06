@@ -642,7 +642,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	// Attach MatchFilters from cache to resource updates for declarative filtering
 	matchFilters := getMatchFiltersFromCache(&data, namespace)
 	for i := range resourceUpdates {
-		filters := findMatchFiltersForType(matchFilters, resourceUpdates[i].Resource.Type)
+		filters := findMatchFiltersForType(matchFilters, resourceUpdates[i].DesiredState.Type)
 		if len(filters) > 0 {
 			resourceUpdates[i].MatchFilters = filters
 		}

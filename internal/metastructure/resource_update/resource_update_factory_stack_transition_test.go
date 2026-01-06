@@ -27,7 +27,7 @@ func TestStackTransition_Factory(t *testing.T) {
 
 		update := requireSingleUpdate(t, existing, new)
 
-		assert.Equal(t, ksuid, update.Resource.Ksuid)
+		assert.Equal(t, ksuid, update.DesiredState.Ksuid)
 		assert.Equal(t, "production", update.StackLabel)
 	})
 
@@ -41,8 +41,8 @@ func TestStackTransition_Factory(t *testing.T) {
 
 		update := requireSingleUpdate(t, existing, new)
 
-		assert.Equal(t, nativeID, update.Resource.NativeID)
-		assert.Equal(t, ksuid, update.Resource.Ksuid)
+		assert.Equal(t, nativeID, update.DesiredState.NativeID)
+		assert.Equal(t, ksuid, update.DesiredState.Ksuid)
 	})
 
 	t.Run("stack change preserves read only properties", func(t *testing.T) {
@@ -54,8 +54,8 @@ func TestStackTransition_Factory(t *testing.T) {
 
 		update := requireSingleUpdate(t, existing, new)
 
-		assert.Equal(t, existing.NativeID, update.Resource.NativeID)
-		assert.Equal(t, ksuid, update.Resource.Ksuid)
+		assert.Equal(t, existing.NativeID, update.DesiredState.NativeID)
+		assert.Equal(t, ksuid, update.DesiredState.Ksuid)
 	})
 
 	t.Run("stack and property change combined", func(t *testing.T) {
@@ -72,10 +72,10 @@ func TestStackTransition_Factory(t *testing.T) {
 		update := requireSingleUpdate(t, existing, new)
 
 		assert.Equal(t, OperationUpdate, update.Operation)
-		assert.Equal(t, ksuid, update.Resource.Ksuid)
-		assert.Equal(t, "vpc-mixed", update.Resource.NativeID)
+		assert.Equal(t, ksuid, update.DesiredState.Ksuid)
+		assert.Equal(t, "vpc-mixed", update.DesiredState.NativeID)
 		assert.Equal(t, "infra-stack", update.StackLabel)
-		assert.NotNil(t, update.Resource.PatchDocument)
+		assert.NotNil(t, update.DesiredState.PatchDocument)
 	})
 }
 

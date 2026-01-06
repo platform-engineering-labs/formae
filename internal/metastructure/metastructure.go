@@ -374,14 +374,14 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		}
 
 		apiCommand.ResourceUpdates = append(apiCommand.ResourceUpdates, apimodel.ResourceUpdate{
-			ResourceID:     ru.Resource.Ksuid,
-			ResourceType:   ru.Resource.Type,
-			ResourceLabel:  ru.Resource.Label,
+			ResourceID:     ru.DesiredState.Ksuid,
+			ResourceType:   ru.DesiredState.Type,
+			ResourceLabel:  ru.DesiredState.Label,
 			StackName:      ru.StackLabel,
-			OldStackName:   ru.ExistingResource.Stack,
-			Properties:     ru.Resource.Properties,
+			OldStackName:   ru.PriorState.Stack,
+			Properties:     ru.DesiredState.Properties,
 			OldProperties:  ru.PreviousProperties,
-			PatchDocument:  ru.Resource.PatchDocument,
+			PatchDocument:  ru.DesiredState.PatchDocument,
 			Operation:      string(ru.Operation),
 			State:          string(ru.State),
 			Duration:       dur.Milliseconds(),
