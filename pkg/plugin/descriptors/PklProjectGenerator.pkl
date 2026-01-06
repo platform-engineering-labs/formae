@@ -1,0 +1,67 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Generates a PklProject file from a list of dependencies.
+///
+/// Usage:
+///   pkl eval PklProjectGenerator.pkl -p Dependencies="formae,package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.75.1,aws,../../../plugins/aws/schema/pkl/PklProject"
+///
+/// Input format: Comma-separated pairs of name,value where:
+///   - If value starts with "package://" -> RemoteDependency with uri
+///   - Otherwise -> Project import path
+///
+/// Output:
+///   amends "pkl:Project"
+///
+///   dependencies {
+///     ["formae"] {
+///       uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.75.1"
+///     }
+///     ["aws"] = import("../../../plugins/aws/schema/pkl/PklProject")
+///   }
+module formae.plugin.PklProjectGenerator
+
+/// Comma-separated list of name,value pairs
+/// Format: "name1,value1,name2,value2,..."
+dependencies: String = read?("prop:Dependencies") ?? ""
+
+/// Parse the input into pairs
+local depList: List<String> = dependencies.split(",").map((s) -> s.trim())
+
+/// Get count of pairs
+local pairCount: Int = depList.length ~/ 2
+
+/// Check if a value is a remote dependency (starts with package://)
+local function isRemoteDependency(value: String): Boolean =
+    value.startsWith("package://")
+
+/// Get name at index i (0-based pair index)
+local function getName(i: Int): String = depList[i * 2]
+
+/// Get value at index i (0-based pair index)
+local function getValue(i: Int): String = depList[i * 2 + 1]
+
+/// Generate dependency entry for a pair
+local function generateDep(i: Int): String =
+    let (name = getName(i))
+    let (value = getValue(i))
+    if (isRemoteDependency(value))
+        "  [\"\(name)\"] {\n    uri = \"\(value)\"\n  }"
+    else
+        "  [\"\(name)\"] = import(\"\(value)\")"
+
+/// Generate the output PklProject file
+output {
+    text = new Listing {
+        "amends \"pkl:Project\""
+        ""
+        "dependencies {"
+        for (i in IntSeq(0, pairCount - 1)) {
+            generateDep(i)
+        }
+        "}"
+    }.join("\n")
+}

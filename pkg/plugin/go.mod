@@ -9,6 +9,7 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ../model
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/ergo v1.999.310
+	github.com/apple/pkl-go v0.12.0
 	github.com/masterminds/semver v1.5.0
 	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
@@ -36,6 +37,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect

@@ -5,24 +5,24 @@
 package model
 
 type Schema struct {
-	Identifier       string
-	Tags             string
-	Fields           []string
-	Nonprovisionable bool
-	Hints            map[string]FieldHint
-	Discoverable     bool
-	Extractable      bool
+	Identifier       string               `json:"Identifier" pkl:"Identifier"`
+	Tags             string               `json:"Tags" pkl:"Tags"`
+	Fields           []string             `json:"Fields" pkl:"Fields"`
+	Nonprovisionable bool                 `json:"Nonprovisionable" pkl:"Nonprovisionable"`
+	Hints            map[string]FieldHint `json:"Hints" pkl:"Hints"`
+	Discoverable     bool                 `json:"Discoverable" pkl:"Discoverable"`
+	Extractable      bool                 `json:"Extractable" pkl:"Extractable"`
 }
 
 type FieldHint struct {
-	CreateOnly       bool
-	Persist          bool
-	WriteOnly        bool
-	Required         bool
-	RequiredOnCreate bool
+	CreateOnly       bool `json:"CreateOnly" pkl:"CreateOnly"`
+	Persist          bool `json:"Persist" pkl:"Persist"`
+	WriteOnly        bool `json:"WriteOnly" pkl:"WriteOnly"`
+	Required         bool `json:"Required" pkl:"Required"`
+	RequiredOnCreate bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
 
-	IndexField   string
-	UpdateMethod FieldUpdateMethod
+	IndexField   string            `json:"IndexField" pkl:"IndexField"`
+	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
 }
 
 type FieldUpdateMethod string
