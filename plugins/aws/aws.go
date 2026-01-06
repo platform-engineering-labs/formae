@@ -22,7 +22,6 @@ import (
 	_ "github.com/platform-engineering-labs/formae/plugins/aws/pkg/cfres"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/cfres/registry"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/config"
-	descriptors "github.com/platform-engineering-labs/formae/plugins/aws/pkg/descriptors"
 	"github.com/platform-engineering-labs/formae/plugins/aws/pkg/helper"
 )
 
@@ -40,7 +39,7 @@ var Plugin = AWS{}
 
 var Descriptors []plugin.ResourceDescriptor
 
-var ResourceTypeDescriptors map[string]descriptors.TypeInformation
+var ResourceTypeDescriptors map[string]plugin.ResourceTypeDescriptor
 
 // EKSAutomodeResourceTypes lists AWS CloudFormation resource types that EKS Automode manages
 var EKSAutomodeResourceTypes = []string{
@@ -62,23 +61,18 @@ var EKSAutomodeResourceTypes = []string{
 	"AWS::Logs::LogGroup",                       // If using CloudWatch logging
 }
 
-func init() {
-	// Load descriptors from PKL file
-	ctx := context.Background()
-	var err error
-	ResourceTypeDescriptors, err = descriptors.LoadDescriptors(ctx)
-	if err != nil {
-		panic("Failed to load resource descriptors: " + err.Error())
-	}
-
-	// Convert to plugin.ResourceDescriptor
-	Descriptors = make([]plugin.ResourceDescriptor, 0, len(ResourceTypeDescriptors))
-	for typeName := range ResourceTypeDescriptors {
+// initDescriptors initializes the descriptor maps from a slice of descriptors.
+// Called from init_local.go or init_prod.go depending on build tags.
+func initDescriptors(resourceTypeDescriptorSlice []plugin.ResourceTypeDescriptor) {
+	ResourceTypeDescriptors = make(map[string]plugin.ResourceTypeDescriptor, len(resourceTypeDescriptorSlice))
+	Descriptors = make([]plugin.ResourceDescriptor, 0, len(resourceTypeDescriptorSlice))
+	for _, desc := range resourceTypeDescriptorSlice {
+		ResourceTypeDescriptors[desc.Type] = desc
 		Descriptors = append(Descriptors, plugin.ResourceDescriptor{
-			Type:                                     typeName,
-			Discoverable:                             ResourceTypeDescriptors[typeName].Discoverable,
-			Extractable:                              ResourceTypeDescriptors[typeName].Extractable,
-			ParentResourceTypesWithMappingProperties: ResourceTypeDescriptors[typeName].ParentResourcesWithMappingProperties,
+			Type:                                     desc.Type,
+			ParentResourceTypesWithMappingProperties: desc.ParentResourceTypesWithMappingProperties,
+			Extractable:                              desc.Schema.Extractable,
+			Discoverable:                             desc.Schema.Discoverable,
 		})
 	}
 }

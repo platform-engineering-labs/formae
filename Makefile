@@ -21,7 +21,7 @@ clean:
 clean-pel:
 	rm -rf ~/.pel/*
 
-build: 
+build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
 	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o aws .
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
@@ -79,11 +79,11 @@ publish-bin: pkg-bin
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
 	pkl project resolve plugins/pkl/schema
-	pkl project resolve plugins/pkl/schema
 	pkl project resolve plugins/pkl/generator
 	pkl project resolve plugins/aws/schema/pkl
 	pkl project resolve plugins/pkl/testdata/forma
 	pkl project resolve plugins/pkl/verify
+	pkl project resolve pkg/plugin/descriptors/
 	pkl project resolve examples/
 	pkl project resolve tests/e2e/pkl
 
@@ -208,10 +208,14 @@ test-generator-pkl:
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/lifeline.json
 	cd plugins/pkl/generator && python3 run_generator.py examples/json/types
 
+test-descriptors-pkl:
+	pkl test pkg/plugin/descriptors/test/PklProjectGenerator_test.pkl
+	pkl test pkg/plugin/descriptors/test/ImportsGenerator_test.pkl
+
 verify-pkl: gen-pkl
 	cd plugins/pkl/verify && pkl eval verify.pkl
 
-test-pkl: gen-pkl test-schema-pkl test-generator-pkl
+test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 
 tidy-all:
 	go mod tidy
@@ -248,4 +252,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all

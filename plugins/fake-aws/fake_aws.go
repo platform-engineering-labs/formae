@@ -6,7 +6,8 @@ package main
 
 import (
 	"context"
-		"github.com/masterminds/semver"
+
+	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -51,7 +52,8 @@ func (s FakeAWS) overrides(context context.Context) *plugin.ResourcePluginOverri
 func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	return []plugin.ResourceDescriptor{
 		{
-			Type:         "FakeAWS::S3::Bucket",
+			Type: "FakeAWS::S3::Bucket",
+
 			Discoverable: true,
 		},
 		{
