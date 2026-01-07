@@ -9,7 +9,6 @@ replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plug
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
 require (
-	github.com/apple/pkl-go v0.12.0
 	github.com/aws/aws-sdk-go-v2 v1.39.3
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
 	github.com/aws/aws-sdk-go-v2/service/cloudcontrol v1.23.4
@@ -33,6 +32,7 @@ require (
 	ergo.services/ergo v1.999.310 // indirect
 	github.com/PaesslerAG/gval v1.0.0 // indirect
 	github.com/PaesslerAG/jsonpath v0.1.1 // indirect
+	github.com/apple/pkl-go v0.12.0 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.67 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.10 // indirect
