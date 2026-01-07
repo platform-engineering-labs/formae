@@ -524,17 +524,32 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	require.True(t, ok, "Eval output should contain Resources array")
 	require.NotEmpty(t, resources, "Eval output should contain at least one resource")
 
+	// Extract all unique resource types from forma for discovery configuration
+	// This is needed for child resources that have parent dependencies in the hierarchy
+	var allResourceTypes []string
+	seenTypes := make(map[string]bool)
+	for _, res := range resources {
+		resMap := res.(map[string]any)
+		if resType, ok := resMap["Type"].(string); ok {
+			if !seenTypes[resType] {
+				seenTypes[resType] = true
+				allResourceTypes = append(allResourceTypes, resType)
+			}
+		}
+	}
+
 	// Get the resource we're testing (last one, which is the main resource after Stack and Target)
 	resourceData := resources[len(resources)-1].(map[string]any)
 	actualResourceType := resourceData["Type"].(string)
 	expectedProperties := resourceData["Properties"].(map[string]any)
 
-	t.Logf("Testing resource type: %s", actualResourceType)
+	t.Logf("Testing resource type: %s (with %d total types for discovery)", actualResourceType, len(allResourceTypes))
 
-	// Step 2: Configure discovery for this resource type
+	// Step 2: Configure discovery for all resource types in the forma
 	// Note: ConfigureDiscovery must be called before StartAgent()
-	t.Log("Step 2: Configuring discovery for resource type...")
-	err = harness.ConfigureDiscovery([]string{actualResourceType})
+	// We include all types so parent-child relationships can be established in the hierarchy
+	t.Log("Step 2: Configuring discovery for resource types...")
+	err = harness.ConfigureDiscovery(allResourceTypes)
 	require.NoError(t, err, "Discovery configuration should succeed")
 
 	// Step 3: Create unmanaged resource via external plugin (bypasses formae database)
