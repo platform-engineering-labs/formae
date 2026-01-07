@@ -87,18 +87,6 @@ gen-pkl:
 	pkl project resolve examples/
 	pkl project resolve tests/e2e/pkl
 
-gen-aws-pkl-types:
-	pkl project resolve plugins/aws
-	pkl project resolve plugins/aws/pkg/descriptors/pkl
-	cd plugins/aws && go generate .
-	rm plugins/aws/pkg/descriptors/gen/Types.pkl.go
-	cd plugins/aws &&  pkl eval pkg/descriptors/pkl/resources.pkl > pkg/descriptors/pkl/generated_resources.pkl
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		sed -i '' '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-		else \
-		sed -i '/pkl.RegisterStrictMapping("types", Types{})/d' plugins/aws/pkg/descriptors/gen/init.pkl.go; \
-		fi
-
 pkg-pkl:
 	pkl project package ./plugins/aws/schema/pkl ./plugins/pkl/schema --skip-publish-check
 
