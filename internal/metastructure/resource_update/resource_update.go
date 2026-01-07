@@ -283,8 +283,9 @@ func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties st
 	return ru.updateProperties(incomingProperties, &ru.ExistingResource.Properties, &ru.ExistingResource.ReadOnlyProperties)
 }
 
-// updateResourceProperties splits the properties from the plugin read result into regular and read-only,
-// based on the resource schema fields, and updates the Resource's properties accordingly.
+// updateProperties splits the properties from the plugin read result into regular and read-only,
+// based on the resource schema fields, and merges $ref structures from the existing target properties.
+// This preserves $ref structures needed for destroy dependency tracking and PKL extraction.
 func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage) error {
 	if incomingProperties == "" {
 		slog.Debug("No properties to split for resource", "uri", ru.URI())
@@ -314,19 +315,19 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 	}
 
 	// Marshal back to JSON
-	if propertiesJson, err := json.Marshal(properties); err == nil {
-		// Merge refs from user-provided properties
-		mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson)
-		if mergeErr != nil {
-			slog.Error("Failed to merge refs into properties", "error", mergeErr)
-			return mergeErr
-		}
-		*targetProperties = mergedProps
-
-	} else {
+	propertiesJson, err := json.Marshal(properties)
+	if err != nil {
 		slog.Error("Failed to marshal regular properties", "error", err)
 		return err
 	}
+
+	// Merge refs from user-provided properties to preserve $ref structures
+	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.Resource.Schema)
+	if mergeErr != nil {
+		slog.Error("Failed to merge refs into properties", "error", mergeErr)
+		return mergeErr
+	}
+	*targetProperties = mergedProps
 
 	if len(readOnlyProperties) > 0 {
 		if readOnlyPropertiesJson, err := json.Marshal(readOnlyProperties); err == nil {
@@ -346,7 +347,12 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 // This function handles special "$ref" objects (resolvable references) by preserving the user's
 // $ref structure while updating the $value from the plugin. The plugin properties serve as the
 // base, with selective preservation of user values.
-func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage) (json.RawMessage, error) {
+//
+// The schema parameter provides field hints that control how arrays are matched:
+// - Default/Set: elements are matched by value (JSON equality after flattening $refs)
+// - Array: elements are matched by index position
+// - EntitySet: elements are matched by a key field (e.g., Tags by "Key")
+func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
 	if userProperties == nil {
 		userProperties = []byte("{}")
 	}
@@ -364,6 +370,7 @@ func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessag
 		userRoot:   userParsed,
 		pluginRoot: pluginParsed,
 		result:     &result,
+		schema:     schema,
 	}
 
 	merger.mergeValue("", userParsed, pluginParsed)
@@ -376,6 +383,7 @@ type propertyMerger struct {
 	userRoot   gjson.Result
 	pluginRoot gjson.Result
 	result     *string
+	schema     pkgmodel.Schema
 }
 
 // mergeValue recursively merges a value at the given path
@@ -444,15 +452,196 @@ func (m *propertyMerger) preferNonNullValue(userValue, pluginValue gjson.Result)
 }
 
 // mergeArray handles merging of array values
-// Arrays are completely replaced with plugin data to properly handle element removals
+// Elements are matched based on the updateMethod hint for the field:
+// - Default/Set: match by value (JSON equality after flattening $refs)
+// - Array: match by index position
+// - EntitySet: match by key field (e.g., Tags by "Key")
 func (m *propertyMerger) mergeArray(path string, userVal, pluginVal gjson.Result) {
-	// Process each element in the plugin array (user array is ignored for removals)
+	userArray := userVal.Array()
+	pluginArray := pluginVal.Array()
 
-	for i, arrVal := range pluginVal.Array() {
-		childPath := fmt.Sprintf("%s.%d", path, i)
-		// Use null user value to ensure plugin array is used as-is
-		m.mergeValue(childPath, gjson.Result{Type: gjson.Null}, arrVal)
+	// Get the field name from the path (e.g., "networks" from "networks" or "networks.0.uuid")
+	fieldName := m.getFieldNameFromPath(path)
+	hint := m.schema.Hints[fieldName]
+
+	// Track which user elements have been matched (to avoid double-matching)
+	matchedUserIndices := make(map[int]bool)
+
+	// Phase 1: Match plugin elements with user elements that have concrete values
+	type pendingMatch struct {
+		pluginIdx  int
+		pluginElem gjson.Result
 	}
+	var unmatchedPluginElements []pendingMatch
+
+	for i, pluginElem := range pluginArray {
+		childPath := fmt.Sprintf("%s.%d", path, i)
+
+		// Find matching user element based on update method
+		matchedUserElem, matchedIdx := m.findMatchingUserElementWithIndex(userArray, pluginElem, hint, matchedUserIndices)
+
+		if matchedIdx >= 0 {
+			matchedUserIndices[matchedIdx] = true
+			m.mergeValue(childPath, matchedUserElem, pluginElem)
+		} else {
+			// No match found - save for phase 2
+			unmatchedPluginElements = append(unmatchedPluginElements, pendingMatch{i, pluginElem})
+		}
+	}
+
+	// Phase 2: For unmatched plugin elements, try to pair with user elements that have $ref-without-$value
+	// These couldn't be matched in phase 1 because they don't have a concrete value yet
+	for _, pending := range unmatchedPluginElements {
+		childPath := fmt.Sprintf("%s.%d", path, pending.pluginIdx)
+
+		// Look for unmatched user element with $ref but no $value
+		matchedUserElem := m.findUserElementWithUnresolvedRef(userArray, matchedUserIndices)
+		if matchedUserElem.matchedIdx >= 0 {
+			matchedUserIndices[matchedUserElem.matchedIdx] = true
+		}
+
+		m.mergeValue(childPath, matchedUserElem.elem, pending.pluginElem)
+	}
+}
+
+// getFieldNameFromPath extracts the top-level field name from a JSON path
+// e.g., "networks" -> "networks", "networks.0.uuid" -> "networks"
+func (m *propertyMerger) getFieldNameFromPath(path string) string {
+	// Remove leading dot if present
+	if path != "" && path[0] == '.' {
+		path = path[1:]
+	}
+
+	// Find the first dot or bracket
+	for i, c := range path {
+		if c == '.' || c == '[' {
+			return path[:i]
+		}
+	}
+	return path
+}
+
+// findMatchingUserElementWithIndex finds a user array element that matches the plugin element,
+// returning both the element and its index. It skips elements already matched (in excludeIndices).
+// Returns index -1 if no match found.
+func (m *propertyMerger) findMatchingUserElementWithIndex(userArray []gjson.Result, pluginElem gjson.Result, hint pkgmodel.FieldHint, excludeIndices map[int]bool) (gjson.Result, int) {
+	if len(userArray) == 0 {
+		return gjson.Result{Type: gjson.Null}, -1
+	}
+
+	switch hint.UpdateMethod {
+	case pkgmodel.FieldUpdateMethodArray:
+		// Array: This should match by index, but we don't have the index here
+		return gjson.Result{Type: gjson.Null}, -1
+
+	case pkgmodel.FieldUpdateMethodEntitySet:
+		// EntitySet: match by key field
+		if hint.IndexField == "" {
+			return gjson.Result{Type: gjson.Null}, -1
+		}
+		pluginKeyValue := pluginElem.Get(hint.IndexField).String()
+		for i, userElem := range userArray {
+			if excludeIndices[i] {
+				continue
+			}
+			userKeyValue := m.flattenRefValue(userElem.Get(hint.IndexField))
+			if userKeyValue == pluginKeyValue {
+				return userElem, i
+			}
+		}
+		return gjson.Result{Type: gjson.Null}, -1
+
+	default:
+		// Default/Set: match by value (JSON equality after flattening $refs)
+		// Only match elements that have concrete values (not $ref without $value)
+		pluginFlattened := m.flattenElement(pluginElem)
+		for i, userElem := range userArray {
+			if excludeIndices[i] {
+				continue
+			}
+			// Skip elements that contain $ref without $value - these will be handled in phase 2
+			if m.hasUnresolvedRef(userElem) {
+				continue
+			}
+			userFlattened := m.flattenElement(userElem)
+			if userFlattened == pluginFlattened {
+				return userElem, i
+			}
+		}
+		return gjson.Result{Type: gjson.Null}, -1
+	}
+}
+
+// unresolvedRefMatch holds the result of finding a user element with unresolved $ref
+type unresolvedRefMatch struct {
+	elem       gjson.Result
+	matchedIdx int
+}
+
+// findUserElementWithUnresolvedRef finds the first unmatched user element that contains
+// a $ref without a $value (unresolved reference). These elements couldn't be matched
+// by value comparison because their value isn't known yet.
+func (m *propertyMerger) findUserElementWithUnresolvedRef(userArray []gjson.Result, excludeIndices map[int]bool) unresolvedRefMatch {
+	for i, userElem := range userArray {
+		if excludeIndices[i] {
+			continue
+		}
+		if m.hasUnresolvedRef(userElem) {
+			return unresolvedRefMatch{elem: userElem, matchedIdx: i}
+		}
+	}
+	return unresolvedRefMatch{elem: gjson.Result{Type: gjson.Null}, matchedIdx: -1}
+}
+
+// hasUnresolvedRef checks if an element contains any $ref object without a $value.
+// These are references where the value isn't known yet (e.g., from PKL translation).
+func (m *propertyMerger) hasUnresolvedRef(elem gjson.Result) bool {
+	if !elem.IsObject() {
+		return false
+	}
+
+	hasUnresolved := false
+	elem.ForEach(func(key, val gjson.Result) bool {
+		if val.IsObject() && val.Get("$ref").Exists() && !val.Get("$value").Exists() {
+			hasUnresolved = true
+			return false // stop iteration
+		}
+		return true
+	})
+	return hasUnresolved
+}
+
+// flattenRefValue extracts the actual value from a potential $ref object
+// If the value is a $ref object, returns the $value; otherwise returns the string value
+func (m *propertyMerger) flattenRefValue(val gjson.Result) string {
+	if val.IsObject() && val.Get("$ref").Exists() {
+		return val.Get("$value").String()
+	}
+	return val.String()
+}
+
+// flattenElement creates a comparable string representation of an element
+// by flattening all $ref objects to their $value
+func (m *propertyMerger) flattenElement(elem gjson.Result) string {
+	if !elem.IsObject() {
+		return elem.Raw
+	}
+
+	// For objects, we need to flatten recursively
+	result := make(map[string]any)
+	elem.ForEach(func(key, val gjson.Result) bool {
+		if val.IsObject() && val.Get("$ref").Exists() {
+			// This is a $ref object - use the $value
+			result[key.String()] = val.Get("$value").Value()
+		} else {
+			result[key.String()] = val.Value()
+		}
+		return true
+	})
+
+	// Marshal back to JSON for comparison
+	jsonBytes, _ := json.Marshal(result)
+	return string(jsonBytes)
 }
 
 // mergePrimitive handles merging of primitive values
