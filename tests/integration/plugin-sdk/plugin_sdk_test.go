@@ -154,16 +154,6 @@ func findTargetResource(resources []map[string]any, resourceType string) map[str
 	return resources[len(resources)-1]
 }
 
-// isResolvable checks if a value is a Formae resolvable (reference to another resource's property)
-func isResolvable(value any) bool {
-	if m, ok := value.(map[string]any); ok {
-		if res, ok := m["$res"].(bool); ok && res {
-			return true
-		}
-	}
-	return false
-}
-
 // compareProperties compares expected properties against actual properties from inventory
 func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) {
 	if actualProperties, ok := actualResource["Properties"].(map[string]any); ok {
