@@ -21,6 +21,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// isResolvable checks if a value is a resolvable reference ($res: true)
+func isResolvable(value any) bool {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	res, exists := m["$res"]
+	if !exists {
+		return false
+	}
+	resBool, ok := res.(bool)
+	return ok && resBool
+}
+
 // getPluginPath returns the path to the plugin being tested
 // This is determined by the PLUGIN_NAME environment variable
 func getPluginPath(t *testing.T) string {
@@ -685,6 +699,14 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	for key, expectedValue := range expectedProperties {
 		// Skip Tags comparison as we intentionally stripped formae tags
 		if key == "Tags" {
+			continue
+		}
+
+		// Skip resolvable properties - when discovered, these get reconstructed to point
+		// to discovered resources (in $unmanaged stack with native IDs as labels),
+		// which won't match the original forma's resolvables
+		if isResolvable(expectedValue) {
+			t.Logf("Skipping resolvable property %s in discovery comparison", key)
 			continue
 		}
 
