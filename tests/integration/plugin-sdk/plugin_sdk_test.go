@@ -552,13 +552,18 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	err = harness.ConfigureDiscovery(allResourceTypes)
 	require.NoError(t, err, "Discovery configuration should succeed")
 
-	// Step 3: Create unmanaged resource via external plugin (bypasses formae database)
-	// This encapsulates: init ergo node, launch plugin, wait for ready, create resource
-	t.Log("Step 3: Creating unmanaged resource via external plugin...")
-	nativeID, err := harness.CreateUnmanagedResource(evalOutput)
-	require.NoError(t, err, "Creating unmanaged resource should succeed")
-	assert.NotEmpty(t, nativeID, "Create should return a native ID")
-	t.Logf("Created unmanaged resource with NativeID: %s", nativeID)
+	// Step 3: Create unmanaged resources via external plugin (bypasses formae database)
+	// This encapsulates: init ergo node, launch plugin, wait for ready, create resource(s)
+	// For multi-resource formas, creates all resources in dependency order
+	t.Log("Step 3: Creating unmanaged resource(s) via external plugin...")
+	createdResources, err := harness.CreateAllUnmanagedResources(evalOutput)
+	require.NoError(t, err, "Creating unmanaged resources should succeed")
+	require.NotEmpty(t, createdResources, "Should have created at least one resource")
+
+	// The main resource is the last one (after dependencies)
+	mainResource := createdResources[len(createdResources)-1]
+	nativeID := mainResource.NativeID
+	t.Logf("Created %d unmanaged resource(s), main resource NativeID: %s", len(createdResources), nativeID)
 
 	// Parse target from eval output for cleanup
 	targets, ok := evalData["Targets"].([]any)
@@ -573,12 +578,17 @@ func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
 	err = json.Unmarshal(targetJSON, &target)
 	require.NoError(t, err, "Failed to unmarshal target")
 
-	// Register cleanup for the unmanaged resource
+	// Register cleanup for ALL created resources (in reverse order - dependents before dependencies)
 	harness.RegisterCleanup(func() {
-		t.Logf("Cleaning up unmanaged resource: type=%s, nativeID=%s", actualResourceType, nativeID)
-		err := harness.DeleteUnmanagedResource(actualResourceType, nativeID, &target)
-		if err != nil {
-			t.Logf("Warning: failed to delete unmanaged resource: %v", err)
+		t.Logf("Cleaning up %d unmanaged resource(s)...", len(createdResources))
+		// Delete in reverse order (children before parents)
+		for i := len(createdResources) - 1; i >= 0; i-- {
+			res := createdResources[i]
+			t.Logf("Cleaning up unmanaged resource: type=%s, label=%s, nativeID=%s", res.ResourceType, res.Label, res.NativeID)
+			err := harness.DeleteUnmanagedResource(res.ResourceType, res.NativeID, &target)
+			if err != nil {
+				t.Logf("Warning: failed to delete unmanaged resource %s: %v", res.Label, err)
+			}
 		}
 	})
 

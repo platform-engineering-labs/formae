@@ -23,6 +23,8 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
@@ -31,6 +33,23 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
+
+// CreatedResourceInfo tracks a resource that was created during multi-resource test setup
+type CreatedResourceInfo struct {
+	ResourceType string
+	Label        string
+	NativeID     string
+	Properties   json.RawMessage // Properties from the plugin after creation
+}
+
+// resolvablePath tracks a resolvable reference found in resource properties
+type resolvablePath struct {
+	path       string
+	label      string
+	resType    string
+	property   string
+	fullObject gjson.Result
+}
 
 // TestHarness manages the lifecycle of formae agent and CLI commands for testing
 type TestHarness struct {
@@ -956,43 +975,65 @@ func (h *TestHarness) WaitForResourceInInventory(resourceType, nativeID string, 
 	return fmt.Errorf("timeout waiting for resource %s (type: %s) to appear in inventory after %v", nativeID, resourceType, timeout)
 }
 
-// CreateUnmanagedResource creates an unmanaged resource using the external plugin directly,
-// bypassing formae's validation and database storage. This method handles the full workflow:
-// initializing the Ergo node, launching the plugin, waiting for it to be ready, and creating
-// the resource via the actor system. After calling this method, use StopErgoNode() before
-// starting the formae agent.
+// CreateUnmanagedResource creates unmanaged resources using the external plugin directly,
+// bypassing formae's validation and database storage. This method handles multi-resource
+// formas by creating all cloud resources in dependency order and resolving references
+// between them. Returns the NativeID of the LAST (main) resource for discovery verification.
+// Use CreateAllUnmanagedResources if you need info about all created resources.
 func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, error) {
-	h.t.Log("Creating unmanaged resource via external plugin")
+	createdResources, err := h.CreateAllUnmanagedResources(evaluatedJSON)
+	if err != nil {
+		return "", err
+	}
+
+	if len(createdResources) == 0 {
+		return "", fmt.Errorf("no resources were created")
+	}
+
+	// Return the last resource's NativeID (the main resource being tested)
+	return createdResources[len(createdResources)-1].NativeID, nil
+}
+
+// CreateAllUnmanagedResources creates ALL cloud resources in a forma using the external plugin
+// directly, handling dependencies and resolvable references between resources.
+// Resources are created in dependency order (resources without resolvables first).
+// Returns a slice of CreatedResourceInfo for all created resources (for cleanup).
+func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]CreatedResourceInfo, error) {
+	h.t.Log("Creating unmanaged resources via external plugin")
 
 	// Parse the evaluated JSON into a Forma object
 	var forma pkgmodel.Forma
 	if err := json.Unmarshal([]byte(evaluatedJSON), &forma); err != nil {
-		return "", fmt.Errorf("failed to parse forma JSON: %w", err)
+		return nil, fmt.Errorf("failed to parse forma JSON: %w", err)
 	}
 
-	// Find the cloud resource to create
-	var cloudResource *pkgmodel.Resource
+	// Collect all cloud resources (those with "::" in the type)
+	var cloudResources []*pkgmodel.Resource
 	for i := range forma.Resources {
 		if strings.Contains(forma.Resources[i].Type, "::") {
-			cloudResource = &forma.Resources[i]
-			break
+			// Make a copy to avoid modifying the original
+			res := forma.Resources[i]
+			cloudResources = append(cloudResources, &res)
 		}
 	}
 
-	if cloudResource == nil {
-		return "", fmt.Errorf("no cloud resource found in forma")
+	if len(cloudResources) == 0 {
+		return nil, fmt.Errorf("no cloud resources found in forma")
 	}
 
-	h.t.Logf("Creating resource of type: %s", cloudResource.Type)
+	h.t.Logf("Found %d cloud resource(s) to create", len(cloudResources))
 
-	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "AWS")
-	namespace := strings.Split(cloudResource.Type, "::")[0]
+	// Sort resources by dependency order (resources without resolvables first)
+	sortedResources := h.sortResourcesByDependency(cloudResources)
+
+	// Extract namespace from the first resource type (all resources should be in same namespace)
+	namespace := strings.Split(sortedResources[0].Type, "::")[0]
 	h.t.Logf("Using plugin namespace: %s", namespace)
 
 	// Get plugin binary path
 	pluginBinaryPath, err := h.GetPluginBinaryPath(namespace)
 	if err != nil {
-		return "", fmt.Errorf("failed to get plugin binary path: %w", err)
+		return nil, fmt.Errorf("failed to get plugin binary path: %w", err)
 	}
 
 	// Store for later cleanup
@@ -1001,67 +1042,329 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 
 	// Initialize Ergo node if needed
 	if err := h.InitErgoNode(); err != nil {
-		return "", fmt.Errorf("failed to initialize Ergo node: %w", err)
+		return nil, fmt.Errorf("failed to initialize Ergo node: %w", err)
 	}
 
 	// Launch the plugin
 	if err := h.LaunchPluginDirect(pluginBinaryPath, namespace); err != nil {
-		return "", fmt.Errorf("failed to launch plugin: %w", err)
+		return nil, fmt.Errorf("failed to launch plugin: %w", err)
 	}
 
 	// Wait for plugin to be ready
 	if err := h.WaitForPluginReady(namespace, 30*time.Second); err != nil {
-		return "", fmt.Errorf("plugin not ready: %w", err)
+		return nil, fmt.Errorf("plugin not ready: %w", err)
 	}
-
-	// Strip Formae metadata tags from the resource properties
-	h.stripFormaeTags(cloudResource)
 
 	// Find the target
 	if len(forma.Targets) == 0 {
-		return "", fmt.Errorf("no targets found in forma")
+		return nil, fmt.Errorf("no targets found in forma")
 	}
 	target := forma.Targets[0]
 
-	// Call PluginCoordinator to create the resource
-	result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", CreateResourceRequest{
-		ResourceType: cloudResource.Type,
-		Namespace:    namespace,
-		Label:        cloudResource.Label,
-		Properties:   cloudResource.Properties,
-		Target:       target,
-	}, 120) // 2 minute timeout for the initial call
-	if err != nil {
-		return "", fmt.Errorf("CreateResource call failed: %w", err)
-	}
+	// Create each resource in dependency order, tracking what was created
+	var createdResources []CreatedResourceInfo
 
-	createResult, ok := result.(CreateResourceResult)
-	if !ok {
-		return "", fmt.Errorf("unexpected response type: %T", result)
-	}
+	for _, res := range sortedResources {
+		h.t.Logf("Creating resource: type=%s, label=%s", res.Type, res.Label)
 
-	if createResult.Error != "" {
-		return "", fmt.Errorf("create failed: %s", createResult.Error)
-	}
+		// Strip Formae metadata tags from the resource properties
+		h.stripFormaeTags(res)
 
-	// Wait for the operation to complete by polling
-	progress := createResult.InitialProgress
-	if progress.OperationStatus == resource.OperationStatusInProgress {
-		h.t.Logf("Resource creation in progress, waiting for completion...")
-		progress, err = h.waitForOperationProgress(createResult.OperatorPID, progress, 10*time.Minute)
+		// Resolve any resolvable references using previously created resources
+		resolvedProps, err := h.resolveResolvablesInProperties(res.Properties, createdResources)
 		if err != nil {
-			return "", fmt.Errorf("waiting for create to complete: %w", err)
+			return createdResources, fmt.Errorf("failed to resolve resolvables for %s: %w", res.Label, err)
+		}
+		res.Properties = resolvedProps
+
+		// Create the resource
+		result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", CreateResourceRequest{
+			ResourceType: res.Type,
+			Namespace:    namespace,
+			Label:        res.Label,
+			Properties:   res.Properties,
+			Target:       target,
+		}, 120) // 2 minute timeout for the initial call
+		if err != nil {
+			return createdResources, fmt.Errorf("CreateResource call failed for %s: %w", res.Label, err)
+		}
+
+		createResult, ok := result.(CreateResourceResult)
+		if !ok {
+			return createdResources, fmt.Errorf("unexpected response type for %s: %T", res.Label, result)
+		}
+
+		if createResult.Error != "" {
+			return createdResources, fmt.Errorf("create failed for %s: %s", res.Label, createResult.Error)
+		}
+
+		// Wait for the operation to complete by polling
+		progress := createResult.InitialProgress
+		if progress.OperationStatus == resource.OperationStatusInProgress {
+			h.t.Logf("Resource %s creation in progress, waiting for completion...", res.Label)
+			progress, err = h.waitForOperationProgress(createResult.OperatorPID, progress, 10*time.Minute)
+			if err != nil {
+				return createdResources, fmt.Errorf("waiting for create to complete for %s: %w", res.Label, err)
+			}
+		}
+
+		if progress.OperationStatus == resource.OperationStatusFailure {
+			return createdResources, fmt.Errorf("create failed for %s: %s (code: %s)", res.Label, progress.StatusMessage, progress.ErrorCode)
+		}
+
+		h.t.Logf("Resource %s created successfully, NativeID: %s", res.Label, progress.NativeID)
+
+		// Track the created resource for cleanup and for resolving subsequent resolvables
+		createdResources = append(createdResources, CreatedResourceInfo{
+			ResourceType: res.Type,
+			Label:        res.Label,
+			NativeID:     progress.NativeID,
+			Properties:   progress.ResourceProperties,
+		})
+	}
+
+	h.t.Logf("Successfully created %d resource(s)", len(createdResources))
+	return createdResources, nil
+}
+
+// sortResourcesByDependency performs a topological sort on resources based on their
+// resolvable dependencies. Resources are ordered so that dependencies come before
+// the resources that depend on them. This handles arbitrary nesting depths.
+func (h *TestHarness) sortResourcesByDependency(resources []*pkgmodel.Resource) []*pkgmodel.Resource {
+	// Build a map of label -> resource for quick lookup
+	byLabel := make(map[string]*pkgmodel.Resource)
+	for _, res := range resources {
+		byLabel[res.Label] = res
+	}
+
+	// Build dependency graph: for each resource, find which other resources it depends on
+	// Dependencies are identified by the $label field in resolvable objects
+	dependencies := make(map[string][]string) // resource label -> labels of resources it depends on
+	for _, res := range resources {
+		deps := h.extractDependencyLabels(res.Properties)
+		dependencies[res.Label] = deps
+	}
+
+	// Perform topological sort using Kahn's algorithm
+	// Calculate in-degree (number of dependencies) for each resource
+	inDegree := make(map[string]int)
+	for _, res := range resources {
+		if _, exists := inDegree[res.Label]; !exists {
+			inDegree[res.Label] = 0
+		}
+		for _, depLabel := range dependencies[res.Label] {
+			// Only count dependencies that are in our resource set
+			if _, exists := byLabel[depLabel]; exists {
+				inDegree[res.Label]++
+			}
 		}
 	}
 
-	if progress.OperationStatus == resource.OperationStatusFailure {
-		return "", fmt.Errorf("create failed: %s (code: %s)", progress.StatusMessage, progress.ErrorCode)
+	// Build reverse dependency map: which resources depend on each resource
+	dependents := make(map[string][]string)
+	for _, res := range resources {
+		for _, depLabel := range dependencies[res.Label] {
+			if _, exists := byLabel[depLabel]; exists {
+				dependents[depLabel] = append(dependents[depLabel], res.Label)
+			}
+		}
 	}
 
-	nativeID := progress.NativeID
-	h.t.Logf("Resource created successfully, NativeID: %s", nativeID)
+	// Start with resources that have no dependencies (in-degree 0)
+	var queue []string
+	for _, res := range resources {
+		if inDegree[res.Label] == 0 {
+			queue = append(queue, res.Label)
+		}
+	}
 
-	return nativeID, nil
+	// Process queue, adding resources to result as their dependencies are satisfied
+	var sortedLabels []string
+	for len(queue) > 0 {
+		// Pop from queue
+		label := queue[0]
+		queue = queue[1:]
+		sortedLabels = append(sortedLabels, label)
+
+		// Decrease in-degree for all resources that depend on this one
+		for _, dependentLabel := range dependents[label] {
+			inDegree[dependentLabel]--
+			if inDegree[dependentLabel] == 0 {
+				queue = append(queue, dependentLabel)
+			}
+		}
+	}
+
+	// Check for cycles (if we didn't process all resources, there's a cycle)
+	if len(sortedLabels) != len(resources) {
+		h.t.Logf("Warning: dependency cycle detected, falling back to original order")
+		return resources
+	}
+
+	// Convert sorted labels back to resources
+	result := make([]*pkgmodel.Resource, 0, len(resources))
+	for _, label := range sortedLabels {
+		result = append(result, byLabel[label])
+	}
+
+	return result
+}
+
+// extractDependencyLabels finds all resource labels that a resource depends on
+// by examining the $label fields in resolvable objects within its properties.
+func (h *TestHarness) extractDependencyLabels(properties json.RawMessage) []string {
+	if len(properties) == 0 {
+		return nil
+	}
+
+	var resolvables []resolvablePath
+	result := gjson.ParseBytes(properties)
+	h.findResolvablesRecursive("", result, &resolvables)
+
+	// Extract unique labels
+	labelSet := make(map[string]struct{})
+	for _, res := range resolvables {
+		if res.label != "" {
+			labelSet[res.label] = struct{}{}
+		}
+	}
+
+	labels := make([]string, 0, len(labelSet))
+	for label := range labelSet {
+		labels = append(labels, label)
+	}
+	return labels
+}
+
+// resolveResolvablesInProperties replaces resolvable references with actual values
+// from previously created resources.
+func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage, createdResources []CreatedResourceInfo) (json.RawMessage, error) {
+	if len(properties) == 0 {
+		return properties, nil
+	}
+
+	propsStr := string(properties)
+	result := gjson.Parse(propsStr)
+
+	// Find all resolvables in the properties
+	var resolvables []resolvablePath
+	h.findResolvablesRecursive("", result, &resolvables)
+
+	if len(resolvables) == 0 {
+		return properties, nil
+	}
+
+	// Build a map of created resources by label and type for quick lookup
+	createdByKey := make(map[string]CreatedResourceInfo)
+	for _, created := range createdResources {
+		key := created.Label + "::" + created.ResourceType
+		createdByKey[key] = created
+	}
+
+	// Resolve each resolvable
+	for _, res := range resolvables {
+		// Look up the created resource by label and type
+		key := res.label + "::" + res.resType
+		created, found := createdByKey[key]
+		if !found {
+			h.t.Logf("Warning: could not find created resource for resolvable: label=%s, type=%s", res.label, res.resType)
+			continue
+		}
+
+		// Extract the property value from the created resource's properties
+		resolvedValue, err := h.extractPropertyValue(created.Properties, res.property)
+		if err != nil {
+			h.t.Logf("Warning: could not extract property %s from created resource %s: %v", res.property, res.label, err)
+			continue
+		}
+
+		h.t.Logf("Resolved %s.%s -> %s", res.label, res.property, resolvedValue)
+
+		// Replace the resolvable object with the resolved value in the properties JSON
+		propsStr, err = sjson.Set(propsStr, res.path, resolvedValue)
+		if err != nil {
+			return properties, fmt.Errorf("failed to set resolved value at path %s: %w", res.path, err)
+		}
+	}
+
+	return json.RawMessage(propsStr), nil
+}
+
+// findResolvablesRecursive recursively finds all resolvable objects in a JSON structure
+func (h *TestHarness) findResolvablesRecursive(basePath string, value gjson.Result, resolvables *[]resolvablePath) {
+	if value.IsObject() {
+		// Check if this object is a resolvable ($res: true)
+		resField := value.Get("$res")
+		if resField.Exists() && resField.Bool() {
+			*resolvables = append(*resolvables, resolvablePath{
+				path:       basePath,
+				label:      value.Get("$label").String(),
+				resType:    value.Get("$type").String(),
+				property:   value.Get("$property").String(),
+				fullObject: value,
+			})
+			return
+		}
+
+		// Recurse into object properties
+		value.ForEach(func(key, val gjson.Result) bool {
+			var newPath string
+			if basePath == "" {
+				newPath = key.String()
+			} else {
+				newPath = basePath + "." + key.String()
+			}
+			h.findResolvablesRecursive(newPath, val, resolvables)
+			return true
+		})
+	} else if value.IsArray() {
+		// Recurse into array elements
+		idx := 0
+		value.ForEach(func(_, val gjson.Result) bool {
+			var newPath string
+			if basePath == "" {
+				newPath = fmt.Sprintf("%d", idx)
+			} else {
+				newPath = fmt.Sprintf("%s.%d", basePath, idx)
+			}
+			h.findResolvablesRecursive(newPath, val, resolvables)
+			idx++
+			return true
+		})
+	}
+}
+
+// extractPropertyValue extracts a property value from resource properties JSON.
+// The property path can be a simple name like "Id" or a nested path like "Arn".
+func (h *TestHarness) extractPropertyValue(properties json.RawMessage, propertyPath string) (string, error) {
+	if len(properties) == 0 {
+		return "", fmt.Errorf("empty properties")
+	}
+
+	result := gjson.GetBytes(properties, propertyPath)
+	if !result.Exists() {
+		// Try case-insensitive search for common property names
+		// AWS often returns Id but we might be looking for id
+		propsStr := string(properties)
+		parsed := gjson.Parse(propsStr)
+
+		var foundValue string
+		parsed.ForEach(func(key, val gjson.Result) bool {
+			if strings.EqualFold(key.String(), propertyPath) {
+				foundValue = val.String()
+				return false // stop iteration
+			}
+			return true
+		})
+
+		if foundValue != "" {
+			return foundValue, nil
+		}
+
+		return "", fmt.Errorf("property %s not found in resource properties", propertyPath)
+	}
+
+	return result.String(), nil
 }
 
 // DeleteUnmanagedResource deletes a resource directly via the external plugin, bypassing formae.
