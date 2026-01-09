@@ -166,8 +166,16 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 	}
 	ru.ModifiedTs = progress.ModifiedTs
 
-	// THE UPDATE SHOULD NOT HAPPEN ON UPDATE OPERATION - OTHERWISE IT WILL OVERWRITE THE PROPERTIES FOR METADATA/LEGACY
-	if progress.FinishedSuccessfully() && ru.Operation == OperationUpdate && progress.Operation == resource.OperationRead {
+	// Only update properties when the operation has finished successfully.
+	// Intermediate progress updates may have empty/partial properties which would
+	// wipe out $ref structures needed for dependency tracking.
+	if !progress.FinishedSuccessfully() {
+		return nil
+	}
+
+	// For Update operations with a Read sub-operation, update ExistingResource properties
+	// instead of Resource properties to preserve user-provided values for metadata/legacy.
+	if ru.Operation == OperationUpdate && progress.Operation == resource.OperationRead {
 		err := ru.updateExistingResourceProperties(string(progress.ResourceProperties))
 		if err != nil {
 			slog.Error("Failed to update resource properties", "error", err)
