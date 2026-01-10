@@ -153,7 +153,7 @@ test-plugin-sdk-aws: build build-aws-plugin
 	@pkl project resolve plugins/aws/testdata
 	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
 
-test-e2e: gen-pkl pkg-pkl build
+test-e2e: gen-pkl pkg-pkl build install-aws-plugin
 	echo "Resolving PKL project..."
 	pkl project resolve tests/e2e/pkl
 	echo "Running full E2E test suite..."
