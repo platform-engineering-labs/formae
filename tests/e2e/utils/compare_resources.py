@@ -159,9 +159,10 @@ def filter_readonly_properties(readonly_props: Dict[str, Any]) -> Dict[str, Any]
 def compare_single_resource(actual_resource: Dict, expected_resource: Dict, resource_label: str) -> bool:
     """Compare a single resource with special handling for identifiers and references"""
 
-    # Compare all properties EXCEPT NativeId, ReadOnlyProperties, and Ksuid (which have special handling)
+    # Compare all properties EXCEPT NativeId, ReadOnlyProperties, Ksuid, and Schema
+    # Schema is resource type metadata that may evolve and doesn't affect actual resource state
     for key in expected_resource:
-        if key in ["NativeID", "ReadOnlyProperties", "Ksuid"]:
+        if key in ["NativeID", "ReadOnlyProperties", "Ksuid", "Schema"]:
             continue
         if remove_dynamic_values(actual_resource.get(key)) != remove_dynamic_values(expected_resource.get(key)):
             print(f"Resource '{resource_label}' property '{key}' differs")
