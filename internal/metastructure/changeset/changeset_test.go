@@ -24,7 +24,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 
 	resourceUpdates := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -36,7 +36,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -49,7 +49,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -61,7 +61,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -74,7 +74,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-2",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -101,8 +101,8 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 	if len(executableUpdates) != 1 {
 		t.Fatalf("Expected 1 executable update, got %d", len(executableUpdates))
 	}
-	if executableUpdates[0].Resource.Label != "test-subnet-1" || executableUpdates[0].Operation != resource_update.OperationDelete {
-		t.Fatalf("Expected subnet-1 delete, got %s %s", executableUpdates[0].Resource.Label, executableUpdates[0].Operation)
+	if executableUpdates[0].DesiredState.Label != "test-subnet-1" || executableUpdates[0].Operation != resource_update.OperationDelete {
+		t.Fatalf("Expected subnet-1 delete, got %s %s", executableUpdates[0].DesiredState.Label, executableUpdates[0].Operation)
 	}
 
 	// Step 2: Complete subnet-1 delete
@@ -118,8 +118,8 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 	if len(nextUpdates) != 1 {
 		t.Fatalf("Expected 1 next update, got %d", len(nextUpdates))
 	}
-	if nextUpdates[0].Resource.Label != "test-vpc" || nextUpdates[0].Operation != resource_update.OperationDelete {
-		t.Fatalf("Expected vpc delete, got %s %s", nextUpdates[0].Resource.Label, nextUpdates[0].Operation)
+	if nextUpdates[0].DesiredState.Label != "test-vpc" || nextUpdates[0].Operation != resource_update.OperationDelete {
+		t.Fatalf("Expected vpc delete, got %s %s", nextUpdates[0].DesiredState.Label, nextUpdates[0].Operation)
 	}
 
 	// Step 3: Complete VPC delete
@@ -135,8 +135,8 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 	if len(nextUpdates2) != 1 {
 		t.Fatalf("Expected 1 next update, got %d", len(nextUpdates2))
 	}
-	if nextUpdates2[0].Resource.Label != "test-vpc" || nextUpdates2[0].Operation != resource_update.OperationCreate {
-		t.Fatalf("Expected vpc create, got %s %s", nextUpdates2[0].Resource.Label, nextUpdates2[0].Operation)
+	if nextUpdates2[0].DesiredState.Label != "test-vpc" || nextUpdates2[0].Operation != resource_update.OperationCreate {
+		t.Fatalf("Expected vpc create, got %s %s", nextUpdates2[0].DesiredState.Label, nextUpdates2[0].Operation)
 	}
 
 	// Step 4: Complete VPC create
@@ -156,7 +156,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 	// Verify both are subnet creates
 	subnetCreateCount := 0
 	for _, update := range nextUpdates3 {
-		if (update.Resource.Label == "test-subnet-1" || update.Resource.Label == "test-subnet-2") &&
+		if (update.DesiredState.Label == "test-subnet-1" || update.DesiredState.Label == "test-subnet-2") &&
 			update.Operation == resource_update.OperationCreate {
 			subnetCreateCount++
 		}
@@ -189,7 +189,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 
 	resourceUpdates := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc-2",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -201,7 +201,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -213,7 +213,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -226,7 +226,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -238,7 +238,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -251,7 +251,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-2",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -285,10 +285,10 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 	foundSubnet1Delete := false
 
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
 			foundVpc2Create = true
 		}
-		if update.Resource.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
 			foundSubnet1Delete = true
 		}
 	}
@@ -303,7 +303,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 	// Complete test-subnet-1 delete first
 	var subnet1Delete *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
 			subnet1Delete = update
 			break
 		}
@@ -321,7 +321,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 	// Plus test-vpc-2 create should still be available
 	foundVpcDelete := false
 	for _, update := range nextUpdates {
-		if update.Resource.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
 			foundVpcDelete = true
 			break
 		}
@@ -343,7 +343,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 
 	resourceUpdates := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc-2",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -356,7 +356,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 			RemainingResolvables: []pkgmodel.FormaeURI{externalVpcKsuid},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -368,7 +368,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -381,7 +381,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -393,7 +393,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -406,7 +406,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-2",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -443,10 +443,10 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	foundSubnet1Delete := false
 
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
 			foundVpc2Create = true
 		}
-		if update.Resource.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
 			foundSubnet1Delete = true
 		}
 	}
@@ -461,7 +461,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	// Complete test-vpc-2 create (should not affect anything since it's independent)
 	var vpc2Create *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
 			vpc2Create = update
 			break
 		}
@@ -477,7 +477,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	// Step 1: Complete subnet-1 delete
 	var subnet1Delete *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
 			subnet1Delete = update
 			break
 		}
@@ -494,7 +494,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	// Should have vpc delete now
 	foundVpcDelete := false
 	for _, update := range nextUpdates2 {
-		if update.Resource.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
 			foundVpcDelete = true
 			// Complete vpc delete
 			update.State = resource_update.ResourceUpdateStateSuccess
@@ -509,7 +509,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 			// Should have vpc create available
 			foundVpcCreate := false
 			for _, update2 := range nextUpdates3 {
-				if update2.Resource.Label == "test-vpc" && update2.Operation == resource_update.OperationCreate {
+				if update2.DesiredState.Label == "test-vpc" && update2.Operation == resource_update.OperationCreate {
 					foundVpcCreate = true
 					break
 				}
@@ -536,7 +536,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 
 	resourceUpdates := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc-2",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -548,7 +548,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -560,7 +560,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -573,7 +573,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -585,7 +585,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -598,7 +598,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-2",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -633,14 +633,14 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	foundSubnet1Delete := false
 
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
 			foundVpc2Create = true
 		}
-		if update.Resource.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
 			foundSubnet1Delete = true
 		}
 		// Verify subnet-2 is NOT executable
-		if update.Resource.Label == "test-subnet-2" {
+		if update.DesiredState.Label == "test-subnet-2" {
 			t.Fatalf("test-subnet-2 should not be executable initially (depends on both VPCs)")
 		}
 	}
@@ -655,7 +655,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	// Step 1: Complete test-vpc-2 create
 	var vpc2Create *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
 			vpc2Create = update
 			break
 		}
@@ -670,7 +670,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	// Step 2: Complete test-subnet-1 delete
 	var subnet1Delete *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.Resource.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
 			subnet1Delete = update
 			break
 		}
@@ -687,7 +687,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	// Step 3: Complete test-vpc delete
 	var vpcDelete *resource_update.ResourceUpdate
 	for _, update := range nextUpdates2 {
-		if update.Resource.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
+		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
 			vpcDelete = update
 			break
 		}
@@ -710,7 +710,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	// Step 4: Complete test-vpc create
 	var vpcCreate *resource_update.ResourceUpdate
 	for _, update := range nextUpdates3 {
-		if update.Resource.Label == "test-vpc" && update.Operation == resource_update.OperationCreate {
+		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationCreate {
 			vpcCreate = update
 			break
 		}
@@ -735,7 +735,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	subnetCreateCount := 0
 
 	for _, update := range finalUpdates {
-		if (update.Resource.Label == "test-subnet-1" || update.Resource.Label == "test-subnet-2") &&
+		if (update.DesiredState.Label == "test-subnet-1" || update.DesiredState.Label == "test-subnet-2") &&
 			update.Operation == resource_update.OperationCreate {
 			subnetCreateCount++
 		}
@@ -754,7 +754,7 @@ func TestNewChangesetFromResourceUpdates_Different_Types_Same_Label(t *testing.T
 
 	resourceUpdateInitial := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "replace-resource-type",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -766,7 +766,7 @@ func TestNewChangesetFromResourceUpdates_Different_Types_Same_Label(t *testing.T
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "replace-resource-type",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -796,8 +796,8 @@ func TestNewChangesetFromResourceUpdates_Different_Types_Same_Label(t *testing.T
 
 	assert.NotNil(t, subnetDelete, "Expected to find delete operation")
 	assert.NotNil(t, vpcCreate, "Expected to find create operation")
-	assert.Equal(t, "AWS::EC2::Subnet", subnetDelete.Resource.Type)
-	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.Resource.Type)
+	assert.Equal(t, "AWS::EC2::Subnet", subnetDelete.DesiredState.Type)
+	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.DesiredState.Type)
 
 	// Complete delete op
 	subnetDelete.State = resource_update.ResourceUpdateStateSuccess
@@ -822,7 +822,7 @@ func TestNewChangesetFromResourceUpdates_Destroy(t *testing.T) {
 
 	resourceUpdates := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -834,7 +834,7 @@ func TestNewChangesetFromResourceUpdates_Destroy(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",
@@ -864,7 +864,7 @@ func TestChangeset_RecursiveFailureCascading(t *testing.T) {
 
 	// Dependency chain: VPC -> Subnet -> Instance
 	vpcUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "vpc",
 			Type:  "AWS::EC2::VPC",
 			Stack: "test-stack",
@@ -874,7 +874,7 @@ func TestChangeset_RecursiveFailureCascading(t *testing.T) {
 		State:     resource_update.ResourceUpdateStateNotStarted,
 	}
 	subnetUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "subnet",
 			Type:  "AWS::EC2::Subnet",
 			Stack: "test-stack",
@@ -885,7 +885,7 @@ func TestChangeset_RecursiveFailureCascading(t *testing.T) {
 		RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 	}
 	instanceUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "instance",
 			Type:  "AWS::EC2::Instance",
 			Stack: "test-stack",
@@ -909,7 +909,7 @@ func TestChangeset_RecursiveFailureCascading(t *testing.T) {
 
 	failedLabels := make([]string, 0, len(failedUpdates))
 	for _, update := range failedUpdates {
-		failedLabels = append(failedLabels, update.Resource.Label)
+		failedLabels = append(failedLabels, update.DesiredState.Label)
 	}
 
 	// both subnet AND instance should be failed
@@ -927,7 +927,7 @@ func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
 
 	// Dependency chain: VPC -> Subnet -> Instance
 	vpcUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "vpc",
 			Type:  "AWS::EC2::VPC",
 			Stack: "test-stack",
@@ -937,7 +937,7 @@ func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
 		State:     resource_update.ResourceUpdateStateNotStarted,
 	}
 	subnetUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "subnet",
 			Type:  "AWS::EC2::Subnet",
 			Stack: "test-stack",
@@ -948,7 +948,7 @@ func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
 		RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
 	}
 	instanceUpdate := resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "instance",
 			Type:  "AWS::EC2::Instance",
 			Stack: "test-stack",
@@ -982,7 +982,7 @@ func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
 	// Verify all failed resources have Failed state
 	for _, update := range failedUpdates {
 		assert.Equal(t, resource_update.ResourceUpdateStateFailed, update.State,
-			"Resource %s should be marked as Failed", update.Resource.Label)
+			"Resource %s should be marked as Failed", update.DesiredState.Label)
 	}
 
 	// Verify empty groups were removed from pipeline
@@ -1003,7 +1003,7 @@ func TestChangeset_GetExecutableUpdatesUpUntilN(t *testing.T) {
 
 	updates := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-bucket-1",
 				Type:  "AWS::S3::Bucket",
 				Stack: "test-stack",
@@ -1015,7 +1015,7 @@ func TestChangeset_GetExecutableUpdatesUpUntilN(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-bucket-2",
 				Type:  "AWS::S3::Bucket",
 				Stack: "test-stack",
@@ -1027,7 +1027,7 @@ func TestChangeset_GetExecutableUpdatesUpUntilN(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-bucket-3",
 				Type:  "FakeAWS::S3::Bucket",
 				Stack: "test-stack",
@@ -1071,7 +1071,7 @@ func TestChangeset_FormaWithCycle(t *testing.T) {
 
 	resourceUpdates := []resource_update.ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -1084,7 +1084,7 @@ func TestChangeset_FormaWithCycle(t *testing.T) {
 			RemainingResolvables: []pkgmodel.FormaeURI{subnet1KsuidURI},
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "test-subnet-1",
 				Type:  "AWS::EC2::Subnet",
 				Stack: "test-stack",

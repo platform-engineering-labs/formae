@@ -29,7 +29,7 @@ func TestMetastructure_ApplyFormaHashesOpaqueValues(t *testing.T) {
 		var receivedProperties json.RawMessage
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				receivedProperties = request.Resource.Properties
+				receivedProperties = request.DesiredState.Properties
 				return &resource.CreateResult{
 					ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationCreate,
@@ -84,7 +84,7 @@ func TestMetastructure_ApplyFormaHashesOpaqueValues(t *testing.T) {
 		// Database should contain hashed values in the completed resource update
 		completedResourceUpdate := fas[0].ResourceUpdates[0]
 		var storedProps map[string]any
-		err = json.Unmarshal(completedResourceUpdate.Resource.Properties, &storedProps)
+		err = json.Unmarshal(completedResourceUpdate.DesiredState.Properties, &storedProps)
 		require.NoError(t, err)
 
 		secretString := storedProps["SecretString"].(map[string]interface{})

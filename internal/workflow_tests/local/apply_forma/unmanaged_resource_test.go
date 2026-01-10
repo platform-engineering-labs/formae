@@ -151,7 +151,7 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedResource(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(commands))
 		assert.Equal(t, 1, len(commands[0].ResourceUpdates))
-		actualKsuidURI := commands[0].ResourceUpdates[0].Resource.URI()
+		actualKsuidURI := commands[0].ResourceUpdates[0].DesiredState.URI()
 
 		fromDb, err := m.Datastore.LoadResource(actualKsuidURI)
 		assert.NoError(t, err)

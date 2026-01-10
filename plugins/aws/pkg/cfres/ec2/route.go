@@ -83,7 +83,7 @@ func (r Route) Create(ctx context.Context, request *resource.CreateRequest) (*re
 	client := ec2.NewFromConfig(cfg)
 
 	var props map[string]any
-	if err := json.Unmarshal(request.Resource.Properties, &props); err != nil {
+	if err := json.Unmarshal(request.DesiredState.Properties, &props); err != nil {
 		return nil, fmt.Errorf("failed to parse properties: %w", err)
 	}
 

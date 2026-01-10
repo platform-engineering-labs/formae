@@ -12,8 +12,8 @@ import (
 )
 
 type CreateRequest struct {
-	Resource *model.Resource
-	Target   *model.Target
+	DesiredState *model.Resource
+	Target       *model.Target
 }
 
 type CreateResult struct {
@@ -22,12 +22,12 @@ type CreateResult struct {
 
 type UpdateRequest struct {
 	NativeID      *string
-	Resource      *model.Resource
+	PriorState    *model.Resource // Previous state of the resource
+	DesiredState  *model.Resource // New desired state of the resource
 	PatchDocument *string
-	OldMetadata   json.RawMessage
-	Metadata      json.RawMessage
 	Target        *model.Target
 }
+
 type UpdateResult struct {
 	ProgressResult *ProgressResult
 }
@@ -35,17 +35,17 @@ type UpdateResult struct {
 type DeleteRequest struct {
 	NativeID     *string
 	ResourceType string
-	Metadata     json.RawMessage
 	Target       *model.Target
 }
+
 type DeleteResult struct {
 	ProgressResult *ProgressResult
 }
 
 type StatusRequest struct {
 	RequestID    string
-	ResourceType string          // Optional resource type for status checks
-	Metadata     json.RawMessage // Optional metadata for status checks which might be necessary for some resources
+	NativeID     string            // NativeID returned by initial Create/Update
+	ResourceType string            // Optional resource type for status checks
 	Target       *model.Target
 }
 
@@ -56,7 +56,6 @@ type StatusResult struct {
 type ReadRequest struct {
 	NativeID     string
 	ResourceType string
-	Metadata     json.RawMessage
 	Target       *model.Target
 
 	// RedactSensitive declares intent to remove sensitive properties
@@ -93,8 +92,7 @@ type ProgressResult struct {
 	OperationStatus OperationStatus
 
 	RequestID          string
-	NativeID           string
-	Metadata           json.RawMessage `json:"Metadata,omitempty"` //required for legacy resources that don't return a NativeID
+	NativeID           string // Required - all plugins must set this
 	ResourceType       string
 	ResourceProperties json.RawMessage    `json:"ResourceProperties,omitempty"`
 	StartTs            time.Time          `json:"StartTs"`

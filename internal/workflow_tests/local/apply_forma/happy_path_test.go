@@ -85,14 +85,14 @@ func TestMetastructure_ApplyFormaSuccess(t *testing.T) {
 
 			return len(commands) == 1 && len(incomplete_commands) == 0 &&
 				len(commands[0].ResourceUpdates) >= 2 &&
-				commands[0].ResourceUpdates[0].Resource.Managed &&
-				commands[0].ResourceUpdates[1].Resource.Managed
+				commands[0].ResourceUpdates[0].DesiredState.Managed &&
+				commands[0].ResourceUpdates[1].DesiredState.Managed
 		}, 5*time.Second, 100*time.Millisecond)
 
 		assert.Equal(t, 1, len(commands))
 		assert.GreaterOrEqual(t, len(commands[0].ResourceUpdates), 2)
-		assert.True(t, commands[0].ResourceUpdates[0].Resource.Managed)
-		assert.True(t, commands[0].ResourceUpdates[1].Resource.Managed)
+		assert.True(t, commands[0].ResourceUpdates[0].DesiredState.Managed)
+		assert.True(t, commands[0].ResourceUpdates[1].DesiredState.Managed)
 	})
 }
 
@@ -153,7 +153,7 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.Resource.Type,
+					ResourceType:    request.DesiredState.Type,
 				}}, nil
 
 			},
@@ -250,7 +250,7 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 				len(fas[0].ResourceUpdates) == 1 &&
 				fas[0].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
 				fas[0].ResourceUpdates[0].Operation == resource_update.OperationDelete &&
-				fas[0].ResourceUpdates[0].Resource.Label == "test-resource-delete")
+				fas[0].ResourceUpdates[0].DesiredState.Label == "test-resource-delete")
 		}, 5*time.Second, 100*time.Millisecond)
 	})
 }
@@ -265,7 +265,7 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.Resource.Type,
+					ResourceType:    request.DesiredState.Type,
 				}}, nil
 			},
 			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
@@ -283,7 +283,7 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 					OperationStatus:    resource.OperationStatusSuccess,
 					RequestID:          "1234",
 					NativeID:           "5678",
-					ResourceType:       request.Resource.Type,
+					ResourceType:       request.DesiredState.Type,
 					ResourceProperties: json.RawMessage(`{"name": "bucket1-renamed", "versioning": "Enabled"}`),
 				}}, nil
 			},
@@ -432,7 +432,7 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 		// Find the create operation in the newest command
 		for _, ru := range fas[0].ResourceUpdates {
 			if ru.Operation == resource_update.OperationCreate {
-				assert.Contains(t, string(ru.Resource.Properties), "bucket1-renamed")
+				assert.Contains(t, string(ru.DesiredState.Properties), "bucket1-renamed")
 				break
 			}
 		}
@@ -491,6 +491,6 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 
 		fas, err = m.Datastore.LoadFormaCommands()
 		require.NoError(t, err)
-		assert.Contains(t, string(fas[0].ResourceUpdates[0].Resource.Properties), "Enabled")
+		assert.Contains(t, string(fas[0].ResourceUpdates[0].DesiredState.Properties), "Enabled")
 	})
 }

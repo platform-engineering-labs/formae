@@ -84,7 +84,7 @@ func TestMetastructure_FormaAppliedPartialSuccess(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if request.Resource.Label == "test-resource2" {
+				if request.DesiredState.Label == "test-resource2" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,
@@ -151,7 +151,7 @@ func TestMetastructure_FormaAppliedPartialSuccess(t *testing.T) {
 				t.Errorf("Failed to load forma commands: %v", err)
 			}
 			resource1Index := slices.IndexFunc(fas[0].ResourceUpdates, func(ru resource_update.ResourceUpdate) bool {
-				return ru.Resource.Label == "test-resource1"
+				return ru.DesiredState.Label == "test-resource1"
 			})
 
 			return len(fas) == 1 && len(fas[0].ResourceUpdates) == 2 && fas[0].ResourceUpdates[resource1Index].State == resource_update.ResourceUpdateStateSuccess && fas[0].ResourceUpdates[resource1Index].Version != ""

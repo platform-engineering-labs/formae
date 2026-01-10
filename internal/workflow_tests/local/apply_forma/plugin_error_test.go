@@ -28,7 +28,7 @@ func TestMetastructure_ApplyFormaFailed(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if strings.EqualFold(request.Resource.Label, "test-resource2") {
+				if strings.EqualFold(request.DesiredState.Label, "test-resource2") {
 					return nil, fmt.Errorf("failed to create resource")
 				} else {
 					return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
@@ -36,7 +36,7 @@ func TestMetastructure_ApplyFormaFailed(t *testing.T) {
 						OperationStatus: resource.OperationStatusSuccess,
 						RequestID:       "1234",
 						NativeID:        "5678",
-						ResourceType:    request.Resource.Type,
+						ResourceType:    request.DesiredState.Type,
 					}}, nil
 				}
 			},
@@ -97,7 +97,7 @@ func TestMetastructure_ApplyFormaFailedAfterRetries(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if strings.EqualFold(request.Resource.Label, "test-resource2") {
+				if strings.EqualFold(request.DesiredState.Label, "test-resource2") {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,
@@ -163,7 +163,7 @@ func TestMetastructure_ApplyFormaFailedAfterRetries(t *testing.T) {
 
 			// Find the failing resource by label (order is non-deterministic)
 			for _, ru := range fas[0].ResourceUpdates {
-				if ru.Resource.Label == "test-resource2" {
+				if ru.DesiredState.Label == "test-resource2" {
 					return ru.State == resource_update.ResourceUpdateStateFailed &&
 						len(ru.ProgressResult) > 0 &&
 						ru.ProgressResult[0].Attempts == 4

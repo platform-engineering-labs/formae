@@ -133,7 +133,7 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedTaglessResource(t *testing.
 		require.Equal(t, 1, len(commands[0].ResourceUpdates), "Should have exactly one resource update")
 
 		// Get the resource from the database
-		actualKsuidURI := commands[0].ResourceUpdates[0].Resource.URI()
+		actualKsuidURI := commands[0].ResourceUpdates[0].DesiredState.URI()
 		fromDb, err := m.Datastore.LoadResource(actualKsuidURI)
 		require.NoError(t, err, "Should be able to load resource from database")
 
@@ -165,7 +165,7 @@ func TestApplyForma_ReconcileFormaWithExistingStackAndUnmanagedTaglessResource(t
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
 				// Allow the initial "other" resource to be created
-				if request.Resource.Type == "FakeAWS::Other::Resource" {
+				if request.DesiredState.Type == "FakeAWS::Other::Resource" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,
@@ -316,7 +316,7 @@ func TestApplyForma_ReconcileFormaWithExistingStackAndUnmanagedTaglessResource(t
 		// Find the VPC Gateway Attachment resource update
 		var vpcGatewayUpdate *resource_update.ResourceUpdate
 		for i, ru := range secondCommand.ResourceUpdates {
-			if ru.Resource.Label == "my-vpc-gateway-attachment" {
+			if ru.DesiredState.Label == "my-vpc-gateway-attachment" {
 				vpcGatewayUpdate = &secondCommand.ResourceUpdates[i]
 				break
 			}

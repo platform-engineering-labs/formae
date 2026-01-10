@@ -434,7 +434,7 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 
 	var subnetUpdate *ResourceUpdate
 	for i := range updates {
-		if updates[i].Resource.Label == "subnet" {
+		if updates[i].DesiredState.Label == "subnet" {
 			subnetUpdate = &updates[i]
 			break
 		}
@@ -442,7 +442,7 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 	require.NotNil(t, subnetUpdate, "Should have subnet update")
 
 	var subnetProps map[string]any
-	err = json.Unmarshal(subnetUpdate.Resource.Properties, &subnetProps)
+	err = json.Unmarshal(subnetUpdate.DesiredState.Properties, &subnetProps)
 	require.NoError(t, err)
 
 	vpcIdRef := subnetProps["VpcId"].(map[string]any)["$ref"].(string)
@@ -452,8 +452,8 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 	assert.NotContains(t, vpcIdRef, "vpc.ec2.aws")
 	assert.NotContains(t, vpcIdRef, "test-stack")
 
-	assert.NotEmpty(t, updates[0].Resource.Ksuid)
-	assert.NotEmpty(t, updates[1].Resource.Ksuid)
+	assert.NotEmpty(t, updates[0].DesiredState.Ksuid)
+	assert.NotEmpty(t, updates[1].DesiredState.Ksuid)
 }
 
 // Update the reference labels tests to use resolvable objects
@@ -607,9 +607,9 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 
 	var vpcUpdate, subnetUpdate *ResourceUpdate
 	for i := range updates {
-		if updates[i].Resource.Label == "new-vpc" {
+		if updates[i].DesiredState.Label == "new-vpc" {
 			vpcUpdate = &updates[i]
-		} else if updates[i].Resource.Label == "subnet" {
+		} else if updates[i].DesiredState.Label == "subnet" {
 			subnetUpdate = &updates[i]
 		}
 	}
@@ -617,8 +617,8 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 	require.NotNil(t, subnetUpdate, "Should have subnet update")
 
 	expectedLabels := map[string]string{
-		vpcUpdate.Resource.Ksuid:    "new-vpc",
-		subnetUpdate.Resource.Ksuid: "subnet",
+		vpcUpdate.DesiredState.Ksuid:    "new-vpc",
+		subnetUpdate.DesiredState.Ksuid: "subnet",
 		"shared-ksuid-999":          "shared-vpc",
 	}
 
@@ -653,7 +653,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 		require.Len(t, updates, 1)
 
 		assert.NotNil(t, updates[0].ReferenceLabels)
-		assert.Equal(t, "standalone-vpc", updates[0].ReferenceLabels[updates[0].Resource.Ksuid])
+		assert.Equal(t, "standalone-vpc", updates[0].ReferenceLabels[updates[0].DesiredState.Ksuid])
 		assert.Len(t, updates[0].ReferenceLabels, 1)
 	})
 
@@ -690,10 +690,10 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 		require.Len(t, updates, 1)
 
 		assert.NotNil(t, updates[0].ReferenceLabels)
-		assert.Equal(t, "subnet-with-bad-ref", updates[0].ReferenceLabels[updates[0].Resource.Ksuid])
+		assert.Equal(t, "subnet-with-bad-ref", updates[0].ReferenceLabels[updates[0].DesiredState.Ksuid])
 
 		var subnetProps map[string]any
-		err = json.Unmarshal(updates[0].Resource.Properties, &subnetProps)
+		err = json.Unmarshal(updates[0].DesiredState.Properties, &subnetProps)
 		require.NoError(t, err)
 		vpcId := subnetProps["VpcId"].(map[string]any)
 		assert.Equal(t, true, vpcId["$res"])
@@ -874,8 +874,8 @@ func TestGenerateResourceUpdatesForDestroy_SameLabel_DifferentTypes(t *testing.T
 	types := make(map[string]bool)
 	for _, update := range updates {
 		assert.Equal(t, OperationDelete, update.Operation)
-		assert.Equal(t, "my-resource", update.Resource.Label)
-		types[update.Resource.Type] = true
+		assert.Equal(t, "my-resource", update.DesiredState.Label)
+		types[update.DesiredState.Type] = true
 	}
 
 	assert.True(t, types["AWS::ApiGateway::RestApi"], "Should have API Gateway delete")
@@ -938,8 +938,8 @@ func TestGenerateResourceUpdatesForSync_SameLabel_DifferentTypes(t *testing.T) {
 	types := make(map[string]bool)
 	for _, update := range updates {
 		assert.Equal(t, OperationRead, update.Operation)
-		assert.Equal(t, "shared-name", update.Resource.Label)
-		types[update.Resource.Type] = true
+		assert.Equal(t, "shared-name", update.DesiredState.Label)
+		types[update.DesiredState.Type] = true
 	}
 
 	assert.True(t, types["AWS::S3::Bucket"], "Should have Bucket sync")
@@ -981,7 +981,7 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 
 	allDeleteUpdates := []ResourceUpdate{
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "my-resource",
 				Type:  "AWS::ApiGateway::RestApi",
 				Stack: "test-stack",
@@ -990,7 +990,7 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 			Operation: OperationDelete,
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "my-resource",
 				Type:  "AWS::CloudFront::Distribution",
 				Stack: "test-stack",
@@ -999,7 +999,7 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 			Operation: OperationDelete,
 		},
 		{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label: "vpc",
 				Type:  "AWS::EC2::VPC",
 				Stack: "test-stack",
@@ -1075,11 +1075,11 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 	require.NotNil(t, deleteOp, "Should have delete operation")
 	require.NotNil(t, createOp, "Should have create operation")
 
-	assert.Equal(t, "my-resource", deleteOp.Resource.Label)
-	assert.Equal(t, "AWS::EC2::Subnet", deleteOp.Resource.Type)
+	assert.Equal(t, "my-resource", deleteOp.DesiredState.Label)
+	assert.Equal(t, "AWS::EC2::Subnet", deleteOp.DesiredState.Type)
 
-	assert.Equal(t, "my-resource", createOp.Resource.Label)
-	assert.Equal(t, "AWS::EC2::VPC", createOp.Resource.Type)
+	assert.Equal(t, "my-resource", createOp.DesiredState.Label)
+	assert.Equal(t, "AWS::EC2::VPC", createOp.DesiredState.Type)
 
 	// They should be treated as independent, not as a replacement
 	assert.Empty(t, deleteOp.GroupID, "Delete should not be grouped (not a replacement)")
