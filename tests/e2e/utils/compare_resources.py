@@ -107,6 +107,23 @@ def remove_dynamic_ids_from_array(field_name: str, value: Any) -> Any:
 
     return value
 
+def normalize_empty_values(obj: Any) -> Any:
+    """Recursively remove empty arrays and empty objects from a dict for comparison.
+    This handles cases where the actual output omits empty values while expected includes them."""
+    if isinstance(obj, dict):
+        result = {}
+        for key, value in obj.items():
+            normalized = normalize_empty_values(value)
+            # Skip empty arrays and empty dicts
+            if normalized == [] or normalized == {}:
+                continue
+            result[key] = normalized
+        return result
+    elif isinstance(obj, list):
+        return [normalize_empty_values(item) for item in obj]
+    else:
+        return obj
+
 def remove_dynamic_values(obj: Any, field_path: str = "") -> Any:
     """Recursively remove dynamic values that shouldn't be compared"""
     if isinstance(obj, dict):
@@ -179,8 +196,9 @@ def compare_single_resource(actual_resource: Dict, expected_resource: Dict, reso
     expected_props = expected_resource.get("Properties", {})
 
     # Remove identifier from properties before comparison if it exists there
-    actual_props_filtered = remove_dynamic_values(actual_props.copy())
-    expected_props_filtered = remove_dynamic_values(expected_props.copy())
+    # Also normalize empty values (missing field == empty array/dict)
+    actual_props_filtered = normalize_empty_values(remove_dynamic_values(actual_props.copy()))
+    expected_props_filtered = normalize_empty_values(remove_dynamic_values(expected_props.copy()))
 
     if identifier_field and identifier_field in actual_props_filtered:
         # Check identifier exists but don't compare its value
