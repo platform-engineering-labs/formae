@@ -37,13 +37,13 @@ func init() {
 }
 
 func (m *Method) Create(ctx context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
-	transformedProperties, err := m.handleLambdaIntegration(request.DesiredState.Properties)
+	transformedProperties, err := m.handleLambdaIntegration(request.Properties)
 	if err != nil {
 		slog.Error("ApiGateway::Method: Failed to transform Lambda integration", "error", err)
 		return nil, err
 	}
 
-	request.DesiredState.Properties = transformedProperties
+	request.Properties = transformedProperties
 
 	ccxClient, err := ccx.NewClient(m.cfg)
 	if err != nil {
@@ -54,11 +54,11 @@ func (m *Method) Create(ctx context.Context, request *resource.CreateRequest) (*
 }
 
 func (m *Method) Update(ctx context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
-	transformedProperties, err := m.handleLambdaIntegration(request.DesiredState.Properties)
+	transformedProperties, err := m.handleLambdaIntegration(request.DesiredProperties)
 	if err != nil {
 		return nil, err
 	}
-	request.DesiredState.Properties = transformedProperties
+	request.DesiredProperties = transformedProperties
 
 	ccxClient, err := ccx.NewClient(m.cfg)
 	if err != nil {

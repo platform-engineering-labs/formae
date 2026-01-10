@@ -38,12 +38,8 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 					ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusInProgress,
-						RequestID:       "request-" + request.DesiredState.Label,
-						NativeID:        "native-" + request.DesiredState.Label,
-						ResourceType:    request.DesiredState.Type,
-						StartTs:         time.Now(),
-						ModifiedTs:      time.Now(),
-						Attempts:        1,
+						RequestID:       "request-" + request.Label,
+						NativeID:        "native-" + request.Label,
 					},
 				}, nil
 			},
@@ -58,9 +54,6 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 							Operation:       resource.OperationCreate,
 							OperationStatus: resource.OperationStatusSuccess,
 							RequestID:       request.RequestID,
-							ResourceType:    request.ResourceType,
-							StartTs:         time.Now(),
-							ModifiedTs:      time.Now(),
 						},
 					}, nil
 				}
@@ -74,9 +67,6 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusInProgress,
 						RequestID:       request.RequestID,
-						ResourceType:    request.ResourceType,
-						StartTs:         time.Now(),
-						ModifiedTs:      time.Now(),
 					},
 				}, nil
 			},

@@ -33,7 +33,6 @@ func TestMetastructure_ApplyFormaWithRes(t *testing.T) {
 					OperationStatus:    resource.OperationStatusSuccess,
 					RequestID:          "1234",
 					NativeID:           "5678",
-					ResourceType:       request.DesiredState.Type,
 					ResourceProperties: json.RawMessage(`{"Id": "1234"}`),
 				}}, nil
 			},

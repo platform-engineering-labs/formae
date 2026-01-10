@@ -153,7 +153,6 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.DesiredState.Type,
 				}}, nil
 
 			},
@@ -164,7 +163,6 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.ResourceType,
 				}}, nil
 
 			},
@@ -265,7 +263,6 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.DesiredState.Type,
 				}}, nil
 			},
 			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
@@ -274,7 +271,6 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.ResourceType,
 				}}, nil
 			},
 			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
@@ -283,7 +279,6 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 					OperationStatus:    resource.OperationStatusSuccess,
 					RequestID:          "1234",
 					NativeID:           "5678",
-					ResourceType:       request.DesiredState.Type,
 					ResourceProperties: json.RawMessage(`{"name": "bucket1-renamed", "versioning": "Enabled"}`),
 				}}, nil
 			},

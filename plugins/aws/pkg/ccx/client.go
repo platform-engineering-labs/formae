@@ -58,12 +58,12 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 // CreateResource creates a resource using CloudControl with full request handling
 func (c *Client) CreateResource(ctx context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
-	resourceProps := request.DesiredState.Properties
+	resourceProps := request.Properties
 
 	// Handle map tags transformation if required
-	if props.RequiresMapTags(request.DesiredState.Type) {
+	if props.RequiresMapTags(request.ResourceType) {
 		var properties map[string]any
-		if err := json.Unmarshal(request.DesiredState.Properties, &properties); err != nil {
+		if err := json.Unmarshal(request.Properties, &properties); err != nil {
 			return nil, err
 		}
 
@@ -80,7 +80,7 @@ func (c *Client) CreateResource(ctx context.Context, request *resource.CreateReq
 
 	result, err := c.Client.CreateResource(ctx, &cloudcontrol.CreateResourceInput{
 		DesiredState: ptr.Of(string(resourceProps)),
-		TypeName:     &request.DesiredState.Type,
+		TypeName:     &request.ResourceType,
 	})
 	if err != nil {
 		return nil, err
@@ -93,7 +93,6 @@ func (c *Client) CreateResource(ctx context.Context, request *resource.CreateReq
 			RequestID:       *result.ProgressEvent.RequestToken,
 			StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 			ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode),
-			ResourceType:    request.DesiredState.Type,
 		},
 	}, nil
 }
@@ -102,15 +101,15 @@ func (c *Client) CreateResource(ctx context.Context, request *resource.CreateReq
 func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
 	// Check if resource exists first
 	_, err := c.GetResource(ctx, &cloudcontrol.GetResourceInput{
-		Identifier: request.NativeID,
-		TypeName:   &request.DesiredState.Type,
+		Identifier: &request.NativeID,
+		TypeName:   &request.ResourceType,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	// For resources where tags are maps, we do not support updates with patch documents
-	if props.RequiresMapTags(request.DesiredState.Type) && request.PatchDocument != nil {
+	if props.RequiresMapTags(request.ResourceType) && request.PatchDocument != nil {
 		errMsg := "Update operations for resources with map tags are not supported"
 		return &resource.UpdateResult{
 			ProgressResult: &resource.ProgressResult{
@@ -123,7 +122,7 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 	}
 
 	patchDoc := request.PatchDocument
-	if request.DesiredState.Type == "AWS::SecretsManager::Secret" && patchDoc != nil {
+	if request.ResourceType == "AWS::SecretsManager::Secret" && patchDoc != nil {
 		transformedPatch, err := transformSecretStringPatch([]byte(*patchDoc))
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform SecretString patch: %w", err)
@@ -132,9 +131,9 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 	}
 
 	result, err := c.Client.UpdateResource(ctx, &cloudcontrol.UpdateResourceInput{
-		Identifier:    request.NativeID,
+		Identifier:    &request.NativeID,
 		PatchDocument: patchDoc,
-		TypeName:      ptr.Of(request.DesiredState.Type),
+		TypeName:      ptr.Of(request.ResourceType),
 	})
 	if err != nil {
 		return nil, err
@@ -147,7 +146,6 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 			RequestID:       *result.ProgressEvent.RequestToken,
 			StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 			ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode),
-			ResourceType:    request.DesiredState.Type,
 		},
 	}, nil
 }
@@ -155,7 +153,7 @@ func (c *Client) UpdateResource(ctx context.Context, request *resource.UpdateReq
 // DeleteResource deletes a resource using CloudControl with full request handling
 func (c *Client) DeleteResource(ctx context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
 	result, err := c.Client.DeleteResource(ctx, &cloudcontrol.DeleteResourceInput{
-		Identifier: request.NativeID,
+		Identifier: &request.NativeID,
 		TypeName:   ptr.Of(request.ResourceType),
 	})
 	if err != nil {
@@ -171,7 +169,6 @@ func (c *Client) DeleteResource(ctx context.Context, request *resource.DeleteReq
 				RequestID:       *result.ProgressEvent.RequestToken,
 				StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 				ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode),
-				ResourceType:    request.ResourceType,
 			},
 		}, nil
 	}
@@ -183,7 +180,6 @@ func (c *Client) DeleteResource(ctx context.Context, request *resource.DeleteReq
 			RequestID:       *result.ProgressEvent.RequestToken,
 			StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 			ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode),
-			ResourceType:    request.ResourceType,
 		},
 	}, nil
 }
@@ -257,7 +253,6 @@ func (c *Client) StatusResource(ctx context.Context, request *resource.StatusReq
 				OperationStatus: resource.OperationStatusSuccess,
 				RequestID:       request.RequestID,
 				NativeID:        identifier,
-				ResourceType:    *result.ProgressEvent.TypeName,
 				StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 				ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode)},
 		}, nil
@@ -269,7 +264,6 @@ func (c *Client) StatusResource(ctx context.Context, request *resource.StatusReq
 			OperationStatus: operationStatus,
 			RequestID:       request.RequestID,
 			NativeID:        identifier,
-			ResourceType:    aws.ToString(result.ProgressEvent.TypeName),
 			StatusMessage:   aws.ToString(result.ProgressEvent.StatusMessage),
 			ErrorCode:       resource.OperationErrorCode(result.ProgressEvent.ErrorCode),
 		},
@@ -280,7 +274,7 @@ func (c *Client) StatusResource(ctx context.Context, request *resource.StatusReq
 		readResult, readErr := readFunc(ctx, &resource.ReadRequest{
 			NativeID:     identifier,
 			ResourceType: *result.ProgressEvent.TypeName,
-			Target:       request.Target,
+			TargetConfig: request.TargetConfig,
 		})
 		if readErr == nil && readResult != nil {
 			statusResult.ProgressResult.ResourceProperties = json.RawMessage(readResult.Properties)

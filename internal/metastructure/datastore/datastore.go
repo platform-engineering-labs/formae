@@ -13,7 +13,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 const (
@@ -179,7 +179,7 @@ type Datastore interface {
 	UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error
 
 	// UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-	UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress resource.ProgressResult) error
+	UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error
 
 	// BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 	// Used for bulk operations like marking dependent resources as failed

@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	pkgresource "github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/assert"
 )
@@ -124,7 +125,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target2", Namespace: "default", Config: json.RawMessage("{}")},
-					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
+					MostRecentProgressResult: plugin.TrackedProgress{ProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")}},
 					DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateRejected},
 			},
@@ -138,7 +139,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target3", Namespace: "default", Config: json.RawMessage("{}")},
-					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
+					MostRecentProgressResult: plugin.TrackedProgress{ProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")}},
 					DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateFailed},
 			},
@@ -152,7 +153,7 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					ResourceTarget:           pkgmodel.Target{Label: "target4", Namespace: "default", Config: json.RawMessage("{}")},
-					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
+					MostRecentProgressResult: plugin.TrackedProgress{ProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")}},
 					DesiredState: pkgmodel.Resource{
 						Properties:         json.RawMessage("{}"),
 						ReadOnlyProperties: json.RawMessage("{}"),
@@ -241,7 +242,7 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 					PriorState: pkgmodel.Resource{
 						Properties: json.RawMessage("null"),
 					},
-					MostRecentProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
+					MostRecentProgressResult: plugin.TrackedProgress{ProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")}},
 					ResourceTarget:           pkgmodel.Target{Label: "hash-target", Namespace: "default", Config: json.RawMessage("{}")},
 					DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
 					State:                    resource_update.ResourceUpdateStateSuccess,

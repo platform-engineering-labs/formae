@@ -30,53 +30,34 @@ func TestDiscovery_FindsAndCreatesNewResources(t *testing.T) {
 			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
 				// Since we only return buckets from read, we must gate list requests in the same way
 				if request.ResourceType != "FakeAWS::S3::Bucket" {
-					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+					return &resource.ListResult{NativeIDs: nil, NextPageToken: nil}, nil
 				}
-				if awsRegionFromTarget(t, request.Target) == "us-east-1" {
+				if awsRegionFromTargetConfig(t, request.TargetConfig) == "us-east-1" {
 					if request.PageToken == nil {
 						return &resource.ListResult{
-							Resources: []resource.Resource{
-								{
-									NativeID:   "test-resource-1",
-									Properties: `{"Tags": {"Name": "test-resource-1", "Environment": "test"}}`,
-								},
-								{
-									NativeID:   "test-resource-2",
-									Properties: `{"Tags": {"Name": "test-resource-2", "Environment": "test"}, "foo": "bar"}`,
-								},
-							},
+							NativeIDs:     []string{"test-resource-1", "test-resource-2"},
 							NextPageToken: util.StringPtr("abcdef"),
 						}, nil
 					} else if *request.PageToken == "abcdef" {
 						return &resource.ListResult{
-							Resources: []resource.Resource{
-								{
-									NativeID:   "test-resource-3",
-									Properties: `{"Tags": {"Name": "test-resource-3", "Environment": "test"}, "baz": "qux"}`,
-								},
-							},
+							NativeIDs:     []string{"test-resource-3"},
 							NextPageToken: nil, // No more pages
 						}, nil
 					}
 					return nil, fmt.Errorf("unexpected page token: %v", request.PageToken)
-				} else if awsRegionFromTarget(t, request.Target) == "us-west-2" {
+				} else if awsRegionFromTargetConfig(t, request.TargetConfig) == "us-west-2" {
 					if request.PageToken == nil {
 						return &resource.ListResult{
-							Resources: []resource.Resource{
-								{
-									NativeID:   "test-resource-4",
-									Properties: `{"Tags": {"Name": "test-resource-4", "Environment": "test"}, "bar": "baz"}`,
-								},
-							},
+							NativeIDs:     []string{"test-resource-4"},
 							NextPageToken: nil, // No more pages
 						}, nil
 					}
 					return nil, fmt.Errorf("unexpected page token: %v", request.PageToken)
 				}
-				return nil, fmt.Errorf("unexpected region: %v", awsRegionFromTarget(t, request.Target))
+				return nil, fmt.Errorf("unexpected region: %v", awsRegionFromTargetConfig(t, request.TargetConfig))
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
-				if awsRegionFromTarget(t, request.Target) == "us-east-1" {
+				if awsRegionFromTargetConfig(t, request.TargetConfig) == "us-east-1" {
 					switch request.NativeID {
 					case "test-resource-2":
 						return &resource.ReadResult{
@@ -89,13 +70,13 @@ func TestDiscovery_FindsAndCreatesNewResources(t *testing.T) {
 							Properties:   fmt.Sprintf(`{"Tags": {"Name": "%s", "Environment": "test"}, "baz": "qux"}`, request.NativeID),
 						}, nil
 					}
-				} else if awsRegionFromTarget(t, request.Target) == "us-west-2" {
+				} else if awsRegionFromTargetConfig(t, request.TargetConfig) == "us-west-2" {
 					return &resource.ReadResult{
 						ResourceType: "FakeAWS::S3::Bucket",
 						Properties:   fmt.Sprintf(`{"Tags": {"Name": "%s", "Environment": "test"}, "bar": "baz"}`, request.NativeID),
 					}, nil
 				}
-				return nil, fmt.Errorf("unexpected region: %v", awsRegionFromTarget(t, request.Target))
+				return nil, fmt.Errorf("unexpected region: %v", awsRegionFromTargetConfig(t, request.TargetConfig))
 			},
 		}
 
@@ -188,38 +169,23 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 				switch request.ResourceType {
 				case "FakeAWS::EC2::VPC":
 					return &resource.ListResult{
-						Resources: []resource.Resource{
-							{
-								NativeID:   "vpc-2",
-								Properties: `{"VpcId":"vpc-2"}`,
-							},
-						},
+						NativeIDs: []string{"vpc-2"},
 					}, nil
 				case "FakeAWS::EC2::VPCCidrBlock":
 					switch request.AdditionalProperties["VpcId"] {
 					case "vpc-1":
 						return &resource.ListResult{
-							ResourceType: "FakeAWS::EC2::VPCCidrBlock",
-							Resources: []resource.Resource{
-								{
-									NativeID:   "vpc-1-cidr-1",
-									Properties: `{}`,
-								},
-							}}, nil
+							NativeIDs: []string{"vpc-1-cidr-1"},
+						}, nil
 					case "vpc-2":
 						return &resource.ListResult{
-							ResourceType: "FakeAWS::EC2::VPCCidrBlock",
-							Resources: []resource.Resource{
-								{
-									NativeID:   "vpc-2-cidr-1",
-									Properties: `{}`,
-								},
-							}}, nil
+							NativeIDs: []string{"vpc-2-cidr-1"},
+						}, nil
 					default:
 						return nil, fmt.Errorf("unexpected VpcId: %v", request.AdditionalProperties["VpcId"])
 					}
 				default:
-					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+					return &resource.ListResult{NativeIDs: nil, NextPageToken: nil}, nil
 				}
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -336,41 +302,24 @@ func TestDiscovery_DiscoversNestedResourcesWhenAllParentsAlreadyExist(t *testing
 				case "FakeAWS::EC2::VPC":
 					// Return two VPCs that both already exist in the database
 					return &resource.ListResult{
-						Resources: []resource.Resource{
-							{
-								NativeID:   "vpc-1",
-								Properties: `{"VpcId":"vpc-1"}`,
-							},
-							{
-								NativeID:   "vpc-2",
-								Properties: `{"VpcId":"vpc-2"}`,
-							},
-						},
+						NativeIDs: []string{"vpc-1", "vpc-2"},
 					}, nil
 				case "FakeAWS::EC2::VPCCidrBlock":
 					// Return nested resources for both VPCs
 					switch request.AdditionalProperties["VpcId"] {
 					case "vpc-1":
 						return &resource.ListResult{
-							Resources: []resource.Resource{
-								{
-									NativeID:   "vpc-1-cidr-1",
-									Properties: `{}`,
-								},
-							}}, nil
+							NativeIDs: []string{"vpc-1-cidr-1"},
+						}, nil
 					case "vpc-2":
 						return &resource.ListResult{
-							Resources: []resource.Resource{
-								{
-									NativeID:   "vpc-2-cidr-1",
-									Properties: `{}`,
-								},
-							}}, nil
+							NativeIDs: []string{"vpc-2-cidr-1"},
+						}, nil
 					default:
 						return nil, fmt.Errorf("unexpected VpcId: %v", request.AdditionalProperties["VpcId"])
 					}
 				default:
-					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+					return &resource.ListResult{NativeIDs: nil, NextPageToken: nil}, nil
 				}
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -473,7 +422,7 @@ func TestDiscovery_OverlapProtection(t *testing.T) {
 			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
 				// Since we only return buckets from read, we must gate list requests in the same way
 				if request.ResourceType != "FakeAWS::S3::Bucket" {
-					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+					return &resource.ListResult{NativeIDs: nil, NextPageToken: nil}, nil
 				}
 				select {
 				case firstDiscoveryStarted <- struct{}{}:
@@ -485,12 +434,7 @@ func TestDiscovery_OverlapProtection(t *testing.T) {
 				<-blockFirstDiscovery
 
 				return &resource.ListResult{
-					Resources: []resource.Resource{
-						{
-							NativeID:   "overlap-test-resource",
-							Properties: `{"Tags": {"Name": "overlap-test-resource"}}`,
-						},
-					},
+					NativeIDs:     []string{"overlap-test-resource"},
 					NextPageToken: nil,
 				}, nil
 			},
@@ -568,19 +512,10 @@ func TestDiscovery_NoTagKeysAreFound_LabelIsSetToNativeId(t *testing.T) {
 				switch req.ResourceType {
 				case "FakeAWS::S3::Bucket":
 					// Return same resources for both regions (simulating global S3 buckets)
-					region := awsRegionFromTarget(t, req.Target)
+					region := awsRegionFromTargetConfig(t, req.TargetConfig)
 					if region == "us-east-1" || region == "us-west-2" {
 						return &resource.ListResult{
-							Resources: []resource.Resource{
-								{
-									NativeID:   "bucket-with-name",
-									Properties: `{}`,
-								},
-								{
-									NativeID:   "bucket-without-name",
-									Properties: `{}`,
-								},
-							},
+							NativeIDs: []string{"bucket-with-name", "bucket-without-name"},
 						}, nil
 					}
 					return nil, fmt.Errorf("unexpected region: %v", region)
@@ -679,7 +614,7 @@ func TestDiscovery_DiscoveryReadSetsRedactSensitiveIntent(t *testing.T) {
 				if req.ResourceType != "FakeAWS::S3::Bucket" {
 					return &resource.ListResult{}, nil
 				}
-				return &resource.ListResult{Resources: []resource.Resource{{NativeID: "bucket-1", Properties: `{}`}}}, nil
+				return &resource.ListResult{NativeIDs: []string{"bucket-1"}}, nil
 			},
 			Read: func(req *resource.ReadRequest) (*resource.ReadResult, error) {
 				detected = req.RedactSensitive
@@ -708,9 +643,9 @@ func TestDiscovery_DiscoveryReadSetsRedactSensitiveIntent(t *testing.T) {
 	})
 }
 
-func awsRegionFromTarget(t *testing.T, target *pkgmodel.Target) string {
+func awsRegionFromTargetConfig(t *testing.T, targetConfig json.RawMessage) string {
 	var config map[string]string
-	err := json.Unmarshal(target.Config, &config)
+	err := json.Unmarshal(targetConfig, &config)
 	assert.NoError(t, err, "Failed to unmarshal target properties")
 
 	return config["region"]
@@ -734,18 +669,15 @@ func resourceUpdateCreatingResource1() *resource_update.ResourceUpdate {
 		},
 		Operation: resource_update.OperationCreate,
 		State:     resource_update.ResourceUpdateStateSuccess,
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id",
-				NativeID:           "test-resource-1",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
-				MaxAttempts:        3,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-resource-1",
+					ResourceProperties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
+				},
 			},
 		},
 		RemainingResolvables: []pkgmodel.FormaeURI{},
@@ -791,12 +723,7 @@ func TestDiscovery_ListPropertiesNotPersistedOnlyReadProperties(t *testing.T) {
 					return &resource.ListResult{}, nil
 				}
 				return &resource.ListResult{
-					Resources: []resource.Resource{
-						{
-							NativeID:   "test-bucket",
-							Properties: `{"ListOnlyProp": "should-not-persist", "BucketName": "list-value"}`,
-						},
-					},
+					NativeIDs: []string{"test-bucket"},
 				}, nil
 			},
 			Read: func(req *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -847,21 +774,12 @@ func TestDiscovery_ResourceFiltering(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
 				if request.ResourceType != "FakeAWS::S3::Bucket" {
-					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+					return &resource.ListResult{NativeIDs: nil, NextPageToken: nil}, nil
 				}
 
 				// Return two buckets: one to be filtered out, one to be included
 				return &resource.ListResult{
-					Resources: []resource.Resource{
-						{
-							NativeID:   "bucket-filtered",
-							Properties: `{}`,
-						},
-						{
-							NativeID:   "bucket-included",
-							Properties: `{}`,
-						},
-					},
+					NativeIDs: []string{"bucket-filtered", "bucket-included"},
 				}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -938,7 +856,7 @@ func TestDiscovery_ResourceFiltering_ByTags(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
 				if request.ResourceType != "FakeAWS::S3::Bucket" {
-					return &resource.ListResult{Resources: nil, NextPageToken: nil}, nil
+					return &resource.ListResult{NativeIDs: nil, NextPageToken: nil}, nil
 				}
 
 				// Return three buckets:
@@ -946,20 +864,7 @@ func TestDiscovery_ResourceFiltering_ByTags(t *testing.T) {
 				// 2. One with SkipDiscovery tag in map format - should be filtered out
 				// 3. One without the tag - should be included
 				return &resource.ListResult{
-					Resources: []resource.Resource{
-						{
-							NativeID:   "bucket-filtered-by-array-tag",
-							Properties: `{}`,
-						},
-						{
-							NativeID:   "bucket-filtered-by-map-tag",
-							Properties: `{}`,
-						},
-						{
-							NativeID:   "bucket-included-no-tag",
-							Properties: `{}`,
-						},
-					},
+					NativeIDs: []string{"bucket-filtered-by-array-tag", "bucket-filtered-by-map-tag", "bucket-included-no-tag"},
 				}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {

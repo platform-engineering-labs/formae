@@ -33,14 +33,13 @@ func TestSynchronizer_ApplyThenChangeThenSyncStack(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if request.DesiredState.Label == "1" {
+				if request.Label == "1" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,
 							OperationStatus: resource.OperationStatusSuccess,
 							RequestID:       "1",
 							NativeID:        "1",
-							ResourceType:    request.DesiredState.Type,
 						},
 					}, nil
 				} else {
@@ -50,7 +49,6 @@ func TestSynchronizer_ApplyThenChangeThenSyncStack(t *testing.T) {
 							OperationStatus: resource.OperationStatusSuccess,
 							RequestID:       "2",
 							NativeID:        "2",
-							ResourceType:    request.DesiredState.Type,
 						},
 					}, nil
 				}
@@ -72,7 +70,6 @@ func TestSynchronizer_ApplyThenChangeThenSyncStack(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1",
 					NativeID:        "1",
-					ResourceType:    request.ResourceType,
 				}}, nil
 			},
 		}
@@ -155,14 +152,13 @@ func TestSynchronizer_ApplyThenDestroyThenSyncStack(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if request.DesiredState.Label == "1" {
+				if request.Label == "1" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,
 							OperationStatus: resource.OperationStatusSuccess,
 							RequestID:       "1",
 							NativeID:        "1",
-							ResourceType:    request.DesiredState.Type,
 						},
 					}, nil
 				} else {
@@ -172,7 +168,6 @@ func TestSynchronizer_ApplyThenDestroyThenSyncStack(t *testing.T) {
 							OperationStatus: resource.OperationStatusSuccess,
 							RequestID:       "2",
 							NativeID:        "2",
-							ResourceType:    request.DesiredState.Type,
 						},
 					}, nil
 				}
@@ -268,7 +263,6 @@ func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 						OperationStatus: resource.OperationStatusSuccess,
 						RequestID:       "1",
 						NativeID:        "1",
-						ResourceType:    request.DesiredState.Type,
 					},
 				}, nil
 			},
@@ -482,9 +476,8 @@ func TestSynchronizer_OverlapProtection(t *testing.T) {
 					ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusSuccess,
-						RequestID:       request.DesiredState.Label,
-						NativeID:        request.DesiredState.Label,
-						ResourceType:    request.DesiredState.Type,
+						RequestID:       request.Label,
+						NativeID:        request.Label,
 					},
 				}, nil
 			},
@@ -600,9 +593,8 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 					ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusSuccess,
-						RequestID:       "create-" + request.DesiredState.Label,
-						NativeID:        request.DesiredState.Label,
-						ResourceType:    request.DesiredState.Type,
+						RequestID:       "create-" + request.Label,
+						NativeID:        request.Label,
 					},
 				}, nil
 			},
@@ -618,9 +610,8 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 					ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationUpdate,
 						OperationStatus: resource.OperationStatusInProgress,
-						RequestID:       "update-" + request.DesiredState.Label,
-						NativeID:        request.DesiredState.Label,
-						ResourceType:    request.DesiredState.Type,
+						RequestID:       "update-" + request.Label,
+						NativeID:        request.Label,
 					},
 				}, nil
 			},
@@ -639,7 +630,6 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 							Operation:       resource.OperationUpdate,
 							OperationStatus: resource.OperationStatusSuccess,
 							RequestID:       request.RequestID,
-							ResourceType:    request.ResourceType,
 						},
 					}, nil
 				default:
@@ -649,7 +639,6 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 							Operation:       resource.OperationUpdate,
 							OperationStatus: resource.OperationStatusInProgress,
 							RequestID:       request.RequestID,
-							ResourceType:    request.ResourceType,
 						},
 					}, nil
 				}

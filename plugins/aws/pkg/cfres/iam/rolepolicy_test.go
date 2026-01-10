@@ -8,7 +8,6 @@ package iam
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -38,12 +37,11 @@ func TestRolePolicy_List_Success(t *testing.T) {
 	})
 
 	assert.NoError(t, err)
-	assert.Equal(t, "AWS::IAM::RolePolicy", result.ResourceType)
-	assert.Len(t, result.Resources, 2)
+	assert.Len(t, result.NativeIDs, 2)
 	assert.Nil(t, result.NextPageToken, "Should be done when no marker returned")
 
-	assertResourceContains(t, result.Resources[0], "role-1", "policy-1")
-	assertResourceContains(t, result.Resources[1], "role-1", "policy-2")
+	assert.Equal(t, "policy-1|role-1", result.NativeIDs[0])
+	assert.Equal(t, "policy-2|role-1", result.NativeIDs[1])
 
 	client.AssertExpectations(t)
 }
@@ -69,7 +67,7 @@ func TestRolePolicy_List_WithPagination(t *testing.T) {
 	})
 
 	assert.NoError(t, err)
-	assert.Len(t, result.Resources, 2)
+	assert.Len(t, result.NativeIDs, 2)
 	assert.NotNil(t, result.NextPageToken, "missing next token when marker returned")
 	assert.Equal(t, "next-page-marker", *result.NextPageToken)
 
@@ -98,11 +96,11 @@ func TestRolePolicy_List_ContinuePagination(t *testing.T) {
 	})
 
 	assert.NoError(t, err)
-	assert.Len(t, result.Resources, 2)
+	assert.Len(t, result.NativeIDs, 2)
 	assert.Nil(t, result.NextPageToken, "not nil when no marker returned")
 
-	assertResourceContains(t, result.Resources[0], "role-1", "policy-3")
-	assertResourceContains(t, result.Resources[1], "role-1", "policy-4")
+	assert.Equal(t, "policy-3|role-1", result.NativeIDs[0])
+	assert.Equal(t, "policy-4|role-1", result.NativeIDs[1])
 
 	client.AssertExpectations(t)
 }
@@ -163,14 +161,4 @@ func TestRolePolicy_List_NoPermissions(t *testing.T) {
 
 func stringPtr(s string) *string {
 	return &s
-}
-
-func assertResourceContains(t *testing.T, res resource.Resource, wantRole, wantPolicy string) {
-	var props map[string]any
-	err := json.Unmarshal([]byte(res.Properties), &props)
-	assert.NoError(t, err)
-
-	assert.Equal(t, wantPolicy, props["PolicyName"])
-	assert.Equal(t, wantRole, props["RoleName"])
-	assert.Equal(t, fmt.Sprintf("%s|%s", wantPolicy, wantRole), res.NativeID)
 }

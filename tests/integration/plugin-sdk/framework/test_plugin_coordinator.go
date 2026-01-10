@@ -246,16 +246,16 @@ func (c *TestPluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			RegisteredAt:       time.Now(),
 		}
 
-	case resource.ProgressResult:
+	case plugin.TrackedProgress:
 		// PluginOperator sends progress updates asynchronously via Send
 		// The 'from' PID is the PluginOperator that sent this message
-		c.Log().Debug("Received ProgressResult",
+		c.Log().Debug("Received TrackedProgress",
 			"from", from,
 			"status", msg.OperationStatus,
 			"nativeID", msg.NativeID)
 
-		// Store the latest progress for this operator
-		c.latestProgress[from] = msg
+		// Store the latest progress for this operator (extract embedded ProgressResult)
+		c.latestProgress[from] = msg.ProgressResult
 
 	default:
 		c.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
@@ -346,13 +346,11 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 
 	// Step 2: Send Create request to PluginOperator
 	createReq := plugin.CreateResource{
-		Namespace: req.Namespace,
-		DesiredState: model.Resource{
-			Type:       req.ResourceType,
-			Label:      req.Label,
-			Properties: req.Properties,
-		},
-		Target: req.Target,
+		Namespace:    req.Namespace,
+		ResourceType: req.ResourceType,
+		Label:        req.Label,
+		Properties:   req.Properties,
+		TargetConfig: req.Target.Config,
 	}
 
 	c.Log().Info("Sending CreateResource to PluginOperator",
@@ -364,21 +362,21 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 		return CreateResourceResult{Error: fmt.Sprintf("CreateResource call failed: %v", err)}
 	}
 
-	progress, ok := result.(resource.ProgressResult)
+	trackedProgress, ok := result.(plugin.TrackedProgress)
 	if !ok {
 		return CreateResourceResult{Error: fmt.Sprintf("unexpected response type: %T", result)}
 	}
 
 	c.Log().Info("CreateResource initial response",
 		"resourceType", req.ResourceType,
-		"status", progress.OperationStatus,
-		"nativeID", progress.NativeID)
+		"status", trackedProgress.OperationStatus,
+		"nativeID", trackedProgress.NativeID)
 
 	// Return immediately with the operator PID and initial progress
 	// The caller is responsible for polling via GetLatestProgressRequest if needed
 	return CreateResourceResult{
 		OperatorPID:     spawnResult.PID,
-		InitialProgress: progress,
+		InitialProgress: trackedProgress.ProgressResult,
 	}
 }
 
@@ -402,7 +400,7 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 			Type:     req.ResourceType,
 			NativeID: req.NativeID,
 		},
-		Target: req.Target,
+		TargetConfig: req.Target.Config,
 	}
 
 	c.Log().Info("Sending DeleteResource to PluginOperator",
@@ -415,7 +413,7 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 		return DeleteResourceResult{Error: fmt.Sprintf("DeleteResource call failed: %v", err)}
 	}
 
-	progress, ok := result.(resource.ProgressResult)
+	trackedProgress, ok := result.(plugin.TrackedProgress)
 	if !ok {
 		return DeleteResourceResult{Error: fmt.Sprintf("unexpected response type: %T", result)}
 	}
@@ -423,13 +421,13 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 	c.Log().Info("DeleteResource initial response",
 		"resourceType", req.ResourceType,
 		"nativeID", req.NativeID,
-		"status", progress.OperationStatus)
+		"status", trackedProgress.OperationStatus)
 
 	// Return immediately with the operator PID and initial progress
 	// The caller is responsible for polling via GetLatestProgressRequest if needed
 	return DeleteResourceResult{
 		OperatorPID:     spawnResult.PID,
-		InitialProgress: progress,
+		InitialProgress: trackedProgress.ProgressResult,
 	}
 }
 

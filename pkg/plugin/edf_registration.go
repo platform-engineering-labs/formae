@@ -89,6 +89,10 @@ func RegisterSharedEDFTypes() error {
 		ListedResource{},
 		Listing{},
 		StartPluginOperation{},
+
+		// 9. TrackedProgress - sent from PluginOperator to ResourceUpdater
+		// Must be registered after resource.ProgressResult since it embeds it
+		TrackedProgress{},
 	}
 
 	for _, t := range types {

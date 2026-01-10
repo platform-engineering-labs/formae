@@ -54,26 +54,26 @@ const (
 // that may involve multiple plugin operations. For example a replace operation will involve two plugin
 // operations: a delete and a create.
 type ResourceUpdate struct {
-	DesiredState             pkgmodel.Resource         `json:"Resource"`
-	ResourceTarget           pkgmodel.Target           `json:"ResourceTarget"`
-	PriorState               pkgmodel.Resource         `json:"ExistingResource"`
-	ExistingTarget           pkgmodel.Target           `json:"ExistingTarget"`
-	Operation                OperationType             `json:"Operation"`
-	State                    ResourceUpdateState       `json:"State"`
-	StartTs                  time.Time                 `json:"StartTs"`
-	ModifiedTs               time.Time                 `json:"ModifiedTs"`
-	Retries                  uint16                    `json:"Retries"`
-	Remaining                int16                     `json:"Remaining"`
-	Version                  string                    `json:"Version"`
-	MostRecentProgressResult resource.ProgressResult   `json:"MostRecentProgressResult"`
-	ProgressResult           []resource.ProgressResult `json:"ProgressResult"`
-	Source                   FormaCommandSource        `json:"Source,omitempty"`
-	RemainingResolvables     []pkgmodel.FormaeURI      `json:"RemainingResolvables,omitempty"`
-	StackLabel               string                    `json:"StackLabel,omitempty"`
-	GroupID                  string                    `json:"GroupId,omitempty"`
-	ReferenceLabels          map[string]string         `json:"ReferenceLabels,omitempty"`
-	PreviousProperties       json.RawMessage           `json:"PreviousProperties,omitempty"`
-	MatchFilters             []plugin.MatchFilter      `json:"matchFilters,omitempty"` // Declarative filters (any match = exclude)
+	DesiredState             pkgmodel.Resource        `json:"Resource"`
+	ResourceTarget           pkgmodel.Target          `json:"ResourceTarget"`
+	PriorState               pkgmodel.Resource        `json:"ExistingResource"`
+	ExistingTarget           pkgmodel.Target          `json:"ExistingTarget"`
+	Operation                OperationType            `json:"Operation"`
+	State                    ResourceUpdateState      `json:"State"`
+	StartTs                  time.Time                `json:"StartTs"`
+	ModifiedTs               time.Time                `json:"ModifiedTs"`
+	Retries                  uint16                   `json:"Retries"`
+	Remaining                int16                    `json:"Remaining"`
+	Version                  string                   `json:"Version"`
+	MostRecentProgressResult plugin.TrackedProgress   `json:"MostRecentProgressResult"`
+	ProgressResult           []plugin.TrackedProgress `json:"ProgressResult"`
+	Source                   FormaCommandSource       `json:"Source,omitempty"`
+	RemainingResolvables     []pkgmodel.FormaeURI     `json:"RemainingResolvables,omitempty"`
+	StackLabel               string                   `json:"StackLabel,omitempty"`
+	GroupID                  string                   `json:"GroupId,omitempty"`
+	ReferenceLabels          map[string]string        `json:"ReferenceLabels,omitempty"`
+	PreviousProperties       json.RawMessage          `json:"PreviousProperties,omitempty"`
+	MatchFilters             []plugin.MatchFilter     `json:"matchFilters,omitempty"` // Declarative filters (any match = exclude)
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {
@@ -129,29 +129,37 @@ func (ru *ResourceUpdate) HasProgress() bool {
 	return false
 }
 
-func (ru *ResourceUpdate) FindProgress(operation resource.Operation) (bool, *resource.ProgressResult) {
-	for _, progress := range ru.ProgressResult {
-		if progress.Operation == operation {
-			return true, &progress
+func (ru *ResourceUpdate) FindProgress(operation resource.Operation) (bool, *plugin.TrackedProgress) {
+	for i := range ru.ProgressResult {
+		if ru.ProgressResult[i].Operation == operation {
+			return true, &ru.ProgressResult[i]
 		}
 	}
 	return false, nil
 }
 
-func (ru *ResourceUpdate) RecordProgress(progress *resource.ProgressResult) error {
+func (ru *ResourceUpdate) RecordProgress(progress *plugin.TrackedProgress) error {
+	tracked := *progress
+	// Set StartTs if not already set (first progress for this resource update)
+	if ru.StartTs.IsZero() {
+		tracked.StartTs = util.TimeNow()
+	}
+
 	found := false
 	for i, existingProgress := range ru.ProgressResult {
 		if existingProgress.Operation == progress.Operation {
-			ru.ProgressResult[i] = *progress
+			// Preserve StartTs from existing progress
+			tracked.StartTs = existingProgress.StartTs
+			ru.ProgressResult[i] = tracked
 			found = true
 		}
 	}
 	if !found {
-		ru.ProgressResult = append(ru.ProgressResult, *progress)
-		ru.MostRecentProgressResult = *progress // Update the MostRecentProgressResult to the latest progress
+		ru.ProgressResult = append(ru.ProgressResult, tracked)
 	}
+	ru.MostRecentProgressResult = tracked
 
-	return ru.updateResourceUpdateFromProgress(progress)
+	return ru.updateResourceUpdateFromProgress(&progress.ProgressResult)
 }
 
 func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.ProgressResult) error {
@@ -160,10 +168,11 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 
 	slog.Debug("Setting NativeID from progress", "nativeID", progress.NativeID, "uri", ru.URI())
 	ru.DesiredState.NativeID = progress.NativeID
+	now := util.TimeNow()
 	if ru.StartTs.IsZero() {
-		ru.StartTs = progress.StartTs
+		ru.StartTs = now
 	}
-	ru.ModifiedTs = progress.ModifiedTs
+	ru.ModifiedTs = now
 
 	// THE UPDATE SHOULD NOT HAPPEN ON UPDATE OPERATION - OTHERWISE IT WILL OVERWRITE THE PROPERTIES FOR METADATA/LEGACY
 	if progress.FinishedSuccessfully() && ru.Operation == OperationUpdate && progress.Operation == resource.OperationRead {
@@ -200,14 +209,14 @@ func (ru *ResourceUpdate) MarkAsFailed() {
 
 func (ru *ResourceUpdate) MostRecentFailureMessage() string {
 	// Account for non-recoverable errors or max attempts reached
-	if msg := ru.FilterProgressMessage(func(p resource.ProgressResult) bool {
+	if msg := ru.FilterProgressMessage(func(p plugin.TrackedProgress) bool {
 		return p.Failed() && p.StatusMessage != ""
 	}); msg != "" {
 		return msg
 	}
 
 	// Account for recoverable errors
-	return ru.FilterProgressMessage(func(p resource.ProgressResult) bool {
+	return ru.FilterProgressMessage(func(p plugin.TrackedProgress) bool {
 		return p.OperationStatus == resource.OperationStatusFailure && p.StatusMessage != ""
 	})
 }
@@ -222,7 +231,7 @@ func (ru *ResourceUpdate) MostRecentStatusMessage() string {
 	return ""
 }
 
-func (ru *ResourceUpdate) FilterProgressMessage(filter func(resource.ProgressResult) bool) string {
+func (ru *ResourceUpdate) FilterProgressMessage(filter func(plugin.TrackedProgress) bool) string {
 	for _, progress := range ru.ProgressResult {
 		if filter(progress) {
 			return progress.StatusMessage
