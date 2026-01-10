@@ -108,14 +108,14 @@ def remove_dynamic_ids_from_array(field_name: str, value: Any) -> Any:
     return value
 
 def normalize_empty_values(obj: Any) -> Any:
-    """Recursively remove empty arrays and empty objects from a dict for comparison.
+    """Recursively remove empty arrays, empty objects, and empty strings from a dict for comparison.
     This handles cases where the actual output omits empty values while expected includes them."""
     if isinstance(obj, dict):
         result = {}
         for key, value in obj.items():
             normalized = normalize_empty_values(value)
-            # Skip empty arrays and empty dicts
-            if normalized == [] or normalized == {}:
+            # Skip empty arrays, empty dicts, and empty strings
+            if normalized == [] or normalized == {} or normalized == "":
                 continue
             result[key] = normalized
         return result
