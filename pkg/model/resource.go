@@ -79,31 +79,6 @@ func (r *Resource) GetProperty(query string) (string, bool) {
 	return value.String(), true
 }
 
-func (r *Resource) GetMetadata() (json.RawMessage, error) {
-	if len(r.Schema.Metadata()) == 0 {
-		return json.RawMessage("{}"), nil
-	}
-
-	persistProps := make(map[string]any)
-	for _, prop := range r.Schema.Metadata() {
-		value := r.getProperty(prop)
-		if value.Exists() {
-			persistProps[prop] = value.Value()
-		}
-	}
-
-	// Only store if we have properties to persist
-	if len(persistProps) > 0 {
-		persistentData, err := json.Marshal(persistProps)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal persistent properties: %w", err)
-		}
-		return json.RawMessage(persistentData), nil
-	}
-
-	return json.RawMessage("{}"), nil
-}
-
 func (r *Resource) ValidateRequiredOnCreateFields() error {
 	missingFields := r.GetMissingRequiredOnCreateFields()
 

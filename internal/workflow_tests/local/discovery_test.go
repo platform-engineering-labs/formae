@@ -718,7 +718,7 @@ func awsRegionFromTarget(t *testing.T, target *pkgmodel.Target) string {
 
 func resourceUpdateCreatingResource1() *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label: "test-resource",
 			Type:  "FakeAWS::S3::Bucket",
 			Schema: pkgmodel.Schema{

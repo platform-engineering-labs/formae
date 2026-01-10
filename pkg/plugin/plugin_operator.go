@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -112,18 +111,18 @@ func (r *ReadResource) TreatNotFoundAsSuccess() bool {
 }
 
 type CreateResource struct {
-	Namespace string
-	Resource  model.Resource
-	Target    model.Target
+	Namespace    string
+	DesiredState model.Resource
+	Target       model.Target
 }
 
 type UpdateResource struct {
-	Namespace        string
-	NativeID         string
-	Resource         model.Resource
-	ExistingResource model.Resource // The existing resource to update
-	PatchDocument    string
-	Target           model.Target
+	Namespace     string
+	NativeID      string
+	DesiredState  model.Resource
+	PriorState    model.Resource // The prior resource state
+	PatchDocument string
+	Target        model.Target
 }
 
 type DeleteResource struct {
@@ -131,7 +130,6 @@ type DeleteResource struct {
 	NativeID     string
 	Resource     model.Resource
 	ResourceType string
-	Metadata     json.RawMessage
 	Target       model.Target
 }
 
@@ -215,8 +213,8 @@ func DecompressListedResources(data []byte) ([]ListedResource, error) {
 type PluginOperatorCheckStatus struct {
 	Namespace         string
 	RequestID         string
-	ResourceType      string          // Optional resource type for status checks
-	Metadata          json.RawMessage // Optional metadata for status checks which might be necessary for some resources
+	NativeID          string // NativeID returned by initial Create/Update
+	ResourceType      string // Optional resource type for status checks
 	Target            model.Target
 	ResourceOperation resource.Operation
 	Request           any
@@ -231,16 +229,10 @@ type StatusCheck interface {
 
 // StatusCheck implementations - properties are expected to be pre-resolved by ResourceUpdater
 func (r ReadResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
-	metadata, err := r.ExistingResource.GetMetadata()
-	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource", "type", r.ExistingResource.Type, "error", err)
-		metadata = json.RawMessage("{}")
-	}
 	return PluginOperatorCheckStatus{
 		Namespace:         r.Resource.Namespace(),
 		RequestID:         r.NativeID,
 		ResourceType:      r.Resource.Type,
-		Metadata:          metadata,
 		Target:            r.Target,
 		ResourceOperation: resource.OperationRead,
 		Request:           r,
@@ -248,16 +240,11 @@ func (r ReadResource) StatusCheck(progress *resource.ProgressResult) PluginOpera
 }
 
 func (c CreateResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
-	metadata, err := c.Resource.GetMetadata()
-	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource", "type", c.Resource.Type, "error", err)
-		metadata = json.RawMessage("{}")
-	}
 	return PluginOperatorCheckStatus{
 		Namespace:         c.Namespace,
 		RequestID:         progress.RequestID,
-		ResourceType:      c.Resource.Type,
-		Metadata:          metadata,
+		NativeID:          progress.NativeID,
+		ResourceType:      c.DesiredState.Type,
 		Target:            c.Target,
 		ResourceOperation: resource.OperationCreate,
 		Request:           c,
@@ -265,16 +252,11 @@ func (c CreateResource) StatusCheck(progress *resource.ProgressResult) PluginOpe
 }
 
 func (u UpdateResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
-	metadata, err := u.ExistingResource.GetMetadata()
-	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource", "type", u.ExistingResource.Type, "error", err)
-		metadata = json.RawMessage("{}")
-	}
 	return PluginOperatorCheckStatus{
 		Namespace:         u.Namespace,
 		RequestID:         progress.RequestID,
-		ResourceType:      u.Resource.Type,
-		Metadata:          metadata,
+		NativeID:          progress.NativeID,
+		ResourceType:      u.DesiredState.Type,
 		Target:            u.Target,
 		ResourceOperation: resource.OperationUpdate,
 		Request:           u,
@@ -282,16 +264,11 @@ func (u UpdateResource) StatusCheck(progress *resource.ProgressResult) PluginOpe
 }
 
 func (d DeleteResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
-	metadata, err := d.Resource.GetMetadata()
-	if err != nil {
-		slog.Debug("PluginOperator: failed to get metadata for resource", "type", d.Resource.Type, "error", err)
-		metadata = json.RawMessage("{}")
-	}
 	return PluginOperatorCheckStatus{
 		Namespace:         d.Namespace,
 		RequestID:         progress.RequestID,
+		NativeID:          progress.NativeID,
 		ResourceType:      d.ResourceType,
-		Metadata:          metadata,
 		Target:            d.Target,
 		ResourceOperation: resource.OperationDelete,
 		Request:           d,
@@ -487,14 +464,6 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
 
-	// Properties are expected to be pre-resolved by ResourceUpdater
-	existingResource := operation.ExistingResource
-	metadata, err := existingResource.GetMetadata()
-	if err != nil {
-		proc.Log().Error("failed to get metadata for resource read", "error", err, "resourceURI", operation.Resource.URI())
-		metadata = json.RawMessage("{}")
-	}
-
 	progressResult := resource.ProgressResult{
 		Operation:    resource.OperationRead,
 		NativeID:     operation.NativeID,
@@ -505,7 +474,6 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 	result, err := data.plugin.Read(data.context, &resource.ReadRequest{
 		NativeID:        operation.NativeID,
 		ResourceType:    operation.Resource.Type,
-		Metadata:        metadata,
 		Target:          &operation.Target,
 		RedactSensitive: operation.RedactSensitive,
 	})
@@ -536,12 +504,12 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
 
-	proc.Log().Debug("PluginOperator: starting create operation for %s", operation.Resource.Type)
+	proc.Log().Debug("PluginOperator: starting create operation for %s", operation.DesiredState.Type)
 
 	// Properties are expected to be pre-resolved by ResourceUpdater
 	result, err := data.plugin.Create(data.context, &resource.CreateRequest{
-		Resource: &operation.Resource,
-		Target:   &operation.Target,
+		DesiredState: &operation.DesiredState,
+		Target:       &operation.Target,
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to create resource: %v", err)
@@ -558,27 +526,11 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
 	}
 
-	// Properties are expected to be pre-resolved by ResourceUpdater
-	existingResource := operation.ExistingResource
-	oldMetadata, err := existingResource.GetMetadata()
-	if err != nil {
-		proc.Log().Error("PluginOperator: update failed to get metadata for existing resource", "type", operation.ExistingResource.Type, "error", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
-	}
-
-	newResource := operation.Resource
-	metadata, err := newResource.GetMetadata()
-	if err != nil {
-		proc.Log().Error("PluginOperator: update failed to get metadata for resource", "type", operation.Resource.Type, "error", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
-	}
-
 	result, err := data.plugin.Update(data.context, &resource.UpdateRequest{
 		NativeID:      &operation.NativeID,
-		Resource:      &operation.Resource,
+		PriorState:    &operation.PriorState,
+		DesiredState:  &operation.DesiredState,
 		PatchDocument: &operation.PatchDocument,
-		OldMetadata:   oldMetadata,
-		Metadata:      metadata,
 		Target:        &operation.Target,
 	})
 	if err != nil {
@@ -599,7 +551,6 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 	result, err := data.plugin.Delete(data.context, &resource.DeleteRequest{
 		NativeID:     &operation.NativeID,
 		ResourceType: operation.ResourceType,
-		Metadata:     operation.Metadata,
 		Target:       &operation.Target,
 	})
 	if err != nil {
@@ -619,8 +570,8 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 
 	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
 		RequestID:    operation.RequestID,
+		NativeID:     operation.NativeID,
 		ResourceType: operation.ResourceType,
-		Metadata:     operation.Metadata,
 		Target:       &operation.Target,
 	})
 	if err != nil {
@@ -684,8 +635,8 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 
 	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
 		RequestID:    operation.Request.RequestID,
+		NativeID:     operation.Request.NativeID,
 		ResourceType: operation.Request.ResourceType,
-		Metadata:     operation.Request.Metadata,
 		Target:       &operation.Request.Target,
 	})
 	if err != nil {

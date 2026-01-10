@@ -95,15 +95,10 @@ func NewResourceUpdateForExisting(
 	// Extract resolvables for the new resource
 	newRemainingResolvables := resolver.ExtractResolvableURIs(newResource)
 
-	existingMetadata, err := existingResource.GetMetadata()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get metadata for existing resource %s: %w", existingResource.Label, err)
-	}
-
 	updateResource := ResourceUpdate{
-		ExistingResource: existingResource,
-		ExistingTarget:   existingTarget,
-		Resource: pkgmodel.Resource{
+		PriorState:     existingResource,
+		ExistingTarget: existingTarget,
+		DesiredState: pkgmodel.Resource{
 			Label:              newResource.Label,
 			Type:               newResource.Type,
 			Stack:              newResource.Stack,
@@ -118,7 +113,6 @@ func NewResourceUpdateForExisting(
 		},
 		ResourceTarget:       newTarget,
 		Operation:            OperationUpdate,
-		MetaData:             existingMetadata,
 		State:                ResourceUpdateStateNotStarted,
 		Source:               source,
 		StackLabel:           newResource.Stack,
@@ -152,17 +146,11 @@ func NewResourceUpdateForReplace(
 
 	deleteUpdate.GroupID = GroupID
 
-	newMetadata, err := newResource.GetMetadata()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get metadata for new resource %s: %w", existingResource.Label, err)
-	}
-
 	// Create create operation for new resource
 	createUpdate := ResourceUpdate{
-		Resource:             newResource,
+		DesiredState:         newResource,
 		ResourceTarget:       newTarget,
 		Operation:            OperationCreate,
-		MetaData:             newMetadata,
 		State:                ResourceUpdateStateNotStarted,
 		Source:               source,
 		GroupID:              GroupID,
@@ -182,16 +170,11 @@ func NewResourceUpdateForDestroy(
 
 	remainingResolvables := resolver.ExtractResolvableURIs(existingResource)
 
-	existingMetadata, err := existingResource.GetMetadata()
-	if err != nil {
-		return ResourceUpdate{}, fmt.Errorf("failed to get metadata for new existing %s: %w", existingResource.Label, err)
-	}
 	return ResourceUpdate{
-		ExistingResource:     existingResource, // We will always run here on the existing resource for deletion
-		Resource:             existingResource,
+		PriorState:           existingResource, // We will always run here on the existing resource for deletion
+		DesiredState:         existingResource,
 		ResourceTarget:       target,
 		Operation:            OperationDelete,
-		MetaData:             existingMetadata,
 		State:                ResourceUpdateStateNotStarted,
 		Source:               source,
 		StackLabel:           existingResource.Stack,
@@ -216,7 +199,7 @@ func NewResourceUpdateForCreate(
 	}
 
 	return ResourceUpdate{
-		Resource:             newResource,
+		DesiredState:         newResource,
 		ResourceTarget:       target,
 		Operation:            OperationCreate,
 		State:                ResourceUpdateStateNotStarted,
@@ -249,18 +232,13 @@ func NewResourceUpdateForSyncWithFilter(
 	}
 
 	existingResource.Properties = resolvedExistingProperties
-	existingMetadata, err := existingResource.GetMetadata()
-	if err != nil {
-		return ResourceUpdate{}, fmt.Errorf("failed to get metadata for new existing %s: %w", existingResource.Label, err)
-	}
 
 	return ResourceUpdate{
-		ExistingResource:   existingResource,
+		PriorState:         existingResource,
 		ExistingTarget:     target,
-		Resource:           existingResourceCopy,
+		DesiredState:       existingResourceCopy,
 		ResourceTarget:     target,
 		Operation:          OperationRead,
-		MetaData:           existingMetadata,
 		State:              ResourceUpdateStateNotStarted,
 		Source:             source,
 		StackLabel:         existingResource.Stack,

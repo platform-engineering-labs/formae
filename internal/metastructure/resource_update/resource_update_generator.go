@@ -93,7 +93,7 @@ func GenerateResourceUpdates(
 
 	// Populate targets for each resource update
 	for _, resourceUpdate := range resourceUpdates {
-		targetLabel := resourceUpdate.Resource.Target
+		targetLabel := resourceUpdate.DesiredState.Target
 
 		// First check forma targets
 		for _, target := range forma.Targets {
@@ -699,10 +699,10 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allExistingStacks 
 	for _, deleteUpdate := range allDeleteUpdates {
 		if deleteUpdate.Operation == OperationDelete {
 			// Find all resources that depend on this resource being deleted
-			dependentResources, err := findResourcesThatDependOn(deleteUpdate.Resource, allExistingStacks)
+			dependentResources, err := findResourcesThatDependOn(deleteUpdate.DesiredState, allExistingStacks)
 			if err != nil {
 				slog.Warn("Failed to find dependent resources",
-					"resource", deleteUpdate.Resource.Label,
+					"resource", deleteUpdate.DesiredState.Label,
 					"error", err)
 				continue
 			}
@@ -712,9 +712,9 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allExistingStacks 
 				// Check if this dependent resource is not already being deleted
 				alreadyBeingDeleted := false
 				for _, existingDelete := range allDeleteUpdates {
-					if existingDelete.Resource.Label == dependentRes.Label &&
-						existingDelete.Resource.Stack == dependentRes.Stack &&
-						existingDelete.Resource.Type == dependentRes.Type {
+					if existingDelete.DesiredState.Label == dependentRes.Label &&
+						existingDelete.DesiredState.Stack == dependentRes.Stack &&
+						existingDelete.DesiredState.Type == dependentRes.Type {
 						alreadyBeingDeleted = true
 						break
 					}
@@ -736,7 +736,7 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allExistingStacks 
 					dependencyDeletes = append(dependencyDeletes, dependencyDelete)
 					slog.Debug("Adding dependency delete",
 						"dependent", dependentRes.Label,
-						"dependsOn", deleteUpdate.Resource.Label)
+						"dependsOn", deleteUpdate.DesiredState.Label)
 				}
 			}
 		}
@@ -754,8 +754,8 @@ func convertUpdatesToReplacementsForDependencies(allResourceUpdates []ResourceUp
 			hasDependencyOnDeletedResource := false
 
 			for _, depDelete := range dependencyDeletes {
-				deletedResourceURI := depDelete.Resource.URI()
-				if update.Resource.URI().Stripped() == deletedResourceURI.Stripped() {
+				deletedResourceURI := depDelete.DesiredState.URI()
+				if update.DesiredState.URI().Stripped() == deletedResourceURI.Stripped() {
 					hasDependencyOnDeletedResource = true
 					break
 				}
@@ -764,22 +764,22 @@ func convertUpdatesToReplacementsForDependencies(allResourceUpdates []ResourceUp
 			if hasDependencyOnDeletedResource {
 				// Convert update to replacement (delete + create) because it depends on a resource being deleted
 				replaceUpdates, err := NewResourceUpdateForReplace(
-					update.ExistingResource,
-					update.Resource,
+					update.PriorState,
+					update.DesiredState,
 					update.ExistingTarget,
 					update.ResourceTarget,
 					source,
 				)
 				if err != nil {
 					slog.Error("Failed to create replacement updates for resource",
-						"resource", update.Resource.Label,
+						"resource", update.DesiredState.Label,
 						"error", err)
 					continue
 				}
 
 				finalResourceUpdates = append(finalResourceUpdates, replaceUpdates...)
 				for i, depDelete := range dependencyDeletes {
-					if depDelete.Resource.URI().Stripped() == update.Resource.URI().Stripped() {
+					if depDelete.DesiredState.URI().Stripped() == update.DesiredState.URI().Stripped() {
 						// Remove this dependency delete as it has been converted to an update
 						dependencyDeletes = append(dependencyDeletes[:i], dependencyDeletes[i+1:]...)
 						break
@@ -801,7 +801,7 @@ func convertUpdatesToReplacementsForDependencies(allResourceUpdates []ResourceUp
 		// Check if this dependency delete is already in the final updates
 		found := false
 		for _, finalUpdate := range finalResourceUpdates {
-			if finalUpdate.Resource.URI().Stripped() == depDelete.Resource.URI().Stripped() && finalUpdate.Operation == OperationDelete {
+			if finalUpdate.DesiredState.URI().Stripped() == depDelete.DesiredState.URI().Stripped() && finalUpdate.Operation == OperationDelete {
 				found = true
 				break
 			}
@@ -825,13 +825,13 @@ func convertDependencyDeletesToReplacements(allResourceUpdates []ResourceUpdate,
 	}
 
 	for _, depDelete := range dependencyDeletes {
-		key := fmt.Sprintf("%s|%s|%s", depDelete.Resource.Stack, depDelete.Resource.Label, depDelete.Resource.Type)
+		key := fmt.Sprintf("%s|%s|%s", depDelete.DesiredState.Stack, depDelete.DesiredState.Label, depDelete.DesiredState.Type)
 		// Check if this dependency delete resource is in the Forma
 		if formaResource, isInFormaCommand := formaResourceMap[key]; isInFormaCommand {
 			// Check if there's already an update or create operation for this resource
 			hasUpdateOrCreate := false
 			for _, update := range allResourceUpdates {
-				if update.Resource.URI().Stripped() == depDelete.Resource.URI().Stripped() &&
+				if update.DesiredState.URI().Stripped() == depDelete.DesiredState.URI().Stripped() &&
 					(update.Operation == OperationUpdate || update.Operation == OperationCreate) {
 					hasUpdateOrCreate = true
 					break
@@ -842,15 +842,15 @@ func convertDependencyDeletesToReplacements(allResourceUpdates []ResourceUpdate,
 				// Convert dependency delete to replacement since the resource is in Forma
 				// but has no update/create operation
 				replaceUpdates, err := NewResourceUpdateForReplace(
-					depDelete.Resource, // existing resource
-					formaResource,      // new resource from forma
+					depDelete.DesiredState, // existing resource
+					formaResource,          // new resource from forma
 					depDelete.ResourceTarget,
 					*targetMap[formaResource.Target],
 					source,
 				)
 				if err != nil {
 					slog.Error("Failed to create replacement updates for dependency delete",
-						"resource", depDelete.Resource.Label,
+						"resource", depDelete.DesiredState.Label,
 						"error", err)
 					remainingDependencyDeletes = append(remainingDependencyDeletes, depDelete)
 					continue
@@ -858,7 +858,7 @@ func convertDependencyDeletesToReplacements(allResourceUpdates []ResourceUpdate,
 
 				finalResourceUpdates = append(finalResourceUpdates, replaceUpdates...)
 				slog.Debug("Converted dependency delete to replacement",
-					"resource", depDelete.Resource.Label,
+					"resource", depDelete.DesiredState.Label,
 					"reason", "resource is in Forma but has no update/create operation")
 			} else {
 				// Keep as dependency delete since there's already an update/create

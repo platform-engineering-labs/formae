@@ -36,7 +36,7 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 						OperationStatus: resource.OperationStatusSuccess,
 						RequestID:       "test-request-id",
 						NativeID:        "test-native-id",
-						ResourceType:    request.Resource.Type,
+						ResourceType:    request.DesiredState.Type,
 					},
 				}, nil
 			},
@@ -117,7 +117,7 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 						OperationStatus:    resource.OperationStatusSuccess,
 						RequestID:          "test-request-id",
 						NativeID:           "test-native-id",
-						ResourceType:       request.Resource.Type,
+						ResourceType:       request.DesiredState.Type,
 						ResourceProperties: properties,
 					},
 				}, nil
@@ -150,7 +150,7 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		commandID := "test-command-deps"
 		vpcUpdate := newTestResourceUpdate("test-vpc", nil, "FakeAWS::EC2::VPC")
 		// Subnet needs to resolve VpcId property from the VPC
-		subnetUpdate := newTestResourceUpdate("test-subnet", []pkgmodel.FormaeURI{pkgmodel.NewFormaeURI(vpcUpdate.Resource.Ksuid, "VpcId")}, "FakeAWS::EC2::Subnet")
+		subnetUpdate := newTestResourceUpdate("test-subnet", []pkgmodel.FormaeURI{pkgmodel.NewFormaeURI(vpcUpdate.DesiredState.Ksuid, "VpcId")}, "FakeAWS::EC2::Subnet")
 
 		// Store the forma command
 		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
@@ -207,13 +207,13 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		// Make VPC creation fail
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if request.Resource.Label == "test-vpc" {
+				if request.DesiredState.Label == "test-vpc" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,
 							OperationStatus: resource.OperationStatusFailure,
 							RequestID:       "test-request-id",
-							ResourceType:    request.Resource.Type,
+							ResourceType:    request.DesiredState.Type,
 						},
 					}, nil
 				}
@@ -225,7 +225,7 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 						OperationStatus:    resource.OperationStatusSuccess,
 						RequestID:          "test-request-id",
 						NativeID:           "test-native-id",
-						ResourceType:       request.Resource.Type,
+						ResourceType:       request.DesiredState.Type,
 						ResourceProperties: properties,
 					},
 				}, nil
@@ -250,7 +250,7 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		commandID := "test-command-cascade-failure"
 		vpcUpdate := newTestResourceUpdate("test-vpc", nil, "FakeAWS::EC2::VPC")
 		// Subnet needs to resolve VpcId property from the VPC (which will fail to be created)
-		subnetUpdate := newTestResourceUpdate("test-subnet", []pkgmodel.FormaeURI{pkgmodel.NewFormaeURI(vpcUpdate.Resource.Ksuid, "VpcId")}, "FakeAWS::EC2::Subnet")
+		subnetUpdate := newTestResourceUpdate("test-subnet", []pkgmodel.FormaeURI{pkgmodel.NewFormaeURI(vpcUpdate.DesiredState.Ksuid, "VpcId")}, "FakeAWS::EC2::Subnet")
 
 		// Store the forma command
 		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
@@ -297,10 +297,10 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		vpcFailed := false
 		subnetFailed := false
 		for _, ru := range command.ResourceUpdates {
-			if ru.Resource.Label == "test-vpc" && ru.State == resource_update.ResourceUpdateStateFailed {
+			if ru.DesiredState.Label == "test-vpc" && ru.State == resource_update.ResourceUpdateStateFailed {
 				vpcFailed = true
 			}
-			if ru.Resource.Label == "test-subnet" && ru.State == resource_update.ResourceUpdateStateFailed {
+			if ru.DesiredState.Label == "test-subnet" && ru.State == resource_update.ResourceUpdateStateFailed {
 				subnetFailed = true
 			}
 		}
@@ -325,7 +325,7 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 						OperationStatus: resource.OperationStatusSuccess,
 						RequestID:       "test-request-id",
 						NativeID:        "test-native-id",
-						ResourceType:    request.Resource.Type,
+						ResourceType:    request.DesiredState.Type,
 					},
 				}, nil
 			},
@@ -394,7 +394,7 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusFailure,
 						RequestID:       "test-request-id",
-						ResourceType:    request.Resource.Type,
+						ResourceType:    request.DesiredState.Type,
 					},
 				}, nil
 			},
@@ -472,7 +472,7 @@ func newTestResourceUpdate(label string, dependencies []pkgmodel.FormaeURI, reso
 	properties += `}`
 
 	return resource_update.ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Label:      label,
 			Type:       resourceType,
 			Stack:      "test-stack",

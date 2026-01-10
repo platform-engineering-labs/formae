@@ -146,8 +146,8 @@ func (s FakeAWS) Create(context context.Context, request *resource.CreateRequest
 			OperationStatus:    resource.OperationStatusSuccess,
 			RequestID:          "1234",
 			NativeID:           "5678",
-			ResourceType:       request.Resource.Type,
-			ResourceProperties: request.Resource.Properties,
+			ResourceType:       request.DesiredState.Type,
+			ResourceProperties: request.DesiredState.Properties,
 		},
 	}, nil
 }

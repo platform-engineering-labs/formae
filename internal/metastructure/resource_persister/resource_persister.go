@@ -85,7 +85,7 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, resourceUpdate *resource_update.ResourceUpdate) (string, error) {
 	ok, relevantProgress := resourceUpdate.FindProgress(pluginOperation)
 	if !ok {
-		panic(fmt.Sprintf("Progress for operation %s not found in resource update %s", pluginOperation, resourceUpdate.Resource.Label))
+		panic(fmt.Sprintf("Progress for operation %s not found in resource update %s", pluginOperation, resourceUpdate.DesiredState.Label))
 	}
 
 	resourceUpdate.Operation = resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress)
@@ -94,7 +94,7 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 	// Subsequently no delete is persisted and the system doesn't work as expected.
 	// To avoid this, we skip the validation when the operation is a delete.
 	if resourceUpdate.Operation != resource_update.OperationDelete {
-		if err := validateRequiredFields(resourceUpdate.Resource); err != nil {
+		if err := validateRequiredFields(resourceUpdate.DesiredState); err != nil {
 			slog.Debug("Validation of required fields failed", "error", err)
 			return "", nil
 		}
@@ -105,7 +105,7 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 		Command: formaCommandFromOperation(pluginOperation),
 		ResourceUpdates: []resource_update.ResourceUpdate{
 			{
-				Resource:                 resourceUpdate.Resource,
+				DesiredState:             resourceUpdate.DesiredState,
 				ResourceTarget:           resourceUpdate.ResourceTarget,
 				Operation:                resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress),
 				State:                    resource_update.ResourceUpdateStateSuccess,
@@ -119,16 +119,16 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 	}
 	if pluginOperation == pkgresource.OperationRead && resourceOperation == resource_update.OperationUpdate {
 		// We need to overwrite
-		forma.ResourceUpdates[0].Resource = resourceUpdate.ExistingResource
+		forma.ResourceUpdates[0].DesiredState = resourceUpdate.PriorState
 	}
 
 	err := rp.storeStacks(forma)
 	if err != nil {
 		slog.Error("Failed to store stacks for resource update",
 			"error", err,
-			"resource", resourceUpdate.Resource,
+			"resource", resourceUpdate.DesiredState,
 			"operation", pluginOperation)
-		return "", fmt.Errorf("failed to store stacks for resource update %v: %w", resourceUpdate.Resource, err)
+		return "", fmt.Errorf("failed to store stacks for resource update %v: %w", resourceUpdate.DesiredState, err)
 	}
 	hash := forma.ResourceUpdates[0].Version
 
@@ -179,37 +179,37 @@ func (rp *ResourcePersister) storeStacks(formaCommand *forma_command.FormaComman
 		// may be substituted - we should skip persisting if the stacks don't match,
 		// as this indicates a stack change is in progress and we shouldn't persist the
 		// old stack's resource state.
-		if rc.Resource.Stack != rc.StackLabel {
+		if rc.DesiredState.Stack != rc.StackLabel {
 			slog.Debug("Skipping resource persist - stack mismatch (stack change in progress)",
-				"resourceStack", rc.Resource.Stack,
+				"resourceStack", rc.DesiredState.Stack,
 				"stackLabel", rc.StackLabel,
-				"resourceLabel", rc.Resource.Label)
+				"resourceLabel", rc.DesiredState.Label)
 			continue
 		}
 		if rc.State == resource_update.ResourceUpdateStateSuccess && rc.Version == "" {
 			slog.Debug("Resource command successful, persisting...",
-				"stackLabel", rc.Resource.Stack,
-				"resourceLabel", rc.Resource.Label,
+				"stackLabel", rc.DesiredState.Stack,
+				"resourceLabel", rc.DesiredState.Label,
 				"command", rc.Operation)
 
 			hash, err := rp.processResourceUpdate(formaCommand.ID, *rc)
 			if err != nil {
 				slog.Error("Failed to persist resource command",
 					"error", err,
-					"resourceLabel", rc.Resource.Label,
-					"stackLabel", rc.Resource.Stack)
-				return fmt.Errorf("failed to persist resource %s in stack %s: %w", rc.Resource.Label, rc.Resource.Stack, err)
+					"resourceLabel", rc.DesiredState.Label,
+					"stackLabel", rc.DesiredState.Stack)
+				return fmt.Errorf("failed to persist resource %s in stack %s: %w", rc.DesiredState.Label, rc.DesiredState.Stack, err)
 			}
 			if hash != "" {
 				rc.Version = hash
 				slog.Debug("Resource command persisted",
-					"resourceLabel", rc.Resource.Label,
-					"stackLabel", rc.Resource.Stack,
+					"resourceLabel", rc.DesiredState.Label,
+					"stackLabel", rc.DesiredState.Stack,
 					"hash", hash)
 			} else {
 				slog.Debug("No persist needed for resource command",
-					"resourceLabel", rc.Resource.Label,
-					"stackLabel", rc.Resource.Stack,
+					"resourceLabel", rc.DesiredState.Label,
+					"stackLabel", rc.DesiredState.Stack,
 					"command", rc.Operation)
 			}
 		}
@@ -271,19 +271,19 @@ func resourceOperationFromPluginOperation(resourceOperation resource_update.Oper
 }
 
 func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource_update.ResourceUpdate) (string, error) {
-	stackLabel := rc.Resource.Stack
+	stackLabel := rc.DesiredState.Stack
 
 	var resourceVersion string
 	var storeResourceErr error
 
 	// Create secret-safe version of the resource for storage
-	secretSafeResource, err := rp.persistValueTransformer.ApplyToResource(&rc.Resource)
+	secretSafeResource, err := rp.persistValueTransformer.ApplyToResource(&rc.DesiredState)
 	if err != nil {
 		slog.Error("Failed to transform resource to secret-safe format",
 			"stackLabel", stackLabel,
-			"resourceLabel", rc.Resource.Label,
+			"resourceLabel", rc.DesiredState.Label,
 			"error", err)
-		return "", fmt.Errorf("failed to transform resource %s for secret-safe storage: %w", rc.Resource.Label, err)
+		return "", fmt.Errorf("failed to transform resource %s for secret-safe storage: %w", rc.DesiredState.Label, err)
 	}
 
 	switch rc.Operation {
@@ -294,32 +294,32 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 		secretSafeResource.PatchDocument = nil
 		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
 	case resource_update.OperationDelete:
-		r, err := rp.datastore.LoadResource(rc.Resource.URI())
+		r, err := rp.datastore.LoadResource(rc.DesiredState.URI())
 		if err == nil && r != nil {
 			slog.Debug("Resource exists, deleting",
 				"stackLabel", stackLabel,
-				"resourceLabel", rc.Resource.Label)
+				"resourceLabel", rc.DesiredState.Label)
 		} else {
 			slog.Debug("Resource does not exist, no removal needed",
 				"stackLabel", stackLabel,
-				"resourceLabel", rc.Resource.Label)
+				"resourceLabel", rc.DesiredState.Label)
 			return "", nil
 		}
 
-		resourceVersion, storeResourceErr = rp.datastore.DeleteResource(&rc.Resource, commandID)
+		resourceVersion, storeResourceErr = rp.datastore.DeleteResource(&rc.DesiredState, commandID)
 	case resource_update.OperationRead:
 		if rc.Operation == resource_update.OperationRead {
-			currentResource, err := rp.datastore.LoadResource(rc.Resource.URI())
+			currentResource, err := rp.datastore.LoadResource(rc.DesiredState.URI())
 			if err != nil {
 				slog.Error("Failed to load current resource for comparison",
-					"resourceLabel", rc.Resource.Label,
+					"resourceLabel", rc.DesiredState.Label,
 					"error", err)
-				return "", fmt.Errorf("failed to load current resource %s for comparison: %w", rc.Resource.Label, err)
+				return "", fmt.Errorf("failed to load current resource %s for comparison: %w", rc.DesiredState.Label, err)
 			}
 
 			if currentResource == nil {
 				slog.Debug("Resource not found, creating new one",
-					"resourceLabel", rc.Resource.Label,
+					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
 				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
@@ -328,8 +328,8 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 			}
 
 			// Only persist if Properties or ReadOnlyProperties have changed
-			if !util.JsonEqualRaw(currentResource.Properties, rc.Resource.Properties) ||
-				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, rc.Resource.ReadOnlyProperties) {
+			if !util.JsonEqualRaw(currentResource.Properties, rc.DesiredState.Properties) ||
+				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, rc.DesiredState.ReadOnlyProperties) {
 
 				// Preserve the current stack and managed state during sync READ operations
 				// to prevent stale sync data from overwriting recent stack changes
@@ -342,44 +342,44 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				currentResource.ReadOnlyProperties = secretSafeResource.ReadOnlyProperties
 
 				slog.Debug("Resource properties changed, persisting update",
-					"resourceLabel", rc.Resource.Label,
+					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
 				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
 				if storeResourceErr != nil {
-					return "", fmt.Errorf("failed to persist updated resource %s: %w", rc.Resource.Label, storeResourceErr)
+					return "", fmt.Errorf("failed to persist updated resource %s: %w", rc.DesiredState.Label, storeResourceErr)
 				}
 
 				return resourceVersion, storeResourceErr
 			} else {
 				slog.Debug("No changes in Properties or ReadOnlyProperties, skipping persist",
-					"resourceLabel", rc.Resource.Label,
+					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 				return "", nil
 			}
 		} else {
-			slog.Debug("Read command, no persist required", "stackLabel", stackLabel, "resourceLabel", rc.Resource.Label)
+			slog.Debug("Read command, no persist required", "stackLabel", stackLabel, "resourceLabel", rc.DesiredState.Label)
 			return "", nil
 		}
 
 	default:
-		slog.Error("Unknown resource command type", "command", rc.Operation, "stackLabel", stackLabel, "resourceLabel", rc.Resource.Label)
-		return "", fmt.Errorf("unknown resource command type '%s' for resource %s", rc.Operation, rc.Resource.Label)
+		slog.Error("Unknown resource command type", "command", rc.Operation, "stackLabel", stackLabel, "resourceLabel", rc.DesiredState.Label)
+		return "", fmt.Errorf("unknown resource command type '%s' for resource %s", rc.Operation, rc.DesiredState.Label)
 	}
 
 	if storeResourceErr != nil {
 		slog.Error("Failed to persist/remove stack for resource command",
 			"error", storeResourceErr,
 			"stackLabel", stackLabel,
-			"resourceLabel", rc.Resource.Label,
+			"resourceLabel", rc.DesiredState.Label,
 			"command", rc.Operation,
 		)
-		return "", fmt.Errorf("persist operation failed for resource %s: %w", rc.Resource.Label, storeResourceErr)
+		return "", fmt.Errorf("persist operation failed for resource %s: %w", rc.DesiredState.Label, storeResourceErr)
 	}
 
 	slog.Debug("Successfully persisted resource operation",
 		"stackLabel", stackLabel,
-		"resourceLabel", rc.Resource.Label,
+		"resourceLabel", rc.DesiredState.Label,
 		"command", rc.Operation,
 		"hash", resourceVersion,
 	)

@@ -54,7 +54,7 @@ func resourceUpdateKey(ksuid string, operation types.OperationType) string {
 func buildResourceUpdateIndex(cmd *forma_command.FormaCommand) map[string]int {
 	ksuidOpToIndex := make(map[string]int, len(cmd.ResourceUpdates))
 	for i, ru := range cmd.ResourceUpdates {
-		key := resourceUpdateKey(ru.Resource.Ksuid, types.OperationType(ru.Operation))
+		key := resourceUpdateKey(ru.DesiredState.Ksuid, types.OperationType(ru.Operation))
 		ksuidOpToIndex[key] = i
 	}
 	return ksuidOpToIndex
@@ -312,11 +312,11 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		res.MostRecentProgressResult = progress.Progress
 
 		if progress.ResourceProperties != nil {
-			res.Resource.Properties = progress.ResourceProperties
+			res.DesiredState.Properties = progress.ResourceProperties
 		}
 
 		if progress.ResourceReadOnlyProperties != nil {
-			res.Resource.ReadOnlyProperties = progress.ResourceReadOnlyProperties
+			res.DesiredState.ReadOnlyProperties = progress.ResourceReadOnlyProperties
 		}
 
 		if progress.Version != "" {
@@ -410,10 +410,10 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		res.ModifiedTs = msg.ResourceModifiedTs
 
 		if msg.ResourceProperties != nil {
-			res.Resource.Properties = msg.ResourceProperties
+			res.DesiredState.Properties = msg.ResourceProperties
 		}
 		if msg.ResourceReadOnlyProperties != nil {
-			res.Resource.ReadOnlyProperties = msg.ResourceReadOnlyProperties
+			res.DesiredState.ReadOnlyProperties = msg.ResourceReadOnlyProperties
 		}
 		if msg.Version != "" {
 			res.Version = msg.Version
@@ -620,16 +620,16 @@ func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_comma
 
 	// Hash opaque vals in ResourceUpdates array (Resources are stored in resource_updates table, not forma.Resources)
 	for i, resourceUpdate := range command.ResourceUpdates {
-		if hasOpaqueValues(resourceUpdate.Resource.Properties) {
-			transformed, err := t.ApplyToResource(&resourceUpdate.Resource)
+		if hasOpaqueValues(resourceUpdate.DesiredState.Properties) {
+			transformed, err := t.ApplyToResource(&resourceUpdate.DesiredState)
 			if err != nil {
 				f.Log().Error("Failed to hash resource update during final cleanup",
 					"commandID", command.ID,
-					"resourceLabel", resourceUpdate.Resource.Label,
+					"resourceLabel", resourceUpdate.DesiredState.Label,
 					"error", err)
-				return false, fmt.Errorf("failed to hash resource update %s during final cleanup: %w", resourceUpdate.Resource.Label, err)
+				return false, fmt.Errorf("failed to hash resource update %s during final cleanup: %w", resourceUpdate.DesiredState.Label, err)
 			}
-			command.ResourceUpdates[i].Resource = *transformed
+			command.ResourceUpdates[i].DesiredState = *transformed
 			hashedCount++
 		}
 	}
