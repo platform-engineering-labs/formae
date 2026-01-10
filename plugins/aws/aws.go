@@ -109,9 +109,9 @@ func (a AWS) SchemaForResourceType(resourceType string) (model.Schema, error) {
 }
 
 func (a AWS) Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
-	targetConfig := config.FromTarget(request.Target)
-	if registry.HasProvisioner(request.DesiredState.Type, resource.OperationCreate) {
-		provisioner := registry.Get(request.DesiredState.Type, resource.OperationCreate, targetConfig)
+	targetConfig := config.FromTargetConfig(request.TargetConfig)
+	if registry.HasProvisioner(request.ResourceType, resource.OperationCreate) {
+		provisioner := registry.Get(request.ResourceType, resource.OperationCreate, targetConfig)
 		return provisioner.Create(context, request)
 	}
 
@@ -124,12 +124,12 @@ func (a AWS) Create(context context.Context, request *resource.CreateRequest) (*
 }
 
 func (a AWS) Update(context context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
-	if registry.HasProvisioner(request.DesiredState.Type, resource.OperationUpdate) {
-		provisioner := registry.Get(request.DesiredState.Type, resource.OperationUpdate, config.FromTarget(request.Target))
+	if registry.HasProvisioner(request.ResourceType, resource.OperationUpdate) {
+		provisioner := registry.Get(request.ResourceType, resource.OperationUpdate, config.FromTargetConfig(request.TargetConfig))
 		return provisioner.Update(context, request)
 	}
 
-	client, err := ccx.NewClient(config.FromTarget(request.Target))
+	client, err := ccx.NewClient(config.FromTargetConfig(request.TargetConfig))
 	if err != nil {
 		return nil, err
 	}
@@ -140,12 +140,12 @@ func (a AWS) Update(context context.Context, request *resource.UpdateRequest) (*
 func (a AWS) Status(context context.Context, request *resource.StatusRequest) (*resource.StatusResult, error) {
 	if request.ResourceType != "" {
 		if registry.HasProvisioner(request.ResourceType, resource.OperationCheckStatus) {
-			provisioner := registry.Get(request.ResourceType, resource.OperationCheckStatus, config.FromTarget(request.Target))
+			provisioner := registry.Get(request.ResourceType, resource.OperationCheckStatus, config.FromTargetConfig(request.TargetConfig))
 			return provisioner.Status(context, request)
 		}
 	}
 
-	client, err := ccx.NewClient(config.FromTarget(request.Target))
+	client, err := ccx.NewClient(config.FromTargetConfig(request.TargetConfig))
 	if err != nil {
 		return nil, err
 	}
@@ -155,11 +155,11 @@ func (a AWS) Status(context context.Context, request *resource.StatusRequest) (*
 
 func (a AWS) Delete(context context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
 	if registry.HasProvisioner(request.ResourceType, resource.OperationDelete) {
-		provisioner := registry.Get(request.ResourceType, resource.OperationDelete, config.FromTarget(request.Target))
+		provisioner := registry.Get(request.ResourceType, resource.OperationDelete, config.FromTargetConfig(request.TargetConfig))
 		return provisioner.Delete(context, request)
 	}
 
-	client, err := ccx.NewClient(config.FromTarget(request.Target))
+	client, err := ccx.NewClient(config.FromTargetConfig(request.TargetConfig))
 	if err != nil {
 		return nil, err
 	}
@@ -169,11 +169,11 @@ func (a AWS) Delete(context context.Context, request *resource.DeleteRequest) (*
 
 func (a AWS) Read(context context.Context, request *resource.ReadRequest) (*resource.ReadResult, error) {
 	if registry.HasProvisioner(request.ResourceType, resource.OperationRead) {
-		provisioner := registry.Get(request.ResourceType, resource.OperationRead, config.FromTarget(request.Target))
+		provisioner := registry.Get(request.ResourceType, resource.OperationRead, config.FromTargetConfig(request.TargetConfig))
 		return provisioner.Read(context, request)
 	}
 
-	client, err := ccx.NewClient(config.FromTarget(request.Target))
+	client, err := ccx.NewClient(config.FromTargetConfig(request.TargetConfig))
 	if err != nil {
 		return nil, err
 	}
@@ -183,11 +183,11 @@ func (a AWS) Read(context context.Context, request *resource.ReadRequest) (*reso
 
 func (a AWS) List(context context.Context, request *resource.ListRequest) (*resource.ListResult, error) {
 	if registry.HasProvisioner(request.ResourceType, resource.OperationList) {
-		provisioner := registry.Get(request.ResourceType, resource.OperationList, config.FromTarget(request.Target))
+		provisioner := registry.Get(request.ResourceType, resource.OperationList, config.FromTargetConfig(request.TargetConfig))
 		return provisioner.List(context, request)
 	}
 
-	client, err := ccx.NewClient(config.FromTarget(request.Target))
+	client, err := ccx.NewClient(config.FromTargetConfig(request.TargetConfig))
 	if err != nil {
 		return nil, err
 	}
@@ -201,30 +201,25 @@ func (a AWS) List(context context.Context, request *resource.ListRequest) (*reso
 		resourceModelStr := string(jsonBytes)
 		resourceModel = &resourceModelStr
 	}
-	var resources []resource.Resource
+	var nativeIDs []string
 	result, err := client.ListResources(context, &cloudcontrol.ListResourcesInput{TypeName: &request.ResourceType, MaxResults: &request.PageSize, NextToken: request.PageToken, ResourceModel: resourceModel})
 	if err != nil {
 		// If the parent resource doesn't exist (404), return an empty list instead of an error
 		errorCode, isCloudControlError := helper.HandleCloudControlError(err)
 		if isCloudControlError && errorCode == cctypes.HandlerErrorCodeNotFound {
 			return &resource.ListResult{
-				ResourceType:  request.ResourceType,
-				Resources:     []resource.Resource{},
+				NativeIDs:     []string{},
 				NextPageToken: nil,
 			}, nil
 		}
 		return nil, err
 	}
 	for _, r := range result.ResourceDescriptions {
-		resources = append(resources, resource.Resource{
-			NativeID:   *r.Identifier,
-			Properties: *r.Properties,
-		})
+		nativeIDs = append(nativeIDs, *r.Identifier)
 	}
 
 	return &resource.ListResult{
-		ResourceType:  request.ResourceType,
-		Resources:     resources,
+		NativeIDs:     nativeIDs,
 		NextPageToken: result.NextToken,
 	}, nil
 }

@@ -6,7 +6,6 @@ package iam
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -82,36 +81,20 @@ func (r *RolePolicy) listWithClient(ctx context.Context, client iamClientInterfa
 		var noSuchEntity *iamtypes.NoSuchEntityException
 		if errors.As(err, &noSuchEntity) {
 			return &resource.ListResult{
-				ResourceType:  request.ResourceType,
-				Resources:     []resource.Resource{},
+				NativeIDs:     []string{},
 				NextPageToken: nil,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to list role policies for role %s: %w", roleName, err)
 	}
 
-	var resources []resource.Resource
+	var nativeIDs []string
 	for _, policyName := range res.PolicyNames {
-		props := map[string]any{
-			"PolicyName": policyName,
-			"RoleName":   roleName,
-		}
-
-		data, err := json.Marshal(props)
-		if err != nil {
-			slog.Error("rolepolicy: failed to marshal properties", "role", roleName, "policy", policyName, "error", err)
-			continue
-		}
-
-		resources = append(resources, resource.Resource{
-			NativeID:   fmt.Sprintf("%s|%s", policyName, roleName),
-			Properties: string(data),
-		})
+		nativeIDs = append(nativeIDs, fmt.Sprintf("%s|%s", policyName, roleName))
 	}
 
 	return &resource.ListResult{
-		ResourceType:  request.ResourceType,
-		Resources:     resources,
+		NativeIDs:     nativeIDs,
 		NextPageToken: res.Marker,
 	}, nil
 }

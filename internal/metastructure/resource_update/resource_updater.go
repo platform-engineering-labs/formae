@@ -304,7 +304,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		Namespace:        convertedExisting.Namespace(),
 		ExistingResource: convertedExisting,
 		Resource:         convertedResource,
-		Target:           data.resourceUpdate.ResourceTarget,
+		TargetConfig:     data.resourceUpdate.ResourceTarget.Config,
 		NativeID:         data.resourceUpdate.DesiredState.NativeID,
 		IsSync:           data.resourceUpdate.IsSync(),
 		IsDelete:         data.resourceUpdate.IsDelete(),
@@ -334,7 +334,7 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		NativeID:     convertedResource.NativeID,
 		Resource:     convertedResource,
 		ResourceType: convertedResource.Type,
-		Target:       data.resourceUpdate.ResourceTarget,
+		TargetConfig: data.resourceUpdate.ResourceTarget.Config,
 	}
 
 	// First we check if progress already was made on the delete operation. This can happen for example if the node crashed while the
@@ -406,8 +406,10 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 
 	createOperation := plugin.CreateResource{
 		Namespace:    convertedResource.Namespace(),
-		DesiredState: convertedResource,
-		Target:       data.resourceUpdate.ResourceTarget,
+		ResourceType: convertedResource.Type,
+		Label:        convertedResource.Label,
+		Properties:   convertedResource.Properties,
+		TargetConfig: data.resourceUpdate.ResourceTarget.Config,
 	}
 
 	// First we check if progress already was made on the create operation. This can happen for example if the node crashed while the
@@ -460,15 +462,16 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 
 		// Create synthetic ProgressResult with existing resource data
 		// No ConvertToPluginFormat needed - properties are already in plain JSON format
-		syntheticResult := resource.ProgressResult{
-			Operation:          resource.OperationUpdate,
-			OperationStatus:    resource.OperationStatusSuccess,
-			StatusMessage:      "Brought under management without property changes (tag-less resource)",
-			NativeID:           data.resourceUpdate.PriorState.NativeID,
-			ResourceType:       data.resourceUpdate.DesiredState.Type,
-			ResourceProperties: completeProperties,
-			StartTs:            util.TimeNow(),
-			ModifiedTs:         util.TimeNow(),
+		syntheticResult := plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:          resource.OperationUpdate,
+				OperationStatus:    resource.OperationStatusSuccess,
+				StatusMessage:      "Brought under management without property changes (tag-less resource)",
+				NativeID:           data.resourceUpdate.PriorState.NativeID,
+				ResourceProperties: completeProperties,
+			},
+			Attempts:    1,
+			MaxAttempts: 1,
 		}
 
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
@@ -489,12 +492,14 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	}
 
 	updateOperation := plugin.UpdateResource{
-		Namespace:     convertedResource.Namespace(),
-		NativeID:      convertedResource.NativeID,
-		DesiredState:  convertedResource,
-		PriorState:    convertedExisting,
-		PatchDocument: string(data.resourceUpdate.DesiredState.PatchDocument),
-		Target:        data.resourceUpdate.ResourceTarget,
+		Namespace:         convertedResource.Namespace(),
+		NativeID:          convertedResource.NativeID,
+		ResourceType:      convertedResource.Type,
+		Label:             convertedResource.Label,
+		PriorProperties:   convertedExisting.Properties,
+		DesiredProperties: convertedResource.Properties,
+		PatchDocument:     string(data.resourceUpdate.DesiredState.PatchDocument),
+		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,
 	}
 
 	// First we check if progress already was made on the update operation. This can happen for example if the node crashed while the
@@ -516,14 +521,15 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
-func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKnownProgress *resource.ProgressResult, operation plugin.StatusCheck, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKnownProgress *plugin.TrackedProgress, operation plugin.StatusCheck, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	// If the lastKnownProgress was finished, we can let the progress handler process the result and determine next steps.
 	if lastKnownProgress.HasFinished() {
 		return handleProgressUpdate(gen.PID{}, state, data, *lastKnownProgress, proc)
 	}
 
 	// Otherwise we retrieve the actual progress by spawning a plugin operator in the WaitingForResource state.
-	actualProgress, err := resumeWaitingForResource(state, data, *lastKnownProgress, operation, proc)
+	// Pass the previous attempts count so the PluginOperator can continue from where it left off.
+	actualProgress, err := resumeWaitingForResource(state, data, lastKnownProgress.ProgressResult, lastKnownProgress.Attempts, operation, proc)
 	if err != nil {
 		proc.Log().Error("failed to resume waiting for resource", "error", err)
 		data.resourceUpdate.MarkAsFailed()
@@ -545,12 +551,12 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 	return state, data, []statemachine.Action{timeout}, nil
 }
 
-func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress resource.ProgressResult, operation plugin.StatusCheck, proc gen.Process) (*resource.ProgressResult, error) {
+func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress resource.ProgressResult, previousAttempts int, operation plugin.StatusCheck, proc gen.Process) (*plugin.TrackedProgress, error) {
 	actualProgress, err := doPluginOperation(data.resourceUpdate.DesiredState.URI(), plugin.ResumeWaitingForResource{
 		Namespace:         data.resourceUpdate.DesiredState.Namespace(),
 		ResourceOperation: currentOperation(state),
 		Request:           operation.StatusCheck(&progress),
-		PreviousAttempts:  progress.Attempts,
+		PreviousAttempts:  previousAttempts,
 	}, proc)
 	if err != nil {
 		proc.Log().Error("failed to resume waiting for resource", "error", err)
@@ -563,7 +569,7 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 // handleProgressUpdate handles progress updates from th plugin operator. It persists any progress made, and moves the
 // state machine to the next state when the plugin operation finished successfully. After the last plugin operation, or
 // after the first error, it reports the final state to the stack updater and exits.
-func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData, message resource.ProgressResult, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData, message plugin.TrackedProgress, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
 		proc.Log().Error("failed to record progress for resource update", "error", err)
@@ -579,7 +585,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			ResourceURI:        data.resourceUpdate.DesiredState.URI(),
 			Operation:          data.resourceUpdate.Operation,
 			ResourceStartTs:    data.resourceUpdate.StartTs,
-			ResourceModifiedTs: message.ModifiedTs,
+			ResourceModifiedTs: data.resourceUpdate.ModifiedTs, // Updated by RecordProgress above
 			ResourceState:      data.resourceUpdate.State,
 			Progress:           message,
 		},
@@ -716,7 +722,7 @@ func nextState(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.A
 	}
 }
 
-func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOperation, proc gen.Process) (*resource.ProgressResult, error) {
+func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOperation, proc gen.Process) (*plugin.TrackedProgress, error) {
 	// Generate a random operationID based on UUID
 	operationID := uuid.New().String()
 
@@ -759,9 +765,9 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 		return nil, err
 	}
 
-	progressResult, ok := response.(resource.ProgressResult)
+	progressResult, ok := response.(plugin.TrackedProgress)
 	if !ok {
-		return nil, fmt.Errorf("expected ProgressResult, got %T", response)
+		return nil, fmt.Errorf("expected TrackedProgress, got %T", response)
 	}
 
 	return &progressResult, nil

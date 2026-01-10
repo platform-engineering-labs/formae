@@ -6,14 +6,13 @@ package resource
 
 import (
 	"encoding/json"
-	"time"
-
-	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 type CreateRequest struct {
-	DesiredState *model.Resource
-	Target       *model.Target
+	ResourceType string
+	Label        string // Resource label for identification (used by Azure as fallback, useful for testing)
+	Properties   json.RawMessage
+	TargetConfig json.RawMessage
 }
 
 type CreateResult struct {
@@ -21,11 +20,13 @@ type CreateResult struct {
 }
 
 type UpdateRequest struct {
-	NativeID      *string
-	PriorState    *model.Resource // Previous state of the resource
-	DesiredState  *model.Resource // New desired state of the resource
-	PatchDocument *string
-	Target        *model.Target
+	NativeID          string
+	ResourceType      string
+	Label             string // Resource label for identification (used by Azure as fallback, useful for testing)
+	PriorProperties   json.RawMessage
+	DesiredProperties json.RawMessage
+	PatchDocument     *string
+	TargetConfig      json.RawMessage
 }
 
 type UpdateResult struct {
@@ -33,9 +34,9 @@ type UpdateResult struct {
 }
 
 type DeleteRequest struct {
-	NativeID     *string
+	NativeID     string
 	ResourceType string
-	Target       *model.Target
+	TargetConfig json.RawMessage
 }
 
 type DeleteResult struct {
@@ -44,9 +45,9 @@ type DeleteResult struct {
 
 type StatusRequest struct {
 	RequestID    string
-	NativeID     string            // NativeID returned by initial Create/Update
-	ResourceType string            // Optional resource type for status checks
-	Target       *model.Target
+	NativeID     string // NativeID returned by initial Create/Update
+	ResourceType string // Optional resource type for status checks
+	TargetConfig json.RawMessage
 }
 
 type StatusResult struct {
@@ -56,7 +57,7 @@ type StatusResult struct {
 type ReadRequest struct {
 	NativeID     string
 	ResourceType string
-	Target       *model.Target
+	TargetConfig json.RawMessage
 
 	// RedactSensitive declares intent to remove sensitive properties
 	RedactSensitive bool
@@ -75,15 +76,14 @@ type Resource struct {
 
 type ListRequest struct {
 	ResourceType         string
-	Target               *model.Target
+	TargetConfig         json.RawMessage
 	PageSize             int32
 	PageToken            *string
 	AdditionalProperties map[string]string
 }
 
 type ListResult struct {
-	ResourceType  string
-	Resources     []Resource
+	NativeIDs     []string
 	NextPageToken *string
 }
 
@@ -93,14 +93,9 @@ type ProgressResult struct {
 
 	RequestID          string
 	NativeID           string // Required - all plugins must set this
-	ResourceType       string
 	ResourceProperties json.RawMessage    `json:"ResourceProperties,omitempty"`
-	StartTs            time.Time          `json:"StartTs"`
-	ModifiedTs         time.Time          `json:"ModifiedTs"`
 	ErrorCode          OperationErrorCode `json:"ErrorCode,omitempty"`
 	StatusMessage      string             `json:"StatusMessage,omitempty"`
-	Attempts           int                `json:"Attempts,omitempty"`
-	MaxAttempts        int                `json:"MaxAttempts,omitempty"`
 }
 
 func (pr *ProgressResult) Zero() ProgressResult {
@@ -112,13 +107,7 @@ func (pr *ProgressResult) FinishedSuccessfully() bool {
 }
 
 func (pr *ProgressResult) Failed() bool {
-	if pr.OperationStatus != OperationStatusFailure {
-		return false
-	}
-	// Attempts will always be one more than the maximum attempts allowed after exhausting all retries. This is
-	// because progress results are sent during each attempt and we would have no way of knowing if the last operation
-	// is finished or still in progress.
-	return !IsRecoverable(pr.ErrorCode) || pr.Attempts > pr.MaxAttempts
+	return pr.OperationStatus == OperationStatusFailure
 }
 
 func (pr *ProgressResult) InProgress() bool {

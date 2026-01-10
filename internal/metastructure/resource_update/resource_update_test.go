@@ -15,10 +15,12 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 func TestRecordResourceProgress_UpdatesResourceProgress_ForDeleteOperation(t *testing.T) {
+	now := time.Now()
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationDelete,
 		State:     ResourceUpdateStateNotStarted,
@@ -27,51 +29,44 @@ func TestRecordResourceProgress_UpdatesResourceProgress_ForDeleteOperation(t *te
 		Operation:       resource.OperationRead,
 		OperationStatus: resource.OperationStatusSuccess,
 		RequestID:       "test-request-id",
-		StartTs:         util.TimeNow(),
-		ModifiedTs:      util.TimeNow().Add(10 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err := resourceUpdate.RecordProgress(readProgress)
+	err := resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *readProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, readProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.StartTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.ModifiedTs, 1*time.Second)
 
 	firstDeleteProgress := &resource.ProgressResult{
 		Operation:       resource.OperationDelete,
 		OperationStatus: resource.OperationStatusInProgress,
 		RequestID:       "test-delete-request-id",
-		StartTs:         util.TimeNow().Add(60 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(80 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(firstDeleteProgress)
+	startTs := resourceUpdate.StartTs // Capture start timestamp
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *firstDeleteProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, firstDeleteProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 
 	secondDeleteProgress := &resource.ProgressResult{
 		Operation:       resource.OperationDelete,
 		OperationStatus: resource.OperationStatusSuccess,
 		RequestID:       "test-second-delete-request-id",
-		StartTs:         util.TimeNow().Add(120 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(140 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(secondDeleteProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *secondDeleteProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, secondDeleteProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 }
 
 func TestRecordResourceProgress_UpdatesResourceProgress_ForCreateOperation(t *testing.T) {
+	now := time.Now()
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationCreate,
 		State:     ResourceUpdateStateNotStarted,
@@ -80,35 +75,31 @@ func TestRecordResourceProgress_UpdatesResourceProgress_ForCreateOperation(t *te
 		Operation:       resource.OperationCreate,
 		OperationStatus: resource.OperationStatusInProgress,
 		RequestID:       "test-create-request-id",
-		StartTs:         util.TimeNow().Add(60 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(80 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err := resourceUpdate.RecordProgress(firstCreateProgress)
+	err := resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *firstCreateProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, firstCreateProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, firstCreateProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.StartTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.ModifiedTs, 1*time.Second)
 
+	startTs := resourceUpdate.StartTs // Capture start timestamp
 	secondCreateProgress := &resource.ProgressResult{
 		Operation:       resource.OperationCreate,
 		OperationStatus: resource.OperationStatusSuccess,
 		RequestID:       "test-second-create-request-id",
-		StartTs:         util.TimeNow().Add(120 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(140 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(secondCreateProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *secondCreateProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
-	assert.WithinDuration(t, firstCreateProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, secondCreateProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 }
 
 func TestRecordResourceProgress_UpdatesResourceProgress_ForUpdateOperation(t *testing.T) {
+	now := time.Now()
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationUpdate,
 		State:     ResourceUpdateStateNotStarted,
@@ -117,51 +108,44 @@ func TestRecordResourceProgress_UpdatesResourceProgress_ForUpdateOperation(t *te
 		Operation:       resource.OperationRead,
 		OperationStatus: resource.OperationStatusSuccess,
 		RequestID:       "test-request-id",
-		StartTs:         util.TimeNow(),
-		ModifiedTs:      util.TimeNow().Add(10 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err := resourceUpdate.RecordProgress(readProgress)
+	err := resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *readProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, readProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.StartTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.ModifiedTs, 1*time.Second)
 
+	startTs := resourceUpdate.StartTs // Capture start timestamp
 	firstUpdateProgress := &resource.ProgressResult{
 		Operation:       resource.OperationUpdate,
 		OperationStatus: resource.OperationStatusInProgress,
 		RequestID:       "test-update-request-id",
-		StartTs:         util.TimeNow().Add(60 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(80 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(firstUpdateProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *firstUpdateProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, firstUpdateProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 
 	secondUpdateProgress := &resource.ProgressResult{
 		Operation:       resource.OperationUpdate,
 		OperationStatus: resource.OperationStatusFailure,
 		RequestID:       "test-second-update-request-id",
-		StartTs:         util.TimeNow().Add(120 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(140 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(secondUpdateProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *secondUpdateProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateFailed, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, secondUpdateProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 }
 
 func TestRecordResourceProgress_UpdatesResourceProgress_ForReplaceOperation(t *testing.T) {
+	now := time.Now()
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationReplace,
 		State:     ResourceUpdateStateNotStarted,
@@ -170,78 +154,64 @@ func TestRecordResourceProgress_UpdatesResourceProgress_ForReplaceOperation(t *t
 		Operation:       resource.OperationRead,
 		OperationStatus: resource.OperationStatusSuccess,
 		RequestID:       "test-request-id",
-		StartTs:         util.TimeNow(),
-		ModifiedTs:      util.TimeNow().Add(10 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err := resourceUpdate.RecordProgress(readProgress)
+	err := resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *readProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, readProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.StartTs, 1*time.Second)
+	assert.WithinDuration(t, now, resourceUpdate.ModifiedTs, 1*time.Second)
 
+	startTs := resourceUpdate.StartTs // Capture start timestamp
 	firstDeleteProgress := &resource.ProgressResult{
 		Operation:       resource.OperationDelete,
 		OperationStatus: resource.OperationStatusInProgress,
 		RequestID:       "test-replace-request-id",
-		StartTs:         util.TimeNow().Add(60 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(80 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(firstDeleteProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *firstDeleteProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, firstDeleteProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 
 	secondDeleteProgress := &resource.ProgressResult{
 		Operation:       resource.OperationDelete,
 		OperationStatus: resource.OperationStatusSuccess,
 		RequestID:       "test-second-replace-request-id",
-		StartTs:         util.TimeNow().Add(120 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(140 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(secondDeleteProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *secondDeleteProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, secondDeleteProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 
 	firstCreateProgress := &resource.ProgressResult{
 		Operation:       resource.OperationCreate,
 		OperationStatus: resource.OperationStatusInProgress,
 		RequestID:       "test-create-request-id",
-		StartTs:         util.TimeNow().Add(180 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(200 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(firstCreateProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *firstCreateProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, firstCreateProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 
 	secondCreateProgress := &resource.ProgressResult{
 		Operation:       resource.OperationCreate,
 		OperationStatus: resource.OperationStatusSuccess,
 		RequestID:       "test-second-create-request-id",
-		StartTs:         util.TimeNow().Add(240 * time.Second),
-		ModifiedTs:      util.TimeNow().Add(260 * time.Second),
-		MaxAttempts:     3,
 	}
 
-	err = resourceUpdate.RecordProgress(secondCreateProgress)
+	err = resourceUpdate.RecordProgress(&plugin.TrackedProgress{ProgressResult: *secondCreateProgress, Attempts: 1, MaxAttempts: 4})
 	assert.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
-	assert.WithinDuration(t, readProgress.StartTs, resourceUpdate.StartTs, 1*time.Second)
-	assert.WithinDuration(t, secondCreateProgress.ModifiedTs, resourceUpdate.ModifiedTs, 1*time.Second)
+	assert.Equal(t, startTs, resourceUpdate.StartTs) // StartTs should not change
+	assert.WithinDuration(t, time.Now(), resourceUpdate.ModifiedTs, 1*time.Second)
 }
 
 func Test_mergeRefsPreservingUserRefs_preservesResolvableValues(t *testing.T) {
@@ -318,11 +288,12 @@ func TestResolveValue_UpdatesResolvedValueInProperties(t *testing.T) {
 func TestUpdateState_InProgress(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		State: ResourceUpdateStateNotStarted,
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:       resource.OperationCreate,
-				OperationStatus: resource.OperationStatusInProgress,
-				MaxAttempts:     3,
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationCreate,
+					OperationStatus: resource.OperationStatusInProgress,
+				},
 			},
 		},
 	}
@@ -335,11 +306,12 @@ func TestUpdateState_FailedButIncomplete(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationUpdate,
 		State:     ResourceUpdateStateNotStarted,
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:       resource.OperationRead,
-				OperationStatus: resource.OperationStatusFailure,
-				MaxAttempts:     3,
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationRead,
+					OperationStatus: resource.OperationStatusFailure,
+				},
 			},
 		},
 	}
@@ -352,16 +324,18 @@ func TestUpdateState_FailedAndComplete(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationDelete,
 		State:     ResourceUpdateStateNotStarted,
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:       resource.OperationRead,
-				OperationStatus: resource.OperationStatusSuccess,
-				MaxAttempts:     3,
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationRead,
+					OperationStatus: resource.OperationStatusSuccess,
+				},
 			},
 			{
-				Operation:       resource.OperationDelete,
-				OperationStatus: resource.OperationStatusFailure,
-				MaxAttempts:     3,
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationDelete,
+					OperationStatus: resource.OperationStatusFailure,
+				},
 			},
 		},
 	}
@@ -379,11 +353,12 @@ func TestUpdateState_RestartRecovery_SuccessProgressDerivesSuccessState(t *testi
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationCreate,
 		State:     ResourceUpdateStateNotStarted, // State before UpdateState() is called
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:       resource.OperationCreate,
-				OperationStatus: resource.OperationStatusSuccess,
-				MaxAttempts:     3,
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationCreate,
+					OperationStatus: resource.OperationStatusSuccess,
+				},
 			},
 		},
 	}

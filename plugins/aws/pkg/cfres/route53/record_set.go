@@ -132,7 +132,7 @@ func (r RecordSet) Create(ctx context.Context, request *resource.CreateRequest) 
 
 	// Parse properties from JSON
 	var properties map[string]any
-	if err := json.Unmarshal(request.DesiredState.Properties, &properties); err != nil {
+	if err := json.Unmarshal(request.Properties, &properties); err != nil {
 		return nil, fmt.Errorf("failed to parse properties: %w", err)
 	}
 
@@ -247,10 +247,10 @@ func (r RecordSet) Update(ctx context.Context, request *resource.UpdateRequest) 
 
 	// Parse properties from JSON for both prior and desired states
 	var priorProperties, desiredProperties map[string]any
-	if err := json.Unmarshal(request.PriorState.Properties, &priorProperties); err != nil {
+	if err := json.Unmarshal(request.PriorProperties, &priorProperties); err != nil {
 		return nil, fmt.Errorf("failed to parse prior state properties: %w", err)
 	}
-	if err := json.Unmarshal(request.DesiredState.Properties, &desiredProperties); err != nil {
+	if err := json.Unmarshal(request.DesiredProperties, &desiredProperties); err != nil {
 		return nil, fmt.Errorf("failed to parse desired state properties: %w", err)
 	}
 
@@ -425,7 +425,7 @@ func (r RecordSet) Delete(ctx context.Context, request *resource.DeleteRequest) 
 
 	// Always read the current record before attempting delete to get the exact state
 	readRes, err := r.Read(ctx, &resource.ReadRequest{
-		NativeID: *request.NativeID,
+		NativeID: request.NativeID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to read record before delete: %w", err)
@@ -437,7 +437,7 @@ func (r RecordSet) Delete(ctx context.Context, request *resource.DeleteRequest) 
 			ProgressResult: &resource.ProgressResult{
 				Operation:       resource.OperationDelete,
 				OperationStatus: resource.OperationStatusSuccess,
-				NativeID:        *request.NativeID,
+				NativeID:        request.NativeID,
 			},
 		}, nil
 	}
@@ -507,7 +507,6 @@ func (r RecordSet) Delete(ctx context.Context, request *resource.DeleteRequest) 
 			Operation:          resource.OperationDelete,
 			OperationStatus:    resource.OperationStatusInProgress,
 			RequestID:          *result.ChangeInfo.Id,
-			ResourceType:       request.ResourceType,
 			NativeID:           meta.NativeID(),
 			ResourceProperties: json.RawMessage{},
 		},
@@ -542,7 +541,7 @@ func (r RecordSet) Status(ctx context.Context, request *resource.StatusRequest) 
 			readRes, readErr := r.Read(ctx, &resource.ReadRequest{
 				NativeID:     request.NativeID,
 				ResourceType: request.ResourceType,
-				Target:       request.Target,
+				TargetConfig: request.TargetConfig,
 			})
 			if readErr == nil && readRes != nil {
 				resourceProperties = json.RawMessage(readRes.Properties)
@@ -555,7 +554,6 @@ func (r RecordSet) Status(ctx context.Context, request *resource.StatusRequest) 
 			OperationStatus:    status,
 			RequestID:          *result.ChangeInfo.Id,
 			NativeID:           request.NativeID,
-			ResourceType:       request.ResourceType,
 			ResourceProperties: resourceProperties,
 		},
 	}, nil
@@ -663,17 +661,13 @@ func (r *RecordSet) List(ctx context.Context, request *resource.ListRequest) (*r
 		return nil, fmt.Errorf("failed to list resource record sets: %w", err)
 	}
 
-	var resources []resource.Resource
+	var nativeIDs []string
 	for _, rrs := range res.ResourceRecordSets {
-		resources = append(resources, resource.Resource{
-			NativeID:   nativeID(request.AdditionalProperties["HostedZoneId"], *rrs.Name, string(rrs.Type)),
-			Properties: "{}", // Properties are ignored in list, we rely on a subsequent read to fetch them
-		})
+		nativeIDs = append(nativeIDs, nativeID(request.AdditionalProperties["HostedZoneId"], *rrs.Name, string(rrs.Type)))
 	}
 
 	return &resource.ListResult{
-		ResourceType:  request.ResourceType,
-		Resources:     resources,
+		NativeIDs:     nativeIDs,
 		NextPageToken: res.NextRecordName,
 	}, nil
 }

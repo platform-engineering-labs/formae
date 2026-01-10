@@ -22,6 +22,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	pkgresource "github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -252,7 +253,7 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 	}
 }
 
-func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *pkgresource.ProgressResult) resource_update.OperationType {
+func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *plugin.TrackedProgress) resource_update.OperationType {
 	switch pluginOperation {
 	case pkgresource.OperationCreate:
 		return resource_update.OperationCreate

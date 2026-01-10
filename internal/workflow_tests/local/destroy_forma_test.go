@@ -31,7 +31,6 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.ResourceType,
 				}}, nil
 			},
 		}

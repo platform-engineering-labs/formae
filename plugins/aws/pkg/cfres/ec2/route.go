@@ -83,7 +83,7 @@ func (r Route) Create(ctx context.Context, request *resource.CreateRequest) (*re
 	client := ec2.NewFromConfig(cfg)
 
 	var props map[string]any
-	if err := json.Unmarshal(request.DesiredState.Properties, &props); err != nil {
+	if err := json.Unmarshal(request.Properties, &props); err != nil {
 		return nil, fmt.Errorf("failed to parse properties: %w", err)
 	}
 
@@ -156,7 +156,7 @@ func (r Route) Delete(ctx context.Context, request *resource.DeleteRequest) (*re
 	client := ec2.NewFromConfig(cfg)
 
 	readRes, err := r.Read(ctx, &resource.ReadRequest{
-		NativeID: *request.NativeID,
+		NativeID: request.NativeID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to read route before delete: %w", err)
@@ -167,14 +167,14 @@ func (r Route) Delete(ctx context.Context, request *resource.DeleteRequest) (*re
 			ProgressResult: &resource.ProgressResult{
 				Operation:       resource.OperationDelete,
 				OperationStatus: resource.OperationStatusSuccess,
-				NativeID:        *request.NativeID,
+				NativeID:        request.NativeID,
 			},
 		}, nil
 	}
 
-	parts := strings.SplitN(*request.NativeID, "|", 3)
+	parts := strings.SplitN(request.NativeID, "|", 3)
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid NativeID format: expected RouteTableId|DestinationCidrBlock|target, got: %s", *request.NativeID)
+		return nil, fmt.Errorf("invalid NativeID format: expected RouteTableId|DestinationCidrBlock|target, got: %s", request.NativeID)
 	}
 
 	routeTableID := parts[0]
@@ -295,6 +295,6 @@ func (r Route) Read(ctx context.Context, request *resource.ReadRequest) (*resour
 func (r Route) List(ctx context.Context, request *resource.ListRequest) (*resource.ListResult, error) {
 	// Future feature
 	return &resource.ListResult{
-		Resources: []resource.Resource{},
+		NativeIDs: []string{},
 	}, nil
 }

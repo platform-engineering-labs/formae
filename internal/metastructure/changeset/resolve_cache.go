@@ -130,14 +130,14 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 			ExistingResource: loadResourceResult.Resource,
 			Resource:         loadResourceResult.Resource,
 			NativeID:         loadResourceResult.Resource.NativeID,
-			Target:           loadResourceResult.Target,
+			TargetConfig:     loadResourceResult.Target.Config,
 		})
 
 	if err != nil {
 		r.Log().Error("Failed to read resource", "resourceURI", resourceURI, "error", err)
 		return "", fmt.Errorf("failed to read resource: %w", err)
 	}
-	progress, ok := progressResult.(resource.ProgressResult)
+	progress, ok := progressResult.(plugin.TrackedProgress)
 	if !ok {
 		r.Log().Error("Unexpected result type from plugin operator", "resultType", reflect.TypeOf(progressResult))
 		return "", fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)

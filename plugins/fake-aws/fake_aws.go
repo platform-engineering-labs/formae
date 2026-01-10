@@ -146,8 +146,7 @@ func (s FakeAWS) Create(context context.Context, request *resource.CreateRequest
 			OperationStatus:    resource.OperationStatusSuccess,
 			RequestID:          "1234",
 			NativeID:           "5678",
-			ResourceType:       request.DesiredState.Type,
-			ResourceProperties: request.DesiredState.Properties,
+			ResourceProperties: request.Properties,
 		},
 	}, nil
 }
@@ -181,14 +180,13 @@ func (s FakeAWS) Delete(context context.Context, request *resource.DeleteRequest
 		}
 	}
 
-	if request.NativeID != nil {
+	if request.NativeID != "" {
 		return &resource.DeleteResult{
 			ProgressResult: &resource.ProgressResult{
 				Operation:       resource.OperationDelete,
 				OperationStatus: resource.OperationStatusSuccess,
 				RequestID:       "delete-123",
-				NativeID:        *request.NativeID,
-				ResourceType:    request.ResourceType,
+				NativeID:        request.NativeID,
 			},
 		}, nil
 	}
@@ -249,17 +247,7 @@ func (s FakeAWS) List(context context.Context, request *resource.ListRequest) (*
 	}
 
 	return &resource.ListResult{
-		ResourceType: request.ResourceType,
-		Resources: []resource.Resource{
-			{
-				NativeID:   "1234",
-				Properties: "{}",
-			},
-			{
-				NativeID:   "5678",
-				Properties: "{}",
-			},
-		},
+		NativeIDs: []string{"1234", "5678"},
 	}, nil
 }
 

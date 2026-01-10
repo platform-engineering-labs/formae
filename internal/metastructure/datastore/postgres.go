@@ -30,7 +30,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	metautil "github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 // tracer is used for creating spans within datastore methods to group SQL queries
@@ -2077,7 +2077,7 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 }
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress resource.ProgressResult) error {
+func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -2089,7 +2089,7 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 		return fmt.Errorf("failed to load existing progress: %w", err)
 	}
 
-	var existingProgress []resource.ProgressResult
+	var existingProgress []plugin.TrackedProgress
 	if len(existingProgressJSON) > 0 {
 		if err := json.Unmarshal(existingProgressJSON, &existingProgress); err != nil {
 			return fmt.Errorf("failed to unmarshal existing progress: %w", err)

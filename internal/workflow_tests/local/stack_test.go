@@ -33,7 +33,6 @@ func TestMetastructure_StoreNewStack(t *testing.T) {
 					OperationStatus: resource.OperationStatusSuccess,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.DesiredState.Type,
 				}}, nil
 			},
 		}
@@ -98,8 +97,7 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 					OperationStatus:    resource.OperationStatusSuccess,
 					RequestID:          "1234",
 					NativeID:           "5678",
-					ResourceType:       request.DesiredState.Type,
-					ResourceProperties: request.DesiredState.Properties,
+					ResourceProperties: request.Properties,
 				}}, nil
 			},
 			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
@@ -108,7 +106,6 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 					OperationStatus: resource.OperationStatusInProgress,
 					RequestID:       "1234",
 					NativeID:        "5678",
-					ResourceType:    request.DesiredState.Type,
 				}}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -124,7 +121,6 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 						OperationStatus:    resource.OperationStatusSuccess,
 						RequestID:          "1234",
 						NativeID:           "5678",
-						ResourceType:       request.ResourceType,
 						ResourceProperties: json.RawMessage(`{"foo":"barbar","baz": "qux", "a":[3,4,2,7,8]}`),
 					},
 				}, nil
@@ -228,8 +224,7 @@ func TestMetastructure_StorePatchAddResourceToStack(t *testing.T) {
 					Operation:          resource.OperationCreate,
 					OperationStatus:    resource.OperationStatusSuccess,
 					NativeID:           "1234",
-					ResourceType:       request.DesiredState.Type,
-					ResourceProperties: request.DesiredState.Properties,
+					ResourceProperties: request.Properties,
 				}}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
@@ -243,8 +238,7 @@ func TestMetastructure_StorePatchAddResourceToStack(t *testing.T) {
 					Operation:          resource.OperationUpdate,
 					OperationStatus:    resource.OperationStatusSuccess,
 					NativeID:           "1234",
-					ResourceType:       request.DesiredState.Type,
-					ResourceProperties: request.DesiredState.Properties,
+					ResourceProperties: request.DesiredProperties,
 				}}, nil
 			},
 		}

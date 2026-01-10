@@ -29,7 +29,7 @@ func TestMetastructure_ApplyFormaHashesOpaqueValues(t *testing.T) {
 		var receivedProperties json.RawMessage
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				receivedProperties = request.DesiredState.Properties
+				receivedProperties = request.Properties
 				return &resource.CreateResult{
 					ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationCreate,
