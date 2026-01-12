@@ -347,7 +347,7 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 	// Step 2: Send Create request to PluginOperator
 	createReq := plugin.CreateResource{
 		Namespace: req.Namespace,
-		Resource: model.Resource{
+		DesiredState: model.Resource{
 			Type:       req.ResourceType,
 			Label:      req.Label,
 			Properties: req.Properties,

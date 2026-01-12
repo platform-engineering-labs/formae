@@ -95,7 +95,7 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 				// Check specific resources
 				resourceLabels := make(map[string]bool)
 				for _, update := range updates {
-					resourceLabels[update.Resource.Label] = true
+					resourceLabels[update.DesiredState.Label] = true
 				}
 				assert.True(t, resourceLabels["test-instance"])
 				assert.True(t, resourceLabels["test-vpc"])
@@ -183,7 +183,7 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 			expectedCount: 1,
 			validate: func(t *testing.T, updates []ResourceUpdate) {
 				assert.Len(t, updates, 1)
-				assert.Equal(t, "test-instance", updates[0].Resource.Label)
+				assert.Equal(t, "test-instance", updates[0].DesiredState.Label)
 				assert.Equal(t, OperationDelete, updates[0].Operation)
 				assert.Equal(t, "existing-res-stack", updates[0].StackLabel)
 			},
@@ -234,7 +234,7 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 			expectedCount: 1,
 			validate: func(t *testing.T, updates []ResourceUpdate) {
 				assert.Len(t, updates, 1)
-				assert.Equal(t, "test-instance", updates[0].Resource.Label)
+				assert.Equal(t, "test-instance", updates[0].DesiredState.Label)
 				assert.Equal(t, OperationDelete, updates[0].Operation)
 			},
 		},
@@ -302,7 +302,7 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 
 				resourcesByStack := make(map[string]string)
 				for _, update := range updates {
-					resourcesByStack[update.Resource.Label] = update.StackLabel
+					resourcesByStack[update.DesiredState.Label] = update.StackLabel
 				}
 
 				assert.Equal(t, "stack-1", resourcesByStack["instance-1"])
@@ -407,10 +407,10 @@ func TestGenerateResourceUpdatesForDestroy_NewResourceUpdateForDestroy(t *testin
 
 	update := updates[0]
 	assert.Equal(t, OperationDelete, update.Operation)
-	assert.Equal(t, "test-instance", update.Resource.Label)
-	assert.Equal(t, "AWS::EC2::Instance", update.Resource.Type)
-	assert.Equal(t, "test-stack", update.Resource.Stack)
-	assert.Equal(t, "test-target", update.Resource.Target)
+	assert.Equal(t, "test-instance", update.DesiredState.Label)
+	assert.Equal(t, "AWS::EC2::Instance", update.DesiredState.Type)
+	assert.Equal(t, "test-stack", update.DesiredState.Stack)
+	assert.Equal(t, "test-target", update.DesiredState.Target)
 }
 
 func TestGenerateResourceUpdatesForDestroy_WithDependencies(t *testing.T) {
@@ -503,7 +503,7 @@ func TestGenerateResourceUpdatesForDestroy_WithDependencies(t *testing.T) {
 	// Check that dependencies are properly preserved for destroy ordering
 	updatesByLabel := make(map[string]ResourceUpdate)
 	for _, update := range updates {
-		updatesByLabel[update.Resource.Label] = update
+		updatesByLabel[update.DesiredState.Label] = update
 	}
 
 	// Instance should still have its dependency on subnet (for destroy, dependents are deleted first)
@@ -588,7 +588,7 @@ func TestGenerateResourceUpdatesForDestroy_WithCrossStackDependencies(t *testing
 
 	update := updates[0]
 	assert.Equal(t, OperationDelete, update.Operation)
-	assert.Equal(t, "app-instance", update.Resource.Label)
+	assert.Equal(t, "app-instance", update.DesiredState.Label)
 	assert.Equal(t, "compute", update.StackLabel)
 
 	// Cross-stack dependency should be preserved
@@ -665,7 +665,7 @@ func TestGenerateResourceUpdatesForDestroy_PartialResourcesWithDependencies(t *t
 
 	update := updates[0]
 	assert.Equal(t, OperationDelete, update.Operation)
-	assert.Equal(t, "web-instance", update.Resource.Label)
+	assert.Equal(t, "web-instance", update.DesiredState.Label)
 	assert.Equal(t, "infrastructure", update.StackLabel)
 
 	// Dependency on subnet should be preserved (external to this destroy operation)

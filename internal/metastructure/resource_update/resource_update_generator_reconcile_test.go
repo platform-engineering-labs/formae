@@ -72,7 +72,7 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				// Check specific resources
 				resourceLabels := make(map[string]bool)
 				for _, update := range updates {
-					resourceLabels[update.Resource.Label] = true
+					resourceLabels[update.DesiredState.Label] = true
 				}
 				assert.True(t, resourceLabels["test-instance"])
 				assert.True(t, resourceLabels["test-vpc"])
@@ -153,10 +153,10 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				}
 
 				createOp := operationsByType[OperationCreate]
-				assert.Equal(t, "new-instance", createOp.Resource.Label)
+				assert.Equal(t, "new-instance", createOp.DesiredState.Label)
 
 				deleteOp := operationsByType[OperationDelete]
-				assert.Equal(t, "existing-instance", deleteOp.Resource.Label)
+				assert.Equal(t, "existing-instance", deleteOp.DesiredState.Label)
 			},
 		},
 		{
@@ -192,8 +192,8 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				resourcesByStack := make(map[string]string)
 				operationsByResource := make(map[string]OperationType)
 				for _, update := range updates {
-					resourcesByStack[update.Resource.Label] = update.StackLabel
-					operationsByResource[update.Resource.Label] = update.Operation
+					resourcesByStack[update.DesiredState.Label] = update.StackLabel
+					operationsByResource[update.DesiredState.Label] = update.Operation
 				}
 
 				assert.Equal(t, "stack-1", resourcesByStack["instance-1"])
@@ -250,7 +250,7 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 
 				targetsByResource := make(map[string]string)
 				for _, update := range updates {
-					targetsByResource[update.Resource.Label] = update.Resource.Target
+					targetsByResource[update.DesiredState.Label] = update.DesiredState.Target
 					assert.Equal(t, OperationCreate, update.Operation)
 				}
 
@@ -350,10 +350,10 @@ func TestGenerateResourceUpdatesForReconcile_NewResourceUpdateForCreate(t *testi
 
 	update := updates[0]
 	assert.Equal(t, OperationCreate, update.Operation)
-	assert.Equal(t, "test-instance", update.Resource.Label)
-	assert.Equal(t, "AWS::EC2::Instance", update.Resource.Type)
-	assert.Equal(t, "test-stack", update.Resource.Stack)
-	assert.Equal(t, "test-target", update.Resource.Target)
+	assert.Equal(t, "test-instance", update.DesiredState.Label)
+	assert.Equal(t, "AWS::EC2::Instance", update.DesiredState.Type)
+	assert.Equal(t, "test-stack", update.DesiredState.Stack)
+	assert.Equal(t, "test-target", update.DesiredState.Target)
 	assert.Equal(t, ResourceUpdateStateNotStarted, update.State)
 }
 
@@ -508,34 +508,34 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 	// Check delete operations
 	deletesByLabel := make(map[string]ResourceUpdate)
 	for _, deleteUpdate := range updatesByOperation[OperationDelete] {
-		deletesByLabel[deleteUpdate.Resource.Label] = deleteUpdate
+		deletesByLabel[deleteUpdate.DesiredState.Label] = deleteUpdate
 	}
 
 	vpcDelete := deletesByLabel["test-vpc"]
-	assert.Equal(t, "AWS::EC2::VPC", vpcDelete.Resource.Type)
+	assert.Equal(t, "AWS::EC2::VPC", vpcDelete.DesiredState.Type)
 	assert.Equal(t, "infrastructure", vpcDelete.StackLabel)
-	assert.JSONEq(t, string(existingVpc.Properties), string(vpcDelete.Resource.Properties))
+	assert.JSONEq(t, string(existingVpc.Properties), string(vpcDelete.DesiredState.Properties))
 
 	subnetDelete := deletesByLabel["test-subnet"]
-	assert.Equal(t, "AWS::EC2::Subnet", subnetDelete.Resource.Type)
+	assert.Equal(t, "AWS::EC2::Subnet", subnetDelete.DesiredState.Type)
 	assert.Equal(t, "infrastructure", subnetDelete.StackLabel)
-	assert.JSONEq(t, string(existingSubnet.Properties), string(subnetDelete.Resource.Properties))
+	assert.JSONEq(t, string(existingSubnet.Properties), string(subnetDelete.DesiredState.Properties))
 
 	// Check create operation (should only be VPC)
 	createsByLabel := make(map[string]ResourceUpdate)
 	for _, createUpdate := range updatesByOperation[OperationCreate] {
-		createsByLabel[createUpdate.Resource.Label] = createUpdate
+		createsByLabel[createUpdate.DesiredState.Label] = createUpdate
 	}
 
 	vpcCreate := createsByLabel["test-vpc"]
-	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.Resource.Type)
+	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.DesiredState.Type)
 	assert.Equal(t, "infrastructure", vpcCreate.StackLabel)
-	assert.JSONEq(t, string(newVpc.Properties), string(vpcCreate.Resource.Properties))
+	assert.JSONEq(t, string(newVpc.Properties), string(vpcCreate.DesiredState.Properties))
 
 	subnetCreate := createsByLabel["test-subnet"]
-	assert.Equal(t, "AWS::EC2::Subnet", subnetCreate.Resource.Type)
+	assert.Equal(t, "AWS::EC2::Subnet", subnetCreate.DesiredState.Type)
 	assert.Equal(t, "infrastructure", subnetCreate.StackLabel)
-	assert.JSONEq(t, string(existingSubnet.Properties), string(subnetCreate.Resource.Properties))
+	assert.JSONEq(t, string(existingSubnet.Properties), string(subnetCreate.DesiredState.Properties))
 
 	assert.Equal(t, vpcCreate.GroupID, vpcDelete.GroupID, "VPC create and delete should have same group ID")
 	assert.Equal(t, subnetCreate.GroupID, subnetDelete.GroupID, "Subnet create and delete should have same group ID")
@@ -556,14 +556,14 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 	}
 
 	// Verify that CIDR block changed in the VPC create operation
-	vpcCreateParsed := gjson.Parse(string(vpcCreate.Resource.Properties))
+	vpcCreateParsed := gjson.Parse(string(vpcCreate.DesiredState.Properties))
 	assert.Equal(t, "172.16.0.0/16", vpcCreateParsed.Get("CidrBlock").String())
 
 	// Verify that old CIDR blocks are preserved in delete operations
-	vpcDeleteParsed := gjson.Parse(string(vpcDelete.Resource.Properties))
+	vpcDeleteParsed := gjson.Parse(string(vpcDelete.DesiredState.Properties))
 	assert.Equal(t, "10.0.0.0/16", vpcDeleteParsed.Get("CidrBlock").String())
 
-	subnetDeleteParsed := gjson.Parse(string(subnetDelete.Resource.Properties))
+	subnetDeleteParsed := gjson.Parse(string(subnetDelete.DesiredState.Properties))
 	assert.Equal(t, "10.0.1.0/24", subnetDeleteParsed.Get("CidrBlock").String())
 
 	// Verify dependencies are preserved
@@ -720,29 +720,29 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 	// Check delete operations
 	deletesByLabel := make(map[string]ResourceUpdate)
 	for _, deleteUpdate := range updatesByOperation[OperationDelete] {
-		deletesByLabel[deleteUpdate.Resource.Label] = deleteUpdate
+		deletesByLabel[deleteUpdate.DesiredState.Label] = deleteUpdate
 	}
 
 	vpcDelete := deletesByLabel["test-vpc"]
-	assert.Equal(t, "AWS::EC2::VPC", vpcDelete.Resource.Type)
+	assert.Equal(t, "AWS::EC2::VPC", vpcDelete.DesiredState.Type)
 	assert.Equal(t, "infrastructure", vpcDelete.StackLabel)
-	assert.JSONEq(t, string(existingVpc.Properties), string(vpcDelete.Resource.Properties))
+	assert.JSONEq(t, string(existingVpc.Properties), string(vpcDelete.DesiredState.Properties))
 
 	// Check create operation (should only be VPC)
 	createsByLabel := make(map[string]ResourceUpdate)
 	for _, createUpdate := range updatesByOperation[OperationCreate] {
-		createsByLabel[createUpdate.Resource.Label] = createUpdate
+		createsByLabel[createUpdate.DesiredState.Label] = createUpdate
 	}
 
 	vpcCreate := createsByLabel["test-vpc"]
-	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.Resource.Type)
+	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.DesiredState.Type)
 	assert.Equal(t, "infrastructure", vpcCreate.StackLabel)
-	assert.JSONEq(t, string(newVpc.Properties), string(vpcCreate.Resource.Properties))
+	assert.JSONEq(t, string(newVpc.Properties), string(vpcCreate.DesiredState.Properties))
 
 	subnetCreate := createsByLabel["test-subnet"]
-	assert.Equal(t, "AWS::EC2::Subnet", subnetCreate.Resource.Type)
+	assert.Equal(t, "AWS::EC2::Subnet", subnetCreate.DesiredState.Type)
 	assert.Equal(t, "infrastructure", subnetCreate.StackLabel)
-	assert.JSONEq(t, string(newSubnet.Properties), string(subnetCreate.Resource.Properties))
+	assert.JSONEq(t, string(newSubnet.Properties), string(subnetCreate.DesiredState.Properties))
 
 	// Verify that VPC delete and create have the same group ID (VPC replacement)
 	assert.Equal(t, vpcDelete.GroupID, vpcCreate.GroupID, "VPC delete and create should have same group ID")
@@ -756,14 +756,14 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 	}
 
 	// Verify that CIDR block changed in the VPC create operation
-	vpcCreateParsed := gjson.Parse(string(vpcCreate.Resource.Properties))
+	vpcCreateParsed := gjson.Parse(string(vpcCreate.DesiredState.Properties))
 	assert.Equal(t, "172.16.0.0/16", vpcCreateParsed.Get("CidrBlock").String())
 
 	// Verify that old CIDR blocks are preserved in delete operations
-	vpcDeleteParsed := gjson.Parse(string(vpcDelete.Resource.Properties))
+	vpcDeleteParsed := gjson.Parse(string(vpcDelete.DesiredState.Properties))
 	assert.Equal(t, "10.0.0.0/16", vpcDeleteParsed.Get("CidrBlock").String())
 
-	subnetDeleteParsed := gjson.Parse(string(subnetCreate.Resource.Properties))
+	subnetDeleteParsed := gjson.Parse(string(subnetCreate.DesiredState.Properties))
 	assert.Equal(t, "10.0.1.0/24", subnetDeleteParsed.Get("CidrBlock").String())
 
 	// Verify dependencies are preserved
@@ -910,8 +910,8 @@ func TestResourceUpdatesForReconcile_GeneratesUpdateOperationsForUnmanagedResour
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
-	assert.Equal(t, "my-s3-bucket", updates[0].Resource.Label)
-	assert.Equal(t, true, updates[0].Resource.Managed)
+	assert.Equal(t, "my-s3-bucket", updates[0].DesiredState.Label)
+	assert.Equal(t, true, updates[0].DesiredState.Managed)
 }
 
 // TODO(naxty): are the remaining tests in this file needed?
@@ -965,7 +965,7 @@ func TestGenerateResourceUpdatesForReconcile_Create(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
-	assert.Equal(t, "my-s3-bucket", updates[0].Resource.Label)
+	assert.Equal(t, "my-s3-bucket", updates[0].DesiredState.Label)
 }
 
 func TestGenerateResourceUpdatesForReconcile_StackExists_NoChanges(t *testing.T) {
@@ -1114,7 +1114,7 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationDelete, updates[0].Operation)
-	assert.Equal(t, "my-s3-bucket-delete", updates[0].Resource.Label)
+	assert.Equal(t, "my-s3-bucket-delete", updates[0].DesiredState.Label)
 }
 
 func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
@@ -1302,8 +1302,8 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 	deleteUpdate := operationsByType[OperationDelete]
 	createUpdate := operationsByType[OperationCreate]
 
-	assert.Equal(t, "my-s3-bucket", deleteUpdate.Resource.Label)
-	assert.Equal(t, "my-s3-bucket", createUpdate.Resource.Label)
+	assert.Equal(t, "my-s3-bucket", deleteUpdate.DesiredState.Label)
+	assert.Equal(t, "my-s3-bucket", createUpdate.DesiredState.Label)
 
 	// Should have same group ID for replacement
 	assert.NotEmpty(t, deleteUpdate.GroupID)

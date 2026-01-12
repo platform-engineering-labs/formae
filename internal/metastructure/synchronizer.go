@@ -204,7 +204,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	// Filter out resources whose plugins aren't registered yet
 	availableResourceUpdates := make([]resource_update.ResourceUpdate, 0, len(allResourceUpdates))
 	for _, update := range allResourceUpdates {
-		namespace := update.Resource.Namespace()
+		namespace := update.DesiredState.Namespace()
 
 		// Check if plugin is available via PluginCoordinator
 		response, err := proc.Call(
@@ -241,7 +241,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 
 	var resourcesToSynchronize []pkgmodel.Resource
 	for _, update := range allResourceUpdates {
-		resourcesToSynchronize = append(resourcesToSynchronize, update.Resource)
+		resourcesToSynchronize = append(resourcesToSynchronize, update.DesiredState)
 	}
 	syncCommand := forma_command.NewFormaCommand(
 		&pkgmodel.Forma{

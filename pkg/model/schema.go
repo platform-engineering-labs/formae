@@ -48,10 +48,6 @@ func (s Schema) CreateOnly() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.CreateOnly }, true)
 }
 
-func (s Schema) Metadata() []string {
-	return filterFields(s, func(h FieldHint) bool { return h.Persist }, true)
-}
-
 func (s Schema) Required() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.Required }, true)
 }

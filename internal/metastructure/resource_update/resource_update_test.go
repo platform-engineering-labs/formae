@@ -304,7 +304,7 @@ func TestResolveValue_UpdatesResolvedValueInProperties(t *testing.T) {
 	resourceKsuid := util.NewID()
 	resolvableUri := pkgmodel.FormaeURI(fmt.Sprintf("formae://%s#/Id", resourceKsuid))
 	resourceUpdate := &ResourceUpdate{
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Properties: json.RawMessage(fmt.Sprintf(`{"resolvable": {"$ref":"formae://%s#/Id"}}`, resourceKsuid)),
 		},
 	}
@@ -312,7 +312,7 @@ func TestResolveValue_UpdatesResolvedValueInProperties(t *testing.T) {
 	assert.NoError(t, err)
 
 	expectedJson := fmt.Sprintf(`{"resolvable":{"$ref":"formae://%s#/Id","$value":"12345"}}`, resourceKsuid)
-	assert.JSONEq(t, expectedJson, string(resourceUpdate.Resource.Properties))
+	assert.JSONEq(t, expectedJson, string(resourceUpdate.DesiredState.Properties))
 }
 
 func TestUpdateState_InProgress(t *testing.T) {

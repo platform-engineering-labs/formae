@@ -140,7 +140,7 @@ func (p *ResourceUpdatePipeline) connectDeleteToCreate(allOps []resource_update.
 	for i := range allOps {
 		op := &allOps[i]
 		// Create key based only on stack label and type
-		resourceKey := fmt.Sprintf("%s/%s/%s", op.Resource.Stack, op.Resource.Label, op.Resource.Type)
+		resourceKey := fmt.Sprintf("%s/%s/%s", op.DesiredState.Stack, op.DesiredState.Label, op.DesiredState.Type)
 		if op.Operation == resource_update.OperationDelete {
 			deleteOps[resourceKey] = op
 		}
@@ -342,7 +342,7 @@ func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_
 		// Check if all upstream dependencies are satisfied
 		if len(group.UpstreamGroups) == 0 && !group.Done() && len(group.Updates) > 0 {
 			nextUpdate, updateKey := group.NextUpdate()
-			if total < max && nextUpdate != nil && nextUpdate.Resource.Namespace() == namespace &&
+			if total < max && nextUpdate != nil && nextUpdate.DesiredState.Namespace() == namespace &&
 				nextUpdate.State == resource_update.ResourceUpdateStateNotStarted {
 				// Check if we haven't already tracked this update
 				if !c.trackedUpdates[updateKey] {
@@ -377,7 +377,7 @@ func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 			if nextUpdate != nil && nextUpdate.State == resource_update.ResourceUpdateStateNotStarted {
 				// Check if we haven't already tracked this update
 				if !c.trackedUpdates[updateKey] {
-					ns := string(nextUpdate.Resource.Namespace())
+					ns := string(nextUpdate.DesiredState.Namespace())
 					if _, ok := result[ns]; !ok {
 						result[ns] = 1
 					} else {
@@ -436,7 +436,7 @@ func (c *Changeset) UpdatePipeline(update *resource_update.ResourceUpdate) ([]*r
 
 		if len(failedUpdates) > 1 {
 			slog.Debug("Cascading failure detected",
-				"originalFailure", update.Resource.Label,
+				"originalFailure", update.DesiredState.Label,
 				"cascadingCount", len(failedUpdates)-1)
 		}
 

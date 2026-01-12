@@ -34,7 +34,7 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationCreate,
 						OperationStatus:    resource.OperationStatusSuccess,
-						NativeID:           request.Resource.Label,
+						NativeID:           request.DesiredState.Label,
 						ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
 					},
 				}, nil

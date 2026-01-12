@@ -169,29 +169,29 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 	// Check delete operations
 	deletesByLabel := make(map[string]ResourceUpdate)
 	for _, deleteUpdate := range updatesByOperation[OperationDelete] {
-		deletesByLabel[deleteUpdate.Resource.Label] = deleteUpdate
+		deletesByLabel[deleteUpdate.DesiredState.Label] = deleteUpdate
 	}
 
 	vpcDelete := deletesByLabel["test-vpc"]
-	assert.Equal(t, "AWS::EC2::VPC", vpcDelete.Resource.Type)
+	assert.Equal(t, "AWS::EC2::VPC", vpcDelete.DesiredState.Type)
 	assert.Equal(t, "infrastructure", vpcDelete.StackLabel)
-	assert.JSONEq(t, string(existingVpc.Properties), string(vpcDelete.Resource.Properties))
+	assert.JSONEq(t, string(existingVpc.Properties), string(vpcDelete.DesiredState.Properties))
 
 	subnetDelete := deletesByLabel["test-subnet"]
-	assert.Equal(t, "AWS::EC2::Subnet", subnetDelete.Resource.Type)
+	assert.Equal(t, "AWS::EC2::Subnet", subnetDelete.DesiredState.Type)
 	assert.Equal(t, "infrastructure", subnetDelete.StackLabel)
-	assert.JSONEq(t, string(existingSubnet.Properties), string(subnetDelete.Resource.Properties))
+	assert.JSONEq(t, string(existingSubnet.Properties), string(subnetDelete.DesiredState.Properties))
 
 	// Check create operation (should only be VPC)
 	createsByLabel := make(map[string]ResourceUpdate)
 	for _, createUpdate := range updatesByOperation[OperationCreate] {
-		createsByLabel[createUpdate.Resource.Label] = createUpdate
+		createsByLabel[createUpdate.DesiredState.Label] = createUpdate
 	}
 
 	vpcCreate := createsByLabel["test-vpc"]
-	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.Resource.Type)
+	assert.Equal(t, "AWS::EC2::VPC", vpcCreate.DesiredState.Type)
 	assert.Equal(t, "infrastructure", vpcCreate.StackLabel)
-	assert.JSONEq(t, string(newVpc.Properties), string(vpcCreate.Resource.Properties))
+	assert.JSONEq(t, string(newVpc.Properties), string(vpcCreate.DesiredState.Properties))
 
 	// Should not have subnet create
 	_, hasSubnetCreate := createsByLabel["test-subnet"]
@@ -209,14 +209,14 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 	}
 
 	// Verify that CIDR block changed in the VPC create operation
-	vpcCreateParsed := gjson.Parse(string(vpcCreate.Resource.Properties))
+	vpcCreateParsed := gjson.Parse(string(vpcCreate.DesiredState.Properties))
 	assert.Equal(t, "172.16.0.0/16", vpcCreateParsed.Get("CidrBlock").String())
 
 	// Verify that old CIDR blocks are preserved in delete operations
-	vpcDeleteParsed := gjson.Parse(string(vpcDelete.Resource.Properties))
+	vpcDeleteParsed := gjson.Parse(string(vpcDelete.DesiredState.Properties))
 	assert.Equal(t, "10.0.0.0/16", vpcDeleteParsed.Get("CidrBlock").String())
 
-	subnetDeleteParsed := gjson.Parse(string(subnetDelete.Resource.Properties))
+	subnetDeleteParsed := gjson.Parse(string(subnetDelete.DesiredState.Properties))
 	assert.Equal(t, "10.0.1.0/24", subnetDeleteParsed.Get("CidrBlock").String())
 
 	// Verify dependencies are preserved
@@ -394,6 +394,6 @@ func TestResourceUpdatesForPatch_GeneratesUpdateOperationsForUnmanagedResources(
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
-	assert.Equal(t, "my-s3-bucket", updates[0].Resource.Label)
-	assert.Equal(t, true, updates[0].Resource.Managed)
+	assert.Equal(t, "my-s3-bucket", updates[0].DesiredState.Label)
+	assert.Equal(t, true, updates[0].DesiredState.Managed)
 }

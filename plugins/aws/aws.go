@@ -110,8 +110,8 @@ func (a AWS) SchemaForResourceType(resourceType string) (model.Schema, error) {
 
 func (a AWS) Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
 	targetConfig := config.FromTarget(request.Target)
-	if registry.HasProvisioner(request.Resource.Type, resource.OperationCreate) {
-		provisioner := registry.Get(request.Resource.Type, resource.OperationCreate, targetConfig)
+	if registry.HasProvisioner(request.DesiredState.Type, resource.OperationCreate) {
+		provisioner := registry.Get(request.DesiredState.Type, resource.OperationCreate, targetConfig)
 		return provisioner.Create(context, request)
 	}
 
@@ -124,8 +124,8 @@ func (a AWS) Create(context context.Context, request *resource.CreateRequest) (*
 }
 
 func (a AWS) Update(context context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
-	if registry.HasProvisioner(request.Resource.Type, resource.OperationUpdate) {
-		provisioner := registry.Get(request.Resource.Type, resource.OperationUpdate, config.FromTarget(request.Target))
+	if registry.HasProvisioner(request.DesiredState.Type, resource.OperationUpdate) {
+		provisioner := registry.Get(request.DesiredState.Type, resource.OperationUpdate, config.FromTarget(request.Target))
 		return provisioner.Update(context, request)
 	}
 

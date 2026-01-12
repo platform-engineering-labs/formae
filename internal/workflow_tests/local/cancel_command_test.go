@@ -38,9 +38,9 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 					ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusInProgress,
-						RequestID:       "request-" + request.Resource.Label,
-						NativeID:        "native-" + request.Resource.Label,
-						ResourceType:    request.Resource.Type,
+						RequestID:       "request-" + request.DesiredState.Label,
+						NativeID:        "native-" + request.DesiredState.Label,
+						ResourceType:    request.DesiredState.Type,
 						StartTs:         time.Now(),
 						ModifiedTs:      time.Now(),
 						Attempts:        1,
@@ -244,16 +244,16 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 		canceledResources := make([]string, 0)
 
 		for _, ru := range cmd.ResourceUpdates {
-			t.Logf("Resource %s: state=%s", ru.Resource.Label, ru.State)
+			t.Logf("Resource %s: state=%s", ru.DesiredState.Label, ru.State)
 			switch ru.State {
 			case resource_update.ResourceUpdateStateSuccess:
 				successCount++
-				successfulResources = append(successfulResources, ru.Resource.Label)
+				successfulResources = append(successfulResources, ru.DesiredState.Label)
 			case resource_update.ResourceUpdateStateCanceled:
 				canceledCount++
-				canceledResources = append(canceledResources, ru.Resource.Label)
+				canceledResources = append(canceledResources, ru.DesiredState.Label)
 			default:
-				t.Errorf("Unexpected resource state: %s for resource %s", ru.State, ru.Resource.Label)
+				t.Errorf("Unexpected resource state: %s for resource %s", ru.State, ru.DesiredState.Label)
 			}
 		}
 

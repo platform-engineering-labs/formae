@@ -70,7 +70,7 @@ func TestResolveCache(t *testing.T) {
 
 		// store the resource
 		resourceUpdate := &resource_update.ResourceUpdate{
-			Resource: pkgmodel.Resource{
+			DesiredState: pkgmodel.Resource{
 				Label:      "resource-1",
 				Type:       "FakeAWS::S3::Bucket",
 				Properties: json.RawMessage(`{"name":"bucket1"}`),
@@ -112,7 +112,7 @@ func TestResolveCache(t *testing.T) {
 			CommandID: "test-command-1",
 		})
 
-		uri := pkgmodel.NewFormaeURI(resourceUpdate.Resource.Ksuid, "name")
+		uri := pkgmodel.NewFormaeURI(resourceUpdate.DesiredState.Ksuid, "name")
 
 		// resolve the value
 		testutil.Send(m.Node,

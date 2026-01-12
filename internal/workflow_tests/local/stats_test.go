@@ -24,13 +24,13 @@ func TestMetastructure_Stats(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if request.Resource.Label == "test-resource-fail" {
+				if request.DesiredState.Label == "test-resource-fail" {
 					return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusFailure,
 						RequestID:       "1234",
 						NativeID:        "5678",
-						ResourceType:    request.Resource.Type,
+						ResourceType:    request.DesiredState.Type,
 						StatusMessage:   "Simulated failure",
 					}}, nil
 				} else {
@@ -39,7 +39,7 @@ func TestMetastructure_Stats(t *testing.T) {
 						OperationStatus: resource.OperationStatusSuccess,
 						RequestID:       "1234",
 						NativeID:        "5678",
-						ResourceType:    request.Resource.Type,
+						ResourceType:    request.DesiredState.Type,
 					}}, nil
 				}
 			},

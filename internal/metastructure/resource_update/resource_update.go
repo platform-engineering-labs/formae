@@ -54,12 +54,11 @@ const (
 // that may involve multiple plugin operations. For example a replace operation will involve two plugin
 // operations: a delete and a create.
 type ResourceUpdate struct {
-	Resource                 pkgmodel.Resource         `json:"Resource"`
+	DesiredState             pkgmodel.Resource         `json:"Resource"`
 	ResourceTarget           pkgmodel.Target           `json:"ResourceTarget"`
-	ExistingResource         pkgmodel.Resource         `json:"ExistingResource"`
+	PriorState               pkgmodel.Resource         `json:"ExistingResource"`
 	ExistingTarget           pkgmodel.Target           `json:"ExistingTarget"`
 	Operation                OperationType             `json:"Operation"`
-	MetaData                 json.RawMessage           `json:"MetaData"`
 	State                    ResourceUpdateState       `json:"State"`
 	StartTs                  time.Time                 `json:"StartTs"`
 	ModifiedTs               time.Time                 `json:"ModifiedTs"`
@@ -78,7 +77,7 @@ type ResourceUpdate struct {
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {
-	return ru.Resource.URI()
+	return ru.DesiredState.URI()
 }
 
 func (ru *ResourceUpdate) HasResolvables() bool {
@@ -90,12 +89,12 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 }
 
 func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string) error {
-	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.Resource.Properties, value)
+	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
 	if err != nil {
 		slog.Error("Failed to resolve dynamic properties", "error", err)
 		return fmt.Errorf("failed to resolve dynamic properties: %w", err)
 	}
-	ru.Resource.Properties = properties
+	ru.DesiredState.Properties = properties
 	return nil
 }
 
@@ -160,7 +159,7 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 	slog.Debug("Updating resource state for " + string(ru.URI()) + " to " + string(ru.State))
 
 	slog.Debug("Setting NativeID from progress", "nativeID", progress.NativeID, "uri", ru.URI())
-	ru.Resource.NativeID = progress.NativeID
+	ru.DesiredState.NativeID = progress.NativeID
 	if ru.StartTs.IsZero() {
 		ru.StartTs = progress.StartTs
 	}
@@ -284,11 +283,11 @@ func (ru *ResourceUpdate) requiredOperations() []resource.Operation {
 }
 
 func (ru *ResourceUpdate) updateResourceProperties(incomingProperties string) error {
-	return ru.updateProperties(incomingProperties, &ru.Resource.Properties, &ru.Resource.ReadOnlyProperties)
+	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties)
 }
 
 func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties string) error {
-	return ru.updateProperties(incomingProperties, &ru.ExistingResource.Properties, &ru.ExistingResource.ReadOnlyProperties)
+	return ru.updateProperties(incomingProperties, &ru.PriorState.Properties, &ru.PriorState.ReadOnlyProperties)
 }
 
 // updateProperties splits the properties from the plugin read result into regular and read-only,
@@ -307,7 +306,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 
 	// Build a set of schema fields for quick lookup
 	fieldsSet := make(map[string]struct{})
-	for _, field := range ru.Resource.Schema.Fields {
+	for _, field := range ru.DesiredState.Schema.Fields {
 		fieldsSet[field] = struct{}{}
 	}
 
@@ -330,7 +329,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 	}
 
 	// Merge refs from user-provided properties to preserve $ref structures
-	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.Resource.Schema)
+	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.DesiredState.Schema)
 	if mergeErr != nil {
 		slog.Error("Failed to merge refs into properties", "error", mergeErr)
 		return mergeErr

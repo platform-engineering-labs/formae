@@ -39,10 +39,10 @@ func TestStackTransition_Generator(t *testing.T) {
 		vpcUpdate := findUpdateByLabel(updates, "test-vpc")
 		subnetUpdate := findUpdateByLabel(updates, "test-subnet")
 
-		assert.Equal(t, vpc.Ksuid, vpcUpdate.Resource.Ksuid)
-		assert.Equal(t, subnet.Ksuid, subnetUpdate.Resource.Ksuid)
-		assert.Equal(t, "vpc-123", vpcUpdate.Resource.NativeID)
-		assert.Equal(t, "subnet-456", subnetUpdate.Resource.NativeID)
+		assert.Equal(t, vpc.Ksuid, vpcUpdate.DesiredState.Ksuid)
+		assert.Equal(t, subnet.Ksuid, subnetUpdate.DesiredState.Ksuid)
+		assert.Equal(t, "vpc-123", vpcUpdate.DesiredState.NativeID)
+		assert.Equal(t, "subnet-456", subnetUpdate.DesiredState.NativeID)
 	})
 
 	t.Run("unmanaged to existing stack", func(t *testing.T) {
@@ -70,10 +70,10 @@ func TestStackTransition_Generator(t *testing.T) {
 
 		assert.Equal(t, OperationUpdate, vpc2Update.Operation)
 		assert.Equal(t, OperationUpdate, subnet1Update.Operation)
-		assert.Equal(t, unmanagedVpc.Ksuid, vpc2Update.Resource.Ksuid)
-		assert.Equal(t, unmanagedSubnet.Ksuid, subnet1Update.Resource.Ksuid)
-		assert.Equal(t, "vpc-222", vpc2Update.Resource.NativeID)
-		assert.Equal(t, "subnet-111", subnet1Update.Resource.NativeID)
+		assert.Equal(t, unmanagedVpc.Ksuid, vpc2Update.DesiredState.Ksuid)
+		assert.Equal(t, unmanagedSubnet.Ksuid, subnet1Update.DesiredState.Ksuid)
+		assert.Equal(t, "vpc-222", vpc2Update.DesiredState.NativeID)
+		assert.Equal(t, "subnet-111", subnet1Update.DesiredState.NativeID)
 	})
 
 	t.Run("mixed transitions and creates to new stack", func(t *testing.T) {
@@ -96,8 +96,8 @@ func TestStackTransition_Generator(t *testing.T) {
 
 		assert.Equal(t, OperationUpdate, existingUpdate.Operation)
 		assert.Equal(t, OperationCreate, newUpdate.Operation)
-		assert.Equal(t, unmanagedVpc.Ksuid, existingUpdate.Resource.Ksuid)
-		assert.Equal(t, "vpc-existing", existingUpdate.Resource.NativeID)
+		assert.Equal(t, unmanagedVpc.Ksuid, existingUpdate.DesiredState.Ksuid)
+		assert.Equal(t, "vpc-existing", existingUpdate.DesiredState.NativeID)
 	})
 
 	t.Run("mixed transitions and creates to existing stack", func(t *testing.T) {
@@ -129,8 +129,8 @@ func TestStackTransition_Generator(t *testing.T) {
 		assert.Equal(t, OperationUpdate, unmanaged2Update.Operation)
 		assert.Equal(t, OperationCreate, newUpdate.Operation)
 
-		assert.Equal(t, unmanaged1.Ksuid, unmanaged1Update.Resource.Ksuid)
-		assert.Equal(t, unmanaged2.Ksuid, unmanaged2Update.Resource.Ksuid)
+		assert.Equal(t, unmanaged1.Ksuid, unmanaged1Update.DesiredState.Ksuid)
+		assert.Equal(t, unmanaged2.Ksuid, unmanaged2Update.DesiredState.Ksuid)
 	})
 
 	t.Run("multiple resources same type transition simultaneously", func(t *testing.T) {
@@ -156,13 +156,13 @@ func TestStackTransition_Generator(t *testing.T) {
 		vpc2Update := findUpdateByLabel(updates, "vpc-2")
 		vpc3Update := findUpdateByLabel(updates, "vpc-3")
 
-		assert.Equal(t, vpc1.Ksuid, vpc1Update.Resource.Ksuid)
-		assert.Equal(t, vpc2.Ksuid, vpc2Update.Resource.Ksuid)
-		assert.Equal(t, vpc3.Ksuid, vpc3Update.Resource.Ksuid)
+		assert.Equal(t, vpc1.Ksuid, vpc1Update.DesiredState.Ksuid)
+		assert.Equal(t, vpc2.Ksuid, vpc2Update.DesiredState.Ksuid)
+		assert.Equal(t, vpc3.Ksuid, vpc3Update.DesiredState.Ksuid)
 
-		assert.Equal(t, "vpc-111", vpc1Update.Resource.NativeID)
-		assert.Equal(t, "vpc-222", vpc2Update.Resource.NativeID)
-		assert.Equal(t, "vpc-333", vpc3Update.Resource.NativeID)
+		assert.Equal(t, "vpc-111", vpc1Update.DesiredState.NativeID)
+		assert.Equal(t, "vpc-222", vpc2Update.DesiredState.NativeID)
+		assert.Equal(t, "vpc-333", vpc3Update.DesiredState.NativeID)
 	})
 
 	t.Run("parent child dependencies with VPC references", func(t *testing.T) {
@@ -188,13 +188,13 @@ func TestStackTransition_Generator(t *testing.T) {
 		subnet1Update := findUpdateByLabel(updates, "child-subnet-1")
 		subnet2Update := findUpdateByLabel(updates, "child-subnet-2")
 
-		assert.Equal(t, vpc.Ksuid, vpcUpdate.Resource.Ksuid)
-		assert.Equal(t, subnet1.Ksuid, subnet1Update.Resource.Ksuid)
-		assert.Equal(t, subnet2.Ksuid, subnet2Update.Resource.Ksuid)
+		assert.Equal(t, vpc.Ksuid, vpcUpdate.DesiredState.Ksuid)
+		assert.Equal(t, subnet1.Ksuid, subnet1Update.DesiredState.Ksuid)
+		assert.Equal(t, subnet2.Ksuid, subnet2Update.DesiredState.Ksuid)
 
-		assert.Equal(t, "vpc-parent", vpcUpdate.Resource.NativeID)
-		assert.Equal(t, "subnet-child-1", subnet1Update.Resource.NativeID)
-		assert.Equal(t, "subnet-child-2", subnet2Update.Resource.NativeID)
+		assert.Equal(t, "vpc-parent", vpcUpdate.DesiredState.NativeID)
+		assert.Equal(t, "subnet-child-1", subnet1Update.DesiredState.NativeID)
+		assert.Equal(t, "subnet-child-2", subnet2Update.DesiredState.NativeID)
 	})
 }
 
@@ -280,7 +280,7 @@ func assertAllUpdates(t *testing.T, updates []ResourceUpdate, expectedStack stri
 
 func findUpdateByLabel(updates []ResourceUpdate, label string) ResourceUpdate {
 	for _, u := range updates {
-		if u.Resource.Label == label {
+		if u.DesiredState.Label == label {
 			return u
 		}
 	}
