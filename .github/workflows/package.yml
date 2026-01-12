@@ -26,7 +26,7 @@ jobs:
   pkg_pkl:
     runs-on: ubuntu-latest
 
-    if: ${{ contains(fromJSON('["", "all", "pkg_pkl"]'), inputs.pkg_job) && github.actor != 'peldroid' }}
+    if: ${{ contains(fromJSON('["", "all", "pkg_pkl"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
 
     concurrency:
       group: package_pkl
@@ -65,7 +65,7 @@ jobs:
   pkg_linux_arm64:
     runs-on: ubuntu-24.04-arm
 
-    if: ${{ contains(fromJSON('["", "all", "pkg_linux_arm64"]'), inputs.pkg_job) && github.actor != 'peldroid' }}
+    if: ${{ contains(fromJSON('["", "all", "pkg_linux_arm64"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
 
     concurrency:
       group: pkg_linux_arm64
@@ -100,7 +100,7 @@ jobs:
   pkg_linux_x8664:
     runs-on: ubuntu-latest
 
-    if: ${{ contains(fromJSON('["", "all", "pkg_linux_x8664"]'), inputs.pkg_job) && github.actor != 'peldroid' }}
+    if: ${{ contains(fromJSON('["", "all", "pkg_linux_x8664"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
 
     concurrency:
       group: pkg_linux_x8664
@@ -135,7 +135,7 @@ jobs:
   pkg_macos_arm64:
     runs-on: macos-latest
 
-    if: ${{ contains(fromJSON('["", "all", "pkg_macos_arm64"]'), inputs.pkg_job) && github.actor != 'peldroid' }}
+    if: ${{ contains(fromJSON('["", "all", "pkg_macos_arm64"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
 
     concurrency:
       group: pkg_macos_arm64
@@ -170,7 +170,7 @@ jobs:
   pkg_macos_x8664:
     runs-on: macos-15-intel
 
-    if: ${{ contains(fromJSON('["", "all", "pkg_macos_x8664"]'), inputs.pkg_job) && github.actor != 'peldroid' }}
+    if: ${{ contains(fromJSON('["", "all", "pkg_macos_x8664"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
 
     concurrency:
       group: pkg_macos_x8664
