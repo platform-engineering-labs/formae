@@ -560,9 +560,8 @@ func (m *propertyMerger) findMatchingUserElementWithIndex(userArray []gjson.Resu
 		return gjson.Result{Type: gjson.Null}, -1
 
 	default:
-		// Default/Set: match by value (JSON equality after flattening $refs)
-		// Only match elements that have concrete values (not $ref without $value)
-		pluginFlattened := m.flattenElement(pluginElem)
+		// Default/Set: match by comparing user fields against plugin element
+		// Only compare the fields that exist in the user element (plugin may have more fields)
 		for i, userElem := range userArray {
 			if excludeIndices[i] {
 				continue
@@ -571,8 +570,7 @@ func (m *propertyMerger) findMatchingUserElementWithIndex(userArray []gjson.Resu
 			if m.hasUnresolvedRef(userElem) {
 				continue
 			}
-			userFlattened := m.flattenElement(userElem)
-			if userFlattened == pluginFlattened {
+			if m.userElementMatchesPlugin(userElem, pluginElem) {
 				return userElem, i
 			}
 		}
@@ -628,28 +626,77 @@ func (m *propertyMerger) flattenRefValue(val gjson.Result) string {
 	return val.String()
 }
 
-// flattenElement creates a comparable string representation of an element
-// by flattening all $ref objects to their $value
-func (m *propertyMerger) flattenElement(elem gjson.Result) string {
-	if !elem.IsObject() {
-		return elem.Raw
+// userElementMatchesPlugin checks if a user array element matches a plugin array element
+// by comparing only the fields that exist in the user element. The plugin element may have
+// additional fields (e.g., fingerprint, kind, name) that the user didn't specify.
+// For $ref objects in user element, we compare the $value against the plugin's plain value.
+func (m *propertyMerger) userElementMatchesPlugin(userElem, pluginElem gjson.Result) bool {
+	if !userElem.IsObject() || !pluginElem.IsObject() {
+		// For non-objects, do direct comparison after flattening $refs
+		return m.flattenRefValue(userElem) == m.flattenRefValue(pluginElem)
 	}
 
-	// For objects, we need to flatten recursively
-	result := make(map[string]any)
-	elem.ForEach(func(key, val gjson.Result) bool {
-		if val.IsObject() && val.Get("$ref").Exists() {
-			// This is a $ref object - use the $value
-			result[key.String()] = val.Get("$value").Value()
-		} else {
-			result[key.String()] = val.Value()
+	// For objects, check that every field in userElem matches the corresponding field in pluginElem
+	allFieldsMatch := true
+	userElem.ForEach(func(key, userVal gjson.Result) bool {
+		keyStr := key.String()
+		pluginVal := pluginElem.Get(keyStr)
+
+		// If plugin doesn't have this field, it's not a match
+		if !pluginVal.Exists() {
+			allFieldsMatch = false
+			return false
 		}
+
+		// Compare the values (flattening $refs as needed)
+		if !m.valuesMatch(userVal, pluginVal) {
+			allFieldsMatch = false
+			return false
+		}
+
 		return true
 	})
 
-	// Marshal back to JSON for comparison
-	jsonBytes, _ := json.Marshal(result)
-	return string(jsonBytes)
+	return allFieldsMatch
+}
+
+// valuesMatch compares two values, handling $ref objects by comparing their $value
+// against the plugin's plain value. Recursively handles nested objects.
+func (m *propertyMerger) valuesMatch(userVal, pluginVal gjson.Result) bool {
+	// If user value is a $ref object, compare its $value against plugin value
+	if userVal.IsObject() && userVal.Get("$ref").Exists() {
+		userValue := userVal.Get("$value")
+		// If plugin is also a $ref object, compare $values
+		if pluginVal.IsObject() && pluginVal.Get("$ref").Exists() {
+			pluginValue := pluginVal.Get("$value")
+			return userValue.String() == pluginValue.String()
+		}
+		// Plugin is a plain value - compare against user's $value
+		return userValue.String() == pluginVal.String()
+	}
+
+	// If both are objects (but user is not a $ref), recursively compare fields
+	if userVal.IsObject() && pluginVal.IsObject() {
+		return m.userElementMatchesPlugin(userVal, pluginVal)
+	}
+
+	// If both are arrays, compare element by element
+	if userVal.IsArray() && pluginVal.IsArray() {
+		userArray := userVal.Array()
+		pluginArray := pluginVal.Array()
+		if len(userArray) != len(pluginArray) {
+			return false
+		}
+		for i, userItem := range userArray {
+			if !m.valuesMatch(userItem, pluginArray[i]) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// For primitives, compare string representation
+	return userVal.String() == pluginVal.String()
 }
 
 // mergePrimitive handles merging of primitive values

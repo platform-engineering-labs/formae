@@ -725,3 +725,158 @@ func TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays(t *te
 	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", subnetKsuid), subnetworkAfterFinal["$ref"],
 		"subnetwork $ref should be preserved after final merge")
 }
+
+// TestRecordProgress_MergePreservesRefStructuresInArrays tests that $ref structures
+// in arrays are preserved when plugin returns plain string values instead of $ref objects.
+func TestRecordProgress_MergePreservesRefStructuresInArrays(t *testing.T) {
+	// User properties with $ref structures in arrays
+	userProps := `{
+		"name": "my-instance",
+		"disks": [{"boot": true, "source": {"$ref": "formae://disk-ksuid#/selfLink", "$value": "disk-1"}}],
+		"networkInterfaces": [{"network": {"$ref": "formae://network-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet-ksuid#/selfLink", "$value": "subnet-1"}}]
+	}`
+
+	// Plugin returns PLAIN STRINGS, not $ref objects
+	pluginProps := `{
+		"name": "my-instance",
+		"disks": [{"boot": true, "size": "20GB", "source": "disk-1"}],
+		"networkInterfaces": [{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}]
+	}`
+
+	// Expected: plugin fields merged with $ref structures preserved from user
+	expectedProps := `{
+		"name": "my-instance",
+		"disks": [{"boot": true, "size": "20GB", "source": {"$ref": "formae://disk-ksuid#/selfLink", "$value": "disk-1"}}],
+		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet-ksuid#/selfLink", "$value": "subnet-1"}}]
+	}`
+
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted,
+		Resource: pkgmodel.Resource{
+			Properties: json.RawMessage(userProps),
+			Schema:     pkgmodel.Schema{Fields: []string{"name", "disks", "networkInterfaces"}},
+		},
+	}
+
+	progress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		RequestID:          "test-request",
+		StartTs:            util.TimeNow(),
+		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(pluginProps),
+	}
+
+	err := resourceUpdate.RecordProgress(progress)
+	require.NoError(t, err)
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.Resource.Properties))
+}
+
+// TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin tests that when user properties
+// have more array elements than plugin returns, the merged result only contains the elements
+// that the plugin returned. This ensures we don't keep stale/removed elements.
+func TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin(t *testing.T) {
+	// User has 2 networkInterfaces
+	userProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [
+			{"network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}},
+			{"network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2"}}
+		]
+	}`
+
+	// Plugin returns only 1 networkInterface (the first one)
+	pluginProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}]
+	}`
+
+	// Expected: only 1 networkInterface with $ref preserved from user's first element
+	expectedProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}}]
+	}`
+
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted,
+		Resource: pkgmodel.Resource{
+			Properties: json.RawMessage(userProps),
+			Schema:     pkgmodel.Schema{Fields: []string{"name", "networkInterfaces"}},
+		},
+	}
+
+	progress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		RequestID:          "test-request",
+		StartTs:            util.TimeNow(),
+		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(pluginProps),
+	}
+
+	err := resourceUpdate.RecordProgress(progress)
+	require.NoError(t, err)
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.Resource.Properties))
+}
+
+// TestRecordProgress_MergeArrays_PluginReturnsReorderedElements tests that when plugin returns
+// array elements in a different order than user provided, the correct $ref structures are
+// matched and preserved based on value matching, not index position.
+func TestRecordProgress_MergeArrays_PluginReturnsReorderedElements(t *testing.T) {
+	// User: network-1, network-2 (in that order)
+	userProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [
+			{"network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}},
+			{"network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2"}}
+		]
+	}`
+
+	// Plugin returns REVERSED order: network-2 first, then network-1
+	pluginProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [
+			{"name": "nic1", "network": "network-2", "subnetwork": "subnet-2"},
+			{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}
+		]
+	}`
+
+	// Expected: plugin order preserved (2, 1) with correct $ref matched by value
+	expectedProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [
+			{"name": "nic1", "network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2"}},
+			{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}}
+		]
+	}`
+
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted,
+		Resource: pkgmodel.Resource{
+			Properties: json.RawMessage(userProps),
+			Schema:     pkgmodel.Schema{Fields: []string{"name", "networkInterfaces"}},
+		},
+	}
+
+	progress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		RequestID:          "test-request",
+		StartTs:            util.TimeNow(),
+		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(pluginProps),
+	}
+
+	err := resourceUpdate.RecordProgress(progress)
+	require.NoError(t, err)
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.Resource.Properties))
+}
