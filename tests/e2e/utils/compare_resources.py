@@ -28,8 +28,9 @@ IGNORED_PROPERTY_FIELDS: Set[str] = {
     "GroupName",        # EC2 SecurityGroup - AWS generates random names
     "SecurityGroups",   # Security group IDs are deployment-specific
     "SubnetMappings",   # Subnet mappings contain deployment-specific subnet IDs
-     "SourceSecurityGroupOwnerId",
-    "SourceSecurityGroupName"
+    "SourceSecurityGroupOwnerId",
+    "SourceSecurityGroupName",
+    "AvailabilityZone", # Region-specific value that differs between deployments
 }
 
 # Fields that contain AWS resource IDs that should be ignored during comparison
