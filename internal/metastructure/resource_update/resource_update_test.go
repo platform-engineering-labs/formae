@@ -584,7 +584,7 @@ func TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays(t *te
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationCreate,
 		State:     ResourceUpdateStateNotStarted,
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Properties: json.RawMessage(userProps),
 			Schema: pkgmodel.Schema{
 				Fields: []string{"region", "name", "instanceType", "disks", "networkInterfaces", "labels"},
@@ -611,7 +611,7 @@ func TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays(t *te
 
 	// CRITICAL: Verify that $ref structures in arrays are PRESERVED after intermediate progress
 	var propsAfterFirst map[string]any
-	err = json.Unmarshal(resourceUpdate.Resource.Properties, &propsAfterFirst)
+	err = json.Unmarshal(resourceUpdate.DesiredState.Properties, &propsAfterFirst)
 	require.NoError(t, err)
 
 	// Check disks array still has $ref
@@ -693,7 +693,7 @@ func TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays(t *te
 
 	// Verify that $ref structures are STILL preserved after final merge
 	var propsAfterFinal map[string]any
-	err = json.Unmarshal(resourceUpdate.Resource.Properties, &propsAfterFinal)
+	err = json.Unmarshal(resourceUpdate.DesiredState.Properties, &propsAfterFinal)
 	require.NoError(t, err)
 
 	// Check disks array still has $ref after final merge
@@ -753,7 +753,7 @@ func TestRecordProgress_MergePreservesRefStructuresInArrays(t *testing.T) {
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationCreate,
 		State:     ResourceUpdateStateNotStarted,
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Properties: json.RawMessage(userProps),
 			Schema:     pkgmodel.Schema{Fields: []string{"name", "disks", "networkInterfaces"}},
 		},
@@ -772,7 +772,7 @@ func TestRecordProgress_MergePreservesRefStructuresInArrays(t *testing.T) {
 	err := resourceUpdate.RecordProgress(progress)
 	require.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
-	assert.JSONEq(t, expectedProps, string(resourceUpdate.Resource.Properties))
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
 
 // TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin tests that when user properties
@@ -803,7 +803,7 @@ func TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin(t *testing.T) 
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationCreate,
 		State:     ResourceUpdateStateNotStarted,
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Properties: json.RawMessage(userProps),
 			Schema:     pkgmodel.Schema{Fields: []string{"name", "networkInterfaces"}},
 		},
@@ -822,7 +822,7 @@ func TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin(t *testing.T) 
 	err := resourceUpdate.RecordProgress(progress)
 	require.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
-	assert.JSONEq(t, expectedProps, string(resourceUpdate.Resource.Properties))
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
 
 // TestRecordProgress_MergeArrays_PluginReturnsReorderedElements tests that when plugin returns
@@ -859,7 +859,7 @@ func TestRecordProgress_MergeArrays_PluginReturnsReorderedElements(t *testing.T)
 	resourceUpdate := &ResourceUpdate{
 		Operation: OperationCreate,
 		State:     ResourceUpdateStateNotStarted,
-		Resource: pkgmodel.Resource{
+		DesiredState: pkgmodel.Resource{
 			Properties: json.RawMessage(userProps),
 			Schema:     pkgmodel.Schema{Fields: []string{"name", "networkInterfaces"}},
 		},
@@ -878,5 +878,5 @@ func TestRecordProgress_MergeArrays_PluginReturnsReorderedElements(t *testing.T)
 	err := resourceUpdate.RecordProgress(progress)
 	require.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
-	assert.JSONEq(t, expectedProps, string(resourceUpdate.Resource.Properties))
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
