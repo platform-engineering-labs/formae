@@ -79,7 +79,7 @@ func (l *RateLimiter) Init(args ...any) error {
 		// Register in-process plugins
 		for _, plugin := range l.pluginManager.ListResourcePlugins() {
 			ns := (*plugin).Namespace()
-			rateLimit := (*plugin).MaxRequestsPerSecond()
+			rateLimit := (*plugin).Throttling().MaxRequestsPerSecondForNamespace
 			l.buckets[ns] = &TokenBucket{
 				Tokens:     rateLimit,
 				Capacity:   rateLimit,

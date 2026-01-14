@@ -64,8 +64,6 @@ func RegisterSharedEDFTypes() error {
 		ListParam{},          // Used in ListResources
 
 		// 5. Filter types (must be registered before messages that use them)
-		FilterAction(""),
-		ConditionType(""),
 		FilterCondition{},
 		MatchFilter{},
 

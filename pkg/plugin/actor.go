@@ -58,7 +58,7 @@ func (p *PluginActor) Init(args ...any) error {
 	caps := PluginCapabilities{
 		SupportedResources: p.plugin.SupportedResources(),
 		ResourceSchemas:    buildSchemaMap(p.plugin),
-		MatchFilters:       p.plugin.GetMatchFilters(),
+		MatchFilters:       p.plugin.DiscoveryFilters(),
 	}
 
 	compressedCaps, err := CompressCapabilities(caps)
@@ -77,7 +77,7 @@ func (p *PluginActor) Init(args ...any) error {
 	announcement := PluginAnnouncement{
 		Namespace:            p.namespace,
 		NodeName:             string(p.Node().Name()),
-		MaxRequestsPerSecond: p.plugin.MaxRequestsPerSecond(),
+		MaxRequestsPerSecond: p.plugin.Throttling().MaxRequestsPerSecondForNamespace,
 		Capabilities:         compressedCaps,
 	}
 
@@ -126,7 +126,7 @@ func (p *PluginActor) HandleMessage(from gen.PID, message any) error {
 func (p *PluginActor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch request.(type) {
 	case GetFilters:
-		filters := p.plugin.GetMatchFilters()
+		filters := p.plugin.DiscoveryFilters()
 		return GetFiltersResponse{Filters: filters}, nil
 
 	default:

@@ -7,12 +7,9 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudcontrol"
 	cctypes "github.com/aws/aws-sdk-go-v2/service/cloudcontrol/types"
-	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/masterminds/semver"
 
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -41,7 +38,8 @@ var Descriptors []plugin.ResourceDescriptor
 
 var ResourceTypeDescriptors map[string]plugin.ResourceTypeDescriptor
 
-// EKSAutomodeResourceTypes lists AWS CloudFormation resource types that EKS Automode manages
+// EKSAutomodeResourceTypes lists AWS CloudFormation resource types that EKS Automode manages.
+// These resources are tagged with "kubernetes.io/cluster/<cluster-name>" = "owned".
 var EKSAutomodeResourceTypes = []string{
 	"AWS::EC2::Instance",                        // Worker nodes
 	"AWS::EC2::SecurityGroup",                   // Pod and node security groups
@@ -97,8 +95,11 @@ func (a AWS) SupportedResources() []plugin.ResourceDescriptor {
 	return Descriptors
 }
 
-func (a AWS) MaxRequestsPerSecond() int {
-	return 2
+func (a AWS) Throttling() plugin.ThrottlingConfig {
+	return plugin.ThrottlingConfig{
+		Scope:                            plugin.ThrottlingScopeNamespace,
+		MaxRequestsPerSecondForNamespace: 2,
+	}
 }
 
 func (a AWS) SchemaForResourceType(resourceType string) (model.Schema, error) {
@@ -224,111 +225,21 @@ func (a AWS) List(context context.Context, request *resource.ListRequest) (*reso
 	}, nil
 }
 
-func (a AWS) TargetBehavior() resource.TargetBehavior {
-	return TargetBehavior
-}
-
-// GetMatchFilters returns declarative filters for EKS Automode resources
-func (a AWS) GetMatchFilters() []plugin.MatchFilter {
-	// This method is called during discovery setup, so we can't use dynamic context here.
-	// Instead, we'll create filters that will check for EKS cluster tags dynamically during evaluation.
-	// For now, we return filter definitions for all EKS Automode resource types.
-
-	var filters []plugin.MatchFilter
-
-	// Get cluster names dynamically (if available, otherwise empty list)
-	ctx := context.Background()
-	// We use a default target config here - the actual target will be provided during filter evaluation
-	clusterNames, err := a.GetAutomodeClusterNames(ctx, &config.Config{})
-	if err != nil {
-		slog.Debug("Could not get Automode cluster names for filter setup", "error", err)
-		clusterNames = []string{}
-	}
-
-	// Create tag keys for all known clusters
-	var tagKeys []string
-	for _, clusterName := range clusterNames {
-		tagKeys = append(tagKeys, "kubernetes.io/cluster/"+clusterName)
-	}
-
-	// If we have cluster names, create a filter for all EKS Automode resource types
-	if len(tagKeys) > 0 {
-		filters = append(filters, plugin.MatchFilter{
+// DiscoveryFilters returns declarative filters for excluding resources from discovery.
+// Uses RFC 9535 JSONPath with match() regex function to filter EKS Automode-managed resources.
+func (a AWS) DiscoveryFilters() []plugin.MatchFilter {
+	return []plugin.MatchFilter{
+		{
+			// Filter out EKS Automode-managed resources.
+			// These resources are tagged with "kubernetes.io/cluster/<cluster-name>" = "owned".
+			// Using RFC 9535 match() function for regex pattern matching on tag keys.
 			ResourceTypes: EKSAutomodeResourceTypes,
 			Conditions: []plugin.FilterCondition{
 				{
-					Type:     plugin.ConditionTypeTagMatch,
-					TagKeys:  tagKeys,
-					TagValue: "owned",
+					PropertyPath:  `$.Tags[?match(@.Key, "kubernetes\\.io/cluster/.*")].Value`,
+					PropertyValue: "owned",
 				},
 			},
-			Action: plugin.FilterActionExclude,
-		})
+		},
 	}
-
-	return filters
-}
-
-// shouldFilterEKSAutomodeResource filters out resources that are managed by EKS Automode
-func (a AWS) shouldFilterEKSAutomodeResource(properties json.RawMessage, target model.Target) bool {
-	tags := model.GetTagsFromProperties(properties)
-	if len(tags) == 0 {
-		return false
-	}
-
-	clusterNames, err := a.GetAutomodeClusterNames(context.Background(), config.FromTarget(&target))
-	if err != nil {
-		slog.Debug("Error getting Automode cluster names", "error", err)
-		return false
-	}
-
-	for _, clusterName := range clusterNames {
-		clusterTagKey := "kubernetes.io/cluster/" + clusterName
-
-		// Check for kubernetes.io/cluster/{clusterName} tag
-		for _, tag := range tags {
-			normalizedTagKey := strings.ToLower(tag.Key)
-			normalizedClusterTagKey := strings.ToLower(clusterTagKey)
-
-			if normalizedTagKey == normalizedClusterTagKey && tag.Value == "owned" {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// GetAutomodeClusterNames returns a list of EKS cluster names that have Automode enabled
-func (a AWS) GetAutomodeClusterNames(ctx context.Context, targetConfig *config.Config) ([]string, error) {
-	awsCfg, err := targetConfig.ToAwsConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-	eksClient := eks.NewFromConfig(awsCfg)
-
-	listResult, err := eksClient.ListClusters(ctx, &eks.ListClustersInput{})
-	if err != nil {
-		return nil, err
-	}
-
-	var automodeClusters []string
-	for _, clusterName := range listResult.Clusters {
-		describeResult, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
-			Name: &clusterName,
-		})
-		if err != nil {
-			slog.Error("Error describing cluster", "clusterName", clusterName, "error", err)
-			continue
-		}
-
-		// Automode is enabled when a cluster has ComputeConfig enabled
-		if describeResult.Cluster.ComputeConfig != nil &&
-			describeResult.Cluster.ComputeConfig.Enabled != nil &&
-			*describeResult.Cluster.ComputeConfig.Enabled {
-			automodeClusters = append(automodeClusters, clusterName)
-		}
-	}
-
-	return automodeClusters, nil
 }

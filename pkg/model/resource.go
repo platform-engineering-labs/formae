@@ -11,9 +11,13 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/PaesslerAG/jsonpath"
+	"github.com/theory/jsonpath"
+	"github.com/theory/jsonpath/registry"
 	"github.com/tidwall/gjson"
 )
+
+// jsonpathParser is a package-level parser with RFC 9535 function extensions
+var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 
 type Resource struct {
 	Label              string          `json:"Label"`
@@ -113,15 +117,25 @@ func (r *Resource) getPropertyFromJSON(query string, properties json.RawMessage)
 		slog.Error("failed to unmarshal properties", "error", err)
 		return "", false
 	}
-	val, err := jsonpath.Get(query, data)
+	// Normalize simple field names to JSONPath syntax for backward compatibility
+	// e.g., "Key1" becomes "$.Key1"
+	if !strings.HasPrefix(query, "$") {
+		query = "$." + query
+	}
+	path, err := jsonpathParser.Parse(query)
 	if err != nil {
-		slog.Error("failed to get property using jsonpath", "query", query, "error", err)
+		slog.Error("failed to parse jsonpath query", "query", query, "error", err)
 		return "", false
 	}
-	if val == nil {
+	nodes := path.Select(data)
+	if len(nodes) == 0 {
 		return "", false
 	}
-	return val.(string), true
+	// Return the first result as a string
+	if strVal, ok := nodes[0].(string); ok {
+		return strVal, true
+	}
+	return fmt.Sprintf("%v", nodes[0]), true
 }
 
 func (r *Resource) getProperty(query string) gjson.Result {

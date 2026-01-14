@@ -22,8 +22,8 @@ var _ plugin.ResourcePlugin = FakeAWS{}
 // Maintain known symbol reference
 var Plugin = FakeAWS{}
 
-// MaxRequestsPerSecond allows tests to control the rate limit
-var MaxRequestsPerSecond int = 5
+// ThrottlingMaxRPS allows tests to control the rate limit
+var ThrottlingMaxRPS int = 5
 
 func (s FakeAWS) Name() string {
 	return "fake-aws"
@@ -74,8 +74,11 @@ func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	}
 }
 
-func (s FakeAWS) MaxRequestsPerSecond() int {
-	return MaxRequestsPerSecond
+func (s FakeAWS) Throttling() plugin.ThrottlingConfig {
+	return plugin.ThrottlingConfig{
+		Scope:                            plugin.ThrottlingScopeNamespace,
+		MaxRequestsPerSecondForNamespace: ThrottlingMaxRPS,
+	}
 }
 
 func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error) {
@@ -251,31 +254,38 @@ func (s FakeAWS) List(context context.Context, request *resource.ListRequest) (*
 	}, nil
 }
 
-func (s FakeAWS) TargetBehavior() resource.TargetBehavior {
-	return TargetBehavior
-}
-
-// GetMatchFilters returns declarative filters matching the existing test behavior
-func (s FakeAWS) GetMatchFilters() []plugin.MatchFilter {
-	return []plugin.MatchFilter{{
-		ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-		Conditions: []plugin.FilterCondition{
-			{
-				Type:          plugin.ConditionTypePropertyMatch,
-				PropertyPath:  "SkipDiscovery",
-				PropertyValue: "true",
+// DiscoveryFilters returns declarative filters for testing discovery exclusion
+func (s FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
+	return []plugin.MatchFilter{
+		{
+			// Filter 1: Exclude by top-level property
+			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
+			Conditions: []plugin.FilterCondition{
+				{
+					PropertyPath:  "$.SkipDiscovery",
+					PropertyValue: "true",
+				},
 			},
 		},
-		Action: plugin.FilterActionExclude,
-	}, {
-		ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-		Conditions: []plugin.FilterCondition{
-			{
-				Type:     plugin.ConditionTypeTagMatch,
-				TagKeys:  []string{"SkipDiscovery"},
-				TagValue: "true",
+		{
+			// Filter 2: Exclude by tag in array format [{"Key": "...", "Value": "..."}]
+			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
+			Conditions: []plugin.FilterCondition{
+				{
+					PropertyPath:  `$.Tags[?(@.Key=="SkipDiscovery")].Value`,
+					PropertyValue: "true",
+				},
 			},
 		},
-		Action: plugin.FilterActionExclude,
-	}}
+		{
+			// Filter 3: Exclude by tag in map format {"key": "value"}
+			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
+			Conditions: []plugin.FilterCondition{
+				{
+					PropertyPath:  "$.Tags.SkipDiscovery",
+					PropertyValue: "true",
+				},
+			},
+		},
+	}
 }

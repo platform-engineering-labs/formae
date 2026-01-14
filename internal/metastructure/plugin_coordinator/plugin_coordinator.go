@@ -64,7 +64,7 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	if c.pluginManager != nil {
 		for _, rp := range c.pluginManager.ListResourcePlugins() {
 			namespace := (*rp).Namespace()
-			maxRPS := (*rp).MaxRequestsPerSecond()
+			maxRPS := (*rp).Throttling().MaxRequestsPerSecondForNamespace
 			err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 				Namespace:            namespace,
 				MaxRequestsPerSecond: maxRPS,
@@ -197,16 +197,17 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 		if err == nil && localPlugin != nil {
 			// Register namespace with RateLimiter if not already registered
 			if !c.registeredLocalNamespaces[req.Namespace] {
+				maxRPS := (*localPlugin).Throttling().MaxRequestsPerSecondForNamespace
 				err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 					Namespace:            req.Namespace,
-					MaxRequestsPerSecond: (*localPlugin).MaxRequestsPerSecond(),
+					MaxRequestsPerSecond: maxRPS,
 				})
 				if err != nil {
 					c.Log().Error("Failed to register namespace %s with RateLimiter: %v", req.Namespace, err)
 					// Don't fail the spawn - rate limiting is not critical
 				} else {
 					c.registeredLocalNamespaces[req.Namespace] = true
-					c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, (*localPlugin).MaxRequestsPerSecond())
+					c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, maxRPS)
 				}
 			}
 
@@ -347,7 +348,7 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 		Namespace:          req.Namespace,
 		SupportedResources: rp.SupportedResources(),
 		ResourceSchemas:    schemas,
-		MatchFilters:       rp.GetMatchFilters(),
+		MatchFilters:       rp.DiscoveryFilters(),
 	}
 }
 
