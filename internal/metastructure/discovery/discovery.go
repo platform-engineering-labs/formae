@@ -469,8 +469,9 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 
 	err = proc.Send(spawnRes.PID, plugin.ListResources{
 		Namespace:      target.Namespace,
+		TargetLabel:    target.Label,
 		ResourceType:   op.ResourceType,
-		Target:         target,
+		TargetConfig:   target.Config,
 		ListParameters: listParameters,
 	})
 	if err != nil {
@@ -483,16 +484,16 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 }
 
 func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message plugin.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
-	proc.Log().Debug("Processing listing for %s in target %s with list parameters %v", message.ResourceType, message.Target.Label, message.ListParameters)
+	proc.Log().Debug("Processing listing for %s in target %s with list parameters %v", message.ResourceType, message.TargetLabel, message.ListParameters)
 
-	mapKey := listOperationMapKey(message.ResourceType, message.Target.Label, util.MapToString(message.ListParameters))
+	mapKey := listOperationMapKey(message.ResourceType, message.TargetLabel, util.MapToString(message.ListParameters))
 	op := data.outstandingListOperations[mapKey]
 
 	delete(data.outstandingListOperations, mapKey)
 
 	// Remove the operation from remaining work if the plugin reported an error
 	if message.Error != nil {
-		proc.Log().Error("Failed to list resources for %s in target %s: %v", message.ResourceType, message.Target.Label, message.Error)
+		proc.Log().Error("Failed to list resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, message.Error)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
 		}
@@ -502,13 +503,13 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	// Decompress the resources from the gzip-compressed message
 	listedResources, err := plugin.DecompressListedResources(message.Resources)
 	if err != nil {
-		proc.Log().Error("Failed to decompress resources for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+		proc.Log().Error("Failed to decompress resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
 		}
 		return state, data, nil, nil
 	}
-	proc.Log().Debug("Decompressed %d resources for %s in target %s", len(listedResources), message.ResourceType, message.Target.Label)
+	proc.Log().Debug("Decompressed %d resources for %s in target %s", len(listedResources), message.ResourceType, message.TargetLabel)
 
 	// De-duplicate resources already under management
 	var newResources []plugin.ListedResource
@@ -524,9 +525,9 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	// If there are no new resources, we can skip the synchronization
 	// However, we still need to discover nested resources if this parent resource type has any
 	if len(newResources) == 0 {
-		proc.Log().Debug("No new resources to synchronize for %s in target %s", message.ResourceType, message.Target.Label)
+		proc.Log().Debug("No new resources to synchronize for %s in target %s", message.ResourceType, message.TargetLabel)
 		if err := discoverChildren(op, data, proc); err != nil {
-			proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+			proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 			if !data.HasOutstandingWork() {
 				return StateIdle, data, nil, nil
 			}
@@ -538,10 +539,20 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 		return state, data, nil, nil
 	}
 
+	// Look up the full target from the data.targets map
+	target, ok := data.targets[message.TargetLabel]
+	if !ok {
+		proc.Log().Error("Target not found for label %s", message.TargetLabel)
+		if !data.HasOutstandingWork() {
+			return StateIdle, data, nil, nil
+		}
+		return state, data, nil, nil
+	}
+
 	// Synchronize the new resources, remove the operation from remaining work on error
-	commandID, err := synchronizeResources(op, message.Target.Namespace, message.Target, newResources, data, proc)
+	commandID, err := synchronizeResources(op, message.Namespace, target, newResources, data, proc)
 	if err != nil {
-		proc.Log().Error("Failed to synchronize resources for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+		proc.Log().Error("Failed to synchronize resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
 		}
@@ -553,7 +564,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	// This ensures we don't miss nested resources for existing parents while waiting for new ones to sync.
 	// New nested resources will be discovered after sync completes in syncCompleted().
 	if err := discoverChildren(op, data, proc); err != nil {
-		proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.Target.Label, err)
+		proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 	}
 
 	return StateDiscovering, data, nil, nil

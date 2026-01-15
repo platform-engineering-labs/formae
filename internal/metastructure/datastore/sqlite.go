@@ -31,7 +31,7 @@ import (
 	metautil "github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 var sqliteTracer trace.Tracer
@@ -2069,7 +2069,7 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 }
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress resource.ProgressResult) error {
+func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error {
 	_, span := sqliteTracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -2081,7 +2081,7 @@ func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid st
 		return fmt.Errorf("failed to load existing progress: %w", err)
 	}
 
-	var existingProgress []resource.ProgressResult
+	var existingProgress []plugin.TrackedProgress
 	if len(existingProgressJSON) > 0 {
 		if err := json.Unmarshal(existingProgressJSON, &existingProgress); err != nil {
 			return fmt.Errorf("failed to unmarshal existing progress: %w", err)

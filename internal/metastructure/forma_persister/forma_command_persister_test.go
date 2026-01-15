@@ -21,7 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/assert"
 )
@@ -62,12 +62,12 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 		ResourceStartTs:    util.TimeNow(),
 		ResourceModifiedTs: util.TimeNow().Add(20 * time.Second),
 		ResourceState:      resource_update.ResourceUpdateStateInProgress,
-		Progress: resource.ProgressResult{
-			Operation:       resource.OperationCreate,
-			OperationStatus: resource.OperationStatusInProgress,
-			RequestID:       "test-request-id",
-			StartTs:         util.TimeNow(),
-			ModifiedTs:      util.TimeNow().Add(20 * time.Second),
+		Progress: plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:       resource.OperationCreate,
+				OperationStatus: resource.OperationStatusInProgress,
+				RequestID:       "test-request-id",
+			},
 		},
 	}
 	res := formaPersister.Call(sender, updateResourceProgress)
@@ -95,12 +95,12 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 		ResourceStartTs:    util.TimeNow(),
 		ResourceModifiedTs: util.TimeNow().Add(20 * time.Second),
 		ResourceState:      resource_update.ResourceUpdateStateSuccess,
-		Progress: resource.ProgressResult{
-			Operation:       resource.OperationCreate,
-			OperationStatus: resource.OperationStatusSuccess,
-			RequestID:       "test-request-id",
-			StartTs:         util.TimeNow(),
-			ModifiedTs:      util.TimeNow().Add(20 * time.Second),
+		Progress: plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:       resource.OperationCreate,
+				OperationStatus: resource.OperationStatusSuccess,
+				RequestID:       "test-request-id",
+			},
 		},
 	}
 	secondRes := formaPersister.Call(sender, secondProgressUpdate)
@@ -339,7 +339,7 @@ func newSyncFormaCommand() *forma_command.FormaCommand {
 				},
 				Operation:      resource_update.OperationRead,
 				State:          resource_update.ResourceUpdateStateNotStarted,
-				ProgressResult: []resource.ProgressResult{},
+				ProgressResult: []plugin.TrackedProgress{},
 				StackLabel:     "test-stack",
 			},
 		},
@@ -372,7 +372,7 @@ func newFormaCommandWithCreateResourceUpdate() *forma_command.FormaCommand {
 				},
 				Operation:      resource_update.OperationCreate,
 				State:          resource_update.ResourceUpdateStateNotStarted,
-				ProgressResult: []resource.ProgressResult{},
+				ProgressResult: []plugin.TrackedProgress{},
 				StackLabel:     "test-stack",
 			},
 		},
@@ -548,9 +548,11 @@ func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) 
 				ResourceStartTs:    util.TimeNow(),
 				ResourceModifiedTs: util.TimeNow(),
 				ResourceState:      resource_update.ResourceUpdateStateInProgress,
-				Progress: resource.ProgressResult{
-					Operation:       resource.OperationCreate,
-					OperationStatus: resource.OperationStatusInProgress,
+				Progress: plugin.TrackedProgress{
+					ProgressResult: resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+					},
 				},
 			}
 			res := formaPersister.Call(sender, progress)

@@ -11,7 +11,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 type MarkResourceUpdateAsComplete struct {
@@ -33,7 +33,7 @@ type UpdateResourceProgress struct {
 	ResourceStartTs            time.Time
 	ResourceModifiedTs         time.Time
 	ResourceState              types.ResourceUpdateState
-	Progress                   resource.ProgressResult
+	Progress                   plugin.TrackedProgress
 	ResourceProperties         json.RawMessage
 	ResourceReadOnlyProperties json.RawMessage
 	Version                    string

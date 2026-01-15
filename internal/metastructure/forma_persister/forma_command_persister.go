@@ -21,7 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 type FormaCommandPersister struct {
@@ -301,15 +301,20 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		// pendingCompletions tracks expected MarkResourceUpdateAsComplete messages, not state transitions.
 		// Progress updates can set state to Success, but completion messages arrive separately.
 
-		index := slices.IndexFunc(res.ProgressResult, func(p resource.ProgressResult) bool {
+		// progress.Progress is already a TrackedProgress from the PluginOperator
+		tracked := progress.Progress
+		tracked.StartTs = progress.ResourceStartTs
+		tracked.ModifiedTs = progress.ResourceModifiedTs
+
+		index := slices.IndexFunc(res.ProgressResult, func(p plugin.TrackedProgress) bool {
 			return p.Operation == progress.Progress.Operation
 		})
 		if index == -1 {
-			res.ProgressResult = append(res.ProgressResult, progress.Progress)
+			res.ProgressResult = append(res.ProgressResult, tracked)
 		} else {
-			res.ProgressResult = slices.Replace(res.ProgressResult, index, index+1, progress.Progress)
+			res.ProgressResult = slices.Replace(res.ProgressResult, index, index+1, tracked)
 		}
-		res.MostRecentProgressResult = progress.Progress
+		res.MostRecentProgressResult = tracked
 
 		if progress.ResourceProperties != nil {
 			res.DesiredState.Properties = progress.ResourceProperties

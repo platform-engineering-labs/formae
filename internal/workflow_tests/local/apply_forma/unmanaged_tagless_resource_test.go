@@ -165,7 +165,7 @@ func TestApplyForma_ReconcileFormaWithExistingStackAndUnmanagedTaglessResource(t
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
 				// Allow the initial "other" resource to be created
-				if request.DesiredState.Type == "FakeAWS::Other::Resource" {
+				if request.ResourceType == "FakeAWS::Other::Resource" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,

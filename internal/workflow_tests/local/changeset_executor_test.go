@@ -36,7 +36,6 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 						OperationStatus: resource.OperationStatusSuccess,
 						RequestID:       "test-request-id",
 						NativeID:        "test-native-id",
-						ResourceType:    request.DesiredState.Type,
 					},
 				}, nil
 			},
@@ -117,7 +116,6 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 						OperationStatus:    resource.OperationStatusSuccess,
 						RequestID:          "test-request-id",
 						NativeID:           "test-native-id",
-						ResourceType:       request.DesiredState.Type,
 						ResourceProperties: properties,
 					},
 				}, nil
@@ -207,13 +205,12 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		// Make VPC creation fail
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if request.DesiredState.Label == "test-vpc" {
+				if request.Label == "test-vpc" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,
 							OperationStatus: resource.OperationStatusFailure,
 							RequestID:       "test-request-id",
-							ResourceType:    request.DesiredState.Type,
 						},
 					}, nil
 				}
@@ -225,7 +222,6 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 						OperationStatus:    resource.OperationStatusSuccess,
 						RequestID:          "test-request-id",
 						NativeID:           "test-native-id",
-						ResourceType:       request.DesiredState.Type,
 						ResourceProperties: properties,
 					},
 				}, nil
@@ -325,7 +321,6 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 						OperationStatus: resource.OperationStatusSuccess,
 						RequestID:       "test-request-id",
 						NativeID:        "test-native-id",
-						ResourceType:    request.DesiredState.Type,
 					},
 				}, nil
 			},
@@ -394,7 +389,6 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 						Operation:       resource.OperationCreate,
 						OperationStatus: resource.OperationStatusFailure,
 						RequestID:       "test-request-id",
-						ResourceType:    request.DesiredState.Type,
 					},
 				}, nil
 			},

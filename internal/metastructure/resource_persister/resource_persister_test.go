@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -42,17 +43,19 @@ func TestResourcePersister_StoresResourceUpdate(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id",
-				NativeID:           "test-native-id",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-native-id",
+					ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 	}
@@ -105,17 +108,19 @@ func TestResourcePersister_LoadsResource(t *testing.T) {
 		ResourceTarget: target,
 		State:          resource_update.ResourceUpdateStateSuccess,
 		StackLabel:     "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id",
-				NativeID:           "test-native-id",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-native-id",
+					ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 	}
@@ -158,17 +163,19 @@ func TestResourcePersister_Create(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id",
-				NativeID:           "test-native-id",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-native-id",
+					ResourceProperties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id",
@@ -218,17 +225,19 @@ func TestResourcePersister_Update(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id",
-				NativeID:           "test-native-id",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-native-id",
+					ResourceProperties: json.RawMessage(`{"foo":"bar","baz":"qux","a":[3,4,2]}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id",
@@ -263,17 +272,19 @@ func TestResourcePersister_Update(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationUpdate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id-2",
-				NativeID:           "test-native-id",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"foo":"barbar","a":[7,8]}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationUpdate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-2",
+					NativeID:           "test-native-id",
+					ResourceProperties: json.RawMessage(`{"foo":"barbar","a":[7,8]}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id",
@@ -331,17 +342,19 @@ func TestResourcePersister_Delete(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id-1",
-				NativeID:           "test-native-id-1",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"name":"bucket1"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-1",
+					NativeID:           "test-native-id-1",
+					ResourceProperties: json.RawMessage(`{"name":"bucket1"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id-1",
@@ -370,17 +383,19 @@ func TestResourcePersister_Delete(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id-2",
-				NativeID:           "test-native-id-2",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"name":"bucket2"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-2",
+					NativeID:           "test-native-id-2",
+					ResourceProperties: json.RawMessage(`{"name":"bucket2"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id-2",
@@ -413,17 +428,19 @@ func TestResourcePersister_Delete(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationDelete,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id-3",
-				NativeID:           "test-native-id-2",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"name":"bucket2"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationDelete,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-3",
+					NativeID:           "test-native-id-2",
+					ResourceProperties: json.RawMessage(`{"name":"bucket2"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id-2",
@@ -457,17 +474,19 @@ func TestResourcePersister_Delete(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationDelete,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id-4",
-				NativeID:           "test-native-id-1",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"name":"bucket1"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationDelete,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-4",
+					NativeID:           "test-native-id-1",
+					ResourceProperties: json.RawMessage(`{"name":"bucket1"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id-1",
@@ -514,17 +533,19 @@ func TestResourcePersister_MissingRequiredFields(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id-1",
-				NativeID:           "test-native-id-1",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"name":"bucket1"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-1",
+					NativeID:           "test-native-id-1",
+					ResourceProperties: json.RawMessage(`{"name":"bucket1"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 		GroupID: "test-group-id-1",
@@ -568,17 +589,19 @@ func TestResourcePersister_IdempotentCreate(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "test-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				RequestID:          "test-request-id",
-				NativeID:           "test-native-id",
-				ResourceType:       "FakeAWS::S3::Bucket",
-				ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
-				Attempts:           1,
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-native-id",
+					ResourceProperties: json.RawMessage(`{"foo":"bar"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
 			},
 		},
 	}
@@ -1003,15 +1026,17 @@ func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "managed-stack",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationCreate,
-				OperationStatus:    resource.OperationStatusSuccess,
-				NativeID:           "vpc-123",
-				ResourceType:       "AWS::EC2::VPC",
-				ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "vpc-123",
+					ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				},
+				ResourceType: "AWS::EC2::VPC",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
 			},
 		},
 	}
@@ -1039,15 +1064,17 @@ func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
 		},
 		State:      resource_update.ResourceUpdateStateSuccess,
 		StackLabel: "$unmanaged",
-		ProgressResult: []resource.ProgressResult{
+		ProgressResult: []plugin.TrackedProgress{
 			{
-				Operation:          resource.OperationRead,
-				OperationStatus:    resource.OperationStatusSuccess,
-				NativeID:           "vpc-123",
-				ResourceType:       "AWS::EC2::VPC",
-				ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16","VpcId":"vpc-123"}`),
-				StartTs:            util.TimeNow(),
-				ModifiedTs:         util.TimeNow(),
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationRead,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "vpc-123",
+					ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16","VpcId":"vpc-123"}`),
+				},
+				ResourceType: "AWS::EC2::VPC",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
 			},
 		},
 	}

@@ -93,10 +93,47 @@ type PluginOperatorRetry struct {
 	Request           any
 }
 
+// TrackedProgress wraps ProgressResult with tracking information.
+// This is the message type sent from PluginOperator to ResourceUpdater.
+// Plugin implementations do not use this type - they return resource.ProgressResult.
+//
+// NOTE: This type lives in pkg/plugin for now because PluginOperator needs it,
+// but plugin developers don't need to interact with it. Consider splitting
+// pkg/plugin into public SDK types and internal infrastructure types.
+type TrackedProgress struct {
+	resource.ProgressResult
+	ResourceType string    `json:"ResourceType,omitempty"`
+	StartTs      time.Time `json:"StartTs,omitempty"`
+	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
+	Attempts     int       `json:"Attempts,omitempty"`
+	MaxAttempts  int       `json:"MaxAttempts,omitempty"`
+}
+
+// Failed returns true if the operation has failed and no more retries are available.
+// This shadows the embedded ProgressResult.Failed() to include retry-aware logic.
+// For recoverable errors, this returns false while retries remain, allowing the
+// PluginOperator to retry the operation.
+func (tp *TrackedProgress) Failed() bool {
+	if tp.OperationStatus != resource.OperationStatusFailure {
+		return false
+	}
+	// Return true only if error is NOT recoverable OR we've exhausted all retries.
+	// Attempts will always be one more than MaxAttempts after exhausting all retries
+	// because progress results are sent during each attempt.
+	return !resource.IsRecoverable(tp.ErrorCode) || tp.Attempts > tp.MaxAttempts
+}
+
+// HasFinished returns true if the operation has completed (successfully or with final failure).
+// This shadows the embedded ProgressResult.HasFinished() to use TrackedProgress.Failed()
+// which includes retry-aware logic.
+func (tp *TrackedProgress) HasFinished() bool {
+	return tp.FinishedSuccessfully() || tp.Failed()
+}
+
 type ReadResource struct {
 	Namespace        string
 	NativeID         string
-	Target           model.Target
+	TargetConfig     json.RawMessage
 	Resource         model.Resource
 	ExistingResource model.Resource // The existing resource to read
 	IsSync           bool
@@ -112,17 +149,21 @@ func (r *ReadResource) TreatNotFoundAsSuccess() bool {
 
 type CreateResource struct {
 	Namespace    string
-	DesiredState model.Resource
-	Target       model.Target
+	ResourceType string
+	Label        string
+	Properties   json.RawMessage
+	TargetConfig json.RawMessage
 }
 
 type UpdateResource struct {
-	Namespace     string
-	NativeID      string
-	DesiredState  model.Resource
-	PriorState    model.Resource // The prior resource state
-	PatchDocument string
-	Target        model.Target
+	Namespace         string
+	NativeID          string
+	ResourceType      string
+	Label             string
+	PriorProperties   json.RawMessage
+	DesiredProperties json.RawMessage
+	PatchDocument     string
+	TargetConfig      json.RawMessage
 }
 
 type DeleteResource struct {
@@ -130,7 +171,7 @@ type DeleteResource struct {
 	NativeID     string
 	Resource     model.Resource
 	ResourceType string
-	Target       model.Target
+	TargetConfig json.RawMessage
 }
 
 type ListParam struct {
@@ -141,8 +182,9 @@ type ListParam struct {
 
 type ListResources struct {
 	Namespace      string
+	TargetLabel    string // Target label for tracking in discovery
 	ResourceType   string
-	Target         model.Target
+	TargetConfig   json.RawMessage
 	ListParameters map[string]ListParam
 }
 
@@ -158,10 +200,11 @@ type ListedResource struct {
 // Uses ListedResource instead of full resource.Resource to minimize message size.
 type Listing struct {
 	Namespace      string
+	TargetLabel    string // Target label for tracking in discovery
 	Resources      []byte // gzip-compressed JSON of []ListedResource
 	ResourceType   string
 	ListParameters map[string]ListParam
-	Target         model.Target
+	TargetConfig   json.RawMessage
 	Error          error
 }
 
@@ -215,7 +258,7 @@ type PluginOperatorCheckStatus struct {
 	RequestID         string
 	NativeID          string // NativeID returned by initial Create/Update
 	ResourceType      string // Optional resource type for status checks
-	Target            model.Target
+	TargetConfig      json.RawMessage
 	ResourceOperation resource.Operation
 	Request           any
 }
@@ -225,6 +268,7 @@ type PluginOperatorCheckStatus struct {
 type StatusCheck interface {
 	StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus
 	Operation() resource.Operation
+	GetResourceType() string
 }
 
 // StatusCheck implementations - properties are expected to be pre-resolved by ResourceUpdater
@@ -233,7 +277,7 @@ func (r ReadResource) StatusCheck(progress *resource.ProgressResult) PluginOpera
 		Namespace:         r.Resource.Namespace(),
 		RequestID:         r.NativeID,
 		ResourceType:      r.Resource.Type,
-		Target:            r.Target,
+		TargetConfig:      r.TargetConfig,
 		ResourceOperation: resource.OperationRead,
 		Request:           r,
 	}
@@ -244,8 +288,8 @@ func (c CreateResource) StatusCheck(progress *resource.ProgressResult) PluginOpe
 		Namespace:         c.Namespace,
 		RequestID:         progress.RequestID,
 		NativeID:          progress.NativeID,
-		ResourceType:      c.DesiredState.Type,
-		Target:            c.Target,
+		ResourceType:      c.ResourceType,
+		TargetConfig:      c.TargetConfig,
 		ResourceOperation: resource.OperationCreate,
 		Request:           c,
 	}
@@ -256,8 +300,8 @@ func (u UpdateResource) StatusCheck(progress *resource.ProgressResult) PluginOpe
 		Namespace:         u.Namespace,
 		RequestID:         progress.RequestID,
 		NativeID:          progress.NativeID,
-		ResourceType:      u.DesiredState.Type,
-		Target:            u.Target,
+		ResourceType:      u.ResourceType,
+		TargetConfig:      u.TargetConfig,
 		ResourceOperation: resource.OperationUpdate,
 		Request:           u,
 	}
@@ -269,7 +313,7 @@ func (d DeleteResource) StatusCheck(progress *resource.ProgressResult) PluginOpe
 		RequestID:         progress.RequestID,
 		NativeID:          progress.NativeID,
 		ResourceType:      d.ResourceType,
-		Target:            d.Target,
+		TargetConfig:      d.TargetConfig,
 		ResourceOperation: resource.OperationDelete,
 		Request:           d,
 	}
@@ -294,12 +338,20 @@ func (r ReadResource) PluginNamespace() string {
 	return r.Namespace
 }
 
+func (r ReadResource) GetResourceType() string {
+	return r.Resource.Type
+}
+
 func (c CreateResource) Operation() resource.Operation {
 	return resource.OperationCreate
 }
 
 func (c CreateResource) PluginNamespace() string {
 	return c.Namespace
+}
+
+func (c CreateResource) GetResourceType() string {
+	return c.ResourceType
 }
 
 func (u UpdateResource) Operation() resource.Operation {
@@ -310,12 +362,20 @@ func (u UpdateResource) PluginNamespace() string {
 	return u.Namespace
 }
 
+func (u UpdateResource) GetResourceType() string {
+	return u.ResourceType
+}
+
 func (d DeleteResource) Operation() resource.Operation {
 	return resource.OperationDelete
 }
 
 func (d DeleteResource) PluginNamespace() string {
 	return d.Namespace
+}
+
+func (d DeleteResource) GetResourceType() string {
+	return d.ResourceType
 }
 
 func (r ResumeWaitingForResource) Operation() resource.Operation {
@@ -326,12 +386,20 @@ func (r ResumeWaitingForResource) PluginNamespace() string {
 	return r.Namespace
 }
 
+func (r ResumeWaitingForResource) GetResourceType() string {
+	return r.Request.ResourceType
+}
+
 func (c PluginOperatorCheckStatus) Operation() resource.Operation {
 	return resource.OperationNoOp
 }
 
 func (c PluginOperatorCheckStatus) PluginNamespace() string {
 	return c.Namespace
+}
+
+func (c PluginOperatorCheckStatus) GetResourceType() string {
+	return c.ResourceType
 }
 
 type PluginUpdateData struct {
@@ -350,20 +418,31 @@ type PluginUpdateData struct {
 	retryCounter       otelmetric.Int64Counter
 }
 
-// NamespaceMismatchError is returned when an operation targets a different namespace than the plugin handles
-var NamespaceMismatchError = resource.ProgressResult{
-	OperationStatus: resource.OperationStatusFailure,
-	ErrorCode:       resource.OperationErrorCodePluginNotFound,
-	Attempts:        1,
-	MaxAttempts:     1,
+// newNamespaceMismatchError creates a TrackedProgress for namespace mismatch errors.
+// This includes attempts info so the UI can show retry status.
+func (data PluginUpdateData) newNamespaceMismatchError() TrackedProgress {
+	maxAttempts := int(data.config.MaxRetries) + 1
+	return TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			OperationStatus: resource.OperationStatusFailure,
+			ErrorCode:       resource.OperationErrorCodePluginNotFound,
+		},
+		Attempts:    data.attempts,
+		MaxAttempts: maxAttempts,
+		ModifiedTs:  time.Now(),
+	}
 }
 
-func (data PluginUpdateData) newUnforeseenError() resource.ProgressResult {
-	return resource.ProgressResult{
-		OperationStatus: resource.OperationStatusFailure,
-		ErrorCode:       resource.OperationErrorCodeUnforeseenError,
-		MaxAttempts:     int(data.config.MaxRetries) + 1,
-		Attempts:        data.attempts,
+func (data PluginUpdateData) newUnforeseenError() TrackedProgress {
+	maxAttempts := int(data.config.MaxRetries) + 1
+	return TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			OperationStatus: resource.OperationStatusFailure,
+			ErrorCode:       resource.OperationErrorCodeUnforeseenError,
+		},
+		Attempts:    data.attempts,
+		MaxAttempts: maxAttempts,
+		ModifiedTs:  time.Now(),
 	}
 }
 
@@ -457,24 +536,23 @@ func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process
 	return true
 }
 
-func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
 	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
-		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
+		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
 	progressResult := resource.ProgressResult{
-		Operation:    resource.OperationRead,
-		NativeID:     operation.NativeID,
-		ResourceType: operation.Resource.Type,
+		Operation: resource.OperationRead,
+		NativeID:  operation.NativeID,
 	}
 	proc.Log().Debug("PluginOperator: starting read operation for %s", operation.NativeID)
 
 	result, err := data.plugin.Read(data.context, &resource.ReadRequest{
 		NativeID:        operation.NativeID,
 		ResourceType:    operation.Resource.Type,
-		Target:          &operation.Target,
+		TargetConfig: operation.TargetConfig,
 		RedactSensitive: operation.RedactSensitive,
 	})
 	if err != nil {
@@ -497,19 +575,21 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 	return handlePluginResult(data, operation, proc, &progressResult)
 }
 
-func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
 	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
-		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
+		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
-	proc.Log().Debug("PluginOperator: starting create operation for %s", operation.DesiredState.Type)
+	proc.Log().Debug("PluginOperator: starting create operation for %s", operation.ResourceType)
 
 	// Properties are expected to be pre-resolved by ResourceUpdater
 	result, err := data.plugin.Create(data.context, &resource.CreateRequest{
-		DesiredState: &operation.DesiredState,
-		Target:       &operation.Target,
+		ResourceType: operation.ResourceType,
+		Label:        operation.Label,
+		Properties:   operation.Properties,
+		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to create resource: %v", err)
@@ -519,19 +599,21 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
 	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
-		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
+		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
 	result, err := data.plugin.Update(data.context, &resource.UpdateRequest{
-		NativeID:      &operation.NativeID,
-		PriorState:    &operation.PriorState,
-		DesiredState:  &operation.DesiredState,
-		PatchDocument: &operation.PatchDocument,
-		Target:        &operation.Target,
+		NativeID:          operation.NativeID,
+		ResourceType:      operation.ResourceType,
+		Label:             operation.Label,
+		PriorProperties:   operation.PriorProperties,
+		DesiredProperties: operation.DesiredProperties,
+		PatchDocument:     &operation.PatchDocument,
+		TargetConfig:      operation.TargetConfig,
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to update resource: %v", err)
@@ -541,17 +623,17 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
-func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
 	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
-		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
+		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
 	result, err := data.plugin.Delete(data.context, &resource.DeleteRequest{
-		NativeID:     &operation.NativeID,
+		NativeID:     operation.NativeID,
 		ResourceType: operation.ResourceType,
-		Target:       &operation.Target,
+		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to delete resource: %v", err)
@@ -572,7 +654,7 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 		RequestID:    operation.RequestID,
 		NativeID:     operation.NativeID,
 		ResourceType: operation.ResourceType,
-		Target:       &operation.Target,
+		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to get status of resource: %v", err)
@@ -592,7 +674,7 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation PluginOperatorRetry, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	var nextState gen.Atom
 	var newData PluginUpdateData
-	var progress resource.ProgressResult
+	var progress TrackedProgress
 	var actions []statemachine.Action
 	var pluginErr error
 
@@ -611,9 +693,6 @@ func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugin
 		nextState, newData, progress, actions, pluginErr = delete(data.requestedBy, state, data, operation.Request.(DeleteResource), proc)
 	}
 
-	progress.Attempts = data.attempts
-	progress.MaxAttempts = data.config.MaxRetries + 1
-
 	proc.Log().Debug("PluginOperator: sending progress update to resource updater %v", data.requestedBy)
 	err := proc.Send(data.requestedBy, progress)
 	if err != nil {
@@ -624,10 +703,10 @@ func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugin
 	return nextState, newData, actions, pluginErr
 }
 
-func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
 	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
-		return StateFinishedWithError, data, NamespaceMismatchError, nil, nil
+		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
 	data.attempts = operation.PreviousAttempts
@@ -637,7 +716,7 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 		RequestID:    operation.Request.RequestID,
 		NativeID:     operation.Request.NativeID,
 		ResourceType: operation.Request.ResourceType,
-		Target:       &operation.Request.Target,
+		TargetConfig: operation.Request.TargetConfig,
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to get resume waiting for resource: %v", err)
@@ -683,12 +762,16 @@ func isThrottlingError(err error) bool {
 		strings.Contains(errStr, "RequestLimitExceeded")
 }
 
-func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.Process, result *resource.ProgressResult) (gen.Atom, PluginUpdateData, resource.ProgressResult, []statemachine.Action, error) {
+func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.Process, result *resource.ProgressResult) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
 	maxAttempts := int(data.config.MaxRetries) + 1
-	progress := *result
-	progress.Attempts = data.attempts
-	progress.MaxAttempts = maxAttempts
-	progress.ModifiedTs = time.Now()
+	progress := TrackedProgress{
+		ProgressResult: *result,
+		ResourceType:   operation.GetResourceType(),
+		StartTs:        data.operationStartTime,
+		Attempts:       data.attempts,
+		MaxAttempts:    maxAttempts,
+		ModifiedTs:     time.Now(),
+	}
 
 	if data.attempts > 1 {
 		progress.StatusMessage = data.LastStatusMessage
@@ -739,7 +822,7 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 	statusCheck := statemachine.GenericTimeout{
 		Name:     "CheckStatus",
 		Duration: data.config.StatusCheckInterval,
-		Message:  operation.StatusCheck(&progress),
+		Message:  operation.StatusCheck(&progress.ProgressResult),
 	}
 
 	return StateWaitingForResource, data, progress, []statemachine.Action{statusCheck}, nil
@@ -751,7 +834,7 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	proc.Log().Debug("PluginOperator: listing resources of type %s in target %s with list parameters %v", operation.ResourceType, operation.Target.Label, operation.ListParameters)
+	proc.Log().Debug("PluginOperator: listing resources of type %s with list parameters %v", operation.ResourceType, operation.ListParameters)
 	var nextPageToken *string
 	pagenr := 1
 	var listedResources []ListedResource
@@ -771,7 +854,7 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 		for attempt := 1; attempt <= maxListAttempts; attempt++ {
 			result, err = data.plugin.List(data.context, &resource.ListRequest{
 				ResourceType:         operation.ResourceType,
-				Target:               &operation.Target,
+				TargetConfig:         operation.TargetConfig,
 				PageSize:             100,
 				PageToken:            nextPageToken,
 				AdditionalProperties: additionalProps,
@@ -794,15 +877,16 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 		}
 
 		if err != nil {
-			proc.Log().Error("PluginOperator: failed to list resources of type %s in target %s with list parameters %v: %v", operation.ResourceType, operation.Target.Label, operation.ListParameters, err)
+			proc.Log().Error("PluginOperator: failed to list resources of type %s with list parameters %v: %v", operation.ResourceType, operation.ListParameters, err)
 
 			// Important: Retain resource type + target so discovery can remove the resource (and eventually return to idle)
 			sendErr := proc.Send(data.requestedBy, Listing{
 				Namespace:      operation.Namespace,
+				TargetLabel:    operation.TargetLabel,
 				Resources:      nil, // Empty compressed data on error
 				ResourceType:   operation.ResourceType,
 				ListParameters: operation.ListParameters,
-				Target:         operation.Target,
+				TargetConfig:   operation.TargetConfig,
 				Error:          err,
 			})
 			if sendErr != nil {
@@ -810,12 +894,12 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 			}
 			return StateFinishedWithError, data, nil, nil
 		}
-		proc.Log().Debug("PluginOperator: received %d resources in page %d for resources of type %s in target %s", len(result.Resources), pagenr, operation.ResourceType, operation.Target.Label)
+		proc.Log().Debug("PluginOperator: received %d resources in page %d for resources of type %s", len(result.NativeIDs), pagenr, operation.ResourceType)
 		pagenr++
-		// Convert full resources to lightweight ListedResource (only NativeID and ResourceType needed for discovery)
-		for _, res := range result.Resources {
+		// Convert NativeIDs to ListedResource (adding ResourceType for discovery)
+		for _, nativeID := range result.NativeIDs {
 			listedResources = append(listedResources, ListedResource{
-				NativeID:     res.NativeID,
+				NativeID:     nativeID,
 				ResourceType: operation.ResourceType,
 			})
 		}
@@ -835,10 +919,11 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 
 	err = proc.Send(data.requestedBy, Listing{
 		Namespace:      operation.Namespace,
+		TargetLabel:    operation.TargetLabel,
 		Resources:      compressedResources,
 		ResourceType:   operation.ResourceType,
 		ListParameters: operation.ListParameters,
-		Target:         operation.Target,
+		TargetConfig:   operation.TargetConfig,
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to send list result: %v", err)
@@ -882,7 +967,7 @@ func setupPluginOperatorMetrics(data *PluginUpdateData) error {
 }
 
 // recordPluginMetrics records metrics for a completed plugin operation
-func recordPluginMetrics(data PluginUpdateData, operation StatusCheck, progress *resource.ProgressResult) {
+func recordPluginMetrics(data PluginUpdateData, operation StatusCheck, progress *TrackedProgress) {
 	if !data.operationStartTime.IsZero() {
 		duration := time.Since(data.operationStartTime).Milliseconds()
 
@@ -903,8 +988,8 @@ func recordPluginMetrics(data PluginUpdateData, operation StatusCheck, progress 
 		}
 
 		// Add resource type if available
-		if progress.ResourceType != "" {
-			attrs = append(attrs, attribute.String("resource_type", progress.ResourceType))
+		if resourceType := operation.GetResourceType(); resourceType != "" {
+			attrs = append(attrs, attribute.String("resource_type", resourceType))
 		}
 
 		// Record duration

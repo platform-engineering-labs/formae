@@ -84,7 +84,7 @@ func TestMetastructure_FormaAppliedPartialSuccess(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				if request.DesiredState.Label == "test-resource2" {
+				if request.Label == "test-resource2" {
 					return &resource.CreateResult{
 						ProgressResult: &resource.ProgressResult{
 							Operation:       resource.OperationCreate,

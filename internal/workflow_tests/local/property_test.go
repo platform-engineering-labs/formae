@@ -678,20 +678,19 @@ func (p *FakePlugin) getMutex(resourceType, resourceLabel string) *sync.Mutex {
 }
 
 func (p *FakePlugin) Create(request *resource.CreateRequest) (*resource.CreateResult, error) {
-	mutex := p.getMutex(request.DesiredState.Type, request.DesiredState.Label)
+	mutex := p.getMutex(request.ResourceType, request.Label)
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	nativeID := fmt.Sprintf("id-%s", request.DesiredState.Label)
-	p.resourceState.Store(nativeID, string(request.DesiredState.Properties))
+	nativeID := fmt.Sprintf("id-%s", request.Label)
+	p.resourceState.Store(nativeID, string(request.Properties))
 
 	return &resource.CreateResult{
 		ProgressResult: &resource.ProgressResult{
 			Operation:       resource.OperationCreate,
 			OperationStatus: resource.OperationStatusSuccess,
-			RequestID:       request.DesiredState.Label,
+			RequestID:       request.Label,
 			NativeID:        nativeID,
-			ResourceType:    request.DesiredState.Type,
 		},
 	}, nil
 }
@@ -716,11 +715,11 @@ func (p *FakePlugin) Read(request *resource.ReadRequest) (*resource.ReadResult, 
 }
 
 func (p *FakePlugin) Update(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
-	mutex := p.getMutex(request.DesiredState.Type, request.DesiredState.Label)
+	mutex := p.getMutex(request.ResourceType, request.Label)
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	nativeID := fmt.Sprintf("id-%s", request.DesiredState.Label)
+	nativeID := fmt.Sprintf("id-%s", request.Label)
 
 	existingPropsRaw, exists := p.resourceState.Load(nativeID)
 	if !exists {
@@ -771,16 +770,15 @@ func (p *FakePlugin) Update(request *resource.UpdateRequest) (*resource.UpdateRe
 		ProgressResult: &resource.ProgressResult{
 			Operation:          resource.OperationUpdate,
 			OperationStatus:    resource.OperationStatusSuccess,
-			RequestID:          request.DesiredState.Label,
+			RequestID:          request.Label,
 			ResourceProperties: []byte(patchStr),
 			NativeID:           nativeID,
-			ResourceType:       request.DesiredState.Type,
 		},
 	}, nil
 }
 
 func (p *FakePlugin) Delete(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
-	nativeID := *request.NativeID
+	nativeID := request.NativeID
 	resourceLabel := strings.TrimPrefix(nativeID, "id-")
 
 	mutex := p.getMutex(request.ResourceType, resourceLabel)
@@ -794,7 +792,6 @@ func (p *FakePlugin) Delete(request *resource.DeleteRequest) (*resource.DeleteRe
 			OperationStatus: resource.OperationStatusSuccess,
 			RequestID:       nativeID, // Critical field
 			NativeID:        nativeID, // Critical field
-			ResourceType:    request.ResourceType,
 		},
 	}
 
