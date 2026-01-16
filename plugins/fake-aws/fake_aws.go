@@ -22,8 +22,8 @@ var _ plugin.ResourcePlugin = FakeAWS{}
 // Maintain known symbol reference
 var Plugin = FakeAWS{}
 
-// ThrottlingMaxRPS allows tests to control the rate limit
-var ThrottlingMaxRPS int = 5
+// RateLimitMaxRPS allows tests to control the rate limit
+var RateLimitMaxRPS int = 5
 
 func (s FakeAWS) Name() string {
 	return "fake-aws"
@@ -74,10 +74,10 @@ func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	}
 }
 
-func (s FakeAWS) Throttling() plugin.ThrottlingConfig {
-	return plugin.ThrottlingConfig{
-		Scope:                            plugin.ThrottlingScopeNamespace,
-		MaxRequestsPerSecondForNamespace: ThrottlingMaxRPS,
+func (s FakeAWS) RateLimit() plugin.RateLimitConfig {
+	return plugin.RateLimitConfig{
+		Scope:                            plugin.RateLimitScopeNamespace,
+		MaxRequestsPerSecondForNamespace: RateLimitMaxRPS,
 	}
 }
 

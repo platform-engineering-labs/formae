@@ -20,7 +20,7 @@ type ResourcePlugin interface {
 	Namespace() string
 	SupportedResources() []ResourceDescriptor
 	SchemaForResourceType(resourceType string) (model.Schema, error)
-	Throttling() ThrottlingConfig
+	RateLimit() RateLimitConfig
 
 	Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error)
 	Update(context context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error)
@@ -36,17 +36,17 @@ type ResourcePlugin interface {
 	DiscoveryFilters() []MatchFilter
 }
 
-// ThrottlingScope defines the granularity of rate limiting
-type ThrottlingScope string
+// RateLimitScope defines the granularity of rate limiting
+type RateLimitScope string
 
 const (
-	// ThrottlingScopeNamespace applies rate limiting at the plugin namespace level (e.g., AWS, Azure)
-	ThrottlingScopeNamespace ThrottlingScope = "Namespace"
+	// RateLimitScopeNamespace applies rate limiting at the plugin namespace level (e.g., AWS, Azure)
+	RateLimitScopeNamespace RateLimitScope = "Namespace"
 )
 
-// ThrottlingConfig specifies rate limiting behavior for a plugin
-type ThrottlingConfig struct {
-	Scope                            ThrottlingScope
+// RateLimitConfig specifies rate limiting behavior for a plugin
+type RateLimitConfig struct {
+	Scope                            RateLimitScope
 	MaxRequestsPerSecondForNamespace int
 }
 

@@ -64,7 +64,7 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	if c.pluginManager != nil {
 		for _, rp := range c.pluginManager.ListResourcePlugins() {
 			namespace := (*rp).Namespace()
-			maxRPS := (*rp).Throttling().MaxRequestsPerSecondForNamespace
+			maxRPS := (*rp).RateLimit().MaxRequestsPerSecondForNamespace
 			err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 				Namespace:            namespace,
 				MaxRequestsPerSecond: maxRPS,
@@ -197,7 +197,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 		if err == nil && localPlugin != nil {
 			// Register namespace with RateLimiter if not already registered
 			if !c.registeredLocalNamespaces[req.Namespace] {
-				maxRPS := (*localPlugin).Throttling().MaxRequestsPerSecondForNamespace
+				maxRPS := (*localPlugin).RateLimit().MaxRequestsPerSecondForNamespace
 				err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 					Namespace:            req.Namespace,
 					MaxRequestsPerSecond: maxRPS,

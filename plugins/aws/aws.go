@@ -95,9 +95,9 @@ func (a AWS) SupportedResources() []plugin.ResourceDescriptor {
 	return Descriptors
 }
 
-func (a AWS) Throttling() plugin.ThrottlingConfig {
-	return plugin.ThrottlingConfig{
-		Scope:                            plugin.ThrottlingScopeNamespace,
+func (a AWS) RateLimit() plugin.RateLimitConfig {
+	return plugin.RateLimitConfig{
+		Scope:                            plugin.RateLimitScopeNamespace,
 		MaxRequestsPerSecondForNamespace: 2,
 	}
 }
