@@ -98,6 +98,20 @@ func TestLabelForUnmanagedResource_HandlesNilProperties(t *testing.T) {
 	assert.Equal(t, nativeId, label)
 }
 
+func TestLabelForUnmanagedResource_ConcatenatesMultipleQueryResults(t *testing.T) {
+	nativeId := "i-1234567890abcdef0"
+	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"MyInstance"},{"Key":"Environment","Value":"Production"},{"Key":"Owner","Value":"Alice"}]}`)
+	// Query that matches multiple tags using OR condition
+	labelConfig := plugin.LabelConfig{
+		DefaultQuery: `$.Tags[?(@.Key=='Name' || @.Key=='Environment')].Value`,
+	}
+
+	l := newResourceLabelerForTest(t)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	// Should concatenate both matching tag values with separator
+	assert.Equal(t, "MyInstance-Production", label)
+}
+
 // Tests for legacy tag-based label extraction (backwards compatibility)
 
 func TestLabelForUnmanagedResource_FallsBackToLegacyTagKeys(t *testing.T) {
