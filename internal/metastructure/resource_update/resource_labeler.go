@@ -67,7 +67,9 @@ func (l *ResourceLabeler) LabelForUnmanagedResource(
 	return l.ensureUnique(nativeID)
 }
 
-// extractLabelFromQuery evaluates a JSONPath query against properties and returns the first string result.
+// extractLabelFromQuery evaluates a JSONPath query against properties and returns
+// concatenated string results. When the query returns multiple values (e.g., from
+// a filter with OR conditions), all values are joined with the label separator.
 func (l *ResourceLabeler) extractLabelFromQuery(properties json.RawMessage, query string) string {
 	if len(properties) == 0 {
 		return ""
@@ -88,19 +90,26 @@ func (l *ResourceLabeler) extractLabelFromQuery(properties json.RawMessage, quer
 		return ""
 	}
 
-	// Handle array result (e.g., from tag filter query)
-	if arr, ok := results[0].([]any); ok && len(arr) > 0 {
-		if str, ok := arr[0].(string); ok {
-			return str
+	// Collect all string values from results
+	var parts []string
+	for _, result := range results {
+		// Handle array result (e.g., from tag filter query)
+		if arr, ok := result.([]any); ok {
+			for _, item := range arr {
+				if str, ok := item.(string); ok && str != "" {
+					parts = append(parts, str)
+				}
+			}
+			continue
+		}
+
+		// Handle direct string result
+		if str, ok := result.(string); ok && str != "" {
+			parts = append(parts, str)
 		}
 	}
 
-	// Handle direct string result
-	if str, ok := results[0].(string); ok {
-		return str
-	}
-
-	return ""
+	return strings.Join(parts, labelSeparator)
 }
 
 // extractLabelFromLegacyTagKeys extracts a label using the legacy tag-based approach.
