@@ -243,3 +243,26 @@ func (a AWS) DiscoveryFilters() []plugin.MatchFilter {
 		},
 	}
 }
+
+// LabelConfig returns the label extraction configuration for discovered AWS resources.
+// Most AWS resources use the Name tag for labels, but some resources don't support tags
+// or have a more natural identifier property.
+func (a AWS) LabelConfig() plugin.LabelConfig {
+	return plugin.LabelConfig{
+		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
+		ResourceOverrides: map[string]string{
+			// IAM resources typically don't have Name tags
+			"AWS::IAM::Policy":        "$.PolicyName",
+			"AWS::IAM::ManagedPolicy": "$.ManagedPolicyName",
+			"AWS::IAM::Role":          "$.RoleName",
+			"AWS::IAM::User":          "$.UserName",
+			"AWS::IAM::Group":         "$.GroupName",
+			// Route53 records use Name property
+			"AWS::Route53::RecordSet": "$.Name",
+			// Resources that represent relationships use parent IDs
+			"AWS::EC2::VPCGatewayAttachment":          "$.VpcId",
+			"AWS::EC2::SubnetRouteTableAssociation":   "$.SubnetId",
+			"AWS::EC2::VPCEndpointServicePermissions": "$.ServiceId",
+		},
+	}
+}

@@ -143,7 +143,8 @@ const PluginOperationCallTimeout = 60 // seconds
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
 	commandID       string
-	labelTagKeys    []string
+	labelConfig     plugin.LabelConfig // JSONPath-based label extraction config from plugin
+	labelTagKeys    []string           // Legacy tag-based label keys for backwards compatibility
 	resourceLabeler *ResourceLabeler
 	retryConfig     pkgmodel.RetryConfig
 	requestedBy     gen.PID
@@ -286,6 +287,14 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 	data.resourceUpdate.StartTs = util.TimeNow()
 	data.resourceUpdate.ModifiedTs = data.resourceUpdate.StartTs
 	data.originalResourceKsuidURI = data.resourceUpdate.DesiredState.URI()
+
+	// Get LabelConfig from the plugin for this namespace
+	if pluginMgr, ok := proc.Env("PluginManager"); ok {
+		pm := pluginMgr.(*plugin.Manager)
+		if resourcePlugin, err := pm.ResourcePlugin(data.resourceUpdate.DesiredState.Namespace()); err == nil && resourcePlugin != nil {
+			data.labelConfig = (*resourcePlugin).LabelConfig()
+		}
+	}
 
 	return nextState(state, data, proc)
 }
@@ -631,7 +640,13 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			}
 
 			// Calculate and set the label for discovered (unmanaged) resources.
-			data.resourceUpdate.DesiredState.Label = data.resourceLabeler.LabelForUnmanagedResource(data.resourceUpdate.DesiredState.NativeID, data.resourceUpdate.DesiredState.Type, pkgmodel.GetTagsFromProperties(data.resourceUpdate.DesiredState.Properties), data.labelTagKeys)
+			data.resourceUpdate.DesiredState.Label = data.resourceLabeler.LabelForUnmanagedResource(
+				data.resourceUpdate.DesiredState.NativeID,
+				data.resourceUpdate.DesiredState.Type,
+				data.resourceUpdate.DesiredState.Properties,
+				data.labelConfig,
+				data.labelTagKeys,
+			)
 		}
 
 		operation := currentOperation(state)

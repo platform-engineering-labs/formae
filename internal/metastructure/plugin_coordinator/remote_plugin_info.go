@@ -18,6 +18,7 @@ type RemotePluginInfo struct {
 	supportedResources []plugin.ResourceDescriptor
 	resourceSchemas    map[string]model.Schema
 	matchFilters       []plugin.MatchFilter
+	labelConfig        plugin.LabelConfig
 }
 
 // NewRemotePluginInfo creates a new RemotePluginInfo instance
@@ -26,12 +27,14 @@ func NewRemotePluginInfo(
 	supportedResources []plugin.ResourceDescriptor,
 	schemas map[string]model.Schema,
 	filters []plugin.MatchFilter,
+	labelConfig plugin.LabelConfig,
 ) *RemotePluginInfo {
 	return &RemotePluginInfo{
 		namespace:          namespace,
 		supportedResources: supportedResources,
 		resourceSchemas:    schemas,
 		matchFilters:       filters,
+		labelConfig:        labelConfig,
 	}
 }
 
@@ -53,6 +56,10 @@ func (r *RemotePluginInfo) SchemaForResourceType(resourceType string) (model.Sch
 
 func (r *RemotePluginInfo) DiscoveryFilters() []plugin.MatchFilter {
 	return r.matchFilters
+}
+
+func (r *RemotePluginInfo) LabelConfig() plugin.LabelConfig {
+	return r.labelConfig
 }
 
 // Verify RemotePluginInfo implements PluginInfo
