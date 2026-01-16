@@ -289,3 +289,12 @@ func (s FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
 		},
 	}
 }
+
+// LabelConfig returns the label extraction configuration for discovered FakeAWS resources.
+// Uses the same pattern as the real AWS plugin for testing.
+func (s FakeAWS) LabelConfig() plugin.LabelConfig {
+	return plugin.LabelConfig{
+		DefaultQuery:      `$.Tags[?(@.Key=='Name')].Value`,
+		ResourceOverrides: map[string]string{},
+	}
+}
