@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/apple/pkl-go/pkl"
+	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
@@ -37,10 +38,18 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 	}
 	defer os.RemoveAll(tempDir)
 
-	includes := []string{
-		"pkl.formae@" + Version,
-		"aws.aws@" + Version,
+	// Build package dependencies using PackageResolver
+	resolver := NewPackageResolver()
+	resolver.Add("formae", "pkl", Version)
+
+	// Extract namespaces from the data and add them as dependencies
+	namespaces := extractNamespaces(data)
+	for ns := range namespaces {
+		// Each namespace uses itself as the plugin name (e.g., aws uses aws plugin)
+		resolver.Add(ns, ns, Version)
 	}
+
+	includes := resolver.GetPackageStrings()
 
 	err = fs.WalkDir(generator, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -99,4 +108,23 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 	}
 
 	return Format(textOutput), nil
+}
+
+// extractNamespaces extracts unique namespaces from the data.
+// It handles both *model.Resource and *model.Forma types.
+func extractNamespaces(data any) map[string]struct{} {
+	namespaces := make(map[string]struct{})
+
+	switch v := data.(type) {
+	case *model.Resource:
+		ns := strings.ToLower(v.Namespace())
+		namespaces[ns] = struct{}{}
+	case *model.Forma:
+		for _, res := range v.Resources {
+			ns := strings.ToLower(res.Namespace())
+			namespaces[ns] = struct{}{}
+		}
+	}
+
+	return namespaces
 }
