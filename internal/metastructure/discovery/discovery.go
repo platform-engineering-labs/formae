@@ -256,7 +256,7 @@ func resumeDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message m
 func getPluginInfo(proc gen.Process, namespace string) (*messages.PluginInfoResponse, error) {
 	result, err := proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
-		messages.GetPluginInfo{Namespace: namespace, RefreshFilters: true},
+		messages.GetPluginInfo{Namespace: namespace},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get plugin info for %s: %w", namespace, err)

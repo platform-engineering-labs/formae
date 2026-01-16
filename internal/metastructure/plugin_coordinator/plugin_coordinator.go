@@ -278,41 +278,16 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, regist
 
 // getPluginInfo retrieves plugin information for the given namespace.
 // It first checks registered external plugins, then falls back to local plugins.
+// Filters are cached from the initial plugin announcement (no refresh needed since filters are static).
 func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.PluginInfoResponse {
 	// 1. Check external plugins first
 	if registered, ok := c.plugins[req.Namespace]; ok {
-		filters := registered.MatchFilters
-
-		// If RefreshFilters is requested, call the remote PluginActor
-		if req.RefreshFilters {
-			pluginActorPID := gen.ProcessID{
-				Name: "PluginActor",
-				Node: registered.NodeName,
-			}
-
-			resp, err := c.Call(pluginActorPID, messages.GetFilters{})
-			if err != nil {
-				c.Log().Error("Failed to refresh filters from remote plugin %s on node %s, using cached: %v", req.Namespace, registered.NodeName, err)
-			} else if filterResp, ok := resp.(messages.GetFiltersResponse); ok {
-				if filterResp.Error != "" {
-					c.Log().Error("Remote plugin %s returned error for GetFilters, using cached: %s", req.Namespace, filterResp.Error)
-				} else {
-					c.Log().Debug("Refreshed filters from remote plugin %s: %d filters", req.Namespace, len(filterResp.Filters))
-					filters = filterResp.Filters
-					// Update cache
-					registered.MatchFilters = filters
-				}
-			} else {
-				c.Log().Error("Unexpected response type %T from GetFilters for namespace %s, using cached", resp, req.Namespace)
-			}
-		}
-
 		return messages.PluginInfoResponse{
 			Found:              true,
 			Namespace:          req.Namespace,
 			SupportedResources: registered.SupportedResources,
 			ResourceSchemas:    registered.ResourceSchemas,
-			MatchFilters:       filters,
+			MatchFilters:       registered.MatchFilters,
 		}
 	}
 

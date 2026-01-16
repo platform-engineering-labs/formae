@@ -70,11 +70,7 @@ func RegisterSharedEDFTypes() error {
 		// 6. Plugin announcement (depends on ResourceDescriptor and filter types)
 		PluginAnnouncement{},
 
-		// 7. Plugin coordination messages
-		GetFilters{},
-		GetFiltersResponse{},
-
-		// 8. Plugin operation messages (ResourceUpdater <-> PluginOperator)
+		// 7. Plugin operation messages (ResourceUpdater <-> PluginOperator)
 		ReadResource{},
 		CreateResource{},
 		UpdateResource{},

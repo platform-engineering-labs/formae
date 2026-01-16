@@ -124,14 +124,7 @@ func (p *PluginActor) HandleMessage(from gen.PID, message any) error {
 }
 
 func (p *PluginActor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
-	switch request.(type) {
-	case GetFilters:
-		filters := p.plugin.DiscoveryFilters()
-		return GetFiltersResponse{Filters: filters}, nil
-
-	default:
-		return nil, fmt.Errorf("unknown request: %T", request)
-	}
+	return nil, fmt.Errorf("unknown request: %T", request)
 }
 
 // buildSchemaMap creates a map of resource type to schema for all supported resources
