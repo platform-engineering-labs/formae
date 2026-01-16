@@ -14,7 +14,6 @@ const type = "AWS::ElasticLoadBalancingV2::TrustStore"
 @aws.ResourceHint {
     type = module.type
     identifier = "TrustStoreArn"
-    tags = "Tags"
 }
 open class TrustStore extends formae.Resource {
 

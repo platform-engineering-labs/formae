@@ -14,7 +14,6 @@ const type = "AWS::EC2::DHCPOptions"
 @aws.ResourceHint {
     type = module.type
     identifier = "DhcpOptionsId"
-    tags = "Tags"
 }
 open class DHCPOptions extends formae.Resource {
 

@@ -50,7 +50,6 @@ open class AccessPointResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "AccessPointId"
-    tags = "AccessPointTags"
 }
 open class AccessPoint extends formae.Resource {
 

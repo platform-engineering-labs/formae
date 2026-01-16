@@ -45,22 +45,6 @@ output {
                             when (res.target == null) {
                                 target = defaultTarget
                             }
-                            tags = (res.tags) {
-                                new {
-                                    key = formae.Tags.FormaeResourceLabel
-                                    value = res.label
-                                }
-                                when (res.group != null) {
-                                    new {
-                                        key = formae.Tags.FormaeResourceGroup
-                                        value = res.group
-                                    }
-                                }
-                                new {
-                                    key = formae.Tags.FormaeStackLabel
-                                    value = res.stack?.label ?? defaultStack.label
-                                }
-                            }
                         }
                     }
                 }

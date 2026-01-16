@@ -64,7 +64,6 @@ open class TagSpecification extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "TagSpecifications"
     discoverable = false
 }
 open class ClientVpnEndpoint extends formae.Resource {

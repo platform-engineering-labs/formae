@@ -75,7 +75,6 @@ open class MethodResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "ResourceId" //identifier = "RestApiId|ResourceId|HttpMethod"
-    tags = ""
     discoverable = false
 }
 open class Method extends formae.Resource {

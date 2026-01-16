@@ -38,7 +38,7 @@ func TestAWSPluginResourceTypes(t *testing.T) {
 	for i, resource := range resources {
 		schema, err := aws.SchemaForResourceType(resource.Type)
 		assert.NoError(t, err, "Expected no error when getting schema for resource type %s", resource.Type)
-		t.Logf("  %d. %s \tSchema {Identifier=%s, Tags=%s, Fields=%s}", i+1, resource.Type, schema.Identifier, schema.Tags, schema.Fields)
+		t.Logf("  %d. %s \tSchema {Identifier=%s, Fields=%s}", i+1, resource.Type, schema.Identifier, schema.Fields)
 	}
 
 	if len(resources) == 0 {

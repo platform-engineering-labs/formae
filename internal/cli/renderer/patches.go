@@ -65,9 +65,6 @@ func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties 
 		return
 	}
 
-	// Remove formae metadata tag operations from display
-	patches, _ = removeFormaeTagOperations(patches)
-
 	for _, patch := range patches {
 		formatSinglePatch(node, patch, props, previousProperties, refLabels)
 	}
@@ -77,68 +74,6 @@ func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties 
 	if isBringingUnderManagement {
 		node.Add(display.LightBlue("put resource under management"))
 	}
-}
-
-// If operations on the formmae techinical tags are detected, this means the resource is being put under management. If we detect these
-// operations, we remove them from the patch list and return true so the caller can replace them with a more meaningful message.
-func removeFormaeTagOperations(ops []patchOperation) ([]patchOperation, bool) {
-	foundFormaeTagOps := false
-	cleanedOps := make([]patchOperation, 0, len(ops))
-	for _, op := range ops {
-		if op.Op != "add" {
-			cleanedOps = append(cleanedOps, op)
-			continue
-		}
-		if op.Path == "/Tags" {
-			// If no tags exist yet, meaning the Tags property is being created, check for mixed Formae and custom tags
-			if tagArray, ok := op.Value.([]any); ok {
-				hasFormaeTags := false
-				customTags := []any{}
-
-				for _, tag := range tagArray {
-					if tagMap, ok := tag.(map[string]any); ok {
-						key, _ := tagMap["Key"].(string)
-						if key == "FormaeStackLabel" || key == "FormaeResourceLabel" {
-							hasFormaeTags = true
-						} else {
-							customTags = append(customTags, tag)
-						}
-					}
-				}
-
-				if hasFormaeTags {
-					foundFormaeTagOps = true
-				}
-
-				if len(customTags) > 0 {
-					// Create a new operation for just the custom tags
-					customTagOp := op
-					customTagOp.Value = customTags
-					cleanedOps = append(cleanedOps, customTagOp)
-				}
-				continue
-			}
-
-			// If we can't parse it as an array, assume all Formae tags (old behavior)
-			foundFormaeTagOps = true
-			continue
-		}
-		if strings.HasPrefix(op.Path, "/Tags/") {
-			// If a tag is being added, we need to check if it is one of the Formae technical tags
-			if tagMap, ok := op.Value.(map[string]any); ok {
-				isFormaeStackLabelTag := tagMap["Key"] == "FormaeStackLabel"
-				isFormaeResourceLabelTag := tagMap["Key"] == "FormaeResourceLabel"
-				if isFormaeStackLabelTag || isFormaeResourceLabelTag {
-					foundFormaeTagOps = true
-					continue
-				}
-				cleanedOps = append(cleanedOps, op)
-			}
-		}
-		cleanedOps = append(cleanedOps, op)
-	}
-
-	return cleanedOps, foundFormaeTagOps
 }
 
 func parsePatchOperations(patchDoc json.RawMessage, node *gtree.Node) []patchOperation {

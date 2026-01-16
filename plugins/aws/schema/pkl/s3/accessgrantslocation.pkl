@@ -14,7 +14,6 @@ const type = "AWS::S3::AccessGrantsLocation"
 @aws.ResourceHint {
     type = module.type
     identifier = "AccessGrantsLocationId"
-    tags = "Tags"
     discoverable = false
 }
 open class AccessGrantsLocation extends formae.Resource {

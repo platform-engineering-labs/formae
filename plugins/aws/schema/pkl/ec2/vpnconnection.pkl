@@ -106,7 +106,6 @@ open class VpnTunnelOptionsSpecification extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "VpnConnectionId"
-    tags = "Tags"
 }
 open class VPNConnection extends formae.Resource {
 

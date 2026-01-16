@@ -27,7 +27,6 @@ open class RouteTableResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
     extractable = true
 }
 open class RouteTable extends formae.Resource {

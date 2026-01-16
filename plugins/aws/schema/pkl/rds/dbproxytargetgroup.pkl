@@ -35,7 +35,6 @@ open class DBProxyTargetGroupResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "TargetGroupArn"
-    tags = ""
     parent = "AWS::RDS::DBProxy"
     listParam = new formae.ListProperty { parentProperty = "DBProxyName" listParameter = "DBProxyName" }
 }

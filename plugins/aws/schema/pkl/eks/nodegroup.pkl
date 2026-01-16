@@ -61,7 +61,6 @@ open class NodegroupResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
     parent = "AWS::EKS::Cluster"
     listParam = new formae.ListProperty { parentProperty = "Name" listParameter = "ClusterName" }
 }

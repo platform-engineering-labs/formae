@@ -16,7 +16,6 @@ typealias InternetGatewayExclusionMode = "allow-bidirectional"|"allow-egress"
 @aws.ResourceHint {
     type = module.type
     identifier = "ExclusionId"
-    tags = "Tags"
 }
 open class VPCBlockPublicAccessExclusion extends formae.Resource {
 

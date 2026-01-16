@@ -35,7 +35,6 @@ open class TagSpecification extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "CapacityReservationFleetId"
-    tags = "TagSpecifications"
 }
 open class CapacityReservationFleet extends formae.Resource {
 

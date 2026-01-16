@@ -49,7 +49,6 @@ open class ThroughResourcesStatementRequest extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "NetworkInsightsAccessScopeId"
-    tags = "Tags"
 }
 open class NetworkInsightsAccessScope extends formae.Resource {
 

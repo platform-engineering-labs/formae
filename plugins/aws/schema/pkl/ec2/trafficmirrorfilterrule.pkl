@@ -20,7 +20,6 @@ open class PortRange extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class TrafficMirrorFilterRule extends formae.Resource {
 

@@ -14,7 +14,6 @@ const type = "AWS::EC2::CarrierGateway"
 @aws.ResourceHint {
     type = module.type
     identifier = "CarrierGatewayId"
-    tags = "Tags"
 }
 open class CarrierGateway extends formae.Resource {
 

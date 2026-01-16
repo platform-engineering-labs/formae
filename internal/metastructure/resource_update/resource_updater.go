@@ -446,10 +446,9 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 }
 
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	// Special case: bringing tag-less resources under management without property changes
-	// For resources that don't support tags (e.g., AWS::EC2::VPCGatewayAttachment),
-	// we skip the plugin Update call since there are no actual changes to make in the cloud.
-	// Instead, we create a synthetic ProgressResult using the existing resource's properties.
+	// When bringing a resource under management without property changes, skip the plugin
+	// Update call since there are no actual changes to make in the cloud. Instead, create
+	// a synthetic ProgressResult using the existing resource's properties.
 	hasEmptyPatch := data.resourceUpdate.DesiredState.PatchDocument == nil ||
 		string(data.resourceUpdate.DesiredState.PatchDocument) == "[]" ||
 		string(data.resourceUpdate.DesiredState.PatchDocument) == ""
@@ -458,7 +457,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.DesiredState.Stack != constants.UnmanagedStack
 
 	if isBringingUnderManagement && hasEmptyPatch {
-		proc.Log().Debug("Bringing tag-less resource under management without property changes",
+		proc.Log().Debug("Bringing resource under management without property changes",
 			"resourceURI", data.resourceUpdate.DesiredState.URI(),
 			"oldStack", data.resourceUpdate.PriorState.Stack,
 			"newStack", data.resourceUpdate.DesiredState.Stack)
@@ -469,7 +468,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			data.resourceUpdate.PriorState.ReadOnlyProperties,
 		)
 		if err != nil {
-			proc.Log().Error("failed to merge properties for tag-less resource", "error", err)
+			proc.Log().Error("failed to merge properties when bringing resource under management", "error", err)
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
 		}
@@ -480,7 +479,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			ProgressResult: resource.ProgressResult{
 				Operation:          resource.OperationUpdate,
 				OperationStatus:    resource.OperationStatusSuccess,
-				StatusMessage:      "Brought under management without property changes (tag-less resource)",
+				StatusMessage:      "Brought under management without property changes",
 				NativeID:           data.resourceUpdate.PriorState.NativeID,
 				ResourceProperties: completeProperties,
 			},

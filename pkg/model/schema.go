@@ -6,7 +6,6 @@ package model
 
 type Schema struct {
 	Identifier       string               `json:"Identifier" pkl:"Identifier"`
-	Tags             string               `json:"Tags" pkl:"Tags"`
 	Fields           []string             `json:"Fields" pkl:"Fields"`
 	Nonprovisionable bool                 `json:"Nonprovisionable" pkl:"Nonprovisionable"`
 	Hints            map[string]FieldHint `json:"Hints" pkl:"Hints"`

@@ -14,7 +14,6 @@ const type = "AWS::EC2::TransitGatewayVpcAttachment"
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class TransitGatewayVpcAttachment extends formae.Resource {
 

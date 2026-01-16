@@ -32,7 +32,6 @@ open class QueueResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
 }
 open class Queue extends formae.Resource {
 

@@ -14,7 +14,6 @@ const type = "AWS::IAM::VirtualMFADevice"
 @aws.ResourceHint {
     type = module.type
     identifier = "SerialNumber"
-    tags = "Tags"
     discoverable = false
     extractable = false
 }

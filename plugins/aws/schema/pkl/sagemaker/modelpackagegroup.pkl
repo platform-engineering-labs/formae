@@ -28,7 +28,6 @@ open class ModelPackageGroupResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
     discoverable = false // Can be discovered but it shows weird behavior on changing the tag
 }
 open class ModelPackageGroup extends formae.Resource {

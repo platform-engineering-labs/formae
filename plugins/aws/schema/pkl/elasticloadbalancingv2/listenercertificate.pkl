@@ -19,7 +19,6 @@ open class Certificate extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
     discoverable = false
 }
 open class ListenerCertificate extends formae.Resource {

@@ -70,12 +70,6 @@ open class StackResolvable extends Resolvable {
     hidden type = "Formae::Stack"
 }
 
-const Tags {
-    FormaeResourceLabel = "FormaeResourceLabel"
-    FormaeResourceGroup = "FormaeResourceGroup"
-    FormaeStackLabel = "FormaeStackLabel"
-}
-
 open class Tag {
     hidden key: String|Mapping
     hidden value: String|Mapping|Value
@@ -96,8 +90,6 @@ open class ResourceHint extends Annotation {
     parent: String?
     /// Parent Property required for list operations
     listParam: (ListProperty|List<ListProperty>)?
-    /// Property that contains tags, null safe for resources that don't have tags
-    tags: String?
     /// Property that dictates whether a resource is blocked from discovery
     discoverable: Boolean = true
     /// Property that dictates whether a resource is extractable via the CLI
@@ -153,8 +145,6 @@ open class Schema {
     Nonprovisionable: Boolean = false
     /// Property to store as the NativeId following create
     Identifier: String
-    /// Property that contains tags
-    Tags: String?
     /// All the fields that can be set by user on the resource which are the Properties keys
     Fields: Listing<String>
     /// Hints fields and their annotations
@@ -478,7 +468,6 @@ class Fq {
             new Schema {
                 Identifier = hint.identifier
                 Nonprovisionable = hint.nonprovisionable
-                Tags = hint.tags
                 Fields = fields(resourceClass)
                 Hints = hints(resourceClass)
                 Discoverable = hint.discoverable

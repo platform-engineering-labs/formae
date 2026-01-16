@@ -29,7 +29,6 @@ open class AccessGrantGrantee extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "AccessGrantId"
-    tags = "Tags"
     discoverable = false
 }
 open class AccessGrant extends formae.Resource {

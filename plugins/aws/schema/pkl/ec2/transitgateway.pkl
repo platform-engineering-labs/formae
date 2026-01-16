@@ -14,7 +14,6 @@ const type = "AWS::EC2::TransitGateway"
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class TransitGateway extends formae.Resource {
 

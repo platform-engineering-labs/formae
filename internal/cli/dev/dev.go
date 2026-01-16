@@ -80,7 +80,6 @@ func awsSupportedTypes() *cobra.Command {
 
 				fmt.Printf("Schema for AWS resource type '%s':\n\n", resourceType)
 				fmt.Printf("Identifier: %s\n", schema.Identifier)
-				fmt.Printf("Tags: %s\n", schema.Tags)
 				fmt.Printf("Nonprovisionable: %t\n", schema.Nonprovisionable)
 				fmt.Printf("CreateOnly: %v\n", schema.CreateOnly())
 				fmt.Printf("Fields: %v\n", schema.Fields)

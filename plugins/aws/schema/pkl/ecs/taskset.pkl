@@ -57,7 +57,6 @@ open class ServiceRegistry extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Cluster"
-    tags = "Tags"
     discoverable = true
     parent = "AWS::ECS::Service"
     listParam = List ( new formae.ListProperty { parentProperty = "ServiceName" listParameter = "Service" }, new formae.ListProperty { parentProperty = "Cluster" listParameter = "Cluster" } )

@@ -8,28 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-
-	"github.com/tidwall/gjson"
-
-	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource/tags"
 )
 
 const TagsField = "Tags"
-
-func HasIdentityTags(resource *pkgmodel.Resource, properties string, id string, stack string) bool {
-	tagsField := TagsField
-	if resource.Schema.Tags != "" {
-		tagsField = resource.Schema.Tags
-	}
-
-	if gjson.Get(properties, tagsField+".#(Key="+tags.FormaeResourceLabel+").Value").String() == id &&
-		gjson.Get(properties, tagsField+".#(Key="+tags.FormaeStackLabel+").Value").String() == stack {
-		return true
-	}
-
-	return false
-}
 
 func Match(oaProperties json.RawMessage, rProperties string) (bool, error) {
 	var propsOA map[string]any

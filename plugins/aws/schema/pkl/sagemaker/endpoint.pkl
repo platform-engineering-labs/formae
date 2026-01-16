@@ -79,7 +79,6 @@ open class EndpointResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
     discoverable = false
 }
 open class Endpoint extends formae.Resource {

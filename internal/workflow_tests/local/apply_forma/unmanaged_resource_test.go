@@ -90,7 +90,6 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedResource(t *testing.T) {
 			Target: "test-target",
 			Schema: pkgmodel.Schema{
 				Identifier: "BucketName",
-				Tags:       "Tags",
 				Hints: map[string]pkgmodel.FieldHint{
 					"BucketName": {
 						CreateOnly: true,
@@ -118,7 +117,6 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedResource(t *testing.T) {
 			Target: "test-target",
 			Schema: pkgmodel.Schema{
 				Identifier: "BucketName",
-				Tags:       "Tags",
 				Hints: map[string]pkgmodel.FieldHint{
 					"BucketName": {
 						CreateOnly: true,

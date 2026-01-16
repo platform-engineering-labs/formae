@@ -56,7 +56,6 @@ open class Or extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Name"
-    tags = "Tags"
 }
 open class StorageLensGroup extends formae.Resource {
 

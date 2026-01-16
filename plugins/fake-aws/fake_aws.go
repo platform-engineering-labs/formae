@@ -86,7 +86,6 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 	case "FakeAWS::EC2::VPCCidrBlock":
 		return model.Schema{
 			Identifier: "Id",
-			Tags:       "Tags",
 			Fields: []string{
 				"AmazonProvidedIpv6CidrBlock",
 				"CidrBlock",
@@ -103,7 +102,6 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 	default:
 		return model.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Fields: []string{
 				"AccelerateConfiguration",
 				"AccessControl",

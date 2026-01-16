@@ -32,7 +32,6 @@ open class VerifiedAccessTrustProvider extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "VerifiedAccessInstanceId"
-    tags = "Tags"
 }
 open class VerifiedAccessInstance extends formae.Resource {
 

@@ -14,7 +14,6 @@ const type = "AWS::EC2::Route"
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = ""
     discoverable = false
 }
 open class Route extends formae.Resource {

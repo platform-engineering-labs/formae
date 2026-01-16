@@ -14,7 +14,6 @@ const type = "AWS::EC2::LocalGatewayRouteTable"
 @aws.ResourceHint {
     type = module.type
     identifier = "LocalGatewayRouteTableId"
-    tags = "Tags"
 }
 open class LocalGatewayRouteTable extends formae.Resource {
 

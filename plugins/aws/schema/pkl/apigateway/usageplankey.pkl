@@ -24,7 +24,6 @@ open class UsagePlanKeyResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = ""
     parent = "AWS::ApiGateway::UsagePlan"
     listParam = new formae.ListProperty { parentProperty = "Id" listParameter =  "UsagePlanId" }
 }

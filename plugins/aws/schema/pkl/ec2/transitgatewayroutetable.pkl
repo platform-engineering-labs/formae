@@ -14,7 +14,6 @@ const type = "AWS::EC2::TransitGatewayRouteTable"
 @aws.ResourceHint {
     type = module.type
     identifier = "TransitGatewayRouteTableId"
-    tags = "Tags"
 }
 open class TransitGatewayRouteTable extends formae.Resource {
 

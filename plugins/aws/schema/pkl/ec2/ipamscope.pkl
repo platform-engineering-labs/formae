@@ -14,7 +14,6 @@ const type = "AWS::EC2::IPAMScope"
 @aws.ResourceHint {
     type = module.type
     identifier = "IpamScopeId"
-    tags = "Tags"
 }
 open class IPAMScope extends formae.Resource {
 
