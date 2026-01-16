@@ -59,6 +59,7 @@ type PluginInfoResponse struct {
 	SupportedResources []plugin.ResourceDescriptor
 	ResourceSchemas    map[string]model.Schema
 	MatchFilters       []plugin.MatchFilter
+	LabelConfig        plugin.LabelConfig
 	Error              string // Set if Found is false
 }
 

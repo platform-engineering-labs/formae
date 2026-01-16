@@ -67,10 +67,13 @@ func RegisterSharedEDFTypes() error {
 		FilterCondition{},
 		MatchFilter{},
 
-		// 6. Plugin announcement (depends on ResourceDescriptor and filter types)
+		// 6. Label config (must be registered before PluginAnnouncement)
+		LabelConfig{},
+
+		// 7. Plugin announcement (depends on ResourceDescriptor, filter types, and LabelConfig)
 		PluginAnnouncement{},
 
-		// 7. Plugin operation messages (ResourceUpdater <-> PluginOperator)
+		// 8. Plugin operation messages (ResourceUpdater <-> PluginOperator)
 		ReadResource{},
 		CreateResource{},
 		UpdateResource{},

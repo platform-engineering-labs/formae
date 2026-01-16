@@ -43,6 +43,7 @@ type RegisteredPlugin struct {
 	SupportedResources []plugin.ResourceDescriptor
 	ResourceSchemas    map[string]model.Schema
 	MatchFilters       []plugin.MatchFilter
+	LabelConfig        plugin.LabelConfig
 }
 
 // NewPluginCoordinator creates a new PluginCoordinator actor
@@ -134,6 +135,7 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			SupportedResources: caps.SupportedResources,
 			ResourceSchemas:    caps.ResourceSchemas,
 			MatchFilters:       caps.MatchFilters,
+			LabelConfig:        caps.LabelConfig,
 		}
 		c.Log().Info("Plugin registered: namespace=%s node=%s rateLimit=%d resources=%d",
 			msg.Namespace, msg.NodeName, msg.MaxRequestsPerSecond, len(caps.SupportedResources))
@@ -288,6 +290,7 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 			SupportedResources: registered.SupportedResources,
 			ResourceSchemas:    registered.ResourceSchemas,
 			MatchFilters:       registered.MatchFilters,
+			LabelConfig:        registered.LabelConfig,
 		}
 	}
 
@@ -324,6 +327,7 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 		SupportedResources: rp.SupportedResources(),
 		ResourceSchemas:    schemas,
 		MatchFilters:       rp.DiscoveryFilters(),
+		LabelConfig:        rp.LabelConfig(),
 	}
 }
 
