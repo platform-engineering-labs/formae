@@ -54,7 +54,7 @@ open class AccessPointResolvable extends formae.Resolvable {
 open class AccessPoint extends formae.Resource {
 
     @aws.FieldHint
-    accessPointTags: Listing<formae.Tag>?
+    accessPointTags: Listing<aws.Tag>?
 
     @aws.FieldHint{
         createOnly = true

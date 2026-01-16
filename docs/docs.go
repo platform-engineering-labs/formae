@@ -761,9 +761,6 @@ const docTemplate = `{
                 },
                 "Nonprovisionable": {
                     "type": "boolean"
-                },
-                "Tags": {
-                    "type": "string"
                 }
             }
         },

@@ -292,7 +292,7 @@ typealias resourceType = "client-vpn-endpoint"|"customer-gateway"|"dedicated-hos
 @aws.SubResourceHint
 open class TagSpecification extends formae.SubResource {
     resourceType: resourceType?
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 }
 
 @aws.SubResourceHint

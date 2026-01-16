@@ -218,8 +218,6 @@ definitions:
         type: string
       Nonprovisionable:
         type: boolean
-      Tags:
-        type: string
     type: object
   model.Simulation:
     properties:

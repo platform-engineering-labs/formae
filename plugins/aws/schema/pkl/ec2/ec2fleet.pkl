@@ -228,7 +228,7 @@ typealias TagSpecificationResourceType = "client-vpn-endpoint"|"customer-gateway
 @aws.SubResourceHint
 open class TagSpecification extends formae.SubResource {
     resourceType: TagSpecificationResourceType?
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 }
 
 typealias DefaultTargetCapacityType = "on-demand"|"spot"
