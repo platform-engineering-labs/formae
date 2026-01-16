@@ -446,6 +446,9 @@ local function parseValueEnhanced(value: Any): Any =
     let (defaultMap =
       if (typeName == "FakeResolvable")
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
+      else if (typeName == "Tag")
+        // Tag moved from formae to aws - include import statement for dependency collection
+        Map("__type__", typeName, "__import__", importInfo, "__import_statement__", "@aws/aws.pkl")
       else
         Map("__type__", typeName, "__import__", importInfo))
       m.fold(defaultMap, (acc: Map<String, Any>, k: String, v: Any) ->
@@ -472,9 +475,9 @@ local function parseValueEnhanced(value: Any): Any =
 
 
 local function getImportInfoForType(clazz: Class, typeName: String, value: Any): String =
-  // Special case for Tag type - always use formae
+  // Special case for Tag type - use aws (Tag moved from formae to aws)
   if (typeName == "Tag")
-    "formae"
+    "aws"
   else if (typeName == "FakeValue")
     "formae"
   else if (typeName == "FakeResolvable")
@@ -581,10 +584,8 @@ local function formatValueWithTypes(value: Any, indent: String): String =
 
 local function formatListAsListing(list: List, indent: String, propertyName: String): String =
   if (list.isEmpty)
-    if (propertyName == "tags")
-      "new Listing<formae.Tag> {}"
-    else
-      "new Listing {}"
+    // Don't use type annotation for empty listings - the import might not be tracked
+    "new Listing {}"
   else
     // Filter out FormaeResourceLabel and FormaeStackLabel tags if this is tags property
     // We check both "key" and "Key" because:
@@ -617,7 +618,7 @@ local function formatListAsListing(list: List, indent: String, propertyName: Str
     else
       let (formattedItems = filteredList.map((item) -> formatValueWithTypes(item, indent)))
       if (propertyName == "tags")
-        "new Listing<formae.Tag> { " + formattedItems.join("; ") + " }"
+        "new Listing<aws.Tag> { " + formattedItems.join("; ") + " }"
       else
         "new Listing { " + formattedItems.join("; ") + " }"
 
@@ -640,7 +641,7 @@ local function isBaseType(typeName: String): Boolean =
 
 local function getTypeDeclaration(typeName: String, importInfo: String?): String =
   if (typeName == "Tag")
-    "new formae.Tag"
+    "new aws.Tag"
   else if (isBaseType(typeName))
     "new \(typeName)"
   else if (importInfo != null && importInfo != "pkl:base")

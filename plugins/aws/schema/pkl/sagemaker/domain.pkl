@@ -278,7 +278,7 @@ open class Domain extends formae.Resource {
         createOnly = true
         writeOnly = true
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     @aws.FieldHint{createOnly = true}
     vpcId: String(matches(Regex(#"[-0-9a-zA-Z]+"#)))|formae.Resolvable

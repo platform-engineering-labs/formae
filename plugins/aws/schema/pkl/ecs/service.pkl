@@ -69,7 +69,7 @@ typealias EBSTagSpecificationPropagateTags = "SERVICE"|"TASK_DEFINITION"
 open class TagSpecification extends formae.SubResource {
     propagateTags: EBSTagSpecificationPropagateTags?
     resourceType: String
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 }
 
 @aws.SubResourceHint
@@ -263,7 +263,7 @@ open class Service extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     @aws.FieldHint
     taskDefinition: (String|formae.Resolvable)?

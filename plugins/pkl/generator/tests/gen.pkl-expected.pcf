@@ -30,7 +30,7 @@ examples {
     Map("label", "simple", "group", null, "target", null, "stack", null, "managed", true, "x", 42, "name", "test")
   }
   ["Convert to map with types - complex"] {
-    Map("label", "my-bucket", "group", null, "target", null, "stack", null, "tags", List(), "managed", true, "type", "FakeAWS::Suckets::TestResource", "size", null, "bucketName", "my-test-bucket")
+    Map("label", "my-bucket", "group", null, "target", null, "stack", null, "managed", true, "type", "FakeAWS::Suckets::TestResource", "size", null, "tags", List(), "bucketName", "my-test-bucket")
   }
   ["Generate import statements"] {
     List("@aws/s3.pkl")

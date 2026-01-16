@@ -24,6 +24,6 @@ open class HealthCheck extends formae.Resource {
     @aws.FieldHint{
         outputField = "HealthCheckTags"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
 }

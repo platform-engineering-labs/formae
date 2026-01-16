@@ -71,7 +71,7 @@ open class HostedZone extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     @aws.FieldHint {
         outputField = "VPCs"

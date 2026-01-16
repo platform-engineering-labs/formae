@@ -18,7 +18,7 @@ const type = "AWS::EC2::CarrierGateway"
 open class CarrierGateway extends formae.Resource {
 
     @aws.FieldHint
-    tags: Listing<(formae.Tag)>?
+    tags: Listing<(aws.Tag)>?
 
     @aws.FieldHint{createOnly = true}
     vpcId: String|formae.Resolvable

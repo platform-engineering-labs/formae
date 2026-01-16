@@ -57,7 +57,7 @@ open class ClientVpnEndpointFederatedAuthenticationRequest extends formae.SubRes
 @aws.SubResourceHint
 open class TagSpecification extends formae.SubResource {
     resourceType: String
-    tags: Listing<formae.Tag>
+    tags: Listing<aws.Tag>
 }
 
 

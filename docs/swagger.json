@@ -755,9 +755,6 @@
                 },
                 "Nonprovisionable": {
                     "type": "boolean"
-                },
-                "Tags": {
-                    "type": "string"
                 }
             }
         },

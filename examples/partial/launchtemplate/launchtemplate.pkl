@@ -23,7 +23,7 @@ local v = new vpc.VPC {
     EnableDnsHostnames = true
     EnableDnsSupport = true
     Tags {
-        new formae.Tag {
+        new aws.Tag {
             Key = "Name"
             Value = "launch-template-vpc"
         }
@@ -38,7 +38,7 @@ local s = new subnet.Subnet {
     AvailabilityZone = "us-east-1a"
     MapPublicIpOnLaunch = true
     Tags {
-        new formae.Tag {
+        new aws.Tag {
             Key = "Name"
             Value = "launch-template-subnet"
         }
@@ -74,7 +74,7 @@ local securityGroup = new securitygroup.SecurityGroup {
         }
     }
     Tags {
-        new formae.Tag {
+        new aws.Tag {
             Key = "Name"
             Value = "launch-template-sg"
         }
@@ -86,7 +86,7 @@ local keyPair = new keypair.KeyPair {
     Label = "lt-keypair"
     KeyName = "launch-template-keypair"
     Tags {
-        new formae.Tag {
+        new aws.Tag {
             Key = "Name"
             Value = "launch-template-keypair"
         }
@@ -219,15 +219,15 @@ local launchTemplate = new launchtemplate.LaunchTemplate {
     //        new launchtemplate.LaunchTemplateTagSpecification {
     //            ResourceType = "instance"
     //            Tags {
-    //                new formae.Tag {
+    //                new aws.Tag {
     //                    Key = "Name"
     //                    Value = "WebServer-LaunchedFromTemplate"
     //                }
-    //                new formae.Tag {
+    //                new aws.Tag {
     //                    Key = "Environment"
     //                    Value = "Production"
     //                }
-    //                new formae.Tag {
+    //                new aws.Tag {
     //                    Key = "LaunchedFrom"
     //                    Value = "LaunchTemplate"
     //                }
@@ -236,7 +236,7 @@ local launchTemplate = new launchtemplate.LaunchTemplate {
     //        new launchtemplate.LaunchTemplateTagSpecification {
     //            ResourceType = "volume"
     //            Tags {
-    //                new formae.Tag {
+    //                new aws.Tag {
     //                    Key = "Name"
     //                    Value = "WebServer-Volume"
     //                }
@@ -257,11 +257,11 @@ local launchTemplate = new launchtemplate.LaunchTemplate {
         new launchtemplate.LaunchTemplateLaunchTemplateTagSpecification {
             ResourceType = "launch-template"
             Tags {
-                new formae.Tag {
+                new aws.Tag {
                     Key = "Name"
                     Value = "WebServerLaunchTemplate"
                 }
-                new formae.Tag {
+                new aws.Tag {
                     Key = "Purpose"
                     Value = "WebServerDeployment"
                 }

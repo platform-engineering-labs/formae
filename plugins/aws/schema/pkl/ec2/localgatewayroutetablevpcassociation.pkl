@@ -21,7 +21,7 @@ open class LocalGatewayRouteTableVPCAssociation extends formae.Resource {
     localGatewayRouteTableId: String|formae.Resolvable
 
     @aws.FieldHint
-    tags: Listing<(formae.Tag)>?
+    tags: Listing<(aws.Tag)>?
 
     @aws.FieldHint{createOnly = true}
     vpcId: String|formae.Resolvable

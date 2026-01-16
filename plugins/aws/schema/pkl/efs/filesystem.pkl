@@ -85,7 +85,7 @@ open class FileSystem extends formae.Resource {
     fileSystemProtection: FileSystemProtection?
 
     @aws.FieldHint
-    fileSystemTags: Listing<formae.Tag>?
+    fileSystemTags: Listing<aws.Tag>?
 
     @aws.FieldHint{createOnly = true}
     kmsKeyId: (String|formae.Resolvable)?

@@ -55,7 +55,7 @@ open class DBShardGroup extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     hidden parent = this
 

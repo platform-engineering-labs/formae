@@ -24,7 +24,6 @@ open class Resource {
     group: String?
     target: TargetResolvable?
     stack: StackResolvable?
-    hidden tags: (Listing<Tag>)?
     fixed managed: Boolean = true
 
     local self = this
@@ -70,13 +69,16 @@ open class StackResolvable extends Resolvable {
     hidden type = "Formae::Stack"
 }
 
+/// DEPRECATED: Use aws#Tag instead.
+/// This class will be removed in a future version.
+/// AWS resources should use `aws.Tag` from `@aws/aws.pkl`.
+@Deprecated { message = "Use aws#Tag instead" }
 open class Tag {
-    hidden key: String|Mapping
-    hidden value: String|Mapping|Value
+    hidden key: String
+    hidden value: Any
 
-    // Output
-    fixed Key: String|Mapping = key
-    fixed Value: String|Mapping|Value = value
+    fixed Key: String = key
+    fixed Value: Any = value
 }
 
 open class ResourceHint extends Annotation {

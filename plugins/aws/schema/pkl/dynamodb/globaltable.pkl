@@ -112,7 +112,7 @@ open class Replica extends formae.SubResource {
     resourcePolicy: ResourcePolicy?
     sSESpecification: ReplicaSSESpecification?
     tableClass: String?
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 }
 
 @aws.SubResourceHint

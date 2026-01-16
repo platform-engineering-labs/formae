@@ -50,6 +50,6 @@ open class RepositoryCreationTemplate extends formae.Resource {
     repositoryPolicy: String?
 
     @aws.FieldHint
-    resourceTags: Listing<formae.Tag>?
+    resourceTags: Listing<aws.Tag>?
 }
 

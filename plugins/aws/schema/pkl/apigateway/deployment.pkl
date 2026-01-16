@@ -54,7 +54,7 @@ open class StageDescription extends formae.SubResource {
     loggingLevel: String?
     methodSettings: Listing<MethodSetting>?
     metricsEnabled: Boolean?
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
     throttlingBurstLimit: Int?
     throttlingRateLimit: Number?
     tracingEnabled: Boolean?
