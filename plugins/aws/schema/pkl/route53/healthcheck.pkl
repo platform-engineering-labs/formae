@@ -15,7 +15,6 @@ const type = "AWS::Route53::HealthCheck"
     type = module.type
     nonprovisionable = true
     identifier = "Id"
-    tags = "HealthCheckTags"
 }
 open class HealthCheck extends formae.Resource {
 

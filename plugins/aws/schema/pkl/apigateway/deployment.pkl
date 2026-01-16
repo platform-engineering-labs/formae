@@ -76,7 +76,6 @@ open class DeploymentResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "DeploymentId"
-    tags = ""
     parent = "AWS::ApiGateway::RestApi"
     listParam = new formae.ListProperty { parentProperty = "RestApiId" listParameter = "RestApiId" }
 }

@@ -37,7 +37,6 @@ open class VpcResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "VpcId"
-    tags = "Tags"
 }
 open class VPC extends formae.Resource {
 

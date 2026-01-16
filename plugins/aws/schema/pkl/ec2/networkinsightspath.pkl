@@ -28,7 +28,6 @@ open class PathFilter extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "NetworkInsightsPathId"
-    tags = "Tags"
 }
 open class NetworkInsightsPath extends formae.Resource {
 

@@ -26,7 +26,6 @@ open class CodeSigningPolicies extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "CodeSigningConfigArn"
-    tags = "Tags"
 }
 open class CodeSigningConfig extends formae.Resource {
     @aws.FieldHint

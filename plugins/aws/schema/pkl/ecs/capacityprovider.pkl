@@ -39,7 +39,6 @@ open class ManagedScaling extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Name"
-    tags = "Tags"
     discoverable = false
     extractable = true
 }

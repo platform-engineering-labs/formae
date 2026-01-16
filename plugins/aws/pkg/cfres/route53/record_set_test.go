@@ -170,7 +170,6 @@ func TestCreate_Route53(t *testing.T) {
 			Stack: "pel-dns",
 			Schema: model.Schema{
 				Identifier: "Id",
-				Tags:       "",
 				Hints: map[string]model.FieldHint{
 					"HostedZoneId": {
 						CreateOnly: true,

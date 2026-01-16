@@ -25,7 +25,6 @@ open class NatGatewayResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "NatGatewayId"
-    tags = "Tags"
 }
 open class NatGateway extends formae.Resource {
 

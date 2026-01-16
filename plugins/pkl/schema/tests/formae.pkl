@@ -64,7 +64,6 @@ local testTarget = new formae.Target {
 @formae.ResourceHint {
     type = "AWS::S3::Bucket"
     identifier = "BucketName"
-    tags = "Tags"
     outputKeyTransformation = (it) -> it.capitalize()
 }
 local class TestBucket extends formae.Resource {
@@ -293,7 +292,6 @@ facts {
     ["Resource schema is built correctly"] {
         let (schema = testBucket.schema())
         schema.Identifier == "BucketName" &&
-        schema.Tags == "Tags" &&
         schema.Nonprovisionable == false &&
         schema.Fields.contains("bucketName")
     }

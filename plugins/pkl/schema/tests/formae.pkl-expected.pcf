@@ -115,7 +115,6 @@ examples {
     new {
       Nonprovisionable = false
       Identifier = "BucketName"
-      Tags = "Tags"
       Fields {
         "bucketName"
         "Region"
@@ -182,8 +181,7 @@ examples {
       Schema {
         Nonprovisionable = false
         Identifier = "BucketName"
-        Tags = "Tags"
-        Fields {
+          Fields {
           "bucketName"
           "Region"
           "Tags"
@@ -243,7 +241,6 @@ examples {
       Schema {
         Nonprovisionable = false
         Identifier = "ResourceName"
-        Tags = null
         Fields {
           "resourceName"
           "nested"
@@ -376,7 +373,6 @@ examples {
     new {
       Nonprovisionable = false
       Identifier = "BucketName"
-      Tags = "Tags"
       Fields {
         "bucketName"
         "Region"

@@ -28,7 +28,6 @@ open class KeyResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
     discoverable = false
     extractable = false
 }

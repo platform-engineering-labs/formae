@@ -373,7 +373,6 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 		NativeID: "vpc-12345",
 		Schema: pkgmodel.Schema{
 			Identifier: "VpcId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -402,7 +401,6 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 		NativeID: "subnet-12345",
 		Schema: pkgmodel.Schema{
 			Identifier: "SubnetId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -448,7 +446,6 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 		NativeID: "new-vpc-67890",
 		Schema: pkgmodel.Schema{
 			Identifier: "VpcId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -587,7 +584,6 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 		Ksuid:  vpcKsuid,
 		Schema: pkgmodel.Schema{
 			Identifier: "VpcId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -615,7 +611,6 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 		Ksuid:  subnetKsuid,
 		Schema: pkgmodel.Schema{
 			Identifier: "SubnetId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -660,7 +655,6 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 		Ksuid:  vpcKsuid,
 		Schema: pkgmodel.Schema{
 			Identifier: "VpcId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -783,7 +777,6 @@ func TestGenerateResourceUpdatesForReconcile_MissingResolvable(t *testing.T) {
 		Ksuid:  util.NewID(),
 		Schema: pkgmodel.Schema{
 			Identifier: "Id",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"HostedZoneId": {
 					CreateOnly: true,
@@ -823,7 +816,6 @@ func TestResourceUpdatesForReconcile_GeneratesUpdateOperationsForUnmanagedResour
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -861,7 +853,6 @@ func TestResourceUpdatesForReconcile_GeneratesUpdateOperationsForUnmanagedResour
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -925,7 +916,6 @@ func TestGenerateResourceUpdatesForReconcile_Create(t *testing.T) {
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -978,7 +968,6 @@ func TestGenerateResourceUpdatesForReconcile_StackExists_NoChanges(t *testing.T)
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -1034,7 +1023,6 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -1064,7 +1052,6 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -1127,7 +1114,6 @@ func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -1156,7 +1142,6 @@ func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -1216,7 +1201,6 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -1245,7 +1229,6 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 		Target: "test-target",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,

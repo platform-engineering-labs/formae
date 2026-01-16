@@ -364,7 +364,6 @@ open class VCpuCount extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "LaunchTemplateId"
-    tags = "TagSpecifications"
 }
 open class LaunchTemplate extends formae.Resource {
 

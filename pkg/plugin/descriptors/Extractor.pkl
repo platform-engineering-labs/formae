@@ -28,7 +28,6 @@ function extractDescriptors(): Listing<resourceDescriptor.ResourceDescriptor> = 
                             Schema = new formae.Schema {
                                 Nonprovisionable = clazz.annotations[0].getProperty("nonprovisionable")
                                 Identifier = clazz.annotations[0].getProperty("identifier")
-                                Tags = clazz.annotations[0].getProperty("tags")
                                 Discoverable = clazz.annotations[0].getProperty("discoverable")
                                 Hints = new Mapping<String, formae.FieldHint> {
                                     for (fieldName, fieldHint in formae.fq.hints(clazz)) {

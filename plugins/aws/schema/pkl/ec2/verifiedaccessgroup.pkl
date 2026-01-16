@@ -20,7 +20,6 @@ open class SSESpecification extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "VerifiedAccessGroupId"
-    tags = "Tags"
 }
 open class VerifiedAccessGroup extends formae.Resource {
 

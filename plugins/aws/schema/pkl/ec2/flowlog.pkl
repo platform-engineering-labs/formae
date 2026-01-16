@@ -20,7 +20,6 @@ typealias FlowLogTrafficType = "ACCEPT"|"ALL"|"REJECT"
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class FlowLog extends formae.Resource {
 

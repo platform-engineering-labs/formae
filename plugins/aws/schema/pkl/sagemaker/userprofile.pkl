@@ -170,7 +170,6 @@ open class UserProfileResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
 }
 open class UserProfile extends formae.Resource {
 

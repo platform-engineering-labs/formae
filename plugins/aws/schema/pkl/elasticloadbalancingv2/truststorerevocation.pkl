@@ -22,7 +22,6 @@ open class RevocationContent extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "RevocationId"
-    tags = "Tags"
     parent = "AWS::ElasticLoadBalancingV2::TrustStore"
     listParam = new formae.ListProperty { parentProperty = "TrustStoreArn" listParameter = "TrustStoreArn" }
 }

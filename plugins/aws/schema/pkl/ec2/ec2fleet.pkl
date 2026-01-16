@@ -259,7 +259,6 @@ open class VCpuCount extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "FleetId"
-    tags = "TagSpecifications"
 }
 open class EC2Fleet extends formae.Resource {
 

@@ -14,7 +14,6 @@ const type = "AWS::EC2::NetworkInsightsAccessScopeAnalysis"
 @aws.ResourceHint {
     type = module.type
     identifier = "NetworkInsightsAccessScopeAnalysisId"
-    tags = "Tags"
 }
 open class NetworkInsightsAccessScopeAnalysis extends formae.Resource {
 

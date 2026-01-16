@@ -154,7 +154,6 @@ open class InstanceResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "InstanceId"
-    tags = "Tags"
 }
 open class Instance extends formae.Resource {
 

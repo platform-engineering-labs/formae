@@ -22,7 +22,6 @@ typealias ImageTagMutability = "MUTABLE"|"IMMUTABLE"
 @aws.ResourceHint {
     type = module.type
     identifier = "Prefix"
-    tags = "ResourceTags"
 }
 open class RepositoryCreationTemplate extends formae.Resource {
 

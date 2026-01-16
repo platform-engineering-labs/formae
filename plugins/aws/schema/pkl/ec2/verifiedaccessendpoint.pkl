@@ -35,7 +35,6 @@ open class SSESpecification extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "VerifiedAccessEndpointId"
-    tags = "Tags"
 }
 open class VerifiedAccessEndpoint extends formae.Resource {
 
