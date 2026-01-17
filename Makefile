@@ -185,6 +185,7 @@ test-property:
 
 test-schema-pkl:
 	cd plugins/pkl/schema && pkl test tests/formae.pkl
+	cd plugins/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
 
 test-generator-pkl:
 	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
