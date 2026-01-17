@@ -44,7 +44,7 @@ type Projects struct {
 }
 
 func NewApp() *App {
-	mgr := plugin.NewManager("")
+	mgr := plugin.NewManager(util.ExpandHomePath("~/.pel/formae/plugins"))
 	u, err := usage.NewPostHogSender()
 	if err != nil {
 		fmt.Println(display.Red("Error: " + err.Error()))

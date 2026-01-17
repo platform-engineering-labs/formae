@@ -52,7 +52,7 @@ install-aws-plugin:
 	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
 	cp plugins/aws/aws ~/.pel/formae/plugins/aws/v${VERSION}/aws
 
-pkg-bin: clean build build-tools
+pkg-bin: clean build build-tools install-aws-plugin
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
