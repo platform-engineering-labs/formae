@@ -187,7 +187,7 @@ open class UserProfile extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     @aws.FieldHint{createOnly = true}
     userProfileName: String

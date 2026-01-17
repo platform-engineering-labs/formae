@@ -15,7 +15,7 @@ const type = "AWS::S3::StorageLensGroup"
 open class And extends formae.SubResource {
     matchAnyPrefix:  Listing<String?>?
     matchAnySuffix:  Listing<String?>?
-    matchAnyTag:  Listing<(formae.Tag)?>?
+    matchAnyTag:  Listing<(aws.Tag)?>?
     matchObjectAge: MatchObjectAge?
     matchObjectSize: MatchObjectSize?
 }
@@ -25,7 +25,7 @@ open class Filter extends formae.SubResource {
     and: And?
     matchAnyPrefix:  Listing<String?>?
     matchAnySuffix:  Listing<String?>?
-    matchAnyTag:  Listing<(formae.Tag)?>?
+    matchAnyTag:  Listing<(aws.Tag)?>?
     matchObjectAge: MatchObjectAge?
     matchObjectSize: MatchObjectSize?
     or: Or?
@@ -48,7 +48,7 @@ open class MatchObjectSize extends formae.SubResource {
 open class Or extends formae.SubResource {
     matchAnyPrefix:  Listing<String?>?
     matchAnySuffix:  Listing<String?>?
-    matchAnyTag:  Listing<(formae.Tag)?>?
+    matchAnyTag:  Listing<(aws.Tag)?>?
     matchObjectAge: MatchObjectAge?
     matchObjectSize: MatchObjectSize?
 }
@@ -69,5 +69,5 @@ open class StorageLensGroup extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 }

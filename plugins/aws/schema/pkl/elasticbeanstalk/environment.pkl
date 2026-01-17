@@ -63,7 +63,7 @@ open class Environment extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     @aws.FieldHint{writeOnly = true}
     templateName: String?

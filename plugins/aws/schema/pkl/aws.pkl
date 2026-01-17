@@ -7,6 +7,11 @@
 module aws
 
 import "@formae/formae.pkl"
+import "types.pkl"
+
+/// AWS Tag - re-exported from types.pkl for convenience.
+/// Users can reference as `aws#Tag` or `aws.Tag`.
+typealias Tag = types.Tag
 
 typealias Region = "af-south-1" |
   "ap-east-1" |

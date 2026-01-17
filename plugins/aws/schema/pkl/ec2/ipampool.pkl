@@ -47,7 +47,7 @@ open class IPAMPool extends formae.Resource {
     allocationMinNetmaskLength: Int?
 
     @aws.FieldHint
-    allocationResourceTags: Listing<formae.Tag>?
+    allocationResourceTags: Listing<aws.Tag>?
 
     @aws.FieldHint
     autoImport: Boolean?
@@ -83,5 +83,5 @@ open class IPAMPool extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 }

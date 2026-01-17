@@ -39,7 +39,7 @@ open class AnalyticsConfiguration extends formae.SubResource {
     @aws.FieldHint {
         outputTransformation = formae.transform.capitalizeMemberKeys
     }
-    tagFilters: Listing<formae.Tag>?
+    tagFilters: Listing<aws.Tag>?
 }
 
 @aws.SubResourceHint
@@ -137,7 +137,7 @@ open class IntelligentTieringConfiguration extends formae.SubResource {
     @aws.FieldHint {
         outputTransformation = formae.transform.capitalizeMemberKeys
     }
-    tagFilters: Listing<formae.Tag>?
+    tagFilters: Listing<aws.Tag>?
 
     tierings: Listing<Tiering>
 }
@@ -209,7 +209,7 @@ open class MetricsConfiguration extends formae.SubResource {
 
     prefix: String?
 
-    tagFilters: Listing<formae.Tag>?
+    tagFilters: Listing<aws.Tag>?
 }
 
 @aws.SubResourceHint
@@ -372,7 +372,7 @@ open class ReplicationRule extends formae.SubResource {
 open class ReplicationRuleAndOperator extends formae.SubResource {
     prefix: String?
 
-    tagFilters: Listing<formae.Tag>?
+    tagFilters: Listing<aws.Tag>?
 }
 
 @aws.SubResourceHint
@@ -381,7 +381,7 @@ open class ReplicationRuleFilter extends formae.SubResource {
 
     prefix: String?
 
-    tagFilter: formae.Tag?
+    tagFilter: aws.Tag?
 }
 
 typealias ReplicationTimeStatus = "Disabled"|"Enabled"
@@ -448,7 +448,7 @@ open class Rule extends formae.SubResource {
 
     status: RuleStatus
 
-    tagFilters: Listing<formae.Tag>?
+    tagFilters: Listing<aws.Tag>?
 
     transition: Transition?
 
@@ -656,7 +656,7 @@ open class Bucket extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     @aws.FieldHint
     versioningConfiguration: VersioningConfiguration?

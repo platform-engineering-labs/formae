@@ -32,7 +32,7 @@ local vpcAlias = new vpc.VPC {
     enableDnsHostnames = true
     enableDnsSupport = true
     tags {
-        new formae.Tag {
+        new aws.Tag {
             key = "Name"
             value = "alias-lb-vpc"
         }
@@ -52,7 +52,7 @@ local subnet1 = new subnet.Subnet {
     availabilityZone = "us-east-2a"
     mapPublicIpOnLaunch = true
     tags {
-        new formae.Tag {
+        new aws.Tag {
             key = "Name"
             value = "alias-lb-subnet-1"
         }
@@ -66,7 +66,7 @@ local subnet2 = new subnet.Subnet {
     availabilityZone = "us-east-2b"
     mapPublicIpOnLaunch = true
     tags {
-        new formae.Tag {
+        new aws.Tag {
             key = "Name"
             value = "alias-lb-subnet-2"
         }
@@ -78,7 +78,7 @@ local rt = new routetable.RouteTable {
     label = "alias-lb-route-table"
     vpcId = vpcAlias.res.id
     tags {
-        new formae.Tag {
+        new aws.Tag {
             key = "Name"
             value = "alias-lb-route-table"
         }
@@ -134,7 +134,7 @@ local alb = new loadbalancer.LoadBalancer {
         securityGroup.res.id
     }
     tags {
-        new formae.Tag {
+        new aws.Tag {
             key = "Name"
             value = "alias-lb-alb"
         }

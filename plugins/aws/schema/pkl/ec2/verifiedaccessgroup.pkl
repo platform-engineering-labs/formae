@@ -39,7 +39,7 @@ open class VerifiedAccessGroup extends formae.Resource {
         updateMethod = "EntitySet"
         indexField = "Key"
     }
-    tags: Listing<formae.Tag>?
+    tags: Listing<aws.Tag>?
 
     @aws.FieldHint
     verifiedAccessInstanceId: String|formae.Resolvable
