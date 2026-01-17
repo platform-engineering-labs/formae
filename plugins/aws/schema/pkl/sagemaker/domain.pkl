@@ -240,7 +240,6 @@ open class DomainResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
     docComment = "This resource creates an EFS system - AutoHomeEFS - which will need to be manually removed prior to successfully destroying the domain."
 }
 open class Domain extends formae.Resource {

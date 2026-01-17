@@ -42,7 +42,6 @@ open class PrivateIpAddressSpecification extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class NetworkInterface extends formae.Resource {
 

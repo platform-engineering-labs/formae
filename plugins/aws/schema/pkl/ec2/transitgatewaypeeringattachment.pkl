@@ -14,7 +14,6 @@ const type = "AWS::EC2::TransitGatewayPeeringAttachment"
 @aws.ResourceHint {
     type = module.type
     identifier = "TransitGatewayAttachmentId"
-    tags = "Tags"
 }
 open class TransitGatewayPeeringAttachment extends formae.Resource {
 

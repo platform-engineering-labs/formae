@@ -27,7 +27,6 @@ open class InternetGatewayResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "InternetGatewayId"
-    tags = "Tags"
 }
 open class InternetGateway extends formae.Resource {
 

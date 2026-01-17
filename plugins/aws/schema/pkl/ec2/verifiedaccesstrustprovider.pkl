@@ -34,7 +34,6 @@ open class OidcOptions extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "VerifiedAccessTrustProviderId"
-    tags = "Tags"
 }
 open class VerifiedAccessTrustProvider extends formae.Resource {
 

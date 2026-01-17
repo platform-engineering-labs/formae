@@ -14,7 +14,6 @@ const type = "AWS::Route53::DNSSEC"
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = ""
 }
 open class DNSSEC extends formae.Resource {
     @aws.FieldHint

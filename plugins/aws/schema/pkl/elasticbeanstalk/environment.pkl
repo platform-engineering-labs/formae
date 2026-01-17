@@ -29,7 +29,6 @@ open class Tier extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "EnvironmentName"
-    tags = "Tags"
 }
 open class Environment extends formae.Resource {
 

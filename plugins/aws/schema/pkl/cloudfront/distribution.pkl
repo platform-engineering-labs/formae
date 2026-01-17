@@ -294,7 +294,6 @@ open class DistributionResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
     discoverable = false
     extractable = false
 }

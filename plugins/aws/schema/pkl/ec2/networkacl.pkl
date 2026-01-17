@@ -14,7 +14,6 @@ const type = "AWS::EC2::NetworkAcl"
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class NetworkAcl extends formae.Resource {
 

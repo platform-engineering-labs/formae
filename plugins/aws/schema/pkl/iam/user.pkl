@@ -27,7 +27,6 @@ open class UserPolicy extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "UserName"
-    tags = "Tags"
     discoverable = false
     extractable = false
 }

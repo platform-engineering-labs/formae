@@ -194,7 +194,6 @@ open class VpcLatticeConfiguration extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Ref"
-    tags = "Tags"
 }
 open class Service extends formae.Resource {
 

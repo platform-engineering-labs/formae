@@ -28,7 +28,6 @@ open class DnsOptions extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class VPCEndpoint extends formae.Resource {
 

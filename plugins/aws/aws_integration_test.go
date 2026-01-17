@@ -53,7 +53,6 @@ func TestMain(m *testing.M) {
 			Label: "pel-zone",
 			Schema: model.Schema{
 				Identifier: "Id",
-				Tags:       "HostedZoneTags",
 				Hints: map[string]model.FieldHint{
 					"Name": {
 						CreateOnly: true,
@@ -264,7 +263,6 @@ func TestAWS_UpdateLogGroupRetentionDays(t *testing.T) {
 		Label: "pel-test-lg",
 		Schema: model.Schema{
 			Identifier: "Arn",
-			Tags:       "Tags",
 			Fields:     []string{"DataProtectionPolicy", "FieldIndexPolicies", "KmsKeyId", "LogGroupClass", "LogGroupName", "RetentionInDays", "Tags"},
 		},
 		Type:       "AWS::Logs::LogGroup",
@@ -287,7 +285,6 @@ func TestAWS_UpdateLogGroupRetentionDays(t *testing.T) {
 		Label: "pel-test-lg",
 		Schema: model.Schema{
 			Identifier: "Arn",
-			Tags:       "Tags",
 			Fields:     []string{"DataProtectionPolicy", "FieldIndexPolicies", "KmsKeyId", "LogGroupClass", "LogGroupName", "RetentionInDays", "Tags"},
 		},
 		Type:       "AWS::Logs::LogGroup",
@@ -322,7 +319,6 @@ func TestAWS_UpdateSQSwithTheoreticalReplace(t *testing.T) {
 		Label: "pel-test-sqs",
 		Schema: model.Schema{
 			Identifier: "Arn",
-			Tags:       "Tags",
 			Hints: map[string]model.FieldHint{
 				"FifoQueue": {
 					CreateOnly: true,
@@ -357,7 +353,6 @@ func TestAWS_UpdateSQSwithTheoreticalReplace(t *testing.T) {
 		Label: "pel-test-sqs",
 		Schema: model.Schema{
 			Identifier: "Arn",
-			Tags:       "Tags",
 			Hints: map[string]model.FieldHint{
 				"FifoQueue": {
 					CreateOnly: true,
@@ -526,8 +521,7 @@ func ec2InstanceCreateRequest(id string) *resource.CreateRequest {
 			Label: fmt.Sprintf("pel-test-%s", id),
 			Schema: model.Schema{
 				Identifier: "Name",
-				Tags:       "Tags",
-				Hints: map[string]model.FieldHint{
+					Hints: map[string]model.FieldHint{
 					"ImageId": {
 						CreateOnly: true,
 					},

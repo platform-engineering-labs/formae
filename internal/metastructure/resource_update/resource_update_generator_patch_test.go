@@ -34,7 +34,6 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 		NativeID: "vpc-12345",
 		Schema: pkgmodel.Schema{
 			Identifier: "VpcId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -63,7 +62,6 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 		NativeID: "subnet-12345",
 		Schema: pkgmodel.Schema{
 			Identifier: "SubnetId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -109,7 +107,6 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 		NativeID: "new-vpc-67890",
 		Schema: pkgmodel.Schema{
 			Identifier: "VpcId",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"CidrBlock": {
 					CreateOnly: true,
@@ -238,7 +235,6 @@ func TestGenerateResourceUpdatesForApply_PatchMode(t *testing.T) {
 		NativeID: "bucket-12345",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -306,7 +302,6 @@ func TestResourceUpdatesForPatch_GeneratesUpdateOperationsForUnmanagedResources(
 		NativeID: "bucket-12345",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,
@@ -345,7 +340,6 @@ func TestResourceUpdatesForPatch_GeneratesUpdateOperationsForUnmanagedResources(
 		NativeID: "bucket-12345",
 		Schema: pkgmodel.Schema{
 			Identifier: "BucketName",
-			Tags:       "Tags",
 			Hints: map[string]pkgmodel.FieldHint{
 				"BucketName": {
 					CreateOnly: true,

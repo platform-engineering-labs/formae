@@ -34,7 +34,6 @@ open class SecurityGroupResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "GroupId"
-    tags = "Tags"
 }
 open class SecurityGroup extends formae.Resource {
 

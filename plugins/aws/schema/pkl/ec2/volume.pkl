@@ -24,7 +24,6 @@ typealias VolumeType = "standard" | "io1" | "io2" | "gp2" | "sc1" | "st1" | "gp3
 @aws.ResourceHint {
     type = module.type
     identifier = "VolumeId"
-    tags = "Tags"
 }
 open class Volume extends formae.Resource {
 

@@ -7,56 +7,23 @@
 package props
 
 import (
+	"encoding/json"
 	"testing"
 
-	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestHasIdentityTags(t *testing.T) {
-	resource := &model.Resource{
-		Schema: model.Schema{
-			Tags: TagsField,
-		},
-	}
+func TestMatch(t *testing.T) {
+	oaProperties := json.RawMessage(`{"BucketName": "test-bucket", "Tags": [{"Key": "env", "Value": "prod"}]}`)
+	rProperties := `{"BucketName": "test-bucket", "Tags": [{"Key": "env", "Value": "prod"}]}`
 
-	resourceKnown := &model.Resource{
-		Schema: model.Schema{
-			Tags: "HostedZoneTags",
-		},
-	}
+	match, err := Match(oaProperties, rProperties)
+	assert.NoError(t, err)
+	assert.True(t, match)
 
-	matchDefault := `
-	{
-      "Tags": [
-      	{
-		   "Key": "FormaeResourceLabel",
-           "Value": "some-label"
-         },
-         {
-			"Key": "FormaeStackLabel",
-           "Value": "some-stack"
-          }
-      ]
-	}`
-
-	matchKnown := `
-	{
-      "HostedZoneTags": [
-      	{
-		   "Key": "FormaeResourceLabel",
-           "Value": "some-label"
-         },
-         {
-			"Key": "FormaeStackLabel",
-           "Value": "some-stack"
-          }
-      ]
-	}`
-
-	assert.True(t, HasIdentityTags(resource, matchDefault, "some-label", "some-stack"))
-	assert.True(t, HasIdentityTags(resourceKnown, matchKnown, "some-label", "some-stack"))
-
-	assert.False(t, HasIdentityTags(resource, matchDefault, "formae-label", "some-snarf"))
-	assert.False(t, HasIdentityTags(resourceKnown, matchKnown, "some-taco", "some-stack"))
+	// Test non-matching properties
+	rPropertiesDiff := `{"BucketName": "different-bucket"}`
+	match, err = Match(oaProperties, rPropertiesDiff)
+	assert.NoError(t, err)
+	assert.False(t, match)
 }

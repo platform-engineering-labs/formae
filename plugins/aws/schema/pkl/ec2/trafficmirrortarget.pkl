@@ -15,7 +15,6 @@ const type = "AWS::EC2::TrafficMirrorTarget"
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class TrafficMirrorTarget extends formae.Resource {
 

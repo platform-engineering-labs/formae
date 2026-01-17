@@ -136,7 +136,6 @@ open class StorageLensStorageLensGroupSelectionCriteria extends formae.SubResour
 @aws.ResourceHint {
     type = module.type
     identifier = "StorageLensConfiguration.Id"
-    tags = "Tags"
 }
 open class StorageLens extends formae.Resource {
 

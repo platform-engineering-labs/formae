@@ -21,7 +21,6 @@ open class Location extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = ""
 }
 open class CidrCollection extends formae.Resource {
 

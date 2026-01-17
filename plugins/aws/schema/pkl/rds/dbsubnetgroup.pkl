@@ -31,7 +31,6 @@ open class DBSubnetGroupResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "DBSubnetGroupName"
-    tags = "Tags"
 }
 open class DBSubnetGroup extends formae.Resource {
 

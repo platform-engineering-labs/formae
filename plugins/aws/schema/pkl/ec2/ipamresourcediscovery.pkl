@@ -19,7 +19,6 @@ open class IPAMResourceDiscoveryIpamOperatingRegion extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "IpamResourceDiscoveryId"
-    tags = "Tags"
 }
 open class IPAMResourceDiscovery extends formae.Resource {
 

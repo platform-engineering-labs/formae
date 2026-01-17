@@ -28,7 +28,6 @@ open class VpcConfiguration extends formae.SubResource {
 @aws.ResourceHint {
     type = module.type
     identifier = "Name"
-    tags = "Tags"
 }
 open class AccessPoint extends formae.Resource {
 

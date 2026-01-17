@@ -26,7 +26,6 @@ open class ResourceResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "ResourceId"
-    tags = ""
     parent = "AWS::ApiGateway::RestApi"
     listParam = new formae.ListProperty { parentProperty = "RestApiId" listParameter = "RestApiId" }
     discoverable = false

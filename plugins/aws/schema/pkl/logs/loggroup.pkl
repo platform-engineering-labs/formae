@@ -36,7 +36,6 @@ open class LogGroupResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "Arn"
-    tags = "Tags"
 }
 open class LogGroup extends formae.Resource {
 

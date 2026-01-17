@@ -15,7 +15,6 @@ const type = "AWS::EC2::LocalGatewayRouteTableVirtualInterfaceGroupAssociation"
 @aws.ResourceHint {
     type = module.type
     identifier = "LocalGatewayRouteTableVirtualInterfaceGroupAssociationId"
-    tags = "Tags"
 }
 open class LocalGatewayRouteTableVirtualInterfaceGroupAssociation extends formae.Resource {
 

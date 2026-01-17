@@ -14,7 +14,6 @@ const type = "AWS::EC2::InstanceConnectEndpoint"
 @aws.ResourceHint {
     type = module.type
     identifier = "Id"
-    tags = "Tags"
 }
 open class InstanceConnectEndpoint extends formae.Resource {
 

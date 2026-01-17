@@ -35,7 +35,6 @@ open class KeypairResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "KeyPairId"
-    tags = "Tags"
 }
 open class KeyPair extends formae.Resource {
 

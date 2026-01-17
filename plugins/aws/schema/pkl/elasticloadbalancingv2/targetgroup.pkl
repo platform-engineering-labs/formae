@@ -53,7 +53,6 @@ open class TargetGroupResolvable extends formae.Resolvable {
 @aws.ResourceHint {
     type = module.type
     identifier = "TargetGroupArn"
-    tags = "Tags"
 }
 open class TargetGroup extends formae.Resource {
 

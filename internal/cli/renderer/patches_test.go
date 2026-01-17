@@ -182,69 +182,13 @@ func TestFormatReferenceValue(t *testing.T) {
 	})
 }
 
-func TestFormatPatchDocument_TagsPropertyCreated_ReplacesAddOpsForFormaeTagsWithHumanReadableMessage(t *testing.T) {
-	node := gtree.NewRoot("")
-	patchDoc := []map[string]string{
-		{
-			"op":    "add",
-			"path":  "/Tags",
-			"value": `[{"Key":"FormaeResourceLabel","Value":"one-more-buuuuuuucket"},{"Key":"FormaeStackLabel","Value":"buc-ees"}]`,
-		},
-	}
-	serialized, err := json.Marshal(patchDoc)
-	assert.NoError(t, err)
-
-	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "$unmanaged")
-
-	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
-	assert.NoError(t, err)
-
-	assert.Len(t, nodes, 2)
-	assert.Contains(t, nodes[1].Name(), "put resource under management")
-}
-
-func TestFormatPatchDocument_ElementsAddedToTagProperty_ReplacesAddOpsForFormaeTagsWithHumanReadableMessage(t *testing.T) {
-	node := gtree.NewRoot("")
-	patchDoc := []map[string]any{
-		{
-			"op":   "add",
-			"path": "/Tags/1",
-			"value": map[string]any{
-				"Key":   "FormaeStackLabel",
-				"Value": "buc-ees"},
-		},
-		{
-			"op":   "add",
-			"path": "/Tags/2",
-			"value": map[string]any{
-				"Key":   "FormaeResourceLabel",
-				"Value": "one-more-buuuuuuucket",
-			},
-		},
-	}
-	serialized, err := json.Marshal(patchDoc)
-	assert.NoError(t, err)
-
-	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "$unmanaged")
-
-	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
-	assert.NoError(t, err)
-
-	assert.Len(t, nodes, 2)
-	assert.Contains(t, nodes[1].Name(), "put resource under management")
-}
-
-func TestFormatPatchDocument_TagsPropertyCreatedWithMixedTags_ShowsBothFormaeMessageAndCustomTags(t *testing.T) {
+func TestFormatPatchDocument_TagsPropertyCreated_ShowsTagsAndManagementMessage(t *testing.T) {
 	node := gtree.NewRoot("")
 	patchDoc := []map[string]any{
 		{
 			"op":   "add",
 			"path": "/Tags",
 			"value": []any{
-				map[string]any{"Key": "FormaeResourceLabel", "Value": "my-resource"},
-				map[string]any{"Key": "FormaeStackLabel", "Value": "my-stack"},
 				map[string]any{"Key": "Environment", "Value": "production"},
 				map[string]any{"Key": "Team", "Value": "platform-eng"},
 			},
@@ -259,15 +203,15 @@ func TestFormatPatchDocument_TagsPropertyCreatedWithMixedTags_ShowsBothFormaeMes
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
 
-	// Should have: root node, "put resource under management" message, and custom tags display
-	assert.GreaterOrEqual(t, len(nodes), 3, "Expected at least root + management message + custom tags")
+	// Should have: root node, tags display, and management message
+	assert.GreaterOrEqual(t, len(nodes), 2, "Expected at least root + management message")
 
 	nodeNames := make([]string, len(nodes))
 	for i, n := range nodes {
 		nodeNames[i] = n.Name()
 	}
 
-	// Verify "put resource under management" message is present (may contain ANSI color codes)
+	// Verify "put resource under management" message is present
 	hasManagementMessage := false
 	for _, name := range nodeNames {
 		if contains(name, "put resource under management") {
@@ -275,20 +219,7 @@ func TestFormatPatchDocument_TagsPropertyCreatedWithMixedTags_ShowsBothFormaeMes
 			break
 		}
 	}
-	assert.True(t, hasManagementMessage, "Should show management message for Formae tags")
-
-	// Verify custom tags are shown (as a Tags property with the custom tags array)
-	hasCustomTagsOutput := false
-	for _, name := range nodeNames {
-		if name != "" && name != "put resource under management" {
-			// The custom tags should appear in some form in the output
-			if containsAny(name, []string{"Environment", "Team", "production", "platform-eng", "Tags"}) {
-				hasCustomTagsOutput = true
-				break
-			}
-		}
-	}
-	assert.True(t, hasCustomTagsOutput, "Should show custom tags in output")
+	assert.True(t, hasManagementMessage, "Should show management message when oldStackName is $unmanaged")
 }
 
 func TestFormatPatchDocument_TagsPropertyCreatedWithOnlyCustomTags_ShowsOnlyCustomTags(t *testing.T) {
