@@ -64,7 +64,7 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	if c.pluginManager != nil {
 		for _, rp := range c.pluginManager.ListResourcePlugins() {
 			namespace := (*rp).Namespace()
-			maxRPS := (*rp).MaxRequestsPerSecond()
+			maxRPS := (*rp).RateLimit().MaxRequestsPerSecondForNamespace
 			err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 				Namespace:            namespace,
 				MaxRequestsPerSecond: maxRPS,
@@ -197,16 +197,17 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 		if err == nil && localPlugin != nil {
 			// Register namespace with RateLimiter if not already registered
 			if !c.registeredLocalNamespaces[req.Namespace] {
+				maxRPS := (*localPlugin).RateLimit().MaxRequestsPerSecondForNamespace
 				err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 					Namespace:            req.Namespace,
-					MaxRequestsPerSecond: (*localPlugin).MaxRequestsPerSecond(),
+					MaxRequestsPerSecond: maxRPS,
 				})
 				if err != nil {
 					c.Log().Error("Failed to register namespace %s with RateLimiter: %v", req.Namespace, err)
 					// Don't fail the spawn - rate limiting is not critical
 				} else {
 					c.registeredLocalNamespaces[req.Namespace] = true
-					c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, (*localPlugin).MaxRequestsPerSecond())
+					c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, maxRPS)
 				}
 			}
 
@@ -277,41 +278,16 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, regist
 
 // getPluginInfo retrieves plugin information for the given namespace.
 // It first checks registered external plugins, then falls back to local plugins.
+// Filters are cached from the initial plugin announcement (no refresh needed since filters are static).
 func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.PluginInfoResponse {
 	// 1. Check external plugins first
 	if registered, ok := c.plugins[req.Namespace]; ok {
-		filters := registered.MatchFilters
-
-		// If RefreshFilters is requested, call the remote PluginActor
-		if req.RefreshFilters {
-			pluginActorPID := gen.ProcessID{
-				Name: "PluginActor",
-				Node: registered.NodeName,
-			}
-
-			resp, err := c.Call(pluginActorPID, messages.GetFilters{})
-			if err != nil {
-				c.Log().Error("Failed to refresh filters from remote plugin %s on node %s, using cached: %v", req.Namespace, registered.NodeName, err)
-			} else if filterResp, ok := resp.(messages.GetFiltersResponse); ok {
-				if filterResp.Error != "" {
-					c.Log().Error("Remote plugin %s returned error for GetFilters, using cached: %s", req.Namespace, filterResp.Error)
-				} else {
-					c.Log().Debug("Refreshed filters from remote plugin %s: %d filters", req.Namespace, len(filterResp.Filters))
-					filters = filterResp.Filters
-					// Update cache
-					registered.MatchFilters = filters
-				}
-			} else {
-				c.Log().Error("Unexpected response type %T from GetFilters for namespace %s, using cached", resp, req.Namespace)
-			}
-		}
-
 		return messages.PluginInfoResponse{
 			Found:              true,
 			Namespace:          req.Namespace,
 			SupportedResources: registered.SupportedResources,
 			ResourceSchemas:    registered.ResourceSchemas,
-			MatchFilters:       filters,
+			MatchFilters:       registered.MatchFilters,
 		}
 	}
 
@@ -347,7 +323,7 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 		Namespace:          req.Namespace,
 		SupportedResources: rp.SupportedResources(),
 		ResourceSchemas:    schemas,
-		MatchFilters:       rp.GetMatchFilters(),
+		MatchFilters:       rp.DiscoveryFilters(),
 	}
 }
 

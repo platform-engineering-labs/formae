@@ -20,7 +20,7 @@ type ResourcePlugin interface {
 	Namespace() string
 	SupportedResources() []ResourceDescriptor
 	SchemaForResourceType(resourceType string) (model.Schema, error)
-	MaxRequestsPerSecond() int
+	RateLimit() RateLimitConfig
 
 	Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error)
 	Update(context context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error)
@@ -31,10 +31,23 @@ type ResourcePlugin interface {
 
 	List(context context.Context, request *resource.ListRequest) (*resource.ListResult, error)
 
-	TargetBehavior() resource.TargetBehavior
+	// DiscoveryFilters returns declarative filters for discovery (serializable).
+	// Resources matching all conditions in a filter are excluded from discovery.
+	DiscoveryFilters() []MatchFilter
+}
 
-	// GetMatchFilters returns declarative filters for discovery (serializable)
-	GetMatchFilters() []MatchFilter
+// RateLimitScope defines the granularity of rate limiting
+type RateLimitScope string
+
+const (
+	// RateLimitScopeNamespace applies rate limiting at the plugin namespace level (e.g., AWS, Azure)
+	RateLimitScopeNamespace RateLimitScope = "Namespace"
+)
+
+// RateLimitConfig specifies rate limiting behavior for a plugin
+type RateLimitConfig struct {
+	Scope                            RateLimitScope
+	MaxRequestsPerSecondForNamespace int
 }
 
 // PluginInfo provides read-only plugin metadata for discovery operations.
@@ -43,42 +56,31 @@ type PluginInfo interface {
 	GetNamespace() string
 	SupportedResources() []ResourceDescriptor
 	SchemaForResourceType(resourceType string) (model.Schema, error)
-	GetMatchFilters() []MatchFilter
+	DiscoveryFilters() []MatchFilter
 }
 
-// ResourceFilter is a function that determines if a resource should be filtered. It
-// MatchFilter is a declarative, serializable filter definition for discovery
+// MatchFilter is a declarative, serializable filter definition for discovery.
+// Resources matching ALL conditions in a filter are excluded from discovery.
 type MatchFilter struct {
 	ResourceTypes []string          // Resource types this filter applies to
-	Conditions    []FilterCondition // All conditions must match (AND logic)
-	Action        FilterAction      // What to do when conditions match
+	Conditions    []FilterCondition // All conditions must match (AND logic) to exclude
 }
 
+// FilterCondition defines a single condition for filtering resources.
+// Uses JSONPath expressions to query resource properties.
 type FilterCondition struct {
-	Type ConditionType // TagMatch, PropertyMatch
+	// PropertyPath is a JSONPath expression to query resource properties.
+	// Examples:
+	//   - "$.Tags[?(@.Key=='Name')].Value" - get value of tag with key "Name"
+	//   - "$.Tags[?(@.Key=~'eks:automode:.*')]" - check if any tag key matches regex
+	//   - "$.SkipDiscovery" - get top-level property value
+	PropertyPath string
 
-	// For TagMatch - check if resource has tag with key in list and matching value
-	TagKeys  []string // Tag keys to look for (e.g., "SkipDiscovery")
-	TagValue string   // Expected tag value (e.g., "true")
-
-	// For PropertyMatch - direct property check
-	PropertyPath  string // Property name (e.g., "SkipDiscovery")
-	PropertyValue string // Expected value (e.g., "true")
+	// PropertyValue is the expected value to match.
+	// Empty string means existence check (path returns any value = match).
+	// Non-empty means exact string match against the query result.
+	PropertyValue string
 }
-
-type FilterAction string
-
-const (
-	FilterActionExclude FilterAction = "exclude" // Exclude matching resources from discovery
-	FilterActionInclude FilterAction = "include" // Only include matching resources
-)
-
-type ConditionType string
-
-const (
-	ConditionTypeTagMatch      ConditionType = "tag_match"
-	ConditionTypePropertyMatch ConditionType = "property_match"
-)
 
 // used in tests to simulate testable behaviour
 const ResourcePluginOverridesContextKey = "resource-plugin-overrides"

@@ -64,19 +64,13 @@ func RegisterSharedEDFTypes() error {
 		ListParam{},          // Used in ListResources
 
 		// 5. Filter types (must be registered before messages that use them)
-		FilterAction(""),
-		ConditionType(""),
 		FilterCondition{},
 		MatchFilter{},
 
 		// 6. Plugin announcement (depends on ResourceDescriptor and filter types)
 		PluginAnnouncement{},
 
-		// 7. Plugin coordination messages
-		GetFilters{},
-		GetFiltersResponse{},
-
-		// 8. Plugin operation messages (ResourceUpdater <-> PluginOperator)
+		// 7. Plugin operation messages (ResourceUpdater <-> PluginOperator)
 		ReadResource{},
 		CreateResource{},
 		UpdateResource{},

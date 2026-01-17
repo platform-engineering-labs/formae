@@ -51,7 +51,7 @@ func (r *RemotePluginInfo) SchemaForResourceType(resourceType string) (model.Sch
 	return schema, nil
 }
 
-func (r *RemotePluginInfo) GetMatchFilters() []plugin.MatchFilter {
+func (r *RemotePluginInfo) DiscoveryFilters() []plugin.MatchFilter {
 	return r.matchFilters
 }
 

@@ -11,6 +11,8 @@ import (
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
+	"github.com/theory/jsonpath"
+	"github.com/theory/jsonpath/registry"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -21,6 +23,9 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
+
+// jsonpathParser is a package-level parser with RFC 9535 function extensions (match, search, etc.)
+var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 
 // convertResourceForPlugin converts a resource's properties to plugin format
 // by extracting $value from opaque value structures (e.g., {"$value": "secret", "$visibility": "Opaque"})
@@ -791,58 +796,82 @@ func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateDa
 	return StateFinishedWithError, data, nil, nil
 }
 
-// shouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter
+// shouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter.
+// Returns true if all conditions match (AND logic), indicating the resource should be excluded.
 func shouldFilterByMatchFilter(filter *plugin.MatchFilter, properties json.RawMessage) bool {
 	if filter == nil {
 		return false
 	}
 
-	// All conditions must match (AND logic)
+	// All conditions must match (AND logic) to exclude
 	for _, cond := range filter.Conditions {
 		if !evaluateCondition(cond, properties) {
 			return false
 		}
 	}
 
-	// All conditions matched
-	return filter.Action == plugin.FilterActionExclude
+	return true // All conditions matched - exclude this resource
 }
 
+// evaluateCondition evaluates a single filter condition using JSONPath.
+// PropertyPath is a JSONPath expression to query properties.
+// PropertyValue: empty = existence check, non-empty = exact string match.
 func evaluateCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
-	switch cond.Type {
-	case plugin.ConditionTypeTagMatch:
-		return matchesTagCondition(cond, properties)
-	case plugin.ConditionTypePropertyMatch:
-		return matchesPropertyCondition(cond, properties)
-	default:
+	var data any
+	if err := json.Unmarshal(properties, &data); err != nil {
 		return false
 	}
+
+	path, err := jsonpathParser.Parse(cond.PropertyPath)
+	if err != nil {
+		// Invalid JSONPath expression - no match
+		return false
+	}
+
+	nodes := path.Select(data)
+	if len(nodes) == 0 {
+		// No value found
+		return false
+	}
+
+	// Empty PropertyValue = existence check (path returned something)
+	if cond.PropertyValue == "" {
+		return true
+	}
+
+	// Non-empty PropertyValue = exact string match against any result
+	for _, node := range nodes {
+		if matchValue(node, cond.PropertyValue) {
+			return true
+		}
+	}
+	return false
 }
 
-func matchesTagCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
-	tags := pkgmodel.GetTagsFromProperties(properties)
-	for _, tag := range tags {
-		for _, key := range cond.TagKeys {
-			if tag.Key == key && tag.Value == cond.TagValue {
+// matchValue compares a JSONPath result against an expected string value.
+// Handles various result types including arrays and nested structures.
+func matchValue(val any, expected string) bool {
+	switch v := val.(type) {
+	case string:
+		return v == expected
+	case []any:
+		// JSONPath filter expressions can return arrays
+		for _, item := range v {
+			if matchValue(item, expected) {
 				return true
 			}
 		}
-	}
-	return false
-}
-
-func matchesPropertyCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
-	var props map[string]any
-	if err := json.Unmarshal(properties, &props); err != nil {
 		return false
-	}
-
-	if val, ok := props[cond.PropertyPath]; ok {
-		if strVal, ok := val.(string); ok {
-			return strVal == cond.PropertyValue
+	case map[string]any:
+		// Check if it's a tag-like structure with Value field
+		if value, ok := v["Value"]; ok {
+			return matchValue(value, expected)
 		}
+		return false
+	default:
+		// Convert other types to string for comparison
+		return fmt.Sprintf("%v", v) == expected
 	}
-	return false
 }
 
 func currentOperation(state gen.Atom) resource.Operation {

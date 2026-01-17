@@ -44,19 +44,19 @@ definitions:
     type: object
   model.FieldHint:
     properties:
-      createOnly:
+      CreateOnly:
         type: boolean
-      indexField:
+      IndexField:
         type: string
-      persist:
+      Persist:
         type: boolean
-      required:
+      Required:
         type: boolean
-      requiredOnCreate:
+      RequiredOnCreate:
         type: boolean
-      updateMethod:
+      UpdateMethod:
         $ref: '#/definitions/model.FieldUpdateMethod'
-      writeOnly:
+      WriteOnly:
         type: boolean
     type: object
   model.FieldUpdateMethod:
@@ -202,23 +202,23 @@ definitions:
     type: object
   model.Schema:
     properties:
-      discoverable:
+      Discoverable:
         type: boolean
-      extractable:
+      Extractable:
         type: boolean
-      fields:
+      Fields:
         items:
           type: string
         type: array
-      hints:
+      Hints:
         additionalProperties:
           $ref: '#/definitions/model.FieldHint'
         type: object
-      identifier:
+      Identifier:
         type: string
-      nonprovisionable:
+      Nonprovisionable:
         type: boolean
-      tags:
+      Tags:
         type: string
     type: object
   model.Simulation:

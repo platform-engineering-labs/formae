@@ -14,12 +14,6 @@ import (
 // PluginAnnouncement is an alias for plugin.PluginAnnouncement
 type PluginAnnouncement = plugin.PluginAnnouncement
 
-// GetFilters is an alias for plugin.GetFilters
-type GetFilters = plugin.GetFilters
-
-// GetFiltersResponse is an alias for plugin.GetFiltersResponse
-type GetFiltersResponse = plugin.GetFiltersResponse
-
 // UnregisterPlugin is sent when a plugin becomes unavailable
 type UnregisterPlugin struct {
 	Namespace string
@@ -55,8 +49,7 @@ type PluginNode struct {
 
 // GetPluginInfo requests plugin metadata from PluginCoordinator
 type GetPluginInfo struct {
-	Namespace      string
-	RefreshFilters bool // If true, fetch fresh filters from plugin before responding
+	Namespace string
 }
 
 // PluginInfoResponse contains plugin capabilities

@@ -503,25 +503,25 @@ const docTemplate = `{
         "model.FieldHint": {
             "type": "object",
             "properties": {
-                "createOnly": {
+                "CreateOnly": {
                     "type": "boolean"
                 },
-                "indexField": {
+                "IndexField": {
                     "type": "string"
                 },
-                "persist": {
+                "Persist": {
                     "type": "boolean"
                 },
-                "required": {
+                "Required": {
                     "type": "boolean"
                 },
-                "requiredOnCreate": {
+                "RequiredOnCreate": {
                     "type": "boolean"
                 },
-                "updateMethod": {
+                "UpdateMethod": {
                     "$ref": "#/definitions/model.FieldUpdateMethod"
                 },
-                "writeOnly": {
+                "WriteOnly": {
                     "type": "boolean"
                 }
             }
@@ -738,31 +738,31 @@ const docTemplate = `{
         "model.Schema": {
             "type": "object",
             "properties": {
-                "discoverable": {
+                "Discoverable": {
                     "type": "boolean"
                 },
-                "extractable": {
+                "Extractable": {
                     "type": "boolean"
                 },
-                "fields": {
+                "Fields": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
-                "hints": {
+                "Hints": {
                     "type": "object",
                     "additionalProperties": {
                         "$ref": "#/definitions/model.FieldHint"
                     }
                 },
-                "identifier": {
+                "Identifier": {
                     "type": "string"
                 },
-                "nonprovisionable": {
+                "Nonprovisionable": {
                     "type": "boolean"
                 },
-                "tags": {
+                "Tags": {
                     "type": "string"
                 }
             }
