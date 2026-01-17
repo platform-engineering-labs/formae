@@ -44,10 +44,6 @@ build-debug:
 	go build -C plugins/tailscale ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
-build-pkl-local:
-	go build -C plugins/pkl -tags local -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
-	pkl project resolve plugins/pkl/generator/
-
 install-aws-plugin:
 	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
 	cp plugins/aws/aws ~/.pel/formae/plugins/aws/v${VERSION}/aws
@@ -240,4 +236,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-aws-plugin build-debug pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
