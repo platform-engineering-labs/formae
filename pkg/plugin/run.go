@@ -36,6 +36,7 @@ type PluginCapabilities struct {
 	SupportedResources []ResourceDescriptor
 	ResourceSchemas    map[string]model.Schema // key = resource type
 	MatchFilters       []MatchFilter
+	LabelConfig        LabelConfig
 }
 
 // PluginAnnouncement is sent by plugins to PluginCoordinator on startup.

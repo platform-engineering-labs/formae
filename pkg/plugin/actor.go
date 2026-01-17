@@ -59,6 +59,7 @@ func (p *PluginActor) Init(args ...any) error {
 		SupportedResources: p.plugin.SupportedResources(),
 		ResourceSchemas:    buildSchemaMap(p.plugin),
 		MatchFilters:       p.plugin.DiscoveryFilters(),
+		LabelConfig:        p.plugin.LabelConfig(),
 	}
 
 	compressedCaps, err := CompressCapabilities(caps)

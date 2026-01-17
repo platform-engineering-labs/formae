@@ -34,6 +34,10 @@ type ResourcePlugin interface {
 	// DiscoveryFilters returns declarative filters for discovery (serializable).
 	// Resources matching all conditions in a filter are excluded from discovery.
 	DiscoveryFilters() []MatchFilter
+
+	// LabelConfig returns the label extraction configuration for discovered resources.
+	// The agent uses this to construct human-readable labels during discovery.
+	LabelConfig() LabelConfig
 }
 
 // RateLimitScope defines the granularity of rate limiting
@@ -50,6 +54,31 @@ type RateLimitConfig struct {
 	MaxRequestsPerSecondForNamespace int
 }
 
+// LabelConfig defines how to extract labels from discovered resources.
+// Labels are constructed by evaluating JSONPath queries against resource properties.
+type LabelConfig struct {
+	// DefaultQuery is a JSONPath expression applied to all resources in this namespace.
+	// Example for AWS: `$.Tags[?(@.Key=='Name')].Value`
+	// If empty, falls back to NativeID.
+	DefaultQuery string
+
+	// ResourceOverrides provides JSONPath expressions for specific resource types,
+	// overriding the DefaultQuery. Use for resources without tags or with
+	// non-standard label sources.
+	// Key: resource type (e.g., "AWS::IAM::Policy")
+	// Value: JSONPath expression (e.g., "$.PolicyName")
+	ResourceOverrides map[string]string
+}
+
+// QueryForResourceType returns the JSONPath query for a given resource type.
+// Returns the resource-specific override if exists, otherwise the default query.
+func (c LabelConfig) QueryForResourceType(resourceType string) string {
+	if override, ok := c.ResourceOverrides[resourceType]; ok {
+		return override
+	}
+	return c.DefaultQuery
+}
+
 // PluginInfo provides read-only plugin metadata for discovery operations.
 // This interface is implemented by both local ResourcePlugin and remote plugin info proxies.
 type PluginInfo interface {
@@ -57,6 +86,7 @@ type PluginInfo interface {
 	SupportedResources() []ResourceDescriptor
 	SchemaForResourceType(resourceType string) (model.Schema, error)
 	DiscoveryFilters() []MatchFilter
+	LabelConfig() LabelConfig
 }
 
 // MatchFilter is a declarative, serializable filter definition for discovery.
