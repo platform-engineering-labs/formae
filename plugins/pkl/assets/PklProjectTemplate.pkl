@@ -6,7 +6,8 @@
 
 import "pkl:semver"
 
-local class Pkg {
+/// Remote package dependency (format: plugin.name@version)
+local class RemotePkg {
   plugin: String
   name: String
   version: semver.Version
@@ -14,24 +15,57 @@ local class Pkg {
   function uri(): String = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(name)@\(version.toString())"
 }
 
-local packages = read("prop:packages").split(",").map((p) -> new Pkg {
-  plugin = p.split(".")[0]
-  name = p.split(".")[1].split("@")[0]
-  version = semver.Version(p.split("@")[1])
-})
-
-dependencies {
-  for (pkg in packages) {
-    [pkg.name] {
-      uri = pkg.uri()
-    }
-  }
+/// Local package dependency (format: local:name:path)
+local class LocalPkg {
+  name: String
+  path: String
 }
 
-output {
-  text = """
-    amends "pkl:Project"
+local packageStrings = read("prop:packages").split(",")
 
-    \(new PcfRenderer {}.renderDocument(module))
-    """
+/// Filter and parse remote packages (format: plugin.name@version)
+local remotePkgs: List<RemotePkg> = packageStrings
+  .filter((p) -> !p.startsWith("local:"))
+  .map((p) -> new RemotePkg {
+    plugin = p.split(".")[0]
+    name = p.split(".")[1].split("@")[0]
+    version = semver.Version(p.split("@")[1])
+  })
+
+/// Filter and parse local packages (format: local:name:path)
+local localPkgs: List<LocalPkg> = packageStrings
+  .filter((p) -> p.startsWith("local:"))
+  .map((p) -> new LocalPkg {
+    name = p.split(":")[1]
+    path = p.replaceFirst("local:" + p.split(":")[1] + ":", "")
+  })
+
+/// Generate remote dependencies as uri blocks
+local remoteDepsText: String = remotePkgs
+  .map((pkg) -> "  [\"\(pkg.name)\"] {\n    uri = \"\(pkg.uri())\"\n  }")
+  .join("\n")
+
+/// Generate local dependencies as import() expressions
+local localDepsText: String = localPkgs
+  .map((pkg) -> "  [\"\(pkg.name)\"] = import(\"\(pkg.path)\")")
+  .join("\n")
+
+/// Combine all dependencies
+local allDepsText: String = new Listing {
+  when (remotePkgs.length > 0) {
+    remoteDepsText
+  }
+  when (localPkgs.length > 0) {
+    localDepsText
+  }
+}.join("\n")
+
+output {
+  text = new Listing {
+    "amends \"pkl:Project\""
+    ""
+    "dependencies {"
+    allDepsText
+    "}"
+  }.join("\n")
 }

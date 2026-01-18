@@ -285,8 +285,18 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 
 	projectFile := filepath.Join(parentDir, "PklProject")
 	if _, err = os.Stat(projectFile); os.IsNotExist(err) {
-		// No PklProject exists, initialize it
-		err = p.ProjectInit(parentDir, includes)
+		// Build package dependencies using PackageResolver (supports local overrides)
+		resolver := NewPackageResolver()
+		resolver.Add("formae", "pkl", Version)
+
+		// Extract namespaces from forma resources
+		for _, res := range forma.Resources {
+			ns := strings.ToLower(res.Namespace())
+			resolver.Add(ns, ns, Version)
+		}
+
+		// No PklProject exists, initialize it with resolved packages
+		err = p.ProjectInit(parentDir, resolver.GetPackageStrings())
 		if err != nil {
 			return plugin.GenerateSourcesResult{}, fmt.Errorf("failed to initialize Pkl project: %v", err)
 		}

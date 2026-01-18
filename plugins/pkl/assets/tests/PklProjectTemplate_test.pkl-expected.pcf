@@ -1,0 +1,31 @@
+examples {
+  ["parsing remote package"] {
+    new {
+      ["plugin"] = "pkl"
+      ["name"] = "formae"
+      ["version"] = "1.0.0"
+    }
+  }
+  ["parsing local package"] {
+    new {
+      ["name"] = "aws"
+      ["path"] = "/path/to/PklProject"
+    }
+  }
+  ["generating remote dependency block"] {
+    """
+      ["formae"] {
+        uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@1.0.0"
+      }
+    """
+  }
+  ["generating local dependency line"] {
+    #"  ["aws"] = import("/path/to/aws/PklProject")"#
+  }
+  ["classifying mixed packages"] {
+    new {
+      ["remote"] = List("pkl.formae@1.0.0", "gcp.gcp@1.0.0")
+      ["local"] = List("local:aws:/path/to/aws")
+    }
+  }
+}
