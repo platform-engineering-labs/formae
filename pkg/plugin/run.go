@@ -173,10 +173,34 @@ func Run(rp ResourcePlugin) {
 		log.Fatalf("Failed to enable spawn for PluginOperator: %v", err)
 	}
 
+	// Start periodic logging of active operators for debugging
+	stopLogging := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				activeOps := ActivePluginOperators.Load()
+				nodeInfo, err := node.Info()
+				if err != nil {
+					fmt.Printf("[%s] Active PluginOperators: %d (failed to get node info: %v)\n",
+						rp.Namespace(), activeOps, err)
+				} else {
+					fmt.Printf("[%s] Active PluginOperators: %d, Total processes: %d, Running: %d, Zombie: %d\n",
+						rp.Namespace(), activeOps, nodeInfo.ProcessesTotal, nodeInfo.ProcessesRunning, nodeInfo.ProcessesZombee)
+				}
+			case <-stopLogging:
+				return
+			}
+		}
+	}()
+
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+	close(stopLogging)
 
 	fmt.Printf("Shutting down %s plugin...\n", rp.Namespace())
 	node.Stop()
