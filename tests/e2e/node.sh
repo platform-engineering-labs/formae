@@ -38,7 +38,22 @@ start_server() {
     fi
 
     echo "Formae server started with PID: $server_pid"
-    return 0
+
+    # Wait for HTTP server to be ready (health check)
+    echo "Waiting for HTTP server to be ready..."
+    local max_attempts=30
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -s http://localhost:49684/api/v1/health > /dev/null 2>&1; then
+            echo "HTTP server is ready"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    echo "HTTP server failed to become ready after $max_attempts seconds"
+    exit 1
 }
 
 stop_server() {
