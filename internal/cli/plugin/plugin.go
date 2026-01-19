@@ -18,12 +18,13 @@ func PluginCmd() *cobra.Command {
 		Short: "Execute commands on plugins",
 		Annotations: map[string]string{
 			"type":     "Plugins",
-			"examples": "{{.Name}} {{.Command}} list",
+			"examples": "{{.Name}} {{.Command}} list\n{{.Name}} {{.Command}} init",
 		},
 		SilenceErrors: true,
 	}
 
 	command.AddCommand(PluginListCmd())
+	command.AddCommand(PluginInitCmd())
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
