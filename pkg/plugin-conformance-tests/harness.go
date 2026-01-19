@@ -27,9 +27,9 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests/testutil"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests/testutil"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 

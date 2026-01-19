@@ -16,7 +16,7 @@ import (
 	"time"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/tests/integration/plugin-sdk/framework"
+	conformance "github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,13 +59,13 @@ func TestPluginSDK_Lifecycle(t *testing.T) {
 	pluginPath := getPluginPath(t)
 
 	// Discover all test cases in the plugin's testdata directory
-	testCases, err := framework.DiscoverTestData(pluginPath)
+	testCases, err := conformance.DiscoverTestData(pluginPath)
 	require.NoError(t, err, "Failed to discover test data")
 
 	t.Logf("Discovered %d test case(s) for plugin at %s", len(testCases), pluginPath)
 
 	// Create test harness once for all test cases
-	harness := framework.NewTestHarness(t)
+	harness := conformance.NewTestHarness(t)
 	defer harness.Cleanup()
 
 	// Start the agent once
@@ -218,7 +218,7 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 }
 
 // runLifecycleTest runs the resource lifecycle test for a single resource
-func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework.TestCase) {
+func runLifecycleTest(t *testing.T, harness *conformance.TestHarness, tc conformance.TestCase) {
 	t.Logf("Testing resource: %s (file: %s)", tc.Name, tc.PKLFile)
 
 	// Step 1: Eval the PKL file to get expected state
@@ -227,7 +227,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 	require.NoError(t, err, "Eval command should succeed")
 
 	// Parse eval output to get expected properties
-	var evalResult framework.InventoryResponse
+	var evalResult conformance.InventoryResponse
 	err = json.Unmarshal([]byte(expectedOutput), &evalResult)
 	require.NoError(t, err, "Should be able to parse eval output")
 	require.NotEmpty(t, evalResult.Resources, "Eval should return at least one resource")
@@ -307,7 +307,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 		require.NoError(t, err, "Eval of extracted file should succeed")
 
 		// Parse extracted eval output
-		var extractedResult framework.InventoryResponse
+		var extractedResult conformance.InventoryResponse
 		err = json.Unmarshal([]byte(extractedOutput), &extractedResult)
 		require.NoError(t, err, "Should be able to parse extracted eval output")
 		require.NotEmpty(t, extractedResult.Resources, "Extracted eval should return at least one resource")
@@ -366,7 +366,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 		require.NoError(t, err, "Update file eval should succeed")
 
 		// Parse to get expected properties
-		var updateEvalResult framework.InventoryResponse
+		var updateEvalResult conformance.InventoryResponse
 		err = json.Unmarshal([]byte(updateExpected), &updateEvalResult)
 		require.NoError(t, err, "Should be able to parse update eval output")
 		require.NotEmpty(t, updateEvalResult.Resources, "Update eval should return at least one resource")
@@ -425,7 +425,7 @@ func runLifecycleTest(t *testing.T, harness *framework.TestHarness, tc framework
 		require.NoError(t, err, "Replace file eval should succeed")
 
 		// Parse to get expected properties
-		var replaceEvalResult framework.InventoryResponse
+		var replaceEvalResult conformance.InventoryResponse
 		err = json.Unmarshal([]byte(replaceExpected), &replaceEvalResult)
 		require.NoError(t, err, "Should be able to parse replace eval output")
 		require.NotEmpty(t, replaceEvalResult.Resources, "Replace eval should return at least one resource")
@@ -494,7 +494,7 @@ func TestPluginSDK_Discovery(t *testing.T) {
 	pluginPath := getPluginPath(t)
 
 	// Discover all test cases in the plugin's testdata directory
-	testCases, err := framework.DiscoverTestData(pluginPath)
+	testCases, err := conformance.DiscoverTestData(pluginPath)
 	require.NoError(t, err, "Failed to discover test data")
 
 	t.Logf("Discovered %d test case(s) for discovery testing", len(testCases))
@@ -509,9 +509,9 @@ func TestPluginSDK_Discovery(t *testing.T) {
 }
 
 // runDiscoveryTest runs the discovery test for a single test case
-func runDiscoveryTest(t *testing.T, tc framework.TestCase) {
+func runDiscoveryTest(t *testing.T, tc conformance.TestCase) {
 	// Create test harness
-	harness := framework.NewTestHarness(t)
+	harness := conformance.NewTestHarness(t)
 	defer harness.Cleanup()
 
 	// Step 1: Evaluate PKL file to get expected state
