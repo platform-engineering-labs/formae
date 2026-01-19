@@ -188,6 +188,10 @@ test-schema-pkl:
 	cd plugins/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
 
 test-generator-pkl:
+	# Generate static files for local development
+	cd plugins/pkl/generator && pkl eval ImportsGenerator.pkl -o imports.pkl
+	cd plugins/pkl/generator && pkl eval ResourcesGenerator.pkl -o resources.pkl
+	cd plugins/pkl/generator && pkl eval ResolvablesGenerator.pkl -o resolvables.pkl
 	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/resources_example.json
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/lifeline.json
