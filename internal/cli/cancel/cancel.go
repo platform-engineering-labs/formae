@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
@@ -19,7 +20,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/logging"
-	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 type CancelOptions struct {
