@@ -54,8 +54,10 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 			return err
 		}
 
-		// Skip the PklProject file which is only necessary for local development of Pkl generator
-		if strings.Contains(path, "PklProject") {
+		// Skip files that will be generated dynamically
+		if strings.Contains(path, "PklProject") ||
+			path == "generator/resources.pkl" ||
+			path == "generator/resolvables.pkl" {
 			return nil
 		}
 
@@ -76,12 +78,30 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 		return "", fmt.Errorf("failed to extract generator files: %w", err)
 	}
 
-	// Initialize project in tempDir to overwrite PklProject with correct dependencies
-	err = p.ProjectInit(tempDir+"/generator", includes)
+	generatorDir := filepath.Join(tempDir, "generator")
+
+	// Step 1: Generate PklProject with correct dependencies
+	err = p.ProjectInit(generatorDir, includes)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize project: %w", err)
 	}
 
+	// Step 2: Generate imports.pkl from PklProject dependencies
+	if err := p.generatePklFile(generatorDir, "ImportsGenerator.pkl", "imports.pkl"); err != nil {
+		return "", fmt.Errorf("failed to generate imports.pkl: %w", err)
+	}
+
+	// Step 3: Generate resources.pkl with dynamic imports
+	if err := p.generatePklFile(generatorDir, "ResourcesGenerator.pkl", "resources.pkl"); err != nil {
+		return "", fmt.Errorf("failed to generate resources.pkl: %w", err)
+	}
+
+	// Step 4: Generate resolvables.pkl with dynamic imports
+	if err := p.generatePklFile(generatorDir, "ResolvablesGenerator.pkl", "resolvables.pkl"); err != nil {
+		return "", fmt.Errorf("failed to generate resolvables.pkl: %w", err)
+	}
+
+	// Step 5: Run the main generator
 	evaluator, err := pkl.NewProjectEvaluator(
 		context.Background(),
 		&url.URL{Scheme: "file", Path: tempDir + "/generator"},
@@ -125,4 +145,36 @@ func extractNamespaces(data any) map[string]struct{} {
 	}
 
 	return namespaces
+}
+
+// generatePklFile evaluates a PKL generator file and writes the output to a target file.
+// This is used in the multi-stage generation pipeline to create imports.pkl, resources.pkl, etc.
+func (p PKL) generatePklFile(generatorDir, generatorName, outputName string) error {
+	evaluator, err := pkl.NewProjectEvaluator(
+		context.Background(),
+		&url.URL{Scheme: "file", Path: generatorDir},
+		pkl.PreconfiguredOptions,
+		func(opts *pkl.EvaluatorOptions) {
+			opts.Logger = pkl.NoopLogger
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create evaluator for %s: %w", generatorName, err)
+	}
+	defer evaluator.Close()
+
+	result, err := evaluator.EvaluateOutputText(
+		context.Background(),
+		pkl.FileSource(filepath.Join(generatorDir, generatorName)),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate %s: %w", generatorName, err)
+	}
+
+	outputPath := filepath.Join(generatorDir, outputName)
+	if err := os.WriteFile(outputPath, []byte(result), 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %w", outputName, err)
+	}
+
+	return nil
 }
