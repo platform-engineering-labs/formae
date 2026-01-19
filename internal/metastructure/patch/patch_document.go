@@ -7,6 +7,7 @@ package patch
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -23,7 +24,24 @@ var defaultIgnoredFields = []jsonpatch.Path{
 }
 
 func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
-	return generatePatch(document, patch, properties, schema, mode)
+	// Log full schema as JSON for debugging
+	schemaJSON, _ := json.Marshal(schema)
+	slog.Info("DEBUG GeneratePatch - inputs",
+		"document", string(document),
+		"patch", string(patch),
+		"mode", mode,
+		"schema", string(schemaJSON),
+	)
+	result, needsReplacement, err := generatePatch(document, patch, properties, schema, mode)
+	if err != nil {
+		slog.Error("DEBUG GeneratePatch - failed", "error", err)
+	} else {
+		slog.Info("DEBUG GeneratePatch - result",
+			"patchDocument", string(result),
+			"needsReplacement", needsReplacement,
+		)
+	}
+	return result, needsReplacement, err
 }
 
 func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {

@@ -54,6 +54,17 @@ func NewResourceUpdateForExisting(
 	var needsReplacement bool
 
 	if hasChanges {
+		// Log full resource objects as JSON for debugging
+		existingResourceJSON, _ := json.Marshal(existingResource)
+		newResourceJSON, _ := json.Marshal(newResource)
+		slog.Info("DEBUG NewResourceUpdateForExisting - raw inputs",
+			"existingResource", string(existingResourceJSON),
+			"newResource", string(newResourceJSON),
+			"filteredProps", string(filteredProps),
+			"stackChanged", stackChanged,
+			"mode", mode,
+		)
+
 		existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
@@ -63,6 +74,11 @@ func NewResourceUpdateForExisting(
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
 		}
+
+		slog.Info("DEBUG NewResourceUpdateForExisting - after ConvertToPluginFormat",
+			"existingPluginProps", string(existingPluginProps),
+			"newPluginProps", string(newPluginProps),
+		)
 
 		patchDocument, needsReplacement, err = patch.GeneratePatch(
 			existingPluginProps,
