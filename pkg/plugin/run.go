@@ -96,7 +96,11 @@ func DecompressCapabilities(data []byte) (PluginCapabilities, error) {
 
 // Run starts the plugin process and announces it to the agent's PluginRegistry.
 // This is the main entry point for resource plugins.
-func Run(rp ResourcePlugin) {
+//
+// For external plugins, use RunWithManifest which reads the manifest and wraps
+// a simplified ResourcePlugin. For built-in plugins that implement FullResourcePlugin
+// directly, use this function.
+func Run(fp FullResourcePlugin) {
 	// Register message types for network serialization
 	registerEDFTypes()
 
@@ -120,7 +124,7 @@ func Run(rp ResourcePlugin) {
 	otelConfigForSetup := readOTelConfigFromEnv()
 
 	// Setup OTel metrics if enabled
-	shutdown := setupPluginOTel(rp.Namespace(), otelConfigForSetup)
+	shutdown := setupPluginOTel(fp.Namespace(), otelConfigForSetup)
 	defer shutdown()
 
 	// Setup Ergo node options
@@ -137,8 +141,8 @@ func Run(rp ResourcePlugin) {
 	// Set environment for PluginActor and remotely spawned PluginOperators
 	options.Env = map[gen.Env]any{
 		gen.Env("Context"):   context.Background(),
-		gen.Env("Plugin"):    rp,
-		gen.Env("Namespace"): rp.Namespace(),
+		gen.Env("Plugin"):    fp,
+		gen.Env("Namespace"): fp.Namespace(),
 		gen.Env("AgentNode"): gen.Atom(agentNode),
 		gen.Env("OTelConfig"): otelConfig,
 		// Default retry config for plugin operations
@@ -170,7 +174,7 @@ func Run(rp ResourcePlugin) {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	fmt.Printf("Shutting down %s plugin...\n", rp.Namespace())
+	fmt.Printf("Shutting down %s plugin...\n", fp.Namespace())
 	node.Stop()
 }
 

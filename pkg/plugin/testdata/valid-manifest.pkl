@@ -1,0 +1,15 @@
+/*
+ * Test fixture: valid plugin manifest
+ * This is a standalone file for testing - production manifests should amend
+ * @formae/plugin-manifest.pkl for validation.
+ */
+
+name = "test-plugin"
+version = "1.2.3"
+namespace = "Test"
+license = "Apache-2.0"
+minFormaeVersion = "0.80.0"
+
+output {
+  renderer = new JsonRenderer {}
+}

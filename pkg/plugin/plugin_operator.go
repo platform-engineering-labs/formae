@@ -407,7 +407,7 @@ type PluginUpdateData struct {
 	LastStatusMessage string
 
 	config      model.RetryConfig
-	plugin      ResourcePlugin
+	plugin      FullResourcePlugin
 	context     context.Context
 	requestedBy gen.PID
 
@@ -464,7 +464,7 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 			return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Plugin' environment variable")
 		}
 	}
-	data.plugin = pluginEnv.(ResourcePlugin)
+	data.plugin = pluginEnv.(FullResourcePlugin)
 
 	ctx, ok := o.Env("Context")
 	if !ok {

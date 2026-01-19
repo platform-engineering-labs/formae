@@ -1,0 +1,51 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Base module for Formae plugin manifests.
+/// Plugin authors amend this module to define their plugin metadata.
+///
+/// Example:
+/// ```pkl
+/// amends "@formae/plugin-manifest.pkl"
+///
+/// name = "aws"
+/// version = "1.0.0"
+/// namespace = "AWS"
+/// license = "Apache-2.0"
+/// minFormaeVersion = "0.80.0"
+/// ```
+module PluginManifest
+
+/// Unique plugin identifier.
+/// Used in repository name (formae-plugin-<name>) and configuration.
+/// Must be lowercase, start with a letter, and contain only letters, numbers, and hyphens.
+/// Example: "aws", "aws-govcloud", "localstack"
+name: String(matches(Regex(#"^[a-z][a-z0-9-]*$"#)))
+
+/// Semantic version of the plugin.
+/// Example: "1.0.0", "0.5.0-beta.1"
+version: String(matches(Regex(#"^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$"#)))
+
+/// Resource type namespace prefix.
+/// Must match the prefix used in resource types (e.g., "AWS" for "AWS::EC2::Instance").
+/// Multiple plugins can share a namespace (e.g., localstack uses "AWS"), but
+/// cannot claim the same resource type.
+/// Must be uppercase, start with a letter.
+namespace: String(matches(Regex(#"^[A-Z][A-Za-z0-9]*$"#)))
+
+/// SPDX license identifier.
+/// Example: "Apache-2.0", "MIT", "FSL-1.1-ALv2"
+license: String
+
+/// Minimum Formae version this plugin is compatible with.
+/// Used for compatibility checking and matrix testing.
+/// Example: "0.80.0"
+minFormaeVersion: String(matches(Regex(#"^\d+\.\d+\.\d+$"#)))
+
+/// Output configuration for JSON rendering.
+output {
+    renderer = new JsonRenderer {}
+}
