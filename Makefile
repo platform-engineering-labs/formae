@@ -44,10 +44,6 @@ build-debug:
 	go build -C plugins/tailscale ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
-build-pkl-local:
-	go build -C plugins/pkl -tags local -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
-	pkl project resolve plugins/pkl/generator/
-
 install-aws-plugin:
 	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
 	cp plugins/aws/aws ~/.pel/formae/plugins/aws/v${VERSION}/aws
@@ -189,8 +185,13 @@ test-property:
 
 test-schema-pkl:
 	cd plugins/pkl/schema && pkl test tests/formae.pkl
+	cd plugins/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
 
 test-generator-pkl:
+	# Generate static files for local development
+	cd plugins/pkl/generator && pkl eval ImportsGenerator.pkl -o imports.pkl
+	cd plugins/pkl/generator && pkl eval ResourcesGenerator.pkl -o resources.pkl
+	cd plugins/pkl/generator && pkl eval ResolvablesGenerator.pkl -o resolvables.pkl
 	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/resources_example.json
 	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/lifeline.json
@@ -240,4 +241,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-aws-plugin build-debug build-pkl-local pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-aws-plugin build-debug pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
