@@ -12,7 +12,7 @@ import (
 	"github.com/blugelabs/bluge"
 	querystr "github.com/blugelabs/query_string"
 
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"

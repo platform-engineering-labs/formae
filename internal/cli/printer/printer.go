@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"gopkg.in/yaml.v3"

@@ -4,7 +4,7 @@
 
 package usage
 
-import apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
+import apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 
 type Sender interface {
 	SendStats(stats *apimodel.Stats, devMode bool) error

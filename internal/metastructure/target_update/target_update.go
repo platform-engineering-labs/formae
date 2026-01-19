@@ -7,7 +7,7 @@ package target_update
 import (
 	"time"
 
-	"github.com/platform-engineering-labs/formae/internal/api/model"
+	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"

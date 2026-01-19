@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/ddddddO/gtree"
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 )
 

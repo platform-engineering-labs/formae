@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"resty.dev/v3"
 )
