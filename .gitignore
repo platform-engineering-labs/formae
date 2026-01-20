@@ -12,6 +12,9 @@
 plugins/aws/aws
 plugins/aws/aws-debug
 
+# fake-aws plugin binary
+plugins/fake-aws/fake-aws
+
 # Test binary, built with `go test -c`
 *.test
 

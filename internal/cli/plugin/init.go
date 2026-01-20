@@ -372,7 +372,8 @@ func transformContent(content string, config *PluginConfig) string {
 
 	// Copyright header
 	content = strings.ReplaceAll(content, "© 2025 Your Name", "© 2025 Platform Engineering Labs Inc.")
-	content = strings.ReplaceAll(content, "SPDX-License-Identifier: Apache-2.0", fmt.Sprintf("SPDX-License-Identifier: %s", config.License))
+	// Note: String split to avoid REUSE tool misinterpreting this as a license declaration
+	content = strings.ReplaceAll(content, "SPDX-"+"License-Identifier: Apache-2.0", fmt.Sprintf("SPDX-"+"License-Identifier: %s", config.License))
 
 	return content
 }

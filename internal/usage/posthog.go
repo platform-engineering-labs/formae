@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"time"
 
-	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/platform-engineering-labs/formae/internal/logging"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	posthog "github.com/posthog/posthog-go"
 )
 
