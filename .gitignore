@@ -87,3 +87,6 @@ docs/design/
 # MCP
 .serena/
 .handoffs/
+
+# fake-aws plugin binary
+plugins/fake-aws/fake-aws
