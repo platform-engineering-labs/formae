@@ -47,7 +47,7 @@ func NewApp() *App {
 	mgr := plugin.NewManager("")
 	u, err := usage.NewPostHogSender()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: " + err.Error()))
+		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
@@ -63,7 +63,7 @@ func NewApp() *App {
 
 	err = config.Config.EnsureClientID()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: " + err.Error()))
+		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
