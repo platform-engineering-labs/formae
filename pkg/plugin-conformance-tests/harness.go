@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -603,11 +604,29 @@ func (h *TestHarness) StopAgent() {
 	}
 
 	h.t.Log("Stopping formae agent...")
-	h.agentCancel()
 
-	// Wait for process to exit
+	// Send SIGTERM for graceful shutdown instead of using context cancellation.
+	// Context cancellation causes exec.CommandContext to send SIGKILL, which
+	// doesn't allow the HTTP server to close gracefully, leaving the socket
+	// in TIME_WAIT state and causing port conflicts in subsequent tests.
 	if h.agentCmd != nil && h.agentCmd.Process != nil {
-		_ = h.agentCmd.Wait()
+		_ = h.agentCmd.Process.Signal(syscall.SIGTERM)
+
+		// Wait for graceful shutdown with timeout
+		done := make(chan error, 1)
+		go func() {
+			done <- h.agentCmd.Wait()
+		}()
+
+		select {
+		case <-done:
+			// Process exited gracefully
+		case <-time.After(15 * time.Second):
+			// Graceful shutdown timed out, force kill
+			h.t.Log("Graceful shutdown timed out, force killing agent")
+			h.agentCancel()
+			<-done
+		}
 	}
 
 	h.agentStarted = false
