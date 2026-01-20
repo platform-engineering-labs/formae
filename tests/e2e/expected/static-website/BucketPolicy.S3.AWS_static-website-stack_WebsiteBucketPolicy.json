@@ -31,20 +31,20 @@
     "Extractable": true
   },
   "Properties": {
-    "Bucket": "static-website-uber-unique-id",
+    "Bucket": "static-website-e2e-942849037363",
     "PolicyDocument": {
       "Statement": [
         {
           "Action": "s3:GetObject",
           "Effect": "Allow",
           "Principal": "*",
-          "Resource": "arn:aws:s3:::static-website-uber-unique-id/*"
+          "Resource": "arn:aws:s3:::static-website-e2e-942849037363/*"
         }
       ],
       "Version": "2012-10-17"
     }
   },
-  "NativeID": "static-website-uber-unique-id",
+  "NativeID": "static-website-e2e-942849037363",
   "Managed": true,
   "Ksuid": "34jc6WVIQ0ALCe6r2K5fz7tcJxO"
 }
