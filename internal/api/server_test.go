@@ -17,8 +17,8 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v4"
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 )

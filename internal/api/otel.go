@@ -36,7 +36,7 @@ import (
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae"
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package framework
+package conformance
 
 import (
 	"bytes"
@@ -26,11 +26,10 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	"github.com/platform-engineering-labs/formae/internal/api/model"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
-	"github.com/platform-engineering-labs/formae/internal/util"
+	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests/testutil"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -79,25 +78,33 @@ type TestHarness struct {
 	lastPluginNamespace  string
 }
 
-// NewTestHarness creates a new test harness instance
+// NewTestHarness creates a new test harness instance.
+// The formae binary location is determined by:
+// 1. FORMAE_BINARY env var (for external plugin tests)
+// 2. Default path relative to repo root (for internal tests)
 func NewTestHarness(t *testing.T) *TestHarness {
-	// Find the formae binary - should be built already at repo root
-	// When running with `go test -C`, we need to go up to repo root
-	binPath := filepath.Join("..", "..", "..", "formae")
-	absPath, err := filepath.Abs(binPath)
-	if err != nil {
-		t.Fatalf("failed to get absolute path for formae binary: %v", err)
+	// Check for FORMAE_BINARY env var first
+	formaeBinary := os.Getenv("FORMAE_BINARY")
+	if formaeBinary == "" {
+		// Fall back to default path relative to repo root
+		// When running with `go test -C`, we need to go up to repo root
+		binPath := filepath.Join("..", "..", "..", "formae")
+		absPath, err := filepath.Abs(binPath)
+		if err != nil {
+			t.Fatalf("failed to get absolute path for formae binary: %v", err)
+		}
+		formaeBinary = absPath
 	}
 
-	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		t.Fatalf("formae binary not found at %s. Run 'make build' first", absPath)
+	if _, err := os.Stat(formaeBinary); os.IsNotExist(err) {
+		t.Fatalf("formae binary not found at %s. Set FORMAE_BINARY env var or run 'make build' first", formaeBinary)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	h := &TestHarness{
 		t:            t,
-		formaeBinary: absPath,
+		formaeBinary: formaeBinary,
 		agentCtx:     ctx,
 		agentCancel:  cancel,
 		cleanupFuncs: []func(){},
@@ -218,7 +225,7 @@ func (h *TestHarness) setupPluginManager() error {
 	h.t.Logf("Loading plugins from: %s", absPluginPath)
 
 	// Create plugin manager with the plugin path
-	h.pluginManager = plugin.NewManager(util.ExpandHomePath("~/.pel/formae/plugins"), absPluginPath)
+	h.pluginManager = plugin.NewManager(ExpandHomePath("~/.pel/formae/plugins"), absPluginPath)
 
 	// Load all plugins
 	h.pluginManager.Load()

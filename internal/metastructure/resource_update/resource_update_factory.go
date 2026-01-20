@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"reflect"
 
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 

@@ -10,6 +10,10 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ./pkg/model
 
 replace github.com/platform-engineering-labs/formae/pkg/ppm => ./pkg/ppm
 
+replace github.com/platform-engineering-labs/formae/pkg/api/model => ./pkg/api/model
+
+replace github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests => ./pkg/plugin-conformance-tests
+
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
@@ -31,8 +35,10 @@ require (
 	github.com/masterminds/semver v1.5.0
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/olekukonko/tablewriter v1.0.7
-	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-00010101000000-000000000000
-	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
+	github.com/platform-engineering-labs/formae/pkg/api/model v0.0.0
+	github.com/platform-engineering-labs/formae/pkg/model v0.0.0
+	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0
+	github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20251220004923-2a697f4229b5
 	github.com/posthog/posthog-go v1.6.3

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package framework
+package conformance
 
 import (
 	"encoding/json"
@@ -49,7 +49,7 @@ type RegisteredPluginInfo struct {
 	RegisteredAt       time.Time
 }
 
-// NewTestPluginCoordinator creates a new TestPluginCoordinator actor factory
+// NewPluginCoordinator creates a new TestPluginCoordinator actor factory
 func NewPluginCoordinator() gen.ProcessBehavior {
 	return &TestPluginCoordinator{}
 }

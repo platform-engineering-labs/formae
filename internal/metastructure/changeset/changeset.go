@@ -12,8 +12,8 @@ import (
 
 	"log/slog"
 
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 

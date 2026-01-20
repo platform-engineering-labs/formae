@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/ddddddO/gtree"
-	apimodel "github.com/platform-engineering-labs/formae/internal/api/model"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 const (
