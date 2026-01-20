@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"ergo.services/actor/statemachine"
@@ -22,10 +21,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 )
-
-// ActivePluginOperators tracks the number of currently active PluginOperator instances.
-// This is used for debugging and monitoring to detect resource leaks.
-var ActivePluginOperators atomic.Int64
 
 // PluginOperator is the Ergo state machine responsible for operations on cloud resources. The operator handles the
 // lifecycle of plugin operations, including reading, creating, updating, and deleting resources.
@@ -373,10 +368,6 @@ func (data PluginUpdateData) newUnforeseenError() resource.ProgressResult {
 }
 
 func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[PluginUpdateData], error) {
-	// Track active operators for debugging
-	count := ActivePluginOperators.Add(1)
-	o.Log().Debug("PluginOperator started, active operators: %d", count)
-
 	data := PluginUpdateData{
 		attempts: 1,
 	}
@@ -449,10 +440,6 @@ func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown Plug
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, proc gen.Process) (gen.Atom, PluginUpdateData, error) {
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError {
-		// Track active operators for debugging
-		count := ActivePluginOperators.Add(-1)
-		proc.Log().Debug("PluginOperator finished (state=%s), active operators: %d", newState, count)
-
 		err := proc.Send(proc.PID(), PluginOperatorShutdown{})
 		if err != nil {
 			proc.Log().Error("PluginOperator: failed to send terminate message: %v", err)
