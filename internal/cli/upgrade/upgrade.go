@@ -9,6 +9,7 @@ import (
 	"debug/macho"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -20,7 +21,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/agent"
-	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/pkg/ppm"
@@ -40,6 +41,11 @@ func UpgradeCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			version, _ := cmd.Flags().GetString("version")
+			configFile, _ := cmd.Flags().GetString("config")
+			app, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
+			if err != nil {
+				return err
+			}
 
 			if !ppm.Sys.IsPrivilegedUser() {
 				fmt.Println("this command requires a privileged user: authentication may be required")
@@ -55,7 +61,19 @@ func UpgradeCmd() *cobra.Command {
 				}
 			}
 
-			manager, err := ppm.NewManager(&ppm.Config{Repo: &ppm.RepoConfig{Uri: formae.BinaryRepository}}, formae.DefaultInstallPrefix)
+			repoUri, err := url.Parse(app.Config.Artifacts.URL)
+			if err != nil {
+				return fmt.Errorf("could not parse repository URL: %s", app.Config.Artifacts.URL)
+			}
+
+			manager, err := ppm.NewManager(
+				&ppm.Config{
+					Repo: &ppm.RepoConfig{
+						Uri:      repoUri,
+						Username: app.Config.Artifacts.Username,
+						Password: app.Config.Artifacts.Password,
+					},
+				}, formae.DefaultInstallPrefix)
 			if err != nil {
 				return err
 			}
@@ -111,9 +129,10 @@ func UpgradeCmd() *cobra.Command {
 		},
 	}
 
-	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
+	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	command.AddCommand(UpgradeListCmd())
 
+	command.Flags().String("config", "", "Path to config file")
 	command.Flags().String("version", "", "Version to install")
 
 	return command
@@ -129,8 +148,25 @@ func UpgradeListCmd() *cobra.Command {
 		},
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			configFile, _ := cmd.Flags().GetString("config")
+			app, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
+			if err != nil {
+				return err
+			}
 
-			manager, err := ppm.NewManager(&ppm.Config{Repo: &ppm.RepoConfig{Uri: formae.BinaryRepository}}, formae.DefaultInstallPrefix)
+			repoUri, err := url.Parse(app.Config.Artifacts.URL)
+			if err != nil {
+				return fmt.Errorf("could not parse repository URL: %s", app.Config.Artifacts.URL)
+			}
+
+			manager, err := ppm.NewManager(
+				&ppm.Config{
+					Repo: &ppm.RepoConfig{
+						Uri:      repoUri,
+						Username: app.Config.Artifacts.Username,
+						Password: app.Config.Artifacts.Password,
+					},
+				}, formae.DefaultInstallPrefix)
 			if err != nil {
 				return err
 			}
@@ -149,7 +185,8 @@ func UpgradeListCmd() *cobra.Command {
 		},
 	}
 
-	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
+	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }

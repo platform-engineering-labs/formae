@@ -33,7 +33,7 @@ func CleanCmd() *cobra.Command {
 				}
 			}
 
-			manager, err := ppm.NewManager(&ppm.Config{Repo: &ppm.RepoConfig{Uri: formae.BinaryRepository}}, formae.DefaultInstallPrefix)
+			manager, err := ppm.NewManager(&ppm.Config{Repo: &ppm.RepoConfig{}}, formae.DefaultInstallPrefix)
 			if err != nil {
 				return err
 			}

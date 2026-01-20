@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/platform-engineering-labs/formae/pkg/ppm"
 
@@ -37,7 +38,12 @@ func RepoContentsCmd() *cobra.Command {
 			uri, _ := cmd.Flags().GetString("uri")
 			all, _ := cmd.Flags().GetBool("all")
 
-			repo, err := ppm.Repo.GetReader(&ppm.RepoConfig{Uri: uri})
+			uriParsed, err := url.Parse(uri)
+			if err != nil {
+				return err
+			}
+
+			repo, err := ppm.Repo.GetReader(&ppm.RepoConfig{Uri: uriParsed})
 			if err != nil {
 				return err
 			}
@@ -85,7 +91,12 @@ func RepoInitCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			uri, _ := cmd.Flags().GetString("uri")
 
-			repo, err := ppm.Repo.GetWriter(&ppm.RepoConfig{Uri: uri})
+			uriParsed, err := url.Parse(uri)
+			if err != nil {
+				return err
+			}
+
+			repo, err := ppm.Repo.GetWriter(&ppm.RepoConfig{Uri: uriParsed})
 			if err != nil {
 				return err
 			}
@@ -117,7 +128,12 @@ func RepoPublishCmd() *cobra.Command {
 				return fmt.Errorf("argument: package files are required")
 			}
 
-			repo, err := ppm.Repo.GetWriter(&ppm.RepoConfig{Uri: uri})
+			uriParsed, err := url.Parse(uri)
+			if err != nil {
+				return err
+			}
+
+			repo, err := ppm.Repo.GetWriter(&ppm.RepoConfig{Uri: uriParsed})
 			if err != nil {
 				return err
 			}
@@ -146,7 +162,12 @@ func RepoRebuildCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			uri, _ := cmd.Flags().GetString("uri")
 
-			repo, err := ppm.Repo.GetWriter(&ppm.RepoConfig{Uri: uri})
+			uriParsed, err := url.Parse(uri)
+			if err != nil {
+				return err
+			}
+
+			repo, err := ppm.Repo.GetWriter(&ppm.RepoConfig{Uri: uriParsed})
 			if err != nil {
 				return err
 			}

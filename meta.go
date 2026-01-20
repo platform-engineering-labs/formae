@@ -6,7 +6,5 @@ package formae
 
 var Version = "0.0.0"
 
-const BinaryRepository = "https://hub.platform.engineering/binaries"
-
 const DefaultInstallPrefix = "/opt/pel"
 const DefaultInstallPath = "/opt/pel/formae"

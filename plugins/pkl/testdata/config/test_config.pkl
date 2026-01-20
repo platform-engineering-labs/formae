@@ -51,6 +51,11 @@ agent {
     }
 }
 
+artifacts {
+  username = "thedude"
+  password = "takeiteasy"
+}
+
 plugins {
     network {
         type = "tailscale"

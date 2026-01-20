@@ -127,5 +127,8 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.Equal(t, slog.LevelDebug, config.Agent.Logging.FileLogLevel)
 	assert.Equal(t, slog.LevelInfo, config.Agent.Logging.ConsoleLogLevel)
 
+	assert.Equal(t, "thedude", config.Artifacts.Username)
+	assert.Equal(t, "takeiteasy", config.Artifacts.Password)
+
 	assert.JSONEq(t, `{"Type": "tailscale", "Tls": false, "AuthKey": "someAuthKey"}`, string(config.Plugins.Network))
 }

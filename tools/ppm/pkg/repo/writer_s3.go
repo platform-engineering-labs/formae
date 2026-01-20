@@ -28,17 +28,17 @@ import (
 )
 
 func init() {
-	ppm.Repo.RegisterWriter("s3", func(uri *url.URL, data *ppm.RepoData) ppm.RepoWriter {
+	ppm.Repo.RegisterWriter("s3", func(config *ppm.RepoConfig, data *ppm.RepoData) ppm.RepoWriter {
 		return &WriterS3{
-			uri:  uri,
-			data: data,
+			config: config,
+			data:   data,
 		}
 	})
 }
 
 type WriterS3 struct {
-	uri  *url.URL
-	data *ppm.RepoData
+	config *ppm.RepoConfig
+	data   *ppm.RepoData
 }
 
 func (w *WriterS3) Init() error {
@@ -48,9 +48,9 @@ func (w *WriterS3) Init() error {
 	}
 
 	result, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-		Bucket:  &w.uri.Host,
+		Bucket:  &w.config.Uri.Host,
 		MaxKeys: aws.Int32(200),
-		Prefix:  aws.String(strings.TrimPrefix(w.uri.Path, "/") + "/"),
+		Prefix:  aws.String(strings.TrimPrefix(w.config.Uri.Path, "/") + "/"),
 	})
 	if err != nil {
 		return err
@@ -61,7 +61,7 @@ func (w *WriterS3) Init() error {
 	}
 
 	_, err = s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
-		Bucket: &w.uri.Host,
+		Bucket: &w.config.Uri.Host,
 		Delete: &types.Delete{
 			Objects: Map(result.Contents, func(item types.Object) types.ObjectIdentifier {
 				return types.ObjectIdentifier{
@@ -84,7 +84,7 @@ func (w *WriterS3) Publish(prune int, pkgPaths ...string) error {
 		return err
 	}
 
-	lockUri, err := url.JoinPath(w.uri.String(), "ppm.lock")
+	lockUri, err := url.JoinPath(w.config.Uri.String(), "ppm.lock")
 	if err != nil {
 		return err
 	}
@@ -107,8 +107,8 @@ func (w *WriterS3) Publish(prune int, pkgPaths ...string) error {
 	defer lock.Unlock()
 
 	result, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
-		Bucket: &w.uri.Host,
-		Key:    aws.String(s3x.BucketPath(w.uri.Path, ppm.RepoFileName)),
+		Bucket: &w.config.Uri.Host,
+		Key:    aws.String(s3x.BucketPath(w.config.Uri.Path, ppm.RepoFileName)),
 	})
 	if err != nil {
 		var noKey *types.NoSuchKey
@@ -151,8 +151,8 @@ func (w *WriterS3) Publish(prune int, pkgPaths ...string) error {
 		}
 
 		_, err = uploader.Upload(context.Background(), &s3.PutObjectInput{
-			Bucket: &w.uri.Host,
-			Key:    aws.String(s3x.BucketPath(w.uri.Path, ppm.PackagePath, fname)),
+			Bucket: &w.config.Uri.Host,
+			Key:    aws.String(s3x.BucketPath(w.config.Uri.Path, ppm.PackagePath, fname)),
 			Body:   uploadFile,
 		})
 		uploadFile.Close()
@@ -163,8 +163,8 @@ func (w *WriterS3) Publish(prune int, pkgPaths ...string) error {
 			err = s3.NewObjectExistsWaiter(s3Client).Wait(
 				context.Background(),
 				&s3.HeadObjectInput{
-					Bucket: &w.uri.Host,
-					Key:    aws.String(s3x.BucketPath(w.uri.Path, ppm.PackagePath, fname))},
+					Bucket: &w.config.Uri.Host,
+					Key:    aws.String(s3x.BucketPath(w.config.Uri.Path, ppm.PackagePath, fname))},
 				time.Minute)
 			if err != nil {
 				return err
@@ -174,8 +174,8 @@ func (w *WriterS3) Publish(prune int, pkgPaths ...string) error {
 
 	for _, pkgFile := range remove {
 		_, err := s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
-			Bucket: &w.uri.Host,
-			Key:    aws.String(s3x.BucketPath(w.uri.Path, ppm.PackagePath, pkgFile)),
+			Bucket: &w.config.Uri.Host,
+			Key:    aws.String(s3x.BucketPath(w.config.Uri.Path, ppm.PackagePath, pkgFile)),
 		})
 		if err != nil {
 			return err
@@ -189,8 +189,8 @@ func (w *WriterS3) Publish(prune int, pkgPaths ...string) error {
 	}
 
 	_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-		Bucket: &w.uri.Host,
-		Key:    aws.String(s3x.BucketPath(w.uri.Path, ppm.RepoFileName)),
+		Bucket: &w.config.Uri.Host,
+		Key:    aws.String(s3x.BucketPath(w.config.Uri.Path, ppm.RepoFileName)),
 		Body:   bytes.NewReader(body),
 	})
 	if err != nil {

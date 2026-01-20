@@ -58,9 +58,9 @@ type LoggingConfig struct {
 }
 
 type Target struct {
-	Label        string      `pkl:"label"`
-	Namespace    string      `pkl:"namespace"`
-	Discoverable bool        `pkl:"discoverable"`
+	Label        string `pkl:"label"`
+	Namespace    string `pkl:"namespace"`
+	Discoverable bool   `pkl:"discoverable"`
 	// Output is postprocessed, hence the key case difference
 	Config *pkl.Object `pkl:"Config"`
 }
@@ -111,6 +111,12 @@ type APIConfig struct {
 	Port int32  `pkl:"port"`
 }
 
+type ArtifactConfig struct {
+	URL      string `pkl:"url"`
+	Username string `pkl:"username"`
+	Password string `pkl:"password"`
+}
+
 type CliConfig struct {
 	API                   APIConfig `pkl:"api"`
 	DisableUsageReporting bool      `pkl:"disableUsageReporting"`
@@ -124,7 +130,8 @@ type PluginConfig struct {
 }
 
 type Config struct {
-	Agent   AgentConfig  `pkl:"agent"`
-	Cli     CliConfig    `pkl:"cli"`
-	Plugins PluginConfig `pkl:"plugins"`
+	Agent     AgentConfig    `pkl:"agent"`
+	Artifacts ArtifactConfig `pkl:"artifacts"`
+	Cli       CliConfig      `pkl:"cli"`
+	Plugins   PluginConfig   `pkl:"plugins"`
 }

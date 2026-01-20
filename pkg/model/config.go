@@ -103,6 +103,12 @@ type APIConfig struct {
 	Port int
 }
 
+type ArtifactConfig struct {
+	URL      string
+	Username string
+	Password string
+}
+
 type CliConfig struct {
 	API                   APIConfig
 	DisableUsageReporting bool
@@ -115,7 +121,8 @@ type PluginConfig struct {
 }
 
 type Config struct {
-	Agent   AgentConfig
-	Cli     CliConfig
-	Plugins PluginConfig
+	Agent     AgentConfig
+	Artifacts ArtifactConfig
+	Cli       CliConfig
+	Plugins   PluginConfig
 }
