@@ -201,3 +201,10 @@ jobs:
 
       - name: Build and Publish
         run: make publish-bin
+
+  pkg_container:
+    uses: "./.github/workflows/container.yml"
+    if: ${{ contains(fromJSON('["", "all"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
+    needs:
+      - pkg_linux_arm64
+      - pkg_linux_x8664
