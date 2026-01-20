@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
@@ -19,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
