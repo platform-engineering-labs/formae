@@ -3,7 +3,11 @@
 export INSTALLPREFIX="/opt/pel"
 export PLUGINDIR="$HOME/.pel/formae/plugins"
 export OS=$(uname | tr '[:upper:]' '[:lower:]')
+
 export ARCH=$(uname -m |  tr -d '_')
+if [[ "$ARCH" == "aarch64" ]]; then
+  export ARCH="arm64"
+fi
 
 skip_prompt='false'
 version='latest'
