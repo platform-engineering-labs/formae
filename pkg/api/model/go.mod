@@ -2,7 +2,7 @@ module github.com/platform-engineering-labs/formae/pkg/api/model
 
 go 1.25
 
-require github.com/platform-engineering-labs/formae/pkg/model v0.0.0
+require github.com/platform-engineering-labs/formae/pkg/model v0.0.0-20260120024139-dfbbaa3804a2
 
 require (
 	github.com/theory/jsonpath v0.10.2 // indirect

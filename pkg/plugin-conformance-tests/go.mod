@@ -4,9 +4,9 @@ go 1.25
 
 require (
 	ergo.services/ergo v1.999.310
-	github.com/platform-engineering-labs/formae/pkg/api/model v0.0.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.0.0
-	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0
+	github.com/platform-engineering-labs/formae/pkg/api/model v0.0.0-20260120024139-dfbbaa3804a2
+	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-20260120024139-dfbbaa3804a2
+	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-20260120024139-dfbbaa3804a2
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 )
