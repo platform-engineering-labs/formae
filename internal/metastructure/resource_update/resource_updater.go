@@ -209,6 +209,8 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		statemachine.WithStateMessageHandler(StateResolving, resolveCacheMissingInAction),
 		statemachine.WithStateMessageHandler(StateResolving, resourceFailedToResolve),
 		statemachine.WithStateMessageHandler(StateResolving, shutdown),
+		statemachine.WithStateMessageHandler(StateSynchronizing, handleProgressUpdate),
+		statemachine.WithStateMessageHandler(StateSynchronizing, pluginOperationMissingInAction),
 		statemachine.WithStateMessageHandler(StateSynchronizing, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
