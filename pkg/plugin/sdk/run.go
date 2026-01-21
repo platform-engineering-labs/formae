@@ -22,7 +22,17 @@ const (
 	// FormaeSchemaPackageURL is the base URL for the formae schema package.
 	// The version will be appended at runtime.
 	FormaeSchemaPackageURL = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@"
+
+	// FormaeVersionEnvVar is the environment variable set by the agent when spawning plugins.
+	// It contains the formae version to use for schema resolution.
+	FormaeVersionEnvVar = "FORMAE_VERSION"
 )
+
+// getFormaeVersion returns the formae version to use for schema resolution.
+// The FORMAE_VERSION env var is set by the agent when spawning plugins.
+func getFormaeVersion() string {
+	return os.Getenv(FormaeVersionEnvVar)
+}
 
 // RunConfig contains options for starting a plugin with RunWithManifest.
 type RunConfig struct {
@@ -70,8 +80,8 @@ func SetupPlugin(ctx context.Context, p plugin.ResourcePlugin, config RunConfig)
 
 	formaeSchemaPath := config.FormaeSchemaPath
 	if formaeSchemaPath == "" {
-		// Use remote package URL with the plugin's version
-		formaeSchemaPath = FormaeSchemaPackageURL + manifest.Version
+		// Use remote package URL with the formae version from agent (or manifest fallback)
+		formaeSchemaPath = FormaeSchemaPackageURL + getFormaeVersion()
 	}
 
 	// 4. Build dependencies for schema extraction
@@ -138,7 +148,8 @@ func SetupPluginFromDir(ctx context.Context, p plugin.ResourcePlugin, pluginDir 
 
 	formaeSchemaPath := config.FormaeSchemaPath
 	if formaeSchemaPath == "" {
-		formaeSchemaPath = FormaeSchemaPackageURL + manifest.Version
+		// Use remote package URL with the formae version from agent (or manifest fallback)
+		formaeSchemaPath = FormaeSchemaPackageURL + getFormaeVersion()
 	}
 
 	// 3. Build dependencies for schema extraction

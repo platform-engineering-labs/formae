@@ -13,6 +13,7 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/meta"
+	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -215,6 +216,7 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 		gen.Env("FORMAE_AGENT_NODE"):     agentNode,
 		gen.Env("FORMAE_PLUGIN_NODE"):    nodeName,
 		gen.Env("FORMAE_NETWORK_COOKIE"): serverConfig.Secret,
+		gen.Env("FORMAE_VERSION"):        formae.Version,
 	}
 
 	// Add OTel configuration if available
