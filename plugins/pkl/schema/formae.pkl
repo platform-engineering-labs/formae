@@ -544,6 +544,7 @@ const fq: Fq = new Fq{}
 class Transform {
     capitalizeMemberKeys: (Any) -> Dynamic = (it) -> it.toList().map((tag) -> tag.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic())
     capitalizeKeys: (Any) -> Dynamic = (it) -> it.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+    toString: (Any) -> String = (it) -> it.toString()
 }
 
 const transform: Transform = new Transform{}
