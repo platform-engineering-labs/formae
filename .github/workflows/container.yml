@@ -2,7 +2,8 @@ name: formae-container
 
 on:
   workflow_dispatch:
-
+  workflow_call:
+    
 jobs:
 
   container_linux:
