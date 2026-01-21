@@ -1,6 +1,7 @@
 name: formae-container
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 jobs:
@@ -8,7 +9,7 @@ jobs:
   container_linux:
     runs-on: ubuntu-latest
 
-    if: ${{ github.event.workflow_run.conclusion == 'success' && !contains(github.repository, 'internal') }}
+    if: ${{ !contains(github.repository, 'internal') }}
 
     env:
       REGISTRY: ghcr.io
