@@ -8,8 +8,6 @@ jobs:
   container_linux:
     runs-on: ubuntu-latest
 
-    if: ${{ github.event.workflow_run.conclusion == 'success' && !contains(github.repository, 'internal') }}
-
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ github.repository }}
