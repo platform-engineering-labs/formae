@@ -182,11 +182,14 @@ func RunDiscoveryTests(t *testing.T) {
 		t.Skip("No test cases found")
 	}
 
-	// Use the first test case for discovery test
-	tc := testCases[0]
-	t.Run("Discovery/"+tc.Name, func(t *testing.T) {
-		runDiscoveryTest(t, tc)
-	})
+	t.Logf("Discovered %d test case(s) for discovery testing", len(testCases))
+
+	// Run discovery test for each test case
+	for _, tc := range testCases {
+		t.Run("Discovery/"+tc.Name, func(t *testing.T) {
+			runDiscoveryTest(t, tc)
+		})
+	}
 }
 
 // runDiscoveryTest runs the discovery test for a single test case.
