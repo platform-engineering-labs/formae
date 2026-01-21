@@ -29,6 +29,113 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
+func TestResourceUpdater_HandlesThrottlingDuringSynchronization(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var readCallCount int
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				readCallCount++
+				if readCallCount == 1 {
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						ErrorCode:    resource.OperationErrorCodeThrottling,
+					}, nil
+				}
+				return &resource.ReadResult{
+					ResourceType: "FakeAWS::S3::Bucket",
+					Properties:   `{"foo":"bar","baz":"qux","a":[3,4,2]}`,
+				}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationUpdate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           "test-native-id",
+						ResourceProperties: json.RawMessage(`{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`),
+					},
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Retry.RetryDelay = 100 * time.Millisecond
+
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		if err != nil {
+			t.Fatalf("Failed to create metastructure: %v", err)
+			return
+		}
+
+		messages := make(chan any, 1)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
+		hash, err := testutil.Call(m.Node, "ResourcePersister", resource_update.PersistResourceUpdate{
+			PluginOperation: resource.OperationCreate,
+			ResourceUpdate:  *initialResource,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, hash)
+
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:      "test-throttle-sync",
+				State:   forma_command.CommandStateNotStarted,
+				StartTs: util.TimeNow(),
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					{
+						Operation: resource_update.OperationUpdate,
+						DesiredState: pkgmodel.Resource{
+							Label:      "test-resource",
+							Type:       "FakeAWS::S3::Bucket",
+							Stack:      "test-stack",
+							Properties: json.RawMessage(`{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`),
+							Ksuid:      initialResource.DesiredState.Ksuid,
+						},
+					},
+				},
+			},
+		})
+
+		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
+		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
+			ResourceURI: initialResource.DesiredState.URI(),
+			CommandID:   "test-throttle-sync",
+			Operation:   string(updateResource.Operation),
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-throttle-sync"), resource_update.StartResourceUpdate{
+			ResourceUpdate: *updateResource,
+			CommandID:      "test-throttle-sync",
+		})
+
+		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
+			return msg.Uri == initialResource.DesiredState.URI() &&
+				msg.State == resource_update.ResourceUpdateStateSuccess
+		})
+
+		assert.GreaterOrEqual(t, readCallCount, 2, "Read should have been called at least twice (initial + retry)")
+
+		stack, err := m.Datastore.LoadStack("test-stack")
+		assert.NoError(t, err)
+		assert.Len(t, stack.Resources, 1)
+		assert.JSONEq(t, `{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`, string(stack.Resources[0].Properties))
+
+		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
+			CommandID: "test-throttle-sync",
+		})
+		assert.NoError(t, err)
+
+		command, ok := commandRes.(*forma_command.FormaCommand)
+		assert.True(t, ok)
+		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
+	})
+}
+
 func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
