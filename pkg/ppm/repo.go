@@ -6,11 +6,10 @@ package ppm
 
 import (
 	"fmt"
-	"net/url"
 )
 
-var repoReaderRegistry = make(map[string]func(uri *url.URL, data *RepoData) RepoReader)
-var repoWriterRegistry = make(map[string]func(uri *url.URL, data *RepoData) RepoWriter)
+var repoReaderRegistry = make(map[string]func(config *RepoConfig, data *RepoData) RepoReader)
+var repoWriterRegistry = make(map[string]func(config *RepoConfig, data *RepoData) RepoWriter)
 
 var Repo = repo{}
 
@@ -29,35 +28,25 @@ type RepoWriter interface {
 }
 
 func (repo) GetReader(config *RepoConfig) (RepoReader, error) {
-	uri, err := url.Parse(config.Uri)
-	if err != nil {
-		return nil, err
+	if repoReaderRegistry[config.Uri.Scheme] != nil {
+		return repoReaderRegistry[config.Uri.Scheme](config, &RepoData{}), nil
 	}
 
-	if repoReaderRegistry[uri.Scheme] != nil {
-		return repoReaderRegistry[uri.Scheme](uri, &RepoData{}), nil
-	}
-
-	return nil, fmt.Errorf("unsupported repository scheme: %s", uri.Scheme)
+	return nil, fmt.Errorf("unsupported repository scheme: %s", config.Uri.Scheme)
 }
 
 func (repo) GetWriter(config *RepoConfig) (RepoWriter, error) {
-	uri, err := url.Parse(config.Uri)
-	if err != nil {
-		return nil, err
+	if repoWriterRegistry[config.Uri.Scheme] != nil {
+		return repoWriterRegistry[config.Uri.Scheme](config, &RepoData{}), nil
 	}
 
-	if repoWriterRegistry[uri.Scheme] != nil {
-		return repoWriterRegistry[uri.Scheme](uri, &RepoData{}), nil
-	}
-
-	return nil, fmt.Errorf("unsupported repository scheme: %s", uri.Scheme)
+	return nil, fmt.Errorf("unsupported repository scheme: %s", config.Uri.Scheme)
 }
 
-func (repo) RegisterReader(scheme string, creator func(uri *url.URL, data *RepoData) RepoReader) {
+func (repo) RegisterReader(scheme string, creator func(config *RepoConfig, data *RepoData) RepoReader) {
 	repoReaderRegistry[scheme] = creator
 }
 
-func (repo) RegisterWriter(scheme string, creator func(uri *url.URL, data *RepoData) RepoWriter) {
+func (repo) RegisterWriter(scheme string, creator func(config *RepoConfig, data *RepoData) RepoWriter) {
 	repoWriterRegistry[scheme] = creator
 }

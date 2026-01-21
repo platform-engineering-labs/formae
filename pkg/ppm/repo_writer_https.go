@@ -6,20 +6,20 @@ package ppm
 
 import (
 	"fmt"
-	"net/url"
 )
 
 func init() {
-	Repo.RegisterWriter("https", func(uri *url.URL, data *RepoData) RepoWriter {
+	Repo.RegisterWriter("https", func(config *RepoConfig, data *RepoData) RepoWriter {
 		return &RepoWriterHttps{
-			uri:  uri,
-			data: data,
+			config: config,
+			data:   data,
 		}
 	})
 }
 
 type RepoWriterHttps struct {
-	uri  *url.URL
+	config *RepoConfig
+
 	data *RepoData
 }
 

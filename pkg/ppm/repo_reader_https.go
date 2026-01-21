@@ -6,16 +6,15 @@ package ppm
 
 import (
 	"fmt"
-	"net/url"
 	"path/filepath"
 
 	"resty.dev/v3"
 )
 
 func init() {
-	Repo.RegisterReader("https", func(uri *url.URL, data *RepoData) RepoReader {
+	Repo.RegisterReader("https", func(config *RepoConfig, data *RepoData) RepoReader {
 		return &RepoReaderHttps{
-			uri:    uri,
+			config: config,
 			data:   data,
 			client: resty.New(),
 		}
@@ -23,8 +22,8 @@ func init() {
 }
 
 type RepoReaderHttps struct {
-	uri  *url.URL
-	data *RepoData
+	config *RepoConfig
+	data   *RepoData
 
 	client *resty.Client
 }
@@ -34,10 +33,15 @@ func (r *RepoReaderHttps) Data() *RepoData {
 }
 
 func (r *RepoReaderHttps) Fetch() error {
-	resp, err := r.client.R().
+	request := r.client.R().
 		SetResult(r.data).
-		SetForceResponseContentType("application/json").
-		Get(r.uri.JoinPath(RepoFileName).String())
+		SetForceResponseContentType("application/json")
+
+	if r.config.Username != "" && r.config.Password != "" {
+		request.SetBasicAuth(r.config.Username, r.config.Password)
+	}
+
+	resp, err := request.Get(r.config.Uri.JoinPath(RepoFileName).String())
 	if err != nil {
 		return err
 	}
@@ -58,11 +62,14 @@ func (r *RepoReaderHttps) Fetch() error {
 
 func (r *RepoReaderHttps) FetchPackage(entry *PkgEntry, path string) error {
 	fileName := Package.FileName(entry.Name, entry.Version, entry.OsArch)
-	fetchUri := r.uri.JoinPath(PackagePath, fileName).String()
+	fetchUri := r.config.Uri.JoinPath(PackagePath, fileName).String()
 
-	resp, err := r.client.R().
-		SetOutputFileName(filepath.Join(path, fileName)).
-		Get(fetchUri)
+	request := r.client.R().SetOutputFileName(filepath.Join(path, fileName))
+	if r.config.Username != "" && r.config.Password != "" {
+		request.SetBasicAuth(r.config.Username, r.config.Password)
+	}
+
+	resp, err := request.Get(fetchUri)
 	if err != nil {
 		return err
 	}

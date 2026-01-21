@@ -187,6 +187,11 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 				},
 			},
 		},
+		Artifacts: pkgmodel.ArtifactConfig{
+			URL:      config.Artifacts.URL,
+			Username: config.Artifacts.Username,
+			Password: config.Artifacts.Password,
+		},
 		Cli: pkgmodel.CliConfig{
 			API: pkgmodel.APIConfig{
 				URL:  config.Cli.API.URL,

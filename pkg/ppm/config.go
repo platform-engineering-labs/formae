@@ -4,8 +4,12 @@
 
 package ppm
 
+import "net/url"
+
 type RepoConfig struct {
-	Uri string
+	Uri      *url.URL
+	Username string
+	Password string
 }
 
 type Config struct {

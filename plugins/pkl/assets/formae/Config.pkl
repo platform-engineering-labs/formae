@@ -8,8 +8,6 @@ module formae.Config
 
 typealias Port = Int(this >= 0 && this <= 65535)
 
-typealias CronExpression = String(matches(Regex(#"^((\*|((\d+,)*\d+)|((\d+|\*)/\d+)|(\d+-\d+))\s+){4}(\*|((\d+,)*\d+)|((\d+|\*)/\d+)|(\d+-\d+))$"#)))
-
 typealias DatastoreType = "sqlite" | "postgres"
 
 class ServerConfig {
@@ -158,6 +156,14 @@ class ApiConfig {
     port: Port = 49684
 }
 
+class ArtifactConfig {
+  url: String = "https://hub.platform.engineering/binaries"
+
+  username: String?
+
+  password: String?
+}
+
 class CliConfig {
     api: ApiConfig
 
@@ -193,6 +199,8 @@ class PluginConfig {
 }
 
 agent: AgentConfig = new AgentConfig{}
+
+artifacts: ArtifactConfig = new ArtifactConfig{}
 
 cli: CliConfig = new CliConfig{}
 
