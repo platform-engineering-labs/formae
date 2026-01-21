@@ -5,10 +5,15 @@
 package conformance
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // RunCRUDTests discovers test cases from the testdata directory and runs
@@ -200,9 +205,13 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 		t.Fatalf("failed to eval PKL file: %v", err)
 	}
 
-	// Configure discovery for this resource type
-	// Note: You may need to extract the resource type from evalOutput
-	// For now, we'll use a simplified approach
+	// Extract the plugin namespace and resource type from the evaluated forma resources
+	namespace, resourceType, err := extractNamespaceFromEvalOutput(evalOutput)
+	if err != nil {
+		t.Fatalf("failed to extract namespace from eval output: %v", err)
+	}
+	t.Logf("Extracted plugin namespace: %s, resource type: %s", namespace, resourceType)
+
 	t.Log("Step 1: Creating resource out-of-band via plugin...")
 
 	// Create the resource directly via the plugin (bypassing formae)
@@ -229,9 +238,9 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 		t.Fatalf("failed to register target: %v", err)
 	}
 
-	// Step 3: Wait for plugin to register
+	// Step 3: Wait for plugin to register (using extracted namespace, not directory name)
 	t.Log("Step 3: Waiting for plugin to register...")
-	if err := harness.WaitForPluginRegistered(tc.PluginName, 30*time.Second); err != nil {
+	if err := harness.WaitForPluginRegistered(namespace, 30*time.Second); err != nil {
 		t.Fatalf("plugin did not register: %v", err)
 	}
 
@@ -243,10 +252,67 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 
 	// Step 5: Wait for resource to appear in inventory
 	t.Log("Step 5: Waiting for resource in inventory...")
-	// Note: This requires knowing the resource type - you may need to extract it from evalOutput
-	// if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, 2*time.Minute); err != nil {
-	// 	t.Fatalf("resource not discovered: %v", err)
-	// }
+	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, 2*time.Minute); err != nil {
+		t.Fatalf("resource not discovered: %v", err)
+	}
+
+	// Step 6: Verify the discovered resource
+	t.Log("Step 6: Verifying discovered resource...")
+	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", resourceType))
+	if err != nil {
+		t.Fatalf("failed to query inventory: %v", err)
+	}
+
+	// Find our specific resource by NativeID
+	var discoveredResource map[string]any
+	for _, res := range inventory.Resources {
+		if resNativeID, ok := res["NativeID"].(string); ok {
+			if resNativeID == nativeID {
+				discoveredResource = res
+				break
+			}
+		}
+	}
+
+	if discoveredResource == nil {
+		t.Fatalf("did not find resource with NativeID %s in discovered resources", nativeID)
+	}
+
+	// Verify resource is on the unmanaged stack
+	stack, ok := discoveredResource["Stack"].(string)
+	if !ok || stack != "$unmanaged" {
+		t.Fatalf("discovered resource should be on $unmanaged stack, got: %s", stack)
+	}
+
+	// Verify resource type matches
+	discoveredType, ok := discoveredResource["Type"].(string)
+	if !ok || discoveredType != resourceType {
+		t.Fatalf("discovered resource type should be %s, got: %s", resourceType, discoveredType)
+	}
 
 	t.Log("Discovery test passed!")
+}
+
+// extractNamespaceFromEvalOutput parses the evaluated JSON to extract the plugin namespace
+// and resource type from the last cloud resource (e.g., "OVH::Network::FloatingIP" -> namespace="OVH", resourceType="OVH::Network::FloatingIP").
+// The last resource is used because it's typically the main resource being tested,
+// while earlier resources are dependencies.
+func extractNamespaceFromEvalOutput(evalOutput string) (namespace string, resourceType string, err error) {
+	var forma pkgmodel.Forma
+	if err := json.Unmarshal([]byte(evalOutput), &forma); err != nil {
+		return "", "", err
+	}
+
+	// Find the last cloud resource (those with "::" in the type)
+	for i := len(forma.Resources) - 1; i >= 0; i-- {
+		res := forma.Resources[i]
+		if strings.Contains(res.Type, "::") {
+			parts := strings.Split(res.Type, "::")
+			if len(parts) > 0 {
+				return parts[0], res.Type, nil
+			}
+		}
+	}
+
+	return "", "", fmt.Errorf("no cloud resource found in eval output")
 }
