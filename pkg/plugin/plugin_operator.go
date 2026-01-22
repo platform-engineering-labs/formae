@@ -527,9 +527,11 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, 
 	return newState, data, nil
 }
 
-// validateNamespace checks that the operation targets the correct plugin
+// validateNamespace checks that the operation targets the correct plugin.
+// Uses case-insensitive comparison since plugins register with lowercase namespace
+// but resource types may use uppercase (e.g., "OVH::Compute::Keypair").
 func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process) bool {
-	if namespace != data.plugin.Namespace() {
+	if !strings.EqualFold(namespace, data.plugin.Namespace()) {
 		proc.Log().Error("PluginOperator: namespace mismatch", "expected", data.plugin.Namespace(), "got", namespace)
 		return false
 	}

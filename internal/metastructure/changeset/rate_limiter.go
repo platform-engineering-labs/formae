@@ -102,7 +102,7 @@ func (l *RateLimiter) Init(args ...any) error {
 func (l *RateLimiter) HandleCall(from gen.PID, ref gen.Ref, message any) (any, error) {
 	switch msg := message.(type) {
 	case RequestTokens:
-		bucket, exists := l.buckets[msg.Namespace]
+		bucket, exists := l.findBucket(msg.Namespace)
 		if !exists {
 			// Namespace not yet registered - return 0 tokens instead of an error.
 			// This handles the race condition where the changeset executor resumes
@@ -154,6 +154,18 @@ func (l *RateLimiter) HandleMessage(from gen.PID, message any) error {
 		l.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
 	}
 	return nil
+}
+
+// findBucket performs a case-insensitive lookup for a namespace bucket.
+// Namespaces are treated as case-insensitive since plugins register with lowercase
+// namespace but resource types may use uppercase (e.g., "OVH::Compute::Keypair").
+func (l *RateLimiter) findBucket(namespace string) (*TokenBucket, bool) {
+	for ns, bucket := range l.buckets {
+		if strings.EqualFold(ns, namespace) {
+			return bucket, true
+		}
+	}
+	return nil, false
 }
 
 // setupMetrics initializes OTel metrics for the rate limiter

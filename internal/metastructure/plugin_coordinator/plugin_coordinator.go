@@ -7,6 +7,7 @@ package plugin_coordinator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"ergo.services/ergo/act"
@@ -90,10 +91,24 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	return nil
 }
 
+// findPlugin performs a case-insensitive lookup for a registered plugin.
+// This handles the case where plugins register with lowercase namespace (e.g., "ovh")
+// but resource types use uppercase (e.g., "OVH::Compute::Keypair").
+func (c *PluginCoordinator) findPlugin(namespace string) (*RegisteredPlugin, bool) {
+	// Namespaces are treated as case-insensitive since plugins register with lowercase
+	// namespace but resource types may use uppercase (e.g., "OVH::Compute::Keypair").
+	for ns, plugin := range c.plugins {
+		if strings.EqualFold(ns, namespace) {
+			return plugin, true
+		}
+	}
+	return nil, false
+}
+
 func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
 	case messages.GetPluginNode:
-		plugin, ok := c.plugins[req.Namespace]
+		plugin, ok := c.findPlugin(req.Namespace)
 		if !ok {
 			return nil, fmt.Errorf("plugin not found: %s", req.Namespace)
 		}
@@ -173,7 +188,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 	)
 
 	// 1. Check if plugin is registered (distributed mode)
-	if registeredPlugin, ok := c.plugins[req.Namespace]; ok {
+	if registeredPlugin, ok := c.findPlugin(req.Namespace); ok {
 		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName)
 		if err != nil {
 			c.Log().Error("Failed to remote spawn PluginOperator for namespace %s on node %s: %v", req.Namespace, registeredPlugin.NodeName, err)
