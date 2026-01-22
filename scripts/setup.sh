@@ -12,12 +12,21 @@ fi
 skip_prompt='false'
 version='latest'
 
+artifact_username="${FORMAE_ARTIFACT_USERNAME}"
+artifact_password="${FORMAE_ARTIFACT_PASSWORD}"
+
 help() {
   echo "setup.sh installs formae from the PEL repository"
   echo " -h show help"
   echo " -v [version] select version"
   echo " -y skip confirmations"
   exit 0
+}
+
+curl_auth() {
+  if [[ "${artifact_username}" != "" && "${artifact_password}" != "" ]]; then
+    echo "-u '${artifact_username}:${artifact_password}'"
+  fi
 }
 
 while getopts 'hv:y' flag; do
@@ -27,6 +36,14 @@ while getopts 'hv:y' flag; do
     y) skip_prompt='true' ;;
   esac
 done
+
+if ! which curl > /dev/null; then
+  echo "curl not found in PATH, please install to continue"
+fi
+
+if ! which ruby > /dev/null && ! which jq > dev/null; then
+  echo "ruby or jq not found in PATH, please install either to continue"
+fi
 
 if [[ "$version" == "latest" ]]; then
   if which ruby > /dev/null; then
@@ -46,7 +63,7 @@ if [[ "$version" == "latest" ]]; then
       end
     ")
   elif which jq > /dev/null; then
-    version=$(curl -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.Version | index("-") | not) | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
+    version=$(curl "$(curl_auth)" -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.Version | index("-") | not) | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
   else
     echo "Could not find a ruby interpreter or jq, required by the installation, please install either package to continue!"
     exit 1
@@ -79,18 +96,9 @@ fi
 pkgname="formae@${version}_${OS}-${ARCH}.tgz"
 
 echo "Downloading: ${pkgname}"
-if which curl > /dev/null; then
-  if ! curl "https://hub.platform.engineering/binaries/pkgs/${pkgname}" 2>/dev/null > ${pkgname}; then
-    echo "Failed to download: ${pkgname}"
-    exit 1
-  fi
-elif which wget > /dev/null; then
-   if ! wget -qc -O  ${pkgname} "https://hub.platform.engineering/binaries/pkgs/${pkgname}" 2>/dev/null; then
-      echo "Failed to download: ${pkgname}"
-      exit 1
-    fi
-else
-  echo "Could not find: wget or curl, please install one so we can fetch the install package"
+if ! curl "$(curl_auth)" "https://hub.platform.engineering/binaries/pkgs/${pkgname}" 2>/dev/null > ${pkgname}; then
+  echo "Failed to download: ${pkgname}"
+  exit 1
 fi
 
 echo "Installing..."
