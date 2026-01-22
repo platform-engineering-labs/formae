@@ -231,19 +231,19 @@ func init() {
 func Start() {
 	err := config.Config.EnsureConfigDirectory()
 	if err != nil {
-		fmt.Println(display.Red("Error: " + err.Error()))
+		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
 	err = config.Config.EnsureDataDirectory()
 	if err != nil {
-		fmt.Println(display.Red("Error: " + err.Error()))
+		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
 	rootCommand, err := cmd.InitCommandWithContext(rootCmd)
 	if err != nil {
-		fmt.Println(display.Red("Error: " + err.Error()))
+		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
@@ -252,7 +252,7 @@ func Start() {
 		// In this case, show usage information to help the user.
 		var flagError *cmd.FlagError
 		if errors.As(err, &flagError) {
-			fmt.Println(display.Red("Error: " + err.Error()))
+			fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 			fmt.Println()
 			// Find the command that failed and print its usage
 			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
@@ -264,7 +264,7 @@ func Start() {
 		// For unknown command errors, show the parent command's usage
 		// to help the user find the correct command.
 		if strings.HasPrefix(err.Error(), "unknown command") {
-			fmt.Println(display.Red("Error: " + err.Error()))
+			fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 			fmt.Println()
 			// Find the parent command and show its usage
 			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
@@ -276,7 +276,7 @@ func Start() {
 		}
 
 		// For other errors (runtime errors), just print the error.
-		fmt.Println(display.Red("Error: " + err.Error()))
+		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
 		os.Exit(1)
 	}
 }

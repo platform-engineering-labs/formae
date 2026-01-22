@@ -114,7 +114,7 @@
               "TLSv1"
             ]
           },
-          "DomainName": "static-website-uber-unique-id.s3-website.us-east-1.amazonaws.com",
+          "DomainName": "static-website-e2e-942849037363.s3-website.us-east-1.amazonaws.com",
           "Id": "S3Origin",
           "OriginAccessControlId": "",
           "OriginCustomHeaders": [],

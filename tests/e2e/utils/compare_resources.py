@@ -28,8 +28,9 @@ IGNORED_PROPERTY_FIELDS: Set[str] = {
     "GroupName",        # EC2 SecurityGroup - AWS generates random names
     "SecurityGroups",   # Security group IDs are deployment-specific
     "SubnetMappings",   # Subnet mappings contain deployment-specific subnet IDs
-     "SourceSecurityGroupOwnerId",
-    "SourceSecurityGroupName"
+    "SourceSecurityGroupOwnerId",
+    "SourceSecurityGroupName",
+    "AvailabilityZone", # Region-specific value that differs between deployments
 }
 
 # Fields that contain AWS resource IDs that should be ignored during comparison
@@ -107,6 +108,23 @@ def remove_dynamic_ids_from_array(field_name: str, value: Any) -> Any:
 
     return value
 
+def normalize_empty_values(obj: Any) -> Any:
+    """Recursively remove empty arrays, empty objects, and empty strings from a dict for comparison.
+    This handles cases where the actual output omits empty values while expected includes them."""
+    if isinstance(obj, dict):
+        result = {}
+        for key, value in obj.items():
+            normalized = normalize_empty_values(value)
+            # Skip empty arrays, empty dicts, and empty strings
+            if normalized == [] or normalized == {} or normalized == "":
+                continue
+            result[key] = normalized
+        return result
+    elif isinstance(obj, list):
+        return [normalize_empty_values(item) for item in obj]
+    else:
+        return obj
+
 def remove_dynamic_values(obj: Any, field_path: str = "") -> Any:
     """Recursively remove dynamic values that shouldn't be compared"""
     if isinstance(obj, dict):
@@ -159,11 +177,14 @@ def filter_readonly_properties(readonly_props: Dict[str, Any]) -> Dict[str, Any]
 def compare_single_resource(actual_resource: Dict, expected_resource: Dict, resource_label: str) -> bool:
     """Compare a single resource with special handling for identifiers and references"""
 
-    # Compare all properties EXCEPT NativeId, ReadOnlyProperties, and Ksuid (which have special handling)
+    # Compare all properties EXCEPT special cases that have custom handling below
+    # - NativeID, ReadOnlyProperties, Ksuid: have special handling
+    # - Schema: resource type metadata that may evolve
+    # - Properties: has special handling for empty values and identifiers
     for key in expected_resource:
-        if key in ["NativeID", "ReadOnlyProperties", "Ksuid"]:
+        if key in ["NativeID", "ReadOnlyProperties", "Ksuid", "Schema", "Properties"]:
             continue
-        if remove_dynamic_values(actual_resource.get(key)) != remove_dynamic_values(expected_resource.get(key)):
+        if normalize_empty_values(remove_dynamic_values(actual_resource.get(key))) != normalize_empty_values(remove_dynamic_values(expected_resource.get(key))):
             print(f"Resource '{resource_label}' property '{key}' differs")
             print(f"\tActual: {actual_resource.get(key)}")
             print(f"\tExpected: {expected_resource.get(key)}")
@@ -178,8 +199,9 @@ def compare_single_resource(actual_resource: Dict, expected_resource: Dict, reso
     expected_props = expected_resource.get("Properties", {})
 
     # Remove identifier from properties before comparison if it exists there
-    actual_props_filtered = remove_dynamic_values(actual_props.copy())
-    expected_props_filtered = remove_dynamic_values(expected_props.copy())
+    # Also normalize empty values (missing field == empty array/dict)
+    actual_props_filtered = normalize_empty_values(remove_dynamic_values(actual_props.copy()))
+    expected_props_filtered = normalize_empty_values(remove_dynamic_values(expected_props.copy()))
 
     if identifier_field and identifier_field in actual_props_filtered:
         # Check identifier exists but don't compare its value

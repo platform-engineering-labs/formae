@@ -7,7 +7,7 @@
 // Base configuration - just default values
 projectName = "static-website"
 environment = "dev"
-bucketSuffix = "-uber-unique-id"
+bucketSuffix = "-e2e-942849037363"
 region = "us-east-1"
 domainName = "test.platform.engineering"
 

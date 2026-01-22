@@ -185,7 +185,7 @@
         }
       ]
     },
-    "BucketName": "static-website-uber-unique-id",
+    "BucketName": "static-website-e2e-942849037363",
     "OwnershipControls": {
       "Rules": [
         {
@@ -222,13 +222,13 @@
     }
   },
   "ReadOnlyProperties": {
-    "Arn": "arn:aws:s3:::static-website-uber-unique-id",
-    "DomainName": "static-website-uber-unique-id.s3.amazonaws.com",
-    "DualStackDomainName": "static-website-uber-unique-id.s3.dualstack.us-east-2.amazonaws.com",
-    "RegionalDomainName": "static-website-uber-unique-id.s3.us-east-2.amazonaws.com",
-    "WebsiteURL": "http://static-website-uber-unique-id.s3-website.us-east-2.amazonaws.com"
+    "Arn": "arn:aws:s3:::static-website-e2e-942849037363",
+    "DomainName": "static-website-e2e-942849037363.s3.amazonaws.com",
+    "DualStackDomainName": "static-website-e2e-942849037363.s3.dualstack.us-east-1.amazonaws.com",
+    "RegionalDomainName": "static-website-e2e-942849037363.s3.us-east-1.amazonaws.com",
+    "WebsiteURL": "http://static-website-e2e-942849037363.s3-website.us-east-1.amazonaws.com"
   },
-  "NativeID": "static-website-uber-unique-id",
+  "NativeID": "static-website-e2e-942849037363",
   "Managed": true,
   "Ksuid": "34jc6am4XC3QosWGHzH4i3j34SV"
 }
