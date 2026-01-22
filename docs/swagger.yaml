@@ -1,6 +1,6 @@
 basePath: /api/v1
 definitions:
-  github_com_platform-engineering-labs_formae_internal_api_model.Command:
+  github_com_platform-engineering-labs_formae_pkg_api_model.Command:
     properties:
       Command:
         type: string
@@ -21,7 +21,7 @@ definitions:
           $ref: '#/definitions/model.TargetUpdate'
         type: array
     type: object
-  github_com_platform-engineering-labs_formae_internal_api_model.Description:
+  github_com_platform-engineering-labs_formae_pkg_api_model.Description:
     properties:
       Confirm:
         type: boolean
@@ -96,7 +96,7 @@ definitions:
     properties:
       Commands:
         items:
-          $ref: '#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command'
+          $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
         type: array
     type: object
   model.PluginInfo:
@@ -224,7 +224,7 @@ definitions:
       ChangesRequired:
         type: boolean
       Command:
-        $ref: '#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command'
+        $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
     type: object
   model.Stack:
     properties:
@@ -286,7 +286,7 @@ definitions:
       CommandId:
         type: string
       Description:
-        $ref: '#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Description'
+        $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Description'
       Simulation:
         $ref: '#/definitions/model.Simulation'
     type: object

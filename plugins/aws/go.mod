@@ -20,10 +20,9 @@ require (
 	github.com/aws/smithy-go v1.23.1
 	github.com/google/uuid v1.6.0
 	github.com/masterminds/semver v1.5.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-00010101000000-000000000000
+	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-20260120024139-dfbbaa3804a2
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
-	github.com/tidwall/gjson v1.18.0
 )
 
 require (
@@ -50,6 +49,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/theory/jsonpath v0.10.2 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
