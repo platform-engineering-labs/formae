@@ -22,6 +22,8 @@ import (
 // For each test case:
 //   - Creates the resource via formae apply
 //   - Reads and verifies the resource via inventory
+//   - Forces synchronization to read actual state from cloud
+//   - Verifies idempotency (resource state unchanged after sync)
 //   - Updates the resource (if update file exists)
 //   - Deletes the resource via formae destroy
 //
@@ -103,9 +105,37 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 	t.Logf("Found %d resource(s) in inventory", len(inventory.Resources))
 
-	// === Step 3: Update resource (if update file exists) ===
+	// Store initial resource count for idempotency check
+	initialResourceCount := len(inventory.Resources)
+
+	// === Step 3: Force synchronization to read actual state from cloud ===
+	t.Log("Step 3: Forcing synchronization...")
+	if err := harness.Sync(); err != nil {
+		t.Fatalf("failed to trigger sync: %v", err)
+	}
+
+	// === Step 4: Wait for synchronization to complete ===
+	t.Log("Step 4: Waiting for synchronization to complete...")
+	if err := harness.WaitForSyncCompletion(60 * time.Second); err != nil {
+		t.Fatalf("sync did not complete: %v", err)
+	}
+
+	// === Step 5: Verify idempotency (inventory should match after sync) ===
+	t.Log("Step 5: Verifying resource state unchanged after sync (idempotency)...")
+	inventoryAfterSync, err := harness.Inventory("managed: true")
+	if err != nil {
+		t.Fatalf("failed to query inventory after sync: %v", err)
+	}
+
+	if len(inventoryAfterSync.Resources) != initialResourceCount {
+		t.Fatalf("idempotency check failed: expected %d resources after sync, got %d",
+			initialResourceCount, len(inventoryAfterSync.Resources))
+	}
+	t.Log("Idempotency verified!")
+
+	// === Step 6: Update resource (if update file exists) ===
 	if tc.UpdateFile != "" {
-		t.Log("Step 3: Updating resource...")
+		t.Log("Step 6: Updating resource...")
 		cmdID, err = harness.ApplyWithMode(tc.UpdateFile, "patch")
 		if err != nil {
 			t.Fatalf("failed to apply update: %v", err)
@@ -117,11 +147,11 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 		}
 		t.Logf("Update command completed with status: %s", status)
 	} else {
-		t.Log("Step 3: Skipping update (no update file)")
+		t.Log("Step 6: Skipping update (no update file)")
 	}
 
-	// === Step 4: Delete resource ===
-	t.Log("Step 4: Deleting resource...")
+	// === Step 7: Delete resource ===
+	t.Log("Step 7: Deleting resource...")
 	cmdID, err = harness.Destroy(tc.PKLFile)
 	if err != nil {
 		t.Fatalf("failed to destroy: %v", err)
@@ -133,8 +163,8 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 	t.Logf("Delete command completed with status: %s", status)
 
-	// === Step 5: Verify deletion ===
-	t.Log("Step 5: Verifying resource deleted...")
+	// === Step 8: Verify deletion ===
+	t.Log("Step 8: Verifying resource deleted...")
 	inventory, err = harness.Inventory("managed: true")
 	if err != nil {
 		t.Fatalf("failed to query inventory after delete: %v", err)
