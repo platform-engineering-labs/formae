@@ -297,11 +297,11 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, regist
 // It first checks registered external plugins, then falls back to local plugins.
 // Filters are cached from the initial plugin announcement (no refresh needed since filters are static).
 func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.PluginInfoResponse {
-	// 1. Check external plugins first
-	if registered, ok := c.plugins[req.Namespace]; ok {
+	// 1. Check external plugins first (case-insensitive lookup)
+	if registered, ok := c.findPlugin(req.Namespace); ok {
 		return messages.PluginInfoResponse{
 			Found:              true,
-			Namespace:          req.Namespace,
+			Namespace:          registered.Namespace, // Use the registered namespace (preserves original case)
 			SupportedResources: registered.SupportedResources,
 			ResourceSchemas:    registered.ResourceSchemas,
 			MatchFilters:       registered.MatchFilters,
