@@ -611,16 +611,10 @@ local function formatListAsListing(list: List, indent: String, propertyName: Str
     )
 
     if (filteredList.isEmpty)
-      if (propertyName == "tags")
-        ""
-      else
-        "new Listing {}"
+      "new Listing {}"
     else
       let (formattedItems = filteredList.map((item) -> formatValueWithTypes(item, indent)))
-      if (propertyName == "tags")
-        "new Listing<aws.Tag> { " + formattedItems.join("; ") + " }"
-      else
-        "new Listing { " + formattedItems.join("; ") + " }"
+      "new Listing { " + formattedItems.join("; ") + " }"
 
 local function isBaseType(typeName: String): Boolean =
   typeName == "Dynamic" ||
@@ -640,9 +634,7 @@ local function isBaseType(typeName: String): Boolean =
   typeName == "Resource"
 
 local function getTypeDeclaration(typeName: String, importInfo: String?): String =
-  if (typeName == "Tag")
-    "new aws.Tag"
-  else if (isBaseType(typeName))
+  if (isBaseType(typeName))
     "new \(typeName)"
   else if (importInfo != null && importInfo != "pkl:base")
     "new \(importInfo).\(typeName)"
