@@ -489,14 +489,15 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOpt
 	return (*schemaPlugin).SerializeForma(forma, options)
 }
 
-func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (plugin.GenerateSourcesResult, error) {
+func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string, schemaLocation string) (plugin.GenerateSourcesResult, error) {
 	schemaPlugin, err := a.PluginManager.SchemaPlugin(outputSchema)
 	if err != nil {
 		return plugin.GenerateSourcesResult{}, err
 	}
-	includes := a.Projects.formatIncludes(outputSchema, []string{"aws"})
+	location := plugin.SchemaLocation(schemaLocation)
+	includes := a.Projects.formatIncludes(outputSchema, []string{"aws"}, location)
 
-	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes)
+	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes, location)
 }
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
@@ -535,21 +536,22 @@ func (p *Plugins) SupportedSchemas() []string {
 
 // Projects
 
-func (p *Projects) Init(path string, format string, include []string) error {
+func (p *Projects) Init(path string, format string, include []string, schemaLocation string) error {
 	// TODO(discount-elf) think about this namespace issue, since different packages can be included in plugins we currently
 	// need plugin.package for download delivery
 	var includes []string
+	location := plugin.SchemaLocation(schemaLocation)
 
 	switch format {
 	case "pkl":
-		includes = p.formatIncludes(format, include)
+		includes = p.formatIncludes(format, include, location)
 
 		schemaPlugin, err := p.pluginManager.SchemaPluginByFileExtension(".pkl")
 		if err != nil {
 			return err
 		}
 
-		err = (*schemaPlugin).ProjectInit(path, includes)
+		err = (*schemaPlugin).ProjectInit(path, includes, location)
 		if err != nil {
 			return err
 		}
@@ -561,7 +563,7 @@ func (p *Projects) Init(path string, format string, include []string) error {
 	return nil
 }
 
-func (p *Projects) formatIncludes(format string, include []string) []string {
+func (p *Projects) formatIncludes(format string, include []string, schemaLocation plugin.SchemaLocation) []string {
 	var includes []string
 	switch format {
 	case "pkl":
@@ -572,6 +574,14 @@ func (p *Projects) formatIncludes(format string, include []string) []string {
 		if slices.Contains(include, "aws") {
 			if awsVersion := p.pluginManager.PluginVersion("aws"); awsVersion != nil {
 				includes = append(includes, "aws.aws@"+awsVersion.String())
+			}
+		}
+
+		// Add all other included namespaces (e.g., ovh, gcp) for local schema resolution
+		// These will be handled by the PackageResolver based on schemaLocation
+		for _, ns := range include {
+			if ns != "aws" { // aws is handled above with version lookup
+				includes = append(includes, ns)
 			}
 		}
 	default:

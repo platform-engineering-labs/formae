@@ -163,11 +163,11 @@ func highlight(code []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string) (plugin.GenerateSourcesResult, error) {
+func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation plugin.SchemaLocation) (plugin.GenerateSourcesResult, error) {
 	return plugin.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 
-func (j JSON) ProjectInit(path string, include []string) error {
+func (j JSON) ProjectInit(path string, include []string, schemaLocation plugin.SchemaLocation) error {
 	return errors.ErrUnsupported
 }
 

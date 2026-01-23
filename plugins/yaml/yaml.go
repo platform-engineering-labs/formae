@@ -166,11 +166,11 @@ func highlight(code []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (j YAML) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string) (plugin.GenerateSourcesResult, error) {
+func (j YAML) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation plugin.SchemaLocation) (plugin.GenerateSourcesResult, error) {
 	return plugin.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 
-func (j YAML) ProjectInit(path string, include []string) error {
+func (j YAML) ProjectInit(path string, include []string, schemaLocation plugin.SchemaLocation) error {
 	return errors.ErrUnsupported
 }
 

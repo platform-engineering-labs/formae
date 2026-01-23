@@ -5,8 +5,9 @@
 package plugin
 
 type SerializeOptions struct {
-	Schema     string
-	Beautify   bool
-	Colorize   bool
-	Simplified bool
+	Schema         string
+	Beautify       bool
+	Colorize       bool
+	Simplified     bool
+	SchemaLocation SchemaLocation
 }

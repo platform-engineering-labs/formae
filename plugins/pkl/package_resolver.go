@@ -7,12 +7,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
-)
 
-// LocalPluginPackagesEnvVar is the environment variable for local package overrides
-// Format: "NAME1,/path1;NAME2,/path2" (semicolon-separated pairs of name,path)
-const LocalPluginPackagesEnvVar = "LOCAL_PKL_PLUGIN_PACKAGES"
+	"github.com/masterminds/semver"
+)
 
 // Package represents a PKL schema package dependency
 type Package struct {
@@ -34,67 +34,46 @@ func (p Package) FormatForPklTemplate() string {
 }
 
 // PackageResolver manages PKL package dependencies.
-// It builds remote packages and allows local overrides from LOCAL_PKL_PLUGIN_PACKAGES env var.
+// By default, packages are resolved remotely. Use WithLocalSchemas() to enable
+// local schema resolution from installed plugins.
 type PackageResolver struct {
-	packages       map[string]Package // name -> Package (lowercase)
-	localOverrides map[string]string  // name -> local path (lowercase)
+	packages             map[string]Package // name -> Package (lowercase)
+	localSchemaBasePath  string             // Base path for local schemas (e.g., ~/.pel/formae/plugins)
+	useLocalSchemas      bool               // Whether to resolve schemas locally
 }
 
-// NewPackageResolver creates a resolver.
-// It automatically loads local overrides from LOCAL_PKL_PLUGIN_PACKAGES environment variable.
+// NewPackageResolver creates a resolver that resolves packages remotely by default.
 func NewPackageResolver() *PackageResolver {
-	r := &PackageResolver{
-		packages:       make(map[string]Package),
-		localOverrides: make(map[string]string),
+	return &PackageResolver{
+		packages: make(map[string]Package),
 	}
-	r.loadLocalOverrides()
+}
+
+// WithLocalSchemas configures the resolver to use local schemas from installed plugins.
+// The basePath should be the plugins directory (e.g., ~/.pel/formae/plugins).
+// When enabled, Add() will look for schemas at basePath/<namespace>/v<version>/schema/pkl/PklProject
+func (r *PackageResolver) WithLocalSchemas(basePath string) *PackageResolver {
+	r.localSchemaBasePath = basePath
+	r.useLocalSchemas = true
 	return r
 }
 
-// loadLocalOverrides parses LOCAL_PKL_PLUGIN_PACKAGES env var into the overrides map.
-// Format: "NAME1,/path1;NAME2,/path2"
-func (r *PackageResolver) loadLocalOverrides() {
-	env := os.Getenv(LocalPluginPackagesEnvVar)
-	if env == "" {
-		return
-	}
-
-	entries := strings.Split(env, ";")
-	for _, entry := range entries {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-
-		parts := strings.SplitN(entry, ",", 2)
-		if len(parts) != 2 {
-			continue // Skip malformed entries
-		}
-
-		name := strings.TrimSpace(parts[0])
-		path := strings.TrimSpace(parts[1])
-
-		if name == "" || path == "" {
-			continue
-		}
-
-		r.localOverrides[strings.ToLower(name)] = path
-	}
-}
-
-// Add adds a remote package with the given namespace, plugin, and version.
-// If a local override exists for this namespace, the local path is used instead.
+// Add adds a package with the given namespace, plugin, and version.
+// If local schemas are enabled and the package is installed locally, uses the local path.
+// Otherwise, adds as a remote package.
 func (r *PackageResolver) Add(namespace, plugin, version string) {
 	name := strings.ToLower(namespace)
 
-	// Check if there's a local override
-	if localPath, ok := r.localOverrides[name]; ok {
-		r.packages[name] = Package{
-			Name:      name,
-			IsLocal:   true,
-			LocalPath: localPath,
+	// If local schemas are enabled, try to find the installed schema
+	if r.useLocalSchemas && r.localSchemaBasePath != "" {
+		if localPath := r.findLocalSchema(namespace); localPath != "" {
+			r.packages[name] = Package{
+				Name:      name,
+				IsLocal:   true,
+				LocalPath: localPath,
+			}
+			return
 		}
-		return
 	}
 
 	// Add as remote package
@@ -106,7 +85,57 @@ func (r *PackageResolver) Add(namespace, plugin, version string) {
 	}
 }
 
-// AddLocal adds a local package directly (bypasses override check).
+// findLocalSchema looks for an installed schema at basePath/<namespace>/v*/schema/pkl/PklProject
+// Returns the path to PklProject for the highest installed version, or empty string if not found.
+func (r *PackageResolver) findLocalSchema(namespace string) string {
+	pluginDir := filepath.Join(r.localSchemaBasePath, strings.ToLower(namespace))
+
+	entries, err := os.ReadDir(pluginDir)
+	if err != nil {
+		return ""
+	}
+
+	// Collect version directories
+	var versions []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Version directories start with 'v' (e.g., v0.1.0)
+		if strings.HasPrefix(name, "v") {
+			versions = append(versions, name)
+		}
+	}
+
+	if len(versions) == 0 {
+		return ""
+	}
+
+	// Sort by semver (highest first)
+	sort.Slice(versions, func(i, j int) bool {
+		vi, errI := semver.NewVersion(versions[i])
+		vj, errJ := semver.NewVersion(versions[j])
+		if errI != nil || errJ != nil {
+			// Fall back to string comparison if parsing fails
+			return versions[i] > versions[j]
+		}
+		return vi.GreaterThan(vj)
+	})
+
+	// Use highest version
+	highestVersion := versions[0]
+	pklProjectPath := filepath.Join(pluginDir, highestVersion, "schema", "pkl", "PklProject")
+
+	// Verify the PklProject file exists
+	if _, err := os.Stat(pklProjectPath); err != nil {
+		return ""
+	}
+
+	return pklProjectPath
+}
+
+// AddLocal adds a local package directly (bypasses version lookup).
 func (r *PackageResolver) AddLocal(namespace, path string) {
 	name := strings.ToLower(namespace)
 	r.packages[name] = Package{
@@ -134,17 +163,17 @@ func (r *PackageResolver) GetPackages() []Package {
 	return result
 }
 
-// HasLocalOverride returns true if the given namespace has a local override
-func (r *PackageResolver) HasLocalOverride(namespace string) bool {
-	_, ok := r.localOverrides[strings.ToLower(namespace)]
-	return ok
+// IsUsingLocalSchemas returns true if local schema resolution is enabled
+func (r *PackageResolver) IsUsingLocalSchemas() bool {
+	return r.useLocalSchemas
 }
 
-// GetLocalOverrides returns a copy of the local overrides map
-func (r *PackageResolver) GetLocalOverrides() map[string]string {
-	result := make(map[string]string, len(r.localOverrides))
-	for k, v := range r.localOverrides {
-		result[k] = v
+// HasRemotePackages returns true if any packages are remote (need pkl project resolve)
+func (r *PackageResolver) HasRemotePackages() bool {
+	for _, pkg := range r.packages {
+		if !pkg.IsLocal {
+			return true
+		}
 	}
-	return result
+	return false
 }
