@@ -53,6 +53,21 @@ func TestRateLimiter_GrantsNoMoreTokensThanAvailable(t *testing.T) {
 	assert.Equal(t, int(0), grant.N)
 }
 
+func TestRateLimiter_ReturnsZeroTokensForUnknownNamespace(t *testing.T) {
+	listener, sender, err := newRateLimiterForTest(t)
+	require.NoError(t, err)
+
+	// Request tokens for a namespace that doesn't exist
+	// Should return 0 tokens without an error, allowing the caller to retry
+	res := listener.Call(sender, RequestTokens{Namespace: "UnknownPlugin", N: 2})
+	require.Nil(t, res.Error, "Unknown namespace should not return an error")
+
+	grant, ok := res.Response.(TokensGranted)
+	require.True(t, ok)
+
+	assert.Equal(t, int(0), grant.N, "Unknown namespace should return 0 tokens")
+}
+
 func TestRateLimited_RefillsTokensEverySecond(t *testing.T) {
 	listener, sender, err := newRateLimiterForTest(t)
 	require.NoError(t, err)
