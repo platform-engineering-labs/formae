@@ -288,11 +288,14 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 	data.resourceUpdate.ModifiedTs = data.resourceUpdate.StartTs
 	data.originalResourceKsuidURI = data.resourceUpdate.DesiredState.URI()
 
-	// Get LabelConfig from the plugin for this namespace
-	if pluginMgr, ok := proc.Env("PluginManager"); ok {
-		pm := pluginMgr.(*plugin.Manager)
-		if resourcePlugin, err := pm.ResourcePlugin(data.resourceUpdate.DesiredState.Namespace()); err == nil && resourcePlugin != nil {
-			data.labelConfig = (*resourcePlugin).LabelConfig()
+	// Get LabelConfig from PluginCoordinator (handles both external and local plugins)
+	namespace := data.resourceUpdate.DesiredState.Namespace()
+	result, err := proc.Call(
+		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
+		messages.GetPluginInfo{Namespace: namespace})
+	if err == nil {
+		if infoResp, ok := result.(messages.PluginInfoResponse); ok && infoResp.Found {
+			data.labelConfig = infoResp.LabelConfig
 		}
 	}
 
