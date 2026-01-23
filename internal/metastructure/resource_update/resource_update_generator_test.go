@@ -619,7 +619,7 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 	expectedLabels := map[string]string{
 		vpcUpdate.DesiredState.Ksuid:    "new-vpc",
 		subnetUpdate.DesiredState.Ksuid: "subnet",
-		"shared-ksuid-999":          "shared-vpc",
+		"shared-ksuid-999":              "shared-vpc",
 	}
 
 	assert.Equal(t, expectedLabels, vpcUpdate.ReferenceLabels, "VPC update should have complete mapping")
