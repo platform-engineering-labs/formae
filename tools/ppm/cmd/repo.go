@@ -149,7 +149,7 @@ func RepoPublishCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Int("prune", 10, "Limit number of packages of each name in repo")
+	cmd.Flags().Int("prune", 20, "Limit number of packages of each name in repo")
 
 	return cmd
 }
