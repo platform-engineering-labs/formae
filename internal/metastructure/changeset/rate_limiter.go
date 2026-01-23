@@ -104,8 +104,13 @@ func (l *RateLimiter) HandleCall(from gen.PID, ref gen.Ref, message any) (any, e
 	case RequestTokens:
 		bucket, exists := l.buckets[msg.Namespace]
 		if !exists {
-			l.Log().Error(fmt.Sprintf("RateLimiter: unknown namespace requested: %s", msg.Namespace))
-			return TokensGranted{N: 0}, fmt.Errorf("unknown namespace: %s", msg.Namespace)
+			// Namespace not yet registered - return 0 tokens instead of an error.
+			// This handles the race condition where the changeset executor resumes
+			// before a plugin has registered its namespace. The executor's existing
+			// retry mechanism will handle this: 0 tokens triggers a 1-second timeout
+			// and retry, continuing until the plugin registers and tokens become available.
+			l.Log().Debug("Namespace not yet registered, returning 0 tokens: %s", msg.Namespace)
+			return TokensGranted{N: 0}, nil
 		}
 
 		// Extract requester name for metrics
