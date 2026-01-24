@@ -352,6 +352,116 @@ func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 	})
 }
 
+func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		readCalled := false
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				readCalled = true
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					ErrorCode:    resource.OperationErrorCodeNotFound,
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+
+		defer def()
+		require.NoError(t, err)
+
+		db, ok := m.Datastore.(datastore.TestDatastoreSQLite)
+		require.True(t, ok)
+
+		db.ClearCommandsTable()
+
+		f := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{
+				{
+					Label: "test-stack-notfound",
+				},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "notfound",
+					Type:       "FakeAWS::Resource",
+					Properties: json.RawMessage(`{"foo":"bar"}`),
+					Stack:      "test-stack-notfound",
+					Schema: pkgmodel.Schema{
+						Fields: []string{"foo"},
+					},
+					Target: "test-target",
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{
+					Label: "test-target",
+				},
+			},
+		}
+
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			assert.NoError(t, err)
+			return len(fas) == 1 && fas[0].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess
+		}, 2*time.Second, 100*time.Millisecond)
+		stacks, err := m.Datastore.LoadAllStacks()
+		require.NoError(t, err)
+		require.Equal(t, 1, len(stacks))
+		require.NoError(t, err)
+
+		// Manual one-time synchronization
+		err = m.ForceSync()
+		require.NoError(t, err)
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			assert.NoError(t, err)
+			if len(fas) != 2 {
+				return false
+			}
+			// Find the sync command by type (don't rely on order)
+			for _, fc := range fas {
+				if fc.Command == pkgmodel.CommandSync && len(fc.ResourceUpdates) > 0 {
+					if fc.ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess {
+						return true
+					}
+				}
+			}
+			return false
+		}, 2*time.Second, 100*time.Millisecond)
+		require.True(t, readCalled, "Read should have been called")
+
+		// Check that the resource is either removed or marked as not found
+		stacks, err = m.Datastore.LoadAllStacks()
+		require.NoError(t, err)
+		require.Equal(t, 0, len(stacks))
+
+		formaCommands, _ := m.Datastore.LoadFormaCommands()
+
+		assert.Equal(t, 2, len(formaCommands), "There should be two forma command recorded")
+
+		// Find apply and sync commands by type (don't rely on order)
+		var applyCmd, syncCmd *forma_command.FormaCommand
+		for _, fc := range formaCommands {
+			switch fc.Command {
+			case pkgmodel.CommandApply:
+				applyCmd = fc
+			case pkgmodel.CommandSync:
+				syncCmd = fc
+			}
+		}
+
+		assert.NotNil(t, syncCmd, "The sync command should exist")
+		assert.NotNil(t, applyCmd, "The apply command should exist")
+		assert.Equal(t, 1, len(syncCmd.ResourceUpdates), "There should be one resource update in the sync command")
+	})
+}
+
 func TestSynchronizer_OverlapProtection(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		blockFirstSync := make(chan struct{})

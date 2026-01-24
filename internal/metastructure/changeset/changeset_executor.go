@@ -200,18 +200,6 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 		}
 	}
 
-	// Resume any orphaned InProgress updates from a previous run (e.g., after agent restart).
-	// These updates have state=InProgress but no ResourceUpdater actor running for them.
-	inProgressUpdates := data.changeset.GetInProgressUpdates()
-	if len(inProgressUpdates) > 0 {
-		proc.Log().Info("Resuming orphaned in-progress updates", "count", len(inProgressUpdates), "commandID", data.changeset.CommandID)
-		err := startResourceUpdates(inProgressUpdates, data.changeset.CommandID, proc)
-		if err != nil {
-			proc.Log().Error("Failed to resume in-progress resource updates", "commandID", data.changeset.CommandID, "error", err)
-			return StateFinishedWithError, data, nil, nil
-		}
-	}
-
 	return resume(from, state, data, Resume{}, proc)
 }
 

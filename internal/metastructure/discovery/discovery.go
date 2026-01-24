@@ -189,9 +189,6 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		statemachine.WithStateMessageHandler(StateDiscovering, processListing),
 		statemachine.WithStateMessageHandler(StateDiscovering, syncCompleted),
 
-		// Handle stale listing responses that arrive after discovery completes
-		statemachine.WithStateMessageHandler(StateIdle, discardStaleListing),
-
 		// Handle pause/resume in both states to allow pausing at any time
 		statemachine.WithStateCallHandler(StateIdle, pauseDiscovery),
 		statemachine.WithStateCallHandler(StateDiscovering, pauseDiscovery),
@@ -488,14 +485,6 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	proc.Log().Debug("Scanning resource type %s in target %s with list properties %v in %f seconds", op.ResourceType, target.Label, listParameters)
 
 	return nil
-}
-
-// discardStaleListing handles listing responses that arrive after discovery has completed.
-// This can happen due to race conditions when the last listing response arrives just after
-// the state machine transitions to Idle. We simply discard these stale messages.
-func discardStaleListing(from gen.PID, state gen.Atom, data DiscoveryData, message plugin.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
-	proc.Log().Debug("Discarding stale listing response received in Idle state for %s in target %s", message.ResourceType, message.TargetLabel)
-	return state, data, nil, nil
 }
 
 func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message plugin.Listing, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {

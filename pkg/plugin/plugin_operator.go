@@ -554,7 +554,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 	result, err := data.plugin.Read(data.context, &resource.ReadRequest{
 		NativeID:        operation.NativeID,
 		ResourceType:    operation.Resource.Type,
-		TargetConfig: operation.TargetConfig,
+		TargetConfig:    operation.TargetConfig,
 		RedactSensitive: operation.RedactSensitive,
 	})
 	if err != nil {

@@ -29,7 +29,7 @@ type ResourcePluginInfo struct {
 type Manager struct {
 	pluginPaths       []string
 	externalPluginDir string
-	plugins     []*Plugin
+	plugins           []*Plugin
 
 	authenticationPlugins []*AuthenticationPlugin
 	networkPlugins        []*NetworkPlugin

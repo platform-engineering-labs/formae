@@ -141,10 +141,10 @@ func Run(fp FullResourcePlugin) {
 
 	// Set environment for PluginActor and remotely spawned PluginOperators
 	options.Env = map[gen.Env]any{
-		gen.Env("Context"):   context.Background(),
-		gen.Env("Plugin"):    fp,
-		gen.Env("Namespace"): fp.Namespace(),
-		gen.Env("AgentNode"): gen.Atom(agentNode),
+		gen.Env("Context"):    context.Background(),
+		gen.Env("Plugin"):     fp,
+		gen.Env("Namespace"):  fp.Namespace(),
+		gen.Env("AgentNode"):  gen.Atom(agentNode),
 		gen.Env("OTelConfig"): otelConfig,
 		// Default retry config for plugin operations
 		gen.Env("RetryConfig"): model.RetryConfig{
