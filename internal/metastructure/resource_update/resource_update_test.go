@@ -568,14 +568,16 @@ func TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays(t *te
 	}
 
 	// First progress: InProgress with EMPTY properties (this is what the plugin returns during polling)
-	firstProgress := &resource.ProgressResult{
-		Operation:          resource.OperationCreate,
-		OperationStatus:    resource.OperationStatusInProgress,
-		RequestID:          "test-create-request-id",
-		StartTs:            util.TimeNow(),
-		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
-		MaxAttempts:        3,
-		ResourceProperties: json.RawMessage(`{}`), // Empty properties during intermediate polling
+	firstProgress := &plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:          resource.OperationCreate,
+			OperationStatus:    resource.OperationStatusInProgress,
+			RequestID:          "test-create-request-id",
+			ResourceProperties: json.RawMessage(`{}`), // Empty properties during intermediate polling
+		},
+		StartTs:     util.TimeNow(),
+		ModifiedTs:  util.TimeNow().Add(10 * time.Second),
+		MaxAttempts: 3,
 	}
 
 	err := resourceUpdate.RecordProgress(firstProgress)
@@ -650,14 +652,16 @@ func TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays(t *te
 		"region": "us-east-1"
 	}`, diskKsuid, networkKsuid, subnetKsuid)
 
-	secondProgress := &resource.ProgressResult{
-		Operation:          resource.OperationCreate,
-		OperationStatus:    resource.OperationStatusSuccess,
-		RequestID:          "test-create-request-id-2",
-		StartTs:            util.TimeNow().Add(120 * time.Second),
-		ModifiedTs:         util.TimeNow().Add(140 * time.Second),
-		MaxAttempts:        3,
-		ResourceProperties: json.RawMessage(finalPluginProps),
+	secondProgress := &plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:          resource.OperationCreate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			RequestID:          "test-create-request-id-2",
+			ResourceProperties: json.RawMessage(finalPluginProps),
+		},
+		StartTs:     util.TimeNow().Add(120 * time.Second),
+		ModifiedTs:  util.TimeNow().Add(140 * time.Second),
+		MaxAttempts: 3,
 	}
 
 	err = resourceUpdate.RecordProgress(secondProgress)
@@ -734,14 +738,16 @@ func TestRecordProgress_MergePreservesRefStructuresInArrays(t *testing.T) {
 		},
 	}
 
-	progress := &resource.ProgressResult{
-		Operation:          resource.OperationCreate,
-		OperationStatus:    resource.OperationStatusSuccess,
-		RequestID:          "test-request",
-		StartTs:            util.TimeNow(),
-		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
-		MaxAttempts:        3,
-		ResourceProperties: json.RawMessage(pluginProps),
+	progress := &plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:          resource.OperationCreate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			RequestID:          "test-request",
+			ResourceProperties: json.RawMessage(pluginProps),
+		},
+		StartTs:     util.TimeNow(),
+		ModifiedTs:  util.TimeNow().Add(10 * time.Second),
+		MaxAttempts: 3,
 	}
 
 	err := resourceUpdate.RecordProgress(progress)
@@ -784,14 +790,16 @@ func TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin(t *testing.T) 
 		},
 	}
 
-	progress := &resource.ProgressResult{
-		Operation:          resource.OperationCreate,
-		OperationStatus:    resource.OperationStatusSuccess,
-		RequestID:          "test-request",
-		StartTs:            util.TimeNow(),
-		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
-		MaxAttempts:        3,
-		ResourceProperties: json.RawMessage(pluginProps),
+	progress := &plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:          resource.OperationCreate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			RequestID:          "test-request",
+			ResourceProperties: json.RawMessage(pluginProps),
+		},
+		StartTs:     util.TimeNow(),
+		ModifiedTs:  util.TimeNow().Add(10 * time.Second),
+		MaxAttempts: 3,
 	}
 
 	err := resourceUpdate.RecordProgress(progress)
@@ -840,14 +848,16 @@ func TestRecordProgress_MergeArrays_PluginReturnsReorderedElements(t *testing.T)
 		},
 	}
 
-	progress := &resource.ProgressResult{
-		Operation:          resource.OperationCreate,
-		OperationStatus:    resource.OperationStatusSuccess,
-		RequestID:          "test-request",
-		StartTs:            util.TimeNow(),
-		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
-		MaxAttempts:        3,
-		ResourceProperties: json.RawMessage(pluginProps),
+	progress := &plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:          resource.OperationCreate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			RequestID:          "test-request",
+			ResourceProperties: json.RawMessage(pluginProps),
+		},
+		StartTs:     util.TimeNow(),
+		ModifiedTs:  util.TimeNow().Add(10 * time.Second),
+		MaxAttempts: 3,
 	}
 
 	err := resourceUpdate.RecordProgress(progress)
