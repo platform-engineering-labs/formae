@@ -289,8 +289,8 @@ github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pierrec/lz4/v4 v4.1.22 h1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=
 github.com/pierrec/lz4/v4 v4.1.22/go.mod h1:gZWDp/Ze/IJXGXf23ltt2EXimqmTUXEy0GFuRQyBid4=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20251220004923-2a697f4229b5 h1:DDH7tWKLOH/B5jnaOAeJRxsuPEiKqjB9xABDCvoxkwU=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20251220004923-2a697f4229b5/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
+github.com/platform-engineering-labs/jsonpatch v0.0.0-20260120160109-3221bac3fb58 h1:IBu5tNDI2WqTawo2biShGP/gUWEyHdL83yBbmlKHFtw=
+github.com/platform-engineering-labs/jsonpatch v0.0.0-20260120160109-3221bac3fb58/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
