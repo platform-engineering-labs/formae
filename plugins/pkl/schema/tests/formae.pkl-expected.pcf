@@ -84,8 +84,6 @@ examples {
     new {
       ["bucketName"] {
         CreateOnly = false
-        Persist = false
-        WriteOnly = false
         Required = true
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -93,8 +91,6 @@ examples {
       }
       ["Region"] {
         CreateOnly = true
-        Persist = false
-        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -102,8 +98,6 @@ examples {
       }
       ["Tags"] {
         CreateOnly = false
-        Persist = false
-        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -113,7 +107,6 @@ examples {
   }
   ["Test Resource - schema()"] {
     new {
-      Nonprovisionable = false
       Identifier = "BucketName"
       Fields {
         "bucketName"
@@ -123,8 +116,6 @@ examples {
       Hints {
         ["bucketName"] {
           CreateOnly = false
-          Persist = false
-          WriteOnly = false
           Required = true
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -132,8 +123,6 @@ examples {
         }
         ["Region"] {
           CreateOnly = true
-          Persist = false
-          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -141,8 +130,6 @@ examples {
         }
         ["Tags"] {
           CreateOnly = false
-          Persist = false
-          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -179,7 +166,6 @@ examples {
       Managed = true
       Type = "AWS::S3::Bucket"
       Schema {
-        Nonprovisionable = false
         Identifier = "BucketName"
           Fields {
           "bucketName"
@@ -189,8 +175,6 @@ examples {
         Hints {
           ["bucketName"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -198,8 +182,6 @@ examples {
           }
           ["Region"] {
             CreateOnly = true
-            Persist = false
-            WriteOnly = false
             Required = false
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -207,8 +189,6 @@ examples {
           }
           ["Tags"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = false
             Required = false
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -239,7 +219,6 @@ examples {
       Managed = true
       Type = "FakeAWS::S3::Resource"
       Schema {
-        Nonprovisionable = false
         Identifier = "ResourceName"
         Fields {
           "resourceName"
@@ -253,8 +232,6 @@ examples {
         Hints {
           ["resourceName"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -262,8 +239,6 @@ examples {
           }
           ["nested"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -271,8 +246,6 @@ examples {
           }
           ["nested.configName"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = true
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -280,8 +253,6 @@ examples {
           }
           ["nested.TestConfigValue"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -289,8 +260,6 @@ examples {
           }
           ["nested.setting"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -298,8 +267,6 @@ examples {
           }
           ["nested.setting.setting1"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = true
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -307,8 +274,6 @@ examples {
           }
           ["nested.setting.SettingTwo"] {
             CreateOnly = false
-            Persist = false
-            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -342,8 +307,6 @@ examples {
     new {
       ["bucketName"] {
         CreateOnly = false
-        Persist = false
-        WriteOnly = false
         Required = true
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -351,8 +314,6 @@ examples {
       }
       ["Region"] {
         CreateOnly = true
-        Persist = false
-        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -360,8 +321,6 @@ examples {
       }
       ["Tags"] {
         CreateOnly = false
-        Persist = false
-        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -371,7 +330,6 @@ examples {
   }
   ["Fq - schema"] {
     new {
-      Nonprovisionable = false
       Identifier = "BucketName"
       Fields {
         "bucketName"
@@ -381,8 +339,6 @@ examples {
       Hints {
         ["bucketName"] {
           CreateOnly = false
-          Persist = false
-          WriteOnly = false
           Required = true
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -390,8 +346,6 @@ examples {
         }
         ["Region"] {
           CreateOnly = true
-          Persist = false
-          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -399,8 +353,6 @@ examples {
         }
         ["Tags"] {
           CreateOnly = false
-          Persist = false
-          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""

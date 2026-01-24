@@ -509,9 +509,6 @@ const docTemplate = `{
                 "IndexField": {
                     "type": "string"
                 },
-                "Persist": {
-                    "type": "boolean"
-                },
                 "Required": {
                     "type": "boolean"
                 },
@@ -520,9 +517,6 @@ const docTemplate = `{
                 },
                 "UpdateMethod": {
                     "$ref": "#/definitions/model.FieldUpdateMethod"
-                },
-                "WriteOnly": {
-                    "type": "boolean"
                 }
             }
         },
@@ -758,9 +752,6 @@ const docTemplate = `{
                 },
                 "Identifier": {
                     "type": "string"
-                },
-                "Nonprovisionable": {
-                    "type": "boolean"
                 }
             }
         },

@@ -5,18 +5,15 @@
 package model
 
 type Schema struct {
-	Identifier       string               `json:"Identifier" pkl:"Identifier"`
-	Fields           []string             `json:"Fields" pkl:"Fields"`
-	Nonprovisionable bool                 `json:"Nonprovisionable" pkl:"Nonprovisionable"`
-	Hints            map[string]FieldHint `json:"Hints" pkl:"Hints"`
-	Discoverable     bool                 `json:"Discoverable" pkl:"Discoverable"`
-	Extractable      bool                 `json:"Extractable" pkl:"Extractable"`
+	Identifier   string               `json:"Identifier" pkl:"Identifier"`
+	Fields       []string             `json:"Fields" pkl:"Fields"`
+	Hints        map[string]FieldHint `json:"Hints" pkl:"Hints"`
+	Discoverable bool                 `json:"Discoverable" pkl:"Discoverable"`
+	Extractable  bool                 `json:"Extractable" pkl:"Extractable"`
 }
 
 type FieldHint struct {
 	CreateOnly       bool `json:"CreateOnly" pkl:"CreateOnly"`
-	Persist          bool `json:"Persist" pkl:"Persist"`
-	WriteOnly        bool `json:"WriteOnly" pkl:"WriteOnly"`
 	Required         bool `json:"Required" pkl:"Required"`
 	RequiredOnCreate bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
 
@@ -55,6 +52,3 @@ func (s Schema) RequiredOnCreate() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.RequiredOnCreate }, true)
 }
 
-func (s Schema) WriteOnly() []string {
-	return filterFields(s, func(h FieldHint) bool { return h.WriteOnly }, true)
-}

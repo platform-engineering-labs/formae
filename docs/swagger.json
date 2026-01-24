@@ -503,9 +503,6 @@
                 "IndexField": {
                     "type": "string"
                 },
-                "Persist": {
-                    "type": "boolean"
-                },
                 "Required": {
                     "type": "boolean"
                 },
@@ -514,9 +511,6 @@
                 },
                 "UpdateMethod": {
                     "$ref": "#/definitions/model.FieldUpdateMethod"
-                },
-                "WriteOnly": {
-                    "type": "boolean"
                 }
             }
         },
@@ -752,9 +746,6 @@
                 },
                 "Identifier": {
                     "type": "string"
-                },
-                "Nonprovisionable": {
-                    "type": "boolean"
                 }
             }
         },

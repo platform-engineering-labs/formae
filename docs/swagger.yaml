@@ -48,16 +48,12 @@ definitions:
         type: boolean
       IndexField:
         type: string
-      Persist:
-        type: boolean
       Required:
         type: boolean
       RequiredOnCreate:
         type: boolean
       UpdateMethod:
         $ref: '#/definitions/model.FieldUpdateMethod'
-      WriteOnly:
-        type: boolean
     type: object
   model.FieldUpdateMethod:
     enum:
@@ -216,8 +212,6 @@ definitions:
         type: object
       Identifier:
         type: string
-      Nonprovisionable:
-        type: boolean
     type: object
   model.Simulation:
     properties:

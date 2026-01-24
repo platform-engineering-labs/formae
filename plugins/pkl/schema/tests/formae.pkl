@@ -93,9 +93,7 @@ local testBucket = new TestBucket {
 
 @formae.SubResourceHint
 local class NestedSetting extends formae.SubResource {
-    @formae.FieldHint{
-        writeOnly = true
-    }
+    @formae.FieldHint
     setting1: String
 
     @formae.FieldHint{
@@ -106,9 +104,7 @@ local class NestedSetting extends formae.SubResource {
 
 @formae.SubResourceHint
 local class NestedConfig extends formae.SubResource {
-    @formae.FieldHint{
-        writeOnly = true
-    }
+    @formae.FieldHint
     configName: String
 
     @formae.FieldHint{
@@ -292,7 +288,6 @@ facts {
     ["Resource schema is built correctly"] {
         let (schema = testBucket.schema())
         schema.Identifier == "BucketName" &&
-        schema.Nonprovisionable == false &&
         schema.Fields.contains("bucketName")
     }
 
