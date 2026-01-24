@@ -653,28 +653,29 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			)
 		}
 
-		// Handle NotFound during sync - resource was deleted externally
-		if state == StateSynchronizing && message.ErrorCode == resource.OperationErrorCodeNotFound {
-			if data.resourceUpdate.IsDelete() {
-				data.resourceUpdate.MarkAsSuccess()
-				return StateFinishedSuccessfully, data, nil, nil
-			}
-
-			_, err := proc.Call(resourcePersisterProcess(proc), PersistResourceUpdate{
-				CommandID:         data.commandID,
-				ResourceOperation: OperationDelete,
-				PluginOperation:   resource.OperationRead,
-				ResourceUpdate:    *data.resourceUpdate,
-			})
-			if err != nil {
-				proc.Log().Error("Failed to persist external deletion", "error", err)
-				data.resourceUpdate.MarkAsFailed()
-				return StateFinishedWithError, data, nil, nil
-			}
-
-			data.resourceUpdate.MarkAsSuccess()
-			return StateFinishedSuccessfully, data, nil, nil
-		}
+		// TODO: NotFound handling should be done via recoverable errors in plugins
+		// // Handle NotFound during sync - resource was deleted externally
+		// if state == StateSynchronizing && message.ErrorCode == resource.OperationErrorCodeNotFound {
+		// 	if data.resourceUpdate.IsDelete() {
+		// 		data.resourceUpdate.MarkAsSuccess()
+		// 		return StateFinishedSuccessfully, data, nil, nil
+		// 	}
+		//
+		// 	_, err := proc.Call(resourcePersisterProcess(proc), PersistResourceUpdate{
+		// 		CommandID:         data.commandID,
+		// 		ResourceOperation: OperationDelete,
+		// 		PluginOperation:   resource.OperationRead,
+		// 		ResourceUpdate:    *data.resourceUpdate,
+		// 	})
+		// 	if err != nil {
+		// 		proc.Log().Error("Failed to persist external deletion", "error", err)
+		// 		data.resourceUpdate.MarkAsFailed()
+		// 		return StateFinishedWithError, data, nil, nil
+		// 	}
+		//
+		// 	data.resourceUpdate.MarkAsSuccess()
+		// 	return StateFinishedSuccessfully, data, nil, nil
+		// }
 
 		operation := currentOperation(state)
 		hash, err := proc.Call(resourcePersisterProcess(proc), PersistResourceUpdate{
