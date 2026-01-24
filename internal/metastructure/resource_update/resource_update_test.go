@@ -518,277 +518,340 @@ func Test_mergeRefsPreservingUserRefs_RemovesArrayElements(t *testing.T) {
 	require.Equal(t, "192.168.55.3", resourceRecords[1])
 }
 
-func Test_mergeRefsPreservingUserRefs_PreservesRefsInArrays(t *testing.T) {
-	// This test verifies that $ref structures inside arrays are preserved during merge.
-	// This is critical for dependency tracking during DELETE operations.
-	//
-	// Scenario: Provider provides Instance with networks array containing $ref to subnet's network_id
-	// User provides: networks: [{uuid: {$ref: "formae://subnet#network_id", $value: "net-123"}}]
-	// Plugin returns: networks: [{uuid: "net-123"}]
-	// Expected: networks: [{uuid: {$ref: "formae://subnet#network_id", $value: "net-123"}}]
-	//
-	// If $ref is lost, ExtractResolvableURIs won't find the dependency,
-	// and DELETE will run Instance and Subnet in parallel, causing SubnetInUse errors.
-
+// TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays tests that $ref structures
+// in arrays are preserved when intermediate progress updates (InProgress status) have empty properties.
+// This prevents the "self-cannibalization" bug where:
+// 1. First progress (InProgress) has empty properties {}
+// 2. Merge would wipe out arrays because plugin arrays are empty
+// 3. User's $ref structures in arrays would be lost forever
+// 4. Final progress (Success) can't restore them because they're already gone
+func TestRecordProgress_IntermediateProgressPreservesRefStructuresInArrays(t *testing.T) {
+	diskKsuid := util.NewID()
+	networkKsuid := util.NewID()
 	subnetKsuid := util.NewID()
 
-	userProps := fmt.Appendf(nil, `{
-		"name": "my-instance",
-		"networks": [
-			{
-				"uuid": {
-					"$ref": "formae://%s#/network_id",
-					"$value": "net-123"
-				}
+	// Initial user properties with $ref structures in arrays (simulating a compute instance)
+	userProps := fmt.Sprintf(`{
+		"region": "us-east-1",
+		"name": "formae-demo-instance",
+		"instanceType": "small",
+		"disks": [{
+			"autoDelete": false,
+			"boot": true,
+			"source": {
+				"$ref": "formae://%s#/selfLink",
+				"$value": "arn:cloud:compute:us-east-1:123456789:disk/formae-demo-boot-disk"
 			}
-		]
-	}`, subnetKsuid)
-
-	pluginProps := []byte(`{
-		"name": "my-instance",
-		"networks": [
-			{
-				"uuid": "net-123"
+		}],
+		"networkInterfaces": [{
+			"network": {
+				"$ref": "formae://%s#/selfLink",
+				"$value": "arn:cloud:network:us-east-1:123456789:vpc/formae-demo-network"
+			},
+			"subnetwork": {
+				"$ref": "formae://%s#/selfLink",
+				"$value": "arn:cloud:network:us-east-1:123456789:subnet/public-subnet"
 			}
-		]
-	}`)
+		}],
+		"labels": {"environment": "demo"}
+	}`, diskKsuid, networkKsuid, subnetKsuid)
 
-	schema := pkgmodel.Schema{
-		Fields: []string{"name", "networks"},
-		Hints:  map[string]pkgmodel.FieldHint{},
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted,
+		DesiredState: pkgmodel.Resource{
+			Properties: json.RawMessage(userProps),
+			Schema: pkgmodel.Schema{
+				Fields: []string{"region", "name", "instanceType", "disks", "networkInterfaces", "labels"},
+			},
+		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
+	// First progress: InProgress with EMPTY properties (this is what the plugin returns during polling)
+	firstProgress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusInProgress,
+		RequestID:          "test-create-request-id",
+		StartTs:            util.TimeNow(),
+		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(`{}`), // Empty properties during intermediate polling
+	}
+
+	err := resourceUpdate.RecordProgress(firstProgress)
 	require.NoError(t, err)
 
-	var mergedMap map[string]any
-	err = json.Unmarshal(merged, &mergedMap)
+	// Verify state is InProgress
+	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
+
+	// CRITICAL: Verify that $ref structures in arrays are PRESERVED after intermediate progress
+	var propsAfterFirst map[string]any
+	err = json.Unmarshal(resourceUpdate.DesiredState.Properties, &propsAfterFirst)
 	require.NoError(t, err)
 
-	// Verify name is preserved
-	require.Equal(t, "my-instance", mergedMap["name"])
+	// Check disks array still has $ref
+	disks, ok := propsAfterFirst["disks"].([]any)
+	require.True(t, ok, "disks should still be an array")
+	require.Len(t, disks, 1, "disks array should have 1 element")
 
-	// Verify networks array preserves the $ref structure
-	networks := mergedMap["networks"].([]any)
-	require.Len(t, networks, 1)
+	disk := disks[0].(map[string]any)
+	source, ok := disk["source"].(map[string]any)
+	require.True(t, ok, "source should be an object with $ref")
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", diskKsuid), source["$ref"],
+		"disk source $ref should be preserved after intermediate progress")
 
-	network := networks[0].(map[string]any)
-	uuid := network["uuid"].(map[string]any)
+	// Check networkInterfaces array still has $ref
+	networkInterfaces, ok := propsAfterFirst["networkInterfaces"].([]any)
+	require.True(t, ok, "networkInterfaces should still be an array")
+	require.Len(t, networkInterfaces, 1, "networkInterfaces array should have 1 element")
 
-	// The $ref should be preserved from userProps
-	require.Equal(t, fmt.Sprintf("formae://%s#/network_id", subnetKsuid), uuid["$ref"])
-	// The $value should be updated from pluginProps (or preserved if same)
-	require.Equal(t, "net-123", uuid["$value"])
+	nic := networkInterfaces[0].(map[string]any)
+	network, ok := nic["network"].(map[string]any)
+	require.True(t, ok, "network should be an object with $ref")
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", networkKsuid), network["$ref"],
+		"network $ref should be preserved after intermediate progress")
+
+	subnetwork, ok := nic["subnetwork"].(map[string]any)
+	require.True(t, ok, "subnetwork should be an object with $ref")
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", subnetKsuid), subnetwork["$ref"],
+		"subnetwork $ref should be preserved after intermediate progress")
+
+	// Second progress: Success with FULL properties from the cloud provider
+	// The plugin returns $ref objects that match the user's $ref structures
+	finalPluginProps := fmt.Sprintf(`{
+		"deletionProtection": false,
+		"disks": [{
+			"architecture": "X86_64",
+			"autoDelete": false,
+			"boot": true,
+			"deviceName": "persistent-disk-0",
+			"diskSizeGb": "20",
+			"source": {
+				"$ref": "formae://%s#/selfLink",
+				"$value": "arn:cloud:compute:us-east-1:123456789:disk/formae-demo-boot-disk"
+			}
+		}],
+		"labels": {"environment": "demo"},
+		"instanceType": "arn:cloud:compute:us-east-1:123456789:instance-type/small",
+		"name": "formae-demo-instance",
+		"networkInterfaces": [{
+			"fingerprint": "inQ5pxBw2-M=",
+			"name": "nic0",
+			"network": {
+				"$ref": "formae://%s#/selfLink",
+				"$value": "arn:cloud:network:us-east-1:123456789:vpc/formae-demo-network"
+			},
+			"networkIP": "10.0.1.7",
+			"subnetwork": {
+				"$ref": "formae://%s#/selfLink",
+				"$value": "arn:cloud:network:us-east-1:123456789:subnet/public-subnet"
+			}
+		}],
+		"region": "us-east-1"
+	}`, diskKsuid, networkKsuid, subnetKsuid)
+
+	secondProgress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		RequestID:          "test-create-request-id-2",
+		StartTs:            util.TimeNow().Add(120 * time.Second),
+		ModifiedTs:         util.TimeNow().Add(140 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(finalPluginProps),
+	}
+
+	err = resourceUpdate.RecordProgress(secondProgress)
+	require.NoError(t, err)
+
+	// Verify state is Success
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
+
+	// Verify that $ref structures are STILL preserved after final merge
+	var propsAfterFinal map[string]any
+	err = json.Unmarshal(resourceUpdate.DesiredState.Properties, &propsAfterFinal)
+	require.NoError(t, err)
+
+	// Check disks array still has $ref after final merge
+	disksAfterFinal, ok := propsAfterFinal["disks"].([]any)
+	require.True(t, ok, "disks should still be an array after final merge")
+	require.Len(t, disksAfterFinal, 1, "disks array should have 1 element after final merge")
+
+	diskAfterFinal := disksAfterFinal[0].(map[string]any)
+	sourceAfterFinal, ok := diskAfterFinal["source"].(map[string]any)
+	require.True(t, ok, "source should be an object with $ref after final merge")
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", diskKsuid), sourceAfterFinal["$ref"],
+		"disk source $ref should be preserved after final merge")
+	require.Equal(t, "arn:cloud:compute:us-east-1:123456789:disk/formae-demo-boot-disk",
+		sourceAfterFinal["$value"], "disk source $value should be preserved")
+
+	// Check networkInterfaces array still has $ref after final merge
+	nicsAfterFinal, ok := propsAfterFinal["networkInterfaces"].([]any)
+	require.True(t, ok, "networkInterfaces should still be an array after final merge")
+	require.Len(t, nicsAfterFinal, 1, "networkInterfaces array should have 1 element after final merge")
+
+	nicAfterFinal := nicsAfterFinal[0].(map[string]any)
+	networkAfterFinal, ok := nicAfterFinal["network"].(map[string]any)
+	require.True(t, ok, "network should be an object with $ref after final merge")
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", networkKsuid), networkAfterFinal["$ref"],
+		"network $ref should be preserved after final merge")
+
+	subnetworkAfterFinal, ok := nicAfterFinal["subnetwork"].(map[string]any)
+	require.True(t, ok, "subnetwork should be an object with $ref after final merge")
+	require.Equal(t, fmt.Sprintf("formae://%s#/selfLink", subnetKsuid), subnetworkAfterFinal["$ref"],
+		"subnetwork $ref should be preserved after final merge")
 }
 
-func Test_mergeRefsPreservingUserRefs_PreservesRefsInArrays_MixedWithHardcoded(t *testing.T) {
-	// More realistic test matching Provider Instance scenario:
-	// - First network: hardcoded public network ID (no $ref)
-	// - Second network: $ref to subnet's network_id
-	// Plugin may return them in different order
-
-	subnetKsuid := util.NewID()
-	extNetID := "b347ed75-8603-4ce0-a40c-c6c98a8820fc"
-	privateNetID := "a9a04d82-051a-42d4-87a6-83052fccb081"
-
-	userProps := fmt.Appendf(nil, `{
+// TestRecordProgress_MergePreservesRefStructuresInArrays tests that $ref structures
+// in arrays are preserved when plugin returns plain string values instead of $ref objects.
+func TestRecordProgress_MergePreservesRefStructuresInArrays(t *testing.T) {
+	// User properties with $ref structures in arrays
+	userProps := `{
 		"name": "my-instance",
-		"networks": [
-			{
-				"uuid": "%s"
-			},
-			{
-				"uuid": {
-					"$ref": "formae://%s#/network_id",
-					"$value": "%s"
-				}
-			}
-		]
-	}`, extNetID, subnetKsuid, privateNetID)
+		"disks": [{"boot": true, "source": {"$ref": "formae://disk-ksuid#/selfLink", "$value": "disk-1"}}],
+		"networkInterfaces": [{"network": {"$ref": "formae://network-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet-ksuid#/selfLink", "$value": "subnet-1"}}]
+	}`
 
-	// Plugin returns in DIFFERENT order (private first, then public)
-	pluginProps := fmt.Appendf(nil, `{
+	// Plugin returns PLAIN STRINGS, not $ref objects
+	pluginProps := `{
 		"name": "my-instance",
-		"networks": [
-			{
-				"uuid": "%s"
-			},
-			{
-				"uuid": "%s"
-			}
-		]
-	}`, privateNetID, extNetID)
+		"disks": [{"boot": true, "size": "20GB", "source": "disk-1"}],
+		"networkInterfaces": [{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}]
+	}`
 
-	schema := pkgmodel.Schema{
-		Fields: []string{"name", "networks"},
-		Hints:  map[string]pkgmodel.FieldHint{},
+	// Expected: plugin fields merged with $ref structures preserved from user
+	expectedProps := `{
+		"name": "my-instance",
+		"disks": [{"boot": true, "size": "20GB", "source": {"$ref": "formae://disk-ksuid#/selfLink", "$value": "disk-1"}}],
+		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet-ksuid#/selfLink", "$value": "subnet-1"}}]
+	}`
+
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted,
+		DesiredState: pkgmodel.Resource{
+			Properties: json.RawMessage(userProps),
+			Schema:     pkgmodel.Schema{Fields: []string{"name", "disks", "networkInterfaces"}},
+		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
+	progress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		RequestID:          "test-request",
+		StartTs:            util.TimeNow(),
+		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(pluginProps),
+	}
+
+	err := resourceUpdate.RecordProgress(progress)
 	require.NoError(t, err)
-
-	var mergedMap map[string]any
-	err = json.Unmarshal(merged, &mergedMap)
-	require.NoError(t, err)
-
-	networks := mergedMap["networks"].([]any)
-	require.Len(t, networks, 2)
-
-	// Plugin element 0 (privateNetID) should match user element 1 (the one with $ref)
-	network0 := networks[0].(map[string]any)
-	uuid0, isMap := network0["uuid"].(map[string]any)
-	require.True(t, isMap, "networks[0].uuid should be a map with $ref preserved")
-	require.Equal(t, fmt.Sprintf("formae://%s#/network_id", subnetKsuid), uuid0["$ref"])
-	require.Equal(t, privateNetID, uuid0["$value"])
-
-	// Plugin element 1 (extNetID) should match user element 0 (hardcoded, no $ref)
-	network1 := networks[1].(map[string]any)
-	uuid1, isString := network1["uuid"].(string)
-	require.True(t, isString, "networks[1].uuid should be a plain string")
-	require.Equal(t, extNetID, uuid1)
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
 
-func Test_mergeRefsPreservingUserRefs_WithoutInitialValue(t *testing.T) {
-	// Test that merge works when user properties have $ref WITHOUT $value
-	// This is the format produced by translateFormaeReferencesToKsuid
-
-	subnetKsuid := util.NewID()
-	extNetID := "b347ed75-8603-4ce0-a40c-c6c98a8820fc"
-	privateNetID := "a9a04d82-051a-42d4-87a6-83052fccb081"
-
-	// User properties with $ref ONLY (no $value) - this is what translation produces
-	userProps := fmt.Appendf(nil, `{
+// TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin tests that when user properties
+// have more array elements than plugin returns, the merged result only contains the elements
+// that the plugin returned. This ensures we don't keep stale/removed elements.
+func TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin(t *testing.T) {
+	// User has 2 networkInterfaces
+	userProps := `{
 		"name": "my-instance",
-		"networks": [
-			{
-				"uuid": "%s"
-			},
-			{
-				"uuid": {
-					"$ref": "formae://%s#/network_id"
-				}
-			}
+		"networkInterfaces": [
+			{"network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}},
+			{"network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2"}}
 		]
-	}`, extNetID, subnetKsuid)
+	}`
 
-	// Plugin returns resolved values
-	pluginProps := fmt.Appendf(nil, `{
+	// Plugin returns only 1 networkInterface (the first one)
+	pluginProps := `{
 		"name": "my-instance",
-		"networks": [
-			{
-				"uuid": "%s"
-			},
-			{
-				"uuid": "%s"
-			}
-		]
-	}`, privateNetID, extNetID)
+		"networkInterfaces": [{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}]
+	}`
 
-	schema := pkgmodel.Schema{
-		Fields: []string{"name", "networks"},
-		Hints:  map[string]pkgmodel.FieldHint{},
+	// Expected: only 1 networkInterface with $ref preserved from user's first element
+	expectedProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}}]
+	}`
+
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted,
+		DesiredState: pkgmodel.Resource{
+			Properties: json.RawMessage(userProps),
+			Schema:     pkgmodel.Schema{Fields: []string{"name", "networkInterfaces"}},
+		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
-	require.NoError(t, err)
-
-	var mergedMap map[string]any
-	err = json.Unmarshal(merged, &mergedMap)
-	require.NoError(t, err)
-
-	networks := mergedMap["networks"].([]any)
-	require.Len(t, networks, 2)
-
-	// Find which network has the $ref
-	var refFound bool
-	var refValue string
-	for _, net := range networks {
-		netMap := net.(map[string]any)
-		if uuid, ok := netMap["uuid"].(map[string]any); ok {
-			if ref, hasRef := uuid["$ref"].(string); hasRef {
-				refFound = true
-				refValue = ref
-				// Should also have $value from plugin
-				require.Contains(t, uuid, "$value", "merged $ref object should have $value")
-			}
-		}
+	progress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		RequestID:          "test-request",
+		StartTs:            util.TimeNow(),
+		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(pluginProps),
 	}
 
-	require.True(t, refFound, "$ref should be preserved in merged properties")
-	require.Equal(t, fmt.Sprintf("formae://%s#/network_id", subnetKsuid), refValue)
+	err := resourceUpdate.RecordProgress(progress)
+	require.NoError(t, err)
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
 
-// Test_EndToEnd_MergeToDestroyDependency verifies that the entire flow works:
-// 1. User properties with $ref (no $value) are merged with plugin properties
-// 2. The merged result preserves $ref with $value
-// 3. A resource with the merged properties can be used to create a destroy update
-// 4. The destroy update's RemainingResolvables contains the expected URIs
-func Test_EndToEnd_MergeToDestroyDependency(t *testing.T) {
-	// Setup: Create a scenario like the Provider Instance with networks referencing Subnet
-	subnetKsuid := util.NewID()
-	instanceKsuid := util.NewID()
-	extNetID := "b347ed75-8603-4ce0-a40c-c6c98a8820fc"
-	privateNetID := "4cba1d81-051a-42d4-87a6-83052fccb081"
-
-	// Step 1: User properties with $ref ONLY (no $value) - what PKL translation produces
-	userProps := fmt.Appendf(nil, `{
+// TestRecordProgress_MergeArrays_PluginReturnsReorderedElements tests that when plugin returns
+// array elements in a different order than user provided, the correct $ref structures are
+// matched and preserved based on value matching, not index position.
+func TestRecordProgress_MergeArrays_PluginReturnsReorderedElements(t *testing.T) {
+	// User: network-1, network-2 (in that order)
+	userProps := `{
 		"name": "my-instance",
-		"networks": [
-			{"uuid": "%s"},
-			{"uuid": {"$ref": "formae://%s#/network_id"}}
+		"networkInterfaces": [
+			{"network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}},
+			{"network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2"}}
 		]
-	}`, extNetID, subnetKsuid)
+	}`
 
-	// Step 2: Plugin returns properties (plain values, potentially in different order)
-	pluginProps := fmt.Appendf(nil, `{
+	// Plugin returns REVERSED order: network-2 first, then network-1
+	pluginProps := `{
 		"name": "my-instance",
-		"networks": [
-			{"uuid": "%s"},
-			{"uuid": "%s"}
+		"networkInterfaces": [
+			{"name": "nic1", "network": "network-2", "subnetwork": "subnet-2"},
+			{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}
 		]
-	}`, privateNetID, extNetID)
+	}`
 
-	schema := pkgmodel.Schema{
-		Fields: []string{"name", "networks"},
-		Hints:  map[string]pkgmodel.FieldHint{},
+	// Expected: plugin order preserved (2, 1) with correct $ref matched by value
+	expectedProps := `{
+		"name": "my-instance",
+		"networkInterfaces": [
+			{"name": "nic1", "network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2"}},
+			{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}}
+		]
+	}`
+
+	resourceUpdate := &ResourceUpdate{
+		Operation: OperationCreate,
+		State:     ResourceUpdateStateNotStarted,
+		DesiredState: pkgmodel.Resource{
+			Properties: json.RawMessage(userProps),
+			Schema:     pkgmodel.Schema{Fields: []string{"name", "networkInterfaces"}},
+		},
 	}
 
-	// Step 3: Merge the properties (simulates what happens after Create)
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
+	progress := &resource.ProgressResult{
+		Operation:          resource.OperationCreate,
+		OperationStatus:    resource.OperationStatusSuccess,
+		RequestID:          "test-request",
+		StartTs:            util.TimeNow(),
+		ModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		MaxAttempts:        3,
+		ResourceProperties: json.RawMessage(pluginProps),
+	}
+
+	err := resourceUpdate.RecordProgress(progress)
 	require.NoError(t, err)
-
-	// Step 4: Create a resource with the merged properties (simulates what's stored in datastore)
-	instanceResource := pkgmodel.Resource{
-		Label:      "my-instance",
-		Type:       "Provider::Compute::Instance",
-		Stack:      "default",
-		Ksuid:      instanceKsuid,
-		Properties: merged,
-		Schema:     schema,
-	}
-
-	// Step 5: Create a destroy update from the resource
-	target := pkgmodel.Target{
-		Label: "test-target",
-	}
-	destroyUpdate, err := NewResourceUpdateForDestroy(instanceResource, target, FormaCommandSourceUser)
-	require.NoError(t, err)
-
-	// Step 6: Verify RemainingResolvables contains the Subnet's URI
-	require.NotEmpty(t, destroyUpdate.RemainingResolvables,
-		"Destroy update should have RemainingResolvables extracted from properties")
-
-	// Find the subnet's URI in the resolvables
-	expectedSubnetURI := pkgmodel.FormaeURI(fmt.Sprintf("formae://%s#/network_id", subnetKsuid))
-	found := false
-	for _, uri := range destroyUpdate.RemainingResolvables {
-		if uri.Stripped() == expectedSubnetURI.Stripped() {
-			found = true
-			break
-		}
-	}
-	require.True(t, found,
-		"RemainingResolvables should contain the subnet's URI. Got: %v", destroyUpdate.RemainingResolvables)
-
-	t.Logf("Success! Destroy update has RemainingResolvables: %v", destroyUpdate.RemainingResolvables)
+	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
+	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
