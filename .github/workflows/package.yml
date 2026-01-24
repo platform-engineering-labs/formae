@@ -16,7 +16,7 @@ on:
           - "pkg_macos_x8664"
   push:
     tags:
-      - '*'
+      - '[0-9]*'  # Only release tags, not pkg/*/v* module tags
 
 permissions:
   id-token: write
