@@ -75,6 +75,11 @@ func runPluginInit() error {
 
 	fmt.Println(display.Gold("Formae Plugin Initialization"))
 	fmt.Println()
+	fmt.Println("Plugin initialization requires several parameters that will appear in the")
+	fmt.Println("plugin's manifest file (formae-plugin.pkl). You can change them at any time later.")
+	fmt.Println()
+	fmt.Println("Please provide the following information:")
+	fmt.Println()
 
 	// Collect plugin configuration interactively
 	config := &PluginConfig{}
@@ -90,27 +95,30 @@ func runPluginInit() error {
 	config.Name = name
 
 	// Namespace (required)
-	namespace, err := p.PromptString("Namespace")
+	namespace, err := p.PromptString("Namespace that uniquely identifies the target technology (e.g. AWS, GCP, OCI)")
 	if err != nil {
+		return err
+	}
+	if err := validateNamespace(namespace); err != nil {
 		return err
 	}
 	config.Namespace = namespace
 
 	// Description (required)
-	description, err := p.PromptString("Description")
+	description, err := p.PromptString("Plugin description")
 	if err != nil {
 		return err
 	}
 	config.Description = description
 
 	// Author (required, for license copyright)
-	author, err := p.PromptString("Author")
+	author, err := p.PromptString("Plugin author")
 	if err != nil {
 		return err
 	}
 	config.Author = author
 
-	// License (select from common SPDX identifiers)
+	// License (select from common SPDX identifiers or enter custom)
 	licenseOptions := []string{
 		"Apache-2.0",
 		"MIT",
@@ -119,16 +127,23 @@ func runPluginInit() error {
 		"MPL-2.0",
 		"AGPL-3.0-only",
 		"FSL-1.1-ALv2",
+		"Other",
 	}
-	license, err := p.PromptChoice("License", licenseOptions, 0)
+	license, err := p.PromptChoice("Plugin license", licenseOptions, 0)
 	if err != nil {
 		return err
 	}
+	if license == "Other" {
+		license, err = p.PromptString("Enter license identifier")
+		if err != nil {
+			return err
+		}
+	}
 	config.License = license
 
-	// Output directory (optional, default: ./<name>)
+	// Target directory (optional, default: ./<name>)
 	defaultDir := "./" + config.Name
-	outputDir, err := p.PromptStringWithDefault("Output directory", defaultDir)
+	outputDir, err := p.PromptStringWithDefault("Target directory", defaultDir)
 	if err != nil {
 		return err
 	}
@@ -141,7 +156,7 @@ func runPluginInit() error {
 
 	// Check if output directory already exists
 	if _, err := os.Stat(config.OutputDir); err == nil {
-		return fmt.Errorf("output directory %q already exists", config.OutputDir)
+		return fmt.Errorf("target directory %q already exists", config.OutputDir)
 	}
 
 	// Download and extract the template
@@ -151,7 +166,7 @@ func runPluginInit() error {
 	}
 
 	// Transform template files
-	fmt.Printf("%s\n", display.Grey(fmt.Sprintf("Customizing plugin '%s'...", config.Name)))
+	fmt.Printf("%s\n", display.Grey(fmt.Sprintf("Initializing plugin '%s' from template...", config.Name)))
 	if err := transformTemplateFiles(config); err != nil {
 		return fmt.Errorf("failed to customize template: %w", err)
 	}
@@ -173,10 +188,19 @@ func runPluginInit() error {
 }
 
 func validatePluginName(name string) error {
-	// Must be lowercase, start with letter, contain only letters/numbers/hyphens
-	pattern := regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	// Must start with letter, contain only letters/numbers/hyphens (no spaces)
+	pattern := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9-]*$`)
 	if !pattern.MatchString(name) {
-		return fmt.Errorf("plugin name must be lowercase, start with a letter, and contain only letters, numbers, and hyphens")
+		return fmt.Errorf("plugin name must start with a letter and contain only letters, numbers, and hyphens (no spaces)")
+	}
+	return nil
+}
+
+func validateNamespace(namespace string) error {
+	// Must start with letter, contain only letters/numbers (no hyphens, no spaces)
+	pattern := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9]*$`)
+	if !pattern.MatchString(namespace) {
+		return fmt.Errorf("namespace must start with a letter and contain only letters and numbers (no spaces or hyphens)")
 	}
 	return nil
 }
@@ -343,26 +367,31 @@ func finalizeLicense(config *PluginConfig) error {
 	licenseFile := filepath.Join(config.OutputDir, "LICENSE")
 	selectedLicensePath := filepath.Join(licensesDir, config.License+".txt")
 
-	// Read the selected license text
+	// Try to read the selected license template
 	licenseText, err := os.ReadFile(selectedLicensePath)
 	if err != nil {
-		return fmt.Errorf("failed to read license file %s: %w", selectedLicensePath, err)
-	}
+		// License template not found - create a simple LICENSE file for custom licenses
+		year := fmt.Sprintf("%d", time.Now().Year())
+		content := fmt.Sprintf("Copyright %s %s\n\nLicense: %s\n", year, config.Author, config.License)
+		if err := os.WriteFile(licenseFile, []byte(content), 0644); err != nil {
+			return fmt.Errorf("failed to write LICENSE file: %w", err)
+		}
+	} else {
+		// Replace placeholders with author and year
+		year := fmt.Sprintf("%d", time.Now().Year())
+		content := string(licenseText)
+		content = strings.ReplaceAll(content, "[year]", year)
+		content = strings.ReplaceAll(content, "[yyyy]", year)
+		content = strings.ReplaceAll(content, "[fullname]", config.Author)
+		content = strings.ReplaceAll(content, "[name of copyright owner]", config.Author)
+		// FSL format placeholders
+		content = strings.ReplaceAll(content, "${year}", year)
+		content = strings.ReplaceAll(content, "${licensor name}", config.Author)
 
-	// Replace placeholders with author and year
-	year := fmt.Sprintf("%d", time.Now().Year())
-	content := string(licenseText)
-	content = strings.ReplaceAll(content, "[year]", year)
-	content = strings.ReplaceAll(content, "[yyyy]", year)
-	content = strings.ReplaceAll(content, "[fullname]", config.Author)
-	content = strings.ReplaceAll(content, "[name of copyright owner]", config.Author)
-	// FSL format placeholders
-	content = strings.ReplaceAll(content, "${year}", year)
-	content = strings.ReplaceAll(content, "${licensor name}", config.Author)
-
-	// Write to LICENSE
-	if err := os.WriteFile(licenseFile, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write LICENSE file: %w", err)
+		// Write to LICENSE
+		if err := os.WriteFile(licenseFile, []byte(content), 0644); err != nil {
+			return fmt.Errorf("failed to write LICENSE file: %w", err)
+		}
 	}
 
 	// Remove the licenses directory
@@ -394,9 +423,10 @@ func transformContent(content string, config *PluginConfig) string {
 	// Plugin name (lowercase)
 	content = strings.ReplaceAll(content, `name = "example"`, fmt.Sprintf(`name = "%s"`, config.Name))
 
-	// Namespace (uppercase)
-	content = strings.ReplaceAll(content, `namespace = "EXAMPLE"`, fmt.Sprintf(`namespace = "%s"`, config.Namespace))
-	content = strings.ReplaceAll(content, "EXAMPLE::", config.Namespace+"::")
+	// Namespace (uppercase in resource types)
+	upperNamespace := strings.ToUpper(config.Namespace)
+	content = strings.ReplaceAll(content, `namespace = "EXAMPLE"`, fmt.Sprintf(`namespace = "%s"`, upperNamespace))
+	content = strings.ReplaceAll(content, "EXAMPLE::", upperNamespace+"::")
 
 	// Description
 	content = strings.ReplaceAll(content, `description = "Example Formae plugin template"`, fmt.Sprintf(`description = "%s"`, config.Description))
