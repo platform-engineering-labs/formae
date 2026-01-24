@@ -56,16 +56,7 @@
   },
   "Properties": {
     "HostedZoneConfig": {},
-    "HostedZoneTags": [
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-hosted-zone"
-      }
-    ],
+    "HostedZoneTags": [],
     "Name": "lb.snarf.platform.engineering.",
     "VPCs": []
   },

@@ -207,14 +207,6 @@
       {
         "Key": "Environment",
         "Value": "dev"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "static-website-stack"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "WebsiteBucket"
       }
     ],
     "WebsiteConfiguration": {

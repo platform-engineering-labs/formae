@@ -25,14 +25,6 @@
   "Properties": {
     "Tags": [
       {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-igw"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
-      },
-      {
         "Key": "Name",
         "Value": "test-igw"
       }

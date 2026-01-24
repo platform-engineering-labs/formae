@@ -56,16 +56,7 @@
   },
   "Properties": {
     "HostedZoneConfig": {},
-    "HostedZoneTags": [
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "route53-hostedzone"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "route53-hostedzone-stack"
-      }
-    ],
+    "HostedZoneTags": [],
     "Name": "snarf.platform.engineering.",
     "VPCs": []
   },

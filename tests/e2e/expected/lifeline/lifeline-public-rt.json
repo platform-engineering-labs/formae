@@ -33,14 +33,6 @@
   "Properties": {
     "Tags": [
       {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-public-rt"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
-      },
-      {
         "Key": "Name",
         "Value": "test-public-rt"
       }

@@ -167,14 +167,6 @@
       {
         "Key": "Name",
         "Value": "alias-lb-subnet-2"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-subnet-2"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
       }
     ],
     "VpcId": {

@@ -165,15 +165,7 @@
     },
     "Tags": [
       {
-        "Key": "FormaeStackLabel",
-        "Value": "ec2-route"
-      },
-      {
         "Key": "Name",
-        "Value": "ec2-route-public-subnet-1"
-      },
-      {
-        "Key": "FormaeResourceLabel",
         "Value": "ec2-route-public-subnet-1"
       }
     ],

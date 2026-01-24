@@ -223,14 +223,6 @@
     ],
     "Tags": [
       {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-load-balancer"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
-      {
         "Key": "Name",
         "Value": "alias-lb-alb"
       }

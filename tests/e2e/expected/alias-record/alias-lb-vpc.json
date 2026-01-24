@@ -77,14 +77,6 @@
     "InstanceTenancy": "default",
     "Tags": [
       {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-vpc"
-      },
-      {
         "Key": "Name",
         "Value": "alias-lb-vpc"
       }

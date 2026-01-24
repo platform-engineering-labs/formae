@@ -199,16 +199,7 @@
       "IgnorePublicAcls": true,
       "RestrictPublicBuckets": true
     },
-    "Tags": [
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "e2e-s3-bucket"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "s3-bucket-stack"
-      }
-    ]
+    "Tags": []
   },
   "ReadOnlyProperties": {
     "Arn": "arn:aws:s3:::e2e-test-bucket-1234567890-911",

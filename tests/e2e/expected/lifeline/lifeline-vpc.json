@@ -79,14 +79,6 @@
       {
         "Key": "Name",
         "Value": "test-vpc"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-vpc"
       }
     ]
   },

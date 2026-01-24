@@ -165,16 +165,8 @@
     },
     "Tags": [
       {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-public-subnet-1"
-      },
-      {
         "Key": "Name",
         "Value": "test-public-subnet-1"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
       }
     ],
     "VpcId": {

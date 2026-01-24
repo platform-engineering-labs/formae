@@ -79,14 +79,6 @@
       {
         "Key": "Name",
         "Value": "ec2-route-vpc"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "ec2-route-vpc"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "ec2-route"
       }
     ]
   },

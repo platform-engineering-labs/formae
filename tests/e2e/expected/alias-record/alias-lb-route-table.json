@@ -35,14 +35,6 @@
       {
         "Key": "Name",
         "Value": "alias-lb-route-table"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-route-table"
       }
     ],
     "VpcId": {

@@ -33,15 +33,7 @@
   "Properties": {
     "Tags": [
       {
-        "Key": "FormaeStackLabel",
-        "Value": "ec2-route"
-      },
-      {
         "Key": "Name",
-        "Value": "ec2-route-public-rt"
-      },
-      {
-        "Key": "FormaeResourceLabel",
         "Value": "ec2-route-public-rt"
       }
     ],

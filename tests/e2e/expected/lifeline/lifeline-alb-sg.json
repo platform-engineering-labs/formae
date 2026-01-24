@@ -51,14 +51,6 @@
     "GroupName": "sIItUIl0RC5IyVqKUXJyPkhpN-qIHAT1pR1dAV",
     "Tags": [
       {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-alb-sg"
-      },
-      {
         "Key": "Name",
         "Value": "test-alb-sg"
       }

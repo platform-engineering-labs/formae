@@ -51,16 +51,8 @@
     "GroupName": "9ClkHb0LDGP5O3uHmHWKjbCV5-BhTfDTW0xCSU",
     "Tags": [
       {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
-      },
-      {
         "Key": "Name",
         "Value": "test-task-sg"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-task-sg"
       }
     ],
     "VpcId": {
