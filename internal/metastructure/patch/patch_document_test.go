@@ -560,3 +560,70 @@ func TestCollectionSemanticsFromFieldHints(t *testing.T) {
 
 	assert.Equal(t, expectedCollections, collections)
 }
+
+func TestGeneratePatch_AddTagsWhileRetainingExisting(t *testing.T) {
+	// This is the existing resource state (from the database) - VPC with 1 tag
+	document := []byte(`{
+		"Tags": [{"Key": "Name", "Value": "ecg-core"}],
+		"CidrBlock": "10.192.0.0/16",
+		"InstanceTenancy": "default",
+		"EnableDnsSupport": true,
+		"EnableDnsHostnames": true
+	}`)
+
+	// This is the desired state (from PKL file) - VPC with 3 tags
+	// The Name tag is retained, FormaeResourceLabel and FormaeStackLabel are added
+	patch := []byte(`{
+		"Tags": [
+			{"Key": "Name", "Value": "ecg-core"},
+			{"Key": "FormaeResourceLabel", "Value": "ecg-core-1"},
+			{"Key": "FormaeStackLabel", "Value": "network-stack"}
+		],
+		"CidrBlock": "10.192.0.0/16",
+		"InstanceTenancy": "default",
+		"EnableDnsSupport": true,
+		"EnableDnsHostnames": true
+	}`)
+
+	// Schema with NO EntitySet hints for Tags - this is the key!
+	// Old resources discovered before the schema update have empty hints.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Tags", "CidrBlock", "InstanceTenancy", "EnableDnsSupport", "EnableDnsHostnames"},
+		Hints: map[string]pkgmodel.FieldHint{
+			// Tags has empty hints (no IndexField, no UpdateMethod)
+			// This causes Tags to be treated as a set, not an EntitySet
+			"Tags": {},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	var patches []jsonpatch.JsonPatchOperation
+	err = json.Unmarshal(patchDoc, &patches)
+	require.NoError(t, err)
+
+	// We expect exactly 2 add operations for the two new tags
+	require.Len(t, patches, 2, "Expected 2 add operations for FormaeResourceLabel and FormaeStackLabel")
+
+	// First add should be at /Tags/1 (not /Tags/2!)
+	assert.Equal(t, "add", patches[0].Operation)
+	assert.Equal(t, "/Tags/1", patches[0].Path, "First new tag should be added at index 1, not 2")
+
+	// Second add should be at /Tags/2 (not /Tags/3!)
+	assert.Equal(t, "add", patches[1].Operation)
+	assert.Equal(t, "/Tags/2", patches[1].Path, "Second new tag should be added at index 2, not 3")
+
+	// Verify the values are correct
+	tag1, ok := patches[0].Value.(map[string]any)
+	require.True(t, ok, "First patch value should be a map")
+	assert.Equal(t, "FormaeResourceLabel", tag1["Key"])
+	assert.Equal(t, "ecg-core-1", tag1["Value"])
+
+	tag2, ok := patches[1].Value.(map[string]any)
+	require.True(t, ok, "Second patch value should be a map")
+	assert.Equal(t, "FormaeStackLabel", tag2["Key"])
+	assert.Equal(t, "network-stack", tag2["Value"])
+}
