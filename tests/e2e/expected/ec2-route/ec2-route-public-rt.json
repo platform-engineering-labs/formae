@@ -10,19 +10,14 @@
       "Tags",
       "VpcId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       }
@@ -33,15 +28,7 @@
   "Properties": {
     "Tags": [
       {
-        "Key": "FormaeStackLabel",
-        "Value": "ec2-route"
-      },
-      {
         "Key": "Name",
-        "Value": "ec2-route-public-rt"
-      },
-      {
-        "Key": "FormaeResourceLabel",
         "Value": "ec2-route-public-rt"
       }
     ],

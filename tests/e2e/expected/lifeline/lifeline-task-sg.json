@@ -12,33 +12,24 @@
       "Tags",
       "VpcId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "GroupDescription": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "GroupName": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }
@@ -51,16 +42,8 @@
     "GroupName": "9ClkHb0LDGP5O3uHmHWKjbCV5-BhTfDTW0xCSU",
     "Tags": [
       {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
-      },
-      {
         "Key": "Name",
         "Value": "test-task-sg"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-task-sg"
       }
     ],
     "VpcId": {

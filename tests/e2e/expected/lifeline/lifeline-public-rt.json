@@ -10,19 +10,14 @@
       "Tags",
       "VpcId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       }
@@ -32,14 +27,6 @@
   },
   "Properties": {
     "Tags": [
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-public-rt"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
-      },
       {
         "Key": "Name",
         "Value": "test-public-rt"

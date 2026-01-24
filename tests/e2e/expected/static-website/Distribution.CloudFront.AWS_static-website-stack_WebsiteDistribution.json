@@ -12,33 +12,24 @@
       "DistributionConfig.CNAMEs",
       "DistributionConfig.IPV6Enabled"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "DistributionConfig": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "DistributionConfig.CNAMEs": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "DistributionConfig.IPV6Enabled": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }

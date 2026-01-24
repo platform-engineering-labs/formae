@@ -12,33 +12,24 @@
       "Tags",
       "VpcId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "GroupDescription": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "GroupName": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }
@@ -49,16 +40,7 @@
   "Properties": {
     "GroupDescription": "Security group for alias load balancer",
     "GroupName": "jVnDzHqajb0GKSJ0jjfKgaI8Q-CdgF2cUozHOw",
-    "Tags": [
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-security-group"
-      }
-    ],
+    "Tags": [],
     "VpcId": {
       "$label": "alias-lb-vpc",
       "$property": "VpcId",

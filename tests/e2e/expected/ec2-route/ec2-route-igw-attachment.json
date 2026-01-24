@@ -11,26 +11,19 @@
       "VpcId",
       "VpnGatewayId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "InternetGatewayId": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "VpnGatewayId": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }

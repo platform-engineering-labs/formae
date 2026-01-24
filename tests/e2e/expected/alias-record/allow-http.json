@@ -20,89 +20,64 @@
       "SourceSecurityGroupOwnerId",
       "ToPort"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "CidrIp": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "CidrIpv6": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Description": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "FromPort": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "GroupId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "GroupName": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "IpProtocol": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "SourcePrefixListId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "SourceSecurityGroupId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "SourceSecurityGroupName": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "SourceSecurityGroupOwnerId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "ToPort": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }

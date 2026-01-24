@@ -20,89 +20,64 @@
       "Tags",
       "Type"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "EnablePrefixForIpv6SourceNat": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "IpAddressType": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "LoadBalancerAttributes": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "MinimumLoadBalancerCapacity": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Name": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Scheme": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "SecurityGroups": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "SubnetMappings": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Subnets": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Type": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }
@@ -222,14 +197,6 @@
       "subnet-00abeb71b2ce03d1a"
     ],
     "Tags": [
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-load-balancer"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
       {
         "Key": "Name",
         "Value": "alias-lb-alb"
