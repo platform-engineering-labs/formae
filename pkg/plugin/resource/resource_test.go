@@ -10,35 +10,51 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestProgressResultFailed_ReturnsFalseWhenErrorIsRecoverableAndAttemptsAreNotExhausted(t *testing.T) {
+func TestProgressResultFailed_ReturnsTrueWhenStatusIsFailure(t *testing.T) {
 	result := ProgressResult{
 		OperationStatus: OperationStatusFailure,
 		ErrorCode:       OperationErrorCodeNetworkFailure,
-		Attempts:        2,
-		MaxAttempts:     3,
+	}
+
+	assert.True(t, result.Failed())
+}
+
+func TestProgressResultFailed_ReturnsFalseWhenStatusIsSuccess(t *testing.T) {
+	result := ProgressResult{
+		OperationStatus: OperationStatusSuccess,
 	}
 
 	assert.False(t, result.Failed())
 }
 
-func TestProgressResultFailed_ReturnsTrueWhenErrorIsRecoverableAndAttemptsAreExhausted(t *testing.T) {
+func TestProgressResultFailed_ReturnsFalseWhenStatusIsInProgress(t *testing.T) {
 	result := ProgressResult{
-		OperationStatus: OperationStatusFailure,
-		ErrorCode:       OperationErrorCodeNetworkFailure,
-		Attempts:        4,
-		MaxAttempts:     3,
+		OperationStatus: OperationStatusInProgress,
 	}
 
-	assert.True(t, result.Failed())
+	assert.False(t, result.Failed())
 }
 
-func TestProgressResultFailed_ReturnsTrueWhenErrorIsNotRecoverable(t *testing.T) {
+func TestProgressResultFinishedSuccessfully_ReturnsTrueWhenSuccess(t *testing.T) {
 	result := ProgressResult{
-		OperationStatus: OperationStatusFailure,
-		ErrorCode:       OperationErrorCodeUnforeseenError,
-		Attempts:        1,
-		MaxAttempts:     3,
+		OperationStatus: OperationStatusSuccess,
 	}
 
-	assert.True(t, result.Failed())
+	assert.True(t, result.FinishedSuccessfully())
+}
+
+func TestProgressResultHasFinished_ReturnsTrueWhenFailure(t *testing.T) {
+	result := ProgressResult{
+		OperationStatus: OperationStatusFailure,
+	}
+
+	assert.True(t, result.HasFinished())
+}
+
+func TestProgressResultInProgress_ReturnsTrueWhenInProgress(t *testing.T) {
+	result := ProgressResult{
+		OperationStatus: OperationStatusInProgress,
+	}
+
+	assert.True(t, result.InProgress())
 }

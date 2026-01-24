@@ -8,9 +8,11 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPackage_FormatForPklTemplate_Remote(t *testing.T) {
@@ -32,7 +34,7 @@ func TestPackage_FormatForPklTemplate_Local(t *testing.T) {
 	assert.Equal(t, "local:gcp:/Users/dev/gcp-plugin/PklProject", pkg.FormatForPklTemplate())
 }
 
-func TestPackageResolver_Add(t *testing.T) {
+func TestPackageResolver_Add_Remote(t *testing.T) {
 	resolver := NewPackageResolver()
 
 	resolver.Add("aws", "aws", "0.75.1")
@@ -71,46 +73,84 @@ func TestPackageResolver_AddLocal(t *testing.T) {
 	assert.Equal(t, "/path/to/gcp/PklProject", packages[0].LocalPath)
 }
 
-func TestPackageResolver_LocalOverride(t *testing.T) {
-	// Set environment variable
-	os.Setenv(LocalPluginPackagesEnvVar, "GCP,/path/to/gcp/PklProject")
-	defer os.Unsetenv(LocalPluginPackagesEnvVar)
+func TestPackageResolver_WithLocalSchemas(t *testing.T) {
+	// Create temp directory structure for testing
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pluginDir, 0755))
+	pklProjectPath := filepath.Join(pluginDir, "PklProject")
+	require.NoError(t, os.WriteFile(pklProjectPath, []byte("amends \"pkl:Project\""), 0644))
 
-	resolver := NewPackageResolver()
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 
-	// Add gcp with remote info - should use local override instead
+	// Add gcp - should use local schema since it exists
 	resolver.Add("gcp", "gcp", "0.75.1")
 
 	packages := resolver.GetPackages()
 	assert.Len(t, packages, 1)
 	assert.Equal(t, "gcp", packages[0].Name)
 	assert.True(t, packages[0].IsLocal)
-	assert.Equal(t, "/path/to/gcp/PklProject", packages[0].LocalPath)
+	assert.Equal(t, pklProjectPath, packages[0].LocalPath)
 }
 
-func TestPackageResolver_MultipleLocalOverrides(t *testing.T) {
-	// Set environment variable with multiple packages
-	os.Setenv(LocalPluginPackagesEnvVar, "GCP,/path/to/gcp/PklProject;AZURE,/path/to/azure/PklProject")
-	defer os.Unsetenv(LocalPluginPackagesEnvVar)
+func TestPackageResolver_WithLocalSchemas_FallsBackToRemote(t *testing.T) {
+	// Create temp directory without the required plugin
+	tmpDir := t.TempDir()
 
-	resolver := NewPackageResolver()
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 
-	// Verify local overrides are loaded
-	overrides := resolver.GetLocalOverrides()
-	assert.Len(t, overrides, 2)
-	assert.Equal(t, "/path/to/gcp/PklProject", overrides["gcp"])
-	assert.Equal(t, "/path/to/azure/PklProject", overrides["azure"])
+	// Add aws - should fall back to remote since it's not installed locally
+	resolver.Add("aws", "aws", "0.75.1")
+
+	packages := resolver.GetPackages()
+	assert.Len(t, packages, 1)
+	assert.Equal(t, "aws", packages[0].Name)
+	assert.False(t, packages[0].IsLocal)
+	assert.Equal(t, "aws", packages[0].Plugin)
+	assert.Equal(t, "0.75.1", packages[0].Version)
+}
+
+func TestPackageResolver_WithLocalSchemas_SelectsHighestVersion(t *testing.T) {
+	// Create temp directory structure with multiple versions
+	tmpDir := t.TempDir()
+
+	// Create v0.1.0
+	v010Dir := filepath.Join(tmpDir, "ovh", "v0.1.0", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(v010Dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(v010Dir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
+
+	// Create v0.2.0 (higher)
+	v020Dir := filepath.Join(tmpDir, "ovh", "v0.2.0", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(v020Dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(v020Dir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
+
+	// Create v0.1.5 (between)
+	v015Dir := filepath.Join(tmpDir, "ovh", "v0.1.5", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(v015Dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(v015Dir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
+
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	resolver.Add("ovh", "ovh", "0.1.0")
+
+	packages := resolver.GetPackages()
+	assert.Len(t, packages, 1)
+	assert.True(t, packages[0].IsLocal)
+	// Should select v0.2.0 (highest version)
+	assert.Contains(t, packages[0].LocalPath, "v0.2.0")
 }
 
 func TestPackageResolver_MixedPackages(t *testing.T) {
-	// Set local override for GCP only
-	os.Setenv(LocalPluginPackagesEnvVar, "GCP,/path/to/gcp/PklProject")
-	defer os.Unsetenv(LocalPluginPackagesEnvVar)
+	// Create temp directory with local GCP schema
+	tmpDir := t.TempDir()
+	gcpDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(gcpDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(gcpDir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
 
-	resolver := NewPackageResolver()
-	resolver.Add("formae", "pkl", "0.75.1")
-	resolver.Add("aws", "aws", "0.75.1")   // Should be remote
-	resolver.Add("gcp", "gcp", "0.75.1")   // Should be local (override)
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+	resolver.Add("formae", "pkl", "0.75.1") // No local schema, should be remote
+	resolver.Add("aws", "aws", "0.75.1")    // No local schema, should be remote
+	resolver.Add("gcp", "gcp", "0.75.1")    // Has local schema
 
 	packages := resolver.GetPackages()
 	assert.Len(t, packages, 3)
@@ -120,7 +160,7 @@ func TestPackageResolver_MixedPackages(t *testing.T) {
 	for _, pkg := range packages {
 		switch pkg.Name {
 		case "gcp":
-			hasLocalGcp = pkg.IsLocal && pkg.LocalPath == "/path/to/gcp/PklProject"
+			hasLocalGcp = pkg.IsLocal && pkg.LocalPath != ""
 		case "aws":
 			hasRemoteAws = !pkg.IsLocal && pkg.Plugin == "aws" && pkg.Version == "0.75.1"
 		case "formae":
@@ -133,12 +173,15 @@ func TestPackageResolver_MixedPackages(t *testing.T) {
 }
 
 func TestPackageResolver_GetPackageStrings(t *testing.T) {
-	os.Setenv(LocalPluginPackagesEnvVar, "GCP,/path/to/gcp/PklProject")
-	defer os.Unsetenv(LocalPluginPackagesEnvVar)
+	tmpDir := t.TempDir()
+	gcpDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(gcpDir, 0755))
+	pklProjectPath := filepath.Join(gcpDir, "PklProject")
+	require.NoError(t, os.WriteFile(pklProjectPath, []byte("amends \"pkl:Project\""), 0644))
 
-	resolver := NewPackageResolver()
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 	resolver.Add("formae", "pkl", "0.75.1")
-	resolver.Add("gcp", "gcp", "0.75.1") // Local override
+	resolver.Add("gcp", "gcp", "0.75.1") // Local
 
 	strings := resolver.GetPackageStrings()
 	assert.Len(t, strings, 2)
@@ -150,44 +193,43 @@ func TestPackageResolver_GetPackageStrings(t *testing.T) {
 		if s == "pkl.formae@0.75.1" {
 			hasFormae = true
 		}
-		if s == "local:gcp:/path/to/gcp/PklProject" {
+		if s == "local:gcp:"+pklProjectPath {
 			hasGcp = true
 		}
 	}
 	assert.True(t, hasFormae, "should have pkl.formae@0.75.1")
-	assert.True(t, hasGcp, "should have local:gcp:/path/to/gcp/PklProject")
+	assert.True(t, hasGcp, "should have local:gcp:/path/to/PklProject")
 }
 
-func TestPackageResolver_HasLocalOverride(t *testing.T) {
-	os.Setenv(LocalPluginPackagesEnvVar, "GCP,/path/to/gcp/PklProject")
-	defer os.Unsetenv(LocalPluginPackagesEnvVar)
-
+func TestPackageResolver_IsUsingLocalSchemas(t *testing.T) {
 	resolver := NewPackageResolver()
+	assert.False(t, resolver.IsUsingLocalSchemas())
 
-	assert.True(t, resolver.HasLocalOverride("gcp"))
-	assert.True(t, resolver.HasLocalOverride("GCP")) // Case insensitive
-	assert.False(t, resolver.HasLocalOverride("aws"))
+	resolver.WithLocalSchemas("/tmp/plugins")
+	assert.True(t, resolver.IsUsingLocalSchemas())
 }
 
-func TestPackageResolver_EmptyEnvVar(t *testing.T) {
-	os.Unsetenv(LocalPluginPackagesEnvVar)
-
+func TestPackageResolver_DefaultRemote(t *testing.T) {
+	// Without WithLocalSchemas, everything should be remote
 	resolver := NewPackageResolver()
 	resolver.Add("gcp", "gcp", "0.75.1")
 
 	packages := resolver.GetPackages()
 	assert.Len(t, packages, 1)
-	assert.False(t, packages[0].IsLocal) // Should be remote when no override
+	assert.False(t, packages[0].IsLocal) // Should be remote when local schemas not enabled
 }
 
-func TestPackageResolver_MalformedEnvVar(t *testing.T) {
-	// Malformed entries should be skipped
-	os.Setenv(LocalPluginPackagesEnvVar, "INVALID;GCP,/valid/path;;,empty;AZURE")
-	defer os.Unsetenv(LocalPluginPackagesEnvVar)
+func TestPackageResolver_WithLocalSchemas_MissingPklProject(t *testing.T) {
+	// Create version directory but without PklProject file
+	tmpDir := t.TempDir()
+	pluginDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pluginDir, 0755))
+	// Don't create PklProject file
 
-	resolver := NewPackageResolver()
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+	resolver.Add("gcp", "gcp", "0.75.1")
 
-	overrides := resolver.GetLocalOverrides()
-	assert.Len(t, overrides, 1) // Only GCP should be valid
-	assert.Equal(t, "/valid/path", overrides["gcp"])
+	packages := resolver.GetPackages()
+	assert.Len(t, packages, 1)
+	assert.False(t, packages[0].IsLocal) // Should fall back to remote
 }

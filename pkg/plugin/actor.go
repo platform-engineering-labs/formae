@@ -23,7 +23,7 @@ type PluginActor struct {
 
 	namespace string
 	agentNode gen.Atom
-	plugin    ResourcePlugin
+	plugin    FullResourcePlugin
 }
 
 func factoryPluginActor() gen.ProcessBehavior {
@@ -36,9 +36,9 @@ func (p *PluginActor) Init(args ...any) error {
 	if !ok {
 		return fmt.Errorf("PluginActor: missing 'Plugin' in environment")
 	}
-	p.plugin, ok = pluginVal.(ResourcePlugin)
+	p.plugin, ok = pluginVal.(FullResourcePlugin)
 	if !ok {
-		return fmt.Errorf("PluginActor: 'Plugin' has wrong type")
+		return fmt.Errorf("PluginActor: 'Plugin' has wrong type (expected FullResourcePlugin)")
 	}
 
 	// Get namespace from plugin
@@ -129,7 +129,7 @@ func (p *PluginActor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, e
 }
 
 // buildSchemaMap creates a map of resource type to schema for all supported resources
-func buildSchemaMap(plugin ResourcePlugin) map[string]model.Schema {
+func buildSchemaMap(plugin FullResourcePlugin) map[string]model.Schema {
 	schemas := make(map[string]model.Schema)
 	for _, rd := range plugin.SupportedResources() {
 		schema, err := plugin.SchemaForResourceType(rd.Type)

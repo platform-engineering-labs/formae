@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-export INSTALLPREFIX="/opt/pel"
+# Support FORMAE_INSTALL_PREFIX env var for custom install location
+export INSTALLPREFIX="${FORMAE_INSTALL_PREFIX:-/opt/pel}"
 export PLUGINDIR="$HOME/.pel/formae/plugins"
 export OS=$(uname | tr '[:upper:]' '[:lower:]')
 
@@ -19,6 +20,7 @@ help() {
   echo "setup.sh installs formae from the PEL repository"
   echo " -h show help"
   echo " -v [version] select version"
+  echo " -p [prefix] install prefix (default: /opt/pel, or FORMAE_INSTALL_PREFIX env var)"
   echo " -y skip confirmations"
   exit 0
 }
@@ -29,9 +31,10 @@ curl_auth() {
   fi
 }
 
-while getopts 'hv:y' flag; do
+while getopts 'hp:v:y' flag; do
   case "${flag}" in
     h) help ;;
+    p) INSTALLPREFIX="$OPTARG" ;;
     v) version="$OPTARG" ;;
     y) skip_prompt='true' ;;
   esac
@@ -128,7 +131,7 @@ done
 
 echo "Done."
 echo ""
-echo "IMPORTANT: ensure you add /opt/pel/formae/bin to your PATH, and reload your shell configuration"
+echo "IMPORTANT: ensure you add ${INSTALLPREFIX}/formae/bin to your PATH, and reload your shell configuration"
 echo ""
 
 CURRENT_SHELL=$(basename "$SHELL" 2>/dev/null || echo "bash")

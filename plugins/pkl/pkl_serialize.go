@@ -38,6 +38,20 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 
 	// Build package dependencies using PackageResolver
 	resolver := NewPackageResolver()
+
+	// Configure local schema resolution if requested
+	schemaLocation := plugin.SchemaLocationRemote
+	if options != nil && options.SchemaLocation != "" {
+		schemaLocation = options.SchemaLocation
+	}
+	if schemaLocation == plugin.SchemaLocationLocal {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			pluginsDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
+			resolver.WithLocalSchemas(pluginsDir)
+		}
+	}
+
 	resolver.Add("formae", "pkl", Version)
 
 	// Extract namespaces from the data and add them as dependencies
@@ -81,7 +95,7 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 	generatorDir := filepath.Join(tempDir, "generator")
 
 	// Step 1: Generate PklProject with correct dependencies
-	err = p.ProjectInit(generatorDir, includes)
+	err = p.ProjectInit(generatorDir, includes, schemaLocation)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize project: %w", err)
 	}

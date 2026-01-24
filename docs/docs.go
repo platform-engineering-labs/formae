@@ -435,7 +435,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "github_com_platform-engineering-labs_formae_internal_api_model.Command": {
+        "github_com_platform-engineering-labs_formae_pkg_api_model.Command": {
             "type": "object",
             "properties": {
                 "Command": {
@@ -467,7 +467,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_platform-engineering-labs_formae_internal_api_model.Description": {
+        "github_com_platform-engineering-labs_formae_pkg_api_model.Description": {
             "type": "object",
             "properties": {
                 "Confirm": {
@@ -579,7 +579,7 @@ const docTemplate = `{
                 "Commands": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command"
+                        "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command"
                     }
                 }
             }
@@ -771,7 +771,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "Command": {
-                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Command"
+                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command"
                 }
             }
         },
@@ -863,7 +863,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "Description": {
-                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_internal_api_model.Description"
+                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Description"
                 },
                 "Simulation": {
                     "$ref": "#/definitions/model.Simulation"

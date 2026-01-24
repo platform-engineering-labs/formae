@@ -407,7 +407,7 @@ type PluginUpdateData struct {
 	LastStatusMessage string
 
 	config      model.RetryConfig
-	plugin      ResourcePlugin
+	plugin      FullResourcePlugin
 	context     context.Context
 	requestedBy gen.PID
 
@@ -464,7 +464,7 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 			return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'Plugin' environment variable")
 		}
 	}
-	data.plugin = pluginEnv.(ResourcePlugin)
+	data.plugin = pluginEnv.(FullResourcePlugin)
 
 	ctx, ok := o.Env("Context")
 	if !ok {
@@ -527,9 +527,11 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, 
 	return newState, data, nil
 }
 
-// validateNamespace checks that the operation targets the correct plugin
+// validateNamespace checks that the operation targets the correct plugin.
+// Uses case-insensitive comparison since plugins register with lowercase namespace
+// but resource types may use uppercase (e.g., "OVH::Compute::Keypair").
 func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process) bool {
-	if namespace != data.plugin.Namespace() {
+	if !strings.EqualFold(namespace, data.plugin.Namespace()) {
 		proc.Log().Error("PluginOperator: namespace mismatch", "expected", data.plugin.Namespace(), "got", namespace)
 		return false
 	}

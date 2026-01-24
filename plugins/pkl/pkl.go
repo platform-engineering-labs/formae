@@ -266,10 +266,10 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 	return forma, nil
 }
 
-func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []string) (plugin.GenerateSourcesResult, error) {
+func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []string, schemaLocation plugin.SchemaLocation) (plugin.GenerateSourcesResult, error) {
 	res := plugin.GenerateSourcesResult{}
 
-	code, err := p.SerializeForma(forma, &plugin.SerializeOptions{Schema: "pkl"})
+	code, err := p.SerializeForma(forma, &plugin.SerializeOptions{Schema: "pkl", SchemaLocation: schemaLocation})
 	if err != nil {
 		slog.Error(err.Error())
 		return plugin.GenerateSourcesResult{}, plugin.ErrFailedToGenerateSources
@@ -290,8 +290,18 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 
 	projectFile := filepath.Join(parentDir, "PklProject")
 	if _, err = os.Stat(projectFile); os.IsNotExist(err) {
-		// Build package dependencies using PackageResolver (supports local overrides)
+		// Build package dependencies using PackageResolver
 		resolver := NewPackageResolver()
+
+		// Configure local schema resolution if requested
+		if schemaLocation == plugin.SchemaLocationLocal {
+			homeDir, err := os.UserHomeDir()
+			if err == nil {
+				pluginsDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
+				resolver.WithLocalSchemas(pluginsDir)
+			}
+		}
+
 		resolver.Add("formae", "pkl", Version)
 
 		// Extract namespaces from forma resources
@@ -301,7 +311,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		}
 
 		// No PklProject exists, initialize it with resolved packages
-		err = p.ProjectInit(parentDir, resolver.GetPackageStrings())
+		err = p.ProjectInit(parentDir, resolver.GetPackageStrings(), schemaLocation)
 		if err != nil {
 			return plugin.GenerateSourcesResult{}, fmt.Errorf("failed to initialize Pkl project: %v", err)
 		}
@@ -316,15 +326,16 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 	}
 
 	// Check if PklProject.deps.json exists after writing the Pkl file
+	// Only warn for remote schema location since local schemas don't need resolution
 	depsFile := filepath.Join(parentDir, "PklProject.deps.json")
-	if _, err := os.Stat(depsFile); os.IsNotExist(err) {
+	if _, err := os.Stat(depsFile); os.IsNotExist(err) && schemaLocation == plugin.SchemaLocationRemote {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("Pkl dependencies not resolved. Run 'pkl project resolve' in '%s' to resolve Pkl dependencies.", parentDir))
 	}
 
 	return res, nil
 }
 
-func (p PKL) ProjectInit(path string, include []string) error {
+func (p PKL) ProjectInit(path string, include []string, schemaLocation plugin.SchemaLocation) error {
 	var err error
 
 	if path == "" {
@@ -379,12 +390,24 @@ func (p PKL) ProjectInit(path string, include []string) error {
 		return err
 	}
 
-	cmd := exec.Command("pkl", "project", "resolve", path)
-	if errors.Is(cmd.Err, exec.ErrDot) {
-		cmd.Err = nil
+	// Run pkl project resolve if there are any remote packages
+	// Local packages use import() syntax and don't need resolution
+	hasRemotePackages := false
+	for _, pkg := range include {
+		if !strings.HasPrefix(pkg, "local:") {
+			hasRemotePackages = true
+			break
+		}
 	}
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("project resolve failed: %v", err)
+
+	if hasRemotePackages {
+		cmd := exec.Command("pkl", "project", "resolve", path)
+		if errors.Is(cmd.Err, exec.ErrDot) {
+			cmd.Err = nil
+		}
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("project resolve failed: %v", err)
+		}
 	}
 
 	return nil

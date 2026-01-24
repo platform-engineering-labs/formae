@@ -7,6 +7,7 @@ package plugin
 import (
 	"context"
 
+	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
@@ -15,29 +16,29 @@ import (
 
 const Resource Type = "resource"
 
-// Must remain stateless to ensure non flaky restarts and hot reloads
+// ResourcePlugin is the public interface that plugin developers implement.
+// Must remain stateless to ensure non-flaky restarts and hot reloads.
+//
+// Plugin identity (name, version, namespace) and schema methods are handled
+// automatically by the SDK - see FullResourcePlugin for the complete interface
+// used internally by the formae agent.
 type ResourcePlugin interface {
-	Namespace() string
-	SupportedResources() []ResourceDescriptor
-	SchemaForResourceType(resourceType string) (model.Schema, error)
+	// Configuration methods
 	RateLimit() RateLimitConfig
+	DiscoveryFilters() []MatchFilter
+	LabelConfig() LabelConfig
 
+	// CRUD operations
 	Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error)
+	Read(context context.Context, request *resource.ReadRequest) (*resource.ReadResult, error)
 	Update(context context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error)
 	Delete(context context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error)
-	Read(context context.Context, request *resource.ReadRequest) (*resource.ReadResult, error)
 
+	// Async operation support
 	Status(context context.Context, request *resource.StatusRequest) (*resource.StatusResult, error)
 
+	// Discovery support
 	List(context context.Context, request *resource.ListRequest) (*resource.ListResult, error)
-
-	// DiscoveryFilters returns declarative filters for discovery (serializable).
-	// Resources matching all conditions in a filter are excluded from discovery.
-	DiscoveryFilters() []MatchFilter
-
-	// LabelConfig returns the label extraction configuration for discovered resources.
-	// The agent uses this to construct human-readable labels during discovery.
-	LabelConfig() LabelConfig
 }
 
 // RateLimitScope defines the granularity of rate limiting
@@ -52,6 +53,23 @@ const (
 type RateLimitConfig struct {
 	Scope                            RateLimitScope
 	MaxRequestsPerSecondForNamespace int
+}
+
+// FullResourcePlugin is the internal interface used by the formae agent.
+// It includes identity and schema methods that plugin developers don't implement directly.
+// The SDK's plugin.Run() function wraps a user's ResourcePlugin with manifest-derived
+// implementations of these methods.
+type FullResourcePlugin interface {
+	ResourcePlugin
+
+	// Identity methods - derived from formae-plugin.pkl manifest
+	Name() string
+	Version() *semver.Version
+	Namespace() string
+
+	// Schema methods - auto-extracted from schema/pkl/ directory
+	SupportedResources() []ResourceDescriptor
+	SchemaForResourceType(resourceType string) (model.Schema, error)
 }
 
 // LabelConfig defines how to extract labels from discovered resources.

@@ -33,7 +33,7 @@ type Manager struct {
 
 	authenticationPlugins []*AuthenticationPlugin
 	networkPlugins        []*NetworkPlugin
-	resourcePlugins       []*ResourcePlugin
+	resourcePlugins       []*FullResourcePlugin
 	schemaPlugins         []*SchemaPlugin
 
 	// External resource plugins that run as separate processes
@@ -156,9 +156,10 @@ func (m *Manager) Load() {
 		case Resource:
 			// Load in-process resource plugins for local testing (e.g., FakeAWS)
 			// Production plugins run as external processes and are discovered separately
-			cast, ok := lookup.(ResourcePlugin)
+			// Built-in plugins must implement FullResourcePlugin (includes identity methods)
+			cast, ok := lookup.(FullResourcePlugin)
 			if !ok {
-				fmt.Fprintf(os.Stderr, "Warning: Could not cast resource plugin %s\n", p)
+				fmt.Fprintf(os.Stderr, "Warning: Could not cast resource plugin %s to FullResourcePlugin\n", p)
 				continue
 			}
 			m.resourcePlugins = append(m.resourcePlugins, &cast)
@@ -261,7 +262,7 @@ func (m *Manager) List() []*Plugin {
 	return m.plugins
 }
 
-func (m *Manager) ListResourcePlugins() []*ResourcePlugin {
+func (m *Manager) ListResourcePlugins() []*FullResourcePlugin {
 	return m.resourcePlugins
 }
 
@@ -314,7 +315,7 @@ func (m *Manager) NetworkPlugin(config json.RawMessage) (*NetworkPlugin, error) 
 	return nil, fmt.Errorf("no plugin found for name: %s", name)
 }
 
-func (m *Manager) ResourcePlugin(namespace string) (*ResourcePlugin, error) {
+func (m *Manager) ResourcePlugin(namespace string) (*FullResourcePlugin, error) {
 	for _, plugin := range m.resourcePlugins {
 		if strings.EqualFold((*plugin).Namespace(), namespace) {
 			return plugin, nil

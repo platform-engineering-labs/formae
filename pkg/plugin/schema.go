@@ -6,6 +6,7 @@ package plugin
 
 import (
 	"errors"
+
 	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -14,6 +15,16 @@ import (
 const Schema Type = "schema"
 
 var ErrFailedToGenerateSources = errors.New("failed to generate source code")
+
+// SchemaLocation specifies where to resolve PKL schemas from
+type SchemaLocation string
+
+const (
+	// SchemaLocationRemote resolves schemas from the PKL package registry (default)
+	SchemaLocationRemote SchemaLocation = "remote"
+	// SchemaLocationLocal resolves schemas from locally installed plugins (~/.pel/formae/plugins)
+	SchemaLocationLocal SchemaLocation = "local"
+)
 
 type GenerateSourcesResult struct {
 	TargetPath            string
@@ -31,7 +42,7 @@ type SchemaPlugin interface {
 	Evaluate(path string, cmd model.Command, mode model.FormaApplyMode, props map[string]string) (*model.Forma, error)
 	Serialize(resource *model.Resource, options *SerializeOptions) (string, error)
 	SerializeForma(resources *model.Forma, options *SerializeOptions) (string, error)
-	GenerateSourceCode(forma *model.Forma, targetPath string, includes []string) (GenerateSourcesResult, error)
-	ProjectInit(path string, include []string) error
+	GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation SchemaLocation) (GenerateSourcesResult, error)
+	ProjectInit(path string, include []string, schemaLocation SchemaLocation) error
 	ProjectProperties(path string) (map[string]model.Prop, error)
 }

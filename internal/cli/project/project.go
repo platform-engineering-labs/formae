@@ -35,19 +35,21 @@ func ProjectInitCmd() *cobra.Command {
 		RunE: func(command *cobra.Command, args []string) error {
 			schema, _ := command.Flags().GetString("schema")
 			include, _ := command.Flags().GetStringArray("include")
+			schemaLocation, _ := command.Flags().GetString("schema-location")
 
 			app, err := cmd.AppFromContext(command.Context(), "", "", command)
 			if err != nil {
 				return err
 			}
 
-			return app.Projects.Init(command.Flags().Arg(0), schema, include)
+			return app.Projects.Init(command.Flags().Arg(0), schema, include, schemaLocation)
 		},
 		SilenceErrors: true,
 	}
 
 	command.Flags().String("schema", "pkl", "Schema to use for the project (pkl)")
 	command.Flags().StringArray("include", []string{"aws"}, "Packages to include (aws)")
+	command.Flags().String("schema-location", "remote", "Schema location: 'remote' (PKL registry) or 'local' (installed plugins)")
 
 	return command
 }
