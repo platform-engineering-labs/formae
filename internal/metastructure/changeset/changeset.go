@@ -88,7 +88,11 @@ func (p *ResourceUpdatePipeline) buildDeleteDependencies(allOps []resource_updat
 		for _, resolvableURI := range deleteOp.RemainingResolvables {
 			dependencyBaseURI := resolvableURI.Stripped()
 
-			// Check if there's a corresponding delete operation for this dependency
+			// Skip self-references to avoid infinite blocking
+			if dependencyBaseURI == deleteOp.URI() {
+				continue
+			}
+
 			if _, exists := deleteOps[dependencyBaseURI]; exists {
 				dependencyOpURI := createOperationURI(dependencyBaseURI, resource_update.OperationDelete)
 				dependencyGroup := p.ResourceUpdateGroups[dependencyOpURI]
@@ -118,6 +122,11 @@ func (p *ResourceUpdatePipeline) buildCreateUpdateDependencies(allOps []resource
 
 		for _, resolvableURI := range createOp.RemainingResolvables {
 			dependencyBaseURI := resolvableURI.Stripped()
+
+			// Skip self-references to avoid infinite blocking
+			if dependencyBaseURI == createOp.URI() {
+				continue
+			}
 
 			// Check if there's a corresponding create/update operation for this dependency
 			if dependencyOp, exists := createUpdateOps[dependencyBaseURI]; exists {
@@ -306,6 +315,16 @@ func (rug *ResourceUpdateGroup) GetRunningUpdate() *resource_update.ResourceUpda
 	return nil
 }
 
+func (rug *ResourceUpdateGroup) GetRunningUpdates() []*resource_update.ResourceUpdate {
+	var updates []*resource_update.ResourceUpdate
+	for _, update := range rug.Updates {
+		if update.State == resource_update.ResourceUpdateStateInProgress {
+			updates = append(updates, update)
+		}
+	}
+	return updates
+}
+
 func (rug *ResourceUpdateGroup) NextUpdate() (*resource_update.ResourceUpdate, string) {
 	for _, update := range rug.Updates {
 		if update.State == resource_update.ResourceUpdateStateNotStarted {
@@ -327,6 +346,16 @@ func (rug *ResourceUpdateGroup) Pop(update *resource_update.ResourceUpdate) {
 
 func (rug *ResourceUpdateGroup) Done() bool {
 	return len(rug.Updates) == 0
+}
+
+// GetInProgressUpdates returns all updates that are in InProgress state.
+// These may be orphaned updates from a previous run that need to be resumed.
+func (c *Changeset) GetInProgressUpdates() []*resource_update.ResourceUpdate {
+	var updates []*resource_update.ResourceUpdate
+	for _, group := range c.Pipeline.ResourceUpdateGroups {
+		updates = append(updates, group.GetRunningUpdates()...)
+	}
+	return updates
 }
 
 func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_update.ResourceUpdate {

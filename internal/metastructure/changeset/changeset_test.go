@@ -1106,3 +1106,124 @@ func TestChangeset_FormaWithCycle(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+func TestChangeset_SelfReferencingCreate_DoesNotBlock(t *testing.T) {
+	vpcKsuidURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "self-ref-vpc",
+				Type:  "AWS::EC2::VPC",
+				Stack: "test-stack",
+				Ksuid: vpcKsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StartTs:              util.TimeNow(),
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI}, // self-reference
+		},
+	}
+
+	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-self-ref", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	executable := changeset.GetExecutableUpdates("AWS", 5)
+	require.Len(t, executable, 1, "Self-referencing resource should be immediately executable")
+	assert.Equal(t, "self-ref-vpc", executable[0].DesiredState.Label)
+}
+
+func TestChangeset_SelfReferencingDelete_DoesNotBlock(t *testing.T) {
+	vpcKsuidURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "self-ref-vpc",
+				Type:  "AWS::EC2::VPC",
+				Stack: "test-stack",
+				Ksuid: vpcKsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationDelete,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StartTs:              util.TimeNow(),
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI}, // self-reference
+		},
+	}
+
+	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-self-ref-delete", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	executable := changeset.GetExecutableUpdates("AWS", 5)
+	require.Len(t, executable, 1, "Self-referencing delete should be immediately executable")
+	assert.Equal(t, "self-ref-vpc", executable[0].DesiredState.Label)
+}
+
+func TestResourceUpdateGroup_GetRunningUpdates(t *testing.T) {
+	ksuid1 := pkgmodel.NewFormaeURI(util.NewID(), "")
+	ksuid2 := pkgmodel.NewFormaeURI(util.NewID(), "")
+	ksuid3 := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	group := &ResourceUpdateGroup{
+		Updates: []*resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{Label: "res1", Ksuid: ksuid1.KSUID()},
+				State:        resource_update.ResourceUpdateStateNotStarted,
+			},
+			{
+				DesiredState: pkgmodel.Resource{Label: "res2", Ksuid: ksuid2.KSUID()},
+				State:        resource_update.ResourceUpdateStateInProgress,
+			},
+			{
+				DesiredState: pkgmodel.Resource{Label: "res3", Ksuid: ksuid3.KSUID()},
+				State:        resource_update.ResourceUpdateStateInProgress,
+			},
+		},
+	}
+
+	running := group.GetRunningUpdates()
+	assert.Len(t, running, 2)
+
+	labels := []string{running[0].DesiredState.Label, running[1].DesiredState.Label}
+	assert.Contains(t, labels, "res2")
+	assert.Contains(t, labels, "res3")
+}
+
+func TestChangeset_GetInProgressUpdates(t *testing.T) {
+	ksuid1 := pkgmodel.NewFormaeURI(util.NewID(), "")
+	ksuid2 := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "vpc1",
+				Type:  "AWS::EC2::VPC",
+				Stack: "test-stack",
+				Ksuid: ksuid1.KSUID(),
+			},
+			Operation:  resource_update.OperationCreate,
+			State:      resource_update.ResourceUpdateStateInProgress,
+			StackLabel: "test-stack",
+		},
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "vpc2",
+				Type:  "AWS::EC2::VPC",
+				Stack: "test-stack",
+				Ksuid: ksuid2.KSUID(),
+			},
+			Operation:  resource_update.OperationCreate,
+			State:      resource_update.ResourceUpdateStateNotStarted,
+			StackLabel: "test-stack",
+		},
+	}
+
+	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-in-progress", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	inProgress := changeset.GetInProgressUpdates()
+	require.Len(t, inProgress, 1)
+	assert.Equal(t, "vpc1", inProgress[0].DesiredState.Label)
+}

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"testing"
 
+	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
