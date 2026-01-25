@@ -46,7 +46,6 @@ pkg-bin: clean build build-tools
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
-	mkdir -p ./dist/pel/formae/examples
 	cp -Rp ./formae ./dist/pel/formae/bin
 	for f in ./plugins/*/*.so; do \
 		if [ -f "$$f" ] && file "$$f" | grep -qE "ELF|Mach-O"; then \
@@ -54,10 +53,6 @@ pkg-bin: clean build build-tools
 		fi \
 	done
 	rm -f ./dist/pel/formae/plugins/fake-*.so
-	cp -Rp ./examples/* ./dist/pel/formae/examples
-	./formae project init ./dist/pel/formae/examples
-	rm -rf ./dist/pel/formae/examples/main.pkl
-	rm -rf ./dist/pel/formae/examples/PklProject.deps.json
 	curl -L -o ./dist/pel/formae/bin/pkl ${PKL_BIN_URL}
 	chmod 755 ./dist/pel/formae/bin/pkl
 	./ppm pkg build --name formae --version ${VERSION} ./dist/pel/formae
@@ -72,7 +67,6 @@ gen-pkl:
 	pkl project resolve plugins/pkl/testdata/forma
 	pkl project resolve plugins/pkl/verify
 	pkl project resolve pkg/plugin/descriptors/
-	pkl project resolve examples/
 	pkl project resolve tests/e2e/pkl
 
 pkg-pkl:
@@ -176,9 +170,7 @@ test-generator-pkl:
 	cd plugins/pkl/generator && pkl eval ResourcesGenerator.pkl -o resources.pkl
 	cd plugins/pkl/generator && pkl eval ResolvablesGenerator.pkl -o resolvables.pkl
 	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
-	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/resources_example.json
-	cd plugins/pkl/generator/ && pkl eval runLocalPklGenerator.pkl -p File=./examples/json/lifeline.json
-	cd plugins/pkl/generator && python3 run_generator.py examples/json/types
+	# Note: AWS-specific generator examples removed - AWS plugin now external
 
 test-descriptors-pkl:
 	pkl test pkg/plugin/descriptors/test/PklProjectGenerator_test.pkl
