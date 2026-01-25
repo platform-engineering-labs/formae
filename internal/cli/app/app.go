@@ -489,15 +489,14 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOpt
 	return (*schemaPlugin).SerializeForma(forma, options)
 }
 
-func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string, schemaLocation string) (plugin.GenerateSourcesResult, error) {
+func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (plugin.GenerateSourcesResult, error) {
 	schemaPlugin, err := a.PluginManager.SchemaPlugin(outputSchema)
 	if err != nil {
 		return plugin.GenerateSourcesResult{}, err
 	}
-	location := plugin.SchemaLocation(schemaLocation)
-	includes := a.Projects.formatIncludes(outputSchema, []string{"aws"}, location)
+	includes := a.Projects.formatIncludes(outputSchema, []string{"aws"}, plugin.SchemaLocationLocal)
 
-	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes, location)
+	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes, plugin.SchemaLocationLocal)
 }
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
@@ -536,22 +535,21 @@ func (p *Plugins) SupportedSchemas() []string {
 
 // Projects
 
-func (p *Projects) Init(path string, format string, include []string, schemaLocation string) error {
+func (p *Projects) Init(path string, format string, include []string) error {
 	// TODO(discount-elf) think about this namespace issue, since different packages can be included in plugins we currently
 	// need plugin.package for download delivery
 	var includes []string
-	location := plugin.SchemaLocation(schemaLocation)
 
 	switch format {
 	case "pkl":
-		includes = p.formatIncludes(format, include, location)
+		includes = p.formatIncludes(format, include, plugin.SchemaLocationLocal)
 
 		schemaPlugin, err := p.pluginManager.SchemaPluginByFileExtension(".pkl")
 		if err != nil {
 			return err
 		}
 
-		err = (*schemaPlugin).ProjectInit(path, includes, location)
+		err = (*schemaPlugin).ProjectInit(path, includes, plugin.SchemaLocationLocal)
 		if err != nil {
 			return err
 		}

@@ -23,11 +23,10 @@ import (
 )
 
 type ExtractOptions struct {
-	TargetPath     string
-	Query          string
-	Yes            bool
-	OutputSchema   string
-	SchemaLocation string
+	TargetPath   string
+	Query        string
+	Yes          bool
+	OutputSchema string
 }
 
 func ExtractCmd() *cobra.Command {
@@ -43,7 +42,6 @@ func ExtractCmd() *cobra.Command {
 			opts.Query, _ = command.Flags().GetString("query")
 			opts.Yes, _ = command.Flags().GetBool("yes")
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
-			opts.SchemaLocation, _ = command.Flags().GetString("schema-location")
 
 			configFile, _ := command.Flags().GetString("config")
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
@@ -66,7 +64,6 @@ func ExtractCmd() *cobra.Command {
 	command.Flags().String("query", " ", "Query that allows to find resources by their attributes")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
 	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
-	command.Flags().String("schema-location", "remote", "Schema location: 'remote' (PKL registry) or 'local' (installed plugins)")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
@@ -111,7 +108,7 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 		}
 	}
 
-	res, err := app.GenerateSourceCode(forma, opts.TargetPath, opts.OutputSchema, opts.SchemaLocation)
+	res, err := app.GenerateSourceCode(forma, opts.TargetPath, opts.OutputSchema)
 	if errors.Is(err, plugin.ErrFailedToGenerateSources) {
 		logFilePath := fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory())
 		return fmt.Errorf("something went wrong during the extraction. This is our fault. Please contact us and send over the error logs from '%s'", logFilePath)
