@@ -23,7 +23,6 @@ clean-pel:
 
 build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
-	go build -C plugins/aws -ldflags="-X 'main.Version=${VERSION}'" -o aws .
 	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
 	go build -C plugins/json -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json.so
 	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
@@ -36,7 +35,6 @@ build-tools:
 
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
-	go build -C plugins/aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -o aws-debug .
 	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
 	go build -C plugins/json ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json-debug.so
 	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
@@ -44,11 +42,7 @@ build-debug:
 	go build -C plugins/tailscale ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
-install-aws-plugin:
-	@mkdir -p ~/.pel/formae/plugins/aws/v${VERSION}
-	cp plugins/aws/aws ~/.pel/formae/plugins/aws/v${VERSION}/aws
-
-pkg-bin: clean build build-tools install-aws-plugin
+pkg-bin: clean build build-tools
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
@@ -59,7 +53,6 @@ pkg-bin: clean build build-tools install-aws-plugin
 			cp "$$f" ./dist/pel/formae/plugins/; \
 		fi \
 	done
-	cp ./plugins/aws/aws ./dist/pel/formae/plugins/
 	rm -f ./dist/pel/formae/plugins/fake-*.so
 	cp -Rp ./examples/* ./dist/pel/formae/examples
 	./formae project init ./dist/pel/formae/examples
@@ -76,7 +69,6 @@ gen-pkl:
 	echo '${VERSION}' > ./version.semver
 	pkl project resolve plugins/pkl/schema
 	pkl project resolve plugins/pkl/generator
-	pkl project resolve plugins/aws/schema/pkl
 	pkl project resolve plugins/pkl/testdata/forma
 	pkl project resolve plugins/pkl/verify
 	pkl project resolve pkg/plugin/descriptors/
@@ -84,10 +76,9 @@ gen-pkl:
 	pkl project resolve tests/e2e/pkl
 
 pkg-pkl:
-	pkl project package ./plugins/aws/schema/pkl ./plugins/pkl/schema --skip-publish-check
+	pkl project package ./plugins/pkl/schema --skip-publish-check
 
 publish-pkl:
-	aws s3 sync .out/aws@${VERSION} s3://hub.platform.engineering/plugins/aws/schema/pkl/aws/
 	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
 
 publish-setup:
@@ -103,7 +94,6 @@ test-build:
 
 test-all: test-build test-pkl
 	go test -C ./plugins/auth-basic -tags="unit integration" -count=1 -failfast ./...
-	go test -C ./plugins/aws -tags="unit" -count=1 -failfast ./...
 	go test -C ./plugins/pkl -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./plugins/tailscale -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./
@@ -112,7 +102,6 @@ test-all: test-build test-pkl
 
 test-unit:
 	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...
-	go test -C ./plugins/aws -tags=unit -failfast ./...
 	go test -C ./plugins/pkl -tags=unit -failfast ./...
 	go test -C ./plugins/tailscale -tags=unit -failfast ./...
 	go test -C ./pkg/model -tags=unit -failfast ./
@@ -139,17 +128,11 @@ test-unit-summary:
 
 test-integration:
 	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
-	go test -C ./plugins/aws -tags=integration -failfast ./...
 	go test -C ./plugins/pkl -tags=integration -failfast ./...
 	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-plugin-sdk-aws: build build-aws-plugin
-	@echo "Resolving PKL dependencies for AWS plugin..."
-	@pkl project resolve plugins/aws/testdata
-	PLUGIN_NAME=aws go test -C ./tests/integration/plugin-sdk -tags=plugin_sdk -v -failfast ./...
-
-test-e2e: gen-pkl pkg-pkl build install-aws-plugin
+test-e2e: gen-pkl pkg-pkl build
 	echo "Resolving PKL project..."
 	pkl project resolve tests/e2e/pkl
 	echo "Running full E2E test suite..."
@@ -209,7 +192,6 @@ test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 tidy-all:
 	go mod tidy
 	cd ./plugins/auth-basic && go mod tidy
-	cd ./plugins/aws && go mod tidy
 	cd ./plugins/fake-aws && go mod tidy
 	cd ./plugins/json && go mod tidy
 	cd ./plugins/yaml && go mod tidy
@@ -241,4 +223,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-aws-plugin build-debug pkg-bin publish-bin gen-pkl gen-aws-pkl-types pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
