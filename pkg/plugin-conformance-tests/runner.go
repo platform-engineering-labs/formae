@@ -670,8 +670,8 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 	defer harness.Cleanup()
 
 	// Get resource descriptor to find the resource type for discovery config
-	pluginDir, _ := os.Getwd()
-	pklFile := filepath.Join(pluginDir, "testdata", filepath.Base(tc.PKLFile))
+	// tc.PKLFile is already the absolute path from DiscoverTestData
+	pklFile := tc.PKLFile
 
 	// Evaluate to get resource type
 	evalOutput, err := harness.Eval(pklFile)
