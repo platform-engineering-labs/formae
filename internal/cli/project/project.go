@@ -49,7 +49,7 @@ func ProjectInitCmd() *cobra.Command {
 
 	command.Flags().String("schema", "pkl", "Schema to use for the project (pkl)")
 	command.Flags().StringArray("include", []string{"aws"}, "Packages to include (aws)")
-	command.Flags().String("schema-location", "remote", "Schema location: 'remote' (PKL registry) or 'local' (installed plugins)")
+	command.Flags().String("schema-location", "local", "Schema location: 'remote' (PKL registry) or 'local' (installed plugins)")
 
 	return command
 }

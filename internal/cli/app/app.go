@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -567,20 +567,36 @@ func (p *Projects) formatIncludes(format string, include []string, schemaLocatio
 	var includes []string
 	switch format {
 	case "pkl":
+		// Formae always comes from the hub (remote)
 		if pklVersion := p.pluginManager.PluginVersion("pkl"); pklVersion != nil {
 			includes = append(includes, "pkl.formae@"+pklVersion.String())
 		}
 
-		if slices.Contains(include, "aws") {
-			if awsVersion := p.pluginManager.PluginVersion("aws"); awsVersion != nil {
-				includes = append(includes, "aws.aws@"+awsVersion.String())
-			}
-		}
-
-		// Add all other included namespaces (e.g., ovh, gcp) for local schema resolution
-		// These will be handled by the PackageResolver based on schemaLocation
+		// Add included packages
 		for _, ns := range include {
-			if ns != "aws" { // aws is handled above with version lookup
+			ns = strings.ToLower(ns)
+
+			// Find installed plugin info (handles case-insensitive lookup)
+			localPath, installedVersion := p.findInstalledPlugin(ns)
+
+			// If local schema location and we found a local schema, use it
+			if schemaLocation == plugin.SchemaLocationLocal && localPath != "" {
+				includes = append(includes, fmt.Sprintf("local:%s:%s", ns, localPath))
+				continue
+			}
+
+			// Fall back to remote: prefer installed version, then plugin manager version
+			var version string
+			if installedVersion != "" {
+				version = installedVersion
+			} else if v := p.pluginManager.PluginVersion(ns); v != nil {
+				version = v.String()
+			}
+
+			if version != "" {
+				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, version))
+			} else {
+				// No version info available, add as plain namespace (will fail at resolve time)
 				includes = append(includes, ns)
 			}
 		}
@@ -589,6 +605,74 @@ func (p *Projects) formatIncludes(format string, include []string, schemaLocatio
 	}
 
 	return includes
+}
+
+// findInstalledPlugin looks for an installed plugin at pluginsDir/<namespace>/v*/schema/pkl/PklProject.
+// It performs case-insensitive directory lookup.
+// Returns (schemaPath, version) where schemaPath is the path to PklProject (empty if no schema),
+// and version is the highest installed version (empty if plugin not installed).
+func (p *Projects) findInstalledPlugin(namespace string) (schemaPath string, version string) {
+	pluginsDir := util.ExpandHomePath("~/.pel/formae/plugins")
+
+	// Case-insensitive lookup: list plugins dir and find matching name
+	pluginEntries, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		return "", ""
+	}
+
+	var pluginDir string
+	nsLower := strings.ToLower(namespace)
+	for _, entry := range pluginEntries {
+		if entry.IsDir() && strings.ToLower(entry.Name()) == nsLower {
+			pluginDir = filepath.Join(pluginsDir, entry.Name())
+			break
+		}
+	}
+
+	if pluginDir == "" {
+		return "", ""
+	}
+
+	// Find version directories
+	entries, err := os.ReadDir(pluginDir)
+	if err != nil {
+		return "", ""
+	}
+
+	// Collect version directories
+	var versions []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Version directories start with 'v' (e.g., v0.1.0)
+		if strings.HasPrefix(name, "v") {
+			versions = append(versions, name)
+		}
+	}
+
+	if len(versions) == 0 {
+		return "", ""
+	}
+
+	// Sort by version string descending (highest first)
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i] > versions[j]
+	})
+
+	// Use highest version
+	highestVersion := versions[0]
+	// Strip the 'v' prefix for the version string
+	version = strings.TrimPrefix(highestVersion, "v")
+
+	// Check if schema exists
+	pklProjectPath := filepath.Join(pluginDir, highestVersion, "schema", "pkl", "PklProject")
+	if _, err := os.Stat(pklProjectPath); err == nil {
+		schemaPath = pklProjectPath
+	}
+
+	return schemaPath, version
 }
 
 func (p *Projects) Properties(path string) (map[string]pkgmodel.Prop, error) {
