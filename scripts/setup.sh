@@ -25,9 +25,11 @@ help() {
   exit 0
 }
 
-curl_auth() {
+curl_cmd() {
   if [[ "${artifact_username}" != "" && "${artifact_password}" != "" ]]; then
-    echo "-u '${artifact_username}:${artifact_password}'"
+    echo "curl -u ${artifact_username}:${artifact_password}"
+  else
+    echo "curl"
   fi
 }
 
@@ -66,7 +68,7 @@ if [[ "$version" == "latest" ]]; then
       end
     ")
   elif which jq > /dev/null; then
-    version=$(curl "$(curl_auth)" -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.Version | index("-") | not) | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
+    version=$($(curl_cmd) -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.Version | index("-") | not) | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
   else
     echo "Could not find a ruby interpreter or jq, required by the installation, please install either package to continue!"
     exit 1
@@ -99,7 +101,7 @@ fi
 pkgname="formae@${version}_${OS}-${ARCH}.tgz"
 
 echo "Downloading: ${pkgname}"
-if ! curl "$(curl_auth)" "https://hub.platform.engineering/binaries/pkgs/${pkgname}" 2>/dev/null > ${pkgname}; then
+if ! $(curl_cmd) "https://hub.platform.engineering/binaries/pkgs/${pkgname}" 2>/dev/null > ${pkgname}; then
   echo "Failed to download: ${pkgname}"
   exit 1
 fi
