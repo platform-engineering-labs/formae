@@ -1,0 +1,28 @@
+/*
+ * FakeAWS IAM RolePolicy - minimal copy for testing.
+ */
+module fakeaws.iam.rolepolicy
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::IAM::RolePolicy"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "PolicyName"
+}
+open class RolePolicy extends formae.Resource {
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    policyName: String
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    roleName: String|formae.Resolvable
+
+    @fakeaws.FieldHint
+    policyDocument: Dynamic
+}

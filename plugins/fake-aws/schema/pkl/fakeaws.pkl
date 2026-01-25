@@ -1,0 +1,36 @@
+/*
+ * FakeAWS - minimal copy of AWS schema for testing the PKL plugin.
+ * This schema provides the same structure as the real AWS plugin
+ * but with the FakeAWS namespace.
+ */
+module fakeaws
+
+import "@formae/formae.pkl"
+import "types.pkl"
+
+/// FakeAWS Tag - re-exported from types.pkl for convenience.
+typealias Tag = types.Tag
+
+typealias Region = "us-east-1" | "us-west-2" | "eu-west-1"
+
+typealias AvailabilityZone = String
+
+open class Config {
+  hidden fixed type: String = "FakeAWS"
+  hidden profile: String?
+  hidden region: Region
+
+  fixed Type: String = type
+  fixed Profile: String? = profile
+  fixed Region: Region = region
+}
+
+class FieldHint extends formae.FieldHint {}
+
+class ResourceHint extends formae.ResourceHint {
+  hidden outputKeyTransformation: (String) -> String = (it) -> it.capitalize()
+}
+
+class SubResourceHint extends formae.SubResourceHint {
+  hidden outputKeyTransformation: (String) -> String = (it) -> it.capitalize()
+}

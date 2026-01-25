@@ -6,7 +6,7 @@
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
-import "@aws/sqs/queue.pkl"
+import "@fakeaws/sqs/queue.pkl"
 
 properties {
   name = new formae.Prop {

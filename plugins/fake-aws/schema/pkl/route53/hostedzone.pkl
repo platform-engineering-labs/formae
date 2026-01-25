@@ -1,0 +1,74 @@
+/*
+ * FakeAWS Route53 HostedZone - minimal copy for testing.
+ */
+module fakeaws.route53.hostedzone
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::Route53::HostedZone"
+
+@fakeaws.SubResourceHint
+open class HostedZoneConfig extends formae.SubResource {
+    comment: String?
+}
+
+@fakeaws.SubResourceHint
+open class QueryLoggingConfig extends formae.SubResource {
+    cloudWatchLogsLogGroupArn: String
+}
+
+@fakeaws.SubResourceHint
+open class VPC extends formae.SubResource {
+    @fakeaws.FieldHint {
+        outputField = "VPCId"
+    }
+    vpcId: String
+
+    @fakeaws.FieldHint {
+        outputField = "VPCRegion"
+    }
+    vpcRegion: fakeaws.Region
+}
+
+open class HostedZoneResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: HostedZoneResolvable = (this) {
+        property = "Id"
+    }
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+}
+open class HostedZone extends formae.Resource {
+    @fakeaws.FieldHint
+    hostedZoneConfig: HostedZoneConfig?
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    name: (String|formae.Value)?
+
+    @fakeaws.FieldHint
+    queryLoggingConfig: QueryLoggingConfig?
+
+    @fakeaws.FieldHint {
+        outputField = "HostedZoneTags"
+    }
+    tags: Listing<fakeaws.Tag>?
+
+    @fakeaws.FieldHint {
+        outputField = "VPCs"
+    }
+    vpcs: Listing<VPC>?
+
+    local parent = this
+
+    hidden res: HostedZoneResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

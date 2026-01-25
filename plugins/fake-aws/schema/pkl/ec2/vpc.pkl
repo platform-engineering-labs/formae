@@ -1,0 +1,44 @@
+/*
+ * FakeAWS EC2 VPC - minimal copy for testing.
+ */
+module fakeaws.ec2.vpc
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::EC2::VPC"
+
+open class VPCResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: VPCResolvable = (this) {
+        property = "VpcId"
+    }
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "VpcId"
+}
+open class VPC extends formae.Resource {
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    cidrBlock: String
+
+    @fakeaws.FieldHint
+    enableDnsHostnames: Boolean?
+
+    @fakeaws.FieldHint
+    enableDnsSupport: Boolean?
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res: VPCResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

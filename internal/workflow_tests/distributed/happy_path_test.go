@@ -26,7 +26,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	internalutil "github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -41,24 +40,25 @@ import (
 // - Plugin registration being logged
 func TestMetastructure_ExternalPlugin_Registration(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		// Step 1: Build the fake-aws plugin binary with hardcoded test behavior
-		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
+		// Step 1: Create isolated plugins directory for this test
+		testPluginsDir := t.TempDir()
+
+		// Step 2: Build the fake-aws plugin binary into isolated directory
+		pluginBinaryPath := buildFakeAWSPluginToDir(t, testPluginsDir)
 		defer os.Remove(pluginBinaryPath)
 
-		// Step 2: Setup test configuration
+		// Step 3: Setup test configuration
 		cfg := newDistributedTestConfig(t)
 		defer cleanupTestDatabase(t, cfg)
 
-		// Step 3: Setup test logger to capture all logs
+		// Step 4: Setup test logger to capture all logs
 		logCapture := setupTestLogger()
 
-		// Step 4: Create and start metastructure
-		// This should trigger PluginCoordinator to scan ~/.pel/formae/plugins/
-		// and spawn the fake-aws plugin via meta.Port
-		m := newDistributedMetastructure(t, cfg)
+		// Step 5: Create and start metastructure with isolated plugins directory
+		m := newDistributedMetastructure(t, cfg, testPluginsDir)
 		defer m.Stop(true)
 
-		// Step 5: Wait for the plugin to register with PluginCoordinator
+		// Step 6: Wait for the plugin to register with PluginCoordinator
 		// The plugin sends a PluginAnnouncement to PluginCoordinator which logs it
 		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
 
@@ -78,28 +78,31 @@ func TestMetastructure_ExternalPlugin_Registration(t *testing.T) {
 // - Command completing successfully
 func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		// Step 1: Build the fake-aws plugin binary
-		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
+		// Step 1: Create isolated plugins directory for this test
+		testPluginsDir := t.TempDir()
+
+		// Step 2: Build the fake-aws plugin binary into isolated directory
+		pluginBinaryPath := buildFakeAWSPluginToDir(t, testPluginsDir)
 		defer os.Remove(pluginBinaryPath)
 
-		// Step 2: Setup test configuration
+		// Step 3: Setup test configuration
 		cfg := newDistributedTestConfig(t)
 		defer cleanupTestDatabase(t, cfg)
 
-		// Step 3: Setup test logger to capture logs
+		// Step 4: Setup test logger to capture logs
 		logCapture := setupTestLogger()
 
-		// Step 4: Create and start metastructure
-		m := newDistributedMetastructure(t, cfg)
+		// Step 5: Create and start metastructure with isolated plugins directory
+		m := newDistributedMetastructure(t, cfg, testPluginsDir)
 		// NOTE: We don't use defer m.Stop(true) here because we need to
 		// explicitly test the shutdown behavior
 
-		// Step 5: Wait for the plugin to register
+		// Step 6: Wait for the plugin to register
 		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
 		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
 		t.Logf("✓ Plugin registered successfully")
 
-		// Step 6: Submit a Forma apply command (mirrors happy_path_test.go)
+		// Step 7: Submit a Forma apply command (mirrors happy_path_test.go)
 		forma := &pkgmodel.Forma{
 			Stacks: []pkgmodel.Stack{
 				{
@@ -131,7 +134,7 @@ func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
 		)
 		require.NoError(t, err, "ApplyForma should not return an error")
 
-		// Step 7: Wait for the command to complete successfully
+		// Step 8: Wait for the command to complete successfully
 		var commands []*forma_command.FormaCommand
 		require.Eventually(t, func() bool {
 			var err error
@@ -154,16 +157,16 @@ func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
 
 		t.Logf("✓ Apply command completed successfully")
 
-		// Step 8: Verify the plugin process is running before shutdown
+		// Step 9: Verify the plugin process is running before shutdown
 		require.True(t, isPluginProcessRunning("fake-aws"),
 			"Plugin process should be running before shutdown")
 		t.Logf("✓ Plugin process is running before shutdown")
 
-		// Step 9: Stop the metastructure
+		// Step 10: Stop the metastructure
 		m.Stop(true)
 		t.Logf("✓ Metastructure stopped")
 
-		// Step 10: Verify the plugin process has been terminated
+		// Step 11: Verify the plugin process has been terminated
 		// Wait a reasonable amount of time for graceful shutdown
 		// With proper graceful shutdown, the plugin should terminate within 2 seconds
 		var pluginStillRunning bool
@@ -176,16 +179,13 @@ func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
 	})
 }
 
-// buildFakeAWSPlugin compiles the fake-aws plugin binary for testing
-func buildFakeAWSPlugin(t *testing.T) string {
+// buildFakeAWSPluginToDir compiles the fake-aws plugin binary into the specified directory
+func buildFakeAWSPluginToDir(t *testing.T, baseDir string) string {
 	t.Helper()
 
-	// Build to standard plugin location: ~/.pel/formae/plugins/fake-aws/v1.0.0/fake-aws-plugin
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err, "Failed to get home directory")
-
-	pluginDir := filepath.Join(homeDir, ".pel", "formae", "plugins", "fake-aws", "v1.0.0")
-	err = os.MkdirAll(pluginDir, 0755)
+	// Build to isolated plugin location: <baseDir>/fake-aws/v1.0.0/fake-aws
+	pluginDir := filepath.Join(baseDir, "fake-aws", "v1.0.0")
+	err := os.MkdirAll(pluginDir, 0755)
 	require.NoError(t, err, "Failed to create plugin directory")
 
 	pluginPath := filepath.Join(pluginDir, "fake-aws")
@@ -206,11 +206,6 @@ func buildFakeAWSPlugin(t *testing.T) string {
 
 	t.Logf("Built fake-aws plugin at: %s", pluginPath)
 	return pluginPath
-}
-
-// Alias for clarity in test
-func buildFakeAWSPluginToStandardLocation(t *testing.T) string {
-	return buildFakeAWSPlugin(t)
 }
 
 // newDistributedTestConfig creates a test configuration for distributed plugins
@@ -260,16 +255,16 @@ func newDistributedTestConfig(t *testing.T) *pkgmodel.Config {
 }
 
 // newDistributedMetastructure creates a metastructure instance configured for distributed plugins
-func newDistributedMetastructure(t *testing.T, cfg *pkgmodel.Config) *metastructure.Metastructure {
+func newDistributedMetastructure(t *testing.T, cfg *pkgmodel.Config, pluginsDir string) *metastructure.Metastructure {
 	t.Helper()
 
 	// Create datastore
 	db, err := datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 	require.NoError(t, err, "Failed to create datastore")
 
-	// Create plugin manager and load all plugins
+	// Create plugin manager with isolated plugins directory
 	// Load() discovers both in-process plugins and external resource plugins
-	pluginManager := plugin.NewManager(internalutil.ExpandHomePath("~/.pel/formae/plugins"))
+	pluginManager := plugin.NewManager(pluginsDir)
 	pluginManager.Load()
 
 	// Create metastructure

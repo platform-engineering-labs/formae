@@ -1,0 +1,44 @@
+/*
+ * FakeAWS RDS DBSubnetGroup - minimal copy for testing.
+ */
+module fakeaws.rds.dbsubnetgroup
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::RDS::DBSubnetGroup"
+
+open class DBSubnetGroupResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden dbSubnetGroupName: DBSubnetGroupResolvable = (this) {
+        property = "DBSubnetGroupName"
+    }
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "DBSubnetGroupName"
+}
+open class DBSubnetGroup extends formae.Resource {
+    @fakeaws.FieldHint
+    dbSubnetGroupDescription: String
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    dbSubnetGroupName: String?
+
+    @fakeaws.FieldHint
+    subnetIds: Listing<String|formae.Resolvable>
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res: DBSubnetGroupResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

@@ -6,7 +6,10 @@
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
-import "@aws/aws.pkl"
+
+// Import your resource plugin schema here, e.g.:
+// import "@aws/aws.pkl"
+// import "@ovh/ovh.pkl"
 
 properties {
   name = new formae.Prop {
@@ -21,12 +24,13 @@ forma {
     description = "Stack for my resources"
   }
 
-  new formae.Target {
-    label = "my-default-aws-target"
-    config = new aws.Config {
-      region = "us-east-2"
-    }
-  }
+  // Add a target with your plugin's config, e.g.:
+  // new formae.Target {
+  //   label = "my-target"
+  //   config = new aws.Config {
+  //     region = "us-east-2"
+  //   }
+  // }
 
   // My Resources
 }

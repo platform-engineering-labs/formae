@@ -9,9 +9,13 @@ module generator
 amends "pkl:test"
 import "../gen.pkl" as gen
 import "@formae/formae.pkl"
-import "@aws/aws.pkl" as aws
 import "pkl:reflect" as reflect
 
+/// Local Tag class for testing (mirrors the pattern used by resource plugins)
+local class Tag {
+    key: String
+    value: String
+}
 
 @formae.ResourceHint
 local class SimpleFoo extends formae.Resource{
@@ -28,13 +32,13 @@ local class ComplexBar extends formae.Resource {
 
 @formae.ResourceHint
 local class TestResource extends formae.Resource {
-    type = "FakeAWS::Suckets::TestResource"
+    type = "FakePlugin::Service::TestResource"
 
     @formae.FieldHint
     size: Int?
 
     @formae.FieldHint
-    tags: Listing<aws.Tag>
+    tags: Listing<Tag>
 
     @formae.FieldHint
     bucketName: String

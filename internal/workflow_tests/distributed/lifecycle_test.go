@@ -20,51 +20,54 @@ import (
 // PluginProcessSupervisor restarts it and it re-registers successfully.
 func TestPluginRestart_AfterCrash(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		// Step 1: Build the fake-aws plugin binary
-		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
+		// Step 1: Create isolated plugins directory for this test
+		testPluginsDir := t.TempDir()
+
+		// Step 2: Build the fake-aws plugin binary into isolated directory
+		pluginBinaryPath := buildFakeAWSPluginToDir(t, testPluginsDir)
 		defer cleanupPluginBinary(t, pluginBinaryPath)
 
-		// Step 2: Setup test configuration
+		// Step 3: Setup test configuration
 		cfg := newDistributedTestConfig(t)
 		defer cleanupTestDatabase(t, cfg)
 
-		// Step 3: Setup test logger to capture logs
+		// Step 4: Setup test logger to capture logs
 		logCapture := setupTestLogger()
 
-		// Step 4: Create and start metastructure
-		m := newDistributedMetastructure(t, cfg)
+		// Step 5: Create and start metastructure with isolated plugins directory
+		m := newDistributedMetastructure(t, cfg, testPluginsDir)
 		defer m.Stop(true)
 
-		// Step 5: Wait for the plugin to register initially
+		// Step 6: Wait for the plugin to register initially
 		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
 		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
 		t.Logf("✓ Plugin registered initially")
 
-		// Step 6: Verify plugin process is running
+		// Step 7: Verify plugin process is running
 		require.True(t, isPluginProcessRunning("fake-aws"),
 			"Plugin process should be running")
 		t.Logf("✓ Plugin process is running")
 
-		// Step 7: Kill the plugin process with SIGKILL (simulate crash)
+		// Step 8: Kill the plugin process with SIGKILL (simulate crash)
 		t.Logf("Killing fake-aws process...")
 		cmd := exec.Command("pkill", "-9", "-f", "fake-aws")
 		err := cmd.Run()
 		require.NoError(t, err, "pkill should succeed")
 		t.Logf("✓ Plugin process killed")
 
-		// Step 8: Wait for plugin to be detected as terminated and restarted
+		// Step 9: Wait for plugin to be detected as terminated and restarted
 		// Look for the restart log message
 		foundRestart := logCapture.WaitForLog("Plugin restarted successfully", 10*time.Second)
 		require.True(t, foundRestart, "Plugin should have been restarted by PluginProcessSupervisor")
 		t.Logf("✓ Plugin restart initiated")
 
-		// Step 9: Wait for the plugin to re-register with PluginCoordinator
+		// Step 10: Wait for the plugin to re-register with PluginCoordinator
 		// Clear previous logs and wait for new registration
 		foundReRegister := logCapture.WaitForLog("Plugin registered", 10*time.Second)
 		require.True(t, foundReRegister, "Plugin should have re-registered after restart")
 		t.Logf("✓ Plugin re-registered after restart")
 
-		// Step 10: Verify plugin process is running again
+		// Step 11: Verify plugin process is running again
 		require.Eventually(t, func() bool {
 			return isPluginProcessRunning("fake-aws")
 		}, 5*time.Second, 100*time.Millisecond,
@@ -89,37 +92,40 @@ func cleanupPluginBinary(t *testing.T, path string) {
 // after m.Stop(true), but this test explicitly verifies the monitoring behavior.
 func TestPluginShutdown_AfterAgentStop(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		// Step 1: Build the fake-aws plugin binary
-		pluginBinaryPath := buildFakeAWSPluginToStandardLocation(t)
+		// Step 1: Create isolated plugins directory for this test
+		testPluginsDir := t.TempDir()
+
+		// Step 2: Build the fake-aws plugin binary into isolated directory
+		pluginBinaryPath := buildFakeAWSPluginToDir(t, testPluginsDir)
 		defer cleanupPluginBinary(t, pluginBinaryPath)
 
-		// Step 2: Setup test configuration
+		// Step 3: Setup test configuration
 		cfg := newDistributedTestConfig(t)
 		defer cleanupTestDatabase(t, cfg)
 
-		// Step 3: Setup test logger to capture logs
+		// Step 4: Setup test logger to capture logs
 		logCapture := setupTestLogger()
 
-		// Step 4: Create and start metastructure
-		m := newDistributedMetastructure(t, cfg)
+		// Step 5: Create and start metastructure with isolated plugins directory
+		m := newDistributedMetastructure(t, cfg, testPluginsDir)
 		// NOT using defer m.Stop(true) - we want to test manual stop behavior
 
-		// Step 5: Wait for the plugin to register
+		// Step 6: Wait for the plugin to register
 		foundMessage := logCapture.WaitForLog("Plugin registered", 5*time.Second)
 		require.True(t, foundMessage, "Plugin should have registered with PluginCoordinator")
 		t.Logf("✓ Plugin registered")
 
-		// Step 6: Verify plugin process is running
+		// Step 7: Verify plugin process is running
 		require.True(t, isPluginProcessRunning("fake-aws"),
 			"Plugin process should be running")
 		t.Logf("✓ Plugin process is running")
 
-		// Step 7: Stop the agent (this closes the network connection, triggering MessageDownNode)
+		// Step 8: Stop the agent (this closes the network connection, triggering MessageDownNode)
 		t.Logf("Stopping agent...")
 		m.Stop(true)
 		t.Logf("✓ Agent stopped")
 
-		// Step 8: Verify the plugin process terminates
+		// Step 9: Verify the plugin process terminates
 		// Plugin should detect agent node is down via MonitorNode and shut down
 		require.Eventually(t, func() bool {
 			return !isPluginProcessRunning("fake-aws")

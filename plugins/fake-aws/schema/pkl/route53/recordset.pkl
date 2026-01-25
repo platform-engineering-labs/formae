@@ -1,0 +1,73 @@
+/*
+ * FakeAWS Route53 RecordSet - minimal copy for testing.
+ */
+module fakeaws.route53.recordset
+
+import "../fakeaws.pkl"
+import "@formae/formae.pkl"
+
+const type = "FakeAWS::Route53::RecordSet"
+
+@fakeaws.SubResourceHint
+open class AliasTarget extends formae.SubResource {
+    @fakeaws.FieldHint {
+        outputField = "DNSName"
+    }
+    dnsName: String|formae.Resolvable
+
+    evaluateTargetHealth: Boolean?
+
+    hostedZoneId: String|formae.Resolvable
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "Id"
+}
+open class RecordSet extends formae.Resource {
+    @fakeaws.FieldHint {
+        persist = true
+    }
+    aliasTarget: AliasTarget?
+
+    @fakeaws.FieldHint
+    comment: String?
+
+    @fakeaws.FieldHint {
+        createOnly = true
+        persist = true
+    }
+    hostedZoneId: (String|formae.Resolvable)?
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    hostedZoneName: String?
+
+    @fakeaws.FieldHint {
+        createOnly = true
+        persist = true
+    }
+    name: String
+
+    region: fakeaws.Region?
+
+    @fakeaws.FieldHint {
+        persist = true
+    }
+    resourceRecords: Listing<String>?
+
+    @fakeaws.FieldHint {
+        persist = true
+        outputField = "TTL"
+    }
+    ttl: Number?
+
+    @fakeaws.FieldHint {
+        persist = true
+    }
+    type: String
+
+    @fakeaws.FieldHint
+    weight: Int?
+}

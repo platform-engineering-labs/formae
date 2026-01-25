@@ -8,7 +8,7 @@ amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
 import "@formae/debug/debug.pkl"
 import "@formae/ext/bcrypt.pkl"
-import "@aws/aws.pkl"
+import "@fakeaws/fakeaws.pkl"
 
 forma {
   new formae.Stack {
@@ -18,7 +18,7 @@ forma {
 
   new formae.Target {
     label = "default-aws-target"
-    config = new aws.Config {
+    config = new fakeaws.Config {
       region = "us-west-2"
     }
   }

@@ -1,0 +1,57 @@
+/*
+ * FakeAWS RDS DBInstance - minimal copy for testing.
+ */
+module fakeaws.rds.dbinstance
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::RDS::DBInstance"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "DBInstanceIdentifier"
+}
+open class DBInstance extends formae.Resource {
+    @fakeaws.FieldHint
+    allocatedStorage: Int?
+
+    @fakeaws.FieldHint
+    dbInstanceClass: String
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    dbInstanceIdentifier: String?
+
+    @fakeaws.FieldHint
+    dbSubnetGroupName: String|formae.Resolvable?
+
+    @fakeaws.FieldHint
+    deletionProtection: Boolean?
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    engine: String
+
+    @fakeaws.FieldHint
+    engineVersion: String?
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    masterUsername: String?
+
+    @fakeaws.FieldHint
+    masterUserPassword: (String|formae.Resolvable)?
+
+    @fakeaws.FieldHint
+    storageEncrypted: Boolean?
+
+    @fakeaws.FieldHint
+    vpcSecurityGroups: Listing<String|formae.Resolvable>?
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+}

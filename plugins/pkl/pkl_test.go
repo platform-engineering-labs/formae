@@ -25,7 +25,7 @@ func TestPkl_Evaluate(t *testing.T) {
 	jsonString := forma.ToJSON()
 
 	assert.Equal(t, props["name"], gjson.Get(jsonString, "Properties.name.Value").String())
-	assert.Equal(t, "AWS::Route53::HostedZone", gjson.Get(jsonString, "Resources.0.Type").String())
+	assert.Equal(t, "FakeAWS::Route53::HostedZone", gjson.Get(jsonString, "Resources.0.Type").String())
 	assert.Equal(t, "A", gjson.Get(jsonString, "Resources.1.Properties.Type").String())
 }
 

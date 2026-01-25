@@ -2,5 +2,5 @@ amends "pkl:Project"
 
 dependencies {
   ["formae"] = import("../../../pkl/schema/PklProject")
-  ["aws"] = import("../../../aws/schema/pkl/PklProject")
+  ["fakeaws"] = import("../../../fake-aws/schema/pkl/PklProject")
 }

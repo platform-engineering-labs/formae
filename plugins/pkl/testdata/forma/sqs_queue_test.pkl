@@ -6,8 +6,8 @@
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
-import "@aws/aws.pkl"
-import "@aws/sqs/queue.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "@fakeaws/sqs/queue.pkl"
 
 properties {
   name = new formae.Prop {
@@ -24,7 +24,7 @@ forma {
 
   new formae.Target {
     label = "dev-aws-target"
-    config = new aws.Config {
+    config = new fakeaws.Config {
       region = "us-west-2"
       profile = "dev"
     }

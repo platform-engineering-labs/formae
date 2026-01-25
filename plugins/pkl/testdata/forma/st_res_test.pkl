@@ -6,8 +6,8 @@
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
-import "@aws/route53/hostedzone.pkl"
-import "@aws/route53/recordset.pkl"
+import "@fakeaws/route53/hostedzone.pkl"
+import "@fakeaws/route53/recordset.pkl"
 
 properties {
   name = new formae.Prop {

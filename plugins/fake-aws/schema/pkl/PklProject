@@ -1,0 +1,12 @@
+amends "pkl:Project"
+
+package {
+  name = "fakeaws"
+  baseUri = "package://fake.local/fakeaws"
+  version = "1.0.0"
+  packageZipUrl = "https://fake.local/fakeaws@1.0.0.zip"
+}
+
+dependencies {
+    ["formae"] = import("../../../pkl/schema/PklProject")
+}

@@ -24,7 +24,7 @@ forma {
 
   new formae.Target {
     label = "default-aws-target"
-    config = new aws.Config {
+    config = new fakeaws.Config {
       region = "us-west-2"
     }
   }

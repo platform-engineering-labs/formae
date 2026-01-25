@@ -1,0 +1,46 @@
+/*
+ * FakeAWS EC2 SecurityGroup - minimal copy for testing.
+ */
+module fakeaws.ec2.securitygroup
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::EC2::SecurityGroup"
+
+open class SecurityGroupResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden groupId: SecurityGroupResolvable = (this) {
+        property = "GroupId"
+    }
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "GroupId"
+}
+open class SecurityGroup extends formae.Resource {
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    groupDescription: String
+
+    @fakeaws.FieldHint
+    groupName: String?
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    vpcId: String|formae.Resolvable
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res: SecurityGroupResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

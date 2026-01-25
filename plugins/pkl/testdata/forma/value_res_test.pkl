@@ -7,15 +7,15 @@
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
 
-import "@aws/aws.pkl"
+import "@fakeaws/fakeaws.pkl"
 
-import "@aws/ec2/vpc.pkl"
-import "@aws/ec2/subnet.pkl"
-import "@aws/ec2/securitygroup.pkl"
+import "@fakeaws/ec2/vpc.pkl"
+import "@fakeaws/ec2/subnet.pkl"
+import "@fakeaws/ec2/securitygroup.pkl"
 
-import "@aws/secretsmanager/secret.pkl"
-import "@aws/rds/dbsubnetgroup.pkl"
-import "@aws/rds/dbinstance.pkl"
+import "@fakeaws/secretsmanager/secret.pkl"
+import "@fakeaws/rds/dbsubnetgroup.pkl"
+import "@fakeaws/rds/dbinstance.pkl"
 
 
 properties {
@@ -38,7 +38,7 @@ forma {
 
     new formae.Target {
         label = "def-aws-target"
-        config = new aws.Config {
+        config = new fakeaws.Config {
             region = properties.region.Value
         }
     }

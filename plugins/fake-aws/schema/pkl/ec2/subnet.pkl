@@ -1,0 +1,51 @@
+/*
+ * FakeAWS EC2 Subnet - minimal copy for testing.
+ */
+module fakeaws.ec2.subnet
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::EC2::Subnet"
+
+open class SubnetResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden subnetId: SubnetResolvable = (this) {
+        property = "SubnetId"
+    }
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "SubnetId"
+}
+open class Subnet extends formae.Resource {
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    vpcId: String|formae.Resolvable
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    cidrBlock: String
+
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    availabilityZone: String?
+
+    @fakeaws.FieldHint
+    mapPublicIpOnLaunch: Boolean?
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res: SubnetResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

@@ -1,0 +1,41 @@
+/*
+ * FakeAWS Logs LogGroup - minimal copy for testing.
+ */
+module fakeaws.logs.loggroup
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::Logs::LogGroup"
+
+open class LogGroupResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden arn: LogGroupResolvable = (this) {
+        property = "Arn"
+    }
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "LogGroupName"
+}
+open class LogGroup extends formae.Resource {
+    @fakeaws.FieldHint {
+        createOnly = true
+    }
+    logGroupName: String?
+
+    @fakeaws.FieldHint
+    retentionInDays: Int?
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res: LogGroupResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

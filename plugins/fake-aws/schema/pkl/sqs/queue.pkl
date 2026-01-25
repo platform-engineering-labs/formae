@@ -1,0 +1,55 @@
+/*
+ * FakeAWS SQS Queue - minimal copy for testing.
+ */
+module fakeaws.sqs.queue
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::SQS::Queue"
+
+open class QueueResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden queueUrl: QueueResolvable = (this) {
+        property = "QueueUrl"
+    }
+
+    hidden arn: QueueResolvable = (this) {
+        property = "Arn"
+    }
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "QueueUrl"
+}
+open class Queue extends formae.Resource {
+    @fakeaws.FieldHint
+    queueName: String?
+
+    @fakeaws.FieldHint
+    delaySeconds: Int?
+
+    @fakeaws.FieldHint
+    maximumMessageSize: Int?
+
+    @fakeaws.FieldHint
+    messageRetentionPeriod: Int?
+
+    @fakeaws.FieldHint
+    receiveMessageWaitTimeSeconds: Int?
+
+    @fakeaws.FieldHint
+    visibilityTimeout: Int?
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res: QueueResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

@@ -6,8 +6,8 @@
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
-import "@aws/iam/rolepolicy.pkl"
-import "@aws/aws.pkl"
+import "@fakeaws/iam/rolepolicy.pkl"
+import "@fakeaws/fakeaws.pkl"
 
 // This test creates inline policies for each of 3 IAM roles
 // Used to test discovery of inline policies
@@ -32,7 +32,7 @@ forma {
 
   new formae.Target {
     label = "default-aws-target"
-    config = new aws.Config {
+    config = new fakeaws.Config {
       region = "us-west-2"
     }
   }

@@ -6,9 +6,9 @@
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
-import "@aws/aws.pkl"
-import "@aws/route53/hostedzone.pkl"
-import "@aws/route53/recordset.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "@fakeaws/route53/hostedzone.pkl"
+import "@fakeaws/route53/recordset.pkl"
 
 properties {
   name = new formae.Prop {
@@ -34,7 +34,7 @@ forma {
   // Will be rendered, so it will be created
   local defaultTarget = new formae.Target {
     label = "default-aws-target"
-    config = new aws.Config {
+    config = new fakeaws.Config {
       region = "us-west-2"
     }
   }
