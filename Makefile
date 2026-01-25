@@ -5,7 +5,7 @@
 .DEFAULT_GOAL := all
 
 DEBUG_GOFLAGS := -gcflags="all=-N -l"
-VERSION := $(shell git describe --tags --abbrev=0)
+VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
 
 PKL_BUNDLE_VERSION := 0.30.0
 PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSION}/pkl-$(shell ./scripts/baduname.sh)
