@@ -688,18 +688,41 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 
 	t.Log("Step 1: Creating resource out-of-band via plugin...")
 
-	// Create the resource directly via the plugin (bypassing formae)
-	nativeID, err := harness.CreateUnmanagedResource(evalOutput)
+	// Create all resources directly via the plugin (bypassing formae)
+	// Use CreateAllUnmanagedResources to get all created resources for cleanup
+	createdResources, err := harness.CreateAllUnmanagedResources(evalOutput)
 	if err != nil {
 		t.Fatalf("failed to create unmanaged resource: %v", err)
 	}
-	t.Logf("Created resource with NativeID: %s", nativeID)
+	if len(createdResources) == 0 {
+		t.Fatal("no resources were created")
+	}
 
-	// Register cleanup to delete the resource
-	defer func() {
-		t.Log("Cleanup: Deleting out-of-band resource...")
-		// Note: cleanup happens via harness.Cleanup()
-	}()
+	// The main resource is the last one (after dependencies)
+	nativeID := createdResources[len(createdResources)-1].NativeID
+	t.Logf("Created %d resource(s), main resource NativeID: %s", len(createdResources), nativeID)
+
+	// Parse target from eval output for cleanup
+	var forma pkgmodel.Forma
+	if err := json.Unmarshal([]byte(evalOutput), &forma); err != nil {
+		t.Fatalf("failed to parse forma for cleanup: %v", err)
+	}
+	if len(forma.Targets) == 0 {
+		t.Fatal("no targets found in forma for cleanup")
+	}
+	target := forma.Targets[0]
+
+	// Register cleanup to delete all created resources (in reverse order - dependents before dependencies)
+	harness.RegisterCleanup(func() {
+		t.Logf("Cleaning up %d unmanaged resource(s)...", len(createdResources))
+		for i := len(createdResources) - 1; i >= 0; i-- {
+			res := createdResources[i]
+			t.Logf("Deleting unmanaged resource: type=%s, label=%s, nativeID=%s", res.ResourceType, res.Label, res.NativeID)
+			if err := harness.DeleteUnmanagedResource(res.ResourceType, res.NativeID, &target); err != nil {
+				t.Logf("Warning: failed to delete unmanaged resource %s: %v", res.Label, err)
+			}
+		}
+	})
 
 	// Start the agent with discovery enabled
 	if err := harness.StartAgent(); err != nil {
