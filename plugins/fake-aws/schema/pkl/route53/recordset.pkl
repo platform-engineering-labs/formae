@@ -1,4 +1,10 @@
 /*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
  * FakeAWS Route53 RecordSet - minimal copy for testing.
  */
 module fakeaws.route53.recordset

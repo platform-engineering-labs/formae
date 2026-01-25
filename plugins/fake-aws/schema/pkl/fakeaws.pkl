@@ -1,4 +1,10 @@
 /*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
  * FakeAWS - minimal copy of AWS schema for testing the PKL plugin.
  * This schema provides the same structure as the real AWS plugin
  * but with the FakeAWS namespace.
