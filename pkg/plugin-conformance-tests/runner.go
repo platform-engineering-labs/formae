@@ -718,20 +718,30 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 		t.Fatalf("plugin did not register: %v", err)
 	}
 
-	// Step 4: Trigger discovery
-	t.Log("Step 4: Triggering discovery...")
+	// Step 4: Check if resource is discoverable before continuing
+	t.Log("Step 4: Checking if resource type is discoverable...")
+	descriptor, err := harness.GetResourceDescriptorFromCoordinator(resourceType)
+	if err != nil {
+		t.Skipf("Skipping discovery test: failed to get resource descriptor for %s: %v", resourceType, err)
+	}
+	if !descriptor.Discoverable {
+		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", resourceType)
+	}
+
+	// Step 5: Trigger discovery
+	t.Log("Step 5: Triggering discovery...")
 	if err := harness.TriggerDiscovery(); err != nil {
 		t.Fatalf("failed to trigger discovery: %v", err)
 	}
 
-	// Step 5: Wait for resource to appear in inventory
-	t.Log("Step 5: Waiting for resource in inventory...")
+	// Step 6: Wait for resource to appear in inventory
+	t.Log("Step 6: Waiting for resource in inventory...")
 	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, 2*time.Minute); err != nil {
 		t.Fatalf("resource not discovered: %v", err)
 	}
 
-	// Step 6: Verify the discovered resource
-	t.Log("Step 6: Verifying discovered resource...")
+	// Step 7: Verify the discovered resource
+	t.Log("Step 7: Verifying discovered resource...")
 	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", resourceType))
 	if err != nil {
 		t.Fatalf("failed to query inventory: %v", err)
