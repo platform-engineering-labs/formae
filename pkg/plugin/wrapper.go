@@ -27,6 +27,10 @@ type pluginWrapper struct {
 	// Auto-extracted from schema directory
 	descriptors         []ResourceDescriptor
 	resourceTypeSchemas map[string]model.Schema
+
+	// Observability - optional, may be nil
+	logger  Logger
+	metrics MetricRegistry
 }
 
 // WrapPlugin creates a FullResourcePlugin from a ResourcePlugin using the provided
@@ -49,6 +53,13 @@ func WrapPlugin(
 		descriptors:         descriptors,
 		resourceTypeSchemas: schemas,
 	}, nil
+}
+
+// SetObservability configures the logger and metrics for this plugin wrapper.
+// Call this after WrapPlugin to enable observability in plugin methods.
+func (w *pluginWrapper) SetObservability(logger Logger, metrics MetricRegistry) {
+	w.logger = logger
+	w.metrics = metrics
 }
 
 // Identity methods - from manifest
@@ -92,28 +103,51 @@ func (w *pluginWrapper) LabelConfig() LabelConfig {
 	return w.plugin.LabelConfig()
 }
 
+// enrichContext adds logger and metrics to the context before calling plugin methods.
+func (w *pluginWrapper) enrichContext(ctx context.Context, operation, resourceType, label string) context.Context {
+	if w.logger != nil {
+		log := w.logger.With(
+			"operation", operation,
+			"resource_type", resourceType,
+			"label", label,
+			"namespace", w.namespace,
+		)
+		ctx = WithLogger(ctx, log)
+	}
+	if w.metrics != nil {
+		ctx = WithMetrics(ctx, w.metrics)
+	}
+	return ctx
+}
+
 // CRUD operations - delegated to user's plugin
 
 func (w *pluginWrapper) Create(ctx context.Context, req *resource.CreateRequest) (*resource.CreateResult, error) {
+	ctx = w.enrichContext(ctx, "create", req.ResourceType, req.Label)
 	return w.plugin.Create(ctx, req)
 }
 
 func (w *pluginWrapper) Read(ctx context.Context, req *resource.ReadRequest) (*resource.ReadResult, error) {
+	ctx = w.enrichContext(ctx, "read", req.ResourceType, req.NativeID)
 	return w.plugin.Read(ctx, req)
 }
 
 func (w *pluginWrapper) Update(ctx context.Context, req *resource.UpdateRequest) (*resource.UpdateResult, error) {
+	ctx = w.enrichContext(ctx, "update", req.ResourceType, req.Label)
 	return w.plugin.Update(ctx, req)
 }
 
 func (w *pluginWrapper) Delete(ctx context.Context, req *resource.DeleteRequest) (*resource.DeleteResult, error) {
+	ctx = w.enrichContext(ctx, "delete", req.ResourceType, req.NativeID)
 	return w.plugin.Delete(ctx, req)
 }
 
 func (w *pluginWrapper) Status(ctx context.Context, req *resource.StatusRequest) (*resource.StatusResult, error) {
+	ctx = w.enrichContext(ctx, "status", req.ResourceType, req.NativeID)
 	return w.plugin.Status(ctx, req)
 }
 
 func (w *pluginWrapper) List(ctx context.Context, req *resource.ListRequest) (*resource.ListResult, error) {
+	ctx = w.enrichContext(ctx, "list", req.ResourceType, "")
 	return w.plugin.List(ctx, req)
 }
