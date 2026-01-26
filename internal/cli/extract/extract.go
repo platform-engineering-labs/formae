@@ -66,7 +66,7 @@ func ExtractCmd() *cobra.Command {
 	command.Flags().String("query", " ", "Query that allows to find resources by their attributes")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
 	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
-	command.Flags().String("schema-location", "remote", "Schema location: 'remote' (PKL registry) or 'local' (installed plugins)")
+	command.Flags().String("schema-location", "local", "Schema location: 'remote' (PKL registry) or 'local' (installed plugins)")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
