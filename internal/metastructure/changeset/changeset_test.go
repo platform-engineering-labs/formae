@@ -1106,5 +1106,3 @@ func TestChangeset_FormaWithCycle(t *testing.T) {
 
 	assert.Error(t, err)
 }
-
-
