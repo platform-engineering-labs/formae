@@ -446,8 +446,8 @@ local function parseValueEnhanced(value: Any): Any =
     let (defaultMap =
       if (typeName == "FakeResolvable")
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
-      else if (typeName == "Tag")
-        // Tag moved from formae to aws - include import statement for dependency collection
+      else if (typeName == "Tag" && getImportInfo(value.getClass()) == "formae")
+        // Backwards compat: formae.Tag was moved to aws.Tag - include import statement for dependency collection
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", "@aws/aws.pkl")
       else
         Map("__type__", typeName, "__import__", importInfo))
@@ -475,15 +475,18 @@ local function parseValueEnhanced(value: Any): Any =
 
 
 local function getImportInfoForType(clazz: Class, typeName: String, value: Any): String =
-  // Special case for Tag type - use aws (Tag moved from formae to aws)
-  if (typeName == "Tag")
+  // Get the actual import info from the class
+  let (actualImport = getImportInfo(clazz))
+  // Backwards compat: formae.Tag was moved to aws.Tag, so redirect formae.Tag to aws
+  // Other Tag types (azure.Tag, aws.Tag) use their actual namespace
+  if (typeName == "Tag" && actualImport == "formae")
     "aws"
   else if (typeName == "FakeValue")
     "formae"
   else if (typeName == "FakeResolvable")
     resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).importName
   else
-    getImportInfo(clazz)
+    actualImport
 
 local function getImportInfo(clazz: Class): String =
   let (fullName = clazz.simpleName)
