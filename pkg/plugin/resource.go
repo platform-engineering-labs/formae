@@ -97,6 +97,13 @@ func (c LabelConfig) QueryForResourceType(resourceType string) string {
 	return c.DefaultQuery
 }
 
+// ObservablePlugin is an optional interface for plugins that support observability.
+// The SDK will check if a wrapped plugin implements this interface and configure
+// logging and metrics if so.
+type ObservablePlugin interface {
+	SetObservability(logger Logger, metrics MetricRegistry)
+}
+
 // PluginInfo provides read-only plugin metadata for discovery operations.
 // This interface is implemented by both local ResourcePlugin and remote plugin info proxies.
 type PluginInfo interface {

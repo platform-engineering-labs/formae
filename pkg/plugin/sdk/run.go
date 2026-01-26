@@ -9,9 +9,13 @@ package sdk
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -26,12 +30,94 @@ const (
 	// FormaeVersionEnvVar is the environment variable set by the agent when spawning plugins.
 	// It contains the formae version to use for schema resolution.
 	FormaeVersionEnvVar = "FORMAE_VERSION"
+
+	// FormaePluginLogLevelEnvVar controls the log level for plugin output.
+	// Valid values: debug, info, warn, error. Default: info.
+	FormaePluginLogLevelEnvVar = "FORMAE_LOG_PLUGINS"
 )
 
 // getFormaeVersion returns the formae version to use for schema resolution.
 // The FORMAE_VERSION env var is set by the agent when spawning plugins.
 func getFormaeVersion() string {
 	return os.Getenv(FormaeVersionEnvVar)
+}
+
+// getPluginLogLevel returns the slog.Level for plugin logging based on env var.
+func getPluginLogLevel() slog.Level {
+	switch os.Getenv(FormaePluginLogLevelEnvVar) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// ergoHandler is a custom slog.Handler that outputs in the format expected by
+// PluginProcessSupervisor: "<timestamp> [<level>] <message>"
+type ergoHandler struct {
+	w     io.Writer
+	level slog.Level
+	attrs []slog.Attr
+}
+
+func (h *ergoHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.level
+}
+
+func (h *ergoHandler) Handle(_ context.Context, r slog.Record) error {
+	// Map slog levels to Ergo levels (lowercase)
+	var level string
+	switch r.Level {
+	case slog.LevelDebug:
+		level = "debug"
+	case slog.LevelInfo:
+		level = "info"
+	case slog.LevelWarn:
+		level = "warning"
+	case slog.LevelError:
+		level = "error"
+	default:
+		level = "info"
+	}
+
+	// Build attributes string
+	var attrs strings.Builder
+	// Include handler-level attrs first
+	for _, a := range h.attrs {
+		fmt.Fprintf(&attrs, " %s=%v", a.Key, a.Value.Any())
+	}
+	// Then record-level attrs
+	r.Attrs(func(a slog.Attr) bool {
+		fmt.Fprintf(&attrs, " %s=%v", a.Key, a.Value.Any())
+		return true
+	})
+
+	// Format: "<timestamp> [<level>] <message><attrs>"
+	_, err := fmt.Fprintf(h.w, "%d [%s] %s%s\n", time.Now().UnixNano(), level, r.Message, attrs.String())
+	return err
+}
+
+func (h *ergoHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newAttrs := make([]slog.Attr, len(h.attrs), len(h.attrs)+len(attrs))
+	copy(newAttrs, h.attrs)
+	newAttrs = append(newAttrs, attrs...)
+	return &ergoHandler{w: h.w, level: h.level, attrs: newAttrs}
+}
+
+func (h *ergoHandler) WithGroup(name string) slog.Handler {
+	// Groups not supported - just return self
+	return h
+}
+
+// setupPluginLogger creates a logger for the plugin that outputs in Ergo format.
+func setupPluginLogger(namespace string) plugin.Logger {
+	handler := &ergoHandler{w: os.Stderr, level: getPluginLogLevel()}
+	slogger := slog.New(handler).With("plugin.namespace", namespace)
+	return plugin.NewPluginLogger(slogger)
 }
 
 // RunConfig contains options for starting a plugin with RunWithManifest.
@@ -115,6 +201,12 @@ func SetupPlugin(ctx context.Context, p plugin.ResourcePlugin, config RunConfig)
 		return nil, fmt.Errorf("failed to wrap plugin: %w", err)
 	}
 
+	// 8. Configure observability if the wrapped plugin supports it
+	if obs, ok := wrapped.(plugin.ObservablePlugin); ok {
+		logger := setupPluginLogger(manifest.Namespace)
+		obs.SetObservability(logger, nil) // Metrics can be added later
+	}
+
 	return wrapped, nil
 }
 
@@ -181,6 +273,12 @@ func SetupPluginFromDir(ctx context.Context, p plugin.ResourcePlugin, pluginDir 
 	wrapped, err := plugin.WrapPlugin(p, manifest, resourceDescriptors, schemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to wrap plugin: %w", err)
+	}
+
+	// 7. Configure observability if the wrapped plugin supports it
+	if obs, ok := wrapped.(plugin.ObservablePlugin); ok {
+		logger := setupPluginLogger(manifest.Namespace)
+		obs.SetObservability(logger, nil) // Metrics can be added later
 	}
 
 	return wrapped, nil
