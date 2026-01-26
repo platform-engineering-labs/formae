@@ -48,6 +48,22 @@ type RegisteredPlugin struct {
 	LabelConfig        plugin.LabelConfig
 }
 
+// findPluginByNamespace performs a case-insensitive lookup for a plugin by namespace.
+// We use case-insensitive matching because different parts of the system may use different
+// casing conventions for namespaces. For example, the PKL Target schema normalizes namespace
+// to uppercase (via toUpperCase()), while plugins may register with mixed case (e.g., "Azure"
+// vs "AZURE"). This ensures seamless plugin discovery regardless of casing.
+// Note: If we ever need to support plugins with the same name but different casing (unlikely),
+// we would need to revisit this approach.
+func (c *PluginCoordinator) findPluginByNamespace(namespace string) (*RegisteredPlugin, bool) {
+	for ns, plugin := range c.plugins {
+		if strings.EqualFold(ns, namespace) {
+			return plugin, true
+		}
+	}
+	return nil, false
+}
+
 // NewPluginCoordinator creates a new PluginCoordinator actor
 func NewPluginCoordinator() gen.ProcessBehavior {
 	return &PluginCoordinator{}
@@ -92,24 +108,10 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	return nil
 }
 
-// findPlugin performs a case-insensitive lookup for a registered plugin.
-// This handles the case where plugins register with lowercase namespace (e.g., "ovh")
-// but resource types use uppercase (e.g., "OVH::Compute::Keypair").
-func (c *PluginCoordinator) findPlugin(namespace string) (*RegisteredPlugin, bool) {
-	// Namespaces are treated as case-insensitive since plugins register with lowercase
-	// namespace but resource types may use uppercase (e.g., "OVH::Compute::Keypair").
-	for ns, plugin := range c.plugins {
-		if strings.EqualFold(ns, namespace) {
-			return plugin, true
-		}
-	}
-	return nil, false
-}
-
 func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
 	case messages.GetPluginNode:
-		plugin, ok := c.findPlugin(req.Namespace)
+		plugin, ok := c.findPluginByNamespace(req.Namespace)
 		if !ok {
 			return nil, fmt.Errorf("plugin not found: %s", req.Namespace)
 		}
@@ -190,7 +192,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 	)
 
 	// 1. Check if plugin is registered (distributed mode)
-	if registeredPlugin, ok := c.findPlugin(req.Namespace); ok {
+	if registeredPlugin, ok := c.findPluginByNamespace(req.Namespace); ok {
 		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName)
 		if err != nil {
 			c.Log().Error("Failed to remote spawn PluginOperator for namespace %s on node %s: %v", req.Namespace, registeredPlugin.NodeName, err)
@@ -299,11 +301,11 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, regist
 // It first checks registered external plugins, then falls back to local plugins.
 // Filters are cached from the initial plugin announcement (no refresh needed since filters are static).
 func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.PluginInfoResponse {
-	// 1. Check external plugins first (case-insensitive lookup)
-	if registered, ok := c.findPlugin(req.Namespace); ok {
+	// 1. Check external plugins first
+	if registered, ok := c.findPluginByNamespace(req.Namespace); ok {
 		return messages.PluginInfoResponse{
 			Found:              true,
-			Namespace:          registered.Namespace, // Use the registered namespace (preserves original case)
+			Namespace:          req.Namespace,
 			SupportedResources: registered.SupportedResources,
 			ResourceSchemas:    registered.ResourceSchemas,
 			MatchFilters:       registered.MatchFilters,

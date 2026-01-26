@@ -37,9 +37,9 @@ func (p Package) FormatForPklTemplate() string {
 // By default, packages are resolved remotely. Use WithLocalSchemas() to enable
 // local schema resolution from installed plugins.
 type PackageResolver struct {
-	packages             map[string]Package // name -> Package (lowercase)
-	localSchemaBasePath  string             // Base path for local schemas (e.g., ~/.pel/formae/plugins)
-	useLocalSchemas      bool               // Whether to resolve schemas locally
+	packages            map[string]Package // name -> Package (lowercase)
+	localSchemaBasePath string             // Base path for local schemas (e.g., ~/.pel/formae/plugins)
+	useLocalSchemas     bool               // Whether to resolve schemas locally
 }
 
 // NewPackageResolver creates a resolver that resolves packages remotely by default.

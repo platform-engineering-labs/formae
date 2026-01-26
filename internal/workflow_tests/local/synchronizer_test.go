@@ -460,7 +460,6 @@ func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
 		assert.NotNil(t, applyCmd, "The apply command should exist")
 		assert.Equal(t, 1, len(syncCmd.ResourceUpdates), "There should be one resource update in the sync command")
 	})
-
 }
 
 func TestSynchronizer_OverlapProtection(t *testing.T) {

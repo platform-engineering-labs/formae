@@ -88,7 +88,6 @@ func (p *ResourceUpdatePipeline) buildDeleteDependencies(allOps []resource_updat
 		for _, resolvableURI := range deleteOp.RemainingResolvables {
 			dependencyBaseURI := resolvableURI.Stripped()
 
-			// Check if there's a corresponding delete operation for this dependency
 			if _, exists := deleteOps[dependencyBaseURI]; exists {
 				dependencyOpURI := createOperationURI(dependencyBaseURI, resource_update.OperationDelete)
 				dependencyGroup := p.ResourceUpdateGroups[dependencyOpURI]

@@ -347,11 +347,6 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 					ListOperation{ResourceType: node.resourceType, TargetLabel: target.Label, ListParams: util.MapToString(make(map[string]plugin.ListParam))})
 			}
 		}
-		err = proc.Send(proc.PID(), ResumeScanning{})
-		if err != nil {
-			proc.Log().Error("Discovery failed to send ResumeScanning message: %v", err)
-			return state, data, nil, gen.TerminateReasonPanic
-		}
 	}
 
 	// If no work was queued (e.g., all plugins failed to register), return to Idle
@@ -367,6 +362,15 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
 		}
 		return StateIdle, data, nil, nil
+	}
+
+	// Send ResumeScanning only after confirming work was queued and we're transitioning to StateDiscovering.
+	// This prevents sending the message when returning to StateIdle, which would cause a state machine error
+	// since ResumeScanning is only handled in StateDiscovering.
+	err = proc.Send(proc.PID(), ResumeScanning{})
+	if err != nil {
+		proc.Log().Error("Discovery failed to send ResumeScanning message: %v", err)
+		return state, data, nil, gen.TerminateReasonPanic
 	}
 
 	return StateDiscovering, data, nil, nil

@@ -92,7 +92,7 @@ type ProgressResult struct {
 	OperationStatus OperationStatus
 
 	RequestID          string
-	NativeID           string // Required - all plugins must set this
+	NativeID           string             // Required - all plugins must set this
 	ResourceProperties json.RawMessage    `json:"ResourceProperties,omitempty"`
 	ErrorCode          OperationErrorCode `json:"ErrorCode,omitempty"`
 	StatusMessage      string             `json:"StatusMessage,omitempty"`

@@ -151,8 +151,9 @@ func resolvePklProject(workDir string) error {
 	// Use pkl CLI to resolve dependencies
 	// This creates PklProject.deps.json with resolved versions
 	cmd := newPklCommand("project", "resolve", workDir)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("pkl project resolve failed: %w", err)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pkl project resolve failed: %w\nOutput: %s", err, string(output))
 	}
 	return nil
 }
