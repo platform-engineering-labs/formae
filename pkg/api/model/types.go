@@ -116,6 +116,7 @@ type Stats struct {
 // PluginInfo represents information about a registered plugin
 type PluginInfo struct {
 	Namespace            string `json:"Namespace"`
+	Version              string `json:"Version"`
 	NodeName             string `json:"NodeName"`
 	MaxRequestsPerSecond int    `json:"MaxRequestsPerSecond"`
 	ResourceCount        int    `json:"ResourceCount"`

@@ -973,6 +973,7 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 			for _, p := range pluginsResult.Plugins {
 				plugins = append(plugins, apimodel.PluginInfo{
 					Namespace:            p.Namespace,
+					Version:              p.Version,
 					NodeName:             p.NodeName,
 					MaxRequestsPerSecond: p.MaxRequestsPerSecond,
 					ResourceCount:        p.ResourceCount,

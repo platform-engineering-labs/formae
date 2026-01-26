@@ -43,6 +43,7 @@ type PluginCapabilities struct {
 // It contains all information needed for the agent to interact with the plugin.
 type PluginAnnouncement struct {
 	Namespace            string
+	Version              string
 	NodeName             string
 	MaxRequestsPerSecond int
 

@@ -36,6 +36,7 @@ type PluginCoordinator struct {
 // RegisteredPlugin contains information about a registered plugin
 type RegisteredPlugin struct {
 	Namespace            string
+	Version              string
 	NodeName             gen.Atom // Ergo node where plugin runs (for remote spawn)
 	MaxRequestsPerSecond int
 	RegisteredAt         time.Time
@@ -143,6 +144,7 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 
 		c.plugins[msg.Namespace] = &RegisteredPlugin{
 			Namespace:            msg.Namespace,
+			Version:              msg.Version,
 			NodeName:             from.Node,
 			MaxRequestsPerSecond: msg.MaxRequestsPerSecond,
 			RegisteredAt:         time.Now(),
@@ -353,6 +355,7 @@ func (c *PluginCoordinator) getRegisteredPlugins() messages.GetRegisteredPlugins
 	for _, registered := range c.plugins {
 		plugins = append(plugins, messages.RegisteredPluginInfo{
 			Namespace:            registered.Namespace,
+			Version:              registered.Version,
 			NodeName:             string(registered.NodeName),
 			MaxRequestsPerSecond: registered.MaxRequestsPerSecond,
 			ResourceCount:        len(registered.SupportedResources),

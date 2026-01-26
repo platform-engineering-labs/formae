@@ -69,6 +69,7 @@ type GetRegisteredPlugins struct{}
 // RegisteredPluginInfo contains basic information about a registered plugin
 type RegisteredPluginInfo struct {
 	Namespace            string
+	Version              string
 	NodeName             string
 	MaxRequestsPerSecond int
 	ResourceCount        int
