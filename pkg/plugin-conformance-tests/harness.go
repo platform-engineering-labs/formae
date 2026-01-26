@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -65,6 +66,7 @@ type TestHarness struct {
 	logFile       string
 	networkCookie string // Network cookie for distributed plugin communication
 	testRunID     string // Unique ID for this test run, used by PKL files for resource naming
+	agentPort     int    // Random port for agent API
 	pluginManager *plugin.Manager
 
 	// Ergo actor system for direct plugin communication (discovery tests)
@@ -79,10 +81,22 @@ type TestHarness struct {
 	lastPluginNamespace  string
 }
 
-// NewTestHarness creates a new test harness instance.
-// The formae binary location is determined by:
-// 1. FORMAE_BINARY env var (for external plugin tests)
-// 2. Default path relative to repo root (for internal tests)
+// getFreePort asks the kernel for a free open port that is ready to use.
+func getFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// NewTestHarness creates a new test harness instance
 func NewTestHarness(t *testing.T) *TestHarness {
 	// Check for FORMAE_BINARY env var first
 	formaeBinary := os.Getenv("FORMAE_BINARY")
@@ -160,6 +174,13 @@ func (h *TestHarness) setupTestEnvironment() error {
 	}
 	h.testRunID = hex.EncodeToString(testRunIDBytes)
 
+	// Get a random available port for the agent
+	agentPort, err := getFreePort()
+	if err != nil {
+		return fmt.Errorf("failed to get free port: %w", err)
+	}
+	h.agentPort = agentPort
+
 	// Generate test config file
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
@@ -172,6 +193,7 @@ amends "formae:/Config.pkl"
 
 agent {
     server {
+        port = %d
         secret = %q
     }
     datastore {
@@ -193,13 +215,16 @@ agent {
 }
 
 cli {
+    api {
+        port = %d
+    }
 	disableUsageReporting = true
 }
 
 plugins {
 	pluginDir = "~/.pel/formae/plugins"
 }
-`, h.networkCookie, dbPath, logPath)
+`, agentPort, h.networkCookie, dbPath, logPath, agentPort)
 
 	// Write config to temp directory
 	configFile := filepath.Join(tempDir, "test-config.pkl")
@@ -495,6 +520,7 @@ amends "formae:/Config.pkl"
 
 agent {
     server {
+        port = %d
         secret = %q
     }
     datastore {
@@ -518,9 +544,12 @@ agent {
 }
 
 cli {
+    api {
+        port = %d
+    }
 	disableUsageReporting = true
 }
-`, h.networkCookie, dbPath, resourceTypesList, h.logFile)
+`, h.agentPort, h.networkCookie, dbPath, resourceTypesList, h.logFile, h.agentPort)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {
@@ -544,7 +573,7 @@ func (h *TestHarness) StartAgent() error {
 	}
 
 	// Clean up any stale PID file first
-	// Note: agent uses /tmp/formae.pid (see internal/agent/agent.go:24)
+	// Note: agent uses /tmp/formae.pid (see internal/agent/agent.go)
 	pidFile := "/tmp/formae.pid"
 	_ = os.Remove(pidFile)
 
@@ -574,8 +603,7 @@ func (h *TestHarness) StartAgent() error {
 
 // waitForAgent polls the health endpoint until the agent is ready
 func (h *TestHarness) waitForAgent() error {
-	// Default port from plugins/pkl/assets/formae/Config.pkl:20
-	healthURL := "http://localhost:49684/api/v1/health"
+	healthURL := fmt.Sprintf("http://localhost:%d/api/v1/health", h.agentPort)
 	timeout := 30 * time.Second
 	pollInterval := 500 * time.Millisecond
 	deadline := time.Now().Add(timeout)
@@ -809,8 +837,7 @@ func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 func (h *TestHarness) Sync() error {
 	h.t.Log("Triggering synchronization via /api/v1/admin/synchronize")
 
-	// Default port from plugins/pkl/assets/formae/Config.pkl:20
-	syncURL := "http://localhost:49684/api/v1/admin/synchronize"
+	syncURL := fmt.Sprintf("http://localhost:%d/api/v1/admin/synchronize", h.agentPort)
 
 	resp, err := http.Post(syncURL, "application/json", nil)
 	if err != nil {
@@ -855,7 +882,7 @@ func (h *TestHarness) WaitForSyncCompletion(timeout time.Duration) error {
 
 // GetStats fetches the agent stats via the /api/v1/stats endpoint
 func (h *TestHarness) GetStats() (*model.Stats, error) {
-	statsURL := "http://localhost:49684/api/v1/stats"
+	statsURL := fmt.Sprintf("http://localhost:%d/api/v1/stats", h.agentPort)
 
 	resp, err := http.Get(statsURL)
 	if err != nil {
@@ -914,8 +941,7 @@ func (h *TestHarness) WaitForPluginRegistered(namespace string, timeout time.Dur
 func (h *TestHarness) TriggerDiscovery() error {
 	h.t.Log("Triggering discovery via /api/v1/admin/discover")
 
-	// Default port from plugins/pkl/assets/formae/Config.pkl:20
-	discoverURL := "http://localhost:49684/api/v1/admin/discover"
+	discoverURL := fmt.Sprintf("http://localhost:%d/api/v1/admin/discover", h.agentPort)
 
 	resp, err := http.Post(discoverURL, "application/json", nil)
 	if err != nil {
@@ -1535,7 +1561,7 @@ func (h *TestHarness) stripFormaeTags(resource *pkgmodel.Resource) {
 
 // submitForma is a helper to submit forma JSON to the API
 func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, error) {
-	commandsURL := "http://localhost:49684/api/v1/commands"
+	commandsURL := fmt.Sprintf("http://localhost:%d/api/v1/commands", h.agentPort)
 
 	// Create multipart writer
 	body := &bytes.Buffer{}

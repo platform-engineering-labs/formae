@@ -186,10 +186,22 @@ type TerminatePluginsResult struct {
 
 // --- HandleCall for synchronous requests ---
 
+// findPluginByNamespace performs a case-insensitive lookup for a plugin by namespace.
+// Namespaces are treated as case-insensitive since plugins register with lowercase
+// namespace but resource types may use uppercase (e.g., "OVH::Compute::Keypair").
+func (c *TestPluginCoordinator) findPluginByNamespace(namespace string) (*RegisteredPluginInfo, bool) {
+	for ns, plugin := range c.plugins {
+		if strings.EqualFold(ns, namespace) {
+			return plugin, true
+		}
+	}
+	return nil, false
+}
+
 func (c *TestPluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
 	case CheckPluginAvailable:
-		info, ok := c.findPlugin(req.Namespace)
+		info, ok := c.findPluginByNamespace(req.Namespace)
 		return CheckPluginAvailableResult{Available: ok, Info: info}, nil
 
 	case GetPluginInfoRequest:
@@ -265,18 +277,6 @@ func (c *TestPluginCoordinator) HandleMessage(from gen.PID, message any) error {
 
 // --- Helper methods ---
 
-// findPlugin performs a case-insensitive lookup for a registered plugin.
-// Namespaces are treated as case-insensitive since plugins register with lowercase
-// namespace but resource types may use uppercase (e.g., "OVH::Compute::Keypair").
-func (c *TestPluginCoordinator) findPlugin(namespace string) (*RegisteredPluginInfo, bool) {
-	for ns, plugin := range c.plugins {
-		if strings.EqualFold(ns, namespace) {
-			return plugin, true
-		}
-	}
-	return nil, false
-}
-
 func (c *TestPluginCoordinator) getLatestProgress(req GetLatestProgressRequest) GetLatestProgressResult {
 	progress, found := c.latestProgress[req.OperatorPID]
 	return GetLatestProgressResult{
@@ -286,7 +286,7 @@ func (c *TestPluginCoordinator) getLatestProgress(req GetLatestProgressRequest) 
 }
 
 func (c *TestPluginCoordinator) getPluginInfo(req GetPluginInfoRequest) GetPluginInfoResult {
-	registered, ok := c.findPlugin(req.Namespace)
+	registered, ok := c.findPluginByNamespace(req.Namespace)
 	if !ok {
 		return GetPluginInfoResult{
 			Found: false,
@@ -303,7 +303,7 @@ func (c *TestPluginCoordinator) getPluginInfo(req GetPluginInfoRequest) GetPlugi
 }
 
 func (c *TestPluginCoordinator) spawnPluginOperator(req SpawnPluginOperatorRequest) SpawnPluginOperatorResult {
-	registered, ok := c.findPlugin(req.Namespace)
+	registered, ok := c.findPluginByNamespace(req.Namespace)
 	if !ok {
 		return SpawnPluginOperatorResult{Error: fmt.Sprintf("plugin not found: %s", req.Namespace)}
 	}
