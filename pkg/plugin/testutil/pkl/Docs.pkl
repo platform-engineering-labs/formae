@@ -1,0 +1,75 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Generates documentation for a PKL schema.
+///
+/// Extracts resource types with their capabilities from @ResourceHint annotations.
+///
+/// Output: JSON with resource documentation
+module formae.testutil.Docs
+
+import "pkl:reflect"
+import "./imports.pkl"
+
+/// The actual imported modules mapping
+local schemaModules = imports.imports
+
+/// A documented resource type with its capabilities
+class ResourceDoc {
+    type: String
+    discoverable: Boolean
+    extractable: Boolean
+    nonprovisionable: Boolean
+    identifier: String
+    docComment: String?
+    moduleName: String
+    className: String
+}
+
+/// Get all resource types with their documentation
+function getAllResourceDocs(): Listing<ResourceDoc> = new Listing {
+    for (name, moduleValue in schemaModules.toMap()) {
+        when (reflect.Module(moduleValue).classes.length > 0) {
+            for (clsName, v in reflect.Module(moduleValue).classes) {
+                when (v.annotations.length > 0 && v.annotations[0].getClass().simpleName == "ResourceHint") {
+                    new ResourceDoc {
+                        type = v.annotations[0].getProperty("type")
+                        discoverable = v.annotations[0].getProperty("discoverable")
+                        extractable = v.annotations[0].getProperty("extractable")
+                        nonprovisionable = v.annotations[0].getProperty("nonprovisionable")
+                        identifier = v.annotations[0].getProperty("identifier")
+                        docComment = v.annotations[0].getPropertyOrNull("docComment")
+                        moduleName = name
+                        className = clsName
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Generate documentation data
+function generateDocs(): Map<String, Any> =
+    let (resources = getAllResourceDocs())
+    let (sortedResources = resources.toList().sortBy((r) -> r.type))
+    new Mapping {
+        ["resources"] = sortedResources.map((r) -> new Mapping {
+            ["type"] = r.type
+            ["discoverable"] = r.discoverable
+            ["extractable"] = r.extractable
+            ["nonprovisionable"] = r.nonprovisionable
+            ["identifier"] = r.identifier
+            ["docComment"] = r.docComment
+            ["moduleName"] = r.moduleName
+            ["className"] = r.className
+        }.toMap()).toListing()
+        ["totalResources"] = resources.length
+    }.toMap()
+
+output {
+    renderer = new JsonRenderer {}
+    value = generateDocs()
+}
