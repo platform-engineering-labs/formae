@@ -186,3 +186,73 @@ func TestTestCaseNames_Empty(t *testing.T) {
 		t.Errorf("expected empty slice, got %v", names)
 	}
 }
+
+func TestGetTestType(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		expected TestType
+	}{
+		{
+			name:     "empty returns all",
+			envValue: "",
+			expected: TestTypeAll,
+		},
+		{
+			name:     "crud returns crud",
+			envValue: "crud",
+			expected: TestTypeCRUD,
+		},
+		{
+			name:     "CRUD uppercase returns crud",
+			envValue: "CRUD",
+			expected: TestTypeCRUD,
+		},
+		{
+			name:     "discovery returns discovery",
+			envValue: "discovery",
+			expected: TestTypeDiscovery,
+		},
+		{
+			name:     "DISCOVERY uppercase returns discovery",
+			envValue: "DISCOVERY",
+			expected: TestTypeDiscovery,
+		},
+		{
+			name:     "all returns all",
+			envValue: "all",
+			expected: TestTypeAll,
+		},
+		{
+			name:     "ALL uppercase returns all",
+			envValue: "ALL",
+			expected: TestTypeAll,
+		},
+		{
+			name:     "invalid value returns all",
+			envValue: "invalid",
+			expected: TestTypeAll,
+		},
+		{
+			name:     "mixed case returns correct type",
+			envValue: "CrUd",
+			expected: TestTypeCRUD,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envValue != "" {
+				os.Setenv("FORMAE_TEST_TYPE", tt.envValue)
+				defer os.Unsetenv("FORMAE_TEST_TYPE")
+			} else {
+				os.Unsetenv("FORMAE_TEST_TYPE")
+			}
+
+			result := getTestType()
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}

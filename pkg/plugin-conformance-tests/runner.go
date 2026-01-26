@@ -65,6 +65,32 @@ func testCaseNames(testCases []TestCase) []string {
 	return names
 }
 
+// TestType represents the type of conformance tests to run.
+type TestType string
+
+const (
+	// TestTypeAll runs both CRUD and discovery tests (default).
+	TestTypeAll TestType = "all"
+	// TestTypeCRUD runs only CRUD lifecycle tests.
+	TestTypeCRUD TestType = "crud"
+	// TestTypeDiscovery runs only discovery tests.
+	TestTypeDiscovery TestType = "discovery"
+)
+
+// getTestType returns the test type from FORMAE_TEST_TYPE environment variable.
+// Valid values are: "all" (default), "crud", "discovery".
+func getTestType() TestType {
+	testType := strings.ToLower(os.Getenv("FORMAE_TEST_TYPE"))
+	switch testType {
+	case "crud":
+		return TestTypeCRUD
+	case "discovery":
+		return TestTypeDiscovery
+	default:
+		return TestTypeAll
+	}
+}
+
 // RunCRUDTests discovers test cases from the testdata directory and runs
 // the standard CRUD lifecycle test for each resource type.
 //
@@ -85,6 +111,9 @@ func testCaseNames(testCases []TestCase) []string {
 //   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
 //     Supports comma-separated patterns for multiple filters.
 //     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
+//   - FORMAE_TEST_TYPE: Select which tests to run (optional).
+//     Values: "all" (default), "crud", "discovery".
+//     When set to "discovery", CRUD tests are skipped.
 //
 // This function should be called from a plugin's conformance_test.go:
 //
@@ -95,6 +124,11 @@ func RunCRUDTests(t *testing.T) {
 	// Skip if not running conformance tests
 	if os.Getenv("FORMAE_BINARY") == "" {
 		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
+	}
+
+	// Skip if test type is discovery-only
+	if getTestType() == TestTypeDiscovery {
+		t.Skip("Skipping CRUD tests: FORMAE_TEST_TYPE=discovery")
 	}
 
 	// Find plugin directory (where the test is running from)
@@ -689,6 +723,9 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 //   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
 //     Supports comma-separated patterns for multiple filters.
 //     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
+//   - FORMAE_TEST_TYPE: Select which tests to run (optional).
+//     Values: "all" (default), "crud", "discovery".
+//     When set to "crud", discovery tests are skipped.
 //
 // This function should be called from a plugin's conformance_test.go:
 //
@@ -699,6 +736,11 @@ func RunDiscoveryTests(t *testing.T) {
 	// Skip if not running conformance tests
 	if os.Getenv("FORMAE_BINARY") == "" {
 		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
+	}
+
+	// Skip if test type is CRUD-only
+	if getTestType() == TestTypeCRUD {
+		t.Skip("Skipping discovery tests: FORMAE_TEST_TYPE=crud")
 	}
 
 	// Find plugin directory
