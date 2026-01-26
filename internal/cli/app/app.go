@@ -489,15 +489,15 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOpt
 	return (*schemaPlugin).SerializeForma(forma, options)
 }
 
-func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string, schemaLocation string) (plugin.GenerateSourcesResult, error) {
+func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (plugin.GenerateSourcesResult, error) {
 	schemaPlugin, err := a.PluginManager.SchemaPlugin(outputSchema)
 	if err != nil {
 		return plugin.GenerateSourcesResult{}, err
 	}
-	location := plugin.SchemaLocation(schemaLocation)
-	includes := a.Projects.formatIncludes(outputSchema, []string{"aws"}, location)
+	// Extract always uses local schema resolution
+	includes, _ := a.Projects.formatIncludes(outputSchema, []string{"aws@local"})
 
-	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes, location)
+	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes, plugin.SchemaLocationLocal)
 }
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
@@ -536,15 +536,29 @@ func (p *Plugins) SupportedSchemas() []string {
 
 // Projects
 
-func (p *Projects) Init(path string, format string, include []string, schemaLocation string) error {
+func (p *Projects) Init(path string, format string, include []string) error {
 	// TODO(discount-elf) think about this namespace issue, since different packages can be included in plugins we currently
 	// need plugin.package for download delivery
-	var includes []string
-	location := plugin.SchemaLocation(schemaLocation)
-
 	switch format {
 	case "pkl":
-		includes = p.formatIncludes(format, include, location)
+		includes, err := p.formatIncludes(format, include)
+		if err != nil {
+			return err
+		}
+
+		// Determine schema location: if all packages are local, use local; otherwise remote
+		// The PKL plugin will run 'pkl project resolve' only for remote packages
+		location := plugin.SchemaLocationRemote
+		allLocal := true
+		for _, inc := range includes {
+			if !strings.HasPrefix(inc, "local:") {
+				allLocal = false
+				break
+			}
+		}
+		if allLocal {
+			location = plugin.SchemaLocationLocal
+		}
 
 		schemaPlugin, err := p.pluginManager.SchemaPluginByFileExtension(".pkl")
 		if err != nil {
@@ -563,7 +577,7 @@ func (p *Projects) Init(path string, format string, include []string, schemaLoca
 	return nil
 }
 
-func (p *Projects) formatIncludes(format string, include []string, schemaLocation plugin.SchemaLocation) []string {
+func (p *Projects) formatIncludes(format string, include []string) ([]string, error) {
 	var includes []string
 	switch format {
 	case "pkl":
@@ -573,19 +587,23 @@ func (p *Projects) formatIncludes(format string, include []string, schemaLocatio
 		}
 
 		// Add included packages
-		for _, ns := range include {
-			ns = strings.ToLower(ns)
+		for _, inc := range include {
+			ns, isLocal := parseIncludeSpec(inc)
 
 			// Find installed plugin info (handles case-insensitive lookup)
 			localPath, installedVersion := p.findInstalledPlugin(ns)
 
-			// If local schema location and we found a local schema, use it
-			if schemaLocation == plugin.SchemaLocationLocal && localPath != "" {
+			// If @local suffix specified, must resolve locally
+			if isLocal {
+				if localPath == "" {
+					return nil, fmt.Errorf("plugin %q not installed locally. Install with: formae plugin install %s", ns, ns)
+				}
 				includes = append(includes, fmt.Sprintf("local:%s:%s", ns, localPath))
 				continue
 			}
 
-			// Fall back to remote: prefer installed version, then plugin manager version
+			// Default: resolve from hub (remote)
+			// Prefer installed version, then plugin manager version
 			var version string
 			if installedVersion != "" {
 				version = installedVersion
@@ -601,10 +619,21 @@ func (p *Projects) formatIncludes(format string, include []string, schemaLocatio
 			}
 		}
 	default:
-		return []string{}
+		return nil, nil
 	}
 
-	return includes
+	return includes, nil
+}
+
+// parseIncludeSpec parses an include specification and returns the namespace and whether it should resolve locally.
+// Format: "namespace" for remote or "namespace@local" for local resolution.
+// The parsing is case-insensitive for the @local suffix.
+func parseIncludeSpec(include string) (namespace string, isLocal bool) {
+	include = strings.ToLower(include)
+	if strings.HasSuffix(include, "@local") {
+		return strings.TrimSuffix(include, "@local"), true
+	}
+	return include, false
 }
 
 // findInstalledPlugin looks for an installed plugin at pluginsDir/<namespace>/v*/schema/pkl/PklProject.
