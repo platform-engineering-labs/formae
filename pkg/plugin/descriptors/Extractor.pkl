@@ -35,6 +35,7 @@ function extractDescriptors(): Listing<resourceDescriptor.ResourceDescriptor> = 
                                     }
                                 }
                                 Fields = formae.fq.fields(clazz)
+                                Extractable = clazz.annotations[0].getProperty("extractable")
                             }
                             ParentResourceTypesWithMappingProperties = extractParentMappings(clazz.annotations[0])
                         }
