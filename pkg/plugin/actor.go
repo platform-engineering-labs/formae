@@ -77,6 +77,7 @@ func (p *PluginActor) Init(args ...any) error {
 	}
 	announcement := PluginAnnouncement{
 		Namespace:            p.namespace,
+		Version:              p.plugin.Version().String(),
 		NodeName:             string(p.Node().Name()),
 		MaxRequestsPerSecond: p.plugin.RateLimit().MaxRequestsPerSecondForNamespace,
 		Capabilities:         compressedCaps,
