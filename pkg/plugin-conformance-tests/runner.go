@@ -16,6 +16,81 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// filterTestCases filters test cases based on the FORMAE_TEST_FILTER environment variable.
+// The filter matches against test case names (e.g., "AWS::s3-bucket") or file paths.
+// Multiple filters can be comma-separated (e.g., "s3-bucket,ec2-instance").
+// If no filter is set, all test cases are returned.
+func filterTestCases(t *testing.T, testCases []TestCase) []TestCase {
+	filter := os.Getenv("FORMAE_TEST_FILTER")
+	if filter == "" {
+		return testCases
+	}
+
+	// Split filter into multiple patterns (comma-separated)
+	patterns := strings.Split(filter, ",")
+	for i := range patterns {
+		patterns[i] = strings.TrimSpace(patterns[i])
+	}
+
+	var filtered []TestCase
+	for _, tc := range testCases {
+		for _, pattern := range patterns {
+			if pattern == "" {
+				continue
+			}
+			// Match against test name, resource type, or PKL file path
+			if strings.Contains(strings.ToLower(tc.Name), strings.ToLower(pattern)) ||
+				strings.Contains(strings.ToLower(tc.ResourceType), strings.ToLower(pattern)) ||
+				strings.Contains(strings.ToLower(tc.PKLFile), strings.ToLower(pattern)) {
+				filtered = append(filtered, tc)
+				break // Don't add the same test case twice
+			}
+		}
+	}
+
+	if len(filtered) == 0 {
+		t.Fatalf("FORMAE_TEST_FILTER=%q matched no test cases. Available: %v", filter, testCaseNames(testCases))
+	}
+
+	t.Logf("Filter %q matched %d of %d test case(s)", filter, len(filtered), len(testCases))
+	return filtered
+}
+
+// testCaseNames returns a slice of test case names for error messages.
+func testCaseNames(testCases []TestCase) []string {
+	names := make([]string, len(testCases))
+	for i, tc := range testCases {
+		names[i] = tc.Name
+	}
+	return names
+}
+
+// TestType represents the type of conformance tests to run.
+type TestType string
+
+const (
+	// TestTypeAll runs both CRUD and discovery tests (default).
+	TestTypeAll TestType = "all"
+	// TestTypeCRUD runs only CRUD lifecycle tests.
+	TestTypeCRUD TestType = "crud"
+	// TestTypeDiscovery runs only discovery tests.
+	TestTypeDiscovery TestType = "discovery"
+)
+
+// getTestType returns the test type from FORMAE_TEST_TYPE environment variable.
+// Valid values are: "all" (default), "crud", "discovery".
+func getTestType() TestType {
+	testType := strings.ToLower(os.Getenv("FORMAE_TEST_TYPE"))
+	switch testType {
+	case "crud":
+		return TestTypeCRUD
+	case "discovery":
+		return TestTypeDiscovery
+	default:
+		return TestTypeAll
+	}
+}
+
 // RunCRUDTests discovers test cases from the testdata directory and runs
 // the standard CRUD lifecycle test for each resource type.
 //
@@ -31,6 +106,15 @@ import (
 //   - Replaces the resource (if replace file exists)
 //   - Deletes the resource via formae destroy
 //
+// Environment variables:
+//   - FORMAE_BINARY: Path to the formae binary (required)
+//   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
+//     Supports comma-separated patterns for multiple filters.
+//     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
+//   - FORMAE_TEST_TYPE: Select which tests to run (optional).
+//     Values: "all" (default), "crud", "discovery".
+//     When set to "discovery", CRUD tests are skipped.
+//
 // This function should be called from a plugin's conformance_test.go:
 //
 //	func TestPluginConformance(t *testing.T) {
@@ -40,6 +124,11 @@ func RunCRUDTests(t *testing.T) {
 	// Skip if not running conformance tests
 	if os.Getenv("FORMAE_BINARY") == "" {
 		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
+	}
+
+	// Skip if test type is discovery-only
+	if getTestType() == TestTypeDiscovery {
+		t.Skip("Skipping CRUD tests: FORMAE_TEST_TYPE=discovery")
 	}
 
 	// Find plugin directory (where the test is running from)
@@ -53,6 +142,9 @@ func RunCRUDTests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to discover test cases: %v", err)
 	}
+
+	// Apply filter if FORMAE_TEST_FILTER is set
+	testCases = filterTestCases(t, testCases)
 
 	t.Logf("Discovered %d test case(s)", len(testCases))
 
@@ -626,6 +718,15 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 //   - Verifies the resource appears as unmanaged
 //   - Cleans up the resource
 //
+// Environment variables:
+//   - FORMAE_BINARY: Path to the formae binary (required)
+//   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
+//     Supports comma-separated patterns for multiple filters.
+//     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
+//   - FORMAE_TEST_TYPE: Select which tests to run (optional).
+//     Values: "all" (default), "crud", "discovery".
+//     When set to "crud", discovery tests are skipped.
+//
 // This function should be called from a plugin's conformance_test.go:
 //
 //	func TestPluginDiscovery(t *testing.T) {
@@ -635,6 +736,11 @@ func RunDiscoveryTests(t *testing.T) {
 	// Skip if not running conformance tests
 	if os.Getenv("FORMAE_BINARY") == "" {
 		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
+	}
+
+	// Skip if test type is CRUD-only
+	if getTestType() == TestTypeCRUD {
+		t.Skip("Skipping discovery tests: FORMAE_TEST_TYPE=crud")
 	}
 
 	// Find plugin directory
@@ -652,6 +758,9 @@ func RunDiscoveryTests(t *testing.T) {
 	if len(testCases) == 0 {
 		t.Skip("No test cases found")
 	}
+
+	// Apply filter if FORMAE_TEST_FILTER is set
+	testCases = filterTestCases(t, testCases)
 
 	t.Logf("Discovered %d test case(s) for discovery testing", len(testCases))
 
