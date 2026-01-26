@@ -6,15 +6,12 @@ package agent
 
 import (
 	"context"
-	"debug/elf"
-	"debug/macho"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -82,11 +79,11 @@ func (a *Agent) Start() error {
 		// Setup logging with OTel handler
 		logging.SetupBackendLogging(&a.cfg.Agent.Logging, otelLogHandler)
 
-		// Migrate plugin executables from system directory to user directory
-		// This is a one-time migration for users who upgraded from older versions
-		// where the upgrade command didn't copy plugins to the user directory.
-		if err := migratePluginExecutables(a.cfg.Plugins.PluginDir); err != nil {
-			slog.Warn("Failed to migrate plugin executables", "error", err)
+		// Migrate resource plugins (with manifest and schema) from system directory.
+		// This handles backwards compatibility when OLD upgrade command didn't know
+		// about resource plugins. Also wipes existing plugins since interface changed.
+		if err := migrateResourcePlugins(a.cfg.Plugins.PluginDir); err != nil {
+			slog.Warn("Failed to migrate resource plugins", "error", err)
 			// Non-fatal - continue anyway, plugins might already be in place
 		}
 
@@ -245,82 +242,6 @@ func waitForPidFileRemoval(timeout time.Duration) bool {
 	return false
 }
 
-// migratePluginExecutables checks for plugin executables in the system install
-// directory and copies them to the user's plugin directory if not already present.
-// This handles the case where users upgraded from older versions that didn't
-// properly install plugins to the user directory.
-func migratePluginExecutables(userPluginDir string) error {
-	systemPluginsDir := filepath.Join(formae.DefaultInstallPath, "plugins")
-
-	entries, err := os.ReadDir(systemPluginsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No system plugins directory, nothing to migrate
-		}
-		return fmt.Errorf("failed to read system plugins directory: %w", err)
-	}
-
-	userPluginDir = util.ExpandHomePath(userPluginDir)
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		srcPath := filepath.Join(systemPluginsDir, entry.Name())
-
-		// Skip .so files - they are shared libraries, not standalone executables
-		if strings.HasSuffix(entry.Name(), ".so") {
-			continue
-		}
-
-		if !isExecutable(srcPath) {
-			continue
-		}
-
-		name := entry.Name()
-		destDir := filepath.Join(userPluginDir, name, "v"+formae.Version)
-
-		// Check if already migrated
-		destPath := filepath.Join(destDir, name)
-		if _, err := os.Stat(destPath); err == nil {
-			continue // Already exists, skip
-		}
-
-		// Create destination directory
-		if err := os.MkdirAll(destDir, 0755); err != nil {
-			return fmt.Errorf("failed to create plugin directory %s: %w", destDir, err)
-		}
-
-		// Copy the executable
-		if err := copyFile(srcPath, destPath); err != nil {
-			return fmt.Errorf("failed to copy plugin %s: %w", name, err)
-		}
-
-		slog.Info("Migrated plugin executable", "name", name, "dest", destPath)
-	}
-
-	return nil
-}
-
-// isExecutable checks if the file is an executable binary.
-func isExecutable(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-
-	switch runtime.GOOS {
-	case "darwin":
-		_, err := macho.NewFile(f)
-		return err == nil
-	default:
-		_, err := elf.NewFile(f)
-		return err == nil
-	}
-}
-
 // copyFile copies a file from src to dst, preserving the executable permission.
 func copyFile(src, dst string) (err error) {
 	srcFile, err := os.Open(src)
@@ -346,4 +267,94 @@ func copyFile(src, dst string) (err error) {
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err
+}
+
+// migrateResourcePlugins checks for resource plugins in the system install
+// directory and copies them to the user's plugin directory. This handles
+// backwards compatibility when OLD upgrade command didn't know about resource
+// plugins. The user plugin directory is wiped first since the plugin interface
+// changed and old plugins are incompatible.
+func migrateResourcePlugins(userPluginDir string) error {
+	systemResourcePluginsDir := filepath.Join(formae.DefaultInstallPath, "resource-plugins")
+
+	namespaces, err := os.ReadDir(systemResourcePluginsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No resource-plugins directory in system location
+		}
+		return fmt.Errorf("failed to read system resource-plugins directory: %w", err)
+	}
+
+	userPluginDir = util.ExpandHomePath(userPluginDir)
+
+	// Wipe existing user plugin directory - old plugins are incompatible
+	if err := os.RemoveAll(userPluginDir); err != nil {
+		return fmt.Errorf("failed to remove old plugins directory: %w", err)
+	}
+	slog.Info("Removed old plugins directory for migration", "path", userPluginDir)
+
+	for _, nsEntry := range namespaces {
+		if !nsEntry.IsDir() {
+			continue
+		}
+		namespace := strings.ToLower(nsEntry.Name())
+		nsPath := filepath.Join(systemResourcePluginsDir, nsEntry.Name())
+
+		versions, err := os.ReadDir(nsPath)
+		if err != nil {
+			continue
+		}
+
+		for _, vEntry := range versions {
+			if !vEntry.IsDir() {
+				continue
+			}
+			version := vEntry.Name()
+			srcDir := filepath.Join(nsPath, version)
+			destDir := filepath.Join(userPluginDir, namespace, version)
+
+			// Create destination and copy entire directory
+			if err := copyDir(srcDir, destDir); err != nil {
+				return fmt.Errorf("failed to copy resource plugin %s/%s: %w", namespace, version, err)
+			}
+
+			slog.Info("Migrated resource plugin", "namespace", namespace, "version", version, "dest", destDir)
+		}
+	}
+
+	return nil
+}
+
+// copyDir recursively copies a directory from src to dst.
+func copyDir(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
