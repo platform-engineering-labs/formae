@@ -12,6 +12,7 @@ fi
 
 skip_prompt='false'
 version='latest'
+local_file=''
 
 artifact_username="${FORMAE_ARTIFACT_USERNAME}"
 artifact_password="${FORMAE_ARTIFACT_PASSWORD}"
@@ -21,6 +22,7 @@ help() {
   echo " -h show help"
   echo " -v [version] select version"
   echo " -p [prefix] install prefix (default: /opt/pel, or FORMAE_INSTALL_PREFIX env var)"
+  echo " -f [file] use local .tgz file instead of downloading"
   echo " -y skip confirmations"
   exit 0
 }
@@ -33,8 +35,9 @@ curl_cmd() {
   fi
 }
 
-while getopts 'hp:v:y' flag; do
+while getopts 'f:hp:v:y' flag; do
   case "${flag}" in
+    f) local_file="$OPTARG" ;;
     h) help ;;
     p) INSTALLPREFIX="$OPTARG" ;;
     v) version="$OPTARG" ;;
@@ -46,42 +49,68 @@ if ! which curl > /dev/null; then
   echo "curl not found in PATH, please install to continue"
 fi
 
-if ! which ruby > /dev/null && ! which jq > dev/null; then
+if ! which ruby > /dev/null && ! which jq > /dev/null; then
   echo "ruby or jq not found in PATH, please install either to continue"
 fi
 
-if [[ "$version" == "latest" ]]; then
-  if which ruby > /dev/null; then
-    version=$(ruby -e "
-      require 'net/http'
-      require 'uri'
-      require 'json'
+if [[ -z "$local_file" ]]; then
+  if [[ "$version" == "latest" ]]; then
+    if which ruby > /dev/null; then
+      version=$(ruby -e "
+        require 'net/http'
+        require 'uri'
+        require 'json'
 
-      resp = Net::HTTP.get(URI('https://hub.platform.engineering/binaries/repo.json'))
-      repo_json = JSON.parse(resp)
+        resp = Net::HTTP.get(URI('https://hub.platform.engineering/binaries/repo.json'))
+        repo_json = JSON.parse(resp)
 
-      repo_json['Packages'].each do |pkg|
-        if pkg['OsArch']['OS'] == ENV['OS'] and pkg['OsArch']['Arch'] == ENV['ARCH'] and !pkg['Version'].include?('-')
-          print pkg['Version']
-          exit
+        repo_json['Packages'].each do |pkg|
+          if pkg['OsArch']['OS'] == ENV['OS'] and pkg['OsArch']['Arch'] == ENV['ARCH'] and !pkg['Version'].include?('-')
+            print pkg['Version']
+            exit
+          end
         end
-      end
-    ")
-  elif which jq > /dev/null; then
-    version=$($(curl_cmd) -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.Version | index("-") | not) | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
-  else
-    echo "Could not find a ruby interpreter or jq, required by the installation, please install either package to continue!"
+      ")
+    elif which jq > /dev/null; then
+      version=$($(curl_cmd) -s https://hub.platform.engineering/binaries/repo.json | jq -r '[.Packages[] | select(.Version | index("-") | not) | select(.OsArch.OS == env.OS and .OsArch.Arch == env.ARCH)][0].Version')
+    else
+      echo "Could not find a ruby interpreter or jq, required by the installation, please install either package to continue!"
+      exit 1
+    fi
+  fi
+
+  if [[ $version == "" ]]; then
+    echo "No version found for platform: ${OS}-${ARCH}"
+    echo "most likely it is unsupported for now"
     exit 1
+  fi
+else
+  # Extract version from local filename if possible (format: formae@VERSION_OS-ARCH.tgz)
+  version=$(basename "$local_file" | sed -n 's/formae@\([^_]*\)_.*/\1/p')
+  if [[ -z "$version" ]]; then
+    version="local"
   fi
 fi
 
-if [[ $version == "" ]]; then
-  echo "No version found for platform: ${OS}-${ARCH}"
-  echo "most likely it is unsupported for now"
-  exit 1
+# Check if we need sudo for the install prefix
+needs_sudo='false'
+if [ $(id -u) = 0 ]; then
+  needs_sudo='false'
+elif [ -d "$INSTALLPREFIX" ] && [ -w "$INSTALLPREFIX" ]; then
+  needs_sudo='false'
+elif [ ! -d "$INSTALLPREFIX" ]; then
+  # Check if we can create the parent directory
+  parent_dir=$(dirname "$INSTALLPREFIX")
+  if [ -d "$parent_dir" ] && [ -w "$parent_dir" ]; then
+    needs_sudo='false'
+  else
+    needs_sudo='true'
+  fi
+else
+  needs_sudo='true'
 fi
 
-if ! [ $(id -u) = 0 ]; then
+if [ "$needs_sudo" = 'true' ]; then
   echo "This script requires escalated privileges to install Formae to: ${INSTALLPREFIX}/formae"
   echo "Your password will be required, to utilize sudo"
 else
@@ -98,17 +127,26 @@ if ! "$skip_prompt"; then
   fi
 fi
 
-pkgname="formae@${version}_${OS}-${ARCH}.tgz"
+if [[ -n "$local_file" ]]; then
+  if [[ ! -f "$local_file" ]]; then
+    echo "Local file not found: $local_file"
+    exit 1
+  fi
+  pkgname="$local_file"
+  echo "Using local file: ${pkgname}"
+else
+  pkgname="formae@${version}_${OS}-${ARCH}.tgz"
 
-echo "Downloading: ${pkgname}"
-if ! $(curl_cmd) "https://hub.platform.engineering/binaries/pkgs/${pkgname}" 2>/dev/null > ${pkgname}; then
-  echo "Failed to download: ${pkgname}"
-  exit 1
+  echo "Downloading: ${pkgname}"
+  if ! $(curl_cmd) "https://hub.platform.engineering/binaries/pkgs/${pkgname}" 2>/dev/null > ${pkgname}; then
+    echo "Failed to download: ${pkgname}"
+    exit 1
+  fi
 fi
 
 echo "Installing..."
 
-if ! [ $(id -u) = 0 ]; then
+if [ "$needs_sudo" = 'true' ]; then
   sudo mkdir -m 755 -p "${INSTALLPREFIX}"
   sudo tar -zxf ${pkgname} -C "${INSTALLPREFIX}"
 else
@@ -123,13 +161,38 @@ for f in "${INSTALLPREFIX}/formae/plugins/"*; do
     dest="${PLUGINDIR}/${name}/v${version}"
     mkdir -p "$dest"
     cp "$f" "$dest/"
-    if ! [ $(id -u) = 0 ]; then
+    if [ "$needs_sudo" = 'true' ]; then
       sudo rm "$f"
     else
       rm "$f"
     fi
   fi
 done
+
+# Install resource plugins (full directory structure including manifest and schema)
+RESOURCE_PLUGINS_SRC="${INSTALLPREFIX}/formae/resource-plugins"
+if [ -d "$RESOURCE_PLUGINS_SRC" ]; then
+  for namespace_dir in "$RESOURCE_PLUGINS_SRC"/*; do
+    if [ -d "$namespace_dir" ]; then
+      namespace=$(basename "$namespace_dir")
+      for version_dir in "$namespace_dir"/*; do
+        if [ -d "$version_dir" ]; then
+          ver=$(basename "$version_dir")
+          dest="${PLUGINDIR}/${namespace}/${ver}"
+          echo "Installing resource plugin: ${namespace} ${ver}"
+          mkdir -p "$dest"
+          cp -r "$version_dir"/* "$dest/"
+        fi
+      done
+    fi
+  done
+  # Remove from system directory after copying
+  if [ "$needs_sudo" = 'true' ]; then
+    sudo rm -rf "$RESOURCE_PLUGINS_SRC"
+  else
+    rm -rf "$RESOURCE_PLUGINS_SRC"
+  fi
+fi
 
 echo "Done."
 echo ""

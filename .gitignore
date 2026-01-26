@@ -91,5 +91,8 @@ docs/design/
 .serena/
 .handoffs/
 
+# External plugin cache (cloned plugin repos during build)
+.plugins/
+
 # fake-aws plugin binary
 plugins/fake-aws/fake-aws

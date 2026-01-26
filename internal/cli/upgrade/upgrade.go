@@ -123,6 +123,12 @@ func UpgradeCmd() *cobra.Command {
 				return fmt.Errorf("failed to install plugin executables: %w", err)
 			}
 
+			// Install resource plugins (full directories with manifest and schema)
+			err = installResourcePlugins(formae.DefaultInstallPrefix)
+			if err != nil {
+				return fmt.Errorf("failed to install resource plugins: %w", err)
+			}
+
 			fmt.Println("done.")
 
 			return nil
@@ -329,4 +335,127 @@ func copyFile(src, dst string) (err error) {
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err
+}
+
+// installResourcePlugins copies resource plugins from the system install
+// directory to the user's plugin directory. Resource plugins include the
+// binary, manifest, and schema files.
+func installResourcePlugins(installPrefix string) error {
+	homeDir, err := getOriginalUserHome()
+	if err != nil {
+		return err
+	}
+
+	resourcePluginsDir := filepath.Join(installPrefix, "formae", "resource-plugins")
+	namespaces, err := os.ReadDir(resourcePluginsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No resource plugins directory
+		}
+		return fmt.Errorf("failed to read resource-plugins directory: %w", err)
+	}
+
+	for _, nsEntry := range namespaces {
+		if !nsEntry.IsDir() {
+			continue
+		}
+		namespace := strings.ToLower(nsEntry.Name())
+		nsPath := filepath.Join(resourcePluginsDir, nsEntry.Name())
+
+		versions, err := os.ReadDir(nsPath)
+		if err != nil {
+			continue
+		}
+
+		for _, vEntry := range versions {
+			if !vEntry.IsDir() {
+				continue
+			}
+			version := vEntry.Name()
+			srcDir := filepath.Join(nsPath, version)
+			destDir := filepath.Join(homeDir, ".pel", "formae", "plugins", namespace, version)
+
+			// Create destination and copy entire directory
+			if err := copyDir(srcDir, destDir); err != nil {
+				return fmt.Errorf("failed to copy plugin %s/%s: %w", namespace, version, err)
+			}
+
+			// Chown if running as sudo
+			chownRecursive(destDir, homeDir)
+
+			fmt.Printf("installed resource plugin: %s %s\n", namespace, version)
+		}
+	}
+
+	// Remove from system directory
+	if err := os.RemoveAll(resourcePluginsDir); err != nil {
+		return fmt.Errorf("failed to remove resource-plugins from system directory: %w", err)
+	}
+
+	return nil
+}
+
+// copyDir recursively copies a directory from src to dst.
+func copyDir(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// chownRecursive sets ownership of a directory tree to the sudo user if running as root.
+func chownRecursive(path, homeDir string) {
+	sudoUser := os.Getenv("SUDO_USER")
+	if sudoUser == "" {
+		return
+	}
+
+	u, err := user.Lookup(sudoUser)
+	if err != nil {
+		return
+	}
+
+	var uid, gid int
+	_, _ = fmt.Sscanf(u.Uid, "%d", &uid)
+	_, _ = fmt.Sscanf(u.Gid, "%d", &gid)
+
+	// Chown parent directories
+	_ = os.Chown(filepath.Join(homeDir, ".pel"), uid, gid)
+	_ = os.Chown(filepath.Join(homeDir, ".pel", "formae"), uid, gid)
+	_ = os.Chown(filepath.Join(homeDir, ".pel", "formae", "plugins"), uid, gid)
+
+	// Walk and chown the plugin directory
+	_ = filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		_ = os.Chown(p, uid, gid)
+		return nil
+	})
 }

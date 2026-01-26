@@ -10,12 +10,22 @@ VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-
 PKL_BUNDLE_VERSION := 0.30.0
 PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSION}/pkl-$(shell ./scripts/baduname.sh)
 
+# External plugin Git repositories to bundle
+EXTERNAL_PLUGIN_REPOS ?= \
+    https://github.com/platform-engineering-labs/formae-plugin-aws.git \
+    https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
+    https://github.com/platform-engineering-labs/formae-plugin-ovh.git
+
+# Directory for cloned plugins
+PLUGINS_CACHE := .plugins
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
 	rm -rf ppm
 	rm -rf version.semver
+	rm -rf $(PLUGINS_CACHE)
 	find ./plugins -name '*.so' -delete
 
 clean-pel:
@@ -33,6 +43,46 @@ build:
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
 
+## fetch-external-plugins: Clone/update external plugin repositories
+fetch-external-plugins:
+	@mkdir -p $(PLUGINS_CACHE)
+	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+		name=$$(basename $$repo .git); \
+		if [ -d "$(PLUGINS_CACHE)/$$name" ]; then \
+			echo "Updating $$name..."; \
+			git -C "$(PLUGINS_CACHE)/$$name" pull --ff-only; \
+		else \
+			echo "Cloning $$name..."; \
+			git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
+		fi \
+	done
+
+## build-external-plugins: Build all external plugins
+build-external-plugins: fetch-external-plugins
+	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+		name=$$(basename $$repo .git); \
+		echo "Building $$name..."; \
+		$(MAKE) -C "$(PLUGINS_CACHE)/$$name" build; \
+	done
+
+## install-external-plugins: Install external plugins to user directory (wipes existing versions)
+install-external-plugins: build-external-plugins
+	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+		name=$$(basename $$repo .git); \
+		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
+		namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
+		version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
+		plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
+		dest="$$HOME/.pel/formae/plugins/$$namespace/v$$version"; \
+		echo "Installing resource plugin: $$namespace v$$version to $$dest"; \
+		rm -rf "$$HOME/.pel/formae/plugins/$$namespace"; \
+		mkdir -p "$$dest/schema"; \
+		cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
+		cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+		cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+	done
+	@echo "External plugins installed successfully."
+
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
 	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
@@ -42,7 +92,7 @@ build-debug:
 	go build -C plugins/tailscale ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
-pkg-bin: clean build build-tools
+pkg-bin: clean build build-tools build-external-plugins
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
@@ -53,6 +103,22 @@ pkg-bin: clean build build-tools
 		fi \
 	done
 	rm -f ./dist/pel/formae/plugins/fake-*.so
+	# Package external resource plugins
+	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+		name=$$(basename $$repo .git); \
+		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
+		namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
+		version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
+		plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
+		dest="./dist/pel/formae/resource-plugins/$$namespace/v$$version"; \
+		echo "Packaging resource plugin: $$namespace v$$version"; \
+		mkdir -p "$$dest/schema"; \
+		cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
+		cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+		cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+		mkdir -p "./dist/pel/formae/examples/$$plugin_name"; \
+		cp -r "$$plugin_dir/examples/"* "./dist/pel/formae/examples/$$plugin_name/" 2>/dev/null || true; \
+	done
 	curl -L -o ./dist/pel/formae/bin/pkl ${PKL_BIN_URL}
 	chmod 755 ./dist/pel/formae/bin/pkl
 	./ppm pkg build --name formae --version ${VERSION} ./dist/pel/formae
@@ -215,4 +281,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
