@@ -154,9 +154,9 @@ func runPluginInit() error {
 
 	fmt.Println()
 
-	// Check if output directory already exists
-	if _, err := os.Stat(config.OutputDir); err == nil {
-		return fmt.Errorf("target directory %q already exists", config.OutputDir)
+	// Validate output directory (allows empty directories, including ".")
+	if err := validateOutputDir(config.OutputDir); err != nil {
+		return err
 	}
 
 	// Download and extract the template
@@ -202,6 +202,37 @@ func validateNamespace(namespace string) error {
 	if !pattern.MatchString(namespace) {
 		return fmt.Errorf("namespace must start with a letter and contain only letters and numbers (no spaces or hyphens)")
 	}
+	return nil
+}
+
+// validateOutputDir checks if the output directory is valid for plugin initialization.
+// It allows:
+// - Non-existent directories (will be created)
+// - Existing empty directories (including "." for current directory)
+// It rejects:
+// - Existing non-empty directories (to prevent overwriting)
+func validateOutputDir(dir string) error {
+	info, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		// Directory doesn't exist, that's fine - it will be created
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to check directory %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("target path %q exists but is not a directory", dir)
+	}
+
+	// Directory exists, check if it's empty
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read directory %q: %w", dir, err)
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("target directory %q already exists and is not empty", dir)
+	}
+
 	return nil
 }
 
