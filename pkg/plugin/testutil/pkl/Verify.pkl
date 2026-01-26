@@ -1,0 +1,119 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Verifies a PKL schema for duplicates and issues.
+///
+/// Checks:
+/// 1. No duplicate filenames across the schema
+/// 2. No duplicate resource types (via @ResourceHint annotation)
+///
+/// Output: JSON with verification results
+module formae.testutil.Verify
+
+import "pkl:reflect"
+import "./imports.pkl"
+
+/// The actual imported modules mapping
+local schemaModules = imports.imports
+
+/// A discovered resource type from the schema
+class ResourceType {
+    type: String
+    moduleName: String
+    className: String
+}
+
+/// An error for duplicate files
+class DuplicateFileError {
+    fileName: String
+    modules: Listing<String>
+}
+
+/// Get all resource types by scanning for @ResourceHint annotated classes
+function getAllResourceTypes(): Listing<ResourceType> = new Listing {
+    for (name, moduleValue in schemaModules.toMap()) {
+        when (reflect.Module(moduleValue).classes.length > 0) {
+            for (clsName, v in reflect.Module(moduleValue).classes) {
+                when (v.annotations.length > 0 && v.annotations[0].getClass().simpleName == "ResourceHint") {
+                    new ResourceType {
+                        type = v.annotations[0].getProperty("type")
+                        moduleName = name
+                        className = clsName
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Extract filename from module path
+function extractFileName(modulePath: String): String =
+    modulePath.split("/").last
+
+/// Check for duplicate filenames
+function verifyNoDuplicateFiles(): Listing<DuplicateFileError> =
+    let (modulesByFileName = schemaModules.toMap().keys.fold(Map(),
+        (acc: Map<String, List<String>>, moduleName: String) ->
+            let (fileName = extractFileName(moduleName))
+            if (acc.getOrNull(fileName) == null)
+                acc.put(fileName, List(moduleName))
+            else
+                let (existingModules = acc.getOrNull(fileName))
+                acc.put(fileName, existingModules.add(moduleName))
+    ))
+    new Listing {
+        for (moduleFileName, mods in modulesByFileName) {
+            when (mods.length > 1) {
+                new DuplicateFileError {
+                    fileName = moduleFileName
+                    modules = mods.toListing()
+                }
+            }
+        }
+    }
+
+/// Check for duplicate resource types
+function verifyUniqueResourceTypes(): Listing<String> =
+    let (resourceTypes = getAllResourceTypes())
+    let (typeGroups = resourceTypes.fold(Map(),
+        (acc: Map<String, List<ResourceType>>, rt: ResourceType) ->
+            if (acc.getOrNull(rt.type) == null)
+                acc.put(rt.type, List(rt))
+            else
+                let (existing = acc.getOrNull(rt.type))
+                acc.put(rt.type, existing.add(rt))
+    ))
+    new Listing {
+        for (type, resources in typeGroups) {
+            when (resources.length > 1) {
+                "Duplicate resource type '\(type)' found in: \(resources.map((r) -> r.moduleName).join(", "))"
+            }
+        }
+    }
+
+/// Run all verification checks
+function runVerification(): Map<String, Any> =
+    let (duplicateFiles = verifyNoDuplicateFiles())
+    let (duplicateTypes = verifyUniqueResourceTypes())
+    let (hasErrors = !duplicateFiles.isEmpty || !duplicateTypes.isEmpty)
+    new Mapping {
+        ["hasErrors"] = hasErrors
+        ["duplicateFileCount"] = duplicateFiles.length
+        ["duplicateTypeCount"] = duplicateTypes.length
+        ["duplicateFiles"] = duplicateFiles.toList().map((e) -> new Mapping {
+            ["fileName"] = e.fileName
+            ["modules"] = e.modules
+        }.toMap()).toListing()
+        ["duplicateTypes"] = duplicateTypes
+        ["totalModules"] = schemaModules.length
+        ["totalResourceTypes"] = getAllResourceTypes().length
+        ["status"] = if (hasErrors) "FAILED" else "PASSED"
+    }.toMap()
+
+output {
+    renderer = new JsonRenderer {}
+    value = runVerification()
+}
