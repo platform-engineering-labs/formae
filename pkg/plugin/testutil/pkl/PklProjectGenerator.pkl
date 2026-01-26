@@ -1,0 +1,34 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Generates a PklProject file with a single local schema dependency.
+///
+/// Usage:
+///   pkl eval PklProjectGenerator.pkl -p Namespace="aws" -p SchemaPath="/path/to/schema/pkl/PklProject"
+///
+/// Output:
+///   amends "pkl:Project"
+///
+///   dependencies {
+///     ["aws"] = import("/path/to/schema/pkl/PklProject")
+///   }
+module formae.testutil.PklProjectGenerator
+
+/// The namespace/alias for the schema dependency (e.g., "aws", "gcp")
+namespace: String = read("prop:Namespace")
+
+/// Absolute path to the schema's PklProject file
+schemaPath: String = read("prop:SchemaPath")
+
+output {
+    text = new Listing {
+        "amends \"pkl:Project\""
+        ""
+        "dependencies {"
+        "  [\"\(namespace)\"] = import(\"\(schemaPath)\")"
+        "}"
+    }.join("\n")
+}

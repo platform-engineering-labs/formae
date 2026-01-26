@@ -20,6 +20,3 @@ jobs:
 
     - name: Test pkl
       run: make test-pkl
-
-    - name: Verify pkl
-      run: make verify-pkl

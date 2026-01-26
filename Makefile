@@ -131,7 +131,6 @@ gen-pkl:
 	pkl project resolve plugins/pkl/schema
 	pkl project resolve plugins/pkl/generator
 	pkl project resolve plugins/pkl/testdata/forma
-	pkl project resolve plugins/pkl/verify
 	pkl project resolve pkg/plugin/descriptors/
 	pkl project resolve tests/e2e/pkl
 
@@ -242,8 +241,8 @@ test-descriptors-pkl:
 	pkl test pkg/plugin/descriptors/test/PklProjectGenerator_test.pkl
 	pkl test pkg/plugin/descriptors/test/ImportsGenerator_test.pkl
 
-verify-pkl: gen-pkl
-	cd plugins/pkl/verify && pkl eval verify.pkl
+verify-schema-fakeaws:
+	cd ./pkg/plugin && go run ./testutil/cmd/verify-schema --namespace fakeaws ../../plugins/fake-aws/schema/pkl
 
 test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 
@@ -281,4 +280,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down all
