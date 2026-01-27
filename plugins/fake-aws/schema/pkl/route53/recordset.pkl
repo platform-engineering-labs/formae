@@ -32,7 +32,6 @@ open class AliasTarget extends formae.SubResource {
 }
 open class RecordSet extends formae.Resource {
     @fakeaws.FieldHint {
-        persist = true
     }
     aliasTarget: AliasTarget?
 
@@ -41,7 +40,6 @@ open class RecordSet extends formae.Resource {
 
     @fakeaws.FieldHint {
         createOnly = true
-        persist = true
     }
     hostedZoneId: (String|formae.Resolvable)?
 
@@ -52,25 +50,21 @@ open class RecordSet extends formae.Resource {
 
     @fakeaws.FieldHint {
         createOnly = true
-        persist = true
     }
     name: String
 
     region: fakeaws.Region?
 
     @fakeaws.FieldHint {
-        persist = true
     }
     resourceRecords: Listing<String>?
 
     @fakeaws.FieldHint {
-        persist = true
         outputField = "TTL"
     }
     ttl: Number?
 
     @fakeaws.FieldHint {
-        persist = true
     }
     type: String
 
