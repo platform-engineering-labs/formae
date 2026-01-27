@@ -157,7 +157,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 
 	for _, tc := range testCases[1:2] {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -229,7 +229,7 @@ func TestCreatePatchDocument_ObjectArrayWithKeyValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -303,7 +303,7 @@ func TestCreatePatchDocument_ObjectArrayWithValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -559,6 +559,75 @@ func TestCollectionSemanticsFromFieldHints(t *testing.T) {
 	}
 
 	assert.Equal(t, expectedCollections, collections)
+}
+
+func TestGeneratePatch_WriteOnlyFieldsGenerateAddOperation(t *testing.T) {
+	// This simulates an AWS CloudControl scenario where:
+	// - Password is a writeOnly field (AWS never returns it)
+	// - Formae stores the password in its own state
+	// - When generating a patch, we need to always include writeOnly fields
+	//   even if they haven't changed, because AWS doesn't have them
+
+	// Existing state (what Formae has stored - includes Password)
+	document := []byte(`{
+		"LoginProfile": {
+			"Password": "secret123",
+			"PasswordResetRequired": false
+		},
+		"UserName": "testuser"
+	}`)
+
+	// Desired state (from PKL file - same password, but adding tags)
+	patch := []byte(`{
+		"LoginProfile": {
+			"Password": "secret123",
+			"PasswordResetRequired": false
+		},
+		"UserName": "testuser",
+		"Tags": [{"Key": "Env", "Value": "test"}]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"LoginProfile", "UserName", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"LoginProfile.Password": {
+				WriteOnly: true,
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	var patches []jsonpatch.JsonPatchOperation
+	err = json.Unmarshal(patchDoc, &patches)
+	require.NoError(t, err)
+
+	// We expect:
+	// 1. An "add" operation for Tags
+	// 2. An "add" operation for LoginProfile/Password (because it's writeOnly and
+	//    must be re-added since AWS CloudControl won't have it in current state)
+	require.Len(t, patches, 2, "Expected 2 operations: one for Tags, one for writeOnly Password")
+
+	// Find the operations by path
+	var tagsOp, passwordOp *jsonpatch.JsonPatchOperation
+	for i := range patches {
+		switch patches[i].Path {
+		case "/Tags", "/Tags/0":
+			tagsOp = &patches[i]
+		case "/LoginProfile/Password":
+			passwordOp = &patches[i]
+		}
+	}
+
+	assert.NotNil(t, tagsOp, "Should have an operation for Tags")
+	assert.Equal(t, "add", tagsOp.Operation)
+
+	assert.NotNil(t, passwordOp, "Should have an add operation for writeOnly Password")
+	assert.Equal(t, "add", passwordOp.Operation, "WriteOnly fields should use 'add' operation")
+	assert.Equal(t, "secret123", passwordOp.Value, "Password value should be preserved")
 }
 
 func TestGeneratePatch_AddTagsWhileRetainingExisting(t *testing.T) {
