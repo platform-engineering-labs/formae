@@ -54,6 +54,8 @@ definitions:
         type: boolean
       UpdateMethod:
         $ref: '#/definitions/model.FieldUpdateMethod'
+      WriteOnly:
+        type: boolean
     type: object
   model.FieldUpdateMethod:
     enum:

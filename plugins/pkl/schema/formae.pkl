@@ -118,6 +118,7 @@ typealias FieldUpdateMethod = "Array"|"EntitySet"|"Set"
 
 open class FieldHint extends Annotation {
     hidden createOnly: Boolean = false
+    hidden writeOnly: Boolean = false
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
     hidden indexField: String?
@@ -129,6 +130,7 @@ open class FieldHint extends Annotation {
 
     // Output
     fixed CreateOnly: Boolean = createOnly
+    fixed WriteOnly: Boolean = writeOnly
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed UpdateMethod: String = updateMethod ?? ""

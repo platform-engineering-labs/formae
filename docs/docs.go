@@ -517,6 +517,9 @@ const docTemplate = `{
                 },
                 "UpdateMethod": {
                     "$ref": "#/definitions/model.FieldUpdateMethod"
+                },
+                "WriteOnly": {
+                    "type": "boolean"
                 }
             }
         },

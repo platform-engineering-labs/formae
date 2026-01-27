@@ -84,6 +84,7 @@ examples {
     new {
       ["bucketName"] {
         CreateOnly = false
+        WriteOnly = false
         Required = true
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -91,6 +92,7 @@ examples {
       }
       ["Region"] {
         CreateOnly = true
+        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -98,6 +100,7 @@ examples {
       }
       ["Tags"] {
         CreateOnly = false
+        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -116,6 +119,7 @@ examples {
       Hints {
         ["bucketName"] {
           CreateOnly = false
+          WriteOnly = false
           Required = true
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -123,6 +127,7 @@ examples {
         }
         ["Region"] {
           CreateOnly = true
+          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -130,6 +135,7 @@ examples {
         }
         ["Tags"] {
           CreateOnly = false
+          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -167,7 +173,7 @@ examples {
       Type = "AWS::S3::Bucket"
       Schema {
         Identifier = "BucketName"
-          Fields {
+        Fields {
           "bucketName"
           "Region"
           "Tags"
@@ -175,6 +181,7 @@ examples {
         Hints {
           ["bucketName"] {
             CreateOnly = false
+            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -182,6 +189,7 @@ examples {
           }
           ["Region"] {
             CreateOnly = true
+            WriteOnly = false
             Required = false
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -189,6 +197,7 @@ examples {
           }
           ["Tags"] {
             CreateOnly = false
+            WriteOnly = false
             Required = false
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -232,6 +241,7 @@ examples {
         Hints {
           ["resourceName"] {
             CreateOnly = false
+            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -239,6 +249,7 @@ examples {
           }
           ["nested"] {
             CreateOnly = false
+            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -246,6 +257,7 @@ examples {
           }
           ["nested.configName"] {
             CreateOnly = false
+            WriteOnly = true
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -253,6 +265,7 @@ examples {
           }
           ["nested.TestConfigValue"] {
             CreateOnly = false
+            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -260,6 +273,7 @@ examples {
           }
           ["nested.setting"] {
             CreateOnly = false
+            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -267,6 +281,7 @@ examples {
           }
           ["nested.setting.setting1"] {
             CreateOnly = false
+            WriteOnly = true
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -274,6 +289,7 @@ examples {
           }
           ["nested.setting.SettingTwo"] {
             CreateOnly = false
+            WriteOnly = false
             Required = true
             RequiredOnCreate = false
             UpdateMethod = ""
@@ -307,6 +323,7 @@ examples {
     new {
       ["bucketName"] {
         CreateOnly = false
+        WriteOnly = false
         Required = true
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -314,6 +331,7 @@ examples {
       }
       ["Region"] {
         CreateOnly = true
+        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -321,6 +339,7 @@ examples {
       }
       ["Tags"] {
         CreateOnly = false
+        WriteOnly = false
         Required = false
         RequiredOnCreate = false
         UpdateMethod = ""
@@ -339,6 +358,7 @@ examples {
       Hints {
         ["bucketName"] {
           CreateOnly = false
+          WriteOnly = false
           Required = true
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -346,6 +366,7 @@ examples {
         }
         ["Region"] {
           CreateOnly = true
+          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""
@@ -353,6 +374,7 @@ examples {
         }
         ["Tags"] {
           CreateOnly = false
+          WriteOnly = false
           Required = false
           RequiredOnCreate = false
           UpdateMethod = ""

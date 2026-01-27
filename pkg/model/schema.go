@@ -14,6 +14,7 @@ type Schema struct {
 
 type FieldHint struct {
 	CreateOnly       bool `json:"CreateOnly" pkl:"CreateOnly"`
+	WriteOnly        bool `json:"WriteOnly" pkl:"WriteOnly"`
 	Required         bool `json:"Required" pkl:"Required"`
 	RequiredOnCreate bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
 
@@ -50,5 +51,9 @@ func (s Schema) Required() []string {
 
 func (s Schema) RequiredOnCreate() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.RequiredOnCreate }, true)
+}
+
+func (s Schema) WriteOnly() []string {
+	return filterFields(s, func(h FieldHint) bool { return h.WriteOnly }, true)
 }
 

@@ -93,7 +93,9 @@ local testBucket = new TestBucket {
 
 @formae.SubResourceHint
 local class NestedSetting extends formae.SubResource {
-    @formae.FieldHint
+    @formae.FieldHint{
+        writeOnly = true
+    }
     setting1: String
 
     @formae.FieldHint{
@@ -104,7 +106,9 @@ local class NestedSetting extends formae.SubResource {
 
 @formae.SubResourceHint
 local class NestedConfig extends formae.SubResource {
-    @formae.FieldHint
+    @formae.FieldHint{
+        writeOnly = true
+    }
     configName: String
 
     @formae.FieldHint{
