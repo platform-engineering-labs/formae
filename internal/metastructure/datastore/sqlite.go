@@ -789,8 +789,13 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	} else {
 		// For non-delete operations, compare resources
 		if readWriteEqual && readOnlyEqual {
-			// Resource data is identical, return existing version ID
-			return fmt.Sprintf("%s_%s", resource.Ksuid, version), nil
+			// Resource data is identical. Only return early if KSUIDs match.
+			// If a new KSUID was assigned (e.g., after destroy with deterministic native_id like Azure),
+			// we need to insert a row with the new KSUID for references to resolve.
+			if resource.Ksuid == ksuid {
+				return fmt.Sprintf("%s_%s", resource.Ksuid, version), nil
+			}
+			// KSUIDs differ - fall through to insert with the new KSUID
 		}
 	}
 
