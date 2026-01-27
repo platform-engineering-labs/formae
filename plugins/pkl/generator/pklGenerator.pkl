@@ -142,7 +142,7 @@ function generateFormaFile(parsed: json.Value): String =
         let (properties = appendProperties(resource))
         // Extract namespace from resource type (e.g. "Azure::Resources::ResourceGroup" -> "azure")
         let (namespace = resourceType.split("::").first.toLowerCase())
-        let (pklMap = gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties).toDynamic()).put("target", target).put("stack", stack).put("__namespace__", namespace))
+        let (pklMap = gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties).toDynamic()).put("target", target).put("stack", stack))
         let (dependencyImports = gen.generateImportStatements(pklMap))
         let (resourceImport = typeMap[resourceType].moduleName)
 
