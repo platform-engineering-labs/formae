@@ -61,7 +61,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -79,19 +79,71 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	return json.RawMessage(patchJson), needsReplacement, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
 	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields)
 	if err != nil {
 		return nil, err
 	}
 
+	// Remove writeOnly fields from the document (existing state).
+	// WriteOnly fields (like passwords) are never returned by the cloud provider's Read operation,
+	// but Formae stores them. By removing them from the document before comparison,
+	// jsonpatch will generate an "add" operation for these fields, ensuring they're always
+	// included in the patch sent to the cloud provider.
+	documentWithoutWriteOnly, err := removeWriteOnlyFields(document, writeOnlyFields)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create the actual patch document
-	patchDoc, err := jsonpatch.CreatePatch(document, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
+	patchDoc, err := jsonpatch.CreatePatch(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JSON patch: %w", err)
 	}
 
 	return patchDoc, nil
+}
+
+// removeWriteOnlyFields removes writeOnly fields from the document.
+// WriteOnly field paths can be nested (e.g., "LoginProfile.Password").
+func removeWriteOnlyFields(document []byte, writeOnlyFields []string) ([]byte, error) {
+	if len(writeOnlyFields) == 0 {
+		return document, nil
+	}
+
+	var deserialized map[string]any
+	if err := json.Unmarshal(document, &deserialized); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal document: %w", err)
+	}
+
+	for _, fieldPath := range writeOnlyFields {
+		removeNestedField(deserialized, strings.Split(fieldPath, "."))
+	}
+
+	serialized, err := json.Marshal(deserialized)
+	if err != nil {
+		return nil, err
+	}
+
+	return serialized, nil
+}
+
+// removeNestedField removes a field at the given path from a nested map structure.
+// For example, path ["LoginProfile", "Password"] removes the Password key from LoginProfile.
+func removeNestedField(obj map[string]any, path []string) {
+	if len(path) == 0 {
+		return
+	}
+
+	if len(path) == 1 {
+		delete(obj, path[0])
+		return
+	}
+
+	// Navigate to the nested object
+	if nested, ok := obj[path[0]].(map[string]any); ok {
+		removeNestedField(nested, path[1:])
+	}
 }
 
 func removeNonSchemaFields(patch []byte, schemaFields []string) ([]byte, error) {
