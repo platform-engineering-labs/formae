@@ -97,7 +97,6 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 				"Ipv6NetmaskLength",
 				"Ipv6Pool",
 				"VpcId"},
-			Nonprovisionable: false,
 		}, nil
 	default:
 		return model.Schema{
@@ -123,7 +122,6 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 				"Tags",
 				"VersioningConfiguration",
 				"WebsiteConfiguration"},
-			Nonprovisionable: false,
 		}, nil
 	}
 }

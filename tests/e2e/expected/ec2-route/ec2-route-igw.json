@@ -9,12 +9,9 @@
     "Fields": [
       "Tags"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }
@@ -24,14 +21,6 @@
   },
   "Properties": {
     "Tags": [
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "ec2-route-igw"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "ec2-route"
-      },
       {
         "Key": "Name",
         "Value": "ec2-route-igw"

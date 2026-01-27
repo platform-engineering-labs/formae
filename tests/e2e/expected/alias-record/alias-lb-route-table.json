@@ -10,19 +10,14 @@
       "Tags",
       "VpcId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       }
@@ -34,14 +29,6 @@
     "Tags": [
       {
         "Key": "Name",
-        "Value": "alias-lb-route-table"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
-      {
-        "Key": "FormaeResourceLabel",
         "Value": "alias-lb-route-table"
       }
     ],

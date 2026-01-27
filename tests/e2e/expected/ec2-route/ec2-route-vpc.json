@@ -15,54 +15,39 @@
       "Ipv4NetmaskLength",
       "Tags"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "CidrBlock": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "EnableDnsHostnames": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "EnableDnsSupport": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "InstanceTenancy": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv4IpamPoolId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": true,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv4NetmaskLength": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": true,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }
@@ -79,14 +64,6 @@
       {
         "Key": "Name",
         "Value": "ec2-route-vpc"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "ec2-route-vpc"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "ec2-route"
       }
     ]
   },

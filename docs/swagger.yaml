@@ -48,8 +48,6 @@ definitions:
         type: boolean
       IndexField:
         type: string
-      Persist:
-        type: boolean
       Required:
         type: boolean
       RequiredOnCreate:
@@ -216,8 +214,6 @@ definitions:
         type: object
       Identifier:
         type: string
-      Nonprovisionable:
-        type: boolean
     type: object
   model.Simulation:
     properties:

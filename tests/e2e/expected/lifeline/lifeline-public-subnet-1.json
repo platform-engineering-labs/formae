@@ -25,124 +25,89 @@
       "Tags",
       "VpcId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "AssignIpv6AddressOnCreation": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "AvailabilityZone": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "AvailabilityZoneId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "CidrBlock": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "EnableDns64": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "EnableLniAtDeviceIndex": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": true,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv4IpamPoolId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": true,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv4NetmaskLength": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": true,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv6CidrBlock": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv6IpamPoolId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": true,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv6Native": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Ipv6NetmaskLength": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": true,
         "Required": false,
         "RequiredOnCreate": false
       },
       "MapPublicIpOnLaunch": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "OutpostArn": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "PrivateDnsNameOptionsOnLaunch": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "VpcId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       }
@@ -165,16 +130,8 @@
     },
     "Tags": [
       {
-        "Key": "FormaeResourceLabel",
-        "Value": "lifeline-public-subnet-1"
-      },
-      {
         "Key": "Name",
         "Value": "test-public-subnet-1"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "lifeline"
       }
     ],
     "VpcId": {

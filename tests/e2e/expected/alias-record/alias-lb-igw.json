@@ -9,12 +9,9 @@
     "Fields": [
       "Tags"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "Tags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }
@@ -23,16 +20,7 @@
     "Extractable": true
   },
   "Properties": {
-    "Tags": [
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-igw"
-      },
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      }
-    ]
+    "Tags": []
   },
   "ReadOnlyProperties": {
     "InternetGatewayId": "igw-0594118d4cbb1727e"

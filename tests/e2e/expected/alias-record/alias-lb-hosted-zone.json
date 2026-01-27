@@ -13,40 +13,29 @@
       "HostedZoneTags",
       "VPCs"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "HostedZoneConfig": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "HostedZoneTags": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Name": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "QueryLoggingConfig": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VPCs": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }
@@ -56,16 +45,7 @@
   },
   "Properties": {
     "HostedZoneConfig": {},
-    "HostedZoneTags": [
-      {
-        "Key": "FormaeStackLabel",
-        "Value": "alias-record-stack"
-      },
-      {
-        "Key": "FormaeResourceLabel",
-        "Value": "alias-lb-hosted-zone"
-      }
-    ],
+    "HostedZoneTags": [],
     "Name": "lb.snarf.platform.engineering.",
     "VPCs": []
   },

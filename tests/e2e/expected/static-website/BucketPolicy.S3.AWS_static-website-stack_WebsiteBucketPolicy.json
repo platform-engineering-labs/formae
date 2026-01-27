@@ -10,19 +10,14 @@
       "Bucket",
       "PolicyDocument"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "Bucket": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "PolicyDocument": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       }

@@ -509,9 +509,6 @@ const docTemplate = `{
                 "IndexField": {
                     "type": "string"
                 },
-                "Persist": {
-                    "type": "boolean"
-                },
                 "Required": {
                     "type": "boolean"
                 },
@@ -758,9 +755,6 @@ const docTemplate = `{
                 },
                 "Identifier": {
                     "type": "string"
-                },
-                "Nonprovisionable": {
-                    "type": "boolean"
                 }
             }
         },

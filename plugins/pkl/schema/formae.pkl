@@ -84,8 +84,6 @@ open class Tag {
 open class ResourceHint extends Annotation {
     /// Resource Type
     type: String(matches(Regex(#"^.*::.*::.*$"#)))
-    /// Property that dictates whether a resource is supported by the CC API
-    nonprovisionable: Boolean = false
     /// Property to store as the NativeId following create
     identifier: String
     /// Type of parent resource
@@ -120,7 +118,6 @@ typealias FieldUpdateMethod = "Array"|"EntitySet"|"Set"
 
 open class FieldHint extends Annotation {
     hidden createOnly: Boolean = false
-    hidden persist: Boolean = false
     hidden writeOnly: Boolean = false
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
@@ -133,7 +130,6 @@ open class FieldHint extends Annotation {
 
     // Output
     fixed CreateOnly: Boolean = createOnly
-    fixed Persist: Boolean = persist
     fixed WriteOnly: Boolean = writeOnly
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
@@ -143,8 +139,6 @@ open class FieldHint extends Annotation {
 
 // Schema output class
 open class Schema {
-    /// Property that dictates whether a resource is supported by the CC API
-    Nonprovisionable: Boolean = false
     /// Property to store as the NativeId following create
     Identifier: String
     /// All the fields that can be set by user on the resource which are the Properties keys
@@ -469,7 +463,6 @@ class Fq {
         let (hint = findResourceHint(resourceClass))
             new Schema {
                 Identifier = hint.identifier
-                Nonprovisionable = hint.nonprovisionable
                 Fields = fields(resourceClass)
                 Hints = hints(resourceClass)
                 Discoverable = hint.discoverable

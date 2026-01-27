@@ -26,131 +26,94 @@
       "AliasTarget.DNSName",
       "GeoProximityLocation.AWSRegion"
     ],
-    "Nonprovisionable": true,
     "Hints": {
       "AliasTarget": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "AliasTarget.DNSName": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "CidrRoutingConfig": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Comment": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Failover": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "GeoLocation": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "GeoProximityLocation": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "GeoProximityLocation.AWSRegion": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "HealthCheckId": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "HostedZoneId": {
         "CreateOnly": true,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "HostedZoneName": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "MultiValueAnswer": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Name": {
         "CreateOnly": true,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "ResourceRecords": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "SetIdentifier": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "TTL": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "Type": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "Weight": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }

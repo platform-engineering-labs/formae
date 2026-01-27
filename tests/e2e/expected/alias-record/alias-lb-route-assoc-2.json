@@ -10,19 +10,14 @@
       "RouteTableId",
       "SubnetId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "RouteTableId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "SubnetId": {
         "CreateOnly": true,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       }

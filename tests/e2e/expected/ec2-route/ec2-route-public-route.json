@@ -23,110 +23,79 @@
       "VpcEndpointId",
       "VpcPeeringConnectionId"
     ],
-    "Nonprovisionable": false,
     "Hints": {
       "CarrierGatewayId": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "CoreNetworkArn": {
         "CreateOnly": false,
-        "Persist": false,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "DestinationCidrBlock": {
         "CreateOnly": true,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "DestinationIpv6CidrBlock": {
         "CreateOnly": true,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "DestinationPrefixListId": {
         "CreateOnly": true,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "EgressOnlyInternetGatewayId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "GatewayId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "InstanceId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "LocalGatewayId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "NatGatewayId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "NetworkInterfaceId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "RouteTableId": {
         "CreateOnly": true,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": true,
         "RequiredOnCreate": false
       },
       "TransitGatewayId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcEndpointId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       },
       "VpcPeeringConnectionId": {
         "CreateOnly": false,
-        "Persist": true,
-        "WriteOnly": false,
         "Required": false,
         "RequiredOnCreate": false
       }

@@ -503,9 +503,6 @@
                 "IndexField": {
                     "type": "string"
                 },
-                "Persist": {
-                    "type": "boolean"
-                },
                 "Required": {
                     "type": "boolean"
                 },
@@ -752,9 +749,6 @@
                 },
                 "Identifier": {
                     "type": "string"
-                },
-                "Nonprovisionable": {
-                    "type": "boolean"
                 }
             }
         },

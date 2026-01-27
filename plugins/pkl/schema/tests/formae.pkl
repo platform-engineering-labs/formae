@@ -292,7 +292,6 @@ facts {
     ["Resource schema is built correctly"] {
         let (schema = testBucket.schema())
         schema.Identifier == "BucketName" &&
-        schema.Nonprovisionable == false &&
         schema.Fields.contains("bucketName")
     }
 
