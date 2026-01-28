@@ -52,6 +52,9 @@ jobs:
           role-to-assume: arn:aws:iam::897722706215:role/github-pel
           role-session-name: PublishSession
 
+      - name: Fetch external plugins
+        run: make fetch-external-plugins
+
       - name: Resolve Pkl
         run: make gen-pkl
 
