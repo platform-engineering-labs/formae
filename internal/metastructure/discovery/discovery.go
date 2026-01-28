@@ -103,6 +103,13 @@ type DiscoveryData struct {
 	recentlyDiscoveredResourceIDs map[string]struct{}
 	timeStarted                   time.Time
 	summary                       map[string]int
+	// typesWithChildrenQueued tracks parent types (keyed by type#target) that have had
+	// child discovery queued this cycle. Prevents duplicate queueing when multiple
+	// listings complete for the same parent type.
+	typesWithChildrenQueued map[string]struct{}
+	// nativeIDsByCommand stores NativeIDs of resources being synced, keyed by command ID.
+	// Used in syncCompleted to discover children only for newly synced parents.
+	nativeIDsByCommand map[string][]string
 	// pauseCount tracks the number of active pause requests. When > 0, Discovery
 	// will not start new list operations, but will allow outstanding operations
 	// to complete. Uses reference counting to support multiple concurrent pausers.
@@ -176,6 +183,8 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		recentlyDiscoveredResourceIDs: make(map[string]struct{}),
 		summary:                       make(map[string]int),
 		pluginInfoCache:               make(map[string]*messages.PluginInfoResponse),
+		typesWithChildrenQueued:       make(map[string]struct{}),
+		nativeIDsByCommand:            make(map[string][]string),
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -530,7 +539,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	// However, we still need to discover nested resources if this parent resource type has any
 	if len(newResources) == 0 {
 		proc.Log().Debug("No new resources to synchronize for %s in target %s", message.ResourceType, message.TargetLabel)
-		if err := discoverChildren(op, data, proc); err != nil {
+		if err := discoverChildrenOnce(op, data, proc); err != nil {
 			proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 			if !data.HasOutstandingWork() {
 				return StateIdle, data, nil, nil
@@ -567,7 +576,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	// Discover nested resources for existing parents immediately, even though we're also syncing new ones.
 	// This ensures we don't miss nested resources for existing parents while waiting for new ones to sync.
 	// New nested resources will be discovered after sync completes in syncCompleted().
-	if err := discoverChildren(op, data, proc); err != nil {
+	if err := discoverChildrenOnce(op, data, proc); err != nil {
 		proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 	}
 
@@ -704,12 +713,21 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		return "", err
 	}
 
+	// Store NativeIDs for child discovery in syncCompleted
+	nativeIDs := make([]string, len(resources))
+	for i, res := range resources {
+		nativeIDs[i] = res.NativeID
+	}
+	data.nativeIDsByCommand[syncCommand.ID] = nativeIDs
+
 	return syncCommand.ID, nil
 }
 
-func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) error {
-	parentNode, exists := data.resourceHierarchy[op.ResourceType]
-	if !exists || !parentNode.hasChildren() {
+// discoverChildrenOnce queries the DB for parents and discovers their children, but only once
+// per type#target per discovery cycle. Subsequent calls for the same type#target are no-ops.
+func discoverChildrenOnce(op ListOperation, data DiscoveryData, proc gen.Process) error {
+	key := op.ResourceType + "#" + op.TargetLabel
+	if _, done := data.typesWithChildrenQueued[key]; done {
 		return nil
 	}
 
@@ -721,6 +739,16 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 	if err != nil {
 		proc.Log().Error("Failed to load parent resources", "type", op.ResourceType, "target", op.TargetLabel, "error", err)
 		return fmt.Errorf("failed to load parent resources: %w", err)
+	}
+
+	data.typesWithChildrenQueued[key] = struct{}{}
+	return discoverChildren(parents, op, data, proc)
+}
+
+func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data DiscoveryData, proc gen.Process) error {
+	parentNode, exists := data.resourceHierarchy[op.ResourceType]
+	if !exists || !parentNode.hasChildren() {
+		return nil
 	}
 
 	for _, parent := range parents {
@@ -752,8 +780,7 @@ func discoverChildren(op ListOperation, data DiscoveryData, proc gen.Process) er
 			// Only send immediate ResumeScanning if no delayed message is pending.
 			// If a delayed message is pending, it will process the queued work when it arrives.
 			if !data.hasPendingResumeScan {
-				err = proc.Send(proc.PID(), ResumeScanning{})
-				if err != nil {
+				if err := proc.Send(proc.PID(), ResumeScanning{}); err != nil {
 					proc.Log().Error("Failed to send ResumeScanning", "error", err)
 					return fmt.Errorf("failed to send ResumeScanning: %w", err)
 				}
@@ -774,18 +801,50 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 
 	if message.State == changeset.ChangeSetStateFinishedWithErrors {
 		proc.Log().Error("Discovery failed to synchronize discovered resources", "resourceType", op.ResourceType, "listParams", op.ListParams, "commandID", message.CommandID)
+		delete(data.nativeIDsByCommand, message.CommandID)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
 		}
 	}
 
-	// Discover nested resources after parent resources are completely sync'd
-	if err := discoverChildren(op, data, proc); err != nil {
-		proc.Log().Error("Failed to discover children for %s in target %s: %v", op.ResourceType, op.TargetLabel, err)
-		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+	// Discover nested resources for the newly synced parents
+	syncedNativeIDs := data.nativeIDsByCommand[message.CommandID]
+	delete(data.nativeIDsByCommand, message.CommandID)
+
+	if len(syncedNativeIDs) > 0 {
+		// Query DB for the synced resources by type+target, then filter to only the ones we synced
+		query := datastore.ResourceQuery{
+			Type:   &datastore.QueryItem[string]{Item: op.ResourceType, Constraint: datastore.Required},
+			Target: &datastore.QueryItem[string]{Item: op.TargetLabel, Constraint: datastore.Required},
 		}
-		return state, data, nil, nil
+		allParents, err := data.ds.QueryResources(&query)
+		if err != nil {
+			proc.Log().Error("Failed to load parent resources for child discovery", "type", op.ResourceType, "target", op.TargetLabel, "error", err)
+			if !data.HasOutstandingWork() {
+				return StateIdle, data, nil, nil
+			}
+			return state, data, nil, nil
+		}
+
+		// Filter to only newly synced parents
+		syncedSet := make(map[string]struct{}, len(syncedNativeIDs))
+		for _, id := range syncedNativeIDs {
+			syncedSet[id] = struct{}{}
+		}
+		var syncedParents []*pkgmodel.Resource
+		for _, p := range allParents {
+			if _, ok := syncedSet[p.NativeID]; ok {
+				syncedParents = append(syncedParents, p)
+			}
+		}
+
+		if err := discoverChildren(syncedParents, op, data, proc); err != nil {
+			proc.Log().Error("Failed to discover children for %s in target %s: %v", op.ResourceType, op.TargetLabel, err)
+			if !data.HasOutstandingWork() {
+				return StateIdle, data, nil, nil
+			}
+			return state, data, nil, nil
+		}
 	}
 	if !data.HasOutstandingWork() {
 		return StateIdle, data, nil, nil
