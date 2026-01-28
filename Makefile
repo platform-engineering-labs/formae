@@ -136,7 +136,15 @@ gen-pkl:
 	pkl project resolve pkg/plugin/descriptors/
 	pkl project resolve tests/e2e/pkl
 
-## gen-external-pkl: Resolve external plugin PKL schemas (requires fetch-external-plugins first)
+## pkg-pkl: Package core formae schema only
+pkg-pkl:
+	pkl project package ./plugins/pkl/schema --skip-publish-check
+
+## publish-pkl: Publish core formae schema to S3
+publish-pkl:
+	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
+
+## gen-external-pkl: Resolve external plugin PKL schemas (requires formae to be published first)
 gen-external-pkl: fetch-external-plugins
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
@@ -150,10 +158,8 @@ gen-external-pkl: fetch-external-plugins
 		fi \
 	done
 
-pkg-pkl: gen-external-pkl
-	@# Package core formae schema
-	pkl project package ./plugins/pkl/schema --skip-publish-check
-	@# Package external plugin schemas
+## pkg-external-pkl: Package external plugin PKL schemas
+pkg-external-pkl: gen-external-pkl
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
 		schema_dir="$(PLUGINS_CACHE)/$$name/schema/pkl"; \
@@ -163,10 +169,8 @@ pkg-pkl: gen-external-pkl
 		fi \
 	done
 
-publish-pkl:
-	@# Publish core formae schema
-	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
-	@# Publish external plugin schemas
+## publish-external-pkl: Publish external plugin PKL schemas to S3
+publish-external-pkl:
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
 		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
@@ -320,4 +324,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down all

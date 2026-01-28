@@ -52,17 +52,20 @@ jobs:
           role-to-assume: arn:aws:iam::897722706215:role/github-pel
           role-session-name: PublishSession
 
-      - name: Fetch external plugins
-        run: make fetch-external-plugins
-
       - name: Resolve Pkl
         run: make gen-pkl
 
       - name: Package Pkl
         run: make pkg-pkl
 
-      - name: Publish PKL Packages to S3
+      - name: Publish core PKL schema to S3
         run: make publish-pkl
+
+      - name: Package external plugin PKL schemas
+        run: make pkg-external-pkl
+
+      - name: Publish external plugin PKL schemas to S3
+        run: make publish-external-pkl
 
       - name: Publish Setup Script to S3
         run: make publish-setup
