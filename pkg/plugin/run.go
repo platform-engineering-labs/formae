@@ -179,6 +179,11 @@ func Run(fp FullResourcePlugin) {
 		log.Fatalf("Failed to start node: %v", err)
 	}
 
+	// Start Ergo metrics collection (if OTel is enabled)
+	if err := StartErgoMetrics(node); err != nil {
+		log.Printf("Warning: failed to start Ergo metrics: %v", err)
+	}
+
 	// Enable remote spawn for PluginOperator so agent can spawn operators on this node
 	if err := node.Network().EnableSpawn(gen.Atom(PluginOperatorFactoryName), NewPluginOperator); err != nil {
 		log.Fatalf("Failed to enable spawn for PluginOperator: %v", err)
