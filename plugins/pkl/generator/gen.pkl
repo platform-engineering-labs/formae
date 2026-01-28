@@ -446,8 +446,8 @@ local function parseValueEnhanced(value: Any): Any =
     let (defaultMap =
       if (typeName == "FakeResolvable")
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
-      else if (typeName == "Tag" && getImportInfo(value.getClass()) == "formae")
-        // Backwards compat: formae.Tag was moved to aws.Tag - include import statement for dependency collection
+      else if (typeName == "Tag" && (getImportInfo(value.getClass()) == "formae" || getImportInfo(value.getClass()) == importPlaceholder))
+        // Tag import: aws.Tag is in types.pkl but exported via aws.pkl. Include import for dependency collection.
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", "@aws/aws.pkl")
       else
         Map("__type__", typeName, "__import__", importInfo))
@@ -477,9 +477,10 @@ local function parseValueEnhanced(value: Any): Any =
 local function getImportInfoForType(clazz: Class, typeName: String, value: Any): String =
   // Get the actual import info from the class
   let (actualImport = getImportInfo(clazz))
-  // Backwards compat: formae.Tag was moved to aws.Tag, so redirect formae.Tag to aws
-  // Other Tag types (azure.Tag, aws.Tag) use their actual namespace
-  if (typeName == "Tag" && actualImport == "formae")
+  // Tag handling: aws.Tag is defined in types.pkl but exported via aws.pkl.
+  // When getImportInfo can't resolve the module (returns importPlaceholder),
+  // or for backwards compat with formae.Tag, redirect to "aws".
+  if (typeName == "Tag" && (actualImport == "formae" || actualImport == importPlaceholder))
     "aws"
   else if (typeName == "FakeValue")
     "formae"
