@@ -107,6 +107,8 @@ definitions:
         type: string
       ResourceCount:
         type: integer
+      Version:
+        type: string
     type: object
   model.Prop:
     properties:
