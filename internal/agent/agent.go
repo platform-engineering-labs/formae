@@ -287,18 +287,19 @@ func migrateResourcePlugins(userPluginDir string) error {
 
 	userPluginDir = util.ExpandHomePath(userPluginDir)
 
-	// Wipe existing user plugin directory - old plugins are incompatible
-	if err := os.RemoveAll(userPluginDir); err != nil {
-		return fmt.Errorf("failed to remove old plugins directory: %w", err)
-	}
-	slog.Info("Removed old plugins directory for migration", "path", userPluginDir)
-
 	for _, nsEntry := range namespaces {
 		if !nsEntry.IsDir() {
 			continue
 		}
 		namespace := strings.ToLower(nsEntry.Name())
 		nsPath := filepath.Join(systemResourcePluginsDir, nsEntry.Name())
+
+		// Remove existing namespace directory before installing new versions
+		existingNamespaceDir := filepath.Join(userPluginDir, namespace)
+		if err := os.RemoveAll(existingNamespaceDir); err != nil {
+			return fmt.Errorf("failed to remove existing plugin directory %s: %w", existingNamespaceDir, err)
+		}
+		slog.Info("Removed existing plugin directory for migration", "path", existingNamespaceDir)
 
 		versions, err := os.ReadDir(nsPath)
 		if err != nil {
