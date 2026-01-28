@@ -136,11 +136,49 @@ gen-pkl:
 	pkl project resolve pkg/plugin/descriptors/
 	pkl project resolve tests/e2e/pkl
 
-pkg-pkl:
+## gen-external-pkl: Resolve external plugin PKL schemas (requires fetch-external-plugins first)
+gen-external-pkl: fetch-external-plugins
+	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+		name=$$(basename $$repo .git); \
+		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
+		schema_dir="$$plugin_dir/schema/pkl"; \
+		if [ -d "$$schema_dir" ] && [ -f "$$schema_dir/PklProject" ]; then \
+			version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
+			echo "$$version" > "$$schema_dir/VERSION"; \
+			echo "Resolving PKL schema for $$name (v$$version)..."; \
+			pkl project resolve "$$schema_dir"; \
+		fi \
+	done
+
+pkg-pkl: gen-external-pkl
+	@# Package core formae schema
 	pkl project package ./plugins/pkl/schema --skip-publish-check
+	@# Package external plugin schemas
+	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+		name=$$(basename $$repo .git); \
+		schema_dir="$(PLUGINS_CACHE)/$$name/schema/pkl"; \
+		if [ -d "$$schema_dir" ] && [ -f "$$schema_dir/PklProject" ]; then \
+			echo "Packaging PKL schema for $$name..."; \
+			pkl project package "$$schema_dir" --skip-publish-check; \
+		fi \
+	done
 
 publish-pkl:
+	@# Publish core formae schema
 	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
+	@# Publish external plugin schemas
+	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+		name=$$(basename $$repo .git); \
+		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
+		schema_dir="$$plugin_dir/schema/pkl"; \
+		if [ -d "$$schema_dir" ] && [ -f "$$schema_dir/PklProject" ]; then \
+			plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
+			version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
+			echo "Publishing PKL schema for $$plugin_name@$$version..."; \
+			aws s3 sync ".out/$${plugin_name}@$${version}" \
+				"s3://hub.platform.engineering/plugins/$${plugin_name}/schema/pkl/$${plugin_name}/"; \
+		fi \
+	done
 
 publish-setup:
 	aws s3 cp ./scripts/setup.sh s3://hub.platform.engineering/setup/formae.sh
@@ -282,4 +320,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl publish-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down all
