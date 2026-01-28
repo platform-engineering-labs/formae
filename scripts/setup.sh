@@ -175,6 +175,8 @@ if [ -d "$RESOURCE_PLUGINS_SRC" ]; then
   for namespace_dir in "$RESOURCE_PLUGINS_SRC"/*; do
     if [ -d "$namespace_dir" ]; then
       namespace=$(basename "$namespace_dir")
+      # Remove existing namespace directory before installing new versions
+      rm -rf "${PLUGINDIR}/${namespace}"
       for version_dir in "$namespace_dir"/*; do
         if [ -d "$version_dir" ]; then
           ver=$(basename "$version_dir")

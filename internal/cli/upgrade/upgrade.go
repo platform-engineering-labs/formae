@@ -362,6 +362,12 @@ func installResourcePlugins(installPrefix string) error {
 		namespace := strings.ToLower(nsEntry.Name())
 		nsPath := filepath.Join(resourcePluginsDir, nsEntry.Name())
 
+		// Remove existing namespace directory before installing new versions
+		existingNamespaceDir := filepath.Join(homeDir, ".pel", "formae", "plugins", namespace)
+		if err := os.RemoveAll(existingNamespaceDir); err != nil {
+			return fmt.Errorf("failed to remove existing plugin directory %s: %w", existingNamespaceDir, err)
+		}
+
 		versions, err := os.ReadDir(nsPath)
 		if err != nil {
 			continue
