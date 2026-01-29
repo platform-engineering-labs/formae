@@ -11,7 +11,7 @@ require (
 	ergo.services/ergo v1.999.310
 	github.com/apple/pkl-go v0.12.0
 	github.com/masterminds/semver v1.5.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-20260120024139-dfbbaa3804a2
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0
 	go.opentelemetry.io/otel v1.39.0
