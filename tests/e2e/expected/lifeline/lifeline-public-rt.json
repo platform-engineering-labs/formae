@@ -29,7 +29,11 @@
     "Tags": [
       {
         "Key": "Name",
-        "Value": "test-public-rt"
+        "Value": {
+          "$strategy": "SetOnce",
+          "$value": "test-public-rt",
+          "$visibility": "Clear"
+        }
       }
     ],
     "VpcId": {
