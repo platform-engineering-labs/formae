@@ -134,7 +134,6 @@ gen-pkl:
 	pkl project resolve plugins/pkl/generator
 	pkl project resolve plugins/pkl/testdata/forma
 	pkl project resolve pkg/plugin/descriptors/
-	pkl project resolve tests/e2e/pkl
 
 ## pkg-pkl: Package core formae schema only
 pkg-pkl:
@@ -235,36 +234,13 @@ test-integration:
 	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-e2e: gen-pkl pkg-pkl build
+test-e2e: gen-pkl pkg-pkl build install-external-plugins
+	echo "Setting up e2e PKL dependencies..."
+	bash ./tests/e2e/setup-pkl-deps.sh
 	echo "Resolving PKL project..."
 	pkl project resolve tests/e2e/pkl
 	echo "Running full E2E test suite..."
-	echo "Backing up existing config file if it exists..."
-	@set -e; \
-		mkdir -p "$$HOME/.config/formae"
-	if [ -f "$$HOME/.config/formae/formae.conf.pkl" ]; then \
-		cp "$$HOME/.config/formae/formae.conf.pkl" "$$HOME/.config/formae/formae.conf.pkl.backup"; \
-		echo "Existing config backed up to formae.conf.pkl.backup"; \
-		fi; \
-		echo "Copy over test config file"; \
-		cp tests/e2e/config/formae.conf.pkl "$$HOME/.config/formae/formae.conf.pkl"; \
-		echo "Running E2E tests..."; \
-		if bash ./tests/e2e/e2e.sh; then \
-		echo "E2E tests completed successfully"; \
-		E2E_EXIT_CODE=0; \
-		else \
-		echo "E2E tests failed"; \
-		E2E_EXIT_CODE=1; \
-		fi; \
-		echo "Restoring original config file..."; \
-		if [ -f "$$HOME/.config/formae/formae.conf.pkl.backup" ]; then \
-		mv "$$HOME/.config/formae/formae.conf.pkl.backup" "$$HOME/.config/formae/formae.conf.pkl"; \
-		echo "Original config restored"; \
-		else \
-		rm -f "$$HOME/.config/formae/formae.conf.pkl"; \
-		echo "Test config removed (no original config to restore)"; \
-		fi; \
-		exit $$E2E_EXIT_CODE
+	bash ./tests/e2e/e2e.sh
 
 test-property:
 	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'

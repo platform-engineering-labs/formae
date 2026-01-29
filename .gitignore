@@ -76,6 +76,9 @@ version.semver
 tests/e2e/formae-server.log
 tests/e2e/test-logs
 
+# Generated e2e test PklProject (contains absolute paths)
+tests/e2e/pkl/PklProject
+
 # Claude Code files
 .claude/
 CLAUDE.md
