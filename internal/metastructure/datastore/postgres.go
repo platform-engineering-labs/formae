@@ -1598,6 +1598,10 @@ func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID 
 }
 
 func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+	// Track if KSUID was provided (from GenerateResourceUpdates) vs generated here.
+	// If a KSUID was already assigned, other resources in the same command may reference it,
+	// so we must not overwrite it with a discovered KSUID.
+	originalKsuidProvided := resource.Ksuid != ""
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
 	}
@@ -1648,7 +1652,11 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	// It can happen in rare cases that the resource existed on the unmanaged stack. This happens when a resource is discovered
 	// before the create operation completes. In this case, we preserve the discovered KSUID to maintain referential integrity
 	// for any resources that may have already created references to it.
-	if !managed && operation != string(resource_update.OperationDelete) {
+	//
+	// However, we only adopt the discovered KSUID if the incoming resource didn't already have one assigned.
+	// If GenerateResourceUpdates already assigned a KSUID, other resources in the same command reference it,
+	// so overwriting it would break those references.
+	if !managed && operation != string(resource_update.OperationDelete) && !originalKsuidProvided {
 		// Preserve the discovered KSUID instead of generating a new one
 		slog.Debug("Resource discovered before apply completed, adopting discovered KSUID",
 			"native_id", resource.NativeID,
@@ -1687,8 +1695,13 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	} else {
 		// For non-delete operations, compare resources
 		if readWriteEqual && readOnlyEqual {
-			// Resource data is identical, return existing version ID
-			return fmt.Sprintf("%s_%s", resource.Ksuid, version), nil
+			// Resource data is identical. Only return early if KSUIDs match.
+			// If a new KSUID was assigned (e.g., after destroy with deterministic native_id like Azure),
+			// we need to insert a row with the new KSUID for references to resolve.
+			if resource.Ksuid == ksuid {
+				return fmt.Sprintf("%s_%s", resource.Ksuid, version), nil
+			}
+			// KSUIDs differ - fall through to insert with the new KSUID
 		}
 	}
 

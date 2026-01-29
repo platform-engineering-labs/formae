@@ -1593,3 +1593,162 @@ func TestDatastore_QueryTargets_Versioning(t *testing.T) {
 	assert.True(t, results[0].Discoverable)
 	assert.Contains(t, string(results[0].Config), "Version\":\"2")
 }
+
+// TestDatastore_StoreResource_DifferentKsuidSameData verifies that storing a resource
+// with identical properties but a different KSUID creates a new row.
+// This is critical for reference resolution after destroy/re-apply cycles.
+func TestDatastore_StoreResource_DifferentKsuidSameData(t *testing.T) {
+	if datastore, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(datastore)
+
+		ksuidA := mksuid.New().String()
+		ksuidB := mksuid.New().String()
+
+		// Store resource with KSUID-A
+		resourceA := &pkgmodel.Resource{
+			Ksuid:    ksuidA,
+			NativeID: "azure-rg-123",
+			Stack:    "test-stack",
+			Type:     "Azure::Resources::ResourceGroup",
+			Label:    "my-resource-group",
+			Properties: json.RawMessage(`{
+				"name": "my-rg",
+				"location": "eastus"
+			}`),
+			Managed: true,
+		}
+
+		versionA, err := datastore.StoreResource(resourceA, "command-1")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, versionA)
+
+		// Verify resource can be loaded by KSUID-A
+		loadedA, err := datastore.LoadResourceById(ksuidA)
+		assert.NoError(t, err)
+		assert.NotNil(t, loadedA)
+		assert.Equal(t, ksuidA, loadedA.Ksuid)
+
+		// Store same resource data but with DIFFERENT KSUID-B
+		// This simulates what happens after destroy/re-apply: same native_id,
+		// same properties, but a new KSUID was assigned
+		resourceB := &pkgmodel.Resource{
+			Ksuid:    ksuidB,
+			NativeID: "azure-rg-123",
+			Stack:    "test-stack",
+			Type:     "Azure::Resources::ResourceGroup",
+			Label:    "my-resource-group",
+			Properties: json.RawMessage(`{
+				"name": "my-rg",
+				"location": "eastus"
+			}`),
+			Managed: true,
+		}
+
+		versionB, err := datastore.StoreResource(resourceB, "command-2")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, versionB)
+
+		// Critical: Resource must be loadable by the NEW KSUID-B
+		// This is what fails without the fix - references use KSUID-B but
+		// the row was never inserted because data was "identical"
+		loadedB, err := datastore.LoadResourceById(ksuidB)
+		assert.NoError(t, err)
+		assert.NotNil(t, loadedB, "Resource should be loadable by new KSUID after store with different KSUID")
+		assert.Equal(t, ksuidB, loadedB.Ksuid)
+		assert.Equal(t, "azure-rg-123", loadedB.NativeID)
+
+	} else {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+}
+
+// TestDatastore_StoreResource_DestroyReapplyCycle simulates the actual Azure bug:
+// 1. Create resource (assigned KSUID-A)
+// 2. Delete resource
+// 3. Re-create resource (assigned NEW KSUID-B, same native_id)
+// 4. Dependent resources try to resolve references using KSUID-B
+//
+// Without the fix, step 3 would return early without inserting KSUID-B,
+// causing step 4 to fail with "resource not found".
+func TestDatastore_StoreResource_DestroyReapplyCycle(t *testing.T) {
+	if datastore, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(datastore)
+
+		// Step 1: Create resource (simulates initial apply)
+		resourceGroup := &pkgmodel.Resource{
+			Ksuid:    mksuid.New().String(),
+			NativeID: "/subscriptions/xxx/resourceGroups/my-rg",
+			Stack:    "networking-stack",
+			Type:     "Azure::Resources::ResourceGroup",
+			Label:    "rg",
+			Properties: json.RawMessage(`{
+				"name": "my-rg",
+				"location": "eastus"
+			}`),
+			Managed: true,
+		}
+		originalKsuid := resourceGroup.Ksuid
+
+		_, err := datastore.StoreResource(resourceGroup, "apply-command-1")
+		assert.NoError(t, err)
+
+		// Verify it exists
+		loaded, err := datastore.LoadResourceById(originalKsuid)
+		assert.NoError(t, err)
+		assert.NotNil(t, loaded)
+
+		// Step 2: Delete resource (simulates destroy)
+		_, err = datastore.DeleteResource(resourceGroup, "destroy-command")
+		assert.NoError(t, err)
+
+		// Verify it's deleted (not returned by query)
+		query := &ResourceQuery{
+			NativeID: &QueryItem[string]{
+				Item:       "/subscriptions/xxx/resourceGroups/my-rg",
+				Constraint: Required,
+			},
+		}
+		results, err := datastore.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Empty(t, results, "Resource should not appear in query after delete")
+
+		// Step 3: Re-create resource with NEW KSUID (simulates re-apply)
+		// In the real scenario, formae assigns a new KSUID because it's treating
+		// this as a new resource creation, but Azure returns the same native_id
+		newKsuid := mksuid.New().String()
+		recreatedResource := &pkgmodel.Resource{
+			Ksuid:    newKsuid,
+			NativeID: "/subscriptions/xxx/resourceGroups/my-rg", // Same native_id!
+			Stack:    "networking-stack",
+			Type:     "Azure::Resources::ResourceGroup",
+			Label:    "rg",
+			Properties: json.RawMessage(`{
+				"name": "my-rg",
+				"location": "eastus"
+			}`),
+			Managed: true,
+		}
+
+		_, err = datastore.StoreResource(recreatedResource, "apply-command-2")
+		assert.NoError(t, err)
+
+		// Step 4: Verify resource is accessible by NEW KSUID
+		// This is what dependent resources (VirtualNetwork, Subnet) need to do
+		// when resolving their "resourceGroupName" reference
+		loadedByNewKsuid, err := datastore.LoadResourceById(newKsuid)
+		assert.NoError(t, err)
+		assert.NotNil(t, loadedByNewKsuid,
+			"Resource must be loadable by new KSUID - this is critical for reference resolution")
+		assert.Equal(t, newKsuid, loadedByNewKsuid.Ksuid)
+		assert.Equal(t, "/subscriptions/xxx/resourceGroups/my-rg", loadedByNewKsuid.NativeID)
+
+		// Also verify it shows up in queries now
+		results, err = datastore.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 1, "Re-created resource should appear in query")
+		assert.Equal(t, newKsuid, results[0].Ksuid)
+
+	} else {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+}
