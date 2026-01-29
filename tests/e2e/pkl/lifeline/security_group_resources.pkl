@@ -1,0 +1,55 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "@formae/formae.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+
+class SecurityGroupResources {
+    name: String
+    vpc: vpc.VPC
+
+    hidden albSg: securitygroup.SecurityGroup = new {
+        label = "lifeline-alb-sg"
+        groupDescription = "Allow HTTP traffic to ALB"
+        vpcId = vpc.res.id
+        tags { new { key = "Name"; value = formae.value(name + "-alb-sg").setOnce } }
+    }
+
+    hidden albHttpIngress: securitygroupingress.SecurityGroupIngress = new {
+        label = "lifeline-alb-http-ingress"
+        ipProtocol = "tcp"
+        fromPort = 80
+        toPort = 80
+        groupId = albSg.res.groupId
+        cidrIp = "0.0.0.0/0"
+    }
+
+    hidden taskSg: securitygroup.SecurityGroup = new {
+        label = "lifeline-task-sg"
+        groupDescription = "Allow HTTP traffic from ALB"
+        vpcId = vpc.res.id
+        tags { new { key = "Name"; value = formae.value(name + "-task-sg").setOnce } }
+    }
+
+    hidden taskHttpIngress: securitygroupingress.SecurityGroupIngress = new {
+        label = "lifeline-task-http-ingress"
+        ipProtocol = "tcp"
+        fromPort = 80
+        toPort = 80
+        sourceSecurityGroupId = albSg.res.groupId
+        groupId = taskSg.res.groupId
+    }
+
+    hidden resources: Listing<formae.Resource> = new {
+        albSg
+        albHttpIngress
+        taskSg
+        taskHttpIngress
+    }
+}
+

@@ -131,7 +131,11 @@
     "Tags": [
       {
         "Key": "Name",
-        "Value": "test-public-subnet-2"
+        "Value": {
+          "$strategy": "SetOnce",
+          "$value": "test-public-subnet-2",
+          "$visibility": "Clear"
+        }
       }
     ],
     "VpcId": {

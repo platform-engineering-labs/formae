@@ -63,7 +63,11 @@
     "Tags": [
       {
         "Key": "Name",
-        "Value": "test-vpc"
+        "Value": {
+          "$strategy": "SetOnce",
+          "$value": "test-vpc",
+          "$visibility": "Clear"
+        }
       }
     ]
   },

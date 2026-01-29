@@ -43,7 +43,11 @@
     "Tags": [
       {
         "Key": "Name",
-        "Value": "test-task-sg"
+        "Value": {
+          "$strategy": "SetOnce",
+          "$value": "test-task-sg",
+          "$visibility": "Clear"
+        }
       }
     ],
     "VpcId": {

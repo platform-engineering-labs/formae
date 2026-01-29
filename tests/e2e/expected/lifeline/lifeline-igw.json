@@ -23,7 +23,11 @@
     "Tags": [
       {
         "Key": "Name",
-        "Value": "test-igw"
+        "Value": {
+          "$strategy": "SetOnce",
+          "$value": "test-igw",
+          "$visibility": "Clear"
+        }
       }
     ]
   },

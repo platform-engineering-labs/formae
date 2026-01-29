@@ -43,7 +43,11 @@
     "Tags": [
       {
         "Key": "Name",
-        "Value": "test-alb-sg"
+        "Value": {
+          "$strategy": "SetOnce",
+          "$value": "test-alb-sg",
+          "$visibility": "Clear"
+        }
       }
     ],
     "VpcId": {
