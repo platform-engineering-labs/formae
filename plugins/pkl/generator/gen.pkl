@@ -122,7 +122,19 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
         ).toMapping()
     else
       Unexpected("Dynamic|Mapping|Map", value.getClass().simpleName)
-  [Any] = (_, value) -> value
+  [Any] = (_, value) ->
+    // Check if this is a formae.Value-like object (has $value, $visibility, $strategy)
+    // For extraction, we just want the evaluated value - not the wrapper:
+    // - setOnce: the expression has been evaluated, just use the result
+    // - opaque: wrapping the hash again would double-hash it
+    if (value is Dynamic|Mapping)
+      let (valueAsMap = value.toMap())
+      if (valueAsMap.containsKey("$value") && valueAsMap.containsKey("$visibility") && valueAsMap.containsKey("$strategy"))
+        valueAsMap.getOrNull("$value")
+      else
+        value
+    else
+      value
 }
 
 
@@ -558,18 +570,16 @@ local function formatValueWithTypes(value: Any, indent: String): String =
               (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
               indent + "}.\(property)"
         else if (typeName == "FakeValue")
-          // Special handling for FakeValue
+          // Special handling for FakeValue - render using fluent API
           let (fakeValue = value.getOrNull("FakeValue"))
           let (visibility = value.getOrNull("FakeVisibility"))
           let (strategy = value.getOrNull("FakeStrategy"))
-          let (valueComment = if (visibility == "Clear") fakeValue else "***HIDDEN***")
-          let (comment = "\n" + indent + "  // Value: \(valueComment)")
-            typeDeclaration + " {" +
-            comment + "\n" +
-            indent + "  value = \"\(fakeValue)\"\n" +
-            (if (visibility != "Clear") indent + "  visibility = \"\(visibility)\"\n" else "") +
-            (if (strategy != "Update") indent + "  strategy = \"\(strategy)\"\n" else "") +
-            indent + "}"
+          let (escapedValue = escapeString(fakeValue))
+          // Build fluent API: formae.value("...").opaque.setOnce
+          let (base = "formae.value(\"\(escapedValue)\")")
+          let (withVisibility = if (visibility == "Opaque") base + ".opaque" else base)
+          let (withStrategy = if (strategy == "SetOnce") withVisibility + ".setOnce" else withVisibility)
+            withStrategy
         else
           typeDeclaration + " {\n" +
           formatNestedContentWithTypes(value, indent + "  ") +
