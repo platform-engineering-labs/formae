@@ -595,6 +595,9 @@ const docTemplate = `{
                 },
                 "ResourceCount": {
                     "type": "integer"
+                },
+                "Version": {
+                    "type": "string"
                 }
             }
         },
