@@ -16,7 +16,6 @@ import (
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -1009,12 +1008,15 @@ func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
 			}
 		case gjson.JSON:
 			if value.IsArray() {
-				// Handle arrays like SubnetIds: ["formae://...", "formae://..."]
+				// Handle arrays - may contain strings or objects with nested $ref
 				value.ForEach(func(_, item gjson.Result) bool {
 					if item.Type == gjson.String {
 						if ksuid := pkgmodel.FormaeURI(item.String()).KSUID(); ksuid != "" {
 							ksuidSet[ksuid] = struct{}{}
 						}
+					} else if item.IsObject() {
+						// Recursively extract from objects inside arrays
+						extractKSUIDs(item.Raw, ksuidSet)
 					}
 					return true
 				})
@@ -1027,75 +1029,57 @@ func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
 	})
 }
 
+// replaceKSUIDs recursively walks the JSON structure and replaces all $ref objects
+// (containing formae URIs) with $res objects (containing resolved resource metadata).
 func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey) string {
-	result := gjson.Parse(jsonStr)
-	modified := jsonStr
-
-	result.ForEach(func(key, value gjson.Result) bool {
-		switch value.Type {
-		case gjson.String:
-			formaeUri := pkgmodel.FormaeURI(value.String())
-			if ksuid := formaeUri.KSUID(); ksuid != "" {
-				if triplet, ok := ksuidToTriplet[ksuid]; ok {
-					resolvableObj := map[string]any{
-						"$res":      true,
-						"$label":    triplet.Label,
-						"$type":     triplet.Type,
-						"$stack":    triplet.Stack,
-						"$property": formaeUri.PropertyPath(),
-						"$value":    value.Get("$value").String(),
-					}
-					modified, _ = sjson.Set(modified, key.String(), resolvableObj)
-				}
-			}
-		case gjson.JSON:
-			if value.IsArray() {
-				value.ForEach(func(index, item gjson.Result) bool {
-					if item.Type == gjson.String {
-						formaeUri := pkgmodel.FormaeURI(item.String())
-						if ksuid := formaeUri.KSUID(); ksuid != "" {
-							if triplet, ok := ksuidToTriplet[ksuid]; ok {
-								resolvableObj := map[string]any{
-									"$res":      true,
-									"$label":    triplet.Label,
-									"$type":     triplet.Type,
-									"$stack":    triplet.Stack,
-									"$property": formaeUri.PropertyPath(),
-									"$value":    value.Get("$value").String(),
-								}
-								path := key.String() + "." + index.String()
-								modified, _ = sjson.Set(modified, path, resolvableObj)
-							}
+	var replace func(value any) any
+	replace = func(value any) any {
+		switch v := value.(type) {
+		case map[string]any:
+			// Check if this is a $ref object that needs conversion
+			if ref, ok := v["$ref"].(string); ok {
+				formaeUri := pkgmodel.FormaeURI(ref)
+				if ksuid := formaeUri.KSUID(); ksuid != "" {
+					if triplet, ok := ksuidToTriplet[ksuid]; ok {
+						dollarValue, _ := v["$value"].(string)
+						return map[string]any{
+							"$res":      true,
+							"$label":    triplet.Label,
+							"$type":     triplet.Type,
+							"$stack":    triplet.Stack,
+							"$property": formaeUri.PropertyPath(),
+							"$value":    dollarValue,
 						}
 					}
-					return true
-				})
-			} else if value.IsObject() {
-				// Check if this is a $ref object that needs to be converted
-				if refValue := value.Get("$ref"); refValue.Exists() && refValue.Type == gjson.String {
-					formaeUri := pkgmodel.FormaeURI(refValue.String())
-					if ksuid := formaeUri.KSUID(); ksuid != "" {
-						if triplet, ok := ksuidToTriplet[ksuid]; ok {
-							resolvableObj := map[string]any{
-								"$res":      true,
-								"$label":    triplet.Label,
-								"$type":     triplet.Type,
-								"$stack":    triplet.Stack,
-								"$property": formaeUri.PropertyPath(),
-								"$value":    value.Get("$value").String(),
-							}
-							modified, _ = sjson.Set(modified, key.String(), resolvableObj)
-						}
-					}
-				} else {
-					// Handle nested objects recursively
-					nestedReplaced := replaceKSUIDs(value.Raw, ksuidToTriplet)
-					modified, _ = sjson.SetRaw(modified, key.String(), nestedReplaced)
 				}
 			}
+			// Recursively process all values in the map
+			result := make(map[string]any, len(v))
+			for key, val := range v {
+				result[key] = replace(val)
+			}
+			return result
+		case []any:
+			// Recursively process all items in the array
+			result := make([]any, len(v))
+			for i, item := range v {
+				result[i] = replace(item)
+			}
+			return result
+		default:
+			return value
 		}
-		return true
-	})
+	}
 
-	return modified
+	var data any
+	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+		return jsonStr
+	}
+
+	replaced := replace(data)
+	result, err := json.Marshal(replaced)
+	if err != nil {
+		return jsonStr
+	}
+	return string(result)
 }
