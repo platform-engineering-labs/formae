@@ -21,7 +21,8 @@ import (
 // that run as separate processes (not loaded via plugin.Open).
 // TODO: Move PluginManager out of pkg/plugin package as it should not be exposed to library users.
 type ResourcePluginInfo struct {
-	Namespace  string
+	Name       string // Plugin name from directory (e.g., "cloudflare-dns")
+	Namespace  string // Namespace from manifest (e.g., "CLOUDFLARE")
 	Version    string
 	BinaryPath string
 }
@@ -191,22 +192,22 @@ func (m *Manager) discoverExternalResourcePlugins() {
 		return
 	}
 
-	// Walk through namespace directories
-	namespaceEntries, err := os.ReadDir(pluginBaseDir)
+	// Walk through plugin directories (named by plugin name, not namespace)
+	pluginEntries, err := os.ReadDir(pluginBaseDir)
 	if err != nil {
 		return
 	}
 
-	for _, namespaceEntry := range namespaceEntries {
-		if !namespaceEntry.IsDir() {
+	for _, pluginEntry := range pluginEntries {
+		if !pluginEntry.IsDir() {
 			continue
 		}
 
-		namespace := namespaceEntry.Name()
-		namespacePath := filepath.Join(pluginBaseDir, namespace)
+		pluginName := pluginEntry.Name()
+		pluginPath := filepath.Join(pluginBaseDir, pluginName)
 
 		// Look for version directories
-		versionEntries, err := os.ReadDir(namespacePath)
+		versionEntries, err := os.ReadDir(pluginPath)
 		if err != nil {
 			continue
 		}
@@ -225,7 +226,8 @@ func (m *Manager) discoverExternalResourcePlugins() {
 			}
 
 			versionStr := versionEntry.Name()
-			binaryPath := filepath.Join(namespacePath, versionStr, namespace)
+			// Binary path uses plugin name, not namespace
+			binaryPath := filepath.Join(pluginPath, versionStr, pluginName)
 
 			// Check if binary exists and is executable
 			if info, err := os.Stat(binaryPath); err == nil && !info.IsDir() {
@@ -249,7 +251,21 @@ func (m *Manager) discoverExternalResourcePlugins() {
 				return candidates[i].version.GreaterThan(candidates[j].version)
 			})
 			best := candidates[0]
+
+			// Read manifest to get namespace
+			manifestPath := filepath.Join(pluginPath, best.versionStr, DefaultManifestPath)
+			manifest, err := ReadManifest(manifestPath)
+
+			var namespace string
+			if err == nil && manifest.Namespace != "" {
+				namespace = manifest.Namespace
+			} else {
+				// Fallback for backward compatibility: use plugin name as namespace
+				namespace = pluginName
+			}
+
 			m.externalResourcePlugins = append(m.externalResourcePlugins, ResourcePluginInfo{
+				Name:       pluginName,
 				Namespace:  namespace,
 				Version:    best.versionStr,
 				BinaryPath: best.binaryPath,
