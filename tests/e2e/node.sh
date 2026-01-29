@@ -19,10 +19,10 @@ start_server() {
 
     echo "Logging server output to $E2E_SERVER_LOG"
 
-    # Start server in background
+    # Start server in background with e2e test config
     #TODO once override is implemented we want to start the server in log level debug
     #$E2E_FORMAE_BINARY agent start --console-log-level "$E2E_CONSOLE_LOG_LEVEL" > "$E2E_SERVER_LOG" 2>&1 &
-    $E2E_FORMAE_BINARY agent start > "$E2E_SERVER_LOG" 2>&1 &
+    $E2E_FORMAE_BINARY agent start --config tests/e2e/config/formae.conf.pkl > "$E2E_SERVER_LOG" 2>&1 &
     local server_pid=$!
 
     # Save PID for cleanup
