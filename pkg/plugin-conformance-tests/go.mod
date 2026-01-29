@@ -6,7 +6,7 @@ require (
 	ergo.services/ergo v1.999.310
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.1
-	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.2
+	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.6
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 )
