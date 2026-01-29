@@ -42,7 +42,7 @@ tests:
   lifeline:
     name: "Lifeline"
     description: "Lifeline example"
-    source: "examples/complete/lifeline/basic_infrastructure.pkl"
+    source: "tests/e2e/pkl/lifeline/basic_infrastructure.pkl"
     expected_dir: "tests/e2e/expected/lifeline"
     timeout:
       apply: 1800
@@ -52,7 +52,7 @@ tests:
   static-website:
     name: "Static Website"
     description: "Static Website example"
-    source: "examples/complete/static-website/main.pkl"
+    source: "tests/e2e/pkl/static-website/main.pkl"
     expected_dir: "tests/e2e/expected/static-website"
     timeout:
       apply: 1800

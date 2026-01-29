@@ -1,0 +1,63 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/ext/random.pkl"
+import "@aws/s3/bucket.pkl"
+import "./vars.pkl"
+
+description {
+    text = """
+    This is the showcase that demonstrates how to work with formae from Day 0 to Day N.
+
+    This forma is supposed to be used in patch mode and demonstrate how to make minimal changes
+    to the infrastructure with minimal blast radius. This is an example of how less experienced
+    platform engineers and developer teams can make changes to the infrastructure without seeing
+    or touching everything else. Another use case is to make urgent changes, for example at night,
+    without having to deal with all details. And yet another use case would be developers changing
+    some parameters in their deployments, such as memory and CPU requirements.
+
+    Apply this forma in patch mode to create a new S3 bucket with.
+
+    Destroy all resources referenced by this forma using the destroy command.
+    """
+    confirm = true
+}
+
+local randomId = random.id(4).toString()
+
+properties {
+    s3BucketSuffix = new formae.Prop {
+        flag = "suffix"
+        default = vars.s3BucketSuffix
+    }
+
+    bucketName = new formae.Prop {
+        flag = "bucketName"
+        default = "\(vars.projectName)\(vars.s3BucketSuffix)-\(randomId)"
+    }
+}
+
+forma {
+    vars.stack.res
+    vars.target.res
+
+    new bucket.Bucket {
+        label = "bucket-1"
+        bucketName = properties.bucketName.value
+        tags {
+            new {
+                key = "Name"
+                value = formae.value(properties.bucketName.value).setOnce
+            }
+            new {
+                key = "Project"
+                value = vars.projectName
+            }
+        }
+    }
+}
