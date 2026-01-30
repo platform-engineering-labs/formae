@@ -1,0 +1,115 @@
+name: Aurora Data API Tests
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # 6 AM UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: aurora-dataapi-tests
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  DATABASE_NAME: formae
+
+jobs:
+  test-aurora-dataapi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout formae
+        uses: actions/checkout@v4
+
+      - name: Checkout formae-plugin-aws
+        uses: actions/checkout@v4
+        with:
+          repository: platform-engineering-labs/formae-plugin-aws
+          path: formae-plugin-aws
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Set up Pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.2
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
+          role-session-name: AuroraDataAPITests
+
+      - name: Build formae
+        run: make build
+
+      - name: Install AWS plugin
+        run: |
+          cd formae-plugin-aws
+          make build
+          mkdir -p ~/.pel/formae/plugins
+          cp formae-plugin-aws ~/.pel/formae/plugins/
+
+      - name: Start formae agent
+        run: |
+          ./formae agent start &
+          sleep 5
+          ./formae status agent
+
+      - name: Deploy Aurora Infrastructure
+        id: deploy
+        run: |
+          ./formae apply --mode reconcile --yes --watch \
+            formae-plugin-aws/examples/aurora-dataapi/main.pkl
+
+      - name: Get Aurora ARNs
+        id: get-arns
+        run: |
+          # Get cluster info from formae inventory
+          INVENTORY=$(./formae inventory resources \
+            --query 'type:AWS::RDS::DBCluster' \
+            --output-consumer machine \
+            --output-schema json)
+
+          echo "Inventory output:"
+          echo "$INVENTORY" | jq .
+
+          # Extract ARNs
+          CLUSTER_ARN=$(echo "$INVENTORY" | jq -r '.Resources[0].ReadOnlyProperties.DBClusterArn')
+          SECRET_ARN=$(echo "$INVENTORY" | jq -r '.Resources[0].Properties.MasterUserSecret.SecretArn')
+
+          echo "cluster_arn=$CLUSTER_ARN" >> $GITHUB_OUTPUT
+          echo "secret_arn=$SECRET_ARN" >> $GITHUB_OUTPUT
+          echo "Cluster ARN: $CLUSTER_ARN"
+          echo "Secret ARN: $SECRET_ARN"
+
+      - name: Run Datastore Tests
+        run: |
+          go test -v -tags=integration -timeout=30m \
+            ./internal/metastructure/datastore/... \
+            -args \
+            -dbType=auroradataapi \
+            -clusterArn="${{ steps.get-arns.outputs.cluster_arn }}" \
+            -secretArn="${{ steps.get-arns.outputs.secret_arn }}" \
+            -database="${{ env.DATABASE_NAME }}" \
+            -region="${{ env.AWS_REGION }}"
+
+      - name: Destroy Aurora Infrastructure
+        if: always()
+        run: |
+          ./formae destroy --mode reconcile --yes --watch \
+            formae-plugin-aws/examples/aurora-dataapi/main.pkl || true
+
+      - name: Stop formae agent
+        if: always()
+        run: |
+          ./formae agent stop || true

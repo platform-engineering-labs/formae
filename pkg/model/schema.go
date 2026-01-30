@@ -56,4 +56,3 @@ func (s Schema) RequiredOnCreate() []string {
 func (s Schema) WriteOnly() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.WriteOnly }, true)
 }
-
