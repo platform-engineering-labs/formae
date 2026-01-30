@@ -114,8 +114,11 @@ func (h *ergoHandler) WithGroup(name string) slog.Handler {
 }
 
 // setupPluginLogger creates a logger for the plugin that outputs in Ergo format.
+// Logs are written to stdout so that Ergo routes them through MessagePortText,
+// which allows PluginProcessSupervisor to parse and route by log level.
+// Stderr is reserved for actual errors (MessagePortError).
 func setupPluginLogger(namespace string) plugin.Logger {
-	handler := &ergoHandler{w: os.Stderr, level: getPluginLogLevel()}
+	handler := &ergoHandler{w: os.Stdout, level: getPluginLogLevel()}
 	slogger := slog.New(handler).With("plugin.namespace", namespace)
 	return plugin.NewPluginLogger(slogger)
 }
