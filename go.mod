@@ -35,10 +35,9 @@ require (
 	github.com/masterminds/semver v1.5.0
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/olekukonko/tablewriter v1.0.7
-	github.com/platform-engineering-labs/formae/pkg/api/model v0.0.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.0.0
-	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0
-	github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests v0.0.0-00010101000000-000000000000
+	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.2
+	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.7
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260120160109-3221bac3fb58
 	github.com/posthog/posthog-go v1.6.3

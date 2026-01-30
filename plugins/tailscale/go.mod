@@ -61,7 +61,7 @@ require (
 	github.com/mdlayher/socket v0.5.0 // indirect
 	github.com/miekg/dns v1.1.58 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
-	github.com/platform-engineering-labs/formae/pkg/model v0.0.0-20260120024139-dfbbaa3804a2 // indirect
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.2 // indirect
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
 	github.com/safchain/ethtool v0.3.0 // indirect
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e // indirect

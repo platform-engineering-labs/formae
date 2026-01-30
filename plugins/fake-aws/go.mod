@@ -13,7 +13,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 )
 
-require github.com/platform-engineering-labs/formae/pkg/model v0.0.0-20260120024139-dfbbaa3804a2
+require github.com/platform-engineering-labs/formae/pkg/model v0.1.2
 
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 // indirect
