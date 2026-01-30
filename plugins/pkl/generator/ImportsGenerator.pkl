@@ -35,7 +35,9 @@ output {
         ""
         "packages: Mapping<String, Mapping<String, Module>> = new Mapping {"
         for (name in schemaPackageNames) {
-            "    [\"@\(name)\"] = import*(\"@\(name)/**/*.pkl\")"
+            // Use both patterns: *.pkl for root level files, **/*.pkl for subdirectories
+            // This works around a pkl quirk where ** doesn't match zero directories
+            "    [\"@\(name)\"] = new Mapping { ...import*(\"@\(name)/*.pkl\"); ...import*(\"@\(name)/**/*.pkl\") }"
         }
         "}"
     }.join("\n")

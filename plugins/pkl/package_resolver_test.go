@@ -76,10 +76,23 @@ func TestPackageResolver_AddLocal(t *testing.T) {
 func TestPackageResolver_WithLocalSchemas(t *testing.T) {
 	// Create temp directory structure for testing
 	tmpDir := t.TempDir()
-	pluginDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	versionDir := filepath.Join(tmpDir, "gcp", "v0.75.1")
+	pluginDir := filepath.Join(versionDir, "schema", "pkl")
 	require.NoError(t, os.MkdirAll(pluginDir, 0755))
+
+	// Create manifest with namespace
+	manifestPath := filepath.Join(versionDir, "formae-plugin.pkl")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(`namespace = "GCP"`), 0644))
+
+	// Create PklProject with package name
 	pklProjectPath := filepath.Join(pluginDir, "PklProject")
-	require.NoError(t, os.WriteFile(pklProjectPath, []byte("amends \"pkl:Project\""), 0644))
+	pklProjectContent := `amends "pkl:Project"
+
+package {
+  name = "gcp"
+}
+`
+	require.NoError(t, os.WriteFile(pklProjectPath, []byte(pklProjectContent), 0644))
 
 	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 
@@ -114,20 +127,34 @@ func TestPackageResolver_WithLocalSchemas_SelectsHighestVersion(t *testing.T) {
 	// Create temp directory structure with multiple versions
 	tmpDir := t.TempDir()
 
+	pklProjectContent := `amends "pkl:Project"
+
+package {
+  name = "ovh"
+}
+`
+	manifestContent := `namespace = "OVH"`
+
 	// Create v0.1.0
-	v010Dir := filepath.Join(tmpDir, "ovh", "v0.1.0", "schema", "pkl")
+	v010VersionDir := filepath.Join(tmpDir, "ovh", "v0.1.0")
+	v010Dir := filepath.Join(v010VersionDir, "schema", "pkl")
 	require.NoError(t, os.MkdirAll(v010Dir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(v010Dir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(v010VersionDir, "formae-plugin.pkl"), []byte(manifestContent), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(v010Dir, "PklProject"), []byte(pklProjectContent), 0644))
 
 	// Create v0.2.0 (higher)
-	v020Dir := filepath.Join(tmpDir, "ovh", "v0.2.0", "schema", "pkl")
+	v020VersionDir := filepath.Join(tmpDir, "ovh", "v0.2.0")
+	v020Dir := filepath.Join(v020VersionDir, "schema", "pkl")
 	require.NoError(t, os.MkdirAll(v020Dir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(v020Dir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(v020VersionDir, "formae-plugin.pkl"), []byte(manifestContent), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(v020Dir, "PklProject"), []byte(pklProjectContent), 0644))
 
 	// Create v0.1.5 (between)
-	v015Dir := filepath.Join(tmpDir, "ovh", "v0.1.5", "schema", "pkl")
+	v015VersionDir := filepath.Join(tmpDir, "ovh", "v0.1.5")
+	v015Dir := filepath.Join(v015VersionDir, "schema", "pkl")
 	require.NoError(t, os.MkdirAll(v015Dir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(v015Dir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(v015VersionDir, "formae-plugin.pkl"), []byte(manifestContent), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(v015Dir, "PklProject"), []byte(pklProjectContent), 0644))
 
 	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 
@@ -143,9 +170,17 @@ func TestPackageResolver_WithLocalSchemas_SelectsHighestVersion(t *testing.T) {
 func TestPackageResolver_MixedPackages(t *testing.T) {
 	// Create temp directory with local GCP schema
 	tmpDir := t.TempDir()
-	gcpDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	gcpVersionDir := filepath.Join(tmpDir, "gcp", "v0.75.1")
+	gcpDir := filepath.Join(gcpVersionDir, "schema", "pkl")
 	require.NoError(t, os.MkdirAll(gcpDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(gcpDir, "PklProject"), []byte("amends \"pkl:Project\""), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(gcpVersionDir, "formae-plugin.pkl"), []byte(`namespace = "GCP"`), 0644))
+	pklProjectContent := `amends "pkl:Project"
+
+package {
+  name = "gcp"
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(gcpDir, "PklProject"), []byte(pklProjectContent), 0644))
 
 	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 	resolver.Add("formae", "pkl", "0.75.1") // No local schema, should be remote
@@ -174,10 +209,18 @@ func TestPackageResolver_MixedPackages(t *testing.T) {
 
 func TestPackageResolver_GetPackageStrings(t *testing.T) {
 	tmpDir := t.TempDir()
-	gcpDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	gcpVersionDir := filepath.Join(tmpDir, "gcp", "v0.75.1")
+	gcpDir := filepath.Join(gcpVersionDir, "schema", "pkl")
 	require.NoError(t, os.MkdirAll(gcpDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(gcpVersionDir, "formae-plugin.pkl"), []byte(`namespace = "GCP"`), 0644))
 	pklProjectPath := filepath.Join(gcpDir, "PklProject")
-	require.NoError(t, os.WriteFile(pklProjectPath, []byte("amends \"pkl:Project\""), 0644))
+	pklProjectContent := `amends "pkl:Project"
+
+package {
+  name = "gcp"
+}
+`
+	require.NoError(t, os.WriteFile(pklProjectPath, []byte(pklProjectContent), 0644))
 
 	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 	resolver.Add("formae", "pkl", "0.75.1")
@@ -220,10 +263,13 @@ func TestPackageResolver_DefaultRemote(t *testing.T) {
 }
 
 func TestPackageResolver_WithLocalSchemas_MissingPklProject(t *testing.T) {
-	// Create version directory but without PklProject file
+	// Create version directory with manifest but without PklProject file
 	tmpDir := t.TempDir()
-	pluginDir := filepath.Join(tmpDir, "gcp", "v0.75.1", "schema", "pkl")
+	versionDir := filepath.Join(tmpDir, "gcp", "v0.75.1")
+	pluginDir := filepath.Join(versionDir, "schema", "pkl")
 	require.NoError(t, os.MkdirAll(pluginDir, 0755))
+	// Create manifest so plugin is found
+	require.NoError(t, os.WriteFile(filepath.Join(versionDir, "formae-plugin.pkl"), []byte(`namespace = "GCP"`), 0644))
 	// Don't create PklProject file
 
 	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
