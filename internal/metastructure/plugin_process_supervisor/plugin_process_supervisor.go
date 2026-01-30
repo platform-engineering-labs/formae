@@ -95,7 +95,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 // Format: "timestamp [level] rest_of_message" e.g. "1764458575429677244 [info] <79F4473F.0.1004>: message"
 var pluginLogRegex = regexp.MustCompile(`^\d+\s+\[(trace|debug|info|warning|error)\]\s+(.*)$`)
 
-func (p *PluginProcessSupervisor) logPluginOutput(namespace, output string) {
+func (p *PluginProcessSupervisor) logPluginOutput(output string) {
 	if output == "" {
 		return
 	}
@@ -103,13 +103,13 @@ func (p *PluginProcessSupervisor) logPluginOutput(namespace, output string) {
 	matches := pluginLogRegex.FindStringSubmatch(output)
 	if matches == nil {
 		// No level found, log as info
-		p.Log().Info("[%s] %s", namespace, output)
+		p.Log().Info("[plugin] %s", output)
 		return
 	}
 
 	level := matches[1]
 	message := matches[2]
-	formattedMsg := fmt.Sprintf("[%s] %s", namespace, message)
+	formattedMsg := fmt.Sprintf("[plugin] %s", message)
 
 	switch level {
 	case "trace":
@@ -132,12 +132,12 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 	case meta.MessagePortText:
 		// Plugin text output - parse level and log appropriately
 		output := strings.TrimSpace(msg.Text)
-		p.logPluginOutput(msg.Tag, output)
+		p.logPluginOutput(output)
 
 	case meta.MessagePortData:
 		// Plugin binary data - parse level and log appropriately
 		output := strings.TrimSpace(string(msg.Data))
-		p.logPluginOutput(msg.Tag, output)
+		p.logPluginOutput(output)
 
 	case meta.MessagePortError:
 		// Plugin error output
@@ -262,4 +262,24 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 
 	p.Log().Debug("Spawned plugin", "namespace", namespace, "node", nodeName, "alias", alias)
 	return nil
+}
+
+// Terminate is called when the actor is being stopped.
+// We gracefully terminate all plugin meta.Ports to avoid race conditions
+// during shutdown that would cause "unable to send MessagePortError" errors.
+func (p *PluginProcessSupervisor) Terminate(reason error) {
+	p.Log().Debug("PluginProcessSupervisor terminating, stopping all plugins", "reason", reason)
+
+	var zeroAlias gen.Alias
+	for namespace, pluginInfo := range p.plugins {
+		if pluginInfo.metaPortAlias != zeroAlias {
+			p.Log().Debug("Terminating plugin", "namespace", namespace, "alias", pluginInfo.metaPortAlias)
+			if err := p.SendExitMeta(pluginInfo.metaPortAlias, reason); err != nil {
+				// Log at debug level since errors during shutdown are expected
+				p.Log().Debug("Failed to send exit to plugin", "namespace", namespace, "error", err)
+			}
+		}
+	}
+
+	p.Log().Debug("PluginProcessSupervisor terminated")
 }
