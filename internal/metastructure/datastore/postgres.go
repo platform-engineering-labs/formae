@@ -587,7 +587,7 @@ func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) 
 	FROM resources
 	WHERE stack = $1 AND label = $2 AND LOWER(type) = LOWER($3)
 	AND operation != $4
-	ORDER BY version DESC
+	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, stack, label, resourceType, resource_update.OperationDelete)
@@ -629,7 +629,7 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 	AND NOT EXISTS (
 		SELECT 1 FROM resources r2
 		WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	`, strings.Join(placeholders, ","), len(triplets)*3+1)
 
@@ -680,7 +680,7 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 			SELECT 1
 			FROM resources AS r2
 			WHERE r1.ksuid = r2.ksuid
-			AND r2.version > r1.version
+			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
 		AND r1.operation != 'delete'
 	)
@@ -741,7 +741,7 @@ func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string
 	query := fmt.Sprintf(`
 	WITH latest_resources AS (
 		SELECT ksuid, stack, label, type, managed, version,
-		       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version DESC) as rn
+		       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version COLLATE "C" DESC) as rn
 		FROM resources
 		WHERE ksuid IN (%s)
 		AND operation != $%d
@@ -815,7 +815,7 @@ func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	AND operation != $1
 	`
@@ -856,7 +856,7 @@ func (d DatastorePostgres) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	AND operation != $1
 	`
@@ -971,7 +971,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	FROM resources
 	WHERE uri = $1
 	AND operation != $2
-	ORDER BY version DESC
+	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, uri, resource_update.OperationDelete)
@@ -1003,7 +1003,7 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	FROM resources
 	WHERE ksuid = $1
 	AND operation != $2
-	ORDER BY version DESC
+	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, ksuid, resource_update.OperationDelete)
@@ -1040,7 +1040,7 @@ func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType 
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	AND r1.operation != $3
 	LIMIT 1
@@ -1077,7 +1077,7 @@ func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error)
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	AND operation != $2
 	`
@@ -1320,7 +1320,7 @@ func (d DatastorePostgres) QueryResources(query *ResourceQuery) ([]*pkgmodel.Res
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	AND r1.operation != $1
 	`
@@ -1430,7 +1430,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	`, constants.UnmanagedStack)
 	row = d.pool.QueryRow(ctx, stacksQuery, resource_update.OperationDelete)
@@ -1450,7 +1450,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	GROUP BY namespace
 	`, constants.UnmanagedStack)
@@ -1480,7 +1480,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	GROUP BY namespace
 	`, constants.UnmanagedStack)
@@ -1537,7 +1537,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
-		AND r2.version > r1.version
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	GROUP BY type
 	`
@@ -1603,7 +1603,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	}
 
 	// Check if this resource already exists by native_id and type
-	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = $1 AND type = $2 ORDER BY version DESC LIMIT 1`
+	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = $1 AND type = $2 ORDER BY version COLLATE "C" DESC LIMIT 1`
 	row := d.pool.QueryRow(ctx, query, resource.NativeID, resource.Type)
 
 	var ksuid string
@@ -1670,7 +1670,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	if operation == string(resource_update.OperationDelete) {
 		// For delete operations, check if the latest version is already a delete
 		var latestOperation string
-		query = `SELECT operation FROM resources WHERE uri = $1 ORDER BY version DESC LIMIT 1`
+		query = `SELECT operation FROM resources WHERE uri = $1 ORDER BY version COLLATE "C" DESC LIMIT 1`
 		row = d.pool.QueryRow(ctx, query, resource.URI())
 		err = row.Scan(&latestOperation)
 		if err != nil {

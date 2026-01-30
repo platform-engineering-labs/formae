@@ -22,9 +22,10 @@ type ServerConfig struct {
 }
 
 type DatastoreConfig struct {
-	DatastoreType string         `pkl:"datastoreType"`
-	Sqlite        SqliteConfig   `pkl:"sqlite"`
-	Postgres      PostgresConfig `pkl:"postgres"`
+	DatastoreType string              `pkl:"datastoreType"`
+	Sqlite        SqliteConfig        `pkl:"sqlite"`
+	Postgres      PostgresConfig      `pkl:"postgres"`
+	AuroraDataAPI AuroraDataAPIConfig `pkl:"auroraDataAPI"`
 }
 
 type SqliteConfig struct {
@@ -39,6 +40,14 @@ type PostgresConfig struct {
 	Database         string `pkl:"database"`
 	Schema           string `pkl:"schema"`
 	ConnectionParams string `pkl:"connectionParams"`
+}
+
+type AuroraDataAPIConfig struct {
+	ClusterArn string `pkl:"clusterArn"`
+	SecretArn  string `pkl:"secretArn"`
+	Database   string `pkl:"database"`
+	Region     string `pkl:"region"`
+	Endpoint   string `pkl:"endpoint"`
 }
 
 type RetryConfig struct {

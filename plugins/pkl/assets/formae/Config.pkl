@@ -8,7 +8,7 @@ module formae.Config
 
 typealias Port = Int(this >= 0 && this <= 65535)
 
-typealias DatastoreType = "sqlite" | "postgres"
+typealias DatastoreType = "sqlite" | "postgres" | "auroradataapi"
 
 class ServerConfig {
     nodename: String = "formae"
@@ -33,6 +33,8 @@ class DatastoreConfig {
     sqlite: SqliteConfig = new SqliteConfig{}
 
     postgres: PostgresConfig = new PostgresConfig{}
+
+    auroraDataAPI: AuroraDataAPIConfig = new AuroraDataAPIConfig{}
 }
 
 class SqliteConfig {
@@ -53,6 +55,16 @@ class PostgresConfig {
     schema: String = ""
 
     connectionParams: String = ""
+}
+
+class AuroraDataAPIConfig {
+    clusterArn: String = ""
+
+    secretArn: String = ""
+
+    database: String = ""
+
+    region: String = ""
 }
 
 class RetryConfig {

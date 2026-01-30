@@ -152,6 +152,12 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 					Schema:           config.Agent.Datastore.Postgres.Schema,
 					ConnectionParams: config.Agent.Datastore.Postgres.ConnectionParams,
 				},
+				AuroraDataAPI: pkgmodel.AuroraDataAPIConfig{
+					ClusterARN: config.Agent.Datastore.AuroraDataAPI.ClusterArn,
+					SecretARN:  config.Agent.Datastore.AuroraDataAPI.SecretArn,
+					Database:   config.Agent.Datastore.AuroraDataAPI.Database,
+					Region:     config.Agent.Datastore.AuroraDataAPI.Region,
+				},
 			},
 			Retry: pkgmodel.RetryConfig{
 				StatusCheckInterval: config.Agent.Retry.StatusCheckInterval.GoDuration(),

@@ -222,8 +222,69 @@ postgres-up:
 postgres-down:
 	docker rm -f formae-test-postgres
 
+local-data-api-up:
+	docker rm -f local-data-api-postgres local-data-api 2>/dev/null || true
+	docker network create local-data-api-net 2>/dev/null || true
+	docker run -d --name local-data-api-postgres \
+		--network local-data-api-net \
+		-e POSTGRES_USER=postgres \
+		-e POSTGRES_PASSWORD=postgres \
+		-e POSTGRES_DB=formae \
+		postgres:15-alpine
+	sleep 3
+	docker run -d --name local-data-api \
+		--network local-data-api-net \
+		-e ENGINE=PostgreSQLJDBC \
+		-e POSTGRES_HOST=local-data-api-postgres \
+		-e POSTGRES_PORT=5432 \
+		-e POSTGRES_USER=postgres \
+		-e POSTGRES_PASSWORD=postgres \
+		-e RESOURCE_ARN=arn:aws:rds:us-east-1:123456789012:cluster:local \
+		-e SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
+		-p 80:80 \
+		koxudaxi/local-data-api
+
+local-data-api-down:
+	docker rm -f local-data-api local-data-api-postgres 2>/dev/null || true
+	docker network rm local-data-api-net 2>/dev/null || true
+
+# CI version: uses --network host to connect to existing PostgreSQL
+# Container listens on port 80, so with --network host it binds to host:80
+local-data-api-ci:
+	docker rm -f local-data-api 2>/dev/null || true
+	docker run -d --name local-data-api \
+		--network host \
+		-e ENGINE=PostgreSQLJDBC \
+		-e POSTGRES_HOST=localhost \
+		-e POSTGRES_PORT=5432 \
+		-e POSTGRES_USER=postgres \
+		-e POSTGRES_PASSWORD=admin \
+		-e RESOURCE_ARN=arn:aws:rds:us-east-1:123456789012:cluster:local \
+		-e SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
+		koxudaxi/local-data-api
+	@echo "Waiting for local-data-api to be ready..."
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		if curl -s http://localhost:80/ > /dev/null 2>&1; then \
+			echo "local-data-api is ready"; \
+			exit 0; \
+		fi; \
+		echo "Attempt $$i: waiting..."; \
+		sleep 2; \
+	done; \
+	echo "local-data-api failed to start"; \
+	docker logs local-data-api; \
+	exit 1
+
 test-unit-postgres:
 	go test -v -tags=unit -failfast ./internal/metastructure/datastore -args -dbType=postgres
+
+test-unit-auroradataapi:
+	go test -v -tags=unit -count=1 -failfast ./internal/metastructure/datastore -args \
+		-dbType=auroradataapi \
+		-clusterArn=arn:aws:rds:us-east-1:123456789012:cluster:local \
+		-secretArn=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
+		-database=postgres \
+		-endpoint=http://localhost:80
 
 test-unit-summary:
 	go test -tags=unit -count=1 -json  ./... | jq 'select(.Action == "fail")'
@@ -300,4 +361,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down all
+.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all

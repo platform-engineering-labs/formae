@@ -71,9 +71,12 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *
 		err error
 	)
 
-	if cfg.Agent.Datastore.DatastoreType == pkgmodel.PostgresDatastore {
+	switch cfg.Agent.Datastore.DatastoreType {
+	case pkgmodel.PostgresDatastore:
 		ds, err = datastore.NewDatastorePostgres(ctx, &cfg.Agent.Datastore, agentID)
-	} else {
+	case pkgmodel.AuroraDataAPIDatastore:
+		ds, err = datastore.NewDatastoreAuroraDataAPI(ctx, &cfg.Agent.Datastore, agentID)
+	default:
 		ds, err = datastore.NewDatastoreSQLite(ctx, &cfg.Agent.Datastore, agentID)
 	}
 
