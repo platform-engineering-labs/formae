@@ -242,11 +242,13 @@ func compareTags(t *testing.T, expected, actual any, context string) bool {
 }
 
 // compareProperties compares expected properties against actual properties from inventory
-func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) {
+func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) bool {
+	hasErrors := false
+
 	actualProperties, ok := actualResource["Properties"].(map[string]any)
 	if !ok {
 		t.Errorf("Could not extract Properties from inventory resource (%s)", context)
-		return
+		return false
 	}
 
 	t.Logf("Comparing expected properties with actual properties (%s)...", context)
@@ -254,6 +256,7 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 		actualValue, exists := actualProperties[key]
 		if !exists {
 			t.Errorf("Property %s should exist in actual resource (%s)", key, context)
+			hasErrors = true
 			continue
 		}
 
@@ -264,6 +267,7 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 			// Verify the actual value is also a resolvable
 			if !isResolvable(actualValue) {
 				t.Errorf("Expected resolvable but got non-resolvable for property %s (%s)", key, context)
+				hasErrors = true
 				continue
 			}
 
@@ -275,10 +279,12 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 			resolvedValue, hasValue := actualMap["$value"]
 			if !hasValue {
 				t.Errorf("Resolvable property %s missing $value in actual resource (%s)", key, context)
+				hasErrors = true
 				continue
 			}
 			if resolvedValue == "" {
 				t.Errorf("Resolvable property %s has empty $value in actual resource (%s)", key, context)
+				hasErrors = true
 				continue
 			}
 			t.Logf("Resolvable property %s resolved to: %v", key, resolvedValue)
@@ -292,6 +298,7 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 				if expectedHasField && actualHasField && expectedFieldValue != actualFieldValue {
 					t.Errorf("Resolvable property %s field %s mismatch: expected %v, got %v (%s)",
 						key, field, expectedFieldValue, actualFieldValue, context)
+					hasErrors = true
 				}
 			}
 
@@ -300,21 +307,31 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 
 		// Use order-independent comparison for Tags
 		if key == "Tags" {
-			compareTags(t, expectedValue, actualValue, context)
+			if !compareTags(t, expectedValue, actualValue, context) {
+				hasErrors = true
+			}
 		} else {
 			if fmt.Sprintf("%v", expectedValue) != fmt.Sprintf("%v", actualValue) {
 				t.Errorf("Property %s should match expected value (%s): expected %v, got %v",
 					key, context, expectedValue, actualValue)
+				hasErrors = true
 			}
 		}
 	}
-	t.Logf("All expected properties matched (%s)!", context)
+
+	if !hasErrors {
+		t.Logf("All expected properties matched (%s)!", context)
+	}
+	return !hasErrors
 }
 
 // runCRUDTest runs the full CRUD lifecycle for a single test case.
 // This matches the structure of formae-internal's runLifecycleTest exactly.
 func runCRUDTest(t *testing.T, tc TestCase) {
 	t.Logf("Testing resource: %s (file: %s)", tc.Name, tc.PKLFile)
+
+	// Track if all property comparisons pass (used for final success message)
+	allPropertiesMatched := true
 
 	// Create test harness
 	harness := NewTestHarness(t)
@@ -403,17 +420,18 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 
 	// Compare properties using helper
-	compareProperties(t, expectedProperties, actualResource, "after create")
+	if !compareProperties(t, expectedProperties, actualResource, "after create") {
+		allPropertiesMatched = false
+	}
 
 	// === Step 6: Extract resource and verify it matches original (if extractable) ===
+	// Check extractable from the eval output's Schema field
 	shouldSkipExtract := false
-	descriptor, err := harness.GetResourceDescriptor(actualResourceType)
-	if err != nil {
-		t.Logf("Skipping extract validation: failed to get resource descriptor for %s: %v", actualResourceType, err)
-		shouldSkipExtract = true
-	} else if !descriptor.Extractable {
-		t.Logf("Skipping extract validation: resource type %s has extractable=false", actualResourceType)
-		shouldSkipExtract = true
+	if schema, ok := expectedResource["Schema"].(map[string]any); ok {
+		if extractable, ok := schema["Extractable"].(bool); ok && !extractable {
+			t.Logf("Skipping extract validation: resource type %s has extractable=false", actualResourceType)
+			shouldSkipExtract = true
+		}
 	}
 
 	if !shouldSkipExtract {
@@ -498,7 +516,9 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	resourceAfterSync := inventoryAfterSync.Resources[0]
 
 	// Compare properties using helper - verifies idempotency
-	compareProperties(t, expectedProperties, resourceAfterSync, "after sync")
+	if !compareProperties(t, expectedProperties, resourceAfterSync, "after sync") {
+		allPropertiesMatched = false
+	}
 	t.Log("Idempotency verified!")
 
 	// === Step 10: Update test (if update file exists) ===
@@ -583,7 +603,9 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 				oldNativeID, newNativeID)
 		}
 
-		compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update")
+		if !compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update") {
+			allPropertiesMatched = false
+		}
 		t.Log("Update test completed successfully!")
 	} else {
 		t.Log("No update file found, skipping update test")
@@ -670,7 +692,9 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 		// Verify properties match expected state
 		resourceAfterReplace := inventoryAfterReplace.Resources[0]
-		compareProperties(t, replaceExpectedProperties, resourceAfterReplace, "after replace")
+		if !compareProperties(t, replaceExpectedProperties, resourceAfterReplace, "after replace") {
+			allPropertiesMatched = false
+		}
 
 		t.Log("Replace test completed successfully - resource was recreated with new NativeID!")
 	} else {
@@ -707,7 +731,10 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 		t.Errorf("Inventory should be empty after destroy, got %d resources", len(inventoryAfterDestroy.Resources))
 	}
 
-	t.Logf("Resource lifecycle test completed successfully for %s!", tc.Name)
+	// Only log success if all property comparisons passed
+	if allPropertiesMatched {
+		t.Logf("Resource lifecycle test completed successfully for %s!", tc.Name)
+	}
 }
 
 // RunDiscoveryTests tests that the plugin can discover resources created out-of-band.
