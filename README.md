@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/platform-engineering-labs/formae/actions/workflows/go.yml"><img src="https://github.com/platform-engineering-labs/formae/actions/workflows/go.yml/badge.svg" alt="formae"></a>
+  <a href="https://github.com/platform-engineering-labs/formae/actions/workflows/e2e-tests.yml"><img src="https://github.com/platform-engineering-labs/formae/actions/workflows/e2e-tests.yml/badge.svg" alt="formae-e2e-tests"></a>
   <a href="https://docs.formae.io"><img src="https://img.shields.io/badge/docs-formae.io-blue" alt="Documentation"></a>
   <a href="https://discord.gg/hr6dHaW76k"><img src="https://img.shields.io/discord/1417222307956392148?logo=discord&logoColor=959da5" alt="Discord"></a>
   <a href="https://github.com/platform-engineering-labs/formae/blob/main/LICENSES/FSL-1.1-ALv2.md"><img src="https://img.shields.io/badge/license-FSL--1.1--ALv2-blue" alt="License: FSL-1.1-ALv2"></a>
