@@ -475,5 +475,11 @@ func transformContent(content string, config *PluginConfig) string {
 	// Note: String split to avoid REUSE tool misinterpreting this as a license declaration
 	content = strings.ReplaceAll(content, "SPDX-"+"License-Identifier: Apache-2.0", fmt.Sprintf("SPDX-"+"License-Identifier: %s", config.License))
 
+	// PKL dependency alias - must match package name from schema's PklProject
+	content = strings.ReplaceAll(content, `["example"]`, fmt.Sprintf(`["%s"]`, config.Name))
+
+	// PKL import paths - @<packageName>/<packageName>.pkl
+	content = strings.ReplaceAll(content, `@example/example.pkl`, fmt.Sprintf(`@%s/%s.pkl`, config.Name, config.Name))
+
 	return content
 }

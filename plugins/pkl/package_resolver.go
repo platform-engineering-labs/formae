@@ -66,9 +66,15 @@ func (r *PackageResolver) Add(namespace, plugin, version string) {
 
 	// If local schemas are enabled, try to find the installed schema
 	if r.useLocalSchemas && r.localSchemaBasePath != "" {
-		if localPath := r.findLocalSchema(namespace); localPath != "" {
-			r.packages[name] = Package{
-				Name:      name,
+		if localPath, pkgName := r.findLocalSchema(namespace); localPath != "" {
+			// Use the package name from PklProject as the dependency alias
+			// This ensures import*("@pkgName/**/*.pkl") globs work correctly
+			aliasName := pkgName
+			if aliasName == "" {
+				aliasName = name // fallback to namespace if package name not found
+			}
+			r.packages[aliasName] = Package{
+				Name:      aliasName,
 				IsLocal:   true,
 				LocalPath: localPath,
 			}
@@ -85,31 +91,74 @@ func (r *PackageResolver) Add(namespace, plugin, version string) {
 	}
 }
 
-// findLocalSchema looks for an installed schema at basePath/<namespace>/v*/schema/pkl/PklProject
-// Returns the path to PklProject for the highest installed version, or empty string if not found.
-func (r *PackageResolver) findLocalSchema(namespace string) string {
-	pluginDir := filepath.Join(r.localSchemaBasePath, strings.ToLower(namespace))
-
-	entries, err := os.ReadDir(pluginDir)
+// findLocalSchema looks for an installed plugin with the given namespace.
+// It iterates through all plugin directories, reads each manifest to find the namespace,
+// and returns the schema PklProject path and package name for the matching plugin.
+// Returns empty strings if not found.
+func (r *PackageResolver) findLocalSchema(namespace string) (string, string) {
+	// Iterate through all plugin directories to find one with matching namespace
+	pluginDirs, err := os.ReadDir(r.localSchemaBasePath)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
-	// Collect version directories
+	targetNamespace := strings.ToUpper(namespace)
+
+	for _, pluginEntry := range pluginDirs {
+		if !pluginEntry.IsDir() {
+			continue
+		}
+
+		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
+
+		// Find the highest version for this plugin
+		versionPath, _ := r.findHighestVersion(pluginDir)
+		if versionPath == "" {
+			continue
+		}
+
+		// Read the manifest to get the namespace
+		manifestPath := filepath.Join(versionPath, "formae-plugin.pkl")
+		pluginNamespace := r.readNamespaceFromManifest(manifestPath)
+		if pluginNamespace == "" {
+			continue
+		}
+
+		// Check if namespace matches
+		if strings.ToUpper(pluginNamespace) == targetNamespace {
+			pklProjectPath := filepath.Join(versionPath, "schema", "pkl", "PklProject")
+			if _, err := os.Stat(pklProjectPath); err == nil {
+				// Read the package name from PklProject
+				pkgName := r.readPackageNameFromPklProject(pklProjectPath)
+				return pklProjectPath, pkgName
+			}
+		}
+	}
+
+	return "", ""
+}
+
+// findHighestVersion finds the highest version directory in a plugin directory.
+// Returns the full path to the version directory and the version string, or empty strings if not found.
+func (r *PackageResolver) findHighestVersion(pluginDir string) (string, string) {
+	entries, err := os.ReadDir(pluginDir)
+	if err != nil {
+		return "", ""
+	}
+
 	var versions []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		// Version directories start with 'v' (e.g., v0.1.0)
 		if strings.HasPrefix(name, "v") {
 			versions = append(versions, name)
 		}
 	}
 
 	if len(versions) == 0 {
-		return ""
+		return "", ""
 	}
 
 	// Sort by semver (highest first)
@@ -117,22 +166,71 @@ func (r *PackageResolver) findLocalSchema(namespace string) string {
 		vi, errI := semver.NewVersion(versions[i])
 		vj, errJ := semver.NewVersion(versions[j])
 		if errI != nil || errJ != nil {
-			// Fall back to string comparison if parsing fails
 			return versions[i] > versions[j]
 		}
 		return vi.GreaterThan(vj)
 	})
 
-	// Use highest version
 	highestVersion := versions[0]
-	pklProjectPath := filepath.Join(pluginDir, highestVersion, "schema", "pkl", "PklProject")
+	return filepath.Join(pluginDir, highestVersion), highestVersion
+}
 
-	// Verify the PklProject file exists
-	if _, err := os.Stat(pklProjectPath); err != nil {
+// readNamespaceFromManifest reads the namespace field from a formae-plugin.pkl manifest.
+// Returns empty string if the file cannot be read or namespace is not found.
+func (r *PackageResolver) readNamespaceFromManifest(manifestPath string) string {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
 		return ""
 	}
 
-	return pklProjectPath
+	// Simple parsing: look for 'namespace = "VALUE"' pattern
+	content := string(data)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "namespace") {
+			// Extract value between quotes
+			start := strings.Index(line, "\"")
+			end := strings.LastIndex(line, "\"")
+			if start != -1 && end > start {
+				return line[start+1 : end]
+			}
+		}
+	}
+
+	return ""
+}
+
+// readPackageNameFromPklProject reads the package name from a PklProject file.
+// Returns empty string if the file cannot be read or name is not found.
+func (r *PackageResolver) readPackageNameFromPklProject(pklProjectPath string) string {
+	data, err := os.ReadFile(pklProjectPath)
+	if err != nil {
+		return ""
+	}
+
+	// Simple parsing: look for 'name = "VALUE"' pattern inside package block
+	content := string(data)
+	inPackageBlock := false
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "package {" || strings.HasPrefix(line, "package {") {
+			inPackageBlock = true
+			continue
+		}
+		if inPackageBlock && line == "}" {
+			break
+		}
+		if inPackageBlock && strings.HasPrefix(line, "name") {
+			// Extract value between quotes
+			start := strings.Index(line, "\"")
+			end := strings.LastIndex(line, "\"")
+			if start != -1 && end > start {
+				return line[start+1 : end]
+			}
+		}
+	}
+
+	return ""
 }
 
 // AddLocal adds a local package directly (bypasses version lookup).
