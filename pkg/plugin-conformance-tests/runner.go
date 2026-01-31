@@ -860,10 +860,21 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 		}
 	})
 
-	// Configure discovery to only scan the specific resource type being tested.
+	// Extract all unique resource types from created resources for discovery configuration.
+	// This includes both the main resource type and any parent/dependency types.
+	resourceTypes := make([]string, 0)
+	seenTypes := make(map[string]bool)
+	for _, res := range createdResources {
+		if !seenTypes[res.ResourceType] {
+			resourceTypes = append(resourceTypes, res.ResourceType)
+			seenTypes[res.ResourceType] = true
+		}
+	}
+
+	// Configure discovery to only scan the resource types being tested (including dependencies).
 	// This prevents discovery from scanning all resource types, which causes
 	// excessive rate limiting and timeouts.
-	if err := harness.ConfigureDiscovery([]string{resourceType}); err != nil {
+	if err := harness.ConfigureDiscovery(resourceTypes); err != nil {
 		t.Fatalf("failed to configure discovery: %v", err)
 	}
 
