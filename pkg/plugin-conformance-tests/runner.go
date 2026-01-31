@@ -860,6 +860,13 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 		}
 	})
 
+	// Configure discovery to only scan the specific resource type being tested.
+	// This prevents discovery from scanning all resource types, which causes
+	// excessive rate limiting and timeouts.
+	if err := harness.ConfigureDiscovery([]string{resourceType}); err != nil {
+		t.Fatalf("failed to configure discovery: %v", err)
+	}
+
 	// Start the agent with discovery enabled
 	if err := harness.StartAgent(); err != nil {
 		t.Fatalf("failed to start agent: %v", err)
