@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,17 @@ func getTestType() TestType {
 	default:
 		return TestTypeAll
 	}
+}
+
+// isParallelEnabled returns true if FORMAE_TEST_PARALLEL is set to a value > 1.
+// This enables parallel test execution when used with `go test -parallel N`.
+func isParallelEnabled() bool {
+	if val := os.Getenv("FORMAE_TEST_PARALLEL"); val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // RunCRUDTests discovers test cases from the testdata directory and runs
@@ -328,6 +340,9 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 // runCRUDTest runs the full CRUD lifecycle for a single test case.
 // This matches the structure of formae-internal's runLifecycleTest exactly.
 func runCRUDTest(t *testing.T, tc TestCase) {
+	if isParallelEnabled() {
+		t.Parallel()
+	}
 	t.Logf("Testing resource: %s (file: %s)", tc.Name, tc.PKLFile)
 
 	// Track if all property comparisons pass (used for final success message)
@@ -801,6 +816,9 @@ func RunDiscoveryTests(t *testing.T) {
 
 // runDiscoveryTest runs the discovery test for a single test case.
 func runDiscoveryTest(t *testing.T, tc TestCase) {
+	if isParallelEnabled() {
+		t.Parallel()
+	}
 	// Create test harness
 	harness := NewTestHarness(t)
 	defer harness.Cleanup()

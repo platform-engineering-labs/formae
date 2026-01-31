@@ -26,9 +26,14 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
-const (
-	pidFile = "/tmp/formae.pid"
-)
+// getPidFile returns the PID file path, configurable via FORMAE_PID_FILE env var.
+// This allows running multiple agents concurrently (e.g., in parallel tests).
+func getPidFile() string {
+	if path := os.Getenv("FORMAE_PID_FILE"); path != "" {
+		return path
+	}
+	return "/tmp/formae.pid"
+}
 
 type Agent struct {
 	ctx    context.Context
@@ -51,7 +56,7 @@ func New(cfg *pkgmodel.Config, id string) *Agent {
 
 func (a *Agent) Start() error {
 	// Check if already running
-	if _, err := os.Stat(pidFile); err == nil {
+	if _, err := os.Stat(getPidFile()); err == nil {
 		return fmt.Errorf("agent appears to be already running (PID file exists)")
 	}
 
@@ -61,7 +66,7 @@ func (a *Agent) Start() error {
 
 	// Write PID
 	pid := os.Getpid()
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0600); err != nil {
+	if err := os.WriteFile(getPidFile(), []byte(fmt.Sprintf("%d", pid)), 0600); err != nil {
 		return fmt.Errorf("failed to write pid file: %w", err)
 	}
 
@@ -166,7 +171,7 @@ func (a *Agent) Start() error {
 
 func (a *Agent) Stop() error {
 	// Try to read PID file
-	pidBytes, err := os.ReadFile(pidFile)
+	pidBytes, err := os.ReadFile(getPidFile())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("agent is not running (no PID file found)")
@@ -226,7 +231,7 @@ func (a *Agent) Wait() {
 func (a *Agent) cleanup() {
 	slog.Info("Cleaning up")
 	// Remove PID file
-	if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(getPidFile()); err != nil && !os.IsNotExist(err) {
 		slog.Error("Failed to remove pid file", "error", err)
 	}
 }
@@ -234,7 +239,7 @@ func (a *Agent) cleanup() {
 func waitForPidFileRemoval(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(pidFile); os.IsNotExist(err) {
+		if _, err := os.Stat(getPidFile()); os.IsNotExist(err) {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)

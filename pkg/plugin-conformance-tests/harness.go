@@ -572,9 +572,9 @@ func (h *TestHarness) StartAgent() error {
 		return fmt.Errorf("agent already started")
 	}
 
-	// Clean up any stale PID file first
-	// Note: agent uses /tmp/formae.pid (see internal/agent/agent.go)
-	pidFile := "/tmp/formae.pid"
+	// Use a unique PID file per test to allow parallel test execution.
+	// Each test has its own tempDir, so PID files won't conflict.
+	pidFile := filepath.Join(h.tempDir, "formae.pid")
 	_ = os.Remove(pidFile)
 
 	h.t.Log("Starting formae agent...")
@@ -582,6 +582,8 @@ func (h *TestHarness) StartAgent() error {
 	// Start agent with context and custom config so we can cancel it
 	h.agentCmd = exec.CommandContext(h.agentCtx, h.formaeBinary, "agent", "start", "--config", h.configFile)
 	h.setCommandEnv(h.agentCmd)
+	// Set unique PID file path to allow parallel test execution
+	h.agentCmd.Env = append(h.agentCmd.Env, fmt.Sprintf("FORMAE_PID_FILE=%s", pidFile))
 	h.agentCmd.Stdout = os.Stdout
 	h.agentCmd.Stderr = os.Stderr
 
