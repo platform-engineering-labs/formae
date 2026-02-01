@@ -29,6 +29,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -49,6 +50,7 @@ type MetastructureAPI interface {
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
+	ExtractStacks() ([]*pkgmodel.Stack, error)
 	ForceSync() error
 	ForceDiscovery() error
 	Stats() (*apimodel.Stats, error)
@@ -410,6 +412,24 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		})
 	}
 
+	for _, su := range fa.StackUpdates {
+		var dur time.Duration = 0
+		if !su.StartTs.IsZero() {
+			dur = su.ModifiedTs.Sub(su.StartTs)
+		}
+
+		apiCommand.StackUpdates = append(apiCommand.StackUpdates, apimodel.StackUpdate{
+			StackLabel:   su.Stack.Label,
+			Operation:    string(su.Operation),
+			State:        string(su.State),
+			Duration:     dur.Milliseconds(),
+			ErrorMessage: su.ErrorMessage,
+			Description:  su.Stack.Description,
+			StartTs:      su.StartTs,
+			ModifiedTs:   su.ModifiedTs,
+		})
+	}
+
 	return apiCommand
 }
 
@@ -694,6 +714,18 @@ func (m *Metastructure) ExtractTargets(queryStr string) ([]*pkgmodel.Target, err
 	return targets, nil
 }
 
+func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
+	slog.Debug("ExtractStacks called")
+	stacks, err := m.Datastore.ListAllStackMetadata()
+	if err != nil {
+		slog.Debug("Cannot get stacks from datastore", "error", err)
+		return nil, err
+	}
+
+	slog.Debug("ExtractStacks returning", "count", len(stacks))
+	return stacks, nil
+}
+
 func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) error {
 	ksuidSet := make(map[string]struct{})
 	for _, resource := range resources {
@@ -948,12 +980,18 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
+	stackUpdates, err := stack_update.NewStackUpdateGenerator(ds).GenerateStackUpdates(forma.Stacks, command)
+	if err != nil {
+		return nil, err
+	}
+
 	return forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
 		command,
 		resourceUpdates,
 		targetUpdates,
+		stackUpdates,
 		clientID,
 	), nil
 }

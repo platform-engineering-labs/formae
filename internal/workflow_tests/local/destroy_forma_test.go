@@ -145,5 +145,10 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 		destroyStack, err := m.Datastore.LoadStack("test-stack1")
 		assert.Nil(t, err)
 		assert.Nil(t, destroyStack)
+
+		// Verify the stack metadata entry was also deleted
+		stackMetadata, err := m.Datastore.GetStackByLabel("test-stack1")
+		assert.NoError(t, err)
+		assert.Nil(t, stackMetadata, "Stack metadata should be deleted when all resources are destroyed")
 	})
 }

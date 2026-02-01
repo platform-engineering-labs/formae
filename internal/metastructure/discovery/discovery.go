@@ -678,6 +678,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		pkgmodel.CommandSync,
 		resourceUpdates,
 		nil, // No target updates on discovery
+		nil, // No stack updates on discovery
 		"formae",
 	)
 

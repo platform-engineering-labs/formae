@@ -24,7 +24,7 @@ import (
 
 func RenderSimulation(s *apimodel.Simulation) (string, error) {
 	renderHeader := func(cmd apimodel.Command) string { return "Command will" }
-	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate)
+	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate, formatSimulatedStackUpdate)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +88,7 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 
 		data[i][2] = status
 
-		statusData := countUpdateStates(command.ResourceUpdates, command.TargetUpdates)
+		statusData := countUpdateStates(command.ResourceUpdates, command.TargetUpdates, command.StackUpdates)
 
 		data[i][3] = fmt.Sprintf("%d", statusData[0])
 		data[i][4] = display.Grey(fmt.Sprintf("%d", statusData[1]))
@@ -118,9 +118,9 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 	}
 }
 
-// countUpdateStates counts states for both resource and target updates
+// countUpdateStates counts states for resource, target, and stack updates
 // Returns [total, waiting, inProgress, success, retry, failed, canceled]
-func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates []apimodel.TargetUpdate) []int {
+func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates []apimodel.TargetUpdate, stackUpdates []apimodel.StackUpdate) []int {
 	statusData := make([]int, 7)
 
 	// Count resource updates
@@ -161,6 +161,20 @@ func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates 
 		}
 	}
 
+	// Count stack updates (create/update operations)
+	for _, su := range stackUpdates {
+		statusData[0]++ // Total changes
+
+		switch su.State {
+		case "NotStarted":
+			statusData[1]++ // Waiting
+		case "Success":
+			statusData[3]++ // Success
+		case "Failed":
+			statusData[5]++ // Failed
+		}
+	}
+
 	return statusData
 }
 
@@ -184,7 +198,7 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 			formatter = formatResourceUpdate
 		}
 
-		s, err := renderCommand(cmd, renderHeader, formatter, formatTargetUpdate)
+		s, err := renderCommand(cmd, renderHeader, formatter, formatTargetUpdate, formatStackUpdate)
 		if err != nil {
 			return "", err
 		}
@@ -194,10 +208,15 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 	return result, nil
 }
 
-func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate), renderTargetUpdate func(*gtree.Node, apimodel.TargetUpdate)) (string, error) {
+func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate), renderTargetUpdate func(*gtree.Node, apimodel.TargetUpdate), renderStackUpdate func(*gtree.Node, apimodel.StackUpdate)) (string, error) {
 	root := gtree.NewRoot(renderHeader(cmd))
 
-	// Render target updates first (before resources)
+	// Render stack updates first (before targets and resources)
+	for _, su := range cmd.StackUpdates {
+		renderStackUpdate(root, su)
+	}
+
+	// Render target updates (before resources)
 	for _, tu := range cmd.TargetUpdates {
 		renderTargetUpdate(root, tu)
 	}
@@ -528,15 +547,44 @@ func formatTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	addUpdateStatusDetails(node, tu.State, tu.ErrorMessage, "", 0, 0)
 }
 
+// formatSimulatedStackUpdate formats a stack update for simulation view
+func formatSimulatedStackUpdate(root *gtree.Node, su apimodel.StackUpdate) {
+	op := coloredOperation(su.Operation)
+	line := display.Greyf("%s stack %s", op, su.StackLabel)
+	if su.Description != "" {
+		line += display.Greyf(" (description: %s)", su.Description)
+	}
+	root.Add(line)
+}
+
+// formatStackUpdate formats a stack update for status view
+func formatStackUpdate(root *gtree.Node, su apimodel.StackUpdate) {
+	op := coloredOperation(su.Operation)
+	line := display.Greyf("%s stack %s", op, su.StackLabel)
+	line = line + fmt.Sprintf(": %s", coloredUpdateState(su.State))
+	line = line + formatDurationLine(su.Duration)
+
+	node := root.Add(line)
+
+	if su.Description != "" {
+		node.Add(display.Greyf("description: %s", su.Description))
+	}
+
+	// Add error details if failed
+	if su.State == "Failed" && su.ErrorMessage != "" {
+		node.Add(display.Grey("reason for failure: ") + display.Red(su.ErrorMessage))
+	}
+}
+
 // PromptForOperations returns a prompt based on the operations to be performed
 func PromptForOperations(cmd *apimodel.Command) string {
-	targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
+	targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
 
-	if targetCreates == 0 && targetUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	summary := operationSummary(targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
+	summary := operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
 	if summary == "" {
 		return ""
 	}
@@ -547,7 +595,7 @@ func PromptForOperations(cmd *apimodel.Command) string {
 }
 
 // analyzeCommands analyzes the resource and target commands and returns operation type counts
-func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
+func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
 	// Group operations by GroupId
 	groupedOperations := make(map[string][]apimodel.ResourceUpdate)
 	ungroupedOperations := make([]apimodel.ResourceUpdate, 0)
@@ -619,11 +667,21 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, resou
 		}
 	}
 
+	// Count stack updates
+	for _, su := range cmd.StackUpdates {
+		switch su.Operation {
+		case "create":
+			stackCreates++
+		case "update":
+			stackUpdates++
+		}
+	}
+
 	return
 }
 
-func operationSummary(targetCreates, targetUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
-	if targetCreates == 0 && targetUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
+	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
@@ -637,7 +695,10 @@ func operationSummary(targetCreates, targetUpdates, resourceCreates, resourceUpd
 		parts = append(parts, display.Redf("replace %d resource(s)", resourceReplaces))
 	}
 
-	// Creates
+	// Creates (stacks, targets, resources)
+	if stackCreates > 0 {
+		parts = append(parts, display.Greenf("create %d stack(s)", stackCreates))
+	}
 	if targetCreates > 0 {
 		parts = append(parts, display.Greenf("create %d target(s)", targetCreates))
 	}
@@ -645,7 +706,10 @@ func operationSummary(targetCreates, targetUpdates, resourceCreates, resourceUpd
 		parts = append(parts, display.Greenf("create %d resource(s)", resourceCreates))
 	}
 
-	// Updates
+	// Updates (stacks, targets, resources)
+	if stackUpdates > 0 {
+		parts = append(parts, display.Goldf("update %d stack(s)", stackUpdates))
+	}
 	if targetUpdates > 0 {
 		parts = append(parts, display.Goldf("update %d target(s)", targetUpdates))
 	}
@@ -777,6 +841,57 @@ func RenderInventoryTargets(targets []*pkgmodel.Target, maxRows int) (string, er
 
 	if maxRows > 0 && len(targets) > maxRows {
 		summary += fmt.Sprintf(" (use --max-results %d to see all)", len(targets))
+	}
+
+	return buf.String() + summary + "\n", nil
+}
+
+// RenderInventoryStacks renders a list of stacks in a table format
+func RenderInventoryStacks(stacks []*pkgmodel.Stack, maxRows int) (string, error) {
+	var buf strings.Builder
+	table := tablewriter.NewTable(&buf,
+		tablewriter.WithRowAutoWrap(tw.WrapBreak),
+		tablewriter.WithHeaderAutoFormat(tw.Off),
+		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
+			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On, ShowHeader: tw.On}},
+		})))
+	table.Header(display.LightBlue("Label"), "Description")
+
+	effectiveMaxRows := len(stacks)
+	if maxRows > 0 && maxRows < len(stacks) {
+		effectiveMaxRows = maxRows
+	}
+
+	data := make([][]string, effectiveMaxRows)
+	for i := 0; i < effectiveMaxRows; i++ {
+		stack := stacks[i]
+
+		data[i] = make([]string, 2)
+		data[i][0] = display.LightBlue(stack.Label)
+		data[i][1] = stack.Description
+	}
+
+	err := table.Bulk(data)
+	if err != nil {
+		return "", fmt.Errorf("error rendering stacks: %v", err)
+	}
+
+	if len(stacks) == 0 {
+		return display.Gold("No stacks found.\n"), nil
+	}
+
+	err = table.Render()
+	if err != nil {
+		return "", fmt.Errorf("error rendering stacks: %v", err)
+	}
+
+	summary := fmt.Sprintf("\n%s Showing %d of %d total stacks",
+		display.Gold("Summary:"),
+		effectiveMaxRows,
+		len(stacks))
+
+	if maxRows > 0 && len(stacks) > maxRows {
+		summary += fmt.Sprintf(" (use --max-results %d to see all)", len(stacks))
 	}
 
 	return buf.String() + summary + "\n", nil

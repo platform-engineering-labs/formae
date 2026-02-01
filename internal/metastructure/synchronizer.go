@@ -252,6 +252,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		pkgmodel.CommandSync,
 		allResourceUpdates,
 		nil, // No target updates on sync
+		nil, // No stack updates on sync
 		"",
 	)
 	data.commandID = syncCommand.ID

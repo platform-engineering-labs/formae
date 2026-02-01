@@ -1099,6 +1099,65 @@ func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
 	assert.Nil(t, unmanagedStack, "Resource should not appear in $unmanaged stack")
 }
 
+func TestResourcePersister_CleanupEmptyStacks(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Create a stack first
+	_, err = ds.CreateStack(&pkgmodel.Stack{Label: "test-stack", Description: "Test stack"}, "cmd-1")
+	assert.NoError(t, err)
+
+	// Create a resource in the stack
+	resourceKsuid := util.NewID()
+	_, err = ds.StoreResource(&pkgmodel.Resource{
+		Label:      "test-resource",
+		Type:       "FakeAWS::S3::Bucket",
+		Properties: json.RawMessage(`{"foo":"bar"}`),
+		Stack:      "test-stack",
+		Ksuid:      resourceKsuid,
+		Target:     "test-target",
+		NativeID:   "native-1",
+		Managed:    true,
+	}, "cmd-1")
+	assert.NoError(t, err)
+
+	// Verify stack exists with resource
+	stack, err := ds.GetStackByLabel("test-stack")
+	assert.NoError(t, err)
+	assert.NotNil(t, stack)
+
+	// Send CleanupEmptyStacks - stack should NOT be deleted because it has resources
+	result := persister.Call(sender, messages.CleanupEmptyStacks{
+		StackLabels: []string{"test-stack"},
+		CommandID:   "cmd-2",
+	})
+	assert.NoError(t, result.Error)
+
+	// Verify stack still exists
+	stack, err = ds.GetStackByLabel("test-stack")
+	assert.NoError(t, err)
+	assert.NotNil(t, stack, "Stack should still exist because it has resources")
+
+	// Delete the resource from the stack
+	_, err = ds.DeleteResource(&pkgmodel.Resource{
+		Ksuid: resourceKsuid,
+		Stack: "test-stack",
+	}, "cmd-3")
+	assert.NoError(t, err)
+
+	// Send CleanupEmptyStacks - stack should be deleted because it's now empty
+	result = persister.Call(sender, messages.CleanupEmptyStacks{
+		StackLabels: []string{"test-stack"},
+		CommandID:   "cmd-4",
+	})
+	assert.NoError(t, result.Error)
+
+	// Verify stack was deleted
+	stack, err = ds.GetStackByLabel("test-stack")
+	assert.NoError(t, err)
+	assert.Nil(t, stack, "Stack should be deleted because it's empty")
+}
+
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.
 // This follows the same pattern as FormaCommandPersister tests.
 func newResourcePersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, datastore.Datastore, error) {

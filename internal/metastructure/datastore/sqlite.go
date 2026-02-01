@@ -1090,6 +1090,210 @@ func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
 	return forma, nil
 }
 
+// Stack metadata operations
+
+func (d DatastoreSQLite) CreateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CreateStack")
+	defer span.End()
+
+	// Check if a non-deleted stack with this label already exists
+	existing, err := d.GetStackByLabel(stack.Label)
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		return "", fmt.Errorf("stack already exists: %s", stack.Label)
+	}
+
+	// Generate new ksuid for both id and version
+	id := mksuid.New().String()
+	version := mksuid.New().String()
+
+	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(query, id, version, commandID, "create", stack.Label, stack.Description)
+	if err != nil {
+		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastoreSQLite) UpdateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateStack")
+	defer span.End()
+
+	// Get the existing stack to find its id
+	query := `
+		SELECT id FROM stacks s1
+		WHERE label = ?
+		AND operation != 'delete'
+		AND NOT EXISTS (
+			SELECT 1 FROM stacks s2
+			WHERE s1.id = s2.id
+			AND s2.version > s1.version
+		)
+		LIMIT 1
+	`
+	row := d.conn.QueryRow(query, stack.Label)
+
+	var id string
+	if err := row.Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("stack not found: %s", stack.Label)
+		}
+		return "", err
+	}
+
+	// Insert new version with same id
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := d.conn.Exec(insertQuery, id, version, commandID, "update", stack.Label, stack.Description)
+	if err != nil {
+		slog.Error("Failed to update stack", "error", err, "label", stack.Label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastoreSQLite) DeleteStack(label string, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "DeleteStack")
+	defer span.End()
+
+	// Get the existing stack to find its id
+	query := `
+		SELECT id FROM stacks s1
+		WHERE label = ?
+		AND operation != 'delete'
+		AND NOT EXISTS (
+			SELECT 1 FROM stacks s2
+			WHERE s1.id = s2.id
+			AND s2.version > s1.version
+		)
+		LIMIT 1
+	`
+	row := d.conn.QueryRow(query, label)
+
+	var id string
+	if err := row.Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("stack not found: %s", label)
+		}
+		return "", err
+	}
+
+	// Insert tombstone version
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := d.conn.Exec(insertQuery, id, version, commandID, "delete", label, "")
+	if err != nil {
+		slog.Error("Failed to delete stack", "error", err, "label", label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetStackByLabel")
+	defer span.End()
+
+	// Get the latest version of the stack that isn't deleted
+	query := `
+		SELECT id, description FROM stacks s1
+		WHERE label = ?
+		AND operation != 'delete'
+		AND NOT EXISTS (
+			SELECT 1 FROM stacks s2
+			WHERE s1.id = s2.id
+			AND s2.version > s1.version
+		)
+		LIMIT 1
+	`
+	row := d.conn.QueryRow(query, label)
+
+	var id, description string
+	if err := row.Scan(&id, &description); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Stack not found, return nil without error
+		}
+		return nil, err
+	}
+
+	return &pkgmodel.Stack{
+		ID:          id,
+		Label:       label,
+		Description: description,
+	}, nil
+}
+
+func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CountResourcesInStack")
+	defer span.End()
+
+	// Count only latest version of resources that haven't been deleted
+	query := `
+		SELECT COUNT(*) FROM resources r1
+		WHERE stack = ?
+		AND NOT EXISTS (
+			SELECT 1 FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != ?
+	`
+	row := d.conn.QueryRow(query, label, resource_update.OperationDelete)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (d DatastoreSQLite) ListAllStackMetadata() ([]*pkgmodel.Stack, error) {
+	_, span := sqliteTracer.Start(context.Background(), "ListAllStackMetadata")
+	defer span.End()
+
+	// Get all stacks at their latest version that aren't deleted
+	query := `
+		SELECT s1.id, s1.label, s1.description FROM stacks s1
+		WHERE s1.operation != 'delete'
+		AND NOT EXISTS (
+			SELECT 1 FROM stacks s2
+			WHERE s1.id = s2.id
+			AND s2.version > s1.version
+		)
+		ORDER BY s1.label
+	`
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stacks []*pkgmodel.Stack
+	for rows.Next() {
+		var id, label, description string
+		if err := rows.Scan(&id, &label, &description); err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return stacks, nil
+}
+
 func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "CreateTarget")
 	defer span.End()
