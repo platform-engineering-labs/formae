@@ -19,6 +19,7 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/registrar"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -134,6 +135,19 @@ func Run(fp FullResourcePlugin) {
 	options.Network.Cookie = cookie
 	options.Security.ExposeEnvRemoteSpawn = true
 	options.Log.Level = gen.LogLevelDebug
+
+	// Configure Ergo port if specified (enables parallel test execution)
+	if portStr := os.Getenv("FORMAE_ERGO_PORT"); portStr != "" {
+		if port, err := strconv.Atoi(portStr); err == nil && port != 0 {
+			options.Network.Acceptors = []gen.AcceptorOptions{
+				{
+					Host:      "localhost",
+					Port:      uint16(port),
+					Registrar: registrar.Create(registrar.Options{Port: uint16(port)}),
+				},
+			}
+		}
+	}
 
 	// Read OTel config from environment variables (for standalone plugin process startup)
 	// This will be overridden by agent when spawning PluginOperator actors remotely

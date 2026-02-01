@@ -132,6 +132,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 				Nodename:     config.Agent.Server.Nodename,
 				Hostname:     config.Agent.Server.Hostname,
 				Port:         int(config.Agent.Server.Port),
+				ErgoPort:     int(config.Agent.Server.ErgoPort),
 				Secret:       config.Agent.Server.Secret,
 				ObserverPort: int(config.Agent.Server.ObserverPort),
 				TLSCert:      config.Agent.Server.TLSCert,

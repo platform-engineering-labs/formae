@@ -11,6 +11,7 @@ agent {
         nodename = "formae"
         hostname = "formae.example.com"
         port = 1234
+        ergoPort = 15100
         secret = "secret"
     }
     datastore {

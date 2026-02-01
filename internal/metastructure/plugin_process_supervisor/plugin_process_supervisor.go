@@ -7,6 +7,7 @@ package plugin_process_supervisor
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -217,6 +218,7 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 		gen.Env("FORMAE_PLUGIN_NODE"):    nodeName,
 		gen.Env("FORMAE_NETWORK_COOKIE"): serverConfig.Secret,
 		gen.Env("FORMAE_VERSION"):        formae.Version,
+		gen.Env("FORMAE_ERGO_PORT"):      strconv.Itoa(serverConfig.ErgoPort),
 	}
 
 	// Add OTel configuration if available
