@@ -101,6 +101,7 @@ func NewTestMetastructureConfig() *pkgmodel.Config {
 				Interval: 5 * time.Minute,
 				Enabled:  false,
 			},
+			// Note: StackExpirer always runs with 5s interval (DefaultStackExpirerInterval)
 		},
 		Plugins: pkgmodel.PluginConfig{},
 	}

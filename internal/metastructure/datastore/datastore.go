@@ -146,6 +146,8 @@ type Datastore interface {
 	CountResourcesInStack(label string) (int, error)
 	// ListAllStacks returns all non-deleted stack entries
 	ListAllStacks() ([]*pkgmodel.Stack, error)
+	// ListExpiredStacks returns all stacks where expires_at < now
+	ListExpiredStacks() ([]*pkgmodel.Stack, error)
 
 	// Target operations - cloud provider configurations
 

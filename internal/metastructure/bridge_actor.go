@@ -9,7 +9,6 @@ import (
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 )
 
 // MetastructureBridge is an actor that bridges the non-actor world (metastructure API)
@@ -57,14 +56,6 @@ func (b *MetastructureBridge) HandleMessage(from gen.PID, message any) error {
 			}
 		}
 
-		return nil
-
-	case changeset.ChangesetCompleted:
-		// Child actors (like ChangesetExecutor) send completion messages to their parent.
-		// Since the bridge acts as a parent when ensuring child actors, we receive these
-		// completion messages. The metastructure uses a fire-and-forget pattern and doesn't
-		// need these notifications, so we simply ignore them.
-		b.Log().Debug("Ignoring changeset completion message (fire-and-forget pattern)", "commandID", msg.CommandID)
 		return nil
 
 	default:

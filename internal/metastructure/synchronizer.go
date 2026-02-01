@@ -285,7 +285,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	proc.Log().Debug("Starting ChangesetExecutor for sync command", "commandID", syncCommand.ID)
 	err = proc.Send(
 		gen.ProcessID{Name: actornames.ChangesetExecutor(syncCommand.ID), Node: proc.Node().Name()},
-		changeset.Start{Changeset: cs},
+		changeset.Start{Changeset: cs, NotifyOnComplete: true},
 	)
 	if err != nil {
 		proc.Log().Error("failed to start ChangesetExecutor for sync command %s: %w", syncCommand.ID, err)

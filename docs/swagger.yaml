@@ -230,11 +230,21 @@ definitions:
     type: object
   model.Stack:
     properties:
+      CreatedAt:
+        type: string
       Description:
+        type: string
+      ExpiresAt:
+        description: Zero value means no expiration
         type: string
       ID:
         type: string
       Label:
+        type: string
+      TTLSeconds:
+        description: 0 means no TTL, > 0 means TTL in seconds
+        type: integer
+      UpdatedAt:
         type: string
     type: object
   model.StackUpdate:
@@ -246,6 +256,8 @@ definitions:
         type: integer
       ErrorMessage:
         type: string
+      ExpiresAt:
+        type: string
       ModifiedTs:
         type: string
       Operation:
@@ -256,6 +268,8 @@ definitions:
         type: string
       State:
         type: string
+      TTLSeconds:
+        type: integer
     type: object
   model.Stats:
     properties:

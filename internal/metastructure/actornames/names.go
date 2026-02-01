@@ -22,6 +22,7 @@ const (
 	ResourcePersister         = gen.Atom("ResourcePersister")
 	ResourceUpdaterSupervisor = gen.Atom("ResourceUpdaterSupervisor")
 	Synchronizer              = gen.Atom("Synchronizer")
+	StackExpirer              = gen.Atom("StackExpirer")
 )
 
 func ChangesetExecutor(commandID string) gen.Atom {

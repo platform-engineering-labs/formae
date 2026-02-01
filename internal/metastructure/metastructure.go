@@ -126,6 +126,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("LoggingConfig"):         cfg.Agent.Logging,
 		gen.Env("OTelConfig"):            cfg.Agent.OTel,
 		gen.Env("AgentID"):               agentID,
+		gen.Env("Metastructure"):         metastructure,
 	}
 
 	// Enable Ergo networking for distributed plugin architecture
@@ -333,6 +334,21 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
+	if len(fa.StackUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			stack_update.PersistStackUpdates{
+				StackUpdates: fa.StackUpdates,
+				CommandID:    fa.ID,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist stack updates", "error", err)
+			return nil, fmt.Errorf("failed to persist stack updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted stack updates", "count", len(fa.StackUpdates))
+	}
+
 	if len(fa.ResourceUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
 		_, err = m.callActor(
@@ -347,7 +363,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
-			changeset.Start{Changeset: cs},
+			changeset.Start{Changeset: cs, NotifyOnComplete: false},
 		)
 		if err != nil {
 			slog.Error("Failed to start ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
@@ -425,6 +441,8 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			Duration:     dur.Milliseconds(),
 			ErrorMessage: su.ErrorMessage,
 			Description:  su.Stack.Description,
+			TTLSeconds:   su.Stack.TTLSeconds,
+			ExpiresAt:    su.Stack.ExpiresAt,
 			StartTs:      su.StartTs,
 			ModifiedTs:   su.ModifiedTs,
 		})
@@ -498,7 +516,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
 	err = m.Node.Send(
 		gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
-		changeset.Start{Changeset: cs},
+		changeset.Start{Changeset: cs, NotifyOnComplete: false},
 	)
 	if err != nil {
 		slog.Error("Failed to start ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
@@ -861,7 +879,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
-			changeset.Start{Changeset: cs},
+			changeset.Start{Changeset: cs, NotifyOnComplete: false},
 		)
 		if err != nil {
 			slog.Error("Failed to start ChangesetExecutor for incomplete forma command", "command", fa.Command, "forma", fa, "error", err)

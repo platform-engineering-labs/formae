@@ -54,6 +54,7 @@ open class SubResource {
 open class Stack {
     hidden label: String(length > 0)
     hidden description: String
+    hidden ttl: Duration?
 
     local parent = this
     hidden res: StackResolvable = new {
@@ -63,6 +64,7 @@ open class Stack {
     // Output
     fixed Label: String = label
     fixed Description: String = description
+    fixed TTLSeconds: Int? = if (ttl != null) ttl.toUnit("s").value.toInt() else null
 }
 
 open class StackResolvable extends Resolvable {

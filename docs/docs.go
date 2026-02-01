@@ -816,13 +816,27 @@ const docTemplate = `{
         "model.Stack": {
             "type": "object",
             "properties": {
+                "CreatedAt": {
+                    "type": "string"
+                },
                 "Description": {
+                    "type": "string"
+                },
+                "ExpiresAt": {
+                    "description": "Zero value means no expiration",
                     "type": "string"
                 },
                 "ID": {
                     "type": "string"
                 },
                 "Label": {
+                    "type": "string"
+                },
+                "TTLSeconds": {
+                    "description": "0 means no TTL, \u003e 0 means TTL in seconds",
+                    "type": "integer"
+                },
+                "UpdatedAt": {
                     "type": "string"
                 }
             }
@@ -840,6 +854,9 @@ const docTemplate = `{
                 "ErrorMessage": {
                     "type": "string"
                 },
+                "ExpiresAt": {
+                    "type": "string"
+                },
                 "ModifiedTs": {
                     "type": "string"
                 },
@@ -854,6 +871,9 @@ const docTemplate = `{
                 },
                 "State": {
                     "type": "string"
+                },
+                "TTLSeconds": {
+                    "type": "integer"
                 }
             }
         },

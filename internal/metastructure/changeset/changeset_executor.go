@@ -64,7 +64,8 @@ func NewChangesetExecutor() gen.ProcessBehavior {
 }
 
 type Start struct {
-	Changeset Changeset
+	Changeset        Changeset
+	NotifyOnComplete bool // If true, send ChangesetCompleted to the requester when done
 }
 
 type Resume struct{}
@@ -84,6 +85,7 @@ const (
 type ChangesetData struct {
 	changeset         Changeset
 	requestedBy       gen.PID
+	notifyOnComplete  bool     // If true, send ChangesetCompleted to requestedBy when done
 	discoveryPaused   bool     // Tracks if this changeset paused Discovery
 	stacksWithDeletes []string // Stacks that had delete operations, captured at start
 }
@@ -116,11 +118,9 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
 	// Cleanup empty stacks after successful completion
 	if newState == StateFinishedSuccessfully {
-		// Use the stacks captured at start, since the pipeline is empty by now
-		proc.Log().Info("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
 			resourcePersisterPID := gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()}
-			_, err := proc.Call(resourcePersisterPID, messages.CleanupEmptyStacks{
+			err := proc.Send(resourcePersisterPID, messages.CleanupEmptyStacks{
 				StackLabels: data.stacksWithDeletes,
 				CommandID:   data.changeset.CommandID,
 			})
@@ -159,10 +159,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 			proc.Log().Error("ChangesetExecutor: failed to send terminate message: %v", err)
 		}
 
-		// Changesets can be requested by other actors or by the metastructure. The metastructure is not an actor (yet) and
-		// uses the node to send messages. We can not send messages to the node. Once we migrated the metastructure onto an
-		// actor we can remove this check.
-		if data.requestedBy != proc.Node().PID() {
+		if data.notifyOnComplete {
 			// Send a message to the requester that the changeset has completed
 			changesetState := ChangeSetStateFinishedSuccessfully
 			if newState == StateFinishedWithError {
@@ -186,6 +183,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	data.requestedBy = from
 	data.changeset = message.Changeset
+	data.notifyOnComplete = message.NotifyOnComplete
 
 	// Capture stacks with delete operations NOW, before the pipeline is modified during execution
 	data.stacksWithDeletes = collectStacksWithDeletes(data.changeset.Pipeline)

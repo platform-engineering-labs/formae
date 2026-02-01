@@ -76,7 +76,8 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 
 		// Send the Start message to the changeset executor
 		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
-			Changeset: cs,
+			Changeset:        cs,
+			NotifyOnComplete: true,
 		})
 
 		// Wait for the changeset to complete
@@ -174,7 +175,8 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 
 		// Start the changeset
 		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
-			Changeset: cs,
+			Changeset:        cs,
+			NotifyOnComplete: true,
 		})
 
 		// Wait for completion
@@ -272,7 +274,8 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 
 		// Start the changeset
 		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
-			Changeset: cs,
+			Changeset:        cs,
+			NotifyOnComplete: true,
 		})
 
 		// Wait for completion (even with failures, the changeset completes)
@@ -360,7 +363,8 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 
 		// Start the changeset
 		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
-			Changeset: cs,
+			Changeset:        cs,
+			NotifyOnComplete: true,
 		})
 
 		// Wait for completion
@@ -428,7 +432,8 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 
 		// Start the changeset
 		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
-			Changeset: cs,
+			Changeset:        cs,
+			NotifyOnComplete: true,
 		})
 
 		// Wait for completion (even with failures, the changeset completes)
