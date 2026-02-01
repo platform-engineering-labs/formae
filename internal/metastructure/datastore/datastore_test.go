@@ -28,6 +28,12 @@ import (
 
 var dbType string
 
+// Aurora Data API test flags
+var clusterArn string
+var secretArn string
+var auroraDatabase string
+var auroraRegion string
+
 func prepareDatastore() (Datastore, error) {
 	switch dbType {
 	case pkgmodel.PostgresDatastore:
@@ -48,6 +54,28 @@ func prepareDatastore() (Datastore, error) {
 		}
 
 		return datastore, nil
+
+	case pkgmodel.AuroraDataAPIDatastore:
+		if clusterArn == "" || secretArn == "" {
+			return nil, fmt.Errorf("Aurora Data API requires -clusterArn and -secretArn flags")
+		}
+		cfg := &pkgmodel.DatastoreConfig{
+			DatastoreType: pkgmodel.AuroraDataAPIDatastore,
+			AuroraDataAPI: pkgmodel.AuroraDataAPIConfig{
+				ClusterARN: clusterArn,
+				SecretARN:  secretArn,
+				Database:   auroraDatabase,
+				Region:     auroraRegion,
+			},
+		}
+
+		datastore, err := NewDatastoreAuroraDataAPI(context.Background(), cfg, "test")
+		if err != nil {
+			return nil, fmt.Errorf("failed to setup Aurora Data API datastore: %w", err)
+		}
+
+		return datastore, nil
+
 	default:
 		cfg := &pkgmodel.DatastoreConfig{
 			DatastoreType: pkgmodel.SqliteDatastore,
@@ -73,11 +101,17 @@ func cleanupDatastore(ds Datastore) {
 		_ = d.CleanUp()
 	case DatastoreSQLite:
 		_ = d.CleanUp()
+	case *DatastoreAuroraDataAPI:
+		_ = d.CleanUp()
 	}
 }
 
 func TestMain(m *testing.M) {
-	flag.StringVar(&dbType, "dbType", pkgmodel.SqliteDatastore, fmt.Sprintf("Specify the database type (e.g., %s, %s)", pkgmodel.SqliteDatastore, pkgmodel.PostgresDatastore))
+	flag.StringVar(&dbType, "dbType", pkgmodel.SqliteDatastore, fmt.Sprintf("Specify the database type (e.g., %s, %s, %s)", pkgmodel.SqliteDatastore, pkgmodel.PostgresDatastore, pkgmodel.AuroraDataAPIDatastore))
+	flag.StringVar(&clusterArn, "clusterArn", "", "Aurora cluster ARN (required for auroradataapi)")
+	flag.StringVar(&secretArn, "secretArn", "", "Secrets Manager secret ARN (required for auroradataapi)")
+	flag.StringVar(&auroraDatabase, "database", "formae", "Aurora database name")
+	flag.StringVar(&auroraRegion, "region", "", "AWS region (optional, uses default if not set)")
 	flag.Parse()
 
 	m.Run()
