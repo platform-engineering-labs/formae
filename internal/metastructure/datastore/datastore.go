@@ -132,6 +132,21 @@ type Datastore interface {
 	// LoadAllStacks returns all stored stacks
 	LoadAllStacks() ([]*pkgmodel.Forma, error)
 
+	// Stack metadata operations - persisted stack definitions with id, label, description
+
+	// CreateStack persists a new stack entry (returns version string)
+	CreateStack(stack *pkgmodel.Stack, commandID string) (string, error)
+	// UpdateStack modifies an existing stack entry (returns version string)
+	UpdateStack(stack *pkgmodel.Stack, commandID string) (string, error)
+	// DeleteStack tombstones a stack entry (returns version string)
+	DeleteStack(label string, commandID string) (string, error)
+	// GetStackByLabel retrieves stack by its label (latest non-deleted version)
+	GetStackByLabel(label string) (*pkgmodel.Stack, error)
+	// CountResourcesInStack returns the count of non-deleted resources in a stack
+	CountResourcesInStack(label string) (int, error)
+	// ListAllStackMetadata returns all non-deleted stack metadata entries
+	ListAllStackMetadata() ([]*pkgmodel.Stack, error)
+
 	// Target operations - cloud provider configurations
 
 	// CreateTarget persists a new target configuration

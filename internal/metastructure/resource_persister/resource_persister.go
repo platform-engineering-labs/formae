@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -75,8 +76,17 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 			return nil, err
 		}
 		return versions, nil
+	case stack_update.PersistStackUpdates:
+		versions, err := rp.persistStackUpdates(req.StackUpdates, req.CommandID)
+		if err != nil {
+			return nil, err
+		}
+		return versions, nil
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
+	case messages.CleanupEmptyStacks:
+		rp.cleanupEmptyStacks(req.StackLabels, req.CommandID)
+		return nil, nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown request type", "type", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)
@@ -457,4 +467,87 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 	}
 
 	return nil
+}
+
+func (rp *ResourcePersister) persistStackUpdates(updates []stack_update.StackUpdate, commandID string) ([]string, error) {
+	rp.Log().Debug("Starting to persist stack updates", "count", len(updates), "commandID", commandID)
+
+	versions := make([]string, 0, len(updates))
+	for i := range updates {
+		rp.Log().Debug("Persisting stack update", "index", i, "label", updates[i].Stack.Label)
+		if err := rp.persistStackUpdate(&updates[i], commandID); err != nil {
+			rp.Log().Error("Failed to persist stack update", "index", i, "label", updates[i].Stack.Label, "error", err)
+			return nil, fmt.Errorf("failed to persist stack update for %s: %w", updates[i].Stack.Label, err)
+		}
+		rp.Log().Debug("Successfully persisted stack update", "index", i, "label", updates[i].Stack.Label)
+		versions = append(versions, updates[i].Version)
+	}
+
+	rp.Log().Debug("Finished persisting all stack updates", "commandID", commandID)
+	return versions, nil
+}
+
+func (rp *ResourcePersister) persistStackUpdate(update *stack_update.StackUpdate, commandID string) error {
+	var version string
+	var err error
+
+	switch update.Operation {
+	case stack_update.StackOperationCreate:
+		version, err = rp.datastore.CreateStack(&update.Stack, commandID)
+	case stack_update.StackOperationUpdate:
+		version, err = rp.datastore.UpdateStack(&update.Stack, commandID)
+	case stack_update.StackOperationDelete:
+		version, err = rp.datastore.DeleteStack(update.Stack.Label, commandID)
+	default:
+		err = fmt.Errorf("unknown stack operation: %s", update.Operation)
+	}
+
+	if err != nil {
+		update.State = stack_update.StackUpdateStateFailed
+		update.ErrorMessage = err.Error()
+		update.ModifiedTs = util.TimeNow()
+		slog.Error("Failed to persist stack",
+			"label", update.Stack.Label,
+			"operation", update.Operation,
+			"error", err)
+		return err
+	}
+
+	update.Version = version
+	update.State = stack_update.StackUpdateStateSuccess
+	update.ModifiedTs = util.TimeNow()
+	slog.Debug("Successfully persisted stack",
+		"label", update.Stack.Label,
+		"operation", update.Operation,
+		"version", version)
+
+	return nil
+}
+
+// cleanupEmptyStacks checks each stack and deletes it if it has no remaining resources.
+// This is called after a changeset completes to clean up stacks that became empty
+// due to resource deletions.
+func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID string) {
+	rp.Log().Info("cleanupEmptyStacks called", "stackLabels", stackLabels, "commandID", commandID)
+	for _, stackLabel := range stackLabels {
+		count, err := rp.datastore.CountResourcesInStack(stackLabel)
+		if err != nil {
+			rp.Log().Error("Failed to count resources in stack",
+				"stackLabel", stackLabel,
+				"error", err)
+			continue
+		}
+
+		if count == 0 {
+			_, err := rp.datastore.DeleteStack(stackLabel, commandID)
+			if err != nil {
+				rp.Log().Error("Failed to delete empty stack",
+					"stackLabel", stackLabel,
+					"error", err)
+			} else {
+				rp.Log().Info("Deleted empty stack",
+					"stackLabel", stackLabel)
+			}
+		}
+	}
 }

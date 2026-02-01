@@ -82,6 +82,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 			pkgmodel.CommandApply,
 			executingFormaResourceUpdates,
 			nil, // No target updates for test
+			nil, // No stack updates for test
 			"")
 		executingForma.State = forma_command.CommandStateInProgress
 
@@ -106,7 +107,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 				},
 			},
 		}
-		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
+		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, nil, "")
 		err = m.Datastore.StoreFormaCommand(executingForma, "1")
 		if err != nil {
 			t.Fatalf("Failed to store forma command: %v", err)
@@ -163,7 +164,8 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			&config.FormaCommandConfig{},
 			pkgmodel.CommandApply,
 			executingFormaResourceUpdates,
-			nil,
+			nil, // No target updates
+			nil, // No stack updates
 			"")
 		executingForma.State = forma_command.CommandStateInProgress
 		err = m.Datastore.StoreFormaCommand(executingForma, "1")
@@ -196,7 +198,8 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			&config.FormaCommandConfig{},
 			pkgmodel.CommandApply,
 			anotherExecutingFormaResourceUpdates,
-			nil,
+			nil, // No target updates
+			nil, // No stack updates
 			"")
 		anotherExecutingForma.State = forma_command.CommandStateInProgress
 		err = m.Datastore.StoreFormaCommand(anotherExecutingForma, "2")
@@ -268,7 +271,7 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			newTestResourceUpdate("test-resource7", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
 		}
 
-		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, "")
+		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, nil, "")
 
 		cfg := config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,

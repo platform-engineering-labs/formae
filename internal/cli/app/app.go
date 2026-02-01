@@ -524,6 +524,30 @@ func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error)
 	return targets, nags, nil
 }
 
+func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	stacks, err := client.ListStacks()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if stacks == nil {
+		stacks = []*pkgmodel.Stack{}
+	}
+
+	return stacks, nags, nil
+}
+
 // Plugins
 
 func (p *Plugins) List() []*plugin.Plugin {

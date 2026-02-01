@@ -12,6 +12,10 @@ definitions:
         items:
           $ref: '#/definitions/model.ResourceUpdate'
         type: array
+      StackUpdates:
+        items:
+          $ref: '#/definitions/model.StackUpdate'
+        type: array
       StartTs:
         type: string
       State:
@@ -228,7 +232,29 @@ definitions:
     properties:
       Description:
         type: string
+      ID:
+        type: string
       Label:
+        type: string
+    type: object
+  model.StackUpdate:
+    properties:
+      Description:
+        type: string
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      ModifiedTs:
+        type: string
+      Operation:
+        type: string
+      StackLabel:
+        type: string
+      StartTs:
+        type: string
+      State:
         type: string
     type: object
   model.Stats:
@@ -578,6 +604,29 @@ paths:
       summary: List resources
       tags:
       - resources
+  /stacks:
+    get:
+      description: Retrieves all stack metadata
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: List of stacks.'
+          schema:
+            items:
+              $ref: '#/definitions/model.Stack'
+            type: array
+        "404":
+          description: 'Not Found: No stacks found.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List stacks
+      tags:
+      - stacks
   /stats:
     get:
       description: Retrieves usage statistics of the Formae agent.

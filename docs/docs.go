@@ -364,6 +364,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/stacks": {
+            "get": {
+                "description": "Retrieves all stack metadata",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stacks"
+                ],
+                "summary": "List stacks",
+                "responses": {
+                    "200": {
+                        "description": "OK: List of stacks.",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Stack"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No stacks found.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/stats": {
             "get": {
                 "description": "Retrieves usage statistics of the Formae agent.",
@@ -451,6 +486,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/model.ResourceUpdate"
+                    }
+                },
+                "StackUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.StackUpdate"
                     }
                 },
                 "StartTs": {
@@ -778,7 +819,40 @@ const docTemplate = `{
                 "Description": {
                     "type": "string"
                 },
+                "ID": {
+                    "type": "string"
+                },
                 "Label": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.StackUpdate": {
+            "type": "object",
+            "properties": {
+                "Description": {
+                    "type": "string"
+                },
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "ModifiedTs": {
+                    "type": "string"
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "StackLabel": {
+                    "type": "string"
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
                     "type": "string"
                 }
             }

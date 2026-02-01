@@ -137,8 +137,10 @@ func InventoryCmd() *cobra.Command {
 
 	resources := resourcesCmd()
 	targets := targetsCmd()
+	stacks := stacksCmd()
 	command.AddCommand(resources)
 	command.AddCommand(targets)
+	command.AddCommand(stacks)
 
 	return command
 }
@@ -213,4 +215,73 @@ func runTargetsForHumans(app *app.App, opts *InventoryOptions) error {
 
 	p := printer.NewHumanReadablePrinter[[]*pkgmodel.Target](os.Stdout)
 	return p.Print(&targets, printer.PrintOptions{MaxResults: opts.MaxResults})
+}
+
+func stacksCmd() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "stacks",
+		Short: "Query inventory of stacks",
+		PreRun: func(cmd *cobra.Command, args []string) {
+			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
+		},
+		RunE: func(command *cobra.Command, args []string) error {
+			opts := &InventoryOptions{}
+			consumer, _ := command.Flags().GetString("output-consumer")
+			opts.OutputConsumer = printer.Consumer(consumer)
+			opts.MaxResults, _ = command.Flags().GetInt("max-results")
+			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
+
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
+			if err != nil {
+				return err
+			}
+
+			return runStacks(app, opts)
+		},
+		Annotations: map[string]string{
+			"examples": "{{.Name}} {{.Command}} inventory stacks --max-results 50",
+		},
+		SilenceErrors: true,
+	}
+
+	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
+	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
+	command.Flags().Int("max-results", 10, "Maximum number of stacks to display in the table (0 = unlimited)")
+	command.Flags().String("config", "", "Path to config file")
+
+	return command
+}
+
+func runStacks(app *app.App, opts *InventoryOptions) error {
+	if err := validateInventoryOptions(opts); err != nil {
+		return err
+	}
+
+	if opts.OutputConsumer == printer.ConsumerMachine {
+		return runStacksForMachines(app, opts)
+	}
+	return runStacksForHumans(app, opts)
+}
+
+func runStacksForMachines(app *app.App, opts *InventoryOptions) error {
+	stacks, _, err := app.ExtractStacks()
+	if err != nil {
+		return err
+	}
+
+	p := printer.NewMachineReadablePrinter[[]*pkgmodel.Stack](os.Stdout, opts.OutputSchema)
+	return p.Print(&stacks)
+}
+
+func runStacksForHumans(app *app.App, opts *InventoryOptions) error {
+	display.PrintBanner()
+
+	stacks, _, err := app.ExtractStacks()
+	if err != nil {
+		return err
+	}
+
+	p := printer.NewHumanReadablePrinter[[]*pkgmodel.Stack](os.Stdout)
+	return p.Print(&stacks, printer.PrintOptions{MaxResults: opts.MaxResults})
 }
