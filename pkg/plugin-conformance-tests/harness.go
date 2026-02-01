@@ -25,6 +25,7 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/registrar"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
@@ -67,6 +68,7 @@ type TestHarness struct {
 	networkCookie string // Network cookie for distributed plugin communication
 	testRunID     string // Unique ID for this test run, used by PKL files for resource naming
 	agentPort     int    // Random port for agent API
+	ergoPort      int    // Random port for Ergo actor framework (enables parallel test execution)
 	pluginManager *plugin.Manager
 
 	// Ergo actor system for direct plugin communication (discovery tests)
@@ -181,6 +183,13 @@ func (h *TestHarness) setupTestEnvironment() error {
 	}
 	h.agentPort = agentPort
 
+	// Get a random available port for Ergo (enables parallel test execution)
+	ergoPort, err := getFreePort()
+	if err != nil {
+		return fmt.Errorf("failed to get free Ergo port: %w", err)
+	}
+	h.ergoPort = ergoPort
+
 	// Generate test config file
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
@@ -194,6 +203,7 @@ amends "formae:/Config.pkl"
 agent {
     server {
         port = %d
+        ergoPort = %d
         secret = %q
     }
     datastore {
@@ -224,7 +234,7 @@ cli {
 plugins {
 	pluginDir = "~/.pel/formae/plugins"
 }
-`, agentPort, h.networkCookie, dbPath, logPath, agentPort)
+`, agentPort, h.ergoPort, h.networkCookie, dbPath, logPath, agentPort)
 
 	// Write config to temp directory
 	configFile := filepath.Join(tempDir, "test-config.pkl")
@@ -282,6 +292,19 @@ func (h *TestHarness) InitErgoNode() error {
 	options.Network.Mode = gen.NetworkModeEnabled
 	options.Network.Cookie = h.networkCookie
 	options.Log.Level = gen.LogLevelWarning
+
+	// Configure Ergo to use a test-specific port (enables parallel test execution)
+	testErgoPort, err := getFreePort()
+	if err != nil {
+		return fmt.Errorf("failed to get test Ergo port: %w", err)
+	}
+	options.Network.Acceptors = []gen.AcceptorOptions{
+		{
+			Host:      "localhost",
+			Port:      uint16(testErgoPort),
+			Registrar: registrar.Create(registrar.Options{Port: uint16(testErgoPort)}),
+		},
+	}
 
 	// Start the Ergo node
 	node, err := ergo.StartNode(h.ergoNodeName, options)
@@ -521,6 +544,7 @@ amends "formae:/Config.pkl"
 agent {
     server {
         port = %d
+        ergoPort = %d
         secret = %q
     }
     datastore {
@@ -549,7 +573,7 @@ cli {
     }
 	disableUsageReporting = true
 }
-`, h.agentPort, h.networkCookie, dbPath, resourceTypesList, h.logFile, h.agentPort)
+`, h.agentPort, h.ergoPort, h.networkCookie, dbPath, resourceTypesList, h.logFile, h.agentPort)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {

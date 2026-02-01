@@ -19,6 +19,7 @@ type ServerConfig struct {
 	Nodename     string
 	Hostname     string
 	Port         int
+	ErgoPort     int `pkl:"ergoPort"`
 	Secret       string
 	ObserverPort int
 	TLSCert      string

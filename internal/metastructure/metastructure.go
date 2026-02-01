@@ -15,6 +15,7 @@ import (
 	"ergo.services/application/observer"
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/registrar"
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
@@ -140,6 +141,17 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 
 	// Use the secret from config which now defaults to a random value via PKL
 	metastructure.options.Network.Cookie = cfg.Agent.Server.Secret
+
+	// Configure Ergo listen address with custom port (enables parallel test execution)
+	if cfg.Agent.Server.ErgoPort != 0 {
+		metastructure.options.Network.Acceptors = []gen.AcceptorOptions{
+			{
+				Host:      cfg.Agent.Server.Hostname,
+				Port:      uint16(cfg.Agent.Server.ErgoPort),
+				Registrar: registrar.Create(registrar.Options{Port: uint16(cfg.Agent.Server.ErgoPort)}),
+			},
+		}
+	}
 
 	metastructure.options.Log.DefaultLogger.Disable = true
 	metastructure.options.Log.Level = gen.LogLevelDebug
