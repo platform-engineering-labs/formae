@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"ergo.services/actor/statemachine"
+	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -25,91 +25,87 @@ import (
 // that have exceeded their TTL. It runs on a scheduled interval and checks
 // for expired stacks in the database.
 
-func NewStackExpirer() gen.ProcessBehavior {
-	return &StackExpirer{}
-}
-
 const (
-	StackExpirerStateIdle = gen.Atom("idle")
-
 	// DefaultStackExpirerInterval is how often the expirer checks for expired stacks.
 	DefaultStackExpirerInterval = 5 * time.Second
 )
 
 type StackExpirer struct {
-	statemachine.StateMachine[StackExpirerData]
-}
+	act.Actor
 
-type StackExpirerData struct {
 	datastore datastore.Datastore
 	interval  time.Duration
+}
+
+func NewStackExpirer() gen.ProcessBehavior {
+	return &StackExpirer{}
 }
 
 // Messages processed by StackExpirer
 
 type CheckExpiredStacks struct{}
 
-func (s *StackExpirer) Init(args ...any) (statemachine.StateMachineSpec[StackExpirerData], error) {
+func (s *StackExpirer) Init(args ...any) error {
 	ds, ok := s.Env("Datastore")
 	if !ok {
 		s.Log().Error("Missing 'Datastore' environment variable")
-		return statemachine.StateMachineSpec[StackExpirerData]{}, fmt.Errorf("stack_expirer: missing 'Datastore' environment variable")
+		return fmt.Errorf("stack_expirer: missing 'Datastore' environment variable")
 	}
 
-	data := StackExpirerData{
-		datastore: ds.(datastore.Datastore),
-		interval:  DefaultStackExpirerInterval,
-	}
+	s.datastore = ds.(datastore.Datastore)
+	s.interval = DefaultStackExpirerInterval
 
-	spec := statemachine.NewStateMachineSpec(StackExpirerStateIdle,
-		statemachine.WithData(data),
-		statemachine.WithStateMessageHandler(StackExpirerStateIdle, checkExpiredStacks),
-	)
 	if _, err := s.SendAfter(s.PID(), CheckExpiredStacks{}, DefaultStackExpirerInterval); err != nil {
-		return statemachine.StateMachineSpec[StackExpirerData]{}, fmt.Errorf("failed to send initial check message: %s", err)
+		return fmt.Errorf("failed to send initial check message: %s", err)
 	}
 	s.Log().Info("Stack expirer ready", "interval", DefaultStackExpirerInterval)
 
-	return spec, nil
+	return nil
 }
 
-func checkExpiredStacks(from gen.PID, state gen.Atom, data StackExpirerData, message CheckExpiredStacks, proc gen.Process) (gen.Atom, StackExpirerData, []statemachine.Action, error) {
+func (s *StackExpirer) HandleMessage(from gen.PID, message any) error {
+	switch message.(type) {
+	case CheckExpiredStacks:
+		s.checkExpiredStacks()
+	default:
+		s.Log().Warning("Received unknown message type", "type", fmt.Sprintf("%T", message))
+	}
+	return nil
+}
+
+func (s *StackExpirer) checkExpiredStacks() {
 	// Query for expired stacks
-	expiredStacks, err := data.datastore.ListExpiredStacks()
+	expiredStacks, err := s.datastore.ListExpiredStacks()
 	if err != nil {
-		proc.Log().Error("Failed to query expired stacks", "error", err)
-		_ = scheduleNextExpirationCheck(data, proc)
-		return StackExpirerStateIdle, data, nil, nil
+		s.Log().Error("Failed to query expired stacks", "error", err)
+		s.scheduleNextExpirationCheck()
+		return
 	}
 
 	if len(expiredStacks) == 0 {
-		_ = scheduleNextExpirationCheck(data, proc)
-		return StackExpirerStateIdle, data, nil, nil
+		s.scheduleNextExpirationCheck()
+		return
 	}
 
 	// For each expired stack, trigger a destroy command directly
 	for _, stack := range expiredStacks {
-		proc.Log().Info("Expiring stack", "label", stack.Label)
+		s.Log().Info("Expiring stack", "label", stack.Label)
 
-		if err := destroyExpiredStack(data, stack.Label, proc); err != nil {
-			proc.Log().Error("Failed to destroy expired stack", "label", stack.Label, "error", err)
+		if err := s.destroyExpiredStack(stack.Label); err != nil {
+			s.Log().Error("Failed to destroy expired stack", "label", stack.Label, "error", err)
 			// Continue with other stacks even if one fails
 		}
 	}
 
 	// Schedule the next check
-	if err := scheduleNextExpirationCheck(data, proc); err != nil {
-		proc.Log().Error("Failed to schedule next expiration check", "error", err)
-	}
-
-	return StackExpirerStateIdle, data, nil, nil
+	s.scheduleNextExpirationCheck()
 }
 
 // destroyExpiredStack directly creates and executes a destroy command for an expired stack,
 // following the same pattern as the Synchronizer actor.
-func destroyExpiredStack(data StackExpirerData, stackLabel string, proc gen.Process) error {
+func (s *StackExpirer) destroyExpiredStack(stackLabel string) error {
 	// Load all resources in the stack
-	resources, err := data.datastore.LoadResourcesByStack(stackLabel)
+	resources, err := s.datastore.LoadResourcesByStack(stackLabel)
 	if err != nil {
 		return fmt.Errorf("failed to load stack %s: %w", stackLabel, err)
 	}
@@ -127,7 +123,7 @@ func destroyExpiredStack(data StackExpirerData, stackLabel string, proc gen.Proc
 	}
 
 	// Load existing targets for resource update generation
-	existingTargets, err := data.datastore.LoadAllTargets()
+	existingTargets, err := s.datastore.LoadAllTargets()
 	if err != nil {
 		return fmt.Errorf("failed to load targets: %w", err)
 	}
@@ -139,7 +135,7 @@ func destroyExpiredStack(data StackExpirerData, stackLabel string, proc gen.Proc
 		pkgmodel.FormaApplyModeReconcile,
 		resource_update.FormaCommandSourceUser, // Treat expiration as user-initiated
 		existingTargets,
-		data.datastore,
+		s.datastore,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate resource updates: %w", err)
@@ -164,8 +160,8 @@ func destroyExpiredStack(data StackExpirerData, stackLabel string, proc gen.Proc
 	)
 
 	// Store the forma command
-	_, err = proc.Call(
-		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
+	_, err = s.Call(
+		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: s.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *destroyCommand},
 	)
 	if err != nil {
@@ -179,8 +175,8 @@ func destroyExpiredStack(data StackExpirerData, stackLabel string, proc gen.Proc
 	}
 
 	// Ensure ChangesetExecutor exists
-	_, err = proc.Call(
-		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: proc.Node().Name()},
+	_, err = s.Call(
+		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: s.Node().Name()},
 		changeset.EnsureChangesetExecutor{CommandID: destroyCommand.ID},
 	)
 	if err != nil {
@@ -188,8 +184,8 @@ func destroyExpiredStack(data StackExpirerData, stackLabel string, proc gen.Proc
 	}
 
 	// Start the changeset execution
-	err = proc.Send(
-		gen.ProcessID{Name: actornames.ChangesetExecutor(destroyCommand.ID), Node: proc.Node().Name()},
+	err = s.Send(
+		gen.ProcessID{Name: actornames.ChangesetExecutor(destroyCommand.ID), Node: s.Node().Name()},
 		changeset.Start{Changeset: cs, NotifyOnComplete: false},
 	)
 	if err != nil {
@@ -199,12 +195,8 @@ func destroyExpiredStack(data StackExpirerData, stackLabel string, proc gen.Proc
 	return nil
 }
 
-func scheduleNextExpirationCheck(data StackExpirerData, proc gen.Process) error {
-	interval := data.interval
-
-	if _, err := proc.SendAfter(proc.PID(), CheckExpiredStacks{}, interval); err != nil {
-		proc.Log().Error("Failed to schedule next expiration check", "error", err)
-		return err
+func (s *StackExpirer) scheduleNextExpirationCheck() {
+	if _, err := s.SendAfter(s.PID(), CheckExpiredStacks{}, s.interval); err != nil {
+		s.Log().Error("Failed to schedule next expiration check", "error", err)
 	}
-	return nil
 }
