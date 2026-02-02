@@ -1,0 +1,14 @@
+-- +goose Up
+ALTER TABLE stacks ADD COLUMN ttl_seconds INTEGER;
+ALTER TABLE stacks ADD COLUMN expires_at TIMESTAMP;
+ALTER TABLE stacks ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE stacks ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS idx_stacks_expires_at ON stacks (expires_at);
+
+-- +goose Down
+DROP INDEX IF EXISTS idx_stacks_expires_at;
+ALTER TABLE stacks DROP COLUMN IF EXISTS updated_at;
+ALTER TABLE stacks DROP COLUMN IF EXISTS created_at;
+ALTER TABLE stacks DROP COLUMN IF EXISTS expires_at;
+ALTER TABLE stacks DROP COLUMN IF EXISTS ttl_seconds;

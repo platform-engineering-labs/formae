@@ -297,6 +297,11 @@ func formatDuration(millis int64) string {
 	return duration.String()
 }
 
+func formatTTL(seconds int64) string {
+	duration := time.Duration(seconds) * time.Second
+	return duration.String()
+}
+
 func createDisplayUpdateFromGroup(group []apimodel.ResourceUpdate) apimodel.ResourceUpdate {
 	if len(group) == 0 {
 		return apimodel.ResourceUpdate{}
@@ -554,7 +559,10 @@ func formatSimulatedStackUpdate(root *gtree.Node, su apimodel.StackUpdate) {
 	if su.Description != "" {
 		line += display.Greyf(" (description: %s)", su.Description)
 	}
-	root.Add(line)
+	node := root.Add(line)
+	if su.TTLSeconds > 0 {
+		node.Add(display.Greyf("with TTL: %s", formatTTL(su.TTLSeconds)))
+	}
 }
 
 // formatStackUpdate formats a stack update for status view
@@ -568,6 +576,14 @@ func formatStackUpdate(root *gtree.Node, su apimodel.StackUpdate) {
 
 	if su.Description != "" {
 		node.Add(display.Greyf("description: %s", su.Description))
+	}
+
+	if su.TTLSeconds > 0 {
+		ttlLine := display.Greyf("TTL: %s", formatTTL(su.TTLSeconds))
+		if !su.ExpiresAt.IsZero() {
+			ttlLine += display.Greyf(" (expires at %s)", su.ExpiresAt.Local().Format("2006-01-02 15:04:05"))
+		}
+		node.Add(ttlLine)
 	}
 
 	// Add error details if failed
@@ -855,7 +871,7 @@ func RenderInventoryStacks(stacks []*pkgmodel.Stack, maxRows int) (string, error
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
 			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On, ShowHeader: tw.On}},
 		})))
-	table.Header(display.LightBlue("Label"), "Description")
+	table.Header(display.LightBlue("Label"), "Description", "TTL", "Expires At")
 
 	effectiveMaxRows := len(stacks)
 	if maxRows > 0 && maxRows < len(stacks) {
@@ -866,9 +882,20 @@ func RenderInventoryStacks(stacks []*pkgmodel.Stack, maxRows int) (string, error
 	for i := 0; i < effectiveMaxRows; i++ {
 		stack := stacks[i]
 
-		data[i] = make([]string, 2)
+		ttlStr := "not set"
+		expiresAtStr := "never"
+		if stack.TTLSeconds > 0 {
+			ttlStr = formatTTL(stack.TTLSeconds)
+			if !stack.ExpiresAt.IsZero() {
+				expiresAtStr = stack.ExpiresAt.Format("2006-01-02 15:04:05")
+			}
+		}
+
+		data[i] = make([]string, 4)
 		data[i][0] = display.LightBlue(stack.Label)
 		data[i][1] = stack.Description
+		data[i][2] = ttlStr
+		data[i][3] = expiresAtStr
 	}
 
 	err := table.Bulk(data)

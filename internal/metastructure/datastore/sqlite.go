@@ -1083,9 +1083,23 @@ func (d DatastoreSQLite) CreateStack(stack *pkgmodel.Stack, commandID string) (s
 	// Generate new ksuid for both id and version
 	id := mksuid.New().String()
 	version := mksuid.New().String()
+	now := time.Now().UTC()
 
-	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(query, id, version, commandID, "create", stack.Label, stack.Description)
+	// Compute expires_at if TTL is set (TTLSeconds > 0 means TTL is set)
+	var expiresAt *time.Time
+	if stack.TTLSeconds > 0 {
+		exp := now.Add(time.Duration(stack.TTLSeconds) * time.Second)
+		expiresAt = &exp
+	}
+
+	// Store TTLSeconds as NULL if 0, otherwise store the value
+	var ttlSecondsDB interface{}
+	if stack.TTLSeconds > 0 {
+		ttlSecondsDB = stack.TTLSeconds
+	}
+
+	query := `INSERT INTO stacks (id, version, command_id, operation, label, description, ttl_seconds, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(query, id, version, commandID, "create", stack.Label, stack.Description, ttlSecondsDB, expiresAt, now, now)
 	if err != nil {
 		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
 		return "", err
@@ -1098,9 +1112,9 @@ func (d DatastoreSQLite) UpdateStack(stack *pkgmodel.Stack, commandID string) (s
 	_, span := sqliteTracer.Start(context.Background(), "UpdateStack")
 	defer span.End()
 
-	// Get the existing stack to find its id
+	// Get the existing stack to find its id and created_at
 	query := `
-		SELECT id FROM stacks s1
+		SELECT id, created_at FROM stacks s1
 		WHERE label = ?
 		AND operation != 'delete'
 		AND NOT EXISTS (
@@ -1113,17 +1127,47 @@ func (d DatastoreSQLite) UpdateStack(stack *pkgmodel.Stack, commandID string) (s
 	row := d.conn.QueryRow(query, stack.Label)
 
 	var id string
-	if err := row.Scan(&id); err != nil {
+	var createdAtStr sql.NullString
+	if err := row.Scan(&id, &createdAtStr); err != nil {
 		if err == sql.ErrNoRows {
 			return "", fmt.Errorf("stack not found: %s", stack.Label)
 		}
 		return "", err
 	}
 
+	// Parse created_at
+	var createdAt time.Time
+	if createdAtStr.Valid {
+		if ts, err := time.Parse(time.RFC3339Nano, createdAtStr.String); err == nil {
+			createdAt = ts.UTC()
+		} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", createdAtStr.String); err == nil {
+			createdAt = ts.UTC()
+		} else {
+			createdAt = time.Now().UTC()
+		}
+	} else {
+		createdAt = time.Now().UTC()
+	}
+
+	now := time.Now().UTC()
+
+	// Compute expires_at if TTL is set (TTLSeconds > 0 means TTL is set)
+	var expiresAt *time.Time
+	if stack.TTLSeconds > 0 {
+		exp := now.Add(time.Duration(stack.TTLSeconds) * time.Second)
+		expiresAt = &exp
+	}
+
+	// Store TTLSeconds as NULL if 0, otherwise store the value
+	var ttlSecondsDB interface{}
+	if stack.TTLSeconds > 0 {
+		ttlSecondsDB = stack.TTLSeconds
+	}
+
 	// Insert new version with same id
 	version := mksuid.New().String()
-	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err := d.conn.Exec(insertQuery, id, version, commandID, "update", stack.Label, stack.Description)
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description, ttl_seconds, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := d.conn.Exec(insertQuery, id, version, commandID, "update", stack.Label, stack.Description, ttlSecondsDB, expiresAt, createdAt, now)
 	if err != nil {
 		slog.Error("Failed to update stack", "error", err, "label", stack.Label)
 		return "", err
@@ -1176,7 +1220,7 @@ func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 
 	// Get the latest version of the stack that isn't deleted
 	query := `
-		SELECT id, description FROM stacks s1
+		SELECT id, description, ttl_seconds, expires_at, created_at, updated_at FROM stacks s1
 		WHERE label = ?
 		AND operation != 'delete'
 		AND NOT EXISTS (
@@ -1189,18 +1233,50 @@ func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 	row := d.conn.QueryRow(query, label)
 
 	var id, description string
-	if err := row.Scan(&id, &description); err != nil {
+	var ttlSeconds sql.NullInt64
+	var expiresAtStr, createdAtStr, updatedAtStr sql.NullString
+	if err := row.Scan(&id, &description, &ttlSeconds, &expiresAtStr, &createdAtStr, &updatedAtStr); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Stack not found, return nil without error
 		}
 		return nil, err
 	}
 
-	return &pkgmodel.Stack{
+	stack := &pkgmodel.Stack{
 		ID:          id,
 		Label:       label,
 		Description: description,
-	}, nil
+	}
+
+	if ttlSeconds.Valid {
+		stack.TTLSeconds = ttlSeconds.Int64
+	}
+
+	if expiresAtStr.Valid {
+		if ts, err := time.Parse(time.RFC3339Nano, expiresAtStr.String); err == nil {
+			stack.ExpiresAt = ts.UTC()
+		} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", expiresAtStr.String); err == nil {
+			stack.ExpiresAt = ts.UTC()
+		}
+	}
+
+	if createdAtStr.Valid {
+		if ts, err := time.Parse(time.RFC3339Nano, createdAtStr.String); err == nil {
+			stack.CreatedAt = ts.UTC()
+		} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", createdAtStr.String); err == nil {
+			stack.CreatedAt = ts.UTC()
+		}
+	}
+
+	if updatedAtStr.Valid {
+		if ts, err := time.Parse(time.RFC3339Nano, updatedAtStr.String); err == nil {
+			stack.UpdatedAt = ts.UTC()
+		} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", updatedAtStr.String); err == nil {
+			stack.UpdatedAt = ts.UTC()
+		}
+	}
+
+	return stack, nil
 }
 
 func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
@@ -1234,7 +1310,7 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 
 	// Get all stacks at their latest version that aren't deleted
 	query := `
-		SELECT s1.id, s1.label, s1.description FROM stacks s1
+		SELECT s1.id, s1.label, s1.description, s1.ttl_seconds, s1.expires_at, s1.created_at, s1.updated_at FROM stacks s1
 		WHERE s1.operation != 'delete'
 		AND NOT EXISTS (
 			SELECT 1 FROM stacks s2
@@ -1252,14 +1328,132 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	var stacks []*pkgmodel.Stack
 	for rows.Next() {
 		var id, label, description string
-		if err := rows.Scan(&id, &label, &description); err != nil {
+		var ttlSeconds sql.NullInt64
+		var expiresAtStr, createdAtStr, updatedAtStr sql.NullString
+		if err := rows.Scan(&id, &label, &description, &ttlSeconds, &expiresAtStr, &createdAtStr, &updatedAtStr); err != nil {
 			return nil, err
 		}
-		stacks = append(stacks, &pkgmodel.Stack{
+
+		stack := &pkgmodel.Stack{
 			ID:          id,
 			Label:       label,
 			Description: description,
-		})
+		}
+
+		if ttlSeconds.Valid {
+			stack.TTLSeconds = ttlSeconds.Int64
+		}
+
+		if expiresAtStr.Valid {
+			if ts, err := time.Parse(time.RFC3339Nano, expiresAtStr.String); err == nil {
+				stack.ExpiresAt = ts.UTC()
+			} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", expiresAtStr.String); err == nil {
+				stack.ExpiresAt = ts.UTC()
+			}
+		}
+
+		if createdAtStr.Valid {
+			if ts, err := time.Parse(time.RFC3339Nano, createdAtStr.String); err == nil {
+				stack.CreatedAt = ts.UTC()
+			} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", createdAtStr.String); err == nil {
+				stack.CreatedAt = ts.UTC()
+			}
+		}
+
+		if updatedAtStr.Valid {
+			if ts, err := time.Parse(time.RFC3339Nano, updatedAtStr.String); err == nil {
+				stack.UpdatedAt = ts.UTC()
+			} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", updatedAtStr.String); err == nil {
+				stack.UpdatedAt = ts.UTC()
+			}
+		}
+
+		stacks = append(stacks, stack)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return stacks, nil
+}
+
+func (d DatastoreSQLite) ListExpiredStacks() ([]*pkgmodel.Stack, error) {
+	_, span := sqliteTracer.Start(context.Background(), "ListExpiredStacks")
+	defer span.End()
+
+	// Format timestamp as RFC3339Nano for consistent comparison with stored TEXT values in SQLite
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	// Get all stacks where expires_at is in the past, not deleted, and no active commands
+	query := `
+		SELECT s1.id, s1.label, s1.description, s1.ttl_seconds, s1.expires_at, s1.created_at, s1.updated_at FROM stacks s1
+		WHERE s1.operation != 'delete'
+		AND s1.expires_at IS NOT NULL
+		AND s1.expires_at < ?
+		AND NOT EXISTS (
+			SELECT 1 FROM stacks s2
+			WHERE s1.id = s2.id
+			AND s2.version > s1.version
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE ru.stack_label = s1.label
+			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		)
+		ORDER BY s1.expires_at
+	`
+	rows, err := d.conn.Query(query, now)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stacks []*pkgmodel.Stack
+	for rows.Next() {
+		var id, label, description string
+		var ttlSeconds sql.NullInt64
+		var expiresAtStr, createdAtStr, updatedAtStr sql.NullString
+		if err := rows.Scan(&id, &label, &description, &ttlSeconds, &expiresAtStr, &createdAtStr, &updatedAtStr); err != nil {
+			return nil, err
+		}
+
+		stack := &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		}
+
+		if ttlSeconds.Valid {
+			stack.TTLSeconds = ttlSeconds.Int64
+		}
+
+		if expiresAtStr.Valid {
+			if ts, err := time.Parse(time.RFC3339Nano, expiresAtStr.String); err == nil {
+				stack.ExpiresAt = ts.UTC()
+			} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", expiresAtStr.String); err == nil {
+				stack.ExpiresAt = ts.UTC()
+			}
+		}
+
+		if createdAtStr.Valid {
+			if ts, err := time.Parse(time.RFC3339Nano, createdAtStr.String); err == nil {
+				stack.CreatedAt = ts.UTC()
+			} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", createdAtStr.String); err == nil {
+				stack.CreatedAt = ts.UTC()
+			}
+		}
+
+		if updatedAtStr.Valid {
+			if ts, err := time.Parse(time.RFC3339Nano, updatedAtStr.String); err == nil {
+				stack.UpdatedAt = ts.UTC()
+			} else if ts, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", updatedAtStr.String); err == nil {
+				stack.UpdatedAt = ts.UTC()
+			}
+		}
+
+		stacks = append(stacks, stack)
 	}
 
 	if err := rows.Err(); err != nil {

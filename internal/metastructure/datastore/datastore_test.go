@@ -1792,3 +1792,86 @@ func TestDatastore_CountResourcesInStack(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, count)
 }
+
+func TestDatastore_ListExpiredStacks_ExcludesStacksWithActiveCommands(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	// Create a stack with TTL (CreateStack computes expires_at from now + TTLSeconds)
+	stackLabel := "expired-stack-test"
+	stack := &pkgmodel.Stack{
+		Label:       stackLabel,
+		Description: "An expired stack",
+		TTLSeconds:  60,
+	}
+	_, err = ds.CreateStack(stack, "cmd-create")
+	assert.NoError(t, err)
+
+	// Manually update the expires_at to be in the past (simulate expiration)
+	expiredTime := time.Now().UTC().Add(-1 * time.Minute)
+	switch d := ds.(type) {
+	case DatastoreSQLite:
+		_, err = d.conn.Exec("UPDATE stacks SET expires_at = ? WHERE label = ?", expiredTime.Format(time.RFC3339Nano), stackLabel)
+	case DatastorePostgres:
+		_, err = d.pool.Exec(context.Background(), "UPDATE stacks SET expires_at = $1 WHERE label = $2", expiredTime, stackLabel)
+	}
+	assert.NoError(t, err)
+
+	// Verify the stack is returned by ListExpiredStacks (no active commands)
+	expiredStacks, err := ds.ListExpiredStacks()
+	assert.NoError(t, err)
+	assert.Len(t, expiredStacks, 1, "Expired stack should be returned when no active commands exist")
+	assert.Equal(t, stackLabel, expiredStacks[0].Label)
+
+	// Create a FormaCommand with state "InProgress" (active command)
+	commandID := "cmd-destroy-1"
+	formaCommand := &forma_command.FormaCommand{
+		ID:      commandID,
+		Command: pkgmodel.CommandDestroy,
+		State:   forma_command.CommandStateInProgress,
+		Config: config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		},
+		StartTs:    util.TimeNow(),
+		ModifiedTs: util.TimeNow(),
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{
+					Ksuid:  mksuid.New().String(),
+					Label:  "test-resource",
+					Type:   "AWS::S3::Bucket",
+					Stack:  stackLabel,
+					Target: "formae://target1",
+				},
+				Operation:  resource_update.OperationDelete,
+				State:      resource_update.ResourceUpdateStateInProgress,
+				StackLabel: stackLabel,
+				StartTs:    util.TimeNow(),
+				ModifiedTs: util.TimeNow(),
+			},
+		},
+	}
+
+	// Store the command (this also stores resource_updates)
+	err = ds.StoreFormaCommand(formaCommand, commandID)
+	assert.NoError(t, err)
+
+	// Verify the stack is NOT returned by ListExpiredStacks (has active command)
+	expiredStacks, err = ds.ListExpiredStacks()
+	assert.NoError(t, err)
+	assert.Len(t, expiredStacks, 0, "Expired stack should NOT be returned when active commands exist")
+
+	// Update the command to a completed state
+	formaCommand.State = forma_command.CommandStateSuccess
+	formaCommand.ResourceUpdates[0].State = resource_update.ResourceUpdateStateSuccess
+	err = ds.StoreFormaCommand(formaCommand, commandID)
+	assert.NoError(t, err)
+
+	// Verify the stack IS returned again (command is now completed)
+	expiredStacks, err = ds.ListExpiredStacks()
+	assert.NoError(t, err)
+	assert.Len(t, expiredStacks, 1, "Expired stack should be returned when command is completed")
+}

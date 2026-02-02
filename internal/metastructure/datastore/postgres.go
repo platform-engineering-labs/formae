@@ -1116,9 +1116,23 @@ func (d DatastorePostgres) CreateStack(stack *pkgmodel.Stack, commandID string) 
 	// Generate new ksuid for both id and version
 	id := mksuid.New().String()
 	version := mksuid.New().String()
+	now := time.Now().UTC()
 
-	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err = d.pool.Exec(ctx, query, id, version, commandID, "create", stack.Label, stack.Description)
+	// Compute expires_at if TTL is set (TTLSeconds > 0 means TTL is set)
+	var expiresAt *time.Time
+	if stack.TTLSeconds > 0 {
+		exp := now.Add(time.Duration(stack.TTLSeconds) * time.Second)
+		expiresAt = &exp
+	}
+
+	// Store TTLSeconds as NULL if 0, otherwise store the value
+	var ttlSecondsDB interface{}
+	if stack.TTLSeconds > 0 {
+		ttlSecondsDB = stack.TTLSeconds
+	}
+
+	query := `INSERT INTO stacks (id, version, command_id, operation, label, description, ttl_seconds, expires_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+	_, err = d.pool.Exec(ctx, query, id, version, commandID, "create", stack.Label, stack.Description, ttlSecondsDB, expiresAt, now, now)
 	if err != nil {
 		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
 		return "", err
@@ -1131,9 +1145,9 @@ func (d DatastorePostgres) UpdateStack(stack *pkgmodel.Stack, commandID string) 
 	ctx, span := tracer.Start(context.Background(), "UpdateStack")
 	defer span.End()
 
-	// Get the existing stack to find its id
+	// Get the existing stack to find its id and created_at
 	query := `
-		SELECT id FROM stacks s1
+		SELECT id, created_at FROM stacks s1
 		WHERE label = $1
 		AND operation != 'delete'
 		AND NOT EXISTS (
@@ -1146,17 +1160,36 @@ func (d DatastorePostgres) UpdateStack(stack *pkgmodel.Stack, commandID string) 
 	row := d.pool.QueryRow(ctx, query, stack.Label)
 
 	var id string
-	if err := row.Scan(&id); err != nil {
+	var createdAt *time.Time
+	if err := row.Scan(&id, &createdAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return "", fmt.Errorf("stack not found: %s", stack.Label)
 		}
 		return "", err
 	}
 
+	now := time.Now().UTC()
+	if createdAt == nil {
+		createdAt = &now
+	}
+
+	// Compute expires_at if TTL is set (TTLSeconds > 0 means TTL is set)
+	var expiresAt *time.Time
+	if stack.TTLSeconds > 0 {
+		exp := now.Add(time.Duration(stack.TTLSeconds) * time.Second)
+		expiresAt = &exp
+	}
+
+	// Store TTLSeconds as NULL if 0, otherwise store the value
+	var ttlSecondsDB interface{}
+	if stack.TTLSeconds > 0 {
+		ttlSecondsDB = stack.TTLSeconds
+	}
+
 	// Insert new version with same id
 	version := mksuid.New().String()
-	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err := d.pool.Exec(ctx, insertQuery, id, version, commandID, "update", stack.Label, stack.Description)
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description, ttl_seconds, expires_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+	_, err := d.pool.Exec(ctx, insertQuery, id, version, commandID, "update", stack.Label, stack.Description, ttlSecondsDB, expiresAt, createdAt, now)
 	if err != nil {
 		slog.Error("Failed to update stack", "error", err, "label", stack.Label)
 		return "", err
@@ -1209,7 +1242,7 @@ func (d DatastorePostgres) GetStackByLabel(label string) (*pkgmodel.Stack, error
 
 	// Get the latest version of the stack that isn't deleted
 	query := `
-		SELECT id, description FROM stacks s1
+		SELECT id, description, ttl_seconds, expires_at, created_at, updated_at FROM stacks s1
 		WHERE label = $1
 		AND operation != 'delete'
 		AND NOT EXISTS (
@@ -1222,18 +1255,35 @@ func (d DatastorePostgres) GetStackByLabel(label string) (*pkgmodel.Stack, error
 	row := d.pool.QueryRow(ctx, query, label)
 
 	var id, description string
-	if err := row.Scan(&id, &description); err != nil {
+	var ttlSeconds *int64
+	var expiresAt, createdAt, updatedAt *time.Time
+	if err := row.Scan(&id, &description, &ttlSeconds, &expiresAt, &createdAt, &updatedAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil // Stack not found, return nil without error
 		}
 		return nil, err
 	}
 
-	return &pkgmodel.Stack{
+	stack := &pkgmodel.Stack{
 		ID:          id,
 		Label:       label,
 		Description: description,
-	}, nil
+	}
+
+	if ttlSeconds != nil {
+		stack.TTLSeconds = *ttlSeconds
+	}
+	if expiresAt != nil {
+		stack.ExpiresAt = *expiresAt
+	}
+	if createdAt != nil {
+		stack.CreatedAt = *createdAt
+	}
+	if updatedAt != nil {
+		stack.UpdatedAt = *updatedAt
+	}
+
+	return stack, nil
 }
 
 func (d DatastorePostgres) CountResourcesInStack(label string) (int, error) {
@@ -1267,7 +1317,7 @@ func (d DatastorePostgres) ListAllStacks() ([]*pkgmodel.Stack, error) {
 
 	// Get all stacks at their latest version that aren't deleted
 	query := `
-		SELECT s1.id, s1.label, s1.description FROM stacks s1
+		SELECT s1.id, s1.label, s1.description, s1.ttl_seconds, s1.expires_at, s1.created_at, s1.updated_at FROM stacks s1
 		WHERE s1.operation != 'delete'
 		AND NOT EXISTS (
 			SELECT 1 FROM stacks s2
@@ -1285,14 +1335,95 @@ func (d DatastorePostgres) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	var stacks []*pkgmodel.Stack
 	for rows.Next() {
 		var id, label, description string
-		if err := rows.Scan(&id, &label, &description); err != nil {
+		var ttlSeconds *int64
+		var expiresAt, createdAt, updatedAt *time.Time
+		if err := rows.Scan(&id, &label, &description, &ttlSeconds, &expiresAt, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
-		stacks = append(stacks, &pkgmodel.Stack{
+		stack := &pkgmodel.Stack{
 			ID:          id,
 			Label:       label,
 			Description: description,
-		})
+		}
+		if ttlSeconds != nil {
+			stack.TTLSeconds = *ttlSeconds
+		}
+		if expiresAt != nil {
+			stack.ExpiresAt = *expiresAt
+		}
+		if createdAt != nil {
+			stack.CreatedAt = *createdAt
+		}
+		if updatedAt != nil {
+			stack.UpdatedAt = *updatedAt
+		}
+		stacks = append(stacks, stack)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return stacks, nil
+}
+
+func (d DatastorePostgres) ListExpiredStacks() ([]*pkgmodel.Stack, error) {
+	ctx, span := tracer.Start(context.Background(), "ListExpiredStacks")
+	defer span.End()
+
+	now := time.Now().UTC()
+
+	// Get all stacks where expires_at is in the past, not deleted, and no active commands
+	query := `
+		SELECT s1.id, s1.label, s1.description, s1.ttl_seconds, s1.expires_at, s1.created_at, s1.updated_at FROM stacks s1
+		WHERE s1.operation != 'delete'
+		AND s1.expires_at IS NOT NULL
+		AND s1.expires_at < $1
+		AND NOT EXISTS (
+			SELECT 1 FROM stacks s2
+			WHERE s1.id = s2.id
+			AND s2.version > s1.version
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE ru.stack_label = s1.label
+			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		)
+		ORDER BY s1.expires_at
+	`
+	rows, err := d.pool.Query(ctx, query, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stacks []*pkgmodel.Stack
+	for rows.Next() {
+		var id, label, description string
+		var ttlSeconds *int64
+		var expiresAt, createdAt, updatedAt *time.Time
+		if err := rows.Scan(&id, &label, &description, &ttlSeconds, &expiresAt, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		stack := &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		}
+		if ttlSeconds != nil {
+			stack.TTLSeconds = *ttlSeconds
+		}
+		if expiresAt != nil {
+			stack.ExpiresAt = *expiresAt
+		}
+		if createdAt != nil {
+			stack.CreatedAt = *createdAt
+		}
+		if updatedAt != nil {
+			stack.UpdatedAt = *updatedAt
+		}
+		stacks = append(stacks, stack)
 	}
 
 	if err := rows.Err(); err != nil {

@@ -93,6 +93,17 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 	}
 }
 
+func (rp *ResourcePersister) HandleMessage(from gen.PID, message any) error {
+	switch msg := message.(type) {
+	case messages.CleanupEmptyStacks:
+		rp.cleanupEmptyStacks(msg.StackLabels, msg.CommandID)
+		return nil
+	default:
+		rp.Log().Error("ResourcePersister: unknown message type", "type", fmt.Sprintf("%T", message))
+		return fmt.Errorf("resource persister: unknown message type %T", message)
+	}
+}
+
 func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, resourceUpdate *resource_update.ResourceUpdate) (string, error) {
 	ok, relevantProgress := resourceUpdate.FindProgress(pluginOperation)
 	if !ok {
@@ -399,20 +410,14 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 }
 
 func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.TargetUpdate, commandID string) ([]string, error) {
-	rp.Log().Debug("Starting to persist target updates", "count", len(updates), "commandID", commandID)
-
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
-		rp.Log().Debug("Persisting target update", "index", i, "label", updates[i].Target.Label)
 		if err := rp.persistTargetUpdate(&updates[i]); err != nil {
 			rp.Log().Error("Failed to persist target update", "index", i, "label", updates[i].Target.Label, "error", err)
 			return nil, fmt.Errorf("failed to persist target update for %s: %w", updates[i].Target.Label, err)
 		}
-		rp.Log().Debug("Successfully persisted target update", "index", i, "label", updates[i].Target.Label)
 		versions = append(versions, updates[i].Version)
 	}
-
-	rp.Log().Debug("Finished persisting all target updates", "commandID", commandID)
 	return versions, nil
 }
 
@@ -468,20 +473,14 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 }
 
 func (rp *ResourcePersister) persistStackUpdates(updates []stack_update.StackUpdate, commandID string) ([]string, error) {
-	rp.Log().Debug("Starting to persist stack updates", "count", len(updates), "commandID", commandID)
-
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
-		rp.Log().Debug("Persisting stack update", "index", i, "label", updates[i].Stack.Label)
 		if err := rp.persistStackUpdate(&updates[i], commandID); err != nil {
 			rp.Log().Error("Failed to persist stack update", "index", i, "label", updates[i].Stack.Label, "error", err)
 			return nil, fmt.Errorf("failed to persist stack update for %s: %w", updates[i].Stack.Label, err)
 		}
-		rp.Log().Debug("Successfully persisted stack update", "index", i, "label", updates[i].Stack.Label)
 		versions = append(versions, updates[i].Version)
 	}
-
-	rp.Log().Debug("Finished persisting all stack updates", "commandID", commandID)
 	return versions, nil
 }
 
@@ -526,7 +525,6 @@ func (rp *ResourcePersister) persistStackUpdate(update *stack_update.StackUpdate
 // This is called after a changeset completes to clean up stacks that became empty
 // due to resource deletions.
 func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID string) {
-	rp.Log().Info("cleanupEmptyStacks called", "stackLabels", stackLabels, "commandID", commandID)
 	for _, stackLabel := range stackLabels {
 		count, err := rp.datastore.CountResourcesInStack(stackLabel)
 		if err != nil {
@@ -543,7 +541,7 @@ func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID 
 					"stackLabel", stackLabel,
 					"error", err)
 			} else {
-				rp.Log().Info("Deleted empty stack",
+				rp.Log().Debug("Deleted empty stack",
 					"stackLabel", stackLabel)
 			}
 		}

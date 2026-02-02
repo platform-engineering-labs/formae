@@ -106,6 +106,8 @@ type StackUpdate struct {
 	Duration     int64     `json:"Duration,omitempty"` // milliseconds
 	ErrorMessage string    `json:"ErrorMessage,omitempty"`
 	Description  string    `json:"Description"`
+	TTLSeconds   int64     `json:"TTLSeconds,omitempty"`
+	ExpiresAt    time.Time `json:"ExpiresAt,omitempty"`
 	StartTs      time.Time `json:"StartTs,omitempty"`
 	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
 }

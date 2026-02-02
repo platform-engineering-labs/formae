@@ -60,6 +60,7 @@ examples {
     new {
       Label = "my-stack"
       Description = "Test stack for unit tests"
+      TTLSeconds = null
     }
   }
   ["Target"] {
