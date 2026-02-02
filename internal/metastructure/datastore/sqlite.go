@@ -959,23 +959,23 @@ func (d DatastoreSQLite) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	return resources, rows.Err()
 }
 
-func (d DatastoreSQLite) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
-	_, span := sqliteTracer.Start(context.Background(), "StoreStack")
+func (d DatastoreSQLite) BulkStoreResources(resources []pkgmodel.Resource, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "BulkStoreResources")
 	defer span.End()
 
 	var ret string
 	var err error
-	for _, resource := range stack.Resources {
+	for _, resource := range resources {
 		if ret, err = d.StoreResource(&resource, commandID); err != nil {
-			slog.Error("Failed to store resource in stack", "error", err, "resourceURI", resource.URI())
+			slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
 			return "", err
 		}
 	}
 	return ret, nil
 }
 
-func (d DatastoreSQLite) LoadAllStacks() ([]*pkgmodel.Forma, error) {
-	_, span := sqliteTracer.Start(context.Background(), "LoadAllStacks")
+func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadAllResourcesByStack")
 	defer span.End()
 
 	query := `
@@ -1020,20 +1020,11 @@ func (d DatastoreSQLite) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 		}
 	}
 
-	// Create Forma objects for each stack
-	var stacks []*pkgmodel.Forma
-	for _, stackResources := range stackResourcesMap {
-		if len(stackResources) > 0 {
-			forma := pkgmodel.FormaFromResources(stackResources)
-			stacks = append(stacks, forma)
-		}
-	}
-
-	return stacks, nil
+	return stackResourcesMap, nil
 }
 
-func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
-	_, span := sqliteTracer.Start(context.Background(), "LoadStack")
+func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadResourcesByStack")
 	defer span.End()
 
 	query := `
@@ -1055,7 +1046,7 @@ func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
 	}
 	defer closeRows(rows)
 
-	var allResources []*pkgmodel.Resource
+	var resources []*pkgmodel.Resource
 	for rows.Next() {
 		var jsonData, ksuid string
 		if err := rows.Scan(&jsonData, &ksuid); err != nil {
@@ -1068,26 +1059,10 @@ func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
 		}
 
 		resource.Ksuid = ksuid
-		allResources = append(allResources, &resource)
+		resources = append(resources, &resource)
 	}
 
-	// Filter resources that belong to this stack
-	var stackResources []*pkgmodel.Resource
-	for _, resource := range allResources {
-		if resource.Stack == stackLabel {
-			stackResources = append(stackResources, resource)
-		}
-	}
-
-	// If no resources found for this stack, return nil
-	if len(stackResources) == 0 {
-		return nil, nil
-	}
-
-	// Create a Forma object from the filtered resources
-	forma := pkgmodel.FormaFromResources(stackResources)
-
-	return forma, nil
+	return resources, nil
 }
 
 // Stack metadata operations

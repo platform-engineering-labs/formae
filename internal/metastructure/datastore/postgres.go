@@ -845,8 +845,8 @@ func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	return resources, rows.Err()
 }
 
-func (d DatastorePostgres) LoadAllStacks() ([]*pkgmodel.Forma, error) {
-	ctx, span := tracer.Start(context.Background(), "LoadAllStacks")
+func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadAllResourcesByStack")
 	defer span.End()
 
 	query := `
@@ -891,16 +891,7 @@ func (d DatastorePostgres) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 		}
 	}
 
-	// Create Forma objects for each stack
-	var stacks []*pkgmodel.Forma
-	for _, stackResources := range stackResourcesMap {
-		if len(stackResources) > 0 {
-			forma := pkgmodel.FormaFromResources(stackResources)
-			stacks = append(stacks, forma)
-		}
-	}
-
-	return stacks, nil
+	return stackResourcesMap, nil
 }
 
 func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
@@ -1065,8 +1056,8 @@ func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType 
 	return &resource, nil
 }
 
-func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
-	ctx, span := tracer.Start(context.Background(), "LoadStack")
+func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadResourcesByStack")
 	defer span.End()
 
 	query := `
@@ -1088,7 +1079,7 @@ func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error)
 	}
 	defer rows.Close()
 
-	var allResources []*pkgmodel.Resource
+	var resources []*pkgmodel.Resource
 	for rows.Next() {
 		var jsonData, ksuid string
 		if err := rows.Scan(&jsonData, &ksuid); err != nil {
@@ -1101,26 +1092,10 @@ func (d DatastorePostgres) LoadStack(stackLabel string) (*pkgmodel.Forma, error)
 		}
 
 		resource.Ksuid = ksuid
-		allResources = append(allResources, &resource)
+		resources = append(resources, &resource)
 	}
 
-	// Filter resources that belong to this stack
-	var stackResources []*pkgmodel.Resource
-	for _, resource := range allResources {
-		if resource.Stack == stackLabel {
-			stackResources = append(stackResources, resource)
-		}
-	}
-
-	// If no resources found for this stack, return nil
-	if len(stackResources) == 0 {
-		return nil, nil
-	}
-
-	// Create a Forma object from the filtered resources
-	forma := pkgmodel.FormaFromResources(stackResources)
-
-	return forma, nil
+	return resources, nil
 }
 
 // Stack metadata operations
@@ -1942,15 +1917,15 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
 }
 
-func (d DatastorePostgres) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
-	_, span := tracer.Start(context.Background(), "StoreStack")
+func (d DatastorePostgres) BulkStoreResources(resources []pkgmodel.Resource, commandID string) (string, error) {
+	_, span := tracer.Start(context.Background(), "BulkStoreResources")
 	defer span.End()
 
 	var lastVersionID string
-	for _, resource := range stack.Resources {
+	for _, resource := range resources {
 		versionID, err := d.StoreResource(&resource, commandID)
 		if err != nil {
-			slog.Error("failed to store resource in stack", "error", err, "resourceURI", resource.URI())
+			slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
 			return "", err
 		}
 		lastVersionID = versionID

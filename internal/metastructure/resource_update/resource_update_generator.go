@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"reflect"
-	"slices"
 
 	"github.com/tidwall/sjson"
 
@@ -144,11 +142,11 @@ func validateStackReferences(forma *pkgmodel.Forma, ds ResourceDataLookup) error
 
 	// Validate each of these stacks exists in the database
 	for stackLabel := range stacksToValidate {
-		existingStack, err := ds.LoadStack(stackLabel)
+		existingResources, err := ds.LoadResourcesByStack(stackLabel)
 		if err != nil {
 			return fmt.Errorf("failed to load stack %s: %w", stackLabel, err)
 		}
-		if existingStack == nil {
+		if len(existingResources) == 0 {
 			return apimodel.StackReferenceNotFoundError{
 				StackLabel: stackLabel,
 			}
@@ -167,25 +165,25 @@ func generateResourceUpdatesForDestroy(
 	var resourceDestroys []ResourceUpdate
 
 	for _, stack := range forma.SplitByStack() {
-		existingStack, err := ds.LoadStack(stack.SingleStackLabel())
+		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
 			slog.Error("Failed to load stack", "error", err)
 			continue
 		}
 
-		if existingStack == nil {
+		if len(existingResources) == 0 {
 			// Stack doesn't exist, nothing to delete
 			continue
 		}
 
 		// Create delete resource updates for existing resources
-		for _, existingResource := range existingStack.Resources {
+		for _, existingResource := range existingResources {
 			for _, formaResource := range forma.Resources {
 				if formaResource.Stack == stack.SingleStackLabel() &&
 					formaResource.Label == existingResource.Label &&
 					formaResource.Type == existingResource.Type {
 					resourceDestroy, err := NewResourceUpdateForDestroy(
-						existingResource,
+						*existingResource,
 						*targetMap[existingResource.Target],
 						source,
 					)
@@ -250,7 +248,7 @@ func generateResourceUpdatesForSync(
 	var resourceUpdates []ResourceUpdate
 
 	for _, stack := range forma.SplitByStack() {
-		existingStack, err := ds.LoadStack(stack.SingleStackLabel())
+		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
 			slog.Error("Failed to load stack", "error", err)
 			continue
@@ -267,19 +265,19 @@ func generateResourceUpdatesForSync(
 				}
 			}
 
-			// Avoid nil pointer access for alternate code path below
+			// Avoid accessing existingResources for alternate code path below
 			continue
 		}
 
 		// Normal sync - create read resource updates for existing resources
-		for _, existingResource := range existingStack.Resources {
+		for _, existingResource := range existingResources {
 			for _, resource := range forma.Resources {
 				if resource.Stack == stack.SingleStackLabel() &&
 					resource.Label == existingResource.Label &&
 					resource.Type == existingResource.Type {
 
 					resourceUpdate, err := NewResourceUpdateForSync(
-						existingResource,
+						*existingResource,
 						*targetMap[existingResource.Target],
 						source,
 					)
@@ -307,23 +305,23 @@ func generateResourceUpdatesForReconcile(
 	var resourceReplaces []ResourceUpdate
 	var implicitDeleteResources []ResourceUpdate
 
-	allExistingStacks, err := ds.LoadAllStacks()
+	allResourcesByStack, err := ds.LoadAllResourcesByStack()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
 	}
 
 	for _, stack := range forma.SplitByStack() {
-		existingStack, err := ds.LoadStack(stack.SingleStackLabel())
+		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
 			slog.Error("Failed to load stack", "error", err)
 			continue
 		}
 
 		// Existing stack not found which means that all resources will be created.
-		if existingStack == nil {
+		if len(existingResources) == 0 {
 			for _, newResource := range stack.Resources {
-				if existingUnmanaged, ok := findUnmanagedResource(newResource, allExistingStacks); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allExistingStacks)
+				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -368,13 +366,8 @@ func generateResourceUpdatesForReconcile(
 			continue
 		}
 
-		if reflect.DeepEqual(existingStack, stack) {
-			slog.Debug("No changes detected in stack", "stack", stack.SingleStackLabel())
-			continue
-		}
-
 		// Now process existing resources
-		for _, existingResource := range existingStack.Resources {
+		for _, existingResource := range existingResources {
 			found := false
 			for _, newResource := range stack.Resources {
 				if newResource.Label == existingResource.Label &&
@@ -384,14 +377,14 @@ func generateResourceUpdatesForReconcile(
 
 					found = true
 
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allExistingStacks)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
 
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
 					existingResourceUpdates, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
-						existingResource,
+						*existingResource,
 						newResource,
 						*targetMap[existingResource.Target],
 						*targetMap[newResource.Target],
@@ -436,7 +429,7 @@ func generateResourceUpdatesForReconcile(
 			if !found {
 				// Resource exists in the stack but not in the new resources, so it will be deleted implicitly
 				resourceDelete, err := NewResourceUpdateForDestroy(
-					existingResource,
+					*existingResource,
 					*targetMap[existingResource.Target],
 					source,
 				)
@@ -449,7 +442,7 @@ func generateResourceUpdatesForReconcile(
 
 		for _, newResource := range stack.Resources {
 			found := false
-			for _, existingResource := range existingStack.Resources {
+			for _, existingResource := range existingResources {
 				if newResource.Label == existingResource.Label &&
 					newResource.Type == existingResource.Type &&
 					newResource.Target == existingResource.Target &&
@@ -461,8 +454,8 @@ func generateResourceUpdatesForReconcile(
 
 			if !found {
 				// Check if this resource exists as an unmanaged resource
-				if existingUnmanaged, ok := findUnmanagedResource(newResource, allExistingStacks); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allExistingStacks)
+				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -512,7 +505,7 @@ func generateResourceUpdatesForReconcile(
 	// After processing all stacks, find dependencies for delete operations
 	allDeleteUpdates := append(resourceReplaces, implicitDeleteResources...)
 
-	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allExistingStacks, targetMap, source)
+	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allResourcesByStack, targetMap, source)
 
 	// Convert updates to replacements if they have dependency deletes
 
@@ -532,16 +525,14 @@ func generateResourceUpdatesForReconcile(
 	return finalResourceUpdates, nil
 }
 
-func findUnmanagedResource(resource pkgmodel.Resource, existingStacks []*pkgmodel.Forma) (pkgmodel.Resource, bool) {
-	unmanagedIndex := slices.IndexFunc(existingStacks, func(s *pkgmodel.Forma) bool {
-		return s.SingleStackLabel() == constants.UnmanagedStack
-	})
-	if unmanagedIndex == -1 {
+func findUnmanagedResource(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource) (pkgmodel.Resource, bool) {
+	unmanagedResources, exists := allResources[constants.UnmanagedStack]
+	if !exists {
 		return pkgmodel.Resource{}, false
 	}
-	for _, res := range existingStacks[unmanagedIndex].Resources {
+	for _, res := range unmanagedResources {
 		if res.Type == resource.Type && res.Label == resource.Label {
-			return res, true
+			return *res, true
 		}
 	}
 	return pkgmodel.Resource{}, false
@@ -558,20 +549,20 @@ func generateResourceUpdatesForPatch(
 	var resourceUpdates []ResourceUpdate
 	var resourceReplaces []ResourceUpdate
 
-	allExistingStacks, err := ds.LoadAllStacks()
+	allResourcesByStack, err := ds.LoadAllResourcesByStack()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
 	}
 
 	for _, stack := range forma.SplitByStack() {
-		existingStack, err := ds.LoadStack(stack.SingleStackLabel())
+		stackResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
 			slog.Error("Failed to load stack", "error", err)
 			continue
 		}
 
 		// Existing stack not found which means that all resources will be created.
-		if existingStack == nil {
+		if len(stackResources) == 0 {
 			for _, newResource := range stack.Resources {
 				resourceCreate, err := NewResourceUpdateForCreate(
 					newResource,
@@ -586,15 +577,12 @@ func generateResourceUpdatesForPatch(
 			continue
 		}
 
-		// Process new resources in the stack
-		managedResources := make([]pkgmodel.Resource, 0)
-		unmanagedIndex := slices.IndexFunc(allExistingStacks, func(s *pkgmodel.Forma) bool {
-			return s.SingleStackLabel() == constants.UnmanagedStack
-		})
-		if unmanagedIndex != -1 {
-			managedResources = append(managedResources, allExistingStacks[unmanagedIndex].Resources...)
+		// Process new resources in the stack - include unmanaged resources
+		existingResources := make([]*pkgmodel.Resource, 0, len(stackResources))
+		existingResources = append(existingResources, stackResources...)
+		if unmanagedResources, ok := allResourcesByStack[constants.UnmanagedStack]; ok {
+			existingResources = append(existingResources, unmanagedResources...)
 		}
-		existingResources := append(existingStack.Resources, managedResources...)
 
 		for _, newResource := range stack.Resources {
 			resourceExists := false
@@ -605,14 +593,14 @@ func generateResourceUpdatesForPatch(
 					resourceExists = true
 
 					// Use NewResourceUpdateForExisting to handle all the logic
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allExistingStacks)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
 
 					existingResourceUpdates, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
-						existingResource,
+						*existingResource,
 						newResource,
 						*targetMap[existingResource.Target],
 						*targetMap[newResource.Target],
@@ -659,18 +647,18 @@ func generateResourceUpdatesForPatch(
 
 	allUpdates := append(append(resourceCreates, resourceUpdates...), resourceReplaces...)
 
-	dependencyDeletes := findDependencyUpdates(resourceReplaces, allExistingStacks, targetMap, source)
+	dependencyDeletes := findDependencyUpdates(resourceReplaces, allResourcesByStack, targetMap, source)
 	finalResourceUpdates := convertUpdatesToReplacementsForDependencies(allUpdates, dependencyDeletes, source)
 	return finalResourceUpdates, nil
 }
 
 // findResourcesThatDependOn finds all resources that have dependencies on the given resource
-func findResourcesThatDependOn(targetResource pkgmodel.Resource, allStacks []*pkgmodel.Forma) ([]pkgmodel.Resource, error) {
+func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource) ([]pkgmodel.Resource, error) {
 	var dependentResources []pkgmodel.Resource
 	targetURI := targetResource.URI()
 
-	for _, stack := range allStacks {
-		for _, resource := range stack.Resources {
+	for _, resources := range allResources {
+		for _, resource := range resources {
 			// Skip the target resource itself
 			if resource.Label == targetResource.Label &&
 				resource.Stack == targetResource.Stack &&
@@ -679,10 +667,10 @@ func findResourcesThatDependOn(targetResource pkgmodel.Resource, allStacks []*pk
 			}
 
 			// Check if this resource has a dependency on the target resource
-			uris := resolver.ExtractResolvableURIs(resource)
+			uris := resolver.ExtractResolvableURIs(*resource)
 			for _, uri := range uris {
 				if uri.Stripped() == targetURI.Stripped() {
-					dependentResources = append(dependentResources, resource)
+					dependentResources = append(dependentResources, *resource)
 					break
 				}
 			}
@@ -693,13 +681,13 @@ func findResourcesThatDependOn(targetResource pkgmodel.Resource, allStacks []*pk
 }
 
 // findDependencyDeletes finds resources that need to be deleted because they depend on resources being deleted
-func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allExistingStacks []*pkgmodel.Forma, targetMap map[string]*pkgmodel.Target, source FormaCommandSource) []ResourceUpdate {
+func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[string][]*pkgmodel.Resource, targetMap map[string]*pkgmodel.Target, source FormaCommandSource) []ResourceUpdate {
 	var dependencyDeletes []ResourceUpdate
 
 	for _, deleteUpdate := range allDeleteUpdates {
 		if deleteUpdate.Operation == OperationDelete {
 			// Find all resources that depend on this resource being deleted
-			dependentResources, err := findResourcesThatDependOn(deleteUpdate.DesiredState, allExistingStacks)
+			dependentResources, err := findResourcesThatDependOn(deleteUpdate.DesiredState, allResources)
 			if err != nil {
 				slog.Warn("Failed to find dependent resources",
 					"resource", deleteUpdate.DesiredState.Label,

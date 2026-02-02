@@ -97,10 +97,10 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, command.ResourceUpdates[0].State)
 
 		// Verify resource was created in the stack
-		stack, err := m.Datastore.LoadStack("test-stack")
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
-		assert.Len(t, stack.Resources, 1)
-		assert.Equal(t, "test-vpc", stack.Resources[0].Label)
+		assert.Len(t, resources, 1)
+		assert.Equal(t, "test-vpc", resources[0].Label)
 	})
 }
 
@@ -183,9 +183,9 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		})
 
 		// Verify both resources were created
-		stack, err := m.Datastore.LoadStack("test-stack")
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
-		assert.Len(t, stack.Resources, 2)
+		assert.Len(t, resources, 2)
 
 		// Verify command state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -304,9 +304,9 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		assert.True(t, subnetFailed, "Subnet update should have failed due to cascade")
 
 		// No resources should be created
-		stack, err := m.Datastore.LoadStack("test-stack")
-		if err == nil && stack != nil {
-			assert.Empty(t, stack.Resources, "No resources should be created when cascade fails")
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
+		if err == nil {
+			assert.Empty(t, resources, "No resources should be created when cascade fails")
 		}
 	})
 }

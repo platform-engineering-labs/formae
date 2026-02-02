@@ -952,31 +952,28 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 	cloudFrontKsuid := pkgmodel.NewFormaeURI(util.NewID(), "")
 
 	// Two resources with same label but different types, both depend on VPC
-	allStacks := []*pkgmodel.Forma{
-		{
-			Resources: []pkgmodel.Resource{
-				{
-					Label: "vpc",
-					Type:  "AWS::EC2::VPC",
-					Stack: "test-stack",
-					Ksuid: vpcKsuid.KSUID(),
-				},
-				{
-					Label:      "my-resource",
-					Type:       "AWS::ApiGateway::RestApi",
-					Stack:      "test-stack",
-					Ksuid:      apiGatewayKsuid.KSUID(),
-					Properties: json.RawMessage(fmt.Sprintf(`{"VpcId": {"$ref": "%s#/VpcId"}}`, vpcKsuid)),
-				},
-				{
-					Label:      "my-resource",
-					Type:       "AWS::CloudFront::Distribution",
-					Stack:      "test-stack",
-					Ksuid:      cloudFrontKsuid.KSUID(),
-					Properties: json.RawMessage(fmt.Sprintf(`{"OriginVpcId": {"$ref": "%s#/VpcId"}}`, vpcKsuid)),
-				},
-			},
-		},
+	vpc := pkgmodel.Resource{
+		Label: "vpc",
+		Type:  "AWS::EC2::VPC",
+		Stack: "test-stack",
+		Ksuid: vpcKsuid.KSUID(),
+	}
+	apiGateway := pkgmodel.Resource{
+		Label:      "my-resource",
+		Type:       "AWS::ApiGateway::RestApi",
+		Stack:      "test-stack",
+		Ksuid:      apiGatewayKsuid.KSUID(),
+		Properties: json.RawMessage(fmt.Sprintf(`{"VpcId": {"$ref": "%s#/VpcId"}}`, vpcKsuid)),
+	}
+	cloudFront := pkgmodel.Resource{
+		Label:      "my-resource",
+		Type:       "AWS::CloudFront::Distribution",
+		Stack:      "test-stack",
+		Ksuid:      cloudFrontKsuid.KSUID(),
+		Properties: json.RawMessage(fmt.Sprintf(`{"OriginVpcId": {"$ref": "%s#/VpcId"}}`, vpcKsuid)),
+	}
+	allResources := map[string][]*pkgmodel.Resource{
+		"test-stack": {&vpc, &apiGateway, &cloudFront},
 	}
 
 	allDeleteUpdates := []ResourceUpdate{
@@ -1013,7 +1010,7 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allStacks, targetMap, FormaCommandSourceUser)
+	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allResources, targetMap, FormaCommandSourceUser)
 
 	assert.Len(t, dependencyDeletes, 0, "Should not create duplicates when resources with same label but different types are already being deleted")
 }

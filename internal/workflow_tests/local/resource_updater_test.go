@@ -120,10 +120,10 @@ func TestResourceUpdater_HandlesThrottlingDuringSynchronization(t *testing.T) {
 
 		assert.GreaterOrEqual(t, readCallCount, 2, "Read should have been called at least twice (initial + retry)")
 
-		stack, err := m.Datastore.LoadStack("test-stack")
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
-		assert.Len(t, stack.Resources, 1)
-		assert.JSONEq(t, `{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`, string(stack.Resources[0].Properties))
+		assert.Len(t, resources, 1)
+		assert.JSONEq(t, `{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`, string(resources[0].Properties))
 
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
 			CommandID: "test-throttle-sync",
@@ -216,11 +216,11 @@ func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 		})
 
 		// assert that the resource is correctly updated
-		stack, err := m.Datastore.LoadStack(initialResource.DesiredState.Stack)
+		resources, err := m.Datastore.LoadResourcesByStack(initialResource.DesiredState.Stack)
 		assert.NoError(t, err)
 
-		assert.Len(t, stack.Resources, 1)
-		assert.JSONEq(t, `{"foo":"bar","baz":"qux","a":[3,4,2,1]}`, string(stack.Resources[0].Properties))
+		assert.Len(t, resources, 1)
+		assert.JSONEq(t, `{"foo":"bar","baz":"qux","a":[3,4,2,1]}`, string(resources[0].Properties))
 
 		// assert that the forma command in the database is updated with the rejected state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -307,13 +307,13 @@ func TestResourceUpdater_SuccessfullySynchronizesAResource(t *testing.T) {
 		})
 
 		// assert that the resource is created
-		stack, err := m.Datastore.LoadStack("test-stack")
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
 
-		assert.Len(t, stack.Resources, 1)
-		assert.Equal(t, "test-resource", stack.Resources[0].Label)
-		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
-		assert.JSONEq(t, `{"foo":"lucky","baz":"robot","a":[4,3,2]}`, string(stack.Resources[0].Properties))
+		assert.Len(t, resources, 1)
+		assert.Equal(t, "test-resource", resources[0].Label)
+		assert.Equal(t, "FakeAWS::S3::Bucket", resources[0].Type)
+		assert.JSONEq(t, `{"foo":"lucky","baz":"robot","a":[4,3,2]}`, string(resources[0].Properties))
 
 		// assert that the forma command in the database is updated with the success state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -426,10 +426,10 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 		})
 
 		// assert that the resource is deleted
-		stack, err := m.Datastore.LoadStack(initialResource.DesiredState.Stack)
+		resources, err := m.Datastore.LoadResourcesByStack(initialResource.DesiredState.Stack)
 		assert.NoError(t, err)
-		// there was only one resource in the stack, so the stack should be deleted
-		assert.Nil(t, stack)
+		// there was only one resource in the stack, so the stack should be empty
+		assert.Empty(t, resources)
 
 		// assert that the forma command in the database is updated with the success state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -717,13 +717,13 @@ func TestResourceUpdater_SuccessfullyUpdatesAResource(t *testing.T) {
 		})
 
 		// assert that the resource is created
-		stack, err := m.Datastore.LoadStack("test-stack")
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
 
-		assert.Len(t, stack.Resources, 1)
-		assert.Equal(t, "test-resource", stack.Resources[0].Label)
-		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
-		assert.JSONEq(t, `{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`, string(stack.Resources[0].Properties))
+		assert.Len(t, resources, 1)
+		assert.Equal(t, "test-resource", resources[0].Label)
+		assert.Equal(t, "FakeAWS::S3::Bucket", resources[0].Type)
+		assert.JSONEq(t, `{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`, string(resources[0].Properties))
 
 		// assert that the forma command in the database is updated with the success state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -780,9 +780,9 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 		assert.NoError(t, err)
 		assert.NotEmpty(t, hash)
 
-		s, err := m.Datastore.LoadStack("test-stack")
+		s, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
-		assert.NotNil(t, s)
+		assert.NotEmpty(t, s)
 
 		// store the forma command in the database
 		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
@@ -840,11 +840,11 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
 		})
 
-		// assert that the resource is created
-		stack, err := m.Datastore.LoadStack("test-stack")
+		// assert that the resource is deleted
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
 
-		assert.Nil(t, stack)
+		assert.Empty(t, resources)
 
 		// assert that the forma command in the database is updated with the success state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -964,13 +964,13 @@ func TestResourceUpdater_SuccessfullyRecoversFromACreateOperationLeftInInProgres
 		})
 
 		// assert that the resource is created
-		stack, err := m.Datastore.LoadStack("test-stack")
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
 
-		assert.Len(t, stack.Resources, 1)
-		assert.Equal(t, "test-resource", stack.Resources[0].Label)
-		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
-		assert.JSONEq(t, `{"foo":"bar","baz":"qux","a":[3,4,2]}`, string(stack.Resources[0].Properties))
+		assert.Len(t, resources, 1)
+		assert.Equal(t, "test-resource", resources[0].Label)
+		assert.Equal(t, "FakeAWS::S3::Bucket", resources[0].Type)
+		assert.JSONEq(t, `{"foo":"bar","baz":"qux","a":[3,4,2]}`, string(resources[0].Properties))
 
 		// assert that the forma command in the database is updated with the success state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -1051,9 +1051,9 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 		assert.NoError(t, err)
 		assert.NotEmpty(t, hash)
 
-		s, err := m.Datastore.LoadStack("test-stack")
+		s, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
-		assert.NotNil(t, s)
+		assert.NotEmpty(t, s)
 
 		// store the forma command in the database
 		updateResource := partiallyCompletedResourceUpdateModifyingS3Bucket()
@@ -1113,14 +1113,14 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateSuccess
 		})
 
-		// assert that the resource is created
-		stack, err := m.Datastore.LoadStack("test-stack")
+		// assert that the resource is updated
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
 
-		assert.Len(t, stack.Resources, 1)
-		assert.Equal(t, "test-resource", stack.Resources[0].Label)
-		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
-		assert.JSONEq(t, `{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`, string(stack.Resources[0].Properties))
+		assert.Len(t, resources, 1)
+		assert.Equal(t, "test-resource", resources[0].Label)
+		assert.Equal(t, "FakeAWS::S3::Bucket", resources[0].Type)
+		assert.JSONEq(t, `{"foo":"snarf","baz":"sandwich","a":[4,3,2]}`, string(resources[0].Properties))
 
 		// assert that the forma command in the database is updated with the success state
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{

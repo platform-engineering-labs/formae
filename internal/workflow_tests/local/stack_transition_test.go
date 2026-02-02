@@ -30,20 +30,16 @@ func TestStackTransition_Integration(t *testing.T) {
 			target := newTestTarget()
 			vpc := newIntegrationVPC("test-vpc", constants.UnmanagedStack, false)
 
-			unmanagedForma := &pkgmodel.Forma{
-				Stacks:    []pkgmodel.Stack{{Label: constants.UnmanagedStack}},
-				Targets:   []pkgmodel.Target{target},
-				Resources: []pkgmodel.Resource{vpc},
-			}
+			unmanagedResources := []pkgmodel.Resource{vpc}
 
-			_, err = m.Datastore.StoreStack(unmanagedForma, "test-discovery")
+			_, err = m.Datastore.BulkStoreResources(unmanagedResources, "test-discovery")
 			require.NoError(t, err)
 
-			allStacks, err := m.Datastore.LoadAllStacks()
+			resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 			require.NoError(t, err)
-			require.Len(t, allStacks, 1)
+			require.Len(t, resourcesByStack, 1)
 
-			origVpcKsuid := allStacks[0].Resources[0].Ksuid
+			origVpcKsuid := resourcesByStack[constants.UnmanagedStack][0].Ksuid
 
 			managedForma := &pkgmodel.Forma{
 				Stacks:  []pkgmodel.Stack{{Label: "managed-stack"}},
@@ -80,13 +76,9 @@ func TestStackTransition_Integration(t *testing.T) {
 			target := newTestTarget()
 			vpc := newIntegrationVPC("transition-vpc", constants.UnmanagedStack, false)
 
-			unmanagedForma := &pkgmodel.Forma{
-				Stacks:    []pkgmodel.Stack{{Label: constants.UnmanagedStack}},
-				Targets:   []pkgmodel.Target{target},
-				Resources: []pkgmodel.Resource{vpc},
-			}
+			unmanagedResources := []pkgmodel.Resource{vpc}
 
-			_, err = m.Datastore.StoreStack(unmanagedForma, "test-discovery")
+			_, err = m.Datastore.BulkStoreResources(unmanagedResources, "test-discovery")
 			require.NoError(t, err)
 
 			managedForma := &pkgmodel.Forma{
@@ -97,7 +89,7 @@ func TestStackTransition_Integration(t *testing.T) {
 				},
 			}
 
-			allStacks, err := m.Datastore.LoadAllStacks()
+			resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 			require.NoError(t, err)
 
 			updates, err := resource_update.GenerateResourceUpdates(
@@ -116,8 +108,9 @@ func TestStackTransition_Integration(t *testing.T) {
 			assert.Equal(t, "transition-vpc", update.DesiredState.Label)
 			assert.Equal(t, "production", update.StackLabel)
 
-			if len(allStacks) > 0 && len(allStacks[0].Resources) > 0 {
-				origKsuid := allStacks[0].Resources[0].Ksuid
+			unmanagedResources2 := resourcesByStack[constants.UnmanagedStack]
+			if len(unmanagedResources2) > 0 {
+				origKsuid := unmanagedResources2[0].Ksuid
 				assert.Equal(t, origKsuid, update.DesiredState.Ksuid)
 			}
 		})

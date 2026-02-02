@@ -16,38 +16,39 @@ import (
 // mockDatastore is a simple in-memory implementation of ResourceDataLookup for testing.
 // This avoids importing the datastore package which would create a circular dependency.
 type mockDatastore struct {
-	mu      sync.RWMutex
-	stacks  map[string]*pkgmodel.Forma
-	triplet map[pkgmodel.TripletKey]string
+	mu               sync.RWMutex
+	resourcesByStack map[string][]*pkgmodel.Resource
+	triplet          map[pkgmodel.TripletKey]string
 }
 
 func newMockDatastore() *mockDatastore {
 	return &mockDatastore{
-		stacks:  make(map[string]*pkgmodel.Forma),
-		triplet: make(map[pkgmodel.TripletKey]string),
+		resourcesByStack: make(map[string][]*pkgmodel.Resource),
+		triplet:          make(map[pkgmodel.TripletKey]string),
 	}
 }
 
-func (m *mockDatastore) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
+func (m *mockDatastore) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	stack, ok := m.stacks[stackLabel]
+	resources, ok := m.resourcesByStack[stackLabel]
 	if !ok {
 		return nil, nil
 	}
-	return stack, nil
+	return resources, nil
 }
 
-func (m *mockDatastore) LoadAllStacks() ([]*pkgmodel.Forma, error) {
+func (m *mockDatastore) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	stacks := make([]*pkgmodel.Forma, 0, len(m.stacks))
-	for _, stack := range m.stacks {
-		stacks = append(stacks, stack)
+	// Return a copy to avoid concurrent access issues
+	result := make(map[string][]*pkgmodel.Resource, len(m.resourcesByStack))
+	for k, v := range m.resourcesByStack {
+		result[k] = v
 	}
-	return stacks, nil
+	return result, nil
 }
 
 func (m *mockDatastore) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error) {
@@ -84,16 +85,14 @@ func (m *mockDatastore) StoreStack(stack *pkgmodel.Forma, commandID string) (str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, s := range stack.Stacks {
-		m.stacks[s.Label] = stack
+	// Group resources by stack label
+	for _, r := range stack.Resources {
+		res := r // Create a copy to get a stable pointer
+		m.resourcesByStack[r.Stack] = append(m.resourcesByStack[r.Stack], &res)
 
 		// Also populate triplet map for KSUID lookups
-		for _, r := range stack.Resources {
-			if r.Stack == s.Label {
-				triplet := pkgmodel.TripletKey{Stack: r.Stack, Label: r.Label, Type: r.Type}
-				m.triplet[triplet] = r.Ksuid
-			}
-		}
+		triplet := pkgmodel.TripletKey{Stack: r.Stack, Label: r.Label, Type: r.Type}
+		m.triplet[triplet] = r.Ksuid
 	}
 	return commandID, nil
 }

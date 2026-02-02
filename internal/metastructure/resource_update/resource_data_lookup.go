@@ -12,8 +12,8 @@ import (
 // to avoid circular dependencies with the datastore package.
 // The datastore.Datastore interface satisfies this interface.
 type ResourceDataLookup interface {
-	LoadStack(stackLabel string) (*pkgmodel.Forma, error)
-	LoadAllStacks() ([]*pkgmodel.Forma, error)
+	LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error)
+	LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error)
 	BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error)
 	GetKSUIDByTriplet(stack, label, resourceType string) (string, error)
 	LatestLabelForResource(label string) (string, error)

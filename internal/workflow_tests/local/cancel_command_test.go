@@ -261,10 +261,10 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 		assert.Contains(t, canceledResources, "subnet", "Subnet should have been canceled")
 
 		// Verify only successful resources were persisted to the stack
-		stack, err := m.Datastore.LoadStack("test-stack")
-		if err == nil && stack != nil {
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
+		if err == nil && len(resources) > 0 {
 			// Only resources that completed successfully should be in the stack
-			assert.Equal(t, successCount, len(stack.Resources),
+			assert.Equal(t, successCount, len(resources),
 				"Only successfully created resources should be persisted in the stack")
 		}
 	})

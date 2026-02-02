@@ -992,6 +992,16 @@ func TestResolveMultiplePropertiesSameResolverInstance(t *testing.T) {
 	assert.Equal(t, "7c5bfje8c3", parentIdValue)
 }
 
+// formaToResourcesMap converts a Forma to the map[string][]*Resource format
+func formaToResourcesMap(forma *pkgmodel.Forma) map[string][]*pkgmodel.Resource {
+	result := make(map[string][]*pkgmodel.Resource)
+	for _, r := range forma.Resources {
+		res := r // copy to get stable pointer
+		result[r.Stack] = append(result[r.Stack], &res)
+	}
+	return result
+}
+
 func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 	t.Run("extracts plain property value", func(t *testing.T) {
 		vpcKsuid := util.NewID()
@@ -1017,7 +1027,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "VpcId")
@@ -1062,7 +1072,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
@@ -1094,7 +1104,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
@@ -1120,7 +1130,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{subnet},
 		}
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
@@ -1150,7 +1160,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, []*pkgmodel.Forma{forma})
+		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
