@@ -384,7 +384,7 @@ func (s *Server) ListTargets(c echo.Context) error {
 }
 
 // @Summary List stacks
-// @Description Retrieves all stack metadata
+// @Description Retrieves all stacks
 // @Tags stacks
 // @Produce json
 // @Success 200 {array} pkgmodel.Stack "OK: List of stacks."

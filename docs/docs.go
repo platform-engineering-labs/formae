@@ -366,7 +366,7 @@ const docTemplate = `{
         },
         "/stacks": {
             "get": {
-                "description": "Retrieves all stack metadata",
+                "description": "Retrieves all stacks",
                 "produces": [
                     "application/json"
                 ],

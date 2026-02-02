@@ -72,19 +72,19 @@ func TestMetastructure_StoreNewStack(t *testing.T) {
 		require.Eventually(t, func() bool {
 			fas, _ := m.Datastore.LoadFormaCommands()
 			firstApply := fas[0]
-			stack, err := m.Datastore.LoadStack("test-stack1")
+			stackResources, err := m.Datastore.LoadResourcesByStack("test-stack1")
 			return firstApply.ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess &&
-				firstApply.State == forma_command.CommandStateSuccess && err == nil && stack != nil
+				firstApply.State == forma_command.CommandStateSuccess && err == nil && len(stackResources) > 0
 
 		},
 			2*time.Second,
 			100*time.Millisecond,
 			"Apply wasn't successfully",
 		)
-		stack, err := m.Datastore.LoadStack("test-stack1")
+		stackResources, err := m.Datastore.LoadResourcesByStack("test-stack1")
 		assert.NoError(t, err)
-		assert.Equal(t, stack.Resources[0].Properties, json.RawMessage(`{"foo":"bar"}`))
-		assert.NotNil(t, stack)
+		assert.Equal(t, stackResources[0].Properties, json.RawMessage(`{"foo":"bar"}`))
+		assert.NotEmpty(t, stackResources)
 	})
 }
 
@@ -209,10 +209,10 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 		)
 		time.Sleep(2 * time.Second)
 
-		stack, err := m.Datastore.LoadStack("test-stack")
+		stackResources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
-		assert.NotNil(t, stack)
-		assert.JSONEq(t, string(json.RawMessage(`{"foo":"barbar","baz":"qux","a":[3,4,2,7,8]}`)), string(stack.Resources[0].Properties))
+		assert.NotEmpty(t, stackResources)
+		assert.JSONEq(t, string(json.RawMessage(`{"foo":"barbar","baz":"qux","a":[3,4,2,7,8]}`)), string(stackResources[0].Properties))
 	})
 }
 
@@ -307,10 +307,10 @@ func TestMetastructure_StorePatchAddResourceToStack(t *testing.T) {
 
 		time.Sleep(2 * time.Second)
 
-		stack, err := m.Datastore.LoadStack("test-stack")
+		stackResources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		assert.NoError(t, err)
-		assert.NotNil(t, stack)
-		assert.JSONEq(t, `{"foo":"barbar","a":[7,8]}`, string(stack.Resources[1].Properties))
+		assert.NotEmpty(t, stackResources)
+		assert.JSONEq(t, `{"foo":"barbar","a":[7,8]}`, string(stackResources[1].Properties))
 	})
 }
 
