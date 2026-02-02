@@ -126,20 +126,21 @@ func TestSynchronizer_ApplyThenChangeThenSyncStack(t *testing.T) {
 		require := require.New(t)
 		require.Eventually(
 			func() bool {
-				stacks, err := m.Datastore.LoadAllStacks()
+				resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 				if err != nil {
 					return false
 				}
-				if len(stacks) != 1 || len(stacks[0].Resources) != 2 {
+				resources := resourcesByStack["test-stack1"]
+				if len(resourcesByStack) != 1 || len(resources) != 2 {
 					return false
 				}
-				var resource1, resource2 pkgmodel.Resource
-				if stacks[0].Resources[0].Label == "1" {
-					resource1 = stacks[0].Resources[0]
-					resource2 = stacks[0].Resources[1]
+				var resource1, resource2 *pkgmodel.Resource
+				if resources[0].Label == "1" {
+					resource1 = resources[0]
+					resource2 = resources[1]
 				} else {
-					resource1 = stacks[0].Resources[1]
-					resource2 = stacks[0].Resources[0]
+					resource1 = resources[1]
+					resource2 = resources[0]
 				}
 				return util.JsonEqual(`{"foo":"1","bar":"2","foobar":"3"}`, string(resource1.Properties)) && util.JsonEqual(`{"foo":"11","bar":"22","foobar":"33"}`, string(resource2.Properties))
 			},
@@ -238,11 +239,11 @@ func TestSynchronizer_ApplyThenDestroyThenSyncStack(t *testing.T) {
 		require := require.New(t)
 		require.Eventually(
 			func() bool {
-				stacks, err := m.Datastore.LoadAllStacks()
+				resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 				if err != nil {
 					return false
 				}
-				return len(stacks) == 1 && len(stacks[0].Resources) == 2
+				return len(resourcesByStack) == 1 && len(resourcesByStack[stack]) == 2
 			},
 			4*time.Second,
 			200*time.Millisecond)
@@ -327,13 +328,14 @@ func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 		require.True(t, readCalled, "Read function should have been called during force sync")
 
 		// Verify synchronization happened
-		stacks, err := m.Datastore.LoadAllStacks()
+		resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 		assert.NoError(t, err)
-		assert.Equal(t, 1, len(stacks))
-		assert.Equal(t, 1, len(stacks[0].Resources))
+		assert.Equal(t, 1, len(resourcesByStack))
+		resources := resourcesByStack[stack]
+		assert.Equal(t, 1, len(resources))
 
 		var got map[string]string
-		err = json.Unmarshal(stacks[0].Resources[0].Properties, &got)
+		err = json.Unmarshal(resources[0].Properties, &got)
 		assert.NoError(t, err)
 
 		assert.Equal(t, updated, got)
@@ -341,12 +343,12 @@ func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 		// Wait long enough to ensure no additional syncs would have occurred
 		// if the timer was incorrectly set
 		time.Sleep(2 * time.Second)
-		stacks, err = m.Datastore.LoadAllStacks()
+		resourcesByStack, err = m.Datastore.LoadAllResourcesByStack()
 		assert.NoError(t, err)
 
 		initialProps := got
 		var laterProps map[string]string
-		err = json.Unmarshal(stacks[0].Resources[0].Properties, &laterProps)
+		err = json.Unmarshal(resourcesByStack[stack][0].Properties, &laterProps)
 		assert.NoError(t, err)
 		assert.Equal(t, initialProps, laterProps)
 	})
@@ -410,10 +412,9 @@ func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
 			assert.NoError(t, err)
 			return len(fas) == 1 && fas[0].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess
 		}, 2*time.Second, 100*time.Millisecond)
-		stacks, err := m.Datastore.LoadAllStacks()
+		resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 		require.NoError(t, err)
-		require.Equal(t, 1, len(stacks))
-		require.NoError(t, err)
+		require.Equal(t, 1, len(resourcesByStack))
 
 		// Manual one-time synchronization
 		err = m.ForceSync()
@@ -437,9 +438,9 @@ func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
 		require.True(t, readCalled, "Read should have been called")
 
 		// Check that the resource is either removed or marked as not found
-		stacks, err = m.Datastore.LoadAllStacks()
+		resourcesByStack, err = m.Datastore.LoadAllResourcesByStack()
 		require.NoError(t, err)
-		require.Equal(t, 0, len(stacks))
+		require.Equal(t, 0, len(resourcesByStack))
 
 		formaCommands, _ := m.Datastore.LoadFormaCommands()
 
@@ -537,8 +538,8 @@ func TestSynchronizer_OverlapProtection(t *testing.T) {
 
 		// Wait for resources to be created
 		require.Eventually(t, func() bool {
-			stacks, err := m.Datastore.LoadAllStacks()
-			return err == nil && len(stacks) == 1 && len(stacks[0].Resources) == 2
+			resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
+			return err == nil && len(resourcesByStack) == 1 && len(resourcesByStack[stack]) == 2
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// Start first sync (will block)
@@ -681,14 +682,14 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 
 		// Wait for initial resource creation
 		require.Eventually(t, func() bool {
-			stacks, err := m.Datastore.LoadAllStacks()
-			return err == nil && len(stacks) == 1 && len(stacks[0].Resources) == 1
+			resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
+			return err == nil && len(resourcesByStack) == 1 && len(resourcesByStack[stack]) == 1
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// Get the initial resource to check versions later
-		stacks, err := m.Datastore.LoadAllStacks()
+		resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 		require.NoError(t, err)
-		initialResource := stacks[0].Resources[0]
+		initialResource := resourcesByStack[stack][0]
 
 		// Start update in a goroutine using reconcile mode
 		// This is more realistic - a full reconcile that happens to update the resource

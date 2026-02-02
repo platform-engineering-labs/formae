@@ -159,7 +159,7 @@ func synchronize(from gen.PID, state gen.Atom, data SynchronizerData, message Sy
 }
 
 func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
-	stacks, err := data.datastore.LoadAllStacks()
+	resourcesByStack, err := data.datastore.LoadAllResourcesByStack()
 	if err != nil {
 		proc.Log().Error("failed to load stacks: %w", err)
 		return state, data, nil, gen.TerminateReasonPanic
@@ -172,9 +172,12 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	}
 
 	var allResourceUpdates []resource_update.ResourceUpdate
-	for _, stack := range stacks {
+	for stackLabel, resources := range resourcesByStack {
+		// Convert resources to Forma for compatibility with GenerateResourceUpdates
+		forma := pkgmodel.FormaFromResources(resources)
+
 		resourceUpdates, err := resource_update.GenerateResourceUpdates(
-			stack,
+			forma,
 			pkgmodel.CommandSync,
 			pkgmodel.FormaApplyModePatch,
 			resource_update.FormaCommandSourceSynchronize,
@@ -182,7 +185,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			data.datastore,
 		)
 		if err != nil {
-			proc.Log().Error("failed to generate resource updates for stack %s: %w", stack.SingleStackLabel(), err)
+			proc.Log().Error("failed to generate resource updates for stack %s: %w", stackLabel, err)
 			return state, data, nil, gen.TerminateReasonPanic
 		}
 

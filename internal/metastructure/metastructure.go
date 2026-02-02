@@ -762,7 +762,7 @@ func (m *Metastructure) ExtractTargets(queryStr string) ([]*pkgmodel.Target, err
 
 func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 	slog.Debug("ExtractStacks called")
-	stacks, err := m.Datastore.ListAllStackMetadata()
+	stacks, err := m.Datastore.ListAllStacks()
 	if err != nil {
 		slog.Debug("Cannot get stacks from datastore", "error", err)
 		return nil, err
@@ -969,22 +969,14 @@ func formaTouchesStacks(forma *forma_command.FormaCommand, stackLabels []string)
 }
 
 func (m *Metastructure) checkIfPatchCanBeApplied(command *forma_command.FormaCommand) error {
-	knownStacks, err := m.Datastore.LoadAllStacks()
+	resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 	if err != nil {
 		slog.Error("Failed to load all stacks", "error", err)
 		return fmt.Errorf("failed to load all stacks: %w", err)
 	}
 
 	for _, stackLabel := range command.GetStackLabels() {
-		var knownStack *pkgmodel.Forma
-		for _, s := range knownStacks {
-			if stackLabel == s.SingleStackLabel() {
-				knownStack = s
-				break
-			}
-		}
-
-		if knownStack == nil {
+		if _, exists := resourcesByStack[stackLabel]; !exists {
 			return apimodel.FormaPatchRejectedError{
 				UnknownStacks: []*pkgmodel.Stack{{Label: stackLabel}},
 			}

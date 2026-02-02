@@ -82,7 +82,7 @@ func TestMetastructure_ApplyFormaWithRes(t *testing.T) {
 				Config: json.RawMessage(`{}`),
 			}},
 		}
-		_, err = m.Datastore.StoreStack(initForma, "host-setup-command")
+		_, err = m.Datastore.BulkStoreResources(initForma.Resources, "host-setup-command")
 		require.NoError(t, err)
 
 		initialResource := &pkgmodel.Resource{

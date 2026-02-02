@@ -125,37 +125,37 @@ func TestDiscovery_FindsAndCreatesNewResources(t *testing.T) {
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		assert.NoError(t, err)
 
-		var stack *pkgmodel.Forma
+		var resources []*pkgmodel.Resource
 		// assert that the resources persisted in the datastore
 		require.Eventually(t, func() bool {
-			stack, err = m.Datastore.LoadStack("$unmanaged")
+			resources, err = m.Datastore.LoadResourcesByStack("$unmanaged")
 			if err != nil {
 				t.Logf("Error loading stack: %v", err)
 				return false
 			}
-			return stack != nil && len(stack.Resources) == 3
+			return len(resources) == 3
 		},
 			5*time.Second,
 			100*time.Millisecond)
 
-		resource2 := findResourceByNativeID("test-resource-2", stack)
+		resource2 := findResourceByNativeID("test-resource-2", resources)
 		assert.NotNil(t, resource2)
 		assert.False(t, resource2.Managed)
 
-		resource3 := findResourceByNativeID("test-resource-3", stack)
+		resource3 := findResourceByNativeID("test-resource-3", resources)
 		assert.NotNil(t, resource3)
 		assert.False(t, resource3.Managed)
 
-		resource4 := findResourceByNativeID("test-resource-4", stack)
+		resource4 := findResourceByNativeID("test-resource-4", resources)
 		assert.NotNil(t, resource4)
 		assert.False(t, resource4.Managed)
 	})
 }
 
-func findResourceByNativeID(nativeID string, stack *pkgmodel.Forma) *pkgmodel.Resource {
-	for i := range stack.Resources {
-		if stack.Resources[i].NativeID == nativeID {
-			return &stack.Resources[i]
+func findResourceByNativeID(nativeID string, resources []*pkgmodel.Resource) *pkgmodel.Resource {
+	for _, r := range resources {
+		if r.NativeID == nativeID {
+			return r
 		}
 	}
 	return nil
@@ -243,26 +243,26 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
 
-		var unmanagedStack *pkgmodel.Forma
+		var unmanagedResources []*pkgmodel.Resource
 		require.Eventually(t, func() bool {
-			unmanagedStack, err = m.Datastore.LoadStack("$unmanaged")
-			if err != nil || unmanagedStack == nil {
+			unmanagedResources, err = m.Datastore.LoadResourcesByStack("$unmanaged")
+			if err != nil {
 				return false
 			}
-			return len(unmanagedStack.Resources) == 3
+			return len(unmanagedResources) == 3
 		}, 10*time.Second, 100*time.Millisecond)
 
-		idxVpc2 := slices.IndexFunc(unmanagedStack.Resources, func(r pkgmodel.Resource) bool {
+		idxVpc2 := slices.IndexFunc(unmanagedResources, func(r *pkgmodel.Resource) bool {
 			return r.NativeID == "vpc-2"
 		})
 		require.NotEqual(t, -1, idxVpc2)
-		vpc2 := unmanagedStack.Resources[idxVpc2]
+		vpc2 := unmanagedResources[idxVpc2]
 
-		idxCidr2 := slices.IndexFunc(unmanagedStack.Resources, func(r pkgmodel.Resource) bool {
+		idxCidr2 := slices.IndexFunc(unmanagedResources, func(r *pkgmodel.Resource) bool {
 			return r.NativeID == "vpc-2-cidr-1"
 		})
 		require.NotEqual(t, -1, idxCidr2)
-		vpcCidrBlock2 := unmanagedStack.Resources[idxCidr2]
+		vpcCidrBlock2 := unmanagedResources[idxCidr2]
 
 		assert.JSONEq(t, fmt.Sprintf(`{
 						"VpcId": {
@@ -272,17 +272,17 @@ func TestDiscovery_DiscoversNestedResources(t *testing.T) {
 						"CidrBlock": "10.0.1.0/24"
 					}`, vpc2.Ksuid), string(vpcCidrBlock2.Properties))
 
-		infraStack, err := m.Datastore.LoadStack("infrastructure")
+		infraResources, err := m.Datastore.LoadResourcesByStack("infrastructure")
 		require.NoError(t, err)
-		require.Len(t, infraStack.Resources, 1)
+		require.Len(t, infraResources, 1)
 
-		vpc1 := infraStack.Resources[0]
+		vpc1 := infraResources[0]
 
-		idxCidr1 := slices.IndexFunc(unmanagedStack.Resources, func(r pkgmodel.Resource) bool {
+		idxCidr1 := slices.IndexFunc(unmanagedResources, func(r *pkgmodel.Resource) bool {
 			return r.NativeID == "vpc-1-cidr-1"
 		})
 		assert.NotEqual(t, -1, idxCidr1)
-		vpcCidrBlock1 := unmanagedStack.Resources[idxCidr1]
+		vpcCidrBlock1 := unmanagedResources[idxCidr1]
 
 		assert.JSONEq(t, fmt.Sprintf(`{
 						"VpcId": {
@@ -393,18 +393,18 @@ func TestDiscovery_DiscoversNestedResourcesWhenAllParentsAlreadyExist(t *testing
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
 
-		var stack *pkgmodel.Forma
+		var resources []*pkgmodel.Resource
 		assert.Eventually(t, func() bool {
-			stack, err = m.Datastore.LoadStack("$unmanaged")
-			if err != nil || stack == nil {
+			resources, err = m.Datastore.LoadResourcesByStack("$unmanaged")
+			if err != nil {
 				return false
 			}
-			return len(stack.Resources) == 2
+			return len(resources) == 2
 		}, 10*time.Second, 100*time.Millisecond, "Expected 2 CIDR blocks to be discovered even though all parents already existed")
 
-		require.NotNil(t, stack)
-		cidrBlockNativeIDs := make([]string, 0, len(stack.Resources))
-		for _, res := range stack.Resources {
+		require.NotEmpty(t, resources)
+		cidrBlockNativeIDs := make([]string, 0, len(resources))
+		for _, res := range resources {
 			assert.Equal(t, "FakeAWS::EC2::VPCCidrBlock", res.Type)
 			cidrBlockNativeIDs = append(cidrBlockNativeIDs, res.NativeID)
 		}
@@ -489,19 +489,19 @@ func TestDiscovery_OverlapProtection(t *testing.T) {
 		close(blockFirstDiscovery)
 
 		assert.Eventually(t, func() bool {
-			stack, loadStackErr := m.Datastore.LoadStack("$unmanaged")
+			resources, loadStackErr := m.Datastore.LoadResourcesByStack("$unmanaged")
 			if loadStackErr != nil {
 				t.Logf("Error loading stack: %v", loadStackErr)
 				return false
 			}
-			return stack != nil && len(stack.Resources) == 1
+			return len(resources) == 1
 		}, 5*time.Second, 100*time.Millisecond, "Should have exactly one resource despite overlap")
 
-		stack, err := m.Datastore.LoadStack("$unmanaged")
+		resources, err := m.Datastore.LoadResourcesByStack("$unmanaged")
 		assert.NoError(t, err)
-		assert.NotNil(t, stack)
-		assert.Equal(t, "overlap-test-resource", stack.Resources[0].NativeID)
-		assert.False(t, stack.Resources[0].Managed)
+		assert.NotEmpty(t, resources)
+		assert.Equal(t, "overlap-test-resource", resources[0].NativeID)
+		assert.False(t, resources[0].Managed)
 	})
 }
 
@@ -582,17 +582,16 @@ func TestDiscovery_NoTagKeysAreFound_LabelIsSetToNativeId(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
-			stack, err := m.Datastore.LoadStack("$unmanaged")
-			if err != nil || stack == nil {
+			resources, err := m.Datastore.LoadResourcesByStack("$unmanaged")
+			if err != nil {
 				return false
 			}
-			if len(stack.Resources) != 2 {
+			if len(resources) != 2 {
 				return false
 			}
 			// map by native id for assertions
 			var withName, withoutName *pkgmodel.Resource
-			for i := range stack.Resources {
-				r := &stack.Resources[i]
+			for _, r := range resources {
 				switch r.NativeID {
 				case "bucket-with-name":
 					withName = r
@@ -709,9 +708,9 @@ func TestDiscovery_NoDiscoverableTargets_CompletesImmediately(t *testing.T) {
 		require.NoError(t, err)
 
 		time.Sleep(time.Millisecond * 500)
-		stack, err := m.Datastore.LoadStack("$unmanaged")
+		resources, err := m.Datastore.LoadResourcesByStack("$unmanaged")
 		require.NoError(t, err)
-		assert.Nil(t, stack, "No unmanaged stack should be created when no discoverable targets exist")
+		assert.Empty(t, resources, "No unmanaged stack should be created when no discoverable targets exist")
 	})
 }
 
@@ -754,13 +753,13 @@ func TestDiscovery_ListPropertiesNotPersistedOnlyReadProperties(t *testing.T) {
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
 
-		var stack *pkgmodel.Forma
+		var resources []*pkgmodel.Resource
 		require.Eventually(t, func() bool {
-			stack, err = m.Datastore.LoadStack("$unmanaged")
-			return err == nil && stack != nil && len(stack.Resources) == 1
+			resources, err = m.Datastore.LoadResourcesByStack("$unmanaged")
+			return err == nil && len(resources) == 1
 		}, 5*time.Second, 100*time.Millisecond)
 
-		res := stack.Resources[0]
+		res := resources[0]
 		var props map[string]any
 		require.NoError(t, json.Unmarshal(res.Properties, &props))
 
@@ -820,32 +819,28 @@ func TestDiscovery_ResourceFiltering(t *testing.T) {
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
 
-		var stack *pkgmodel.Forma
+		var resources []*pkgmodel.Resource
 		require.Eventually(t, func() bool {
-			stack, err = m.Datastore.LoadStack("$unmanaged")
+			resources, err = m.Datastore.LoadResourcesByStack("$unmanaged")
 			if err != nil {
 				t.Logf("Error loading stack: %v", err)
 				return false
 			}
-			if stack == nil {
-				t.Logf("Stack is nil")
-				return false
-			}
-			t.Logf("Found %d resources in $unmanaged stack", len(stack.Resources))
-			for i, r := range stack.Resources {
+			t.Logf("Found %d resources in $unmanaged stack", len(resources))
+			for i, r := range resources {
 				t.Logf("  Resource %d: NativeID=%s, Type=%s", i, r.NativeID, r.Type)
 			}
-			return len(stack.Resources) == 1
+			return len(resources) == 1
 		}, 5*time.Second, 100*time.Millisecond, "Expected only 1 resource (bucket-included) to be discovered")
 
 		// Verify only bucket-included is present
-		require.Len(t, stack.Resources, 1)
-		assert.Equal(t, "bucket-included", stack.Resources[0].NativeID)
-		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
-		assert.False(t, stack.Resources[0].Managed)
+		require.Len(t, resources, 1)
+		assert.Equal(t, "bucket-included", resources[0].NativeID)
+		assert.Equal(t, "FakeAWS::S3::Bucket", resources[0].Type)
+		assert.False(t, resources[0].Managed)
 
 		// Verify bucket-filtered is NOT present
-		for _, res := range stack.Resources {
+		for _, res := range resources {
 			assert.NotEqual(t, "bucket-filtered", res.NativeID, "bucket-filtered should have been filtered out")
 		}
 	})
@@ -910,32 +905,28 @@ func TestDiscovery_ResourceFiltering_ByTags(t *testing.T) {
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
 
-		var stack *pkgmodel.Forma
+		var resources []*pkgmodel.Resource
 		require.Eventually(t, func() bool {
-			stack, err = m.Datastore.LoadStack("$unmanaged")
+			resources, err = m.Datastore.LoadResourcesByStack("$unmanaged")
 			if err != nil {
 				t.Logf("Error loading stack: %v", err)
 				return false
 			}
-			if stack == nil {
-				t.Logf("Stack is nil")
-				return false
-			}
-			t.Logf("Found %d resources in $unmanaged stack", len(stack.Resources))
-			for i, r := range stack.Resources {
+			t.Logf("Found %d resources in $unmanaged stack", len(resources))
+			for i, r := range resources {
 				t.Logf("  Resource %d: NativeID=%s, Type=%s", i, r.NativeID, r.Type)
 			}
-			return len(stack.Resources) == 1
+			return len(resources) == 1
 		}, 5*time.Second, 100*time.Millisecond, "Expected only 1 resource (bucket-included-no-tag) to be discovered")
 
 		// Verify only bucket-included-no-tag is present
-		require.Len(t, stack.Resources, 1)
-		assert.Equal(t, "bucket-included-no-tag", stack.Resources[0].NativeID)
-		assert.Equal(t, "FakeAWS::S3::Bucket", stack.Resources[0].Type)
-		assert.False(t, stack.Resources[0].Managed)
+		require.Len(t, resources, 1)
+		assert.Equal(t, "bucket-included-no-tag", resources[0].NativeID)
+		assert.Equal(t, "FakeAWS::S3::Bucket", resources[0].Type)
+		assert.False(t, resources[0].Managed)
 
 		// Verify filtered buckets are NOT present
-		for _, res := range stack.Resources {
+		for _, res := range resources {
 			assert.NotEqual(t, "bucket-filtered-by-array-tag", res.NativeID, "bucket-filtered-by-array-tag should have been filtered out")
 			assert.NotEqual(t, "bucket-filtered-by-map-tag", res.NativeID, "bucket-filtered-by-map-tag should have been filtered out")
 		}

@@ -39,12 +39,12 @@ func (p *ResolvableProperties) Get(ksuid, property string) (string, bool) {
 	return "", false
 }
 
-func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, everything []*pkgmodel.Forma) (ResolvableProperties, error) {
+func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource) (ResolvableProperties, error) {
 	res := NewResolvableProperties()
 
-	resourcesByKsuid := make(map[string]pkgmodel.Resource)
-	for _, f := range everything {
-		for _, r := range f.Resources {
+	resourcesByKsuid := make(map[string]*pkgmodel.Resource)
+	for _, resources := range allResources {
+		for _, r := range resources {
 			if r.Ksuid != "" {
 				resourcesByKsuid[r.Ksuid] = r
 			}
