@@ -30,7 +30,7 @@ func NewStackUpdateGenerator(ds StackDatastore) *StackUpdateGenerator {
 // GenerateStackUpdates determines what stack changes are needed
 func (sg *StackUpdateGenerator) GenerateStackUpdates(stacks []pkgmodel.Stack, command pkgmodel.Command) ([]StackUpdate, error) {
 	// For destroy commands, we don't delete stacks here.
-	// Stack deletion happens when all resources in a stack are deleted (Session 6).
+	// Stack deletion happens when all resources in a stack are deleted.
 	if command == pkgmodel.CommandDestroy {
 		return nil, nil
 	}

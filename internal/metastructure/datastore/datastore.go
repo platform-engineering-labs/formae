@@ -144,8 +144,8 @@ type Datastore interface {
 	GetStackByLabel(label string) (*pkgmodel.Stack, error)
 	// CountResourcesInStack returns the count of non-deleted resources in a stack
 	CountResourcesInStack(label string) (int, error)
-	// ListAllStackMetadata returns all non-deleted stack metadata entries
-	ListAllStackMetadata() ([]*pkgmodel.Stack, error)
+	// ListAllStacks returns all non-deleted stack entries
+	ListAllStacks() ([]*pkgmodel.Stack, error)
 
 	// Target operations - cloud provider configurations
 

@@ -1253,7 +1253,7 @@ func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
 	return count, nil
 }
 
-func (d DatastoreSQLite) ListAllStackMetadata() ([]*pkgmodel.Stack, error) {
+func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	_, span := sqliteTracer.Start(context.Background(), "ListAllStackMetadata")
 	defer span.End()
 

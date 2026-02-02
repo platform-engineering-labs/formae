@@ -1286,7 +1286,7 @@ func (d DatastorePostgres) CountResourcesInStack(label string) (int, error) {
 	return count, nil
 }
 
-func (d DatastorePostgres) ListAllStackMetadata() ([]*pkgmodel.Stack, error) {
+func (d DatastorePostgres) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	ctx, span := tracer.Start(context.Background(), "ListAllStackMetadata")
 	defer span.End()
 
