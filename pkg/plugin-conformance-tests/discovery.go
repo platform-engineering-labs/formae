@@ -44,6 +44,12 @@ func DiscoverTestData(pluginPath string) ([]TestCase, error) {
 			return nil
 		}
 
+		// Skip files in config directories (testdata/config/ or any /config/ subdirectory)
+		relPath, _ := filepath.Rel(testDataDir, path)
+		if strings.HasPrefix(relPath, "config"+string(filepath.Separator)) || strings.Contains(relPath, string(filepath.Separator)+"config"+string(filepath.Separator)) {
+			return nil
+		}
+
 		// Skip variant files (-update.pkl and -replace.pkl) as they will be discovered
 		// alongside their base files
 		basename := filepath.Base(path)
