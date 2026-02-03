@@ -30,6 +30,7 @@ type PluginProcessSupervisor struct {
 }
 
 type PluginInfo struct {
+	name          string
 	namespace     string
 	binaryPath    string
 	metaPortAlias gen.Alias
@@ -67,17 +68,19 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 
 	// Store plugin info and spawn each plugin
 	for _, pluginInfo := range externalPlugins {
+		name := pluginInfo.Name
 		namespace := pluginInfo.Namespace
 		version := pluginInfo.Version
 		binaryPath := pluginInfo.BinaryPath
 
 		p.plugins[namespace] = &PluginInfo{
+			name:       name,
 			namespace:  namespace,
 			binaryPath: binaryPath,
 			healthy:    false,
 		}
 
-		p.Log().Debug("Discovered plugin: namespace=%s version=%s path=%s", namespace, version, binaryPath)
+		p.Log().Debug("Discovered plugin: name=%s namespace=%s version=%s path=%s", name, namespace, version, binaryPath)
 
 		// Spawn the plugin
 		err := p.spawnPlugin(namespace, p.plugins[namespace])
@@ -92,11 +95,20 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 	return nil
 }
 
+// getPluginName returns the plugin name for a given namespace (tag).
+// Falls back to the namespace if the plugin is not found.
+func (p *PluginProcessSupervisor) getPluginName(namespace string) string {
+	if info, ok := p.plugins[namespace]; ok {
+		return info.name
+	}
+	return namespace
+}
+
 // logPluginOutput parses Ergo's log format and logs with appropriate level
 // Format: "timestamp [level] rest_of_message" e.g. "1764458575429677244 [info] <79F4473F.0.1004>: message"
 var pluginLogRegex = regexp.MustCompile(`^\d+\s+\[(trace|debug|info|warning|error)\]\s+(.*)$`)
 
-func (p *PluginProcessSupervisor) logPluginOutput(output string) {
+func (p *PluginProcessSupervisor) logPluginOutput(pluginName, output string) {
 	if output == "" {
 		return
 	}
@@ -104,13 +116,13 @@ func (p *PluginProcessSupervisor) logPluginOutput(output string) {
 	matches := pluginLogRegex.FindStringSubmatch(output)
 	if matches == nil {
 		// No level found, log as info
-		p.Log().Info("[plugin] %s", output)
+		p.Log().Info("[%s] %s", pluginName, output)
 		return
 	}
 
 	level := matches[1]
 	message := matches[2]
-	formattedMsg := fmt.Sprintf("[plugin] %s", message)
+	formattedMsg := fmt.Sprintf("[%s] %s", pluginName, message)
 
 	switch level {
 	case "trace":
@@ -133,12 +145,14 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 	case meta.MessagePortText:
 		// Plugin text output - parse level and log appropriately
 		output := strings.TrimSpace(msg.Text)
-		p.logPluginOutput(output)
+		pluginName := p.getPluginName(msg.Tag)
+		p.logPluginOutput(pluginName, output)
 
 	case meta.MessagePortData:
 		// Plugin binary data - parse level and log appropriately
 		output := strings.TrimSpace(string(msg.Data))
-		p.logPluginOutput(output)
+		pluginName := p.getPluginName(msg.Tag)
+		p.logPluginOutput(pluginName, output)
 
 	case meta.MessagePortError:
 		// Plugin error output
