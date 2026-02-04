@@ -133,9 +133,9 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 		forma.ResourceUpdates[0].DesiredState = resourceUpdate.PriorState
 	}
 
-	err := rp.storeStacks(forma)
+	err := rp.persistResourceUpdates(forma)
 	if err != nil {
-		slog.Error("Failed to store stacks for resource update",
+		slog.Error("Failed to persist resource updates",
 			"error", err,
 			"resource", resourceUpdate.DesiredState,
 			"operation", pluginOperation)
@@ -180,7 +180,7 @@ func validateRequiredFields(resource pkgmodel.Resource) error {
 	return nil
 }
 
-func (rp *ResourcePersister) storeStacks(formaCommand *forma_command.FormaCommand) error {
+func (rp *ResourcePersister) persistResourceUpdates(formaCommand *forma_command.FormaCommand) error {
 	// Iterate ResourceUpdates directly - no need to use Forma.Resources/SplitByStack()
 	// since all information needed is in the ResourceUpdate itself
 	for i := range formaCommand.ResourceUpdates {

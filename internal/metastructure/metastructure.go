@@ -348,6 +348,21 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
+
+	if len(fa.StackUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			stack_update.PersistStackUpdates{
+				StackUpdates: fa.StackUpdates,
+				CommandID:    fa.ID,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist stack updates", "error", err)
+			return nil, fmt.Errorf("failed to persist stack updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted stack updates", "count", len(fa.StackUpdates))
+	}
 	if len(fa.ResourceUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
 		_, err = m.callActor(
