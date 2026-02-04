@@ -21,6 +21,9 @@ import (
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/registrar"
 	"github.com/platform-engineering-labs/formae/pkg/model"
+
+	"go.opentelemetry.io/contrib/instrumentation/host"
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -126,7 +129,7 @@ func Run(fp FullResourcePlugin) {
 	otelConfigForSetup := readOTelConfigFromEnv()
 
 	// Setup OTel metrics if enabled
-	shutdown := setupPluginOTel(fp.Namespace(), otelConfigForSetup)
+	shutdown := setupPluginOTel(fp.Name(), otelConfigForSetup)
 	defer shutdown()
 
 	// Setup Ergo node options
@@ -177,6 +180,11 @@ func Run(fp FullResourcePlugin) {
 	node, err := ergo.StartNode(gen.Atom(pluginNode), options)
 	if err != nil {
 		log.Fatalf("Failed to start node: %v", err)
+	}
+
+	// Start Ergo metrics collection (if OTel is enabled)
+	if err := StartErgoMetrics(node); err != nil {
+		log.Printf("Warning: failed to start Ergo metrics: %v", err)
 	}
 
 	// Enable remote spawn for PluginOperator so agent can spawn operators on this node
@@ -239,7 +247,7 @@ func readOTelConfigFromEnv() model.OTelConfig {
 
 // setupPluginOTel initializes OpenTelemetry metrics for the plugin process.
 // Returns a shutdown function that should be called on exit.
-func setupPluginOTel(namespace string, config model.OTelConfig) func() {
+func setupPluginOTel(name string, config model.OTelConfig) func() {
 	if !config.Enabled {
 		return func() {}
 	}
@@ -259,8 +267,8 @@ func setupPluginOTel(namespace string, config model.OTelConfig) func() {
 	// Create resource with plugin-specific attributes
 	res, err := otelresource.New(context.Background(),
 		otelresource.WithAttributes(
-			semconv.ServiceNameKey.String("formae-plugin-"+namespace),
-			attribute.String("plugin.namespace", namespace),
+			semconv.ServiceNameKey.String("formae-plugin-"+name),
+			attribute.String("plugin.name", name),
 		),
 	)
 	if err != nil {
@@ -306,7 +314,20 @@ func setupPluginOTel(namespace string, config model.OTelConfig) func() {
 	// Set global meter provider
 	otel.SetMeterProvider(meterProvider)
 
-	fmt.Fprintf(os.Stdout, "OTel metrics enabled for plugin %s (endpoint: %s, protocol: %s)\n", namespace, endpoint, protocol)
+	// Start Go runtime metrics collection (goroutines, memory, GC, etc.)
+	if err := runtime.Start(
+		runtime.WithMinimumReadMemStatsInterval(time.Second),
+		runtime.WithMeterProvider(meterProvider),
+	); err != nil {
+		fmt.Fprintf(os.Stdout, "Warning: failed to start Go runtime metrics: %v\n", err)
+	}
+
+	// Start host/process metrics collection (CPU, network, etc.)
+	if err := host.Start(host.WithMeterProvider(meterProvider)); err != nil {
+		fmt.Fprintf(os.Stdout, "Warning: failed to start host metrics: %v\n", err)
+	}
+
+	fmt.Fprintf(os.Stdout, "OTel metrics enabled for plugin %s (endpoint: %s, protocol: %s)\n", name, endpoint, protocol)
 
 	// Return shutdown function
 	return func() {
