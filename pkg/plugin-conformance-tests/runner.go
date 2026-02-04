@@ -103,6 +103,18 @@ func isParallelEnabled() bool {
 	return false
 }
 
+// getOperationTimeout returns the timeout duration for long-running operations.
+// It reads from FORMAE_TEST_TIMEOUT environment variable (in minutes).
+// Default is 5 minutes. For resources like Cloud SQL that take longer, set to 15.
+func getOperationTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return 5 * time.Minute // Default timeout
+}
+
 // RunCRUDTests discovers test cases from the testdata directory and runs
 // the standard CRUD lifecycle test for each resource type.
 //
@@ -126,6 +138,8 @@ func isParallelEnabled() bool {
 //   - FORMAE_TEST_TYPE: Select which tests to run (optional).
 //     Values: "all" (default), "crud", "discovery".
 //     When set to "discovery", CRUD tests are skipped.
+//   - FORMAE_TEST_TIMEOUT: Timeout in minutes for long-running operations (optional).
+//     Default is 5 minutes. Set to 15 for slow resources like Cloud SQL.
 //
 // This function should be called from a plugin's conformance_test.go:
 //
@@ -405,7 +419,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 	// === Step 4: Poll for apply command to complete successfully ===
 	t.Log("Step 4: Polling for apply command completion...")
-	applyStatus, err := harness.PollStatus(applyCommandID, 5*time.Minute)
+	applyStatus, err := harness.PollStatus(applyCommandID, getOperationTimeout())
 	if err != nil {
 		t.Fatalf("Apply command should complete successfully: %v", err)
 	}
@@ -587,7 +601,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 		// === Step 11: Poll for update command completion ===
 		t.Log("Step 11: Polling for update command completion...")
-		updateStatus, err := harness.PollStatus(updateCmdID, 5*time.Minute)
+		updateStatus, err := harness.PollStatus(updateCmdID, getOperationTimeout())
 		if err != nil {
 			t.Fatalf("Update command should complete successfully: %v", err)
 		}
@@ -677,7 +691,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 		// === Step 14: Poll for replace command completion ===
 		t.Log("Step 14: Polling for replace command completion...")
-		replaceStatus, err := harness.PollStatus(replaceCmdID, 5*time.Minute)
+		replaceStatus, err := harness.PollStatus(replaceCmdID, getOperationTimeout())
 		if err != nil {
 			t.Fatalf("Replace command should complete successfully: %v", err)
 		}
@@ -728,7 +742,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 	// === Step 17: Poll for destroy command to complete successfully ===
 	t.Log("Step 17: Polling for destroy command completion...")
-	destroyStatus, err := harness.PollStatus(destroyCommandID, 5*time.Minute)
+	destroyStatus, err := harness.PollStatus(destroyCommandID, getOperationTimeout())
 	if err != nil {
 		t.Fatalf("Destroy command should complete successfully: %v", err)
 	}
