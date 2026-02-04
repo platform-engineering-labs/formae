@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 )
@@ -31,6 +32,65 @@ type PluginConfig struct {
 	License     string
 	OutputDir   string
 	ModulePath  string
+}
+
+// PluginInitOptions holds the command-line options for plugin init
+type PluginInitOptions struct {
+	Name        string
+	Namespace   string
+	Description string
+	Author      string
+	ModulePath  string
+	License     string
+	OutputDir   string
+	NoInput     bool
+}
+
+// validatePluginInitOptions validates the options and applies defaults.
+// When NoInput is true, all required fields must be provided.
+// When NoInput is false (interactive mode), validation is skipped as values will be prompted.
+func validatePluginInitOptions(opts *PluginInitOptions) error {
+	if opts.NoInput {
+		// Check for missing required flags
+		var missing []string
+		if opts.Name == "" {
+			missing = append(missing, "--name")
+		}
+		if opts.Namespace == "" {
+			missing = append(missing, "--namespace")
+		}
+		if opts.Description == "" {
+			missing = append(missing, "--description")
+		}
+		if opts.Author == "" {
+			missing = append(missing, "--author")
+		}
+		if opts.ModulePath == "" {
+			missing = append(missing, "--module-path")
+		}
+
+		if len(missing) > 0 {
+			return cmd.FlagErrorf("missing required flags for --no-input mode: %s", strings.Join(missing, ", "))
+		}
+
+		// Validate provided values
+		if err := validatePluginName(opts.Name); err != nil {
+			return cmd.FlagErrorf("invalid plugin name: %s", err.Error())
+		}
+		if err := validateNamespace(opts.Namespace); err != nil {
+			return cmd.FlagErrorf("invalid namespace: %s", err.Error())
+		}
+
+		// Apply defaults for optional fields
+		if opts.License == "" {
+			opts.License = "Apache-2.0"
+		}
+		if opts.OutputDir == "" {
+			opts.OutputDir = "./" + opts.Name
+		}
+	}
+
+	return nil
 }
 
 // Template repository configuration
@@ -60,99 +120,162 @@ func PluginInitCmd() *cobra.Command {
 This command interactively prompts for plugin configuration, clones the
 template from GitHub, and customizes it for your plugin.
 
+Use --no-input with all required flags for non-interactive mode (useful for
+automation and LLM-assisted workflows).
+
 Template repository: github.com/platform-engineering-labs/formae-plugin-template`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPluginInit()
+		RunE: func(c *cobra.Command, args []string) error {
+			opts := &PluginInitOptions{}
+			opts.Name, _ = c.Flags().GetString("name")
+			opts.Namespace, _ = c.Flags().GetString("namespace")
+			opts.Description, _ = c.Flags().GetString("description")
+			opts.Author, _ = c.Flags().GetString("author")
+			opts.ModulePath, _ = c.Flags().GetString("module-path")
+			opts.License, _ = c.Flags().GetString("license")
+			opts.OutputDir, _ = c.Flags().GetString("output-dir")
+			opts.NoInput, _ = c.Flags().GetBool("no-input")
+
+			if err := validatePluginInitOptions(opts); err != nil {
+				return err
+			}
+
+			return runPluginInit(opts)
 		},
 		SilenceErrors: true,
 	}
 
+	command.Flags().String("name", "", "Plugin name (required for --no-input)")
+	command.Flags().String("namespace", "", "Target technology namespace, e.g. AWS, GCP (required for --no-input)")
+	command.Flags().String("description", "", "Plugin description (required for --no-input)")
+	command.Flags().String("author", "", "Plugin author for license copyright (required for --no-input)")
+	command.Flags().String("module-path", "", "Go module path, e.g. github.com/your-org/formae-plugin-foo (required for --no-input)")
+	command.Flags().String("license", "", "SPDX license identifier (default: Apache-2.0)")
+	command.Flags().String("output-dir", "", "Target directory (default: ./<name>)")
+	command.Flags().Bool("no-input", false, "Disable interactive prompts; error if required flags are missing")
+
 	return command
 }
 
-func runPluginInit() error {
+func runPluginInit(opts *PluginInitOptions) error {
 	p := prompter.NewBasicPrompter()
 
-	fmt.Println(display.Gold("Formae Plugin Initialization"))
-	fmt.Println()
-	fmt.Println("Plugin initialization requires several parameters that will appear in the")
-	fmt.Println("plugin's manifest file (formae-plugin.pkl). You can change them at any time later.")
-	fmt.Println()
-	fmt.Println("Please provide the following information:")
-	fmt.Println()
+	// In non-interactive mode, all values are already set and validated
+	if !opts.NoInput {
+		fmt.Println(display.Gold("Formae Plugin Initialization"))
+		fmt.Println()
+		fmt.Println("Plugin initialization requires several parameters that will appear in the")
+		fmt.Println("plugin's manifest file (formae-plugin.pkl). You can change them at any time later.")
+		fmt.Println()
+		fmt.Println("Please provide the following information:")
+		fmt.Println()
+	}
 
-	// Collect plugin configuration interactively
+	// Collect plugin configuration, prompting only for missing values
 	config := &PluginConfig{}
 
 	// Plugin name (required)
-	name, err := p.PromptString("Plugin name")
-	if err != nil {
-		return err
-	}
-	if err := validatePluginName(name); err != nil {
-		return err
-	}
-	config.Name = name
-
-	// Namespace (required)
-	namespace, err := p.PromptString("Namespace that uniquely identifies the target technology (e.g. AWS, GCP, OCI)")
-	if err != nil {
-		return err
-	}
-	if err := validateNamespace(namespace); err != nil {
-		return err
-	}
-	config.Namespace = namespace
-
-	// Description (required)
-	description, err := p.PromptString("Plugin description")
-	if err != nil {
-		return err
-	}
-	config.Description = description
-
-	// Author (required, for license copyright)
-	author, err := p.PromptString("Plugin author")
-	if err != nil {
-		return err
-	}
-	config.Author = author
-
-	// License (select from common SPDX identifiers or enter custom)
-	licenseOptions := []string{
-		"Apache-2.0",
-		"MIT",
-		"GPL-3.0-only",
-		"BSD-3-Clause",
-		"MPL-2.0",
-		"AGPL-3.0-only",
-		"FSL-1.1-ALv2",
-		"Other",
-	}
-	license, err := p.PromptChoice("Plugin license", licenseOptions, 0)
-	if err != nil {
-		return err
-	}
-	if license == "Other" {
-		license, err = p.PromptString("Enter license identifier")
+	if opts.Name != "" {
+		config.Name = opts.Name
+	} else {
+		name, err := p.PromptString("Plugin name")
 		if err != nil {
 			return err
 		}
+		if err := validatePluginName(name); err != nil {
+			return err
+		}
+		config.Name = name
 	}
-	config.License = license
+
+	// Namespace (required)
+	if opts.Namespace != "" {
+		config.Namespace = opts.Namespace
+	} else {
+		namespace, err := p.PromptString("Namespace that uniquely identifies the target technology (e.g. AWS, GCP, OCI)")
+		if err != nil {
+			return err
+		}
+		if err := validateNamespace(namespace); err != nil {
+			return err
+		}
+		config.Namespace = namespace
+	}
+
+	// Description (required)
+	if opts.Description != "" {
+		config.Description = opts.Description
+	} else {
+		description, err := p.PromptString("Plugin description")
+		if err != nil {
+			return err
+		}
+		config.Description = description
+	}
+
+	// Author (required, for license copyright)
+	if opts.Author != "" {
+		config.Author = opts.Author
+	} else {
+		author, err := p.PromptString("Plugin author")
+		if err != nil {
+			return err
+		}
+		config.Author = author
+	}
+
+	// Module path (required)
+	if opts.ModulePath != "" {
+		config.ModulePath = opts.ModulePath
+	} else {
+		modulePath, err := p.PromptString("Go module path (e.g. github.com/your-org/formae-plugin-name) - used in go.mod and imports")
+		if err != nil {
+			return err
+		}
+		config.ModulePath = modulePath
+	}
+
+	// License (optional, default: Apache-2.0)
+	if opts.License != "" {
+		config.License = opts.License
+	} else {
+		licenseOptions := []string{
+			"Apache-2.0",
+			"MIT",
+			"GPL-3.0-only",
+			"BSD-3-Clause",
+			"MPL-2.0",
+			"AGPL-3.0-only",
+			"FSL-1.1-ALv2",
+			"Other",
+		}
+		license, err := p.PromptChoice("Plugin license", licenseOptions, 0)
+		if err != nil {
+			return err
+		}
+		if license == "Other" {
+			license, err = p.PromptString("Enter license identifier")
+			if err != nil {
+				return err
+			}
+		}
+		config.License = license
+	}
 
 	// Target directory (optional, default: ./<name>)
-	defaultDir := "./" + config.Name
-	outputDir, err := p.PromptStringWithDefault("Target directory", defaultDir)
-	if err != nil {
-		return err
+	if opts.OutputDir != "" {
+		config.OutputDir = expandTilde(opts.OutputDir)
+	} else {
+		defaultDir := "./" + config.Name
+		outputDir, err := p.PromptStringWithDefault("Target directory", defaultDir)
+		if err != nil {
+			return err
+		}
+		config.OutputDir = expandTilde(outputDir)
 	}
-	config.OutputDir = expandTilde(outputDir)
 
-	// Module path (derived from name)
-	config.ModulePath = fmt.Sprintf("github.com/platform-engineering-labs/formae-plugin-%s", config.Name)
-
-	fmt.Println()
+	if !opts.NoInput {
+		fmt.Println()
+	}
 
 	// Validate output directory (allows empty directories, including ".")
 	if err := validateOutputDir(config.OutputDir); err != nil {
