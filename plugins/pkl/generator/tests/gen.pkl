@@ -199,4 +199,28 @@ facts {
         gen.shouldSkipPropertyName("PropertiesExtended") == false
     }
 
+    ["parseModuleUri extracts correct import name from package URIs"] {
+        gen.parseModuleUri("@oci/oci.pkl") == "oci" &&
+        gen.parseModuleUri("@oci/objectstorage/bucket.pkl") == "bucket" &&
+        gen.parseModuleUri("@aws/aws.pkl") == "aws" &&
+        gen.parseModuleUri("@aws/types.pkl") == "types" &&
+        gen.parseModuleUri("@azure/resources/resourcegroup.pkl") == "resourcegroup"
+    }
+
+    ["parseModuleUri handles full package URIs with fragments"] {
+        gen.parseModuleUri("package://hub.example.com/pkg@1.0.0#/oci.pkl") == "oci" &&
+        gen.parseModuleUri("package://hub.example.com/pkg@1.0.0#/objectstorage/bucket.pkl") == "bucket"
+    }
+
+    ["getImportInfo uses reflection to get module URI"] {
+        // For a class defined in this test module (local file), getImportInfo returns
+        // the placeholder since local file:// URIs aren't package URIs.
+        // The important thing is that reflection works - parseModuleUri tests verify the parsing.
+        let (tagClass = Tag.getClass())
+        let (importInfo = gen.getImportInfo(tagClass))
+        // Local file URIs return placeholder (which is expected)
+        // For package URIs like @oci/oci.pkl, it would return "oci"
+        importInfo == gen.importPlaceholder
+    }
+
 }

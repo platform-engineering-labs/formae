@@ -20,7 +20,7 @@ function Fail(_message: String): GenerationFailure = new {
   message = _message
 }
 
-hidden const importPlaceholder = "_import.placeholder_"
+const importPlaceholder = "_import.placeholder_"
 
 function Unexpected(expected: String, actual: String): GenerationFailure =
   Fail(#"Expected "\#(expected)" but got "\#(actual)""#)
@@ -458,7 +458,7 @@ local function parseValueEnhanced(value: Any): Any =
     let (defaultMap =
       if (typeName == "FakeResolvable")
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
-      else if (typeName == "Tag" && (getImportInfo(value.getClass()) == "formae" || getImportInfo(value.getClass()) == importPlaceholder))
+      else if (typeName == "Tag" && (getImportInfo(value.getClass()) == "types" || getImportInfo(value.getClass()) == "formae" || getImportInfo(value.getClass()) == importPlaceholder))
         // Tag import: aws.Tag is in types.pkl but exported via aws.pkl. Include import for dependency collection.
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", "@aws/aws.pkl")
       else
@@ -490,9 +490,8 @@ local function getImportInfoForType(clazz: Class, typeName: String, value: Any):
   // Get the actual import info from the class
   let (actualImport = getImportInfo(clazz))
   // Tag handling: aws.Tag is defined in types.pkl but exported via aws.pkl.
-  // When getImportInfo can't resolve the module (returns importPlaceholder),
-  // or for backwards compat with formae.Tag, redirect to "aws".
-  if (typeName == "Tag" && (actualImport == "formae" || actualImport == importPlaceholder))
+  // Redirect "types" (from @aws/types.pkl) or legacy fallbacks to "aws".
+  if (typeName == "Tag" && (actualImport == "types" || actualImport == "formae" || actualImport == importPlaceholder))
     "aws"
   else if (typeName == "FakeValue")
     "formae"
@@ -501,25 +500,28 @@ local function getImportInfoForType(clazz: Class, typeName: String, value: Any):
   else
     actualImport
 
-local function getImportInfo(clazz: Class): String =
-  let (fullName = clazz.simpleName)
-    // Extract module path from full class name
-    // e.g., "com.example.MyClass" -> "com.example"
-    // or "file:///path/to/module.pkl#MyClass" -> "file:///path/to/module.pkl"
-    if (fullName.contains("#"))
-      // Handle file-based modules
-      fullName.split("#").first
-    else if (fullName.contains("."))
-      // Handle package-based modules
-      let (parts = fullName.split("."))
-        if (parts.length > 1)
-          parts.take(parts.length - 1).join(".")
-        else
-          importPlaceholder
-    else
-      // Built-in or no module info
-      //"pkl:base"
-      importPlaceholder
+function getImportInfo(clazz: Class): String =
+  // Use reflection to get the actual module where the class is defined
+  let (reflectClass = reflect.Class(clazz))
+  // enclosingDeclaration returns a reflect.Module (or reflect.Class for nested classes)
+  let (enclosingModule = reflectClass.enclosingDeclaration)
+  let (moduleUri = enclosingModule.uri)
+  parseModuleUri(moduleUri)
+
+/// Parses a module URI to extract the import name (used in generated code).
+/// Examples:
+///   @oci/oci.pkl → "oci"
+///   @oci/objectstorage/bucket.pkl → "bucket"
+///   @aws/aws.pkl → "aws"
+///   package://...#/oci.pkl → "oci"
+function parseModuleUri(uri: String): String =
+  if (uri.startsWith("@"))
+    uri.replaceAll(".pkl", "").split("/").last
+  else if (uri.contains("#"))
+    let (fragment = uri.split("#").last)
+    fragment.replaceAll(".pkl", "").split("/").last
+  else
+    importPlaceholder
 
 
 local function parseJsonString(value: String): Dynamic|String =
@@ -717,7 +719,10 @@ local function formatNestedContent(map: Map<String, Any>, indent: String): Strin
 
 local function formatNestedContentWithTypes(map: Map<String, Any>, indent: String): String =
   let (isMapping = map.getOrNull("__type__") == "Mapping")
-  let (isTag = map.getOrNull("__type__") == "Tag")
+  // Tag classes (Tag, DefinedTag, FreeformTag, etc.) use hidden lowercase properties
+  // for assignment but return PascalCase keys from APIs. Detect any *Tag type and
+  // uncapitalize keys so extract generates valid PKL (e.g., Namespace → namespace).
+  let (isTag = (map.getOrNull("__type__") ?? "").matches(Regex(".*Tag$")))
 
   let (lines = map.fold(List(), (acc: List<String>, key: String, value: Any) ->
     // Skip internal metadata keys
@@ -725,10 +730,8 @@ local function formatNestedContentWithTypes(map: Map<String, Any>, indent: Strin
       acc
     else
       let (formattedKey =
-        if (isTag && key == "Key")
-          "key"  // Convert Key to key for Tag objects
-        else if (isTag && key == "Value")
-          "value"  // Convert Value to value for Tag objects
+        if (isTag)
+          key.take(1).toLowerCase() + key.drop(1)
         else if (key.contains(":") || isMapping)
           "[\"" + key + "\"]"
         else
