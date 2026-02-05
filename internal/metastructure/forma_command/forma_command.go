@@ -75,9 +75,9 @@ func NewFormaCommand(
 	}
 }
 
-// HasChanges returns true if the command has any resource or target updates
+// HasChanges returns true if the command has any resource, target, or stack updates
 func (fc *FormaCommand) HasChanges() bool {
-	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0
+	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0 || len(fc.StackUpdates) > 0
 }
 
 // IsInFinalState returns true if the command is in a final state (Success, Failed, or Canceled)

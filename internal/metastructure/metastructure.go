@@ -348,7 +348,6 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
-
 	if len(fa.StackUpdates) > 0 {
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
