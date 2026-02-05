@@ -3142,7 +3142,7 @@ func (d *DatastoreAuroraDataAPI) Close() {
 func (d *DatastoreAuroraDataAPI) CleanUp() error {
 	ctx := context.Background()
 
-	tables := []string{"resource_updates", "resources", "targets", "forma_commands"}
+	tables := []string{"stacks", "resource_updates", "resources", "targets", "forma_commands"}
 
 	for _, table := range tables {
 		query := fmt.Sprintf("DELETE FROM %s", table)
