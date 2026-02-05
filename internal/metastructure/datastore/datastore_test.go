@@ -1811,6 +1811,9 @@ func TestDatastore_UpdateStack(t *testing.T) {
 	original, _ := ds.GetStackByLabel("update-test")
 	originalID := original.ID
 
+	// Sleep to ensure KSUID is in a different second (KSUID has 1-second precision)
+	time.Sleep(1100 * time.Millisecond)
+
 	// Update the description
 	stack.Description = "Updated description"
 	version, err := ds.UpdateStack(stack, "cmd-2")
@@ -1838,6 +1841,9 @@ func TestDatastore_DeleteStack(t *testing.T) {
 	}
 	_, err = ds.CreateStack(stack, "cmd-1")
 	assert.NoError(t, err)
+
+	// Sleep to ensure KSUID is in a different second (KSUID has 1-second precision)
+	time.Sleep(1100 * time.Millisecond)
 
 	// Delete it (tombstone)
 	version, err := ds.DeleteStack("delete-test", "cmd-2")
@@ -1868,9 +1874,15 @@ func TestDatastore_DeleteStack_ThenRecreate(t *testing.T) {
 	original, _ := ds.GetStackByLabel("recreate-test")
 	originalID := original.ID
 
+	// Sleep to ensure KSUID is in a different second (KSUID has 1-second precision)
+	time.Sleep(1100 * time.Millisecond)
+
 	// Delete it
 	_, err = ds.DeleteStack("recreate-test", "cmd-2")
 	assert.NoError(t, err)
+
+	// Sleep to ensure KSUID is in a different second
+	time.Sleep(1100 * time.Millisecond)
 
 	// Recreate with same label
 	stack2 := &pkgmodel.Stack{
