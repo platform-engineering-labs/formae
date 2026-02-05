@@ -17,6 +17,7 @@ import (
 	"github.com/XSAM/otelsql"
 	"github.com/demula/mksuid/v2"
 	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
 	"github.com/mattn/go-sqlite3"
 	"go.opentelemetry.io/otel"
 	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
@@ -1080,8 +1081,8 @@ func (d DatastoreSQLite) CreateStack(stack *pkgmodel.Stack, commandID string) (s
 		return "", fmt.Errorf("stack already exists: %s", stack.Label)
 	}
 
-	// Generate new ksuid for both id and version
-	id := mksuid.New().String()
+	// Generate UUID for id (stable identifier) and KSUID for version (ordering)
+	id := uuid.New().String()
 	version := mksuid.New().String()
 
 	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`

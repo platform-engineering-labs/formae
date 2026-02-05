@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata/types"
 	"github.com/demula/mksuid/v2"
+	"github.com/google/uuid"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -2873,8 +2874,8 @@ func (d *DatastoreAuroraDataAPI) CreateStack(stack *pkgmodel.Stack, commandID st
 		return "", fmt.Errorf("stack already exists: %s", stack.Label)
 	}
 
-	// Generate new ksuid for both id and version
-	id := mksuid.New().String()
+	// Generate UUID for id (stable identifier) and KSUID for version (ordering)
+	id := uuid.New().String()
 	version := mksuid.New().String()
 
 	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (:id, :version, :command_id, :operation, :label, :description)`
