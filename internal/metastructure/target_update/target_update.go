@@ -21,6 +21,7 @@ type (
 const (
 	TargetOperationCreate = types.OperationCreate
 	TargetOperationUpdate = types.OperationUpdate
+	TargetOperationDelete = types.OperationDelete
 
 	TargetUpdateStateNotStarted = types.TargetUpdateStateNotStarted
 	TargetUpdateStateSuccess    = types.TargetUpdateStateSuccess

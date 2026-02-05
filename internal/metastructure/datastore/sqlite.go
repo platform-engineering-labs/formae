@@ -1142,6 +1142,55 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
+func (d DatastoreSQLite) DeleteTarget(targetLabel string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "DeleteTarget")
+	defer span.End()
+
+	// Hard delete all versions of the target
+	query := `DELETE FROM targets WHERE label = ?`
+	result, err := d.conn.Exec(query, targetLabel)
+	if err != nil {
+		slog.Error("Failed to delete target", "error", err, "label", targetLabel)
+		return "", err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+
+	if rowsAffected == 0 {
+		return "", fmt.Errorf("target %s does not exist, cannot delete", targetLabel)
+	}
+
+	return fmt.Sprintf("%s_deleted", targetLabel), nil
+}
+
+func (d DatastoreSQLite) CountResourcesInTarget(targetLabel string) (int, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CountResourcesInTarget")
+	defer span.End()
+
+	// Count only latest version of resources that haven't been deleted
+	query := `
+		SELECT COUNT(*) FROM resources r1
+		WHERE target = ?
+		AND NOT EXISTS (
+			SELECT 1 FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != ?
+	`
+	row := d.conn.QueryRow(query, targetLabel, resource_update.OperationDelete)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
 func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	_, span := sqliteTracer.Start(context.Background(), "LoadTarget")
 	defer span.End()

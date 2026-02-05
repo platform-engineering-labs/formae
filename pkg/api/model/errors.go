@@ -145,3 +145,12 @@ type TargetReferenceNotFoundError struct {
 func (e TargetReferenceNotFoundError) Error() string {
 	return fmt.Sprintf("target %s does not exist in existing targets and added targets", e.TargetLabel)
 }
+
+type TargetHasResourcesError struct {
+	TargetLabel   string `json:"TargetLabel"`
+	ResourceCount int    `json:"ResourceCount"`
+}
+
+func (e TargetHasResourcesError) Error() string {
+	return fmt.Sprintf("target %s cannot be deleted: has %d deployed resources", e.TargetLabel, e.ResourceCount)
+}

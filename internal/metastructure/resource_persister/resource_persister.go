@@ -415,6 +415,8 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		version, err = rp.datastore.CreateTarget(&update.Target)
 	case target_update.TargetOperationUpdate:
 		version, err = rp.datastore.UpdateTarget(&update.Target)
+	case target_update.TargetOperationDelete:
+		version, err = rp.datastore.DeleteTarget(update.Target.Label)
 	default:
 		err = fmt.Errorf("unknown target operation: %s", update.Operation)
 	}
