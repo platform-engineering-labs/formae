@@ -2901,10 +2901,11 @@ func (d *DatastoreAuroraDataAPI) UpdateStack(stack *pkgmodel.Stack, commandID st
 	ctx := context.Background()
 
 	// Get the existing stack to find its id (most recent version of any operation)
+	// Note: Use valid_from DESC because local-data-api has TEXT ordering issues
 	query := `
 		SELECT id, operation FROM stacks
 		WHERE label = :label
-		ORDER BY version DESC
+		ORDER BY valid_from DESC
 		LIMIT 1
 	`
 	params := []types.SqlParameter{
@@ -2959,10 +2960,11 @@ func (d *DatastoreAuroraDataAPI) DeleteStack(label string, commandID string) (st
 	ctx := context.Background()
 
 	// Get the existing stack to find its id (most recent version of any operation)
+	// Note: Use valid_from DESC because local-data-api has TEXT ordering issues
 	query := `
 		SELECT id, operation FROM stacks
 		WHERE label = :label
-		ORDER BY version DESC
+		ORDER BY valid_from DESC
 		LIMIT 1
 	`
 	params := []types.SqlParameter{
@@ -3018,10 +3020,12 @@ func (d *DatastoreAuroraDataAPI) GetStackByLabel(label string) (*pkgmodel.Stack,
 
 	// Get the latest version of the stack, return nil if deleted
 	// We need to check if the MOST RECENT version is a delete operation
+	// Note: Use valid_from DESC because the local-data-api emulator has issues
+	// with TEXT column ordering that causes version DESC to return wrong results
 	query := `
 		SELECT id, description, operation FROM stacks
 		WHERE label = :label
-		ORDER BY version DESC
+		ORDER BY valid_from DESC
 		LIMIT 1
 	`
 	params := []types.SqlParameter{
@@ -3067,10 +3071,11 @@ func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
 
 	// Get all stacks at their latest version that aren't deleted
 	// Uses window function to reliably get the most recent version per stack id
+	// Note: Use valid_from DESC because local-data-api has TEXT ordering issues
 	query := `
 		SELECT id, label, description FROM (
 			SELECT id, label, description, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY valid_from DESC) as rn
 			FROM stacks
 		) sub
 		WHERE rn = 1 AND operation != 'delete'
