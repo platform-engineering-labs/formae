@@ -27,12 +27,14 @@ func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
 	return &TargetUpdateGenerator{datastore: ds}
 }
 
-// GenerateTargetUpdates determines what target changes are needed
-func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command) ([]TargetUpdate, error) {
+// GenerateTargetUpdates determines what target changes are needed.
+// hasResources indicates whether the forma has resources - if true and command is destroy,
+// we skip target deletion since the target will still have resources after this command.
+func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command, hasResources bool) ([]TargetUpdate, error) {
 	var updates []TargetUpdate
 
 	for _, target := range targets {
-		update, hasUpdate, err := tp.determineTargetUpdate(target, command)
+		update, hasUpdate, err := tp.determineTargetUpdate(target, command, hasResources)
 		if err != nil {
 			return nil, fmt.Errorf("failed to determine target update for %s: %w", target.Label, err)
 		}
@@ -51,7 +53,7 @@ func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target
 	return updates, nil
 }
 
-func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command) (TargetUpdate, bool, error) {
+func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command, hasResources bool) (TargetUpdate, bool, error) {
 	now := util.TimeNow()
 
 	existing, err := tp.datastore.LoadTarget(target.Label)
@@ -61,13 +63,20 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 
 	// Handle destroy command
 	if command == pkgmodel.CommandDestroy {
+		// If the forma has resources, don't try to delete the target
+		// (the resources need to be destroyed first)
+		if hasResources {
+			slog.Debug("Destroy command has resources, skipping target deletion", "label", target.Label)
+			return TargetUpdate{}, false, nil
+		}
+
 		if existing == nil {
 			// Target doesn't exist, nothing to delete
 			slog.Debug("Target does not exist, nothing to delete", "label", target.Label)
 			return TargetUpdate{}, false, nil
 		}
 
-		// Check if target has resources
+		// Check if target has resources in the database
 		count, err := tp.datastore.CountResourcesInTarget(target.Label)
 		if err != nil {
 			return TargetUpdate{}, false, fmt.Errorf("failed to count resources in target: %w", err)

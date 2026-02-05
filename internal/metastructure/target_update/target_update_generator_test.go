@@ -47,7 +47,7 @@ func TestGenerateTargetUpdates_DestroyCommand_DeletesEmptyTarget(t *testing.T) {
 		{Label: "empty-target", Namespace: "default", Discoverable: false},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, false)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -70,7 +70,7 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetNotFound(t *testing.T) {
 		{Label: "non-existent-target", Namespace: "default", Discoverable: true},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, false)
 
 	assert.NoError(t, err)
 	assert.Empty(t, updates) // No update for non-existent target
@@ -99,7 +99,7 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetHasResources(t *testing.T) {
 		{Label: "target-with-resources", Namespace: "default", Discoverable: false},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be deleted")
@@ -124,7 +124,7 @@ func TestGenerateTargetUpdates_CreateNewTarget(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -163,7 +163,7 @@ func TestGenerateTargetUpdates_UpdateExistingTarget_DiscoverableChanged(t *testi
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -203,7 +203,7 @@ func TestGenerateTargetUpdates_NoChange_DiscoverableSame(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	require.NoError(t, err)
 	assert.Empty(t, updates) // No updates should be generated
@@ -235,7 +235,7 @@ func TestGenerateTargetUpdates_ValidationError_NamespaceMismatch(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "target-with-error")
@@ -252,7 +252,7 @@ func TestGenerateTargetUpdates_DatastoreError(t *testing.T) {
 		{Label: "error-target", Namespace: "default", Discoverable: true},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to determine target update")
@@ -292,7 +292,7 @@ func TestGenerateTargetUpdates_MultipleTargets_MixedScenarios(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandSync)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandSync, false)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
