@@ -1969,6 +1969,64 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *TargetQuery) ([]*pkgm
 	return targets, nil
 }
 
+func (d *DatastoreAuroraDataAPI) DeleteTarget(targetLabel string) (string, error) {
+	ctx := context.Background()
+
+	// Hard delete all versions of the target
+	query := `DELETE FROM targets WHERE label = :label`
+	params := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		slog.Error("Failed to delete target", "error", err, "label", targetLabel)
+		return "", err
+	}
+
+	if output.NumberOfRecordsUpdated == 0 {
+		return "", fmt.Errorf("target %s does not exist, cannot delete", targetLabel)
+	}
+
+	return fmt.Sprintf("%s_deleted", targetLabel), nil
+}
+
+func (d *DatastoreAuroraDataAPI) CountResourcesInTarget(targetLabel string) (int, error) {
+	ctx := context.Background()
+
+	// Count only latest version of resources that haven't been deleted
+	query := `
+		SELECT COUNT(*) FROM resources r1
+		WHERE target = :target
+		AND NOT EXISTS (
+			SELECT 1 FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != :operation
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("target"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+		return 0, nil
+	}
+
+	count, err := getIntField(output.Records[0][0])
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
 func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	ctx := context.Background()
 	res := stats.Stats{}
