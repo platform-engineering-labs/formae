@@ -9,7 +9,7 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 replace github.com/platform-engineering-labs/formae/tests/testcontrol => ../testcontrol
 
 require (
-	ergo.services/ergo v1.999.310
+	ergo.services/ergo v1.999.320
 	github.com/masterminds/semver v1.5.0
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0

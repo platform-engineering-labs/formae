@@ -21,7 +21,7 @@ replace github.com/platform-engineering-labs/formae/pkg/auth => ./pkg/auth
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
-	ergo.services/ergo v1.999.310
+	ergo.services/ergo v1.999.320
 	github.com/XSAM/otelsql v0.41.0
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/apple/pkl-go v0.12.0
