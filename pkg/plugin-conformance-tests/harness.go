@@ -799,12 +799,23 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 	)
 	h.setCommandEnv(cmd)
 
-	output, err := cmd.CombinedOutput()
+	// Capture stdout and stderr separately to prevent stderr (warnings, etc.)
+	// from corrupting the JSON output that we need to parse
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("eval command failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("eval command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
 	}
 
-	return string(output), nil
+	// Log stderr if there was any output (for debugging purposes)
+	if stderr.Len() > 0 {
+		h.t.Logf("Eval stderr (ignored for parsing): %s", stderr.String())
+	}
+
+	return stdout.String(), nil
 }
 
 // Extract runs `formae extract` with the given query and output file
