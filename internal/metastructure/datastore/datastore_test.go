@@ -1593,3 +1593,88 @@ func TestDatastore_QueryTargets_Versioning(t *testing.T) {
 	assert.True(t, results[0].Discoverable)
 	assert.Contains(t, string(results[0].Config), "Version\":\"2")
 }
+
+func TestDatastore_CountResourcesInTarget(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	// Create target
+	target := &pkgmodel.Target{
+		Label:        "target-count-test",
+		Namespace:    "test-namespace",
+		Config:       json.RawMessage(`{}`),
+		Discoverable: false,
+	}
+	_, err = ds.CreateTarget(target)
+	assert.NoError(t, err)
+
+	// Initially no resources
+	count, err := ds.CountResourcesInTarget("target-count-test")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	// Add a resource to the target
+	resource := &pkgmodel.Resource{
+		Stack:  "default",
+		Label:  "test-resource",
+		Type:   "AWS::S3::Bucket",
+		Target: "target-count-test",
+		Ksuid:  mksuid.New().String(),
+	}
+	_, err = ds.StoreResource(resource, "cmd-1")
+	assert.NoError(t, err)
+
+	// Now count should be 1
+	count, err = ds.CountResourcesInTarget("target-count-test")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestDatastore_DeleteTarget_Success(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	// Create target
+	target := &pkgmodel.Target{
+		Label:        "delete-target-test",
+		Namespace:    "test-namespace",
+		Config:       json.RawMessage(`{}`),
+		Discoverable: false,
+	}
+	_, err = ds.CreateTarget(target)
+	assert.NoError(t, err)
+
+	// Verify target exists
+	loaded, err := ds.LoadTarget("delete-target-test")
+	assert.NoError(t, err)
+	assert.NotNil(t, loaded)
+
+	// Delete target
+	version, err := ds.DeleteTarget("delete-target-test")
+	assert.NoError(t, err)
+	assert.Equal(t, "delete-target-test_deleted", version)
+
+	// Verify target no longer exists
+	loaded, err = ds.LoadTarget("delete-target-test")
+	assert.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+func TestDatastore_DeleteTarget_NotFound(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	// Try to delete non-existent target
+	_, err = ds.DeleteTarget("non-existent-target")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
+}

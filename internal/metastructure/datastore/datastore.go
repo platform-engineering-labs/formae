@@ -148,6 +148,10 @@ type Datastore interface {
 	LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	// QueryTargets searches targets based on filter criteria
 	QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error)
+	// DeleteTarget removes a target by its label (hard delete all versions)
+	DeleteTarget(targetLabel string) (string, error)
+	// CountResourcesInTarget returns the count of non-deleted resources belonging to a target
+	CountResourcesInTarget(targetLabel string) (int, error)
 
 	// Stats returns aggregated statistics about the datastore contents
 	Stats() (*stats.Stats, error)

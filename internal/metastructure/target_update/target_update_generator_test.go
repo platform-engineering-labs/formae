@@ -24,16 +24,86 @@ func TestNewTargetUpdateGenerator(t *testing.T) {
 	assert.Equal(t, mockDS, generator.datastore)
 }
 
-func TestGenerateTargetUpdates_DestroyCommand_ReturnsNil(t *testing.T) {
-	generator := NewTargetUpdateGenerator(&mockTargetDatastore{})
+func TestGenerateTargetUpdates_DestroyCommand_DeletesEmptyTarget(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:        "empty-target",
+		Namespace:    "default",
+		Config:       json.RawMessage(`{"region": "us-east-1"}`),
+		Discoverable: false,
+		Version:      1,
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"empty-target": existingTarget,
+		},
+		resourceCounts: map[string]int{
+			"empty-target": 0, // No resources
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
 
 	targets := []pkgmodel.Target{
-		{Label: "test-target", Namespace: "default", Discoverable: true},
+		{Label: "empty-target", Namespace: "default", Discoverable: false},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+
+	update := updates[0]
+	assert.Equal(t, "empty-target", update.Target.Label)
+	assert.Equal(t, TargetOperationDelete, update.Operation)
+	assert.Equal(t, TargetUpdateStateNotStarted, update.State)
+	assert.NotNil(t, update.ExistingTarget)
+}
+
+func TestGenerateTargetUpdates_DestroyCommand_TargetNotFound(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets:        make(map[string]*pkgmodel.Target),
+		resourceCounts: make(map[string]int),
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "non-existent-target", Namespace: "default", Discoverable: true},
 	}
 
 	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
 
 	assert.NoError(t, err)
+	assert.Empty(t, updates) // No update for non-existent target
+}
+
+func TestGenerateTargetUpdates_DestroyCommand_TargetHasResources(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:        "target-with-resources",
+		Namespace:    "default",
+		Config:       json.RawMessage(`{"region": "us-east-1"}`),
+		Discoverable: false,
+		Version:      1,
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"target-with-resources": existingTarget,
+		},
+		resourceCounts: map[string]int{
+			"target-with-resources": 3, // Has resources
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "target-with-resources", Namespace: "default", Discoverable: false},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be deleted")
+	assert.Contains(t, err.Error(), "3 deployed resources")
 	assert.Nil(t, updates)
 }
 
@@ -247,8 +317,9 @@ func TestGenerateTargetUpdates_MultipleTargets_MixedScenarios(t *testing.T) {
 }
 
 type mockTargetDatastore struct {
-	targets     map[string]*pkgmodel.Target
-	shouldError bool
+	targets        map[string]*pkgmodel.Target
+	resourceCounts map[string]int
+	shouldError    bool
 }
 
 func (m *mockTargetDatastore) LoadTarget(label string) (*pkgmodel.Target, error) {
@@ -266,4 +337,21 @@ func (m *mockTargetDatastore) LoadTarget(label string) (*pkgmodel.Target, error)
 	}
 
 	return target, nil
+}
+
+func (m *mockTargetDatastore) CountResourcesInTarget(targetLabel string) (int, error) {
+	if m.shouldError {
+		return 0, assert.AnError
+	}
+
+	if m.resourceCounts == nil {
+		return 0, nil
+	}
+
+	count, exists := m.resourceCounts[targetLabel]
+	if !exists {
+		return 0, nil
+	}
+
+	return count, nil
 }

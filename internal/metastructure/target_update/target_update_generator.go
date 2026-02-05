@@ -9,11 +9,13 @@ import (
 	"log/slog"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 type TargetDatastore interface {
 	LoadTarget(label string) (*pkgmodel.Target, error)
+	CountResourcesInTarget(targetLabel string) (int, error)
 }
 
 type TargetUpdateGenerator struct {
@@ -27,16 +29,10 @@ func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
 
 // GenerateTargetUpdates determines what target changes are needed
 func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command) ([]TargetUpdate, error) {
-	// NOTE: Destroy command support for targets is intentionally deferred for future implementation.
-	// Currently, destroy commands only operate on resources, not targets.
-	if command == pkgmodel.CommandDestroy {
-		return nil, nil
-	}
-
 	var updates []TargetUpdate
 
 	for _, target := range targets {
-		update, hasUpdate, err := tp.determineTargetUpdate(target)
+		update, hasUpdate, err := tp.determineTargetUpdate(target, command)
 		if err != nil {
 			return nil, fmt.Errorf("failed to determine target update for %s: %w", target.Label, err)
 		}
@@ -55,7 +51,7 @@ func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target
 	return updates, nil
 }
 
-func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target) (TargetUpdate, bool, error) {
+func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command) (TargetUpdate, bool, error) {
 	now := util.TimeNow()
 
 	existing, err := tp.datastore.LoadTarget(target.Label)
@@ -63,6 +59,38 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target) (
 		return TargetUpdate{}, false, fmt.Errorf("failed to load target: %w", err)
 	}
 
+	// Handle destroy command
+	if command == pkgmodel.CommandDestroy {
+		if existing == nil {
+			// Target doesn't exist, nothing to delete
+			slog.Debug("Target does not exist, nothing to delete", "label", target.Label)
+			return TargetUpdate{}, false, nil
+		}
+
+		// Check if target has resources
+		count, err := tp.datastore.CountResourcesInTarget(target.Label)
+		if err != nil {
+			return TargetUpdate{}, false, fmt.Errorf("failed to count resources in target: %w", err)
+		}
+
+		if count > 0 {
+			return TargetUpdate{}, false, model.TargetHasResourcesError{
+				TargetLabel:   target.Label,
+				ResourceCount: count,
+			}
+		}
+
+		return TargetUpdate{
+			Target:         target,
+			ExistingTarget: existing,
+			Operation:      TargetOperationDelete,
+			State:          TargetUpdateStateNotStarted,
+			StartTs:        now,
+			ModifiedTs:     now,
+		}, true, nil
+	}
+
+	// Handle apply command (create or update)
 	var operation TargetOperation
 	if existing == nil {
 		operation = TargetOperationCreate

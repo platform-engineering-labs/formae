@@ -472,29 +472,60 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		return nil, fmt.Errorf("failed to store forma command: %w", err)
 	}
 
-	cs, err := changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, pkgmodel.CommandDestroy)
-	if err != nil {
-		return nil, err
+	if len(fa.TargetUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			target_update.PersistTargetUpdates{
+				TargetUpdates: fa.TargetUpdates,
+				CommandID:     fa.ID,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist target updates", "error", err)
+			return nil, fmt.Errorf("failed to persist target updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted target updates", "count", len(fa.TargetUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			messages.UpdateTargetStates{
+				CommandID:     fa.ID,
+				TargetUpdates: fa.TargetUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with target states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with target states: %w", err)
+		}
 	}
 
-	m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
-	_, err = m.callActor(
-		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
-		changeset.EnsureChangesetExecutor{CommandID: fa.ID},
-	)
-	if err != nil {
-		slog.Error("Failed to ensure ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
-		return nil, fmt.Errorf("failed to ensure ChangesetExecutor: %w", err)
-	}
+	if len(fa.ResourceUpdates) > 0 {
+		cs, err := changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, pkgmodel.CommandDestroy)
+		if err != nil {
+			return nil, err
+		}
 
-	m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
-	err = m.Node.Send(
-		gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
-		changeset.Start{Changeset: cs},
-	)
-	if err != nil {
-		slog.Error("Failed to start ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
-		return nil, fmt.Errorf("failed to start ChangesetExecutor: %w", err)
+		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
+			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
+		)
+		if err != nil {
+			slog.Error("Failed to ensure ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
+			return nil, fmt.Errorf("failed to ensure ChangesetExecutor: %w", err)
+		}
+
+		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
+		err = m.Node.Send(
+			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
+			changeset.Start{Changeset: cs},
+		)
+		if err != nil {
+			slog.Error("Failed to start ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
+			return nil, fmt.Errorf("failed to start ChangesetExecutor: %w", err)
+		}
+	} else {
+		m.Node.Log().Debug("No resource updates, skipping ChangesetExecutor (target-only destroy)", "commandID", fa.ID)
 	}
 
 	return &apimodel.SubmitCommandResponse{

@@ -1808,6 +1808,51 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
+func (d DatastorePostgres) DeleteTarget(targetLabel string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "DeleteTarget")
+	defer span.End()
+
+	// Hard delete all versions of the target
+	query := `DELETE FROM targets WHERE label = $1`
+	result, err := d.pool.Exec(ctx, query, targetLabel)
+	if err != nil {
+		slog.Error("Failed to delete target", "error", err, "label", targetLabel)
+		return "", err
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return "", fmt.Errorf("target %s does not exist, cannot delete", targetLabel)
+	}
+
+	return fmt.Sprintf("%s_deleted", targetLabel), nil
+}
+
+func (d DatastorePostgres) CountResourcesInTarget(targetLabel string) (int, error) {
+	ctx, span := tracer.Start(context.Background(), "CountResourcesInTarget")
+	defer span.End()
+
+	// Count only latest version of resources that haven't been deleted
+	query := `
+		SELECT COUNT(*) FROM resources r1
+		WHERE target = $1
+		AND NOT EXISTS (
+			SELECT 1 FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != $2
+	`
+	row := d.pool.QueryRow(ctx, query, targetLabel, resource_update.OperationDelete)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
 // BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
 // This is the key performance optimization: insert all updates in one transaction
 func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
