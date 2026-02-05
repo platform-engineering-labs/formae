@@ -25,7 +25,6 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
-	"ergo.services/ergo/net/registrar"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
@@ -191,6 +190,7 @@ func (h *TestHarness) setupTestEnvironment() error {
 	h.ergoPort = ergoPort
 
 	// Generate test config file
+	// Use unique nodename per test to enable parallel test execution
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
  *
@@ -205,6 +205,7 @@ agent {
         port = %d
         ergoPort = %d
         secret = %q
+        nodename = "formae-%s"
     }
     datastore {
         sqlite {
@@ -234,7 +235,7 @@ cli {
 plugins {
 	pluginDir = "~/.pel/formae/plugins"
 }
-`, agentPort, h.ergoPort, h.networkCookie, dbPath, logPath, agentPort)
+`, agentPort, h.ergoPort, h.networkCookie, h.testRunID, dbPath, logPath, agentPort)
 
 	// Write config to temp directory
 	configFile := filepath.Join(tempDir, "test-config.pkl")
@@ -294,15 +295,17 @@ func (h *TestHarness) InitErgoNode() error {
 	options.Log.Level = gen.LogLevelWarning
 
 	// Configure Ergo to use a test-specific port (enables parallel test execution)
+	// Note: We don't set a custom Registrar here. The acceptor and registrar cannot share
+	// the same port - the acceptor binds first, then the registrar falls back to client mode
+	// and tries to connect to what it thinks is a registrar server, causing a protocol mismatch.
 	testErgoPort, err := getFreePort()
 	if err != nil {
 		return fmt.Errorf("failed to get test Ergo port: %w", err)
 	}
 	options.Network.Acceptors = []gen.AcceptorOptions{
 		{
-			Host:      "localhost",
-			Port:      uint16(testErgoPort),
-			Registrar: registrar.Create(registrar.Options{Port: uint16(testErgoPort)}),
+			Host: "localhost",
+			Port: uint16(testErgoPort),
 		},
 	}
 
@@ -532,6 +535,7 @@ func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
 	}
 
 	// Generate updated config file with discovery enabled
+	// Use unique nodename per test to enable parallel test execution
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
  *
@@ -546,6 +550,7 @@ agent {
         port = %d
         ergoPort = %d
         secret = %q
+        nodename = "formae-%s"
     }
     datastore {
         sqlite {
@@ -573,7 +578,7 @@ cli {
     }
 	disableUsageReporting = true
 }
-`, h.agentPort, h.ergoPort, h.networkCookie, dbPath, resourceTypesList, h.logFile, h.agentPort)
+`, h.agentPort, h.ergoPort, h.networkCookie, h.testRunID, dbPath, resourceTypesList, h.logFile, h.agentPort)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {
