@@ -44,3 +44,9 @@ jobs:
 
     - name: Postgres unit tests
       run: make test-unit-postgres
+
+    - name: Setup local-data-api
+      run: make local-data-api-ci
+
+    - name: Aurora Data API unit tests
+      run: make test-unit-auroradataapi

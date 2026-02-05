@@ -171,4 +171,3 @@ func TestVerifySchemaWithNamespace_FakeAWS(t *testing.T) {
 
 	t.Logf("Verified %d modules, %d resource types", result.TotalModules, result.TotalResourceTypes)
 }
-

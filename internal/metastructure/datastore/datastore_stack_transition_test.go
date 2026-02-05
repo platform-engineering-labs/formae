@@ -23,8 +23,10 @@ func TestDatastore_StackTransition(t *testing.T) {
 		require.NoError(t, err)
 		defer cleanupDatastore(ds)
 
+		// Use unique native ID to avoid any potential data collision across test runs
+		nativeID := "vpc-" + util.NewID()
 		unmanagedResource := &pkgmodel.Resource{
-			NativeID: "vpc-12345",
+			NativeID: nativeID,
 			Stack:    constants.UnmanagedStack,
 			Type:     "AWS::EC2::VPC",
 			Label:    "discovered-vpc",
@@ -33,7 +35,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 				"CidrBlock": "10.0.0.0/16"
 			}`),
 			ReadOnlyProperties: json.RawMessage(`{
-				"VpcId": "vpc-12345",
+				"VpcId": "` + nativeID + `",
 				"OwnerId": "123456789012"
 			}`),
 			Managed: false,
@@ -42,14 +44,14 @@ func TestDatastore_StackTransition(t *testing.T) {
 		versionID1, err := ds.StoreResource(unmanagedResource, "discovery-command")
 		require.NoError(t, err)
 
-		stored1, err := ds.LoadResourceByNativeID("vpc-12345", "AWS::EC2::VPC")
+		stored1, err := ds.LoadResourceByNativeID(nativeID, "AWS::EC2::VPC")
 		require.NoError(t, err)
 		require.NotNil(t, stored1)
 		originalKsuid := stored1.Ksuid
 
 		managedResource := &pkgmodel.Resource{
 			Ksuid:    util.NewID(),
-			NativeID: "vpc-12345",
+			NativeID: nativeID,
 			Stack:    "production",
 			Type:     "AWS::EC2::VPC",
 			Label:    "discovered-vpc",
@@ -58,7 +60,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 				"CidrBlock": "10.0.0.0/16"
 			}`),
 			ReadOnlyProperties: json.RawMessage(`{
-				"VpcId": "vpc-12345",
+				"VpcId": "` + nativeID + `",
 				"OwnerId": "123456789012"
 			}`),
 			Managed: true,
@@ -67,7 +69,7 @@ func TestDatastore_StackTransition(t *testing.T) {
 		versionID2, err := ds.StoreResource(managedResource, "apply-command")
 		require.NoError(t, err)
 
-		stored2, err := ds.LoadResourceByNativeID("vpc-12345", "AWS::EC2::VPC")
+		stored2, err := ds.LoadResourceByNativeID(nativeID, "AWS::EC2::VPC")
 		require.NoError(t, err)
 		require.NotNil(t, stored2)
 
@@ -82,7 +84,8 @@ func TestDatastore_StackTransition(t *testing.T) {
 		require.NoError(t, err)
 		defer cleanupDatastore(ds)
 
-		nativeID := "subnet-abc123"
+		// Use unique native ID to avoid any potential data collision across test runs
+		nativeID := "subnet-" + util.NewID()
 		unmanagedResource := &pkgmodel.Resource{
 			NativeID: nativeID,
 			Stack:    constants.UnmanagedStack,

@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	SqliteDatastore   = "sqlite"
-	PostgresDatastore = "postgres"
+	SqliteDatastore        = "sqlite"
+	PostgresDatastore      = "postgres"
+	AuroraDataAPIDatastore = "auroradataapi"
 )
 
 type ServerConfig struct {
@@ -30,6 +31,7 @@ type DatastoreConfig struct {
 	DatastoreType string
 	Sqlite        SqliteConfig
 	Postgres      PostgresConfig
+	AuroraDataAPI AuroraDataAPIConfig
 }
 
 type SqliteConfig struct {
@@ -44,6 +46,14 @@ type PostgresConfig struct {
 	Database         string
 	Schema           string
 	ConnectionParams string
+}
+
+type AuroraDataAPIConfig struct {
+	ClusterARN string
+	SecretARN  string
+	Database   string
+	Region     string
+	Endpoint   string
 }
 
 type RetryConfig struct {

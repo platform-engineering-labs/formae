@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -27,6 +28,22 @@ import (
 )
 
 var dbType string
+
+// Aurora Data API test flags
+var clusterArn string
+var secretArn string
+var auroraDatabase string
+var auroraRegion string
+var auroraEndpoint string
+
+func init() {
+	flag.StringVar(&dbType, "dbType", pkgmodel.SqliteDatastore, fmt.Sprintf("Specify the database type (e.g., %s, %s, %s)", pkgmodel.SqliteDatastore, pkgmodel.PostgresDatastore, pkgmodel.AuroraDataAPIDatastore))
+	flag.StringVar(&clusterArn, "clusterArn", "", "Aurora cluster ARN (required for auroradataapi)")
+	flag.StringVar(&secretArn, "secretArn", "", "Secrets Manager secret ARN (required for auroradataapi)")
+	flag.StringVar(&auroraDatabase, "database", "formae", "Aurora database name")
+	flag.StringVar(&auroraRegion, "region", "", "AWS region (optional, uses default if not set)")
+	flag.StringVar(&auroraEndpoint, "endpoint", "", "Custom endpoint URL (for local testing)")
+}
 
 func prepareDatastore() (Datastore, error) {
 	switch dbType {
@@ -48,6 +65,36 @@ func prepareDatastore() (Datastore, error) {
 		}
 
 		return datastore, nil
+
+	case pkgmodel.AuroraDataAPIDatastore:
+		if clusterArn == "" || secretArn == "" {
+			return nil, fmt.Errorf("Aurora Data API requires -clusterArn and -secretArn flags")
+		}
+		cfg := &pkgmodel.DatastoreConfig{
+			DatastoreType: pkgmodel.AuroraDataAPIDatastore,
+			AuroraDataAPI: pkgmodel.AuroraDataAPIConfig{
+				ClusterARN: clusterArn,
+				SecretARN:  secretArn,
+				Database:   auroraDatabase,
+				Region:     auroraRegion,
+				Endpoint:   auroraEndpoint,
+			},
+		}
+
+		datastore, err := NewDatastoreAuroraDataAPI(context.Background(), cfg, "test")
+		if err != nil {
+			return nil, fmt.Errorf("failed to setup Aurora Data API datastore: %w", err)
+		}
+
+		// Clean up any stale data from previous test runs
+		if d, ok := datastore.(*DatastoreAuroraDataAPI); ok {
+			if err := d.CleanUp(); err != nil {
+				slog.Warn("Failed to clean up datastore", "error", err)
+			}
+		}
+
+		return datastore, nil
+
 	default:
 		cfg := &pkgmodel.DatastoreConfig{
 			DatastoreType: pkgmodel.SqliteDatastore,
@@ -73,15 +120,14 @@ func cleanupDatastore(ds Datastore) {
 		_ = d.CleanUp()
 	case DatastoreSQLite:
 		_ = d.CleanUp()
+	case *DatastoreAuroraDataAPI:
+		_ = d.CleanUp()
 	}
 }
 
 func TestMain(m *testing.M) {
-	flag.StringVar(&dbType, "dbType", pkgmodel.SqliteDatastore, fmt.Sprintf("Specify the database type (e.g., %s, %s)", pkgmodel.SqliteDatastore, pkgmodel.PostgresDatastore))
 	flag.Parse()
-
 	m.Run()
-
 	os.Exit(0)
 }
 
@@ -470,14 +516,16 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 							Properties: json.RawMessage(fmt.Sprintf(`{"key": "value-%d"}`, i)),
 							Stack:      fmt.Sprintf("stack-%d", i%2),
 						},
-						State: resource_update.ResourceUpdateStateSuccess,
+						StackLabel: fmt.Sprintf("stack-%d", i%2),
+						State:      resource_update.ResourceUpdateStateSuccess,
 					},
 					{
 						DesiredState: pkgmodel.Resource{
 							Properties: json.RawMessage(fmt.Sprintf(`{"key": "value-%d"}`, i)),
 							Stack:      fmt.Sprintf("stack-%d", i%2),
 						},
-						State: resource_update.ResourceUpdateStateInProgress,
+						StackLabel: fmt.Sprintf("stack-%d", i%2),
+						State:      resource_update.ResourceUpdateStateInProgress,
 					},
 				},
 			}
@@ -1156,18 +1204,17 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, emptyResults)
 
-		// Test that deleted resources' KSUIDs are still available for reuse (KSUID stability)
+		// Test that deleted resources are NOT returned (they should be filtered out)
 		_, err = datastore.DeleteResource(storedResource1, "delete-command")
 		assert.NoError(t, err)
 
 		afterDeleteResults, err := datastore.BatchGetKSUIDsByTriplets(triplets)
 		assert.NoError(t, err)
-		assert.Len(t, afterDeleteResults, 3)
+		assert.Len(t, afterDeleteResults, 2, "Deleted resources should not be returned")
 
-		// Verify deleted resource's KSUID is still available for reuse
-		ksuid, exists := afterDeleteResults[triplets[0]]
-		assert.True(t, exists, "Deleted resource's KSUID should still be available for reuse")
-		assert.Equal(t, storedResource1.Ksuid, ksuid, "Should return the same KSUID for stability")
+		// Verify deleted resource is NOT in results
+		_, exists = afterDeleteResults[triplets[0]]
+		assert.False(t, exists, "Deleted resource should not be in results")
 
 		// Verify other resources are still there
 		assert.Equal(t, storedResource2.Ksuid, afterDeleteResults[triplets[1]])
@@ -1591,5 +1638,5 @@ func TestDatastore_QueryTargets_Versioning(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.True(t, results[0].Discoverable)
-	assert.Contains(t, string(results[0].Config), "Version\":\"2")
+	assert.JSONEq(t, `{"Version":"2"}`, string(results[0].Config))
 }
