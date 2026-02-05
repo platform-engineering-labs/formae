@@ -18,6 +18,7 @@ const (
 	PatchRejected                APIError = "PatchRejected"
 	ReconcileRejected            APIError = "ReconcileRejected"
 	CyclesDetected               APIError = "CyclesDetected"
+	EmptyStackRejected           APIError = "EmptyStackRejected"
 	TargetAlreadyExists          APIError = "TargetAlreadyExists"
 	ReferencedResourcesNotFound  APIError = "ReferencedResourcesNotFound"
 	RequiredFieldMissingOnCreate APIError = "RequiredFieldMissingOnCreate"
@@ -75,6 +76,14 @@ type FormaPatchRejectedError struct {
 
 func (e FormaPatchRejectedError) Error() string {
 	return "forma command rejected because an unknown stack cannot be patched"
+}
+
+type FormaEmptyStackRejectedError struct {
+	EmptyStacks []string `json:"EmptyStacks"`
+}
+
+func (e FormaEmptyStackRejectedError) Error() string {
+	return "forma rejected because creating empty stacks is not allowed"
 }
 
 type FormaReferencedResourcesNotFoundError struct {

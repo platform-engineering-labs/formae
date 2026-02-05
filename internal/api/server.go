@@ -546,6 +546,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusUnprocessableEntity, apimodel.PatchRejected, rejectedResult)
 	}
 
+	var emptyStackError apimodel.FormaEmptyStackRejectedError
+	if errors.As(err, &emptyStackError) {
+		return apiError(c, http.StatusUnprocessableEntity, apimodel.EmptyStackRejected, emptyStackError)
+	}
+
 	var resourceNotFoundError apimodel.FormaReferencedResourcesNotFoundError
 	if errors.As(err, &resourceNotFoundError) {
 		return apiError(c, http.StatusBadRequest, apimodel.ReferencedResourcesNotFound, resourceNotFoundError)

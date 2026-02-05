@@ -230,6 +230,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.updateCommandFromProgress(&msg)
 	case messages.UpdateTargetStates:
 		return f.updateTargetStates(&msg)
+	case messages.UpdateStackStates:
+		return f.updateStackStates(&msg)
 	case MarkResourcesAsRejected:
 		return f.markResourcesAsRejected(&msg)
 	case MarkResourcesAsFailed:
@@ -382,6 +384,28 @@ func (f *FormaCommandPersister) updateTargetStates(msg *messages.UpdateTargetSta
 	}
 
 	f.Log().Debug("Successfully updated Forma command with target states", "commandID", msg.CommandID)
+	return true, nil
+}
+
+func (f *FormaCommandPersister) updateStackStates(msg *messages.UpdateStackStates) (bool, error) {
+	f.Log().Debug("Updating Forma command with stack states", "commandID", msg.CommandID, "stackCount", len(msg.StackUpdates))
+
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		f.Log().Error("Failed to load Forma command for stack state update", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to load Forma command for stack state update: %w", err)
+	}
+
+	command := cached.command
+	command.StackUpdates = msg.StackUpdates
+	command.State = overallCommandState(command)
+
+	if err := f.persistCommand(cached); err != nil {
+		f.Log().Error("Failed to update Forma command with stack states", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to update Forma command with stack states: %w", err)
+	}
+
+	f.Log().Debug("Successfully updated Forma command with stack states", "commandID", msg.CommandID)
 	return true, nil
 }
 

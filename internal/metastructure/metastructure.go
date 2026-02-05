@@ -300,6 +300,12 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
+	// Validate that no empty stacks are being created (applies to both modes)
+	err = checkForEmptyStackCreation(fa)
+	if err != nil {
+		return nil, err
+	}
+
 	if config.Simulate {
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
@@ -361,6 +367,18 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			return nil, fmt.Errorf("failed to persist stack updates: %w", err)
 		}
 		m.Node.Log().Debug("Successfully persisted stack updates", "count", len(fa.StackUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			messages.UpdateStackStates{
+				CommandID:    fa.ID,
+				StackUpdates: fa.StackUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with stack states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with stack states: %w", err)
+		}
 	}
 	if len(fa.ResourceUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
@@ -995,6 +1013,33 @@ func (m *Metastructure) checkIfPatchCanBeApplied(command *forma_command.FormaCom
 				UnknownStacks: []*pkgmodel.Stack{{Label: stackLabel}},
 			}
 		}
+	}
+
+	return nil
+}
+
+// checkForEmptyStackCreation validates that no new stacks are being created without resources.
+// Empty stacks are automatically cleaned up when the last resource is removed, so creating
+// them manually is not allowed.
+func checkForEmptyStackCreation(command *forma_command.FormaCommand) error {
+	// Build a set of stacks that have resources in this command
+	stacksWithResources := make(map[string]bool)
+	for _, ru := range command.ResourceUpdates {
+		stacksWithResources[ru.StackLabel] = true
+	}
+
+	// Check if any stack update is creating a new stack without resources
+	var emptyStacks []string
+	for _, su := range command.StackUpdates {
+		if su.Operation == stack_update.StackOperationCreate {
+			if !stacksWithResources[su.Stack.Label] {
+				emptyStacks = append(emptyStacks, su.Stack.Label)
+			}
+		}
+	}
+
+	if len(emptyStacks) > 0 {
+		return apimodel.FormaEmptyStackRejectedError{EmptyStacks: emptyStacks}
 	}
 
 	return nil

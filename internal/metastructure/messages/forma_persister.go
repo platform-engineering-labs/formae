@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -42,4 +43,9 @@ type UpdateResourceProgress struct {
 type UpdateTargetStates struct {
 	CommandID     string
 	TargetUpdates []target_update.TargetUpdate
+}
+
+type UpdateStackStates struct {
+	CommandID    string
+	StackUpdates []stack_update.StackUpdate
 }

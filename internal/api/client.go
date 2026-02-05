@@ -256,6 +256,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.EmptyStackRejected:
+		var errResp apimodel.ErrorResponse[apimodel.FormaEmptyStackRejectedError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse EmptyStackRejected error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.CyclesDetected:
 		var errResp apimodel.ErrorResponse[apimodel.FormaCyclesDetectedError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {

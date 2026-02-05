@@ -49,6 +49,13 @@ func RenderErrorMessage(err error) (string, error) {
 		}
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaEmptyStackRejectedError]); ok {
+		msg, err = renderEmptyStackRejectedError(&errResp.Data)
+		if err != nil {
+			return "", err
+		}
+	}
+
 	if _, ok := err.(*apimodel.ErrorResponse[apimodel.FormaCyclesDetectedError]); ok {
 		msg = display.Red("forma rejected because one or more cycles were found in the resolvables\n")
 	}
@@ -156,6 +163,23 @@ func renderPatchRejectedError(patchRejected *apimodel.FormaPatchRejectedError) (
 
 	buf.WriteString("\n")
 	buf.WriteString(display.Gold("A patch can only modify existing stacks. Use '--mode reconcile' to create new stacks.\n"))
+
+	return buf.String(), nil
+}
+
+func renderEmptyStackRejectedError(emptyStackRejected *apimodel.FormaEmptyStackRejectedError) (string, error) {
+	var buf strings.Builder
+
+	root := gtree.NewRoot(display.Red("forma rejected because creating empty stacks is not allowed:"))
+	for _, stackLabel := range emptyStackRejected.EmptyStacks {
+		root.Add(stackLabel)
+	}
+	if err := gtree.OutputFromRoot(&buf, root); err != nil {
+		return "", err
+	}
+
+	buf.WriteString("\n")
+	buf.WriteString(display.Gold("Stacks must contain at least one resource. Empty stacks are automatically cleaned up when the last resource is removed.\n"))
 
 	return buf.String(), nil
 }
