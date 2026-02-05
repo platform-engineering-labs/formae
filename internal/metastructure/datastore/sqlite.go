@@ -1099,26 +1099,26 @@ func (d DatastoreSQLite) UpdateStack(stack *pkgmodel.Stack, commandID string) (s
 	_, span := sqliteTracer.Start(context.Background(), "UpdateStack")
 	defer span.End()
 
-	// Get the existing stack to find its id
+	// Get the existing stack to find its id (most recent version of any operation)
 	query := `
-		SELECT id FROM stacks s1
+		SELECT id, operation FROM stacks
 		WHERE label = ?
-		AND operation != 'delete'
-		AND NOT EXISTS (
-			SELECT 1 FROM stacks s2
-			WHERE s1.id = s2.id
-			AND s2.version > s1.version
-		)
+		ORDER BY version DESC
 		LIMIT 1
 	`
 	row := d.conn.QueryRow(query, stack.Label)
 
-	var id string
-	if err := row.Scan(&id); err != nil {
+	var id, operation string
+	if err := row.Scan(&id, &operation); err != nil {
 		if err == sql.ErrNoRows {
 			return "", fmt.Errorf("stack not found: %s", stack.Label)
 		}
 		return "", err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return "", fmt.Errorf("stack not found: %s", stack.Label)
 	}
 
 	// Insert new version with same id
@@ -1137,26 +1137,26 @@ func (d DatastoreSQLite) DeleteStack(label string, commandID string) (string, er
 	_, span := sqliteTracer.Start(context.Background(), "DeleteStack")
 	defer span.End()
 
-	// Get the existing stack to find its id
+	// Get the existing stack to find its id (most recent version of any operation)
 	query := `
-		SELECT id FROM stacks s1
+		SELECT id, operation FROM stacks
 		WHERE label = ?
-		AND operation != 'delete'
-		AND NOT EXISTS (
-			SELECT 1 FROM stacks s2
-			WHERE s1.id = s2.id
-			AND s2.version > s1.version
-		)
+		ORDER BY version DESC
 		LIMIT 1
 	`
 	row := d.conn.QueryRow(query, label)
 
-	var id string
-	if err := row.Scan(&id); err != nil {
+	var id, operation string
+	if err := row.Scan(&id, &operation); err != nil {
 		if err == sql.ErrNoRows {
 			return "", fmt.Errorf("stack not found: %s", label)
 		}
 		return "", err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return "", fmt.Errorf("stack not found: %s", label)
 	}
 
 	// Insert tombstone version
@@ -1175,26 +1175,27 @@ func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 	_, span := sqliteTracer.Start(context.Background(), "GetStackByLabel")
 	defer span.End()
 
-	// Get the latest version of the stack that isn't deleted
+	// Get the latest version of the stack, return nil if deleted
+	// We need to check if the MOST RECENT version is a delete operation
 	query := `
-		SELECT id, description FROM stacks s1
+		SELECT id, description, operation FROM stacks
 		WHERE label = ?
-		AND operation != 'delete'
-		AND NOT EXISTS (
-			SELECT 1 FROM stacks s2
-			WHERE s1.id = s2.id
-			AND s2.version > s1.version
-		)
+		ORDER BY version DESC
 		LIMIT 1
 	`
 	row := d.conn.QueryRow(query, label)
 
-	var id, description string
-	if err := row.Scan(&id, &description); err != nil {
+	var id, description, operation string
+	if err := row.Scan(&id, &description, &operation); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Stack not found, return nil without error
 		}
 		return nil, err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return nil, nil
 	}
 
 	return &pkgmodel.Stack{
@@ -1234,15 +1235,15 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	defer span.End()
 
 	// Get all stacks at their latest version that aren't deleted
+	// Uses window function to reliably get the most recent version per stack id
 	query := `
-		SELECT s1.id, s1.label, s1.description FROM stacks s1
-		WHERE s1.operation != 'delete'
-		AND NOT EXISTS (
-			SELECT 1 FROM stacks s2
-			WHERE s1.id = s2.id
-			AND s2.version > s1.version
-		)
-		ORDER BY s1.label
+		SELECT id, label, description FROM (
+			SELECT id, label, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM stacks
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+		ORDER BY label
 	`
 	rows, err := d.conn.Query(query)
 	if err != nil {
