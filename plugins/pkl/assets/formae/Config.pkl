@@ -19,6 +19,8 @@ class ServerConfig {
 
     ergoPort: Port = 0
 
+    registrarPort: Port = 4499
+
     secret: String = "secret"
 
     observerPort: Port = 0

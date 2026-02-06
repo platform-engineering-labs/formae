@@ -12,6 +12,7 @@ agent {
         hostname = "formae.example.com"
         port = 1234
         ergoPort = 15100
+        registrarPort = 15200
         secret = "secret"
     }
     datastore {

@@ -233,6 +233,7 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 		gen.Env("FORMAE_NETWORK_COOKIE"): serverConfig.Secret,
 		gen.Env("FORMAE_VERSION"):        formae.Version,
 		gen.Env("FORMAE_ERGO_PORT"):      strconv.Itoa(serverConfig.ErgoPort),
+		gen.Env("FORMAE_REGISTRAR_PORT"): strconv.Itoa(serverConfig.RegistrarPort),
 	}
 
 	// Add OTel configuration if available

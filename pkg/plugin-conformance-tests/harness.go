@@ -25,6 +25,7 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/registrar"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
@@ -68,6 +69,7 @@ type TestHarness struct {
 	testRunID     string // Unique ID for this test run, used by PKL files for resource naming
 	agentPort     int    // Random port for agent API
 	ergoPort      int    // Random port for Ergo actor framework (enables parallel test execution)
+	registrarPort int    // Random port for Ergo registrar (isolates parallel agents)
 	pluginManager *plugin.Manager
 
 	// Ergo actor system for direct plugin communication (discovery tests)
@@ -189,6 +191,13 @@ func (h *TestHarness) setupTestEnvironment() error {
 	}
 	h.ergoPort = ergoPort
 
+	// Get a random available port for Ergo registrar (isolates parallel agents)
+	registrarPort, err := getFreePort()
+	if err != nil {
+		return fmt.Errorf("failed to get free registrar port: %w", err)
+	}
+	h.registrarPort = registrarPort
+
 	// Generate test config file
 	// Use unique nodename per test to enable parallel test execution
 	configContent := fmt.Sprintf(`/*
@@ -204,6 +213,7 @@ agent {
     server {
         port = %d
         ergoPort = %d
+        registrarPort = %d
         secret = %q
         nodename = "formae-%s"
     }
@@ -235,7 +245,7 @@ cli {
 plugins {
 	pluginDir = "~/.pel/formae/plugins"
 }
-`, agentPort, h.ergoPort, h.networkCookie, h.testRunID, dbPath, logPath, agentPort)
+`, agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, logPath, agentPort)
 
 	// Write config to temp directory
 	configFile := filepath.Join(tempDir, "test-config.pkl")
@@ -294,14 +304,14 @@ func (h *TestHarness) InitErgoNode() error {
 	options.Network.Cookie = h.networkCookie
 	options.Log.Level = gen.LogLevelWarning
 
-	// Configure Ergo to use a test-specific port (enables parallel test execution)
-	// Note: We don't set a custom Registrar here. The acceptor and registrar cannot share
-	// the same port - the acceptor binds first, then the registrar falls back to client mode
-	// and tries to connect to what it thinks is a registrar server, causing a protocol mismatch.
+	// Configure Ergo to use a test-specific port and registrar (enables parallel test execution)
+	// Each test gets its own registrar to avoid sharing the global one.
 	testErgoPort, err := getFreePort()
 	if err != nil {
 		return fmt.Errorf("failed to get test Ergo port: %w", err)
 	}
+	// Set registrar at node level for both incoming registration and outgoing resolution
+	options.Network.Registrar = registrar.Create(registrar.Options{Port: uint16(h.registrarPort)})
 	options.Network.Acceptors = []gen.AcceptorOptions{
 		{
 			Host: "localhost",
@@ -384,6 +394,7 @@ func (h *TestHarness) LaunchPluginDirect(pluginBinaryPath, namespace string) err
 		PluginBinaryPath: pluginBinaryPath,
 		Namespace:        namespace,
 		TestRunID:        h.testRunID,
+		RegistrarPort:    h.registrarPort,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to call PluginCoordinator: %w", err)
@@ -549,6 +560,7 @@ agent {
     server {
         port = %d
         ergoPort = %d
+        registrarPort = %d
         secret = %q
         nodename = "formae-%s"
     }
@@ -578,7 +590,7 @@ cli {
     }
 	disableUsageReporting = true
 }
-`, h.agentPort, h.ergoPort, h.networkCookie, h.testRunID, dbPath, resourceTypesList, h.logFile, h.agentPort)
+`, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, resourceTypesList, h.logFile, h.agentPort)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {

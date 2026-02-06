@@ -7,6 +7,7 @@ package conformance
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -168,6 +169,7 @@ type LaunchPluginRequest struct {
 	PluginBinaryPath string
 	Namespace        string
 	TestRunID        string // Unique test run ID for plugin node name disambiguation
+	RegistrarPort    int    // Port for the Ergo registrar (isolates parallel agents)
 }
 
 // LaunchPluginResult is the response
@@ -456,6 +458,7 @@ func (c *TestPluginCoordinator) launchPlugin(req LaunchPluginRequest) LaunchPlug
 			gen.Env("FORMAE_AGENT_NODE"):     c.agentNodeName, // Plugin will announce to our node
 			gen.Env("FORMAE_PLUGIN_NODE"):    pluginNodeName,
 			gen.Env("FORMAE_NETWORK_COOKIE"): c.networkCookie,
+			gen.Env("FORMAE_REGISTRAR_PORT"): strconv.Itoa(req.RegistrarPort),
 		},
 		Tag:     req.Namespace,
 		Process: gen.Atom("PluginCoordinator"), // Route messages to our coordinator

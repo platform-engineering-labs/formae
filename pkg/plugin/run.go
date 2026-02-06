@@ -19,6 +19,7 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/registrar"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 
 	"go.opentelemetry.io/contrib/instrumentation/host"
@@ -138,17 +139,21 @@ func Run(fp FullResourcePlugin) {
 	options.Security.ExposeEnvRemoteSpawn = true
 	options.Log.Level = gen.LogLevelDebug
 
-	// Configure plugin's own Ergo acceptor on a random free port
-	// Note: FORMAE_ERGO_PORT tells us the agent's port for CONNECTING, not for our acceptor.
+	// Configure plugin's own Ergo acceptor on a random free port.
 	// The plugin needs its own acceptor for the agent to spawn remote PluginOperator processes.
-	// Using port 0 lets the OS assign a free port, avoiding conflicts in parallel test execution.
-	// We don't set a custom Registrar - the global registrar suffices and the unique network
-	// cookie ensures isolation between different agent-plugin pairs.
 	options.Network.Acceptors = []gen.AcceptorOptions{
 		{
 			Host: "localhost",
 			Port: 0, // Auto-select free port
 		},
+	}
+
+	// Configure Ergo registrar if specified (enables parallel test execution)
+	// Each plugin connects to the agent's dedicated registrar rather than the global one.
+	if registrarPortStr := os.Getenv("FORMAE_REGISTRAR_PORT"); registrarPortStr != "" {
+		if registrarPort, err := strconv.Atoi(registrarPortStr); err == nil && registrarPort != 0 {
+			options.Network.Registrar = registrar.Create(registrar.Options{Port: uint16(registrarPort)})
+		}
 	}
 
 	// Read OTel config from environment variables (for standalone plugin process startup)

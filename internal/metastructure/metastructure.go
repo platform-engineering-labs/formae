@@ -15,6 +15,7 @@ import (
 	"ergo.services/application/observer"
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/registrar"
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
@@ -147,11 +148,16 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.options.Network.Cookie = cfg.Agent.Server.Secret
 
 	// Configure Ergo listen address with custom port (enables parallel test execution)
-	// Note: We don't set a custom Registrar here. The acceptor and registrar cannot share
-	// the same port - the acceptor binds first, then the registrar falls back to client mode
-	// and tries to connect to what it thinks is a registrar server, causing a protocol mismatch.
-	// For single-node operation (which is the conformance test case), the global registrar suffices.
+	// Each agent gets its own registrar to avoid sharing the global one on port 4499.
+	// When multiple agents share a registrar, the first agent to shut down kills the
+	// registrar server, causing all other agents to lose their connection.
 	if cfg.Agent.Server.ErgoPort != 0 {
+		registrarPort := cfg.Agent.Server.RegistrarPort
+		if registrarPort == 0 {
+			registrarPort = 4499
+		}
+		// Set registrar at node level for both incoming registration and outgoing resolution
+		metastructure.options.Network.Registrar = registrar.Create(registrar.Options{Port: uint16(registrarPort)})
 		metastructure.options.Network.Acceptors = []gen.AcceptorOptions{
 			{
 				Host: cfg.Agent.Server.Hostname,

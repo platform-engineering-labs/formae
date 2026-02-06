@@ -100,6 +100,7 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.Equal(t, "formae.example.com", config.Agent.Server.Hostname)
 	assert.Equal(t, 1234, config.Agent.Server.Port)
 	assert.Equal(t, 15100, config.Agent.Server.ErgoPort)
+	assert.Equal(t, 15200, config.Agent.Server.RegistrarPort)
 	assert.Equal(t, "secret", config.Agent.Server.Secret)
 	assert.Equal(t, 0, config.Agent.Server.ObserverPort)
 
