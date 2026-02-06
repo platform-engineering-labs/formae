@@ -1136,7 +1136,7 @@ func (d DatastorePostgres) UpdateStack(stack *pkgmodel.Stack, commandID string) 
 	query := `
 		SELECT id, operation FROM stacks
 		WHERE label = $1
-		ORDER BY version DESC
+		ORDER BY version COLLATE "C" DESC
 		LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, stack.Label)
@@ -1174,7 +1174,7 @@ func (d DatastorePostgres) DeleteStack(label string, commandID string) (string, 
 	query := `
 		SELECT id, operation FROM stacks
 		WHERE label = $1
-		ORDER BY version DESC
+		ORDER BY version COLLATE "C" DESC
 		LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, label)
@@ -1213,7 +1213,7 @@ func (d DatastorePostgres) GetStackByLabel(label string) (*pkgmodel.Stack, error
 	query := `
 		SELECT id, description, operation FROM stacks
 		WHERE label = $1
-		ORDER BY version DESC
+		ORDER BY version COLLATE "C" DESC
 		LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, label)
@@ -1272,7 +1272,7 @@ func (d DatastorePostgres) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	query := `
 		SELECT id, label, description FROM (
 			SELECT id, label, description, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
 			FROM stacks
 		) sub
 		WHERE rn = 1 AND operation != 'delete'
