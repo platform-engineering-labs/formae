@@ -23,7 +23,7 @@ func SetupInitialLogging() {
 	w := os.Stdout
 	slog.SetDefault(slog.New(
 		tint.NewHandler(w, &tint.Options{
-			Level:      slog.LevelDebug,
+			Level:      slog.LevelInfo,
 			TimeFormat: time.RFC3339,
 		}),
 	))
