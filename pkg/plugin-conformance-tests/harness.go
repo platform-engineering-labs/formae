@@ -733,19 +733,30 @@ func (h *TestHarness) ApplyWithMode(pklFile string, mode string) (string, error)
 	)
 	h.setCommandEnv(cmd)
 
-	output, err := cmd.CombinedOutput()
+	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
+	// from corrupting the JSON output that we need to parse
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("apply command failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("apply command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
 	}
 
-	// Parse JSON response
+	// Log stderr if there was any output (for debugging purposes)
+	if stderr.Len() > 0 {
+		h.t.Logf("Apply stderr (ignored for parsing): %s", stderr.String())
+	}
+
+	// Parse JSON response from stdout only
 	var response model.SubmitCommandResponse
-	if err := json.Unmarshal(output, &response); err != nil {
-		return "", fmt.Errorf("failed to parse apply response: %w\nOutput: %s", err, string(output))
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		return "", fmt.Errorf("failed to parse apply response: %w\nStdout: %s", err, stdout.String())
 	}
 
 	if response.CommandID == "" {
-		return "", fmt.Errorf("no command ID in response: %s", string(output))
+		return "", fmt.Errorf("no command ID in response: %s", stdout.String())
 	}
 
 	h.t.Logf("Apply command submitted, CommandID: %s", response.CommandID)
@@ -766,19 +777,30 @@ func (h *TestHarness) Destroy(pklFile string) (string, error) {
 	)
 	h.setCommandEnv(cmd)
 
-	output, err := cmd.CombinedOutput()
+	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
+	// from corrupting the JSON output that we need to parse
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("destroy command failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("destroy command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
 	}
 
-	// Parse JSON response
+	// Log stderr if there was any output (for debugging purposes)
+	if stderr.Len() > 0 {
+		h.t.Logf("Destroy stderr (ignored for parsing): %s", stderr.String())
+	}
+
+	// Parse JSON response from stdout only
 	var response model.SubmitCommandResponse
-	if err := json.Unmarshal(output, &response); err != nil {
-		return "", fmt.Errorf("failed to parse destroy response: %w\nOutput: %s", err, string(output))
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		return "", fmt.Errorf("failed to parse destroy response: %w\nStdout: %s", err, stdout.String())
 	}
 
 	if response.CommandID == "" {
-		return "", fmt.Errorf("no command ID in response: %s", string(output))
+		return "", fmt.Errorf("no command ID in response: %s", stdout.String())
 	}
 
 	h.t.Logf("Destroy command submitted, CommandID: %s", response.CommandID)
@@ -831,9 +853,20 @@ func (h *TestHarness) Extract(query string, outputFile string) error {
 	)
 	h.setCommandEnv(cmd)
 
-	output, err := cmd.CombinedOutput()
+	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
+	// from corrupting the output
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("extract command failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("extract command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
+	}
+
+	// Log stderr if there was any output (for debugging purposes)
+	if stderr.Len() > 0 {
+		h.t.Logf("Extract stderr (ignored): %s", stderr.String())
 	}
 
 	h.t.Logf("Extract completed successfully")
@@ -860,15 +893,26 @@ func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 		"--output-schema", "json",
 	)
 
-	output, err := cmd.CombinedOutput()
+	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
+	// from corrupting the JSON output that we need to parse
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("inventory command failed: %w\nOutput: %s", err, string(output))
+		return nil, fmt.Errorf("inventory command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
 	}
 
-	// Parse JSON response
+	// Log stderr if there was any output (for debugging purposes)
+	if stderr.Len() > 0 {
+		h.t.Logf("Inventory stderr (ignored for parsing): %s", stderr.String())
+	}
+
+	// Parse JSON response from stdout only
 	var response InventoryResponse
-	if err := json.Unmarshal(output, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse inventory response: %w\nOutput: %s", err, string(output))
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		return nil, fmt.Errorf("failed to parse inventory response: %w\nStdout: %s", err, stdout.String())
 	}
 
 	h.t.Logf("Inventory returned %d resource(s)", len(response.Resources))
@@ -1775,15 +1819,21 @@ func (h *TestHarness) GetStatus(commandID string) (string, error) {
 		"--output-schema", "json",
 	)
 
-	output, err := cmd.CombinedOutput()
+	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
+	// from corrupting the JSON output that we need to parse
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("status command failed: %w\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("status command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
 	}
 
-	// Parse JSON response
+	// Parse JSON response from stdout only
 	var response model.ListCommandStatusResponse
-	if err := json.Unmarshal(output, &response); err != nil {
-		return "", fmt.Errorf("failed to parse status response: %w\nOutput: %s", err, string(output))
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		return "", fmt.Errorf("failed to parse status response: %w\nStdout: %s", err, stdout.String())
 	}
 
 	if len(response.Commands) == 0 {
