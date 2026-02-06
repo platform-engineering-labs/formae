@@ -1834,25 +1834,38 @@ func TestDatastore_DeleteStack(t *testing.T) {
 	}
 	defer cleanupDatastore(ds)
 
+	// Check for pre-existing stacks
+	existingStacks, _ := ds.ListAllStacks()
+	t.Logf("DEBUG: Pre-existing stacks count: %d", len(existingStacks))
+	for _, s := range existingStacks {
+		t.Logf("DEBUG: Pre-existing stack: label=%s, id=%s", s.Label, s.ID)
+	}
+
 	// Create a stack
 	stack := &pkgmodel.Stack{
 		Label:       "delete-test",
 		Description: "To be deleted",
 	}
-	_, err = ds.CreateStack(stack, "cmd-1")
+	createVersion, err := ds.CreateStack(stack, "cmd-1")
 	assert.NoError(t, err)
+	t.Logf("DEBUG: Created stack with version: %s", createVersion)
 
 	// Sleep to ensure KSUID is in a different second (KSUID has 1-second precision)
 	time.Sleep(1100 * time.Millisecond)
 
 	// Delete it (tombstone)
-	version, err := ds.DeleteStack("delete-test", "cmd-2")
+	deleteVersion, err := ds.DeleteStack("delete-test", "cmd-2")
 	assert.NoError(t, err)
-	assert.NotEmpty(t, version)
+	assert.NotEmpty(t, deleteVersion)
+	t.Logf("DEBUG: Deleted stack with version: %s", deleteVersion)
+	t.Logf("DEBUG: Version comparison - deleteVersion > createVersion: %v", deleteVersion > createVersion)
 
 	// Verify it's no longer retrievable
 	retrieved, err := ds.GetStackByLabel("delete-test")
 	assert.NoError(t, err)
+	if retrieved != nil {
+		t.Logf("DEBUG: GetStackByLabel returned non-nil! ID=%s, Description=%s", retrieved.ID, retrieved.Description)
+	}
 	assert.Nil(t, retrieved)
 }
 
