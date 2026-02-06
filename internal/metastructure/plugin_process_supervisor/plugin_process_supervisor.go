@@ -222,8 +222,8 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 		return fmt.Errorf("ServerConfig has wrong type")
 	}
 
-	// Create node name for the plugin
-	nodeName := fmt.Sprintf("%s-plugin@%s", strings.ToLower(namespace), serverConfig.Hostname)
+	// Create node name for the plugin - include agent nodename prefix for uniqueness when running parallel agents
+	nodeName := fmt.Sprintf("%s-%s-plugin@%s", serverConfig.Nodename, strings.ToLower(namespace), serverConfig.Hostname)
 	agentNode := fmt.Sprintf("%s@%s", serverConfig.Nodename, serverConfig.Hostname)
 
 	// Build environment variables for the plugin process
