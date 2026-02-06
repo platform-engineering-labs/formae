@@ -89,9 +89,9 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		projectDir = WalkForProjectFile(filepath.Dir(path))
 	}
 
+	var cleanup func()
 	if projectDir != "" {
-		// Use NewProjectEvaluator when a PklProject is found
-		evaluator, err = pkl.NewProjectEvaluator(
+		evaluator, cleanup, err = newSafeProjectEvaluator(
 			context.Background(),
 			&url.URL{Scheme: "file", Path: projectDir},
 			pkl.WithFs(formaeFs, "formae"),
@@ -99,22 +99,20 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 			pkl.PreconfiguredOptions,
 		)
 	} else {
-		// Fall back to regular evaluator
 		evaluator, err = pkl.NewEvaluator(
 			context.Background(),
 			pkl.WithFs(formaeFs, "formae"),
 			pkl.WithResourceReader(libExtension{}),
 			pkl.PreconfiguredOptions,
 		)
+		cleanup = func() { _ = evaluator.Close() }
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	defer func(evaluator pkl.Evaluator) {
-		_ = evaluator.Close()
-	}(evaluator)
+	defer cleanup()
 
 	var config *pklmodel.Config
 	err = evaluator.EvaluateModule(context.Background(), configSource, &config)
@@ -225,8 +223,9 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 
 	projectDir := WalkForProjectFile(filepath.Dir(path))
 
+	var cleanup func()
 	if projectDir != "" {
-		evaluator, err = pkl.NewProjectEvaluator(
+		evaluator, cleanup, err = newSafeProjectEvaluator(
 			context.Background(),
 			&url.URL{Scheme: "file", Path: projectDir},
 			pkl.PreconfiguredOptions,
@@ -248,15 +247,14 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 				opts.Properties = props
 				opts.OutputFormat = "json"
 			})
+		cleanup = func() { _ = evaluator.Close() }
 
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	defer func(evaluator pkl.Evaluator) {
-		_ = evaluator.Close()
-	}(evaluator)
+	defer cleanup()
 
 	// Render PKL
 	result, err := evaluator.EvaluateOutputText(context.Background(), pkl.FileSource(path))
@@ -531,6 +529,42 @@ func parseLogLevel(level string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// newSafeProjectEvaluator creates a project-aware PKL evaluator without the race
+// condition in pkl-go's NewProjectEvaluator. That function internally creates two
+// evaluators on the same manager and defer-closes the first one. If the pkl subprocess
+// sends a late message for the closed evaluator, the manager's listen loop exits
+// entirely (calls return instead of continue), killing all message processing.
+// See: https://github.com/apple/pkl-go/blob/v0.12.0/pkl/evaluator_exec.go#L57-L84
+//
+// This function keeps both evaluators alive until the returned cleanup function is
+// called, which closes the entire manager.
+func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pkl.EvaluatorOptions)) (pkl.Evaluator, func(), error) {
+	manager := pkl.NewEvaluatorManager()
+
+	projectEvaluator, err := manager.NewEvaluator(ctx, opts...)
+	if err != nil {
+		manager.Close()
+		return nil, nil, fmt.Errorf("failed to create project evaluator: %w", err)
+	}
+
+	projectPath := projectBaseURL.JoinPath("PklProject")
+	project, err := pkl.LoadProjectFromEvaluator(ctx, projectEvaluator, &pkl.ModuleSource{Uri: projectPath})
+	if err != nil {
+		manager.Close()
+		return nil, nil, fmt.Errorf("failed to load project: %w", err)
+	}
+
+	newOpts := []func(*pkl.EvaluatorOptions){pkl.WithProject(project)}
+	newOpts = append(newOpts, opts...)
+	evaluator, err := manager.NewEvaluator(ctx, newOpts...)
+	if err != nil {
+		manager.Close()
+		return nil, nil, fmt.Errorf("failed to create evaluator: %w", err)
+	}
+
+	return evaluator, func() { manager.Close() }, nil
 }
 
 var Plugin = PKL{}

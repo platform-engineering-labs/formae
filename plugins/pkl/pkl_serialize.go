@@ -116,7 +116,7 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 	}
 
 	// Step 5: Run the main generator
-	evaluator, err := pkl.NewProjectEvaluator(
+	evaluator, cleanup, err := newSafeProjectEvaluator(
 		context.Background(),
 		&url.URL{Scheme: "file", Path: tempDir + "/generator"},
 		pkl.PreconfiguredOptions,
@@ -130,9 +130,7 @@ func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (strin
 		return "", err
 	}
 
-	defer func(evaluator pkl.Evaluator) {
-		_ = evaluator.Close()
-	}(evaluator)
+	defer cleanup()
 
 	textOutput, err := evaluator.EvaluateOutputText(context.Background(), pkl.FileSource(filepath.Join(tempDir, "generator/runPklGenerator.pkl")))
 	if err != nil {
@@ -164,7 +162,7 @@ func extractNamespaces(data any) map[string]struct{} {
 // generatePklFile evaluates a PKL generator file and writes the output to a target file.
 // This is used in the multi-stage generation pipeline to create imports.pkl, resources.pkl, etc.
 func (p PKL) generatePklFile(generatorDir, generatorName, outputName string) error {
-	evaluator, err := pkl.NewProjectEvaluator(
+	evaluator, cleanup, err := newSafeProjectEvaluator(
 		context.Background(),
 		&url.URL{Scheme: "file", Path: generatorDir},
 		pkl.PreconfiguredOptions,
@@ -175,7 +173,7 @@ func (p PKL) generatePklFile(generatorDir, generatorName, outputName string) err
 	if err != nil {
 		return fmt.Errorf("failed to create evaluator for %s: %w", generatorName, err)
 	}
-	defer evaluator.Close()
+	defer cleanup()
 
 	result, err := evaluator.EvaluateOutputText(
 		context.Background(),

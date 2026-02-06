@@ -101,7 +101,7 @@ func GenerateDocsWithNamespace(schemaDir, namespace string) (*DocsResult, error)
 
 // runDocs runs Docs.pkl and parses the result.
 func runDocs(ctx context.Context, workDir string) (*DocsResult, error) {
-	evaluator, err := pkl.NewProjectEvaluator(
+	evaluator, cleanup, err := newSafeProjectEvaluator(
 		ctx,
 		&url.URL{Scheme: "file", Path: workDir},
 		pkl.PreconfiguredOptions,
@@ -109,7 +109,7 @@ func runDocs(ctx context.Context, workDir string) (*DocsResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create evaluator: %w", err)
 	}
-	defer evaluator.Close()
+	defer cleanup()
 
 	docsPath := filepath.Join(workDir, "Docs.pkl")
 	jsonOutput, err := evaluator.EvaluateOutputText(ctx, pkl.FileSource(docsPath))
