@@ -160,8 +160,7 @@ func resolvePklProject(workDir string) error {
 
 // generateImports generates imports.pkl from PklProject dependencies using ImportsGenerator.pkl
 func generateImports(ctx context.Context, workDir string) error {
-	// Use a project evaluator since ImportsGenerator.pkl imports PklProject
-	evaluator, err := pkl.NewProjectEvaluator(
+	evaluator, cleanup, err := newSafeProjectEvaluator(
 		ctx,
 		&url.URL{Scheme: "file", Path: workDir},
 		pkl.PreconfiguredOptions,
@@ -169,7 +168,7 @@ func generateImports(ctx context.Context, workDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create evaluator: %w", err)
 	}
-	defer evaluator.Close()
+	defer cleanup()
 
 	generatorPath := filepath.Join(workDir, "ImportsGenerator.pkl")
 	result, err := evaluator.EvaluateOutputText(ctx, pkl.FileSource(generatorPath))
@@ -188,8 +187,7 @@ func generateImports(ctx context.Context, workDir string) error {
 
 // runExtractor runs the Extractor.pkl to extract ResourceDescriptors
 func runExtractor(ctx context.Context, workDir string) ([]plugin.ResourceTypeDescriptor, error) {
-	// NewProjectEvaluator expects the directory containing PklProject, not the file itself
-	evaluator, err := pkl.NewProjectEvaluator(
+	evaluator, cleanup, err := newSafeProjectEvaluator(
 		ctx,
 		&url.URL{Scheme: "file", Path: workDir},
 		pkl.PreconfiguredOptions,
@@ -200,7 +198,7 @@ func runExtractor(ctx context.Context, workDir string) ([]plugin.ResourceTypeDes
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project evaluator: %w", err)
 	}
-	defer evaluator.Close()
+	defer cleanup()
 
 	extractorPath := filepath.Join(workDir, "Extractor.pkl")
 
@@ -219,6 +217,42 @@ func runExtractor(ctx context.Context, workDir string) ([]plugin.ResourceTypeDes
 	}
 
 	return pklResult.Descriptors, nil
+}
+
+// newSafeProjectEvaluator creates a project-aware PKL evaluator without the race
+// condition in pkl-go's NewProjectEvaluator. That function internally creates two
+// evaluators on the same manager and defer-closes the first one. If the pkl subprocess
+// sends a late message for the closed evaluator, the manager's listen loop exits
+// entirely (calls return instead of continue), killing all message processing.
+// See: https://github.com/apple/pkl-go/blob/v0.12.0/pkl/evaluator_exec.go#L57-L84
+//
+// This function keeps both evaluators alive until the returned cleanup function is
+// called, which closes the entire manager.
+func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pkl.EvaluatorOptions)) (pkl.Evaluator, func(), error) {
+	manager := pkl.NewEvaluatorManager()
+
+	projectEvaluator, err := manager.NewEvaluator(ctx, opts...)
+	if err != nil {
+		manager.Close()
+		return nil, nil, fmt.Errorf("failed to create project evaluator: %w", err)
+	}
+
+	projectPath := projectBaseURL.JoinPath("PklProject")
+	project, err := pkl.LoadProjectFromEvaluator(ctx, projectEvaluator, &pkl.ModuleSource{Uri: projectPath})
+	if err != nil {
+		manager.Close()
+		return nil, nil, fmt.Errorf("failed to load project: %w", err)
+	}
+
+	newOpts := []func(*pkl.EvaluatorOptions){pkl.WithProject(project)}
+	newOpts = append(newOpts, opts...)
+	evaluator, err := manager.NewEvaluator(ctx, newOpts...)
+	if err != nil {
+		manager.Close()
+		return nil, nil, fmt.Errorf("failed to create evaluator: %w", err)
+	}
+
+	return evaluator, func() { manager.Close() }, nil
 }
 
 // newPklCommand creates a new exec.Cmd for running pkl CLI commands
