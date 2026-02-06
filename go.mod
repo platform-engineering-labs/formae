@@ -21,6 +21,7 @@ require (
 	github.com/XSAM/otelsql v0.41.0
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.7
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.7
 	github.com/aws/aws-sdk-go-v2/service/rdsdata v1.32.17
 	github.com/blugelabs/bluge v0.1.7
 	github.com/blugelabs/query_string v0.3.0
@@ -39,7 +40,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/olekukonko/tablewriter v1.0.7
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.2
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.4
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.2
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260120160109-3221bac3fb58
@@ -85,7 +86,6 @@ require (
 	github.com/RoaringBitmap/roaring v0.9.1 // indirect
 	github.com/STARRY-S/zip v0.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.7 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.17 // indirect
