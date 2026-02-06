@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata/types"
 	"github.com/demula/mksuid/v2"
+	"github.com/google/uuid"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -1068,6 +1069,198 @@ func (d *DatastoreAuroraDataAPI) DeleteResource(resource *pkgmodel.Resource, com
 	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
 }
 
+func (d *DatastoreAuroraDataAPI) BulkStoreResources(resources []pkgmodel.Resource, commandID string) (string, error) {
+	var ret string
+	var err error
+	for _, resource := range resources {
+		if ret, err = d.StoreResource(&resource, commandID); err != nil {
+			slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
+			return "", err
+		}
+	}
+	return ret, nil
+}
+
+func (d *DatastoreAuroraDataAPI) CountResourcesInStack(label string) (int, error) {
+	ctx := context.Background()
+
+	// Count only latest version of resources that haven't been deleted
+	query := `
+		SELECT COUNT(*) FROM resources r1
+		WHERE stack = :stack
+		AND NOT EXISTS (
+			SELECT 1 FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != :operation
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: label}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+		return 0, nil
+	}
+
+	if longVal, ok := output.Records[0][0].(*types.FieldMemberLongValue); ok {
+		return int(longVal.Value), nil
+	}
+
+	return 0, fmt.Errorf("unexpected type for COUNT result")
+}
+
+func (d *DatastoreAuroraDataAPI) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
+	ctx := context.Background()
+
+	query := `
+		SELECT data, ksuid
+		FROM resources r1
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != :operation
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var allResources []*pkgmodel.Resource
+	for _, record := range output.Records {
+		if len(record) < 2 {
+			continue
+		}
+
+		jsonData, err := getStringField(record[0])
+		if err != nil {
+			return nil, err
+		}
+		ksuid, err := getStringField(record[1])
+		if err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+
+		resource.Ksuid = ksuid
+		allResources = append(allResources, &resource)
+	}
+
+	// Group resources by stack label
+	stackResourcesMap := make(map[string][]*pkgmodel.Resource)
+	for _, resource := range allResources {
+		if resource.Stack != "" {
+			stackResourcesMap[resource.Stack] = append(stackResourcesMap[resource.Stack], resource)
+		}
+	}
+
+	return stackResourcesMap, nil
+}
+
+func (d *DatastoreAuroraDataAPI) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
+	ctx := context.Background()
+
+	query := `
+		SELECT data, ksuid
+		FROM resources r1
+		WHERE stack = :stack
+		AND NOT EXISTS (
+			SELECT 1
+			FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != :operation
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resources []*pkgmodel.Resource
+	for _, record := range output.Records {
+		if len(record) < 2 {
+			continue
+		}
+
+		jsonData, err := getStringField(record[0])
+		if err != nil {
+			return nil, err
+		}
+		ksuid, err := getStringField(record[1])
+		if err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+
+		resource.Ksuid = ksuid
+		resources = append(resources, &resource)
+	}
+
+	return resources, nil
+}
+
+func (d *DatastoreAuroraDataAPI) CountResourcesInTarget(targetLabel string) (int, error) {
+	ctx := context.Background()
+
+	// Count only latest version of resources that haven't been deleted
+	query := `
+		SELECT COUNT(*) FROM resources r1
+		WHERE target = :target
+		AND NOT EXISTS (
+			SELECT 1 FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != :operation
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("target"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+		return 0, nil
+	}
+
+	if longVal, ok := output.Records[0][0].(*types.FieldMemberLongValue); ok {
+		return int(longVal.Value), nil
+	}
+
+	return 0, fmt.Errorf("unexpected type for COUNT result")
+}
+
 func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
@@ -1969,64 +2162,6 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *TargetQuery) ([]*pkgm
 	return targets, nil
 }
 
-func (d *DatastoreAuroraDataAPI) DeleteTarget(targetLabel string) (string, error) {
-	ctx := context.Background()
-
-	// Hard delete all versions of the target
-	query := `DELETE FROM targets WHERE label = :label`
-	params := []types.SqlParameter{
-		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
-	}
-
-	output, err := d.executeStatement(ctx, query, params)
-	if err != nil {
-		slog.Error("Failed to delete target", "error", err, "label", targetLabel)
-		return "", err
-	}
-
-	if output.NumberOfRecordsUpdated == 0 {
-		return "", fmt.Errorf("target %s does not exist, cannot delete", targetLabel)
-	}
-
-	return fmt.Sprintf("%s_deleted", targetLabel), nil
-}
-
-func (d *DatastoreAuroraDataAPI) CountResourcesInTarget(targetLabel string) (int, error) {
-	ctx := context.Background()
-
-	// Count only latest version of resources that haven't been deleted
-	query := `
-		SELECT COUNT(*) FROM resources r1
-		WHERE target = :target
-		AND NOT EXISTS (
-			SELECT 1 FROM resources r2
-			WHERE r1.uri = r2.uri
-			AND r2.version > r1.version
-		)
-		AND operation != :operation
-	`
-	params := []types.SqlParameter{
-		{Name: aws.String("target"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
-		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
-	}
-
-	output, err := d.executeStatement(ctx, query, params)
-	if err != nil {
-		return 0, err
-	}
-
-	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
-		return 0, nil
-	}
-
-	count, err := getIntField(output.Records[0][0])
-	if err != nil {
-		return 0, err
-	}
-
-	return count, nil
-}
-
 func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	ctx := context.Background()
 	res := stats.Stats{}
@@ -2727,6 +2862,281 @@ func (d *DatastoreAuroraDataAPI) UpdateFormaCommandProgress(commandID string, st
 	return nil
 }
 
+func (d *DatastoreAuroraDataAPI) CreateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	ctx := context.Background()
+
+	// Check if a non-deleted stack with this label already exists
+	existing, err := d.GetStackByLabel(stack.Label)
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		return "", fmt.Errorf("stack already exists: %s", stack.Label)
+	}
+
+	// Generate UUID for id (stable identifier) and KSUID for version (ordering)
+	id := uuid.New().String()
+	version := mksuid.New().String()
+
+	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (:id, :version, :command_id, :operation, :label, :description)`
+	params := []types.SqlParameter{
+		{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "create"}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: stack.Label}},
+		{Name: aws.String("description"), Value: &types.FieldMemberStringValue{Value: stack.Description}},
+	}
+
+	_, err = d.executeStatement(ctx, query, params)
+	if err != nil {
+		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d *DatastoreAuroraDataAPI) UpdateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	ctx := context.Background()
+
+	// Get the existing stack to find its id (most recent version of any operation)
+	// Note: Use COLLATE "C" for binary ordering of KSUID strings (en_US.utf8 collation breaks ASCII ordering)
+	query := `
+		SELECT id, operation FROM stacks
+		WHERE label = :label
+		ORDER BY version COLLATE "C" DESC
+		LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: stack.Label}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return "", err
+	}
+
+	if len(output.Records) == 0 {
+		return "", fmt.Errorf("stack not found: %s", stack.Label)
+	}
+
+	id, err := getStringField(output.Records[0][0])
+	if err != nil {
+		return "", err
+	}
+	operation, err := getStringField(output.Records[0][1])
+	if err != nil {
+		return "", err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return "", fmt.Errorf("stack not found: %s", stack.Label)
+	}
+
+	// Insert new version with same id
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (:id, :version, :command_id, :operation, :label, :description)`
+	insertParams := []types.SqlParameter{
+		{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "update"}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: stack.Label}},
+		{Name: aws.String("description"), Value: &types.FieldMemberStringValue{Value: stack.Description}},
+	}
+
+	_, err = d.executeStatement(ctx, insertQuery, insertParams)
+	if err != nil {
+		slog.Error("Failed to update stack", "error", err, "label", stack.Label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d *DatastoreAuroraDataAPI) DeleteStack(label string, commandID string) (string, error) {
+	ctx := context.Background()
+
+	// Get the existing stack to find its id (most recent version of any operation)
+	// Note: Use COLLATE "C" for binary ordering of KSUID strings (en_US.utf8 collation breaks ASCII ordering)
+	query := `
+		SELECT id, operation FROM stacks
+		WHERE label = :label
+		ORDER BY version COLLATE "C" DESC
+		LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return "", err
+	}
+
+	if len(output.Records) == 0 {
+		return "", fmt.Errorf("stack not found: %s", label)
+	}
+
+	id, err := getStringField(output.Records[0][0])
+	if err != nil {
+		return "", err
+	}
+	operation, err := getStringField(output.Records[0][1])
+	if err != nil {
+		return "", err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return "", fmt.Errorf("stack not found: %s", label)
+	}
+
+	// Insert tombstone version
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (:id, :version, :command_id, :operation, :label, :description)`
+	insertParams := []types.SqlParameter{
+		{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "delete"}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+		{Name: aws.String("description"), Value: &types.FieldMemberStringValue{Value: ""}},
+	}
+
+	_, err = d.executeStatement(ctx, insertQuery, insertParams)
+	if err != nil {
+		slog.Error("Failed to delete stack", "error", err, "label", label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d *DatastoreAuroraDataAPI) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
+	ctx := context.Background()
+
+	// Get the latest version of the stack, return nil if deleted
+	// We need to check if the MOST RECENT version is a delete operation
+	// Note: Use COLLATE "C" for binary ordering of KSUID strings (en_US.utf8 collation breaks ASCII ordering)
+	query := `
+		SELECT id, description, operation FROM stacks
+		WHERE label = :label
+		ORDER BY version COLLATE "C" DESC
+		LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(output.Records) == 0 {
+		return nil, nil // Stack not found, return nil without error
+	}
+
+	id, err := getStringField(output.Records[0][0])
+	if err != nil {
+		return nil, err
+	}
+	description, err := getStringField(output.Records[0][1])
+	if err != nil {
+		return nil, err
+	}
+	operation, err := getStringField(output.Records[0][2])
+	if err != nil {
+		return nil, err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return nil, nil
+	}
+
+	return &pkgmodel.Stack{
+		ID:          id,
+		Label:       label,
+		Description: description,
+	}, nil
+}
+
+func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
+	ctx := context.Background()
+
+	// Get all stacks at their latest version that aren't deleted
+	// Uses window function to reliably get the most recent version per stack id
+	// Note: Use COLLATE "C" for binary ordering of KSUID strings (en_US.utf8 collation breaks ASCII ordering)
+	query := `
+		SELECT id, label, description FROM (
+			SELECT id, label, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+		ORDER BY label
+	`
+
+	output, err := d.executeStatement(ctx, query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var stacks []*pkgmodel.Stack
+	for _, record := range output.Records {
+		if len(record) < 3 {
+			continue
+		}
+
+		id, err := getStringField(record[0])
+		if err != nil {
+			return nil, err
+		}
+		label, err := getStringField(record[1])
+		if err != nil {
+			return nil, err
+		}
+		description, err := getStringField(record[2])
+		if err != nil {
+			return nil, err
+		}
+
+		stacks = append(stacks, &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		})
+	}
+
+	return stacks, nil
+}
+
+func (d *DatastoreAuroraDataAPI) DeleteTarget(targetLabel string) (string, error) {
+	ctx := context.Background()
+
+	// Hard delete all versions of the target
+	query := `DELETE FROM targets WHERE label = :label`
+	params := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		slog.Error("Failed to delete target", "error", err, "label", targetLabel)
+		return "", err
+	}
+
+	if output.NumberOfRecordsUpdated == 0 {
+		return "", fmt.Errorf("target %s does not exist, cannot delete", targetLabel)
+	}
+
+	return fmt.Sprintf("%s_deleted", targetLabel), nil
+}
+
 func (d *DatastoreAuroraDataAPI) Close() {
 	// Data API is stateless - no persistent connections to close
 	slog.Info("Closed Aurora Data API datastore")
@@ -2736,7 +3146,7 @@ func (d *DatastoreAuroraDataAPI) Close() {
 func (d *DatastoreAuroraDataAPI) CleanUp() error {
 	ctx := context.Background()
 
-	tables := []string{"resource_updates", "resources", "targets", "forma_commands"}
+	tables := []string{"stacks", "resource_updates", "resources", "targets", "forma_commands"}
 
 	for _, table := range tables {
 		query := fmt.Sprintf("DELETE FROM %s", table)

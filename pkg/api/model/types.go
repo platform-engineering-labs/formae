@@ -37,6 +37,7 @@ type Command struct {
 	EndTs           time.Time        `json:"EndTs,omitempty"`
 	ResourceUpdates []ResourceUpdate `json:"ResourceUpdates,omitempty"`
 	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
+	StackUpdates    []StackUpdate    `json:"StackUpdates,omitempty"`
 }
 
 // wrapper for machine-readable output
@@ -94,6 +95,17 @@ type TargetUpdate struct {
 	Duration     int64     `json:"Duration,omitempty"` // milliseconds
 	ErrorMessage string    `json:"ErrorMessage,omitempty"`
 	Discoverable bool      `json:"Discoverable"`
+	StartTs      time.Time `json:"StartTs,omitempty"`
+	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
+}
+
+type StackUpdate struct {
+	StackLabel   string    `json:"StackLabel"`
+	Operation    string    `json:"Operation"`
+	State        string    `json:"State"`
+	Duration     int64     `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage string    `json:"ErrorMessage,omitempty"`
+	Description  string    `json:"Description"`
 	StartTs      time.Time `json:"StartTs,omitempty"`
 	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
 }

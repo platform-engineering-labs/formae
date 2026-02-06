@@ -51,3 +51,12 @@ const (
 	TargetUpdateStateSuccess    TargetUpdateState = "Success"
 	TargetUpdateStateFailed     TargetUpdateState = "Failed"
 )
+
+// StackUpdateState represents the state of a stack update
+type StackUpdateState string
+
+const (
+	StackUpdateStateNotStarted StackUpdateState = "NotStarted"
+	StackUpdateStateSuccess    StackUpdateState = "Success"
+	StackUpdateStateFailed     StackUpdateState = "Failed"
+)

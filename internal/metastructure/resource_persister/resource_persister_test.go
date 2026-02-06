@@ -74,11 +74,11 @@ func TestResourcePersister_StoresResourceUpdate(t *testing.T) {
 	assert.NotEmpty(t, hash)
 
 	// Verify the resource was stored in the datastore
-	loadedStack, err := ds.LoadStack("test-stack")
+	loadedResources, err := ds.LoadResourcesByStack("test-stack")
 	assert.NoError(t, err)
-	assert.NotNil(t, loadedStack)
-	assert.Equal(t, 1, len(loadedStack.Resources))
-	assert.Equal(t, "test-resource", loadedStack.Resources[0].Label)
+	assert.NotNil(t, loadedResources)
+	assert.Equal(t, 1, len(loadedResources))
+	assert.Equal(t, "test-resource", loadedResources[0].Label)
 }
 
 func TestResourcePersister_LoadsResource(t *testing.T) {
@@ -194,13 +194,12 @@ func TestResourcePersister_Create(t *testing.T) {
 	assert.NotEmpty(t, hash)
 
 	// Verify the stack was stored correctly
-	loadedStack, err := ds.LoadStack("test-stack")
+	loadedResources, err := ds.LoadResourcesByStack("test-stack")
 	assert.NoError(t, err)
-	assert.NotNil(t, loadedStack)
-	assert.Equal(t, "test-stack", loadedStack.SingleStackLabel())
-	assert.Equal(t, 1, len(loadedStack.Resources))
-	assert.Equal(t, "test-resource", loadedStack.Resources[0].Label)
-	assert.JSONEq(t, `{"foo":"bar","baz":"qux","a":[3,4,2]}`, string(loadedStack.Resources[0].Properties))
+	assert.NotNil(t, loadedResources)
+	assert.Equal(t, 1, len(loadedResources))
+	assert.Equal(t, "test-resource", loadedResources[0].Label)
+	assert.JSONEq(t, `{"foo":"bar","baz":"qux","a":[3,4,2]}`, string(loadedResources[0].Properties))
 }
 
 func TestResourcePersister_Update(t *testing.T) {
@@ -303,14 +302,14 @@ func TestResourcePersister_Update(t *testing.T) {
 	assert.NotEmpty(t, latestHash)
 
 	// Verify properties were updated correctly
-	loadedStack, err := ds.LoadStack("test-stack")
+	loadedResources, err := ds.LoadResourcesByStack("test-stack")
 	assert.NoError(t, err)
-	assert.NotNil(t, loadedStack)
-	assert.Equal(t, 1, len(loadedStack.Resources))
+	assert.NotNil(t, loadedResources)
+	assert.Equal(t, 1, len(loadedResources))
 
 	// Convert properties to maps for easier comparison
 	var props map[string]interface{}
-	err = json.Unmarshal(loadedStack.Resources[0].Properties, &props)
+	err = json.Unmarshal(loadedResources[0].Properties, &props)
 	assert.NoError(t, err)
 
 	// Check updated properties
@@ -409,9 +408,9 @@ func TestResourcePersister_Delete(t *testing.T) {
 	})
 	assert.NoError(t, result2.Error)
 
-	stack, err := ds.LoadStack("test-stack")
+	resources, err := ds.LoadResourcesByStack("test-stack")
 	assert.NoError(t, err)
-	assert.Len(t, stack.Resources, 2)
+	assert.Len(t, resources, 2)
 
 	// Delete resource-2
 	deleteResource2 := resource_update.ResourceUpdate{
@@ -454,10 +453,10 @@ func TestResourcePersister_Delete(t *testing.T) {
 	})
 	assert.NoError(t, deleteResult.Error)
 
-	stack, err = ds.LoadStack("test-stack")
+	resources, err = ds.LoadResourcesByStack("test-stack")
 	assert.NoError(t, err)
-	assert.Len(t, stack.Resources, 1)
-	assert.Equal(t, "resource-1", stack.Resources[0].Label)
+	assert.Len(t, resources, 1)
+	assert.Equal(t, "resource-1", resources[0].Label)
 
 	// Delete resource-1
 	deleteResource1 := resource_update.ResourceUpdate{
@@ -501,9 +500,9 @@ func TestResourcePersister_Delete(t *testing.T) {
 	assert.NoError(t, deleteResult2.Error)
 
 	// Verify the stack was completely removed
-	emptyStack, err := ds.LoadStack("test-stack")
+	emptyResources, err := ds.LoadResourcesByStack("test-stack")
 	assert.NoError(t, err)
-	assert.Nil(t, emptyStack)
+	assert.Empty(t, emptyResources)
 }
 
 func TestResourcePersister_MissingRequiredFields(t *testing.T) {
@@ -1087,16 +1086,75 @@ func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
 	})
 	assert.NoError(t, readResult.Error)
 
-	loadedStack, err := ds.LoadStack("managed-stack")
+	loadedResources, err := ds.LoadResourcesByStack("managed-stack")
 	assert.NoError(t, err)
-	assert.NotNil(t, loadedStack, "Resource should remain in managed-stack, not move to $unmanaged")
-	assert.Equal(t, 1, len(loadedStack.Resources))
-	assert.Equal(t, "test-vpc", loadedStack.Resources[0].Label)
-	assert.True(t, loadedStack.Resources[0].Managed, "Resource should remain managed")
+	assert.NotEmpty(t, loadedResources, "Resource should remain in managed-stack, not move to $unmanaged")
+	assert.Equal(t, 1, len(loadedResources))
+	assert.Equal(t, "test-vpc", loadedResources[0].Label)
+	assert.True(t, loadedResources[0].Managed, "Resource should remain managed")
 
-	unmanagedStack, err := ds.LoadStack("$unmanaged")
+	unmanagedResources, err := ds.LoadResourcesByStack("$unmanaged")
 	assert.NoError(t, err)
-	assert.Nil(t, unmanagedStack, "Resource should not appear in $unmanaged stack")
+	assert.Empty(t, unmanagedResources, "Resource should not appear in $unmanaged stack")
+}
+
+func TestResourcePersister_CleanupEmptyStacks(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Create a stack first
+	_, err = ds.CreateStack(&pkgmodel.Stack{Label: "test-stack", Description: "Test stack"}, "cmd-1")
+	assert.NoError(t, err)
+
+	// Create a resource in the stack
+	resourceKsuid := util.NewID()
+	_, err = ds.StoreResource(&pkgmodel.Resource{
+		Label:      "test-resource",
+		Type:       "FakeAWS::S3::Bucket",
+		Properties: json.RawMessage(`{"foo":"bar"}`),
+		Stack:      "test-stack",
+		Ksuid:      resourceKsuid,
+		Target:     "test-target",
+		NativeID:   "native-1",
+		Managed:    true,
+	}, "cmd-1")
+	assert.NoError(t, err)
+
+	// Verify stack exists with resource
+	stack, err := ds.GetStackByLabel("test-stack")
+	assert.NoError(t, err)
+	assert.NotNil(t, stack)
+
+	// Send CleanupEmptyStacks - stack should NOT be deleted because it has resources
+	result := persister.Call(sender, messages.CleanupEmptyStacks{
+		StackLabels: []string{"test-stack"},
+		CommandID:   "cmd-2",
+	})
+	assert.NoError(t, result.Error)
+
+	// Verify stack still exists
+	stack, err = ds.GetStackByLabel("test-stack")
+	assert.NoError(t, err)
+	assert.NotNil(t, stack, "Stack should still exist because it has resources")
+
+	// Delete the resource from the stack
+	_, err = ds.DeleteResource(&pkgmodel.Resource{
+		Ksuid: resourceKsuid,
+		Stack: "test-stack",
+	}, "cmd-3")
+	assert.NoError(t, err)
+
+	// Send CleanupEmptyStacks - stack should be deleted because it's now empty
+	result = persister.Call(sender, messages.CleanupEmptyStacks{
+		StackLabels: []string{"test-stack"},
+		CommandID:   "cmd-4",
+	})
+	assert.NoError(t, result.Error)
+
+	// Verify stack was deleted
+	stack, err = ds.GetStackByLabel("test-stack")
+	assert.NoError(t, err)
+	assert.Nil(t, stack, "Stack should be deleted because it's empty")
 }
 
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.

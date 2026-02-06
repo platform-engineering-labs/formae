@@ -9,6 +9,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -35,6 +36,7 @@ type FormaCommand struct {
 	ModifiedTs      time.Time                        `json:"ModifiedTs"`
 	ResourceUpdates []resource_update.ResourceUpdate `json:"ResourceUpdates,omitempty"`
 	TargetUpdates   []target_update.TargetUpdate     `json:"TargetUpdates,omitempty"`
+	StackUpdates    []stack_update.StackUpdate       `json:"StackUpdates,omitempty"`
 	Config          config.FormaCommandConfig        `json:"Config"`
 	Command         pkgmodel.Command                 `json:"Command"`
 	ClientID        string                           `json:"ClientId,omitempty"`
@@ -55,6 +57,7 @@ func NewFormaCommand(
 	command pkgmodel.Command,
 	resourceUpdates []resource_update.ResourceUpdate,
 	targetUpdates []target_update.TargetUpdate,
+	stackUpdates []stack_update.StackUpdate,
 	clientID string,
 ) *FormaCommand {
 	return &FormaCommand{
@@ -63,6 +66,7 @@ func NewFormaCommand(
 		ModifiedTs:      util.TimeNow(),
 		ResourceUpdates: resourceUpdates,
 		TargetUpdates:   targetUpdates,
+		StackUpdates:    stackUpdates,
 		Config:          *formaCommandConfig,
 		Command:         command,
 		Description:     forma.Description,
@@ -71,9 +75,9 @@ func NewFormaCommand(
 	}
 }
 
-// HasChanges returns true if the command has any resource or target updates
+// HasChanges returns true if the command has any resource, target, or stack updates
 func (fc *FormaCommand) HasChanges() bool {
-	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0
+	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0 || len(fc.StackUpdates) > 0
 }
 
 // IsInFinalState returns true if the command is in a final state (Success, Failed, or Canceled)

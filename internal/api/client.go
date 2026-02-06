@@ -256,6 +256,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.EmptyStackRejected:
+		var errResp apimodel.ErrorResponse[apimodel.FormaEmptyStackRejectedError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse EmptyStackRejected error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.CyclesDetected:
 		var errResp apimodel.ErrorResponse[apimodel.FormaCyclesDetectedError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -459,6 +466,28 @@ func (c *Client) ListTargets(query string) ([]*pkgmodel.Target, error) {
 			return nil, fmt.Errorf("failed to decode response: %w", err)
 		}
 		return targets, nil
+	case http.StatusNotFound:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
+func (c *Client) ListStacks() ([]*pkgmodel.Stack, error) {
+	resp, err := c.resty.R().
+		Get(c.endpoint + "/api/v1/stacks")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list stacks: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var stacks []*pkgmodel.Stack
+		if err := json.NewDecoder(resp.Body).Decode(&stacks); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return stacks, nil
 	case http.StatusNotFound:
 		return nil, nil
 	default:

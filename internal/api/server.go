@@ -37,6 +37,7 @@ const (
 	CancelCommandsRoute    = BasePath + "/commands/cancel"
 	ListResourcesRoute     = BasePath + "/resources"
 	ListTargetsRoute       = BasePath + "/targets"
+	ListStacksRoute        = BasePath + "/stacks"
 	StatsRoute             = BasePath + "/stats"
 
 	AdminBasePath = BasePath + "/admin"
@@ -175,6 +176,7 @@ func (s *Server) configureEcho() *echo.Echo {
 
 	// Target listing endpoint
 	e.GET(ListTargetsRoute, s.ListTargets)
+	e.GET(ListStacksRoute, s.ListStacks)
 
 	// Usage stats endpoint
 	e.GET(StatsRoute, s.Stats)
@@ -381,6 +383,28 @@ func (s *Server) ListTargets(c echo.Context) error {
 	return c.JSON(http.StatusOK, targets)
 }
 
+// @Summary List stacks
+// @Description Retrieves all stack metadata
+// @Tags stacks
+// @Produce json
+// @Success 200 {array} pkgmodel.Stack "OK: List of stacks."
+// @Failure 404 {string} string "Not Found: No stacks found."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /stacks [get]
+func (s *Server) ListStacks(c echo.Context) error {
+	stacks, err := s.metastructure.ExtractStacks()
+	if err != nil {
+		return mapError(c, err)
+	}
+	if len(stacks) == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "No stacks found",
+		})
+	}
+
+	return c.JSON(http.StatusOK, stacks)
+}
+
 // @Summary Get usage statistics
 // @Description Retrieves usage statistics of the Formae agent.
 // @Tags stats
@@ -520,6 +544,11 @@ func mapError(c echo.Context, err error) error {
 	var rejectedResult apimodel.FormaPatchRejectedError
 	if errors.As(err, &rejectedResult) {
 		return apiError(c, http.StatusUnprocessableEntity, apimodel.PatchRejected, rejectedResult)
+	}
+
+	var emptyStackError apimodel.FormaEmptyStackRejectedError
+	if errors.As(err, &emptyStackError) {
+		return apiError(c, http.StatusUnprocessableEntity, apimodel.EmptyStackRejected, emptyStackError)
 	}
 
 	var resourceNotFoundError apimodel.FormaReferencedResourcesNotFoundError

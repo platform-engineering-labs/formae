@@ -43,10 +43,14 @@ jobs:
         postgresql password: admin
 
     - name: Postgres unit tests
-      run: make test-unit-postgres
+      run: |
+        set -eo pipefail
+        make test-unit-postgres
 
     - name: Setup local-data-api
       run: make local-data-api-ci
 
     - name: Aurora Data API unit tests
-      run: make test-unit-auroradataapi
+      run: |
+        set -eo pipefail
+        make test-unit-auroradataapi

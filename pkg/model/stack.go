@@ -5,6 +5,7 @@
 package model
 
 type Stack struct {
+	ID          string `json:"ID,omitempty"`
 	Label       string `json:"Label"`
 	Description string `json:"Description"`
 }

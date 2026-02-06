@@ -79,7 +79,7 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedTaglessResource(t *testing.
 			Resources: []pkgmodel.Resource{unmanagedResource},
 			Targets:   []pkgmodel.Target{{Label: "test-target", Namespace: "FakeAWS"}},
 		}
-		_, err = m.Datastore.StoreStack(unmanagedStack, "discovery-command-1")
+		_, err = m.Datastore.BulkStoreResources(unmanagedStack.Resources, "discovery-command-1")
 		require.NoError(t, err, "Failed to store unmanaged stack")
 
 		// Now the user wants to bring this resource under management in their "infrastructure" stack
@@ -260,7 +260,7 @@ func TestApplyForma_ReconcileFormaWithExistingStackAndUnmanagedTaglessResource(t
 			Targets:   []pkgmodel.Target{}, // Target already exists from first forma
 		}
 
-		_, err = m.Datastore.StoreStack(unmanagedStack, "discovery-command-1")
+		_, err = m.Datastore.BulkStoreResources(unmanagedStack.Resources, "discovery-command-1")
 		require.NoError(t, err, "Failed to store unmanaged stack")
 
 		// Step 3: Now apply a forma that brings the unmanaged resource under management

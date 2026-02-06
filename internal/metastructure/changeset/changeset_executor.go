@@ -11,6 +11,7 @@ import (
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
@@ -81,9 +82,10 @@ const (
 )
 
 type ChangesetData struct {
-	changeset       Changeset
-	requestedBy     gen.PID
-	discoveryPaused bool // Tracks if this changeset paused Discovery
+	changeset         Changeset
+	requestedBy       gen.PID
+	discoveryPaused   bool     // Tracks if this changeset paused Discovery
+	stacksWithDeletes []string // Stacks that had delete operations, captured at start
 }
 
 type RegisterEvents struct{}
@@ -112,6 +114,22 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
+	// Cleanup empty stacks after successful completion
+	if newState == StateFinishedSuccessfully {
+		// Use the stacks captured at start, since the pipeline is empty by now
+		proc.Log().Info("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
+		if len(data.stacksWithDeletes) > 0 {
+			resourcePersisterPID := gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()}
+			_, err := proc.Call(resourcePersisterPID, messages.CleanupEmptyStacks{
+				StackLabels: data.stacksWithDeletes,
+				CommandID:   data.changeset.CommandID,
+			})
+			if err != nil {
+				proc.Log().Error("Failed to send CleanupEmptyStacks message", "error", err, "commandID", data.changeset.CommandID)
+			}
+		}
+	}
+
 	// Only shutdown when we reach a final state (not Canceling)
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateCanceled {
 		// Resume Discovery if we paused it
@@ -168,6 +186,9 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	data.requestedBy = from
 	data.changeset = message.Changeset
+
+	// Capture stacks with delete operations NOW, before the pipeline is modified during execution
+	data.stacksWithDeletes = collectStacksWithDeletes(data.changeset.Pipeline)
 
 	// Ensure the resolve cache is started
 	_, err := proc.Call(
@@ -517,4 +538,26 @@ func changesetHasUserUpdates(changeset Changeset) bool {
 		}
 	}
 	return false
+}
+
+// collectStacksWithDeletes returns a list of unique stack labels that had delete operations
+// in the pipeline, excluding the unmanaged stack.
+func collectStacksWithDeletes(pipeline *ResourceUpdatePipeline) []string {
+	stackSet := make(map[string]struct{})
+	for _, group := range pipeline.ResourceUpdateGroups {
+		for _, update := range group.Updates {
+			if update.Operation == resource_update.OperationDelete || update.Operation == resource_update.OperationReplace {
+				stackLabel := update.StackLabel
+				if stackLabel != "" && stackLabel != constants.UnmanagedStack {
+					stackSet[stackLabel] = struct{}{}
+				}
+			}
+		}
+	}
+
+	stacks := make([]string, 0, len(stackSet))
+	for stack := range stackSet {
+		stacks = append(stacks, stack)
+	}
+	return stacks
 }

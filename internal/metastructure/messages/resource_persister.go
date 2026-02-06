@@ -16,3 +16,10 @@ type LoadResourceResult struct {
 	Resource pkgmodel.Resource
 	Target   pkgmodel.Target
 }
+
+// CleanupEmptyStacks is sent to ResourcePersister after a changeset completes
+// to delete any stacks that no longer have resources.
+type CleanupEmptyStacks struct {
+	StackLabels []string
+	CommandID   string
+}

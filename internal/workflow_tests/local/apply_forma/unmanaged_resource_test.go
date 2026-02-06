@@ -107,7 +107,7 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedResource(t *testing.T) {
 			Resources: []pkgmodel.Resource{unmanagedResource},
 			Targets:   []pkgmodel.Target{{Label: "test-target", Namespace: "FakeAWS"}},
 		}
-		_, err = m.Datastore.StoreStack(unmanagedStack, "discovery-command-1")
+		_, err = m.Datastore.BulkStoreResources(unmanagedStack.Resources, "discovery-command-1")
 		assert.NoError(t, err)
 
 		managedResource := pkgmodel.Resource{

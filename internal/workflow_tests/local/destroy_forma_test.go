@@ -81,9 +81,9 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 				fas[0].State == forma_command.CommandStateSuccess
 		}, 5*time.Second, 100*time.Millisecond)
 
-		applyStack, err := m.Datastore.LoadStack("test-stack1")
+		applyResources, err := m.Datastore.LoadResourcesByStack("test-stack1")
 		assert.NoError(t, err)
-		assert.Len(t, applyStack.Resources, 1)
+		assert.Len(t, applyResources, 1)
 
 		m.DestroyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
@@ -142,8 +142,13 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, destroyForma.ResourceUpdates[0].State)
 
 		assert.Equal(t, forma_command.CommandStateSuccess, destroyForma.State)
-		destroyStack, err := m.Datastore.LoadStack("test-stack1")
+		destroyResources, err := m.Datastore.LoadResourcesByStack("test-stack1")
 		assert.Nil(t, err)
-		assert.Nil(t, destroyStack)
+		assert.Empty(t, destroyResources)
+
+		// Verify the stack was also deleted
+		stack, err := m.Datastore.GetStackByLabel("test-stack1")
+		assert.NoError(t, err)
+		assert.Nil(t, stack, "Stack should be deleted when all resources are destroyed")
 	})
 }

@@ -123,14 +123,29 @@ type Datastore interface {
 	// LoadResourceById retrieves a resource by its KSUID
 	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
 
-	// Stack operations - logical groupings of resources
+	// Resource-by-stack operations - query resources grouped by stack
 
-	// StoreStack persists a stack definition
-	StoreStack(stack *pkgmodel.Forma, commandID string) (string, error)
-	// LoadStack retrieves a stack by its label
-	LoadStack(stackLabel string) (*pkgmodel.Forma, error)
-	// LoadAllStacks returns all stored stacks
-	LoadAllStacks() ([]*pkgmodel.Forma, error)
+	// BulkStoreResources persists multiple resources in a single operation
+	BulkStoreResources(resources []pkgmodel.Resource, commandID string) (string, error)
+	// LoadResourcesByStack retrieves all resources belonging to a stack
+	LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error)
+	// LoadAllResourcesByStack returns all resources grouped by stack label
+	LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error)
+
+	// Stack metadata operations - persisted stack definitions with id, label, description
+
+	// CreateStack persists a new stack entry (returns version string)
+	CreateStack(stack *pkgmodel.Stack, commandID string) (string, error)
+	// UpdateStack modifies an existing stack entry (returns version string)
+	UpdateStack(stack *pkgmodel.Stack, commandID string) (string, error)
+	// DeleteStack tombstones a stack entry (returns version string)
+	DeleteStack(label string, commandID string) (string, error)
+	// GetStackByLabel retrieves stack by its label (latest non-deleted version)
+	GetStackByLabel(label string) (*pkgmodel.Stack, error)
+	// CountResourcesInStack returns the count of non-deleted resources in a stack
+	CountResourcesInStack(label string) (int, error)
+	// ListAllStacks returns all non-deleted stack entries
+	ListAllStacks() ([]*pkgmodel.Stack, error)
 
 	// Target operations - cloud provider configurations
 

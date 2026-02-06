@@ -29,6 +29,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -49,6 +50,7 @@ type MetastructureAPI interface {
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
+	ExtractStacks() ([]*pkgmodel.Stack, error)
 	ForceSync() error
 	ForceDiscovery() error
 	Stats() (*apimodel.Stats, error)
@@ -300,6 +302,12 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
+	// Validate that no empty stacks are being created (applies to both modes)
+	err = checkForEmptyStackCreation(fa)
+	if err != nil {
+		return nil, err
+	}
+
 	if config.Simulate {
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
@@ -348,6 +356,32 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
+	if len(fa.StackUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			stack_update.PersistStackUpdates{
+				StackUpdates: fa.StackUpdates,
+				CommandID:    fa.ID,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist stack updates", "error", err)
+			return nil, fmt.Errorf("failed to persist stack updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted stack updates", "count", len(fa.StackUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			messages.UpdateStackStates{
+				CommandID:    fa.ID,
+				StackUpdates: fa.StackUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with stack states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with stack states: %w", err)
+		}
+	}
 	if len(fa.ResourceUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
 		_, err = m.callActor(
@@ -424,6 +458,24 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			Discoverable: tu.Target.Discoverable,
 			StartTs:      tu.StartTs,
 			ModifiedTs:   tu.ModifiedTs,
+		})
+	}
+
+	for _, su := range fa.StackUpdates {
+		var dur time.Duration = 0
+		if !su.StartTs.IsZero() {
+			dur = su.ModifiedTs.Sub(su.StartTs)
+		}
+
+		apiCommand.StackUpdates = append(apiCommand.StackUpdates, apimodel.StackUpdate{
+			StackLabel:   su.Stack.Label,
+			Operation:    string(su.Operation),
+			State:        string(su.State),
+			Duration:     dur.Milliseconds(),
+			ErrorMessage: su.ErrorMessage,
+			Description:  su.Stack.Description,
+			StartTs:      su.StartTs,
+			ModifiedTs:   su.ModifiedTs,
 		})
 	}
 
@@ -742,6 +794,18 @@ func (m *Metastructure) ExtractTargets(queryStr string) ([]*pkgmodel.Target, err
 	return targets, nil
 }
 
+func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
+	slog.Debug("ExtractStacks called")
+	stacks, err := m.Datastore.ListAllStacks()
+	if err != nil {
+		slog.Debug("Cannot get stacks from datastore", "error", err)
+		return nil, err
+	}
+
+	slog.Debug("ExtractStacks returning", "count", len(stacks))
+	return stacks, nil
+}
+
 func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) error {
 	ksuidSet := make(map[string]struct{})
 	for _, resource := range resources {
@@ -939,26 +1003,45 @@ func formaTouchesStacks(forma *forma_command.FormaCommand, stackLabels []string)
 }
 
 func (m *Metastructure) checkIfPatchCanBeApplied(command *forma_command.FormaCommand) error {
-	knownStacks, err := m.Datastore.LoadAllStacks()
+	resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
 	if err != nil {
 		slog.Error("Failed to load all stacks", "error", err)
 		return fmt.Errorf("failed to load all stacks: %w", err)
 	}
 
 	for _, stackLabel := range command.GetStackLabels() {
-		var knownStack *pkgmodel.Forma
-		for _, s := range knownStacks {
-			if stackLabel == s.SingleStackLabel() {
-				knownStack = s
-				break
-			}
-		}
-
-		if knownStack == nil {
+		if _, exists := resourcesByStack[stackLabel]; !exists {
 			return apimodel.FormaPatchRejectedError{
 				UnknownStacks: []*pkgmodel.Stack{{Label: stackLabel}},
 			}
 		}
+	}
+
+	return nil
+}
+
+// checkForEmptyStackCreation validates that no new stacks are being created without resources.
+// Empty stacks are automatically cleaned up when the last resource is removed, so creating
+// them manually is not allowed.
+func checkForEmptyStackCreation(command *forma_command.FormaCommand) error {
+	// Build a set of stacks that have resources in this command
+	stacksWithResources := make(map[string]bool)
+	for _, ru := range command.ResourceUpdates {
+		stacksWithResources[ru.StackLabel] = true
+	}
+
+	// Check if any stack update is creating a new stack without resources
+	var emptyStacks []string
+	for _, su := range command.StackUpdates {
+		if su.Operation == stack_update.StackOperationCreate {
+			if !stacksWithResources[su.Stack.Label] {
+				emptyStacks = append(emptyStacks, su.Stack.Label)
+			}
+		}
+	}
+
+	if len(emptyStacks) > 0 {
+		return apimodel.FormaEmptyStackRejectedError{EmptyStacks: emptyStacks}
 	}
 
 	return nil
@@ -996,12 +1079,18 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
+	stackUpdates, err := stack_update.NewStackUpdateGenerator(ds).GenerateStackUpdates(forma.Stacks, command)
+	if err != nil {
+		return nil, err
+	}
+
 	return forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
 		command,
 		resourceUpdates,
 		targetUpdates,
+		stackUpdates,
 		clientID,
 	), nil
 }

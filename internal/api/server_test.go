@@ -112,6 +112,10 @@ func (m *FakeMetastructure) ExtractTargets(query string) ([]*pkgmodel.Target, er
 	return nextResponse.Targets, nextResponse.Error
 }
 
+func (m *FakeMetastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
+	return []*pkgmodel.Stack{}, nil
+}
+
 func (m *FakeMetastructure) ForceSync() error {
 	return nil
 }

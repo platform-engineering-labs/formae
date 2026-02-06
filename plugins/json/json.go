@@ -114,11 +114,13 @@ func (j JSON) SerializeForma(forma *model.Forma, options *plugin.SerializeOption
 
 		data = simplifiedResources
 	} else {
-		// Full structure with Targets and Resources
+		// Full structure with Stacks, Targets, and Resources
 		data = struct {
+			Stacks    []model.Stack    `json:"Stacks,omitempty"`
 			Targets   []model.Target   `json:"Targets,omitempty"`
 			Resources []model.Resource `json:"Resources,omitempty"`
 		}{
+			Stacks:    forma.Stacks,
 			Targets:   forma.Targets,
 			Resources: forma.Resources,
 		}

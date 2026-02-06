@@ -17,6 +17,7 @@ import (
 	"github.com/XSAM/otelsql"
 	"github.com/demula/mksuid/v2"
 	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
 	"github.com/mattn/go-sqlite3"
 	"go.opentelemetry.io/otel"
 	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
@@ -959,23 +960,23 @@ func (d DatastoreSQLite) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	return resources, rows.Err()
 }
 
-func (d DatastoreSQLite) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
-	_, span := sqliteTracer.Start(context.Background(), "StoreStack")
+func (d DatastoreSQLite) BulkStoreResources(resources []pkgmodel.Resource, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "BulkStoreResources")
 	defer span.End()
 
 	var ret string
 	var err error
-	for _, resource := range stack.Resources {
+	for _, resource := range resources {
 		if ret, err = d.StoreResource(&resource, commandID); err != nil {
-			slog.Error("Failed to store resource in stack", "error", err, "resourceURI", resource.URI())
+			slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
 			return "", err
 		}
 	}
 	return ret, nil
 }
 
-func (d DatastoreSQLite) LoadAllStacks() ([]*pkgmodel.Forma, error) {
-	_, span := sqliteTracer.Start(context.Background(), "LoadAllStacks")
+func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadAllResourcesByStack")
 	defer span.End()
 
 	query := `
@@ -1020,20 +1021,11 @@ func (d DatastoreSQLite) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 		}
 	}
 
-	// Create Forma objects for each stack
-	var stacks []*pkgmodel.Forma
-	for _, stackResources := range stackResourcesMap {
-		if len(stackResources) > 0 {
-			forma := pkgmodel.FormaFromResources(stackResources)
-			stacks = append(stacks, forma)
-		}
-	}
-
-	return stacks, nil
+	return stackResourcesMap, nil
 }
 
-func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
-	_, span := sqliteTracer.Start(context.Background(), "LoadStack")
+func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadResourcesByStack")
 	defer span.End()
 
 	query := `
@@ -1055,7 +1047,7 @@ func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
 	}
 	defer closeRows(rows)
 
-	var allResources []*pkgmodel.Resource
+	var resources []*pkgmodel.Resource
 	for rows.Next() {
 		var jsonData, ksuid string
 		if err := rows.Scan(&jsonData, &ksuid); err != nil {
@@ -1068,26 +1060,215 @@ func (d DatastoreSQLite) LoadStack(stackLabel string) (*pkgmodel.Forma, error) {
 		}
 
 		resource.Ksuid = ksuid
-		allResources = append(allResources, &resource)
+		resources = append(resources, &resource)
 	}
 
-	// Filter resources that belong to this stack
-	var stackResources []*pkgmodel.Resource
-	for _, resource := range allResources {
-		if resource.Stack == stackLabel {
-			stackResources = append(stackResources, resource)
+	return resources, nil
+}
+
+// Stack metadata operations
+
+func (d DatastoreSQLite) CreateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CreateStack")
+	defer span.End()
+
+	// Check if a non-deleted stack with this label already exists
+	existing, err := d.GetStackByLabel(stack.Label)
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		return "", fmt.Errorf("stack already exists: %s", stack.Label)
+	}
+
+	// Generate UUID for id (stable identifier) and KSUID for version (ordering)
+	id := uuid.New().String()
+	version := mksuid.New().String()
+
+	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(query, id, version, commandID, "create", stack.Label, stack.Description)
+	if err != nil {
+		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastoreSQLite) UpdateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateStack")
+	defer span.End()
+
+	// Get the existing stack to find its id (most recent version of any operation)
+	query := `
+		SELECT id, operation FROM stacks
+		WHERE label = ?
+		ORDER BY version DESC
+		LIMIT 1
+	`
+	row := d.conn.QueryRow(query, stack.Label)
+
+	var id, operation string
+	if err := row.Scan(&id, &operation); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("stack not found: %s", stack.Label)
 		}
+		return "", err
 	}
 
-	// If no resources found for this stack, return nil
-	if len(stackResources) == 0 {
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return "", fmt.Errorf("stack not found: %s", stack.Label)
+	}
+
+	// Insert new version with same id
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := d.conn.Exec(insertQuery, id, version, commandID, "update", stack.Label, stack.Description)
+	if err != nil {
+		slog.Error("Failed to update stack", "error", err, "label", stack.Label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastoreSQLite) DeleteStack(label string, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "DeleteStack")
+	defer span.End()
+
+	// Get the existing stack to find its id (most recent version of any operation)
+	query := `
+		SELECT id, operation FROM stacks
+		WHERE label = ?
+		ORDER BY version DESC
+		LIMIT 1
+	`
+	row := d.conn.QueryRow(query, label)
+
+	var id, operation string
+	if err := row.Scan(&id, &operation); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("stack not found: %s", label)
+		}
+		return "", err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
+		return "", fmt.Errorf("stack not found: %s", label)
+	}
+
+	// Insert tombstone version
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := d.conn.Exec(insertQuery, id, version, commandID, "delete", label, "")
+	if err != nil {
+		slog.Error("Failed to delete stack", "error", err, "label", label)
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetStackByLabel")
+	defer span.End()
+
+	// Get the latest version of the stack, return nil if deleted
+	// We need to check if the MOST RECENT version is a delete operation
+	query := `
+		SELECT id, description, operation FROM stacks
+		WHERE label = ?
+		ORDER BY version DESC
+		LIMIT 1
+	`
+	row := d.conn.QueryRow(query, label)
+
+	var id, description, operation string
+	if err := row.Scan(&id, &description, &operation); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Stack not found, return nil without error
+		}
+		return nil, err
+	}
+
+	// If the most recent version is a delete, the stack doesn't exist
+	if operation == "delete" {
 		return nil, nil
 	}
 
-	// Create a Forma object from the filtered resources
-	forma := pkgmodel.FormaFromResources(stackResources)
+	return &pkgmodel.Stack{
+		ID:          id,
+		Label:       label,
+		Description: description,
+	}, nil
+}
 
-	return forma, nil
+func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CountResourcesInStack")
+	defer span.End()
+
+	// Count only latest version of resources that haven't been deleted
+	query := `
+		SELECT COUNT(*) FROM resources r1
+		WHERE stack = ?
+		AND NOT EXISTS (
+			SELECT 1 FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+		AND operation != ?
+	`
+	row := d.conn.QueryRow(query, label, resource_update.OperationDelete)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
+	_, span := sqliteTracer.Start(context.Background(), "ListAllStackMetadata")
+	defer span.End()
+
+	// Get all stacks at their latest version that aren't deleted
+	// Uses window function to reliably get the most recent version per stack id
+	query := `
+		SELECT id, label, description FROM (
+			SELECT id, label, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM stacks
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+		ORDER BY label
+	`
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stacks []*pkgmodel.Stack
+	for rows.Next() {
+		var id, label, description string
+		if err := rows.Scan(&id, &label, &description); err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return stacks, nil
 }
 
 func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
