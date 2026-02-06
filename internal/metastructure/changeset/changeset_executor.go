@@ -117,7 +117,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 	// Cleanup empty stacks after successful completion
 	if newState == StateFinishedSuccessfully {
 		// Use the stacks captured at start, since the pipeline is empty by now
-		proc.Log().Info("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
+		proc.Log().Debug("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
 			resourcePersisterPID := gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()}
 			_, err := proc.Call(resourcePersisterPID, messages.CleanupEmptyStacks{
