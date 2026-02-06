@@ -381,7 +381,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	// Parse eval output to get expected properties
 	var evalResult InventoryResponse
 	if err := json.Unmarshal([]byte(expectedOutput), &evalResult); err != nil {
-		t.Fatalf("Failed to parse eval output: %v", err)
+		t.Fatalf("Failed to parse eval output: %v\nRaw output:\n%s", err, expectedOutput)
 	}
 	if len(evalResult.Resources) == 0 {
 		t.Fatal("Eval should return at least one resource")
