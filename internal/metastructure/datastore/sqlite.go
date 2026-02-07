@@ -120,6 +120,11 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		return fmt.Errorf("failed to marshal target updates: %w", err)
 	}
 
+	stackUpdatesJSON, err := json.Marshal(fa.StackUpdates)
+	if err != nil {
+		return fmt.Errorf("failed to marshal stack updates: %w", err)
+	}
+
 	// We no longer store the forma JSON - Description and Config are stored as normalized columns
 	// Normalize timestamps to UTC for consistent TEXT-based sorting in SQLite
 	startTsUTC := fa.StartTs.UTC()
@@ -142,12 +147,12 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 	query := fmt.Sprintf(`INSERT OR REPLACE INTO %s
 		(command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		 description_text, description_confirm, config_mode, config_force, config_simulate,
-		 target_updates, modified_ts)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, CommandsTable)
+		 target_updates, stack_updates, modified_ts)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, CommandsTable)
 
 	_, err = d.conn.Exec(query, commandID, startTsUTC, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, descriptionConfirm, fa.Config.Mode, configForce, configSimulate,
-		targetUpdatesJSON, modifiedTsUTC)
+		targetUpdatesJSON, stackUpdatesJSON, modifiedTsUTC)
 	if err != nil {
 		slog.Error("Query", "query", query, "error", err)
 		return err
@@ -172,7 +177,7 @@ const formaCommandWithResourceUpdatesQueryBase = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.modified_ts,
+	fc.target_updates, fc.stack_updates, fc.modified_ts,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -195,6 +200,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var configMode sql.NullString
 	var configForce, configSimulate sql.NullInt64
 	var targetUpdatesJSON []byte
+	var stackUpdatesJSON []byte
 	var fcModifiedTs sql.NullString
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
@@ -210,7 +216,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &command, &fcState, &clientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &fcModifiedTs,
+		&targetUpdatesJSON, &stackUpdatesJSON, &fcModifiedTs,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -263,6 +269,12 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	if len(targetUpdatesJSON) > 0 {
 		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
 			return nil, nil, fmt.Errorf("failed to unmarshal target updates: %w", err)
+		}
+	}
+
+	if len(stackUpdatesJSON) > 0 {
+		if err := json.Unmarshal(stackUpdatesJSON, &cmd.StackUpdates); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal stack updates: %w", err)
 		}
 	}
 
@@ -458,7 +470,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.modified_ts,
+			fc.target_updates, fc.stack_updates, fc.modified_ts,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -625,7 +637,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *StatusQuery) ([]*forma_comman
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.modified_ts,
+			fc.target_updates, fc.stack_updates, fc.modified_ts,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,

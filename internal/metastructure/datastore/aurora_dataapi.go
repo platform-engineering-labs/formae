@@ -27,6 +27,7 @@ import (
 	metaConfig "github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stats"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	metaTypes "github.com/platform-engineering-labs/formae/internal/metastructure/types"
@@ -467,13 +468,18 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		return fmt.Errorf("failed to marshal target updates: %w", err)
 	}
 
+	stackUpdatesJSON, err := json.Marshal(fa.StackUpdates)
+	if err != nil {
+		return fmt.Errorf("failed to marshal stack updates: %w", err)
+	}
+
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, modified_ts)
+		target_updates, stack_updates, modified_ts)
 	VALUES (:command_id, :timestamp::timestamp, :command, :state, :agent_version, :client_id, :agent_id,
 		:description_text, :description_confirm, :config_mode, :config_force, :config_simulate,
-		:target_updates, :modified_ts::timestamp)
+		:target_updates, :stack_updates, :modified_ts::timestamp)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -487,6 +493,7 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	config_force = EXCLUDED.config_force,
 	config_simulate = EXCLUDED.config_simulate,
 	target_updates = EXCLUDED.target_updates,
+	stack_updates = EXCLUDED.stack_updates,
 	modified_ts = EXCLUDED.modified_ts
 	`, CommandsTable)
 
@@ -504,6 +511,7 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		{Name: aws.String("config_force"), Value: &types.FieldMemberBooleanValue{Value: fa.Config.Force}},
 		{Name: aws.String("config_simulate"), Value: &types.FieldMemberBooleanValue{Value: fa.Config.Simulate}},
 		{Name: aws.String("target_updates"), Value: &types.FieldMemberStringValue{Value: string(targetUpdatesJSON)}},
+		{Name: aws.String("stack_updates"), Value: &types.FieldMemberStringValue{Value: string(stackUpdatesJSON)}},
 		{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: fa.ModifiedTs.UTC().Format(time.RFC3339Nano)}},
 	}
 
@@ -530,7 +538,7 @@ func (d *DatastoreAuroraDataAPI) LoadFormaCommands() ([]*forma_command.FormaComm
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, modified_ts
+		target_updates, stack_updates, modified_ts
 	FROM forma_commands
 	ORDER BY timestamp DESC
 	`
@@ -566,7 +574,7 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, modified_ts
+		target_updates, stack_updates, modified_ts
 	FROM forma_commands
 	WHERE command != :sync_command AND state = :state
 	ORDER BY timestamp DESC
@@ -603,7 +611,7 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 
 // parseFormaCommandRecord parses a single forma_commands row into a FormaCommand.
 func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (*forma_command.FormaCommand, error) {
-	if len(record) < 12 {
+	if len(record) < 13 {
 		return nil, fmt.Errorf("unexpected record length: %d", len(record))
 	}
 
@@ -618,11 +626,17 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 	configForce, _ := getBoolField(record[8])
 	configSimulate, _ := getBoolField(record[9])
 	targetUpdatesJSON, _ := getStringField(record[10])
-	modifiedTs, _ := getTimestampField(record[11])
+	stackUpdatesJSON, _ := getStringField(record[11])
+	modifiedTs, _ := getTimestampField(record[12])
 
 	var targetUpdates []target_update.TargetUpdate
 	if targetUpdatesJSON != "" {
 		_ = json.Unmarshal([]byte(targetUpdatesJSON), &targetUpdates)
+	}
+
+	var stackUpdates []stack_update.StackUpdate
+	if stackUpdatesJSON != "" {
+		_ = json.Unmarshal([]byte(stackUpdatesJSON), &stackUpdates)
 	}
 
 	return &forma_command.FormaCommand{
@@ -641,6 +655,7 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 			Simulate: configSimulate,
 		},
 		TargetUpdates: targetUpdates,
+		StackUpdates:  stackUpdates,
 		ModifiedTs:    modifiedTs,
 	}, nil
 }
@@ -670,7 +685,7 @@ func (d *DatastoreAuroraDataAPI) GetFormaCommandByCommandID(commandID string) (*
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, modified_ts
+		target_updates, stack_updates, modified_ts
 	FROM forma_commands
 	WHERE command_id = :command_id
 	`
@@ -708,7 +723,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, modified_ts
+		target_updates, stack_updates, modified_ts
 	FROM forma_commands
 	WHERE client_id = :client_id
 	ORDER BY timestamp DESC
@@ -816,7 +831,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	queryStr := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, modified_ts
+		target_updates, stack_updates, modified_ts
 	FROM forma_commands
 	WHERE 1=1
 	`
