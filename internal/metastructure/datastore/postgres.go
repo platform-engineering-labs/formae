@@ -16,7 +16,6 @@ import (
 	"github.com/demula/mksuid/v2"
 	"github.com/exaring/otelpgx"
 	json "github.com/goccy/go-json"
-	"github.com/google/uuid"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -1127,8 +1126,8 @@ func (d DatastorePostgres) CreateStack(stack *pkgmodel.Stack, commandID string) 
 		return "", fmt.Errorf("stack already exists: %s", stack.Label)
 	}
 
-	// Generate UUID for id (stable identifier) and KSUID for version (ordering)
-	id := uuid.New().String()
+	// Generate KSUIDs for both id (stable identifier) and version (ordering)
+	id := mksuid.New().String()
 	version := mksuid.New().String()
 
 	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES ($1, $2, $3, $4, $5, $6)`
