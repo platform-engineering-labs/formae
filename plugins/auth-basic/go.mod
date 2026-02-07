@@ -8,6 +8,8 @@ replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plug
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
+replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
+
 require (
 	github.com/masterminds/semver v1.5.0
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
@@ -16,7 +18,7 @@ require (
 
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 // indirect
-	ergo.services/ergo v1.999.310 // indirect
+	ergo.services/ergo v1.999.320 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/ebitengine/purego v0.9.1 // indirect
