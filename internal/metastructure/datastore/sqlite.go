@@ -1911,6 +1911,51 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	return &loadedResource, nil
 }
 
+func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "FindResourcesDependingOn")
+	defer span.End()
+
+	// Search for resources that contain a $ref to this KSUID in their properties
+	// The format is: "formae://KSUID#/..." (JSON without spaces after colons)
+	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE data LIKE ?
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version > r1.version
+	)
+	AND operation != ?
+	`
+
+	rows, err := d.conn.Query(query, pattern, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, nil
+}
+
 func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "GetKSUIDByTriplet")
 	defer span.End()

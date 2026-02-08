@@ -364,10 +364,17 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	op := coloredOperation(rc.Operation)
 
 	line := display.Greyf("%s resource %s", op, rc.ResourceLabel)
+	if rc.IsCascade {
+		line = line + display.Gold(" (cascade)")
+	}
 	node := root.Add(line)
 
 	node.Add(fmt.Sprintf(display.Grey("of type ")+"%s", rc.ResourceType))
 	node.Add(formatStackLine(rc.Operation, rc.OldStackName, rc.StackName))
+
+	if rc.IsCascade && rc.CascadeSource != "" {
+		node.Add(display.Grey("because it depends on ") + display.LightBlue(rc.CascadeSource))
+	}
 
 	if rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0 {
 		propertiesNode := node.Add(display.Grey("by doing the following:"))

@@ -1032,6 +1032,51 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	return &resource, nil
 }
 
+func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "FindResourcesDependingOn")
+	defer span.End()
+
+	// Search for resources that contain a $ref to this KSUID in their properties
+	// The format is: "formae://KSUID#/..." (JSON without spaces after colons)
+	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE data LIKE $1
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != $2
+	`
+
+	rows, err := d.pool.Query(ctx, query, pattern, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, nil
+}
+
 func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "LoadResourceByNativeID")
 	defer span.End()

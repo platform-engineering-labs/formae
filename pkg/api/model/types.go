@@ -67,6 +67,8 @@ type ResourceUpdate struct {
 	OldProperties   json.RawMessage   `json:"OldProperties,omitempty"`
 	GroupID         string            `json:"GroupId,omitempty"`
 	ReferenceLabels map[string]string `json:"ReferenceLabels,omitempty"`
+	IsCascade       bool              `json:"IsCascade,omitempty"`
+	CascadeSource   string            `json:"CascadeSource,omitempty"`
 }
 
 const (
