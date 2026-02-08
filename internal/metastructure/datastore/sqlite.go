@@ -80,6 +80,21 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 		return nil, err
 	}
 
+	// Enable WAL mode for better concurrency - allows readers to proceed during writes.
+	// This prevents timeouts when concurrent operations (like CleanupEmptyStacks) need
+	// to read while bulk operations are writing.
+	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		slog.Error("Failed to enable WAL mode", "error", err)
+		return nil, err
+	}
+
+	// Set a busy timeout so SQLite waits instead of immediately failing when locked.
+	// 10 seconds should be more than enough for any operation to complete.
+	if _, err := conn.Exec("PRAGMA busy_timeout=10000"); err != nil {
+		slog.Error("Failed to set busy timeout", "error", err)
+		return nil, err
+	}
+
 	// SQLite doesn't handle concurrent writes well - limit to a single connection
 	// to avoid "database is locked" errors during concurrent operations.
 	conn.SetMaxOpenConns(1)

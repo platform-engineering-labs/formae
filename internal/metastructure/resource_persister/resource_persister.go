@@ -85,11 +85,26 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
 	case messages.CleanupEmptyStacks:
+		// Also handle via Call for backwards compatibility with tests
 		rp.cleanupEmptyStacks(req.StackLabels, req.CommandID)
 		return nil, nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown request type", "type", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)
+	}
+}
+
+// HandleMessage handles asynchronous messages (sent via proc.Send).
+// CleanupEmptyStacks is handled here because using Call in state enter callbacks
+// can timeout due to Ergo framework limitations, even when the work completes quickly.
+func (rp *ResourcePersister) HandleMessage(from gen.PID, message any) error {
+	switch msg := message.(type) {
+	case messages.CleanupEmptyStacks:
+		rp.cleanupEmptyStacks(msg.StackLabels, msg.CommandID)
+		return nil
+	default:
+		rp.Log().Error("ResourcePersister: unknown message type", "type", fmt.Sprintf("%T", message))
+		return nil
 	}
 }
 
