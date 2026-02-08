@@ -93,7 +93,7 @@ func TestSynchronizer_ApplyThenChangeThenSyncStack(t *testing.T) {
 			Resources: []pkgmodel.Resource{
 				{
 					Label:      "1",
-					Type:       "FakeAWS::S3::Bucket",
+					Type:       "FakeAWS::Resource",
 					Properties: json.RawMessage(`{"foo":"01","bar":"02","foobar":"03"}`),
 					Stack:      "test-stack1",
 					Schema: pkgmodel.Schema{
@@ -103,7 +103,7 @@ func TestSynchronizer_ApplyThenChangeThenSyncStack(t *testing.T) {
 				},
 				{
 					Label:      "2",
-					Type:       "FakeAWS::S3::Bucket",
+					Type:       "FakeAWS::Resource",
 					Properties: json.RawMessage(`{"foo":"011","bar":"022","foobar":"033"}`),
 					Stack:      "test-stack1",
 					Schema: pkgmodel.Schema{
@@ -912,5 +912,107 @@ func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
 		assert.True(t, res.Managed, "Managed should be preserved")
 		assert.True(t, res.Schema.Discoverable, "Schema.Discoverable should be preserved")
 		assert.True(t, res.Schema.Extractable, "Schema.Extractable should be preserved")
+	})
+}
+
+// TestSynchronizer_SyncPicksUpNewSchemaFields verifies that when a plugin's schema
+// evolves to include new fields, the synchronizer picks up the fresh schema from the
+// plugin rather than using the stale schema stored in the database. This ensures that
+// new fields returned by Read are classified as regular Properties (not ReadOnlyProperties).
+func TestSynchronizer_SyncPicksUpNewSchemaFields(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		readCalled := false
+
+		// The plugin's full schema for FakeAWS::S3::Bucket includes many fields including
+		// "VersioningConfiguration". We apply a resource with a restricted schema that
+		// does NOT include "VersioningConfiguration". After sync, the fresh schema from
+		// the plugin should be used, so "VersioningConfiguration" ends up in Properties.
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "1",
+						NativeID:        "my-bucket",
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				readCalled = true
+				// Return properties that include a field NOT in the resource's original schema
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"BucketName":"my-bucket","Tags":{"env":"prod"},"VersioningConfiguration":{"Status":"Enabled"}}`,
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+		f := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "my-bucket",
+					Type:       "FakeAWS::S3::Bucket",
+					Properties: json.RawMessage(`{"BucketName":"my-bucket","Tags":{"env":"prod"}}`),
+					Stack:      stack,
+					Schema: pkgmodel.Schema{
+						Identifier: "BucketName",
+						// Intentionally restricted: does NOT include "VersioningConfiguration"
+						Fields: []string{"BucketName", "Tags"},
+					},
+					Target: "test-target",
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "test-target"}},
+		}
+
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		require.NoError(t, err)
+		time.Sleep(1 * time.Second)
+
+		// Force a one-time sync
+		err = m.ForceSync()
+		require.NoError(t, err)
+		time.Sleep(2 * time.Second)
+		require.True(t, readCalled, "Read function should have been called during force sync")
+
+		// Verify the resource after sync
+		resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
+		require.NoError(t, err)
+		resources := resourcesByStack[stack]
+		require.Equal(t, 1, len(resources))
+
+		res := resources[0]
+
+		// Parse Properties
+		var props map[string]any
+		err = json.Unmarshal(res.Properties, &props)
+		require.NoError(t, err)
+
+		// "VersioningConfiguration" should be in Properties (not ReadOnlyProperties)
+		// because the sync used the fresh plugin schema which includes this field
+		assert.Contains(t, props, "VersioningConfiguration",
+			"VersioningConfiguration should be in Properties after sync with fresh schema")
+
+		// Also verify the other fields are still there
+		assert.Contains(t, props, "BucketName")
+		assert.Contains(t, props, "Tags")
+
+		// Verify VersioningConfiguration is NOT in ReadOnlyProperties
+		if res.ReadOnlyProperties != nil {
+			var roProps map[string]any
+			err = json.Unmarshal(res.ReadOnlyProperties, &roProps)
+			require.NoError(t, err)
+			assert.NotContains(t, roProps, "VersioningConfiguration",
+				"VersioningConfiguration should NOT be in ReadOnlyProperties")
+		}
 	})
 }

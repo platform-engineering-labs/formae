@@ -171,6 +171,58 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
+	// Collect unique namespaces from all resources and query plugin availability + schemas upfront
+	namespaceSeen := make(map[string]bool)
+	for _, resources := range resourcesByStack {
+		for _, res := range resources {
+			namespaceSeen[res.Namespace()] = true
+		}
+	}
+
+	type pluginCache struct {
+		available bool
+		schemas   map[string]pkgmodel.Schema
+	}
+	pluginInfoByNamespace := make(map[string]pluginCache)
+	for namespace := range namespaceSeen {
+		response, err := proc.Call(
+			gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
+			messages.GetPluginInfo{Namespace: namespace},
+		)
+		if err != nil {
+			proc.Log().Debug("Failed to check plugin availability, skipping namespace",
+				"namespace", namespace, "error", err)
+			pluginInfoByNamespace[namespace] = pluginCache{available: false}
+			continue
+		}
+
+		pluginInfo, ok := response.(messages.PluginInfoResponse)
+		if !ok || !pluginInfo.Found {
+			proc.Log().Debug("Plugin not available yet, skipping namespace from sync",
+				"namespace", namespace)
+			pluginInfoByNamespace[namespace] = pluginCache{available: false}
+			continue
+		}
+
+		pluginInfoByNamespace[namespace] = pluginCache{
+			available: true,
+			schemas:   pluginInfo.ResourceSchemas,
+		}
+	}
+
+	// Stamp fresh schemas on resources before converting to Forma
+	for _, resources := range resourcesByStack {
+		for _, res := range resources {
+			cache, ok := pluginInfoByNamespace[res.Namespace()]
+			if !ok || !cache.available {
+				continue
+			}
+			if freshSchema, ok := cache.schemas[res.Type]; ok {
+				res.Schema = freshSchema
+			}
+		}
+	}
+
 	var allResourceUpdates []resource_update.ResourceUpdate
 	for stackLabel, resources := range resourcesByStack {
 		// Convert resources to Forma for compatibility with GenerateResourceUpdates
@@ -204,32 +256,17 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	}
 	allResourceUpdates = filteredResourceUpdates
 
-	// Filter out resources whose plugins aren't registered yet
+	// Filter out resources whose plugins aren't registered
 	availableResourceUpdates := make([]resource_update.ResourceUpdate, 0, len(allResourceUpdates))
 	for _, update := range allResourceUpdates {
 		namespace := update.DesiredState.Namespace()
-
-		// Check if plugin is available via PluginCoordinator
-		response, err := proc.Call(
-			gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
-			messages.GetPluginInfo{Namespace: namespace},
-		)
-		if err != nil {
-			proc.Log().Debug("Failed to check plugin availability, skipping resource",
-				"namespace", namespace,
-				"resourceURI", string(update.URI()),
-				"error", err)
-			continue
-		}
-
-		pluginInfo, ok := response.(messages.PluginInfoResponse)
-		if !ok || !pluginInfo.Found {
-			proc.Log().Debug("Plugin not available yet, skipping resource from sync",
+		cache, ok := pluginInfoByNamespace[namespace]
+		if !ok || !cache.available {
+			proc.Log().Debug("Plugin not available, skipping resource from sync",
 				"namespace", namespace,
 				"resourceURI", string(update.URI()))
 			continue
 		}
-
 		availableResourceUpdates = append(availableResourceUpdates, update)
 	}
 	allResourceUpdates = availableResourceUpdates

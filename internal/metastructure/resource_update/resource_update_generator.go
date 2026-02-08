@@ -276,6 +276,10 @@ func generateResourceUpdatesForSync(
 					resource.Label == existingResource.Label &&
 					resource.Type == existingResource.Type {
 
+					// Use the schema from the forma resource (which may have been refreshed
+					// from the plugin) rather than the stale schema stored in the DB
+					existingResource.Schema = resource.Schema
+
 					resourceUpdate, err := NewResourceUpdateForSync(
 						*existingResource,
 						*targetMap[existingResource.Target],
