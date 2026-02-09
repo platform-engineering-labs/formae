@@ -1,0 +1,42 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+import "@aws/s3/bucket.pkl"
+
+local stackName = "ttl-test-stack"
+
+// A simple S3 bucket to test the TTL policy
+local b = new bucket.Bucket {
+    label = "ttl-test-bucket"
+        bucketName = "ttl-test-bucket-manual-testing"
+}
+
+forma {
+    // Stack with a 60-second TTL policy for testing
+    new formae.Stack {
+        label = stackName
+            description = "Test stack with inline TTL policy"
+            policies = new Listing {
+                new formae.TTLPolicy {
+                    ttl = 2.min  // Short TTL for testing - stack expires after 60 seconds
+                        onDependents = "cascade"
+                }
+            }
+    }
+
+    new formae.Target {
+        label = "aws-target-ttl-test"
+            config = new aws.Config {
+                region = "us-east-1"
+            }
+    }
+
+    b
+}

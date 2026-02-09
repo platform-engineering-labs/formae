@@ -81,6 +81,13 @@ type ResourceUpdateRef struct {
 	Operation types.OperationType
 }
 
+// ExpiredStackInfo contains information about a stack whose TTL policy has expired
+type ExpiredStackInfo struct {
+	StackLabel   string
+	StackID      string
+	OnDependents string // "abort" or "cascade"
+}
+
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
@@ -181,6 +188,14 @@ type Datastore interface {
 	BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error)
 	// BatchGetTripletsByKSUIDs converts multiple KSUIDs to triplets in one query
 	BatchGetTripletsByKSUIDs(ksuids []string) (map[string]pkgmodel.TripletKey, error)
+
+	// Policy operations - policies define behaviors attached to stacks
+
+	// CreatePolicy persists a new policy (returns version string)
+	CreatePolicy(policy pkgmodel.Policy, commandID string) (string, error)
+	// GetExpiredStacks returns stacks with TTL policies that have expired,
+	// excluding stacks with active forma commands to avoid inconsistent state
+	GetExpiredStacks() ([]ExpiredStackInfo, error)
 
 	// Close releases database connections
 	Close()

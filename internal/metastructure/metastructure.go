@@ -28,6 +28,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
@@ -389,6 +390,43 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			return nil, fmt.Errorf("failed to update forma command with stack states: %w", err)
 		}
 	}
+
+	if len(fa.PolicyUpdates) > 0 {
+		// Build StackIDMap from persisted stack updates
+		stackIDMap := make(map[string]string)
+		for _, su := range fa.StackUpdates {
+			if su.Stack.ID != "" {
+				stackIDMap[su.Stack.Label] = su.Stack.ID
+			}
+		}
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			policy_update.PersistPolicyUpdates{
+				PolicyUpdates: fa.PolicyUpdates,
+				CommandID:     fa.ID,
+				StackIDMap:    stackIDMap,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist policy updates", "error", err)
+			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			messages.UpdatePolicyStates{
+				CommandID:     fa.ID,
+				PolicyUpdates: fa.PolicyUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with policy states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with policy states: %w", err)
+		}
+	}
+
 	if len(fa.ResourceUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
 		_, err = m.callActor(
@@ -1130,6 +1168,11 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
+	policyUpdates, err := policy_update.NewPolicyUpdateGenerator(ds).GeneratePolicyUpdates(forma, command)
+	if err != nil {
+		return nil, err
+	}
+
 	return forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
@@ -1137,6 +1180,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		resourceUpdates,
 		targetUpdates,
 		stackUpdates,
+		policyUpdates,
 		clientID,
 	), nil
 }

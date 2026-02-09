@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -78,6 +79,12 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return versions, nil
 	case stack_update.PersistStackUpdates:
 		versions, err := rp.persistStackUpdates(req.StackUpdates, req.CommandID)
+		if err != nil {
+			return nil, err
+		}
+		return versions, nil
+	case policy_update.PersistPolicyUpdates:
+		versions, err := rp.persistPolicyUpdates(req.PolicyUpdates, req.CommandID, req.StackIDMap)
 		if err != nil {
 			return nil, err
 		}
@@ -529,6 +536,66 @@ func (rp *ResourcePersister) persistStackUpdate(update *stack_update.StackUpdate
 	update.ModifiedTs = util.TimeNow()
 	slog.Debug("Successfully persisted stack",
 		"label", update.Stack.Label,
+		"operation", update.Operation,
+		"version", version)
+
+	return nil
+}
+
+func (rp *ResourcePersister) persistPolicyUpdates(updates []policy_update.PolicyUpdate, commandID string, stackIDMap map[string]string) ([]string, error) {
+	rp.Log().Debug("Starting to persist policy updates", "count", len(updates), "commandID", commandID)
+
+	versions := make([]string, 0, len(updates))
+	for i := range updates {
+		rp.Log().Debug("Persisting policy update", "index", i, "label", updates[i].Policy.GetLabel())
+		if err := rp.persistPolicyUpdate(&updates[i], commandID, stackIDMap); err != nil {
+			rp.Log().Error("Failed to persist policy update", "index", i, "label", updates[i].Policy.GetLabel(), "error", err)
+			return nil, fmt.Errorf("failed to persist policy update for %s: %w", updates[i].Policy.GetLabel(), err)
+		}
+		rp.Log().Debug("Successfully persisted policy update", "index", i, "label", updates[i].Policy.GetLabel())
+		versions = append(versions, updates[i].Version)
+	}
+
+	rp.Log().Debug("Finished persisting all policy updates", "commandID", commandID)
+	return versions, nil
+}
+
+func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpdate, commandID string, stackIDMap map[string]string) error {
+	// For inline policies, set the stack ID from the map
+	if update.StackLabel != "" {
+		stackID, ok := stackIDMap[update.StackLabel]
+		if !ok {
+			return fmt.Errorf("stack ID not found for stack label %s", update.StackLabel)
+		}
+		update.Policy.SetStackID(stackID)
+	}
+
+	var version string
+	var err error
+
+	switch update.Operation {
+	case policy_update.PolicyOperationCreate:
+		version, err = rp.datastore.CreatePolicy(update.Policy, commandID)
+	default:
+		err = fmt.Errorf("unknown policy operation: %s", update.Operation)
+	}
+
+	if err != nil {
+		update.State = policy_update.PolicyUpdateStateFailed
+		update.ErrorMessage = err.Error()
+		update.ModifiedTs = util.TimeNow()
+		slog.Error("Failed to persist policy",
+			"label", update.Policy.GetLabel(),
+			"operation", update.Operation,
+			"error", err)
+		return err
+	}
+
+	update.Version = version
+	update.State = policy_update.PolicyUpdateStateSuccess
+	update.ModifiedTs = util.TimeNow()
+	slog.Debug("Successfully persisted policy",
+		"label", update.Policy.GetLabel(),
 		"operation", update.Operation,
 		"version", version)
 

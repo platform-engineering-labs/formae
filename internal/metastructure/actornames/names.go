@@ -21,6 +21,7 @@ const (
 	RateLimiter               = gen.Atom("RateLimiter")
 	ResourcePersister         = gen.Atom("ResourcePersister")
 	ResourceUpdaterSupervisor = gen.Atom("ResourceUpdaterSupervisor")
+	StackExpirer              = gen.Atom("StackExpirer")
 	Synchronizer              = gen.Atom("Synchronizer")
 )
 

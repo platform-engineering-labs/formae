@@ -60,3 +60,12 @@ const (
 	StackUpdateStateSuccess    StackUpdateState = "Success"
 	StackUpdateStateFailed     StackUpdateState = "Failed"
 )
+
+// PolicyUpdateState represents the state of a policy update
+type PolicyUpdateState string
+
+const (
+	PolicyUpdateStateNotStarted PolicyUpdateState = "NotStarted"
+	PolicyUpdateStateSuccess    PolicyUpdateState = "Success"
+	PolicyUpdateStateFailed     PolicyUpdateState = "Failed"
+)

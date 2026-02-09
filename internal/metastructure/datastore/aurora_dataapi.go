@@ -2969,6 +2969,9 @@ func (d *DatastoreAuroraDataAPI) CreateStack(stack *pkgmodel.Stack, commandID st
 		return "", err
 	}
 
+	// Set the ID on the stack pointer so callers can access it
+	stack.ID = id
+
 	return version, nil
 }
 
@@ -3188,6 +3191,122 @@ func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	}
 
 	return stacks, nil
+}
+
+// Policy operations
+
+func (d *DatastoreAuroraDataAPI) CreatePolicy(policy pkgmodel.Policy, commandID string) (string, error) {
+	ctx := context.Background()
+
+	// Generate KSUIDs for both id and version
+	id := mksuid.New().String()
+	version := mksuid.New().String()
+
+	// Serialize policy-specific data as JSON
+	var policyData string
+	switch p := policy.(type) {
+	case *pkgmodel.TTLPolicy:
+		data, err := json.Marshal(map[string]any{
+			"TTLSeconds":   p.TTLSeconds,
+			"OnDependents": p.OnDependents,
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal policy data: %w", err)
+		}
+		policyData = string(data)
+	default:
+		return "", fmt.Errorf("unsupported policy type: %T", policy)
+	}
+
+	query := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
+	          VALUES (:id, :version, :command_id, :operation, :label, :policy_type, :stack_id, :policy_data)`
+	params := []types.SqlParameter{
+		{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "create"}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
+		{Name: aws.String("policy_type"), Value: &types.FieldMemberStringValue{Value: policy.GetType()}},
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: policy.GetStackID()}},
+		{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: policyData}},
+	}
+
+	_, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		slog.Error("Failed to create policy", "error", err, "label", policy.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) {
+	ctx := context.Background()
+
+	// Get stacks with TTL policies that have expired:
+	// - Join stacks with policies on stack_id
+	// - Calculate expiration as stack.valid_from + policy.ttl_seconds
+	// - Exclude stacks with active forma commands
+	// - Only consider latest non-deleted versions of both stacks and policies
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, valid_from, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		),
+		latest_policies AS (
+			SELECT id, label, stack_id, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+		)
+		SELECT s.label, s.id, p.policy_data->>'OnDependents'
+		FROM latest_stacks s
+		JOIN latest_policies p ON p.stack_id = s.id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		AND p.policy_type = 'ttl'
+		AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+		AND NOT EXISTS (
+			SELECT 1 FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE ru.stack_label = s.label
+			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		)
+		ORDER BY s.valid_from
+	`
+
+	output, err := d.executeStatement(ctx, query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []ExpiredStackInfo
+	for _, record := range output.Records {
+		if len(record) < 3 {
+			continue
+		}
+
+		stackLabel, err := getStringField(record[0])
+		if err != nil {
+			return nil, err
+		}
+		stackID, err := getStringField(record[1])
+		if err != nil {
+			return nil, err
+		}
+		onDependents, _ := getStringField(record[2])
+		if onDependents == "" {
+			onDependents = "abort" // default
+		}
+
+		result = append(result, ExpiredStackInfo{
+			StackLabel:   stackLabel,
+			StackID:      stackID,
+			OnDependents: onDependents,
+		})
+	}
+
+	return result, nil
 }
 
 func (d *DatastoreAuroraDataAPI) DeleteTarget(targetLabel string) (string, error) {

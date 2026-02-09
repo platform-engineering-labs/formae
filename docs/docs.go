@@ -585,6 +585,16 @@ const docTemplate = `{
                 "Description": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description"
                 },
+                "Policies": {
+                    "description": "Standalone policies",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
                 "Properties": {
                     "type": "object",
                     "additionalProperties": {
@@ -830,6 +840,16 @@ const docTemplate = `{
                 },
                 "Label": {
                     "type": "string"
+                },
+                "Policies": {
+                    "description": "Inline policies from PKL",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
                 }
             }
         },

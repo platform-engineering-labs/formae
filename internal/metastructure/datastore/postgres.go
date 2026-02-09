@@ -1187,6 +1187,9 @@ func (d DatastorePostgres) CreateStack(stack *pkgmodel.Stack, commandID string) 
 		return "", err
 	}
 
+	// Set the ID on the stack pointer so callers can access it
+	stack.ID = id
+
 	return version, nil
 }
 
@@ -1364,6 +1367,107 @@ func (d DatastorePostgres) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	}
 
 	return stacks, nil
+}
+
+// Policy operations
+
+func (d DatastorePostgres) CreatePolicy(policy pkgmodel.Policy, commandID string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "CreatePolicy")
+	defer span.End()
+
+	// Generate KSUIDs for both id and version
+	id := mksuid.New().String()
+	version := mksuid.New().String()
+
+	// Serialize policy-specific data as JSON
+	var policyData []byte
+	var err error
+	switch p := policy.(type) {
+	case *pkgmodel.TTLPolicy:
+		policyData, err = json.Marshal(map[string]any{
+			"TTLSeconds":   p.TTLSeconds,
+			"OnDependents": p.OnDependents,
+		})
+	default:
+		return "", fmt.Errorf("unsupported policy type: %T", policy)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal policy data: %w", err)
+	}
+
+	query := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err = d.pool.Exec(ctx, query, id, version, commandID, "create", policy.GetLabel(), policy.GetType(), policy.GetStackID(), string(policyData))
+	if err != nil {
+		slog.Error("Failed to create policy", "error", err, "label", policy.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {
+	ctx, span := tracer.Start(context.Background(), "GetExpiredStacks")
+	defer span.End()
+
+	// Get stacks with TTL policies that have expired:
+	// - Join stacks with policies on stack_id
+	// - Calculate expiration as stack.valid_from + policy.ttl_seconds
+	// - Exclude stacks with active forma commands
+	// - Only consider latest non-deleted versions of both stacks and policies
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, valid_from, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		),
+		latest_policies AS (
+			SELECT id, label, stack_id, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+		)
+		SELECT s.label, s.id, p.policy_data->>'OnDependents'
+		FROM latest_stacks s
+		JOIN latest_policies p ON p.stack_id = s.id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		AND p.policy_type = 'ttl'
+		AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+		AND NOT EXISTS (
+			SELECT 1 FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE ru.stack_label = s.label
+			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		)
+		ORDER BY s.valid_from
+	`
+
+	rows, err := d.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ExpiredStackInfo
+	for rows.Next() {
+		var info ExpiredStackInfo
+		var onDependents *string
+		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents); err != nil {
+			return nil, err
+		}
+		if onDependents != nil {
+			info.OnDependents = *onDependents
+		} else {
+			info.OnDependents = "abort" // default
+		}
+		result = append(result, info)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {

@@ -77,6 +77,13 @@ definitions:
     properties:
       Description:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description'
+      Policies:
+        description: Standalone policies
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
       Properties:
         additionalProperties:
           $ref: '#/definitions/model.Prop'
@@ -240,6 +247,13 @@ definitions:
         type: string
       Label:
         type: string
+      Policies:
+        description: Inline policies from PKL
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
     type: object
   model.StackUpdate:
     properties:
