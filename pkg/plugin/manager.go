@@ -70,14 +70,6 @@ func detectPluginPaths() []string {
 		}
 	}
 
-	// ./plugins from binary
-	// binary built in source tree
-	if path, ok := pluginDirExists(filepath.Join(filepath.Dir(binPath), "plugins")); ok {
-		return []string{
-			path,
-		}
-	}
-
 	// only needed for development via go run
 	return []string{
 		"./",
