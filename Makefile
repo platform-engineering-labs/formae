@@ -24,7 +24,7 @@ PLUGINS_CACHE := .plugins
 clean:
 	rm -rf .out/
 	rm -rf dist/
-	rm -rf formae
+	rm -rf bin/formae
 	rm -rf ppm
 	rm -rf version.semver
 	rm -rf $(PLUGINS_CACHE)
@@ -40,7 +40,7 @@ build:
 	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
 	go build -C plugins/fake-aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws.so
 	go build -C plugins/tailscale -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale.so
-	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
+	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o bin/formae cmd/formae/main.go
 
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
@@ -92,13 +92,13 @@ build-debug:
 	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
 	go build -C plugins/fake-aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws-debug.so
 	go build -C plugins/tailscale ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale-debug.so
-	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
+	go build ${DEBUG_GOFLAGS} -o bin/formae cmd/formae/main.go
 
 pkg-bin: clean build build-tools build-external-plugins
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
-	cp -Rp ./formae ./dist/pel/formae/bin
+	cp -Rp ./bin/formae ./dist/pel/formae/bin
 	for f in ./plugins/*/*.so; do \
 		if [ -f "$$f" ] && file "$$f" | grep -qE "ELF|Mach-O"; then \
 			cp "$$f" ./dist/pel/formae/plugins/; \
