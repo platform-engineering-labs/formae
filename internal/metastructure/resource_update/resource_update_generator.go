@@ -251,8 +251,8 @@ func findCascadeDeletes(
 			processed[dependent.Ksuid] = true
 
 			// Skip unmanaged (discovered) resources - they have implicit lifecycle
-			// ties to their parents and AWS will handle their deletion automatically.
-			// If they can't be deleted, the user will see an error from AWS explaining why.
+			// ties to their parents and the provider will handle their deletion automatically.
+			// If they can't be deleted, the user will see an error from the provider explaining why.
 			if dependent.Stack == constants.UnmanagedStack {
 				slog.Debug("Skipping cascade delete for unmanaged resource",
 					"resource", dependent.Label,

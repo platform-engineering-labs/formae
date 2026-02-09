@@ -1032,6 +1032,11 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	return &resource, nil
 }
 
+// FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
+// This is essential for referential integrity — without it we risk leaving orphaned resources in an
+// inconsistent state. Currently this requires a full table scan (LIKE on the data column) which will
+// be slow for users with large resource counts.
+// TODO: make the dependency graph discoverable from the schema so we can query edges directly.
 func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "FindResourcesDependingOn")
 	defer span.End()

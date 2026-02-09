@@ -84,10 +84,6 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return versions, nil
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
-	case messages.CleanupEmptyStacks:
-		// Also handle via Call for backwards compatibility with tests
-		rp.cleanupEmptyStacks(req.StackLabels, req.CommandID)
-		return nil, nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown request type", "type", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)
