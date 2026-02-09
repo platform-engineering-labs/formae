@@ -232,10 +232,30 @@ func renderRequiredFieldMissingOnCreateError(errResp *apimodel.RequiredFieldMiss
 func renderTargetTree(label string, target json.RawMessage) (string, error) {
 	var buf strings.Builder
 	root := gtree.NewRoot(label)
+
+	// Handle nil or empty slice (no config provided)
+	if len(target) == 0 {
+		root.Add("<no configuration>")
+		if err := gtree.OutputFromRoot(&buf, root); err != nil {
+			return "", err
+		}
+		return buf.String(), nil
+	}
+
 	var data map[string]any
 	if err := json.Unmarshal(target, &data); err != nil {
 		return "", err
 	}
+
+	// Handle empty object {} (config provided but empty)
+	if len(data) == 0 {
+		root.Add("<empty configuration {}>")
+		if err := gtree.OutputFromRoot(&buf, root); err != nil {
+			return "", err
+		}
+		return buf.String(), nil
+	}
+
 	if err := renderJSONToTree(root, data); err != nil {
 		return "", err
 	}

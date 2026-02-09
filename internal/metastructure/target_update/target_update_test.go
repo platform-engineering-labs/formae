@@ -212,6 +212,40 @@ func TestValidateImmutableFields_Error_ConfigMismatch_NilVsNonNil(t *testing.T) 
 	assert.Equal(t, "config", targetErr.MismatchType)
 }
 
+func TestValidateImmutableFields_Success_NilVsEmptyObject(t *testing.T) {
+	existing := &pkgmodel.Target{
+		Label:     "test-target",
+		Namespace: "production",
+		Config:    nil,
+	}
+
+	new := &pkgmodel.Target{
+		Label:     "test-target",
+		Namespace: "production",
+		Config:    json.RawMessage(`{}`),
+	}
+
+	err := ValidateImmutableFields(existing, new)
+	assert.NoError(t, err) // nil and {} should be treated as equivalent
+}
+
+func TestValidateImmutableFields_Success_EmptyObjectVsNil(t *testing.T) {
+	existing := &pkgmodel.Target{
+		Label:     "test-target",
+		Namespace: "production",
+		Config:    json.RawMessage(`{}`),
+	}
+
+	new := &pkgmodel.Target{
+		Label:     "test-target",
+		Namespace: "production",
+		Config:    nil,
+	}
+
+	err := ValidateImmutableFields(existing, new)
+	assert.NoError(t, err) // {} and nil should be treated as equivalent
+}
+
 func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
 	update := TargetUpdate{
 		Target: pkgmodel.Target{
