@@ -67,6 +67,7 @@ function parseStacks(stacksData: List<Map<String, Any>>): String =
     let (stacksString = stacksData.map((stackData) ->
         let (label = stackData["label"])
         let (camelCaseLabel = toCamelCase(label))
+        let (description = stackData.getOrNull("description") ?? "This was generated")
 
         let (labelLine = if (label == "$unmanaged")
             """
@@ -81,7 +82,7 @@ function parseStacks(stacksData: List<Map<String, Any>>): String =
 
       local \(camelCaseLabel) = new formae.Stack {
         \(labelLine)
-        description = "This was generated"
+        description = "\(description)"
       }
       \(camelCaseLabel)
       """
@@ -141,6 +142,7 @@ function parseResources(resources: List<String>, targetMap: Map<String, String>,
 function generateFormaFile(parsed: json.Value): String =
     let (parsedList = parsed.Resources.toList())
 
+
     let (resourceData = parsedList.map((resource) ->
         let (stack = resource.Stack)
         let (target = resource.Target)
@@ -184,10 +186,19 @@ function generateFormaFile(parsed: json.Value): String =
         List()
     )
 
-    // Extract stack data from resources (assuming stacks come from resource Stack properties)
-    let (stacksFromResources = resourceData.map((r) -> r["stack"]).distinct.map((stackLabel) ->
-        Map("label", stackLabel)
-    ))
+    // Extract stack data from the parsed JSON, falling back to resource stack labels if Stacks is not present
+    let (stacksFromJson = if (parsed.Stacks != null)
+        parsed.Stacks.toList().map((stack) -> Map(
+            "label", stack.Label,
+            "description", stack.Description
+            )
+        )
+    else
+        // Fallback: extract stack labels from resources (for backwards compatibility)
+        resourceData.map((r) -> r["stack"]).distinct.map((stackLabel) ->
+            Map("label", stackLabel)
+        )
+    )
 
     // Create mapping from original labels to camelCase labels for targets
     let (targetLabelMap = targetsFromJson.fold(Map(), (acc: Map<String, String>, targetData) ->
@@ -197,7 +208,7 @@ function generateFormaFile(parsed: json.Value): String =
     ))
 
     // Create mapping from original labels to camelCase labels for stacks
-    let (stackLabelMap = stacksFromResources.fold(Map(), (acc: Map<String, String>, stackData) ->
+    let (stackLabelMap = stacksFromJson.fold(Map(), (acc: Map<String, String>, stackData) ->
         let (originalLabel = stackData["label"])
         let (camelCaseLabel = toCamelCase(originalLabel))
         acc.put(originalLabel, camelCaseLabel)
@@ -228,7 +239,7 @@ function generateFormaFile(parsed: json.Value): String =
     \(importFormatting(imports))\(dependencyImportsSection)
 
     forma {
-        \(parseStacks(stacksFromResources))
+        \(parseStacks(stacksFromJson))
 
         \(parseTargets(targetsFromJson))
 

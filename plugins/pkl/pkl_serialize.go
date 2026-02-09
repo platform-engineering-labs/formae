@@ -16,11 +16,12 @@ import (
 
 	"github.com/apple/pkl-go/pkl"
 	"github.com/platform-engineering-labs/formae/pkg/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 // serializeWithPKL is a generic helper function that can serialize any data structure
-func (p PKL) serializeWithPKL(data any, options *plugin.SerializeOptions) (string, error) {
+func (p PKL) serializeWithPKL(data *pkgmodel.Forma, options *plugin.SerializeOptions) (string, error) {
 	input, err := json.Marshal(data)
 	if err != nil {
 		return "", fmt.Errorf("error marshalling JSON: %w", err)
