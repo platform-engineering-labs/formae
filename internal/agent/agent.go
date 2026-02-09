@@ -57,7 +57,26 @@ func New(cfg *pkgmodel.Config, id string) *Agent {
 func (a *Agent) Start() error {
 	// Check if already running
 	if _, err := os.Stat(getPidFile()); err == nil {
-		return fmt.Errorf("agent appears to be already running (PID file exists)")
+		pidBytes, err := os.ReadFile(getPidFile())
+		if err != nil {
+			return fmt.Errorf("agent appears to be already running (PID file exists but unreadable): %w", err)
+		}
+
+		var pid int
+		if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err != nil {
+			// Corrupt PID file — safe to remove and continue
+			slog.Warn("Removing corrupt PID file", "error", err)
+			os.Remove(getPidFile())
+		} else {
+			process, err := os.FindProcess(pid)
+			if err != nil || process.Signal(syscall.Signal(0)) != nil {
+				// Process not running — stale PID file
+				slog.Warn("Removing stale PID file", "pid", pid)
+				os.Remove(getPidFile())
+			} else {
+				return fmt.Errorf("agent is already running (PID %d)", pid)
+			}
+		}
 	}
 
 	// Set up signal handling
