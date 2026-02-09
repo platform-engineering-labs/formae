@@ -48,6 +48,11 @@ type WrappedTargetResponse struct {
 	Error   error
 }
 
+type WrappedDriftResponse struct {
+	Drift apimodel.ModifiedStack
+	Error error
+}
+
 type FakeMetastructure struct {
 	applyResponses   []WrappedCommandResponse
 	destroyResponses []WrappedCommandResponse
@@ -55,6 +60,7 @@ type FakeMetastructure struct {
 	targetResponses  []WrappedTargetResponse
 	listResponses    []WrappedListResponse
 	cancelResponses  []WrappedCancelResponse
+	driftResponses   []WrappedDriftResponse
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
@@ -122,6 +128,12 @@ func (m *FakeMetastructure) ForceSync() error {
 
 func (m *FakeMetastructure) ForceDiscovery() error {
 	return nil
+}
+
+func (m *FakeMetastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
+	nextResponse := m.driftResponses[0]
+	m.driftResponses = m.driftResponses[1:]
+	return &nextResponse.Drift, nextResponse.Error
 }
 
 func (m *FakeMetastructure) Stats() (*apimodel.Stats, error) {
@@ -957,5 +969,71 @@ func TestServer_ListTargets_WithQuery(t *testing.T) {
 		assert.Len(t, response, 1)
 		assert.Equal(t, "TAILSCALE", response[0].Namespace)
 		assert.True(t, response[0].Discoverable)
+	}
+}
+
+func TestServer_ListDrift_Success(t *testing.T) {
+	meta := &FakeMetastructure{
+		driftResponses: []WrappedDriftResponse{
+			{
+				Drift: apimodel.ModifiedStack{
+					ModifiedResources: []apimodel.ResourceModification{
+						{Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket", Operation: "update"},
+						{Stack: "production", Type: "AWS::DynamoDB::Table", Label: "my-table", Operation: "delete"},
+					},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/production/drift", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("stack")
+	c.SetParamValues("production")
+
+	if assert.NoError(t, server.ListDrift(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response apimodel.ModifiedStack
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Len(t, response.ModifiedResources, 2)
+		assert.Equal(t, "my-bucket", response.ModifiedResources[0].Label)
+	}
+}
+
+func TestServer_ListDrift_NoDrift(t *testing.T) {
+	meta := &FakeMetastructure{
+		driftResponses: []WrappedDriftResponse{
+			{
+				Drift: apimodel.ModifiedStack{
+					ModifiedResources: []apimodel.ResourceModification{},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/production/drift", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("stack")
+	c.SetParamValues("production")
+
+	if assert.NoError(t, server.ListDrift(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response apimodel.ModifiedStack
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Empty(t, response.ModifiedResources)
 	}
 }
