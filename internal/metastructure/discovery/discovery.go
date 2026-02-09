@@ -679,6 +679,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		resourceUpdates,
 		nil, // No target updates on discovery
 		nil, // No stack updates on discovery
+		nil, // No policy updates on discovery
 		"formae",
 	)
 
@@ -707,7 +708,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	proc.Log().Debug("Starting ChangesetExecutor for sync command", "commandID", syncCommand.ID)
 	err = proc.Send(
 		gen.ProcessID{Name: actornames.ChangesetExecutor(syncCommand.ID), Node: proc.Node().Name()},
-		changeset.Start{Changeset: cs},
+		changeset.Start{Changeset: cs, NotifyOnComplete: true},
 	)
 	if err != nil {
 		slog.Error("failed to start ChangesetExecutor for sync command", "command", syncCommand.Command, "forma", syncCommand, "error", err)
