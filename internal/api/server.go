@@ -38,6 +38,7 @@ const (
 	ListResourcesRoute     = BasePath + "/resources"
 	ListTargetsRoute       = BasePath + "/targets"
 	ListStacksRoute        = BasePath + "/stacks"
+	StackDriftRoute        = BasePath + "/stacks/:stack/drift"
 	StatsRoute             = BasePath + "/stats"
 
 	AdminBasePath = BasePath + "/admin"
@@ -177,6 +178,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	// Target listing endpoint
 	e.GET(ListTargetsRoute, s.ListTargets)
 	e.GET(ListStacksRoute, s.ListStacks)
+	e.GET(StackDriftRoute, s.ListDrift)
 
 	// Usage stats endpoint
 	e.GET(StatsRoute, s.Stats)
@@ -403,6 +405,24 @@ func (s *Server) ListStacks(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, stacks)
+}
+
+// @Summary List drift for a stack
+// @Description Retrieves resource modifications (drift) detected since the last reconcile for a given stack.
+// @Tags stacks
+// @Produce json
+// @Param stack path string true "The stack label to check for drift."
+// @Success 200 {object} apimodel.ModifiedStack "OK: Drift report for the stack."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /stacks/{stack}/drift [get]
+func (s *Server) ListDrift(c echo.Context) error {
+	stack := c.Param("stack")
+	drift, err := s.metastructure.ListDrift(stack)
+	if err != nil {
+		return mapError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, drift)
 }
 
 // @Summary Get usage statistics

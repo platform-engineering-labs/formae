@@ -54,6 +54,7 @@ type MetastructureAPI interface {
 	ExtractStacks() ([]*pkgmodel.Stack, error)
 	ForceSync() error
 	ForceDiscovery() error
+	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
 }
 
@@ -871,6 +872,21 @@ func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.R
 	}
 
 	return nil
+}
+
+func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
+	modifications, err := m.Datastore.GetResourceModificationsSinceLastReconcile(stack)
+	if err != nil {
+		slog.Error("Failed to get drift for stack", "stack", stack, "error", err)
+		return nil, fmt.Errorf("failed to get drift for stack %s: %w", stack, err)
+	}
+
+	modifiedResources := make([]apimodel.ResourceModification, 0, len(modifications))
+	for _, modification := range modifications {
+		modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
+	}
+
+	return &apimodel.ModifiedStack{ModifiedResources: modifiedResources}, nil
 }
 
 func (m *Metastructure) ForceSync() error {
