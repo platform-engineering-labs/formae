@@ -576,6 +576,8 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 	switch update.Operation {
 	case policy_update.PolicyOperationCreate:
 		version, err = rp.datastore.CreatePolicy(update.Policy, commandID)
+	case policy_update.PolicyOperationUpdate:
+		version, err = rp.datastore.UpdatePolicy(update.Policy, commandID)
 	default:
 		err = fmt.Errorf("unknown policy operation: %s", update.Operation)
 	}

@@ -16,7 +16,11 @@ CREATE INDEX IF NOT EXISTS idx_policies_stack_id ON policies(stack_id);
 CREATE INDEX IF NOT EXISTS idx_policies_policy_type ON policies(policy_type);
 CREATE INDEX IF NOT EXISTS idx_policies_label ON policies(label);
 
+-- Add policy_updates column to forma_commands table (mirrors stack_updates pattern)
+ALTER TABLE forma_commands ADD COLUMN policy_updates TEXT;
+
 -- +goose Down
+ALTER TABLE forma_commands DROP COLUMN policy_updates;
 DROP INDEX IF EXISTS idx_policies_label;
 DROP INDEX IF EXISTS idx_policies_policy_type;
 DROP INDEX IF EXISTS idx_policies_stack_id;

@@ -15,7 +15,10 @@ import (
 
 // PolicyDatastore defines the datastore operations needed for policy updates
 type PolicyDatastore interface {
-	// Future: GetPolicyByLabel for detecting existing policies
+	// GetStackByLabel retrieves a stack by its label
+	GetStackByLabel(label string) (*pkgmodel.Stack, error)
+	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
+	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
 }
 
 // PolicyUpdateGenerator generates policy updates by comparing desired state with existing state
@@ -30,8 +33,9 @@ func NewPolicyUpdateGenerator(ds PolicyDatastore) *PolicyUpdateGenerator {
 
 // GeneratePolicyUpdates determines what policy changes are needed
 func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, command pkgmodel.Command) ([]PolicyUpdate, error) {
-	// For destroy commands, we don't process policies here.
-	// Policy deletion happens when stacks are deleted.
+	// For destroy commands, we don't generate policy updates here.
+	// Inline policy deletion happens implicitly when their stack is deleted
+	// (via cascade delete in DeleteStack).
 	if command == pkgmodel.CommandDestroy {
 		return nil, nil
 	}
@@ -67,24 +71,53 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 		return nil, fmt.Errorf("failed to parse policies: %w", err)
 	}
 
+	// Look up existing policies for this stack
+	existingPoliciesByType := make(map[string]pkgmodel.Policy)
+	if pg.datastore != nil {
+		existingStack, err := pg.datastore.GetStackByLabel(stack.Label)
+		if err == nil && existingStack != nil {
+			existingPolicies, err := pg.datastore.GetPoliciesForStack(existingStack.ID)
+			if err == nil {
+				for _, p := range existingPolicies {
+					existingPoliciesByType[p.GetType()] = p
+				}
+			}
+		}
+	}
+
 	now := util.TimeNow()
 	var updates []PolicyUpdate
 
 	for _, policy := range policies {
-		// Generate label if not provided (inline policies)
+		var operation PolicyOperation
 		label := policy.GetLabel()
-		if label == "" {
-			label = fmt.Sprintf("%s-%s-%s", stack.Label, policy.GetType(), util.NewID()[:8])
-			// Set the label on the policy
-			if ttl, ok := policy.(*pkgmodel.TTLPolicy); ok {
-				ttl.Label = label
+
+		// Check if a policy of this type already exists for this stack
+		if existing, found := existingPoliciesByType[policy.GetType()]; found {
+			// Reuse the existing label for inline policies
+			if label == "" {
+				label = existing.GetLabel()
+				// Set the label on the policy
+				if ttl, ok := policy.(*pkgmodel.TTLPolicy); ok {
+					ttl.Label = label
+				}
 			}
+			operation = PolicyOperationUpdate
+		} else {
+			// New policy - generate label if not provided
+			if label == "" {
+				label = fmt.Sprintf("%s-%s-%s", stack.Label, policy.GetType(), util.NewID()[:8])
+				// Set the label on the policy
+				if ttl, ok := policy.(*pkgmodel.TTLPolicy); ok {
+					ttl.Label = label
+				}
+			}
+			operation = PolicyOperationCreate
 		}
 
-		// For now, always create (we'll add update detection later)
 		update := PolicyUpdate{
 			Policy:     policy,
-			Operation:  PolicyOperationCreate,
+			Operation:  operation,
 			State:      PolicyUpdateStateNotStarted,
 			StackLabel: stack.Label, // Mark as inline
 			StartTs:    now,

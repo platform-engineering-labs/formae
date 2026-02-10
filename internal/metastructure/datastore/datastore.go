@@ -193,6 +193,12 @@ type Datastore interface {
 
 	// CreatePolicy persists a new policy (returns version string)
 	CreatePolicy(policy pkgmodel.Policy, commandID string) (string, error)
+	// UpdatePolicy updates an existing policy (returns version string)
+	UpdatePolicy(policy pkgmodel.Policy, commandID string) (string, error)
+	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
+	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
+	// DeletePoliciesForStack soft-deletes all policies for a stack (cascade delete)
+	DeletePoliciesForStack(stackID string, commandID string) error
 	// GetExpiredStacks returns stacks with TTL policies that have expired,
 	// excluding stacks with active forma commands to avoid inconsistent state
 	GetExpiredStacks() ([]ExpiredStackInfo, error)

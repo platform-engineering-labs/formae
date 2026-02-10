@@ -25,6 +25,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	metaConfig "github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stats"
@@ -472,13 +473,18 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		return fmt.Errorf("failed to marshal stack updates: %w", err)
 	}
 
+	policyUpdatesJSON, err := json.Marshal(fa.PolicyUpdates)
+	if err != nil {
+		return fmt.Errorf("failed to marshal policy updates: %w", err)
+	}
+
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, modified_ts)
+		target_updates, stack_updates, policy_updates, modified_ts)
 	VALUES (:command_id, :timestamp::timestamp, :command, :state, :agent_version, :client_id, :agent_id,
 		:description_text, :description_confirm, :config_mode, :config_force, :config_simulate,
-		:target_updates, :stack_updates, :modified_ts::timestamp)
+		:target_updates, :stack_updates, :policy_updates, :modified_ts::timestamp)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -493,6 +499,7 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	config_simulate = EXCLUDED.config_simulate,
 	target_updates = EXCLUDED.target_updates,
 	stack_updates = EXCLUDED.stack_updates,
+	policy_updates = EXCLUDED.policy_updates,
 	modified_ts = EXCLUDED.modified_ts
 	`, CommandsTable)
 
@@ -511,6 +518,7 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		{Name: aws.String("config_simulate"), Value: &types.FieldMemberBooleanValue{Value: fa.Config.Simulate}},
 		{Name: aws.String("target_updates"), Value: &types.FieldMemberStringValue{Value: string(targetUpdatesJSON)}},
 		{Name: aws.String("stack_updates"), Value: &types.FieldMemberStringValue{Value: string(stackUpdatesJSON)}},
+		{Name: aws.String("policy_updates"), Value: &types.FieldMemberStringValue{Value: string(policyUpdatesJSON)}},
 		{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: fa.ModifiedTs.UTC().Format(time.RFC3339Nano)}},
 	}
 
@@ -537,7 +545,7 @@ func (d *DatastoreAuroraDataAPI) LoadFormaCommands() ([]*forma_command.FormaComm
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, modified_ts
+		target_updates, stack_updates, policy_updates, modified_ts
 	FROM forma_commands
 	ORDER BY timestamp DESC
 	`
@@ -573,7 +581,7 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, modified_ts
+		target_updates, stack_updates, policy_updates, modified_ts
 	FROM forma_commands
 	WHERE command != :sync_command AND state = :state
 	ORDER BY timestamp DESC
@@ -626,7 +634,8 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 	configSimulate, _ := getBoolField(record[9])
 	targetUpdatesJSON, _ := getStringField(record[10])
 	stackUpdatesJSON, _ := getStringField(record[11])
-	modifiedTs, _ := getTimestampField(record[12])
+	policyUpdatesJSON, _ := getStringField(record[12])
+	modifiedTs, _ := getTimestampField(record[13])
 
 	var targetUpdates []target_update.TargetUpdate
 	if targetUpdatesJSON != "" {
@@ -636,6 +645,11 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 	var stackUpdates []stack_update.StackUpdate
 	if stackUpdatesJSON != "" {
 		_ = json.Unmarshal([]byte(stackUpdatesJSON), &stackUpdates)
+	}
+
+	var policyUpdates []policy_update.PolicyUpdate
+	if policyUpdatesJSON != "" {
+		_ = json.Unmarshal([]byte(policyUpdatesJSON), &policyUpdates)
 	}
 
 	return &forma_command.FormaCommand{
@@ -655,6 +669,7 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 		},
 		TargetUpdates: targetUpdates,
 		StackUpdates:  stackUpdates,
+		PolicyUpdates: policyUpdates,
 		ModifiedTs:    modifiedTs,
 	}, nil
 }
@@ -684,7 +699,7 @@ func (d *DatastoreAuroraDataAPI) GetFormaCommandByCommandID(commandID string) (*
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, modified_ts
+		target_updates, stack_updates, policy_updates, modified_ts
 	FROM forma_commands
 	WHERE command_id = :command_id
 	`
@@ -722,7 +737,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, modified_ts
+		target_updates, stack_updates, policy_updates, modified_ts
 	FROM forma_commands
 	WHERE client_id = :client_id
 	ORDER BY timestamp DESC
@@ -830,7 +845,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	queryStr := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, modified_ts
+		target_updates, stack_updates, policy_updates, modified_ts
 	FROM forma_commands
 	WHERE 1=1
 	`
@@ -2949,8 +2964,12 @@ func (d *DatastoreAuroraDataAPI) CreateStack(stack *pkgmodel.Stack, commandID st
 		return "", fmt.Errorf("stack already exists: %s", stack.Label)
 	}
 
-	// Generate KSUIDs for both id (stable identifier) and version (ordering)
-	id := mksuid.New().String()
+	// Use pre-generated ID if available, otherwise generate one
+	id := stack.ID
+	if id == "" {
+		id = mksuid.New().String()
+		stack.ID = id
+	}
 	version := mksuid.New().String()
 
 	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (:id, :version, :command_id, :operation, :label, :description)`
@@ -2968,9 +2987,6 @@ func (d *DatastoreAuroraDataAPI) CreateStack(stack *pkgmodel.Stack, commandID st
 		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
 		return "", err
 	}
-
-	// Set the ID on the stack pointer so callers can access it
-	stack.ID = id
 
 	return version, nil
 }
@@ -3070,6 +3086,12 @@ func (d *DatastoreAuroraDataAPI) DeleteStack(label string, commandID string) (st
 	// If the most recent version is a delete, the stack doesn't exist
 	if operation == "delete" {
 		return "", fmt.Errorf("stack not found: %s", label)
+	}
+
+	// Cascade delete: delete all inline policies associated with this stack
+	if err := d.DeletePoliciesForStack(id, commandID); err != nil {
+		slog.Warn("Failed to delete policies for stack", "error", err, "stackID", id, "label", label)
+		// Continue with stack deletion even if policy deletion fails
 	}
 
 	// Insert tombstone version
@@ -3238,6 +3260,198 @@ func (d *DatastoreAuroraDataAPI) CreatePolicy(policy pkgmodel.Policy, commandID 
 	}
 
 	return version, nil
+}
+
+func (d *DatastoreAuroraDataAPI) UpdatePolicy(policy pkgmodel.Policy, commandID string) (string, error) {
+	ctx := context.Background()
+
+	// Get the existing policy to find its id
+	selectQuery := `
+		SELECT id FROM policies
+		WHERE label = :label AND stack_id = :stack_id
+		ORDER BY version DESC
+		LIMIT 1
+	`
+	selectParams := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: policy.GetStackID()}},
+	}
+
+	result, err := d.executeStatement(ctx, selectQuery, selectParams)
+	if err != nil {
+		return "", fmt.Errorf("failed to find existing policy: %w", err)
+	}
+	if len(result.Records) == 0 {
+		return "", fmt.Errorf("policy not found: %s", policy.GetLabel())
+	}
+
+	id, err := getStringField(result.Records[0][0])
+	if err != nil {
+		return "", fmt.Errorf("failed to get policy id: %w", err)
+	}
+
+	// Generate new version
+	version := mksuid.New().String()
+
+	// Serialize policy-specific data as JSON
+	var policyData string
+	switch p := policy.(type) {
+	case *pkgmodel.TTLPolicy:
+		data, err := json.Marshal(map[string]any{
+			"TTLSeconds":   p.TTLSeconds,
+			"OnDependents": p.OnDependents,
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal policy data: %w", err)
+		}
+		policyData = string(data)
+	default:
+		return "", fmt.Errorf("unsupported policy type: %T", policy)
+	}
+
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
+	                VALUES (:id, :version, :command_id, :operation, :label, :policy_type, :stack_id, :policy_data)`
+	insertParams := []types.SqlParameter{
+		{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "update"}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
+		{Name: aws.String("policy_type"), Value: &types.FieldMemberStringValue{Value: policy.GetType()}},
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: policy.GetStackID()}},
+		{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: policyData}},
+	}
+
+	_, err = d.executeStatement(ctx, insertQuery, insertParams)
+	if err != nil {
+		slog.Error("Failed to update policy", "error", err, "label", policy.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d *DatastoreAuroraDataAPI) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	ctx := context.Background()
+
+	// Get the latest non-deleted version of each policy for the given stack
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = :stack_id
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+	}
+
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var policies []pkgmodel.Policy
+	for _, record := range result.Records {
+		if len(record) < 3 {
+			continue
+		}
+
+		label, _ := getStringField(record[0])
+		policyType, _ := getStringField(record[1])
+		policyDataStr, _ := getStringField(record[2])
+
+		policy, err := deserializePolicyAurora(label, policyType, policyDataStr, stackID)
+		if err != nil {
+			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	return policies, nil
+}
+
+func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandID string) error {
+	ctx := context.Background()
+
+	// Get all non-deleted policies for this stack and insert tombstone versions
+	policies, err := d.GetPoliciesForStack(stackID)
+	if err != nil {
+		return fmt.Errorf("failed to get policies for stack: %w", err)
+	}
+
+	for _, policy := range policies {
+		// Get the existing policy ID
+		query := `
+			SELECT id FROM policies
+			WHERE label = :label AND stack_id = :stack_id
+			ORDER BY version COLLATE "C" DESC
+			LIMIT 1
+		`
+		params := []types.SqlParameter{
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
+			{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+		}
+
+		result, err := d.executeStatement(ctx, query, params)
+		if err != nil || len(result.Records) == 0 {
+			slog.Warn("Failed to get policy ID for deletion", "error", err, "label", policy.GetLabel())
+			continue
+		}
+
+		id, _ := getStringField(result.Records[0][0])
+
+		// Insert tombstone version
+		version := mksuid.New().String()
+		insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES (:id, :version, :command_id, :operation, :label, :policy_type, :stack_id, :policy_data)`
+		insertParams := []types.SqlParameter{
+			{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+			{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+			{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+			{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "delete"}},
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
+			{Name: aws.String("policy_type"), Value: &types.FieldMemberStringValue{Value: policy.GetType()}},
+			{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+			{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: "{}"}},
+		}
+
+		_, err = d.executeStatement(ctx, insertQuery, insertParams)
+		if err != nil {
+			slog.Error("Failed to delete policy", "error", err, "label", policy.GetLabel())
+			continue
+		}
+		slog.Debug("Deleted policy as part of stack deletion", "label", policy.GetLabel(), "stackID", stackID)
+	}
+
+	return nil
+}
+
+// deserializePolicyAurora creates a Policy from stored data (Aurora Data API version)
+func deserializePolicyAurora(label, policyType, policyDataStr, stackID string) (pkgmodel.Policy, error) {
+	switch policyType {
+	case "ttl":
+		var data struct {
+			TTLSeconds   int64  `json:"TTLSeconds"`
+			OnDependents string `json:"OnDependents"`
+		}
+		if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal TTL policy data: %w", err)
+		}
+		return &pkgmodel.TTLPolicy{
+			Type:         "ttl",
+			Label:        label,
+			TTLSeconds:   data.TTLSeconds,
+			OnDependents: data.OnDependents,
+			StackID:      stackID,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown policy type: %s", policyType)
+	}
 }
 
 func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) {

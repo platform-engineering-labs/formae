@@ -173,12 +173,17 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 		return fmt.Errorf("failed to marshal stack updates: %w", err)
 	}
 
+	policyUpdatesJSON, err := json.Marshal(fa.PolicyUpdates)
+	if err != nil {
+		return fmt.Errorf("failed to marshal policy updates: %w", err)
+	}
+
 	// We no longer store the forma JSON - Description and Config are stored as normalized columns
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, modified_ts)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		target_updates, stack_updates, policy_updates, modified_ts)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -193,12 +198,13 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	config_simulate = EXCLUDED.config_simulate,
 	target_updates = EXCLUDED.target_updates,
 	stack_updates = EXCLUDED.stack_updates,
+	policy_updates = EXCLUDED.policy_updates,
 	modified_ts = EXCLUDED.modified_ts
 	`, CommandsTable)
 
 	_, err = d.pool.Exec(ctx, query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
-		targetUpdatesJSON, stackUpdatesJSON, fa.ModifiedTs.UTC())
+		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, fa.ModifiedTs.UTC())
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
 		return err
@@ -222,7 +228,7 @@ const formaCommandWithResourceUpdatesQueryBasePostgres = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.stack_updates, fc.modified_ts,
+	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -246,6 +252,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var configForce, configSimulate *bool
 	var targetUpdatesJSON []byte
 	var stackUpdatesJSON []byte
+	var policyUpdatesJSON []byte
 	var fcModifiedTs *time.Time
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
@@ -261,7 +268,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &stackUpdatesJSON, &fcModifiedTs,
+		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -308,6 +315,12 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	if len(stackUpdatesJSON) > 0 {
 		if err := json.Unmarshal(stackUpdatesJSON, &cmd.StackUpdates); err != nil {
 			return nil, nil, fmt.Errorf("failed to unmarshal stack updates: %w", err)
+		}
+	}
+
+	if len(policyUpdatesJSON) > 0 {
+		if err := json.Unmarshal(policyUpdatesJSON, &cmd.PolicyUpdates); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal policy updates: %w", err)
 		}
 	}
 
@@ -572,7 +585,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_comm
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.stack_updates, fc.modified_ts,
+			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -1176,8 +1189,12 @@ func (d DatastorePostgres) CreateStack(stack *pkgmodel.Stack, commandID string) 
 		return "", fmt.Errorf("stack already exists: %s", stack.Label)
 	}
 
-	// Generate KSUIDs for both id (stable identifier) and version (ordering)
-	id := mksuid.New().String()
+	// Use pre-generated ID if available, otherwise generate one
+	id := stack.ID
+	if id == "" {
+		id = mksuid.New().String()
+		stack.ID = id
+	}
 	version := mksuid.New().String()
 
 	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES ($1, $2, $3, $4, $5, $6)`
@@ -1186,9 +1203,6 @@ func (d DatastorePostgres) CreateStack(stack *pkgmodel.Stack, commandID string) 
 		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
 		return "", err
 	}
-
-	// Set the ID on the stack pointer so callers can access it
-	stack.ID = id
 
 	return version, nil
 }
@@ -1257,13 +1271,19 @@ func (d DatastorePostgres) DeleteStack(label string, commandID string) (string, 
 		return "", fmt.Errorf("stack not found: %s", label)
 	}
 
+	// Cascade delete: delete all inline policies associated with this stack
+	if err := d.DeletePoliciesForStack(id, commandID); err != nil {
+		slog.Warn("Failed to delete policies for stack", "error", err, "stackID", id, "label", label)
+		// Continue with stack deletion even if policy deletion fails
+	}
+
 	// Insert tombstone version
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err := d.pool.Exec(ctx, insertQuery, id, version, commandID, "delete", label, "")
-	if err != nil {
-		slog.Error("Failed to delete stack", "error", err, "label", label)
-		return "", err
+	_, execErr := d.pool.Exec(ctx, insertQuery, id, version, commandID, "delete", label, "")
+	if execErr != nil {
+		slog.Error("Failed to delete stack", "error", execErr, "label", label)
+		return "", execErr
 	}
 
 	return version, nil
@@ -1404,6 +1424,159 @@ func (d DatastorePostgres) CreatePolicy(policy pkgmodel.Policy, commandID string
 	}
 
 	return version, nil
+}
+
+func (d DatastorePostgres) UpdatePolicy(policy pkgmodel.Policy, commandID string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "UpdatePolicy")
+	defer span.End()
+
+	// Get the existing policy to find its id
+	query := `
+		SELECT id FROM policies
+		WHERE label = $1 AND stack_id = $2
+		ORDER BY version DESC
+		LIMIT 1
+	`
+	var id string
+	err := d.pool.QueryRow(ctx, query, policy.GetLabel(), policy.GetStackID()).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("failed to find existing policy: %w", err)
+	}
+
+	// Generate new version
+	version := mksuid.New().String()
+
+	// Serialize policy-specific data as JSON
+	var policyData []byte
+	switch p := policy.(type) {
+	case *pkgmodel.TTLPolicy:
+		policyData, err = json.Marshal(map[string]any{
+			"TTLSeconds":   p.TTLSeconds,
+			"OnDependents": p.OnDependents,
+		})
+	default:
+		return "", fmt.Errorf("unsupported policy type: %T", policy)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal policy data: %w", err)
+	}
+
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
+	                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err = d.pool.Exec(ctx, insertQuery, id, version, commandID, "update", policy.GetLabel(), policy.GetType(), policy.GetStackID(), string(policyData))
+	if err != nil {
+		slog.Error("Failed to update policy", "error", err, "label", policy.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+func (d DatastorePostgres) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	ctx, span := tracer.Start(context.Background(), "GetPoliciesForStack")
+	defer span.End()
+
+	// Get the latest non-deleted version of each policy for the given stack
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = $1
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+
+	rows, err := d.pool.Query(ctx, query, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var label, policyType, policyDataStr string
+		if err := rows.Scan(&label, &policyType, &policyDataStr); err != nil {
+			return nil, err
+		}
+
+		policy, err := deserializePolicyPostgres(label, policyType, policyDataStr, stackID)
+		if err != nil {
+			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return policies, nil
+}
+
+func (d DatastorePostgres) DeletePoliciesForStack(stackID string, commandID string) error {
+	ctx, span := tracer.Start(context.Background(), "DeletePoliciesForStack")
+	defer span.End()
+
+	// Get all non-deleted policies for this stack and insert tombstone versions
+	policies, err := d.GetPoliciesForStack(stackID)
+	if err != nil {
+		return fmt.Errorf("failed to get policies for stack: %w", err)
+	}
+
+	for _, policy := range policies {
+		// Get the existing policy ID
+		query := `
+			SELECT id FROM policies
+			WHERE label = $1 AND stack_id = $2
+			ORDER BY version COLLATE "C" DESC
+			LIMIT 1
+		`
+		var id string
+		err := d.pool.QueryRow(ctx, query, policy.GetLabel(), stackID).Scan(&id)
+		if err != nil {
+			slog.Warn("Failed to get policy ID for deletion", "error", err, "label", policy.GetLabel())
+			continue
+		}
+
+		// Insert tombstone version
+		version := mksuid.New().String()
+		insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		_, err = d.pool.Exec(ctx, insertQuery, id, version, commandID, "delete", policy.GetLabel(), policy.GetType(), stackID, "{}")
+		if err != nil {
+			slog.Error("Failed to delete policy", "error", err, "label", policy.GetLabel())
+			continue
+		}
+		slog.Debug("Deleted policy as part of stack deletion", "label", policy.GetLabel(), "stackID", stackID)
+	}
+
+	return nil
+}
+
+// deserializePolicyPostgres creates a Policy from stored data (Postgres version)
+func deserializePolicyPostgres(label, policyType, policyDataStr, stackID string) (pkgmodel.Policy, error) {
+	switch policyType {
+	case "ttl":
+		var data struct {
+			TTLSeconds   int64  `json:"TTLSeconds"`
+			OnDependents string `json:"OnDependents"`
+		}
+		if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal TTL policy data: %w", err)
+		}
+		return &pkgmodel.TTLPolicy{
+			Type:         "ttl",
+			Label:        label,
+			TTLSeconds:   data.TTLSeconds,
+			OnDependents: data.OnDependents,
+			StackID:      stackID,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown policy type: %s", policyType)
+	}
 }
 
 func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {

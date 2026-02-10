@@ -5,6 +5,7 @@
 package policy_update
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
@@ -32,15 +33,94 @@ type PolicyUpdateState = types.PolicyUpdateState
 
 // PolicyUpdate represents a policy change operation
 type PolicyUpdate struct {
-	Policy         pkgmodel.Policy
-	ExistingPolicy pkgmodel.Policy
-	Operation      PolicyOperation
-	State          PolicyUpdateState
-	StackLabel     string // For inline policies - the stack this policy belongs to
-	StartTs        time.Time
-	ModifiedTs     time.Time
-	Version        string
-	ErrorMessage   string
+	Policy         pkgmodel.Policy   `json:"-"`
+	ExistingPolicy pkgmodel.Policy   `json:"-"`
+	Operation      PolicyOperation   `json:"Operation"`
+	State          PolicyUpdateState `json:"State"`
+	StackLabel     string            `json:"StackLabel"` // For inline policies - the stack this policy belongs to
+	StartTs        time.Time         `json:"StartTs"`
+	ModifiedTs     time.Time         `json:"ModifiedTs"`
+	Version        string            `json:"Version"`
+	ErrorMessage   string            `json:"ErrorMessage,omitempty"`
+}
+
+// policyUpdateJSON is a helper struct for JSON marshaling/unmarshaling
+type policyUpdateJSON struct {
+	Policy         json.RawMessage   `json:"Policy,omitempty"`
+	ExistingPolicy json.RawMessage   `json:"ExistingPolicy,omitempty"`
+	Operation      PolicyOperation   `json:"Operation"`
+	State          PolicyUpdateState `json:"State"`
+	StackLabel     string            `json:"StackLabel"`
+	StartTs        time.Time         `json:"StartTs"`
+	ModifiedTs     time.Time         `json:"ModifiedTs"`
+	Version        string            `json:"Version"`
+	ErrorMessage   string            `json:"ErrorMessage,omitempty"`
+}
+
+// MarshalJSON implements custom JSON marshaling for PolicyUpdate
+func (pu PolicyUpdate) MarshalJSON() ([]byte, error) {
+	var policyJSON, existingPolicyJSON json.RawMessage
+	var err error
+
+	if pu.Policy != nil {
+		policyJSON, err = json.Marshal(pu.Policy)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if pu.ExistingPolicy != nil {
+		existingPolicyJSON, err = json.Marshal(pu.ExistingPolicy)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return json.Marshal(policyUpdateJSON{
+		Policy:         policyJSON,
+		ExistingPolicy: existingPolicyJSON,
+		Operation:      pu.Operation,
+		State:          pu.State,
+		StackLabel:     pu.StackLabel,
+		StartTs:        pu.StartTs,
+		ModifiedTs:     pu.ModifiedTs,
+		Version:        pu.Version,
+		ErrorMessage:   pu.ErrorMessage,
+	})
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for PolicyUpdate
+func (pu *PolicyUpdate) UnmarshalJSON(data []byte) error {
+	var helper policyUpdateJSON
+	if err := json.Unmarshal(data, &helper); err != nil {
+		return err
+	}
+
+	pu.Operation = helper.Operation
+	pu.State = helper.State
+	pu.StackLabel = helper.StackLabel
+	pu.StartTs = helper.StartTs
+	pu.ModifiedTs = helper.ModifiedTs
+	pu.Version = helper.Version
+	pu.ErrorMessage = helper.ErrorMessage
+
+	if len(helper.Policy) > 0 {
+		policy, err := pkgmodel.ParsePolicy(helper.Policy)
+		if err != nil {
+			return err
+		}
+		pu.Policy = policy
+	}
+
+	if len(helper.ExistingPolicy) > 0 {
+		existingPolicy, err := pkgmodel.ParsePolicy(helper.ExistingPolicy)
+		if err != nil {
+			return err
+		}
+		pu.ExistingPolicy = existingPolicy
+	}
+
+	return nil
 }
 
 // PersistPolicyUpdates is a message to persist policy updates

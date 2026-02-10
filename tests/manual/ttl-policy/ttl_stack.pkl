@@ -8,35 +8,37 @@ amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
 
 import "@aws/aws.pkl"
-import "@aws/s3/bucket.pkl"
+import "@aws/logs/loggroup.pkl"
 
-local stackName = "ttl-test-stack"
+// Stack with a 5-minute TTL policy for testing
+local ttlStack = new formae.Stack {
+    label = "ttl-test-stack"
+    description = "Test stack with inline TTL policy"
+    policies = new Listing {
+        new formae.TTLPolicy {
+            ttl = 2.min  // Short TTL for testing
+            onDependents = "cascade"
+        }
+    }
+}
 
-// A simple S3 bucket to test the TTL policy
-local b = new bucket.Bucket {
-    label = "ttl-test-bucket"
-        bucketName = "ttl-test-bucket-manual-testing"
+local ttlTarget = new formae.Target {
+    label = "aws-target-ttl-test"
+    config = new aws.Config {
+        region = "us-east-1"
+    }
 }
 
 forma {
-    // Stack with a 60-second TTL policy for testing
-    new formae.Stack {
-        label = stackName
-            description = "Test stack with inline TTL policy"
-            policies = new Listing {
-                new formae.TTLPolicy {
-                    ttl = 2.min  // Short TTL for testing - stack expires after 60 seconds
-                        onDependents = "cascade"
-                }
-            }
-    }
+    ttlStack
+    ttlTarget
 
-    new formae.Target {
-        label = "aws-target-ttl-test"
-            config = new aws.Config {
-                region = "us-east-1"
-            }
+    // A simple LogGroup to test the TTL policy
+    new loggroup.LogGroup {
+        label = "ttl-test-loggroup"
+        stack = ttlStack.res
+        target = ttlTarget.res
+        logGroupName = "/formae-ttl-test/logs"
+        retentionInDays = 7
     }
-
-    b
 }
