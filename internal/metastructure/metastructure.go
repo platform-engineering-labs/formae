@@ -400,6 +400,19 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			}
 		}
 
+		// For inline policies whose stacks aren't in the map (existing stacks with no changes),
+		// look up the stack ID from the database
+		for _, pu := range fa.PolicyUpdates {
+			if pu.StackLabel != "" {
+				if _, ok := stackIDMap[pu.StackLabel]; !ok {
+					stack, err := m.Datastore.GetStackByLabel(pu.StackLabel)
+					if err == nil && stack != nil {
+						stackIDMap[pu.StackLabel] = stack.ID
+					}
+				}
+			}
+		}
+
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
 			policy_update.PersistPolicyUpdates{
@@ -523,6 +536,25 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			Description:  su.Stack.Description,
 			StartTs:      su.StartTs,
 			ModifiedTs:   su.ModifiedTs,
+		})
+	}
+
+	for _, pu := range fa.PolicyUpdates {
+		var dur time.Duration = 0
+		if !pu.StartTs.IsZero() {
+			dur = pu.ModifiedTs.Sub(pu.StartTs)
+		}
+
+		apiCommand.PolicyUpdates = append(apiCommand.PolicyUpdates, apimodel.PolicyUpdate{
+			PolicyLabel:  pu.Policy.GetLabel(),
+			PolicyType:   pu.Policy.GetType(),
+			StackLabel:   pu.StackLabel,
+			Operation:    string(pu.Operation),
+			State:        string(pu.State),
+			Duration:     dur.Milliseconds(),
+			ErrorMessage: pu.ErrorMessage,
+			StartTs:      pu.StartTs,
+			ModifiedTs:   pu.ModifiedTs,
 		})
 	}
 
@@ -869,6 +901,24 @@ func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 	if err != nil {
 		slog.Debug("Cannot get stacks from datastore", "error", err)
 		return nil, err
+	}
+
+	// Populate policies for each stack
+	for _, stack := range stacks {
+		policies, err := m.Datastore.GetPoliciesForStack(stack.ID)
+		if err != nil {
+			slog.Warn("Failed to get policies for stack", "stack", stack.Label, "error", err)
+			continue
+		}
+		// Convert policies to json.RawMessage for the Stack.Policies field
+		for _, policy := range policies {
+			policyJSON, err := json.Marshal(policy)
+			if err != nil {
+				slog.Warn("Failed to marshal policy", "policy", policy.GetLabel(), "error", err)
+				continue
+			}
+			stack.Policies = append(stack.Policies, json.RawMessage(policyJSON))
+		}
 	}
 
 	slog.Debug("ExtractStacks returning", "count", len(stacks))

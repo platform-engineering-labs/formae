@@ -8,6 +8,10 @@ definitions:
         type: string
       EndTs:
         type: string
+      PolicyUpdates:
+        items:
+          $ref: '#/definitions/model.PolicyUpdate'
+        type: array
       ResourceUpdates:
         items:
           $ref: '#/definitions/model.ResourceUpdate'
@@ -119,6 +123,29 @@ definitions:
       ResourceCount:
         type: integer
       Version:
+        type: string
+    type: object
+  model.PolicyUpdate:
+    properties:
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      ModifiedTs:
+        type: string
+      Operation:
+        type: string
+      PolicyLabel:
+        type: string
+      PolicyType:
+        description: '"ttl", etc.'
+        type: string
+      StackLabel:
+        type: string
+      StartTs:
+        type: string
+      State:
         type: string
     type: object
   model.Prop:

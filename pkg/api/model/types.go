@@ -38,6 +38,7 @@ type Command struct {
 	ResourceUpdates []ResourceUpdate `json:"ResourceUpdates,omitempty"`
 	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
 	StackUpdates    []StackUpdate    `json:"StackUpdates,omitempty"`
+	PolicyUpdates   []PolicyUpdate   `json:"PolicyUpdates,omitempty"`
 }
 
 // wrapper for machine-readable output
@@ -108,6 +109,18 @@ type StackUpdate struct {
 	Duration     int64     `json:"Duration,omitempty"` // milliseconds
 	ErrorMessage string    `json:"ErrorMessage,omitempty"`
 	Description  string    `json:"Description"`
+	StartTs      time.Time `json:"StartTs,omitempty"`
+	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
+}
+
+type PolicyUpdate struct {
+	PolicyLabel  string    `json:"PolicyLabel"`
+	PolicyType   string    `json:"PolicyType"` // "ttl", etc.
+	StackLabel   string    `json:"StackLabel,omitempty"`
+	Operation    string    `json:"Operation"`
+	State        string    `json:"State"`
+	Duration     int64     `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage string    `json:"ErrorMessage,omitempty"`
 	StartTs      time.Time `json:"StartTs,omitempty"`
 	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
 }

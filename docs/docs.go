@@ -482,6 +482,12 @@ const docTemplate = `{
                 "EndTs": {
                     "type": "string"
                 },
+                "PolicyUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.PolicyUpdate"
+                    }
+                },
                 "ResourceUpdates": {
                     "type": "array",
                     "items": {
@@ -648,6 +654,40 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "Version": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.PolicyUpdate": {
+            "type": "object",
+            "properties": {
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "ModifiedTs": {
+                    "type": "string"
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "PolicyLabel": {
+                    "type": "string"
+                },
+                "PolicyType": {
+                    "description": "\"ttl\", etc.",
+                    "type": "string"
+                },
+                "StackLabel": {
+                    "type": "string"
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
                     "type": "string"
                 }
             }
