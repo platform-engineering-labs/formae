@@ -1,0 +1,95 @@
+/*
+ * (c) 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module pklGeneratorTest
+
+amends "pkl:test"
+import "pkl:json"
+import "../pklGenerator.pkl" as generator
+
+// Load test fixtures
+local sqsJson = new json.Parser {}.parse(read("../examples/json/sqs_queue.json"))
+local vpcJson = new json.Parser {}.parse(read("../examples/json/ec2_vpc.json"))
+local multiJson = new json.Parser {}.parse(read("../examples/json/multi_resource.json"))
+
+facts {
+    ["SQS Queue - generates correct imports"] {
+        let (result = generator.generateFormaFile(sqsJson))
+        result.contains("@fakeaws/sqs/queue.pkl") &&
+        result.contains("@fakeaws/fakeaws.pkl")
+    }
+
+    ["SQS Queue - generates forma block with stacks and targets"] {
+        let (result = generator.generateFormaFile(sqsJson))
+        result.contains("amends \"@formae/forma.pkl\"") &&
+        result.contains("import \"@formae/formae.pkl\"") &&
+        result.contains("formae.Stack") &&
+        result.contains("label = \"queue-stack\"") &&
+        result.contains("formae.Target") &&
+        result.contains("label = \"fakeaws-target\"") &&
+        result.contains("namespace = \"FakeAWS\"")
+    }
+
+    ["SQS Queue - generates resource declarations"] {
+        let (result = generator.generateFormaFile(sqsJson))
+        result.contains("queue.Queue") &&
+        result.contains("queueName = \"my-dlq\"") &&
+        result.contains("queueName = \"my-main-queue\"") &&
+        result.contains("visibilityTimeout = 60") &&
+        result.contains("delaySeconds = 5")
+    }
+
+    ["SQS Queue - generates tags correctly"] {
+        let (result = generator.generateFormaFile(sqsJson))
+        result.contains("key = \"Environment\"") &&
+        result.contains("value = \"test\"") &&
+        result.contains("key = \"Team\"") &&
+        result.contains("value = \"platform\"")
+    }
+
+    ["EC2 VPC - generates correct imports"] {
+        let (result = generator.generateFormaFile(vpcJson))
+        result.contains("@fakeaws/ec2/vpc.pkl") &&
+        result.contains("@fakeaws/fakeaws.pkl")
+    }
+
+    ["EC2 VPC - generates resource with correct properties"] {
+        let (result = generator.generateFormaFile(vpcJson))
+        result.contains("vpc.VPC") &&
+        result.contains("cidrBlock = \"10.0.0.0/16\"") &&
+        result.contains("enableDnsHostnames = true") &&
+        result.contains("enableDnsSupport = true")
+    }
+
+    ["Multi resource - generates imports for all resource types"] {
+        let (result = generator.generateFormaFile(multiJson))
+        result.contains("@fakeaws/ec2/vpc.pkl") &&
+        result.contains("@fakeaws/ec2/subnet.pkl") &&
+        result.contains("@fakeaws/ec2/securitygroup.pkl") &&
+        result.contains("@fakeaws/sqs/queue.pkl") &&
+        result.contains("@fakeaws/fakeaws.pkl")
+    }
+
+    ["Multi resource - generates multiple stacks"] {
+        let (result = generator.generateFormaFile(multiJson))
+        result.contains("label = \"network-stack\"") &&
+        result.contains("label = \"app-stack\"")
+    }
+
+    ["Multi resource - generates resolvable references"] {
+        let (result = generator.generateFormaFile(multiJson))
+        // Subnet and SecurityGroup should reference VPC via resolvable
+        result.contains("vpc.VPCResolvable")
+    }
+
+    ["Multi resource - generates all resource types"] {
+        let (result = generator.generateFormaFile(multiJson))
+        result.contains("vpc.VPC") &&
+        result.contains("subnet.Subnet") &&
+        result.contains("securitygroup.SecurityGroup") &&
+        result.contains("queue.Queue")
+    }
+}
