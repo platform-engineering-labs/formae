@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -213,53 +214,46 @@ func isResolvable(value any) bool {
 	return ok && resBool
 }
 
-// compareTags compares two tag slices ignoring order
-func compareTags(t *testing.T, expected, actual any, context string) bool {
-	expectedTags, ok := expected.([]any)
+// compareArrayUnordered compares two arrays ignoring element order.
+// Elements are serialized to JSON for canonical comparison.
+func compareArrayUnordered(t *testing.T, key string, expected, actual any, context string) bool {
+	expectedArr, ok := expected.([]any)
 	if !ok {
-		t.Errorf("Expected tags is not a slice (%s)", context)
+		t.Errorf("Expected %s is not an array (%s)", key, context)
 		return false
 	}
-	actualTags, ok := actual.([]any)
+	actualArr, ok := actual.([]any)
 	if !ok {
-		t.Errorf("Actual tags is not a slice (%s)", context)
+		t.Errorf("Actual %s is not an array (%s)", key, context)
 		return false
 	}
 
-	if len(expectedTags) != len(actualTags) {
-		t.Errorf("Tag count mismatch: expected %d, got %d (%s)", len(expectedTags), len(actualTags), context)
+	if len(expectedArr) != len(actualArr) {
+		t.Errorf("Array %s length mismatch: expected %d, got %d (%s)", key, len(expectedArr), len(actualArr), context)
 		return false
 	}
 
-	// Build a map of expected tags for easy lookup
-	expectedMap := make(map[string]string)
-	for _, tag := range expectedTags {
-		tagMap, ok := tag.(map[string]any)
-		if !ok {
-			t.Errorf("Expected tag is not a map (%s)", context)
-			return false
-		}
-		key, _ := tagMap["Key"].(string)
-		value, _ := tagMap["Value"].(string)
-		expectedMap[key] = value
+	serialize := func(v any) string {
+		b, _ := json.Marshal(v)
+		return string(b)
 	}
 
-	// Check each actual tag exists in expected
-	for _, tag := range actualTags {
-		tagMap, ok := tag.(map[string]any)
-		if !ok {
-			t.Errorf("Actual tag is not a map (%s)", context)
-			return false
-		}
-		key, _ := tagMap["Key"].(string)
-		value, _ := tagMap["Value"].(string)
-		expectedValue, exists := expectedMap[key]
-		if !exists {
-			t.Errorf("Unexpected tag key %q in actual tags (%s)", key, context)
-			return false
-		}
-		if expectedValue != value {
-			t.Errorf("Tag %q value mismatch: expected %q, got %q (%s)", key, expectedValue, value, context)
+	expectedSorted := make([]string, len(expectedArr))
+	for i, v := range expectedArr {
+		expectedSorted[i] = serialize(v)
+	}
+	sort.Strings(expectedSorted)
+
+	actualSorted := make([]string, len(actualArr))
+	for i, v := range actualArr {
+		actualSorted[i] = serialize(v)
+	}
+	sort.Strings(actualSorted)
+
+	for i := range expectedSorted {
+		if expectedSorted[i] != actualSorted[i] {
+			t.Errorf("Array %s mismatch at sorted index %d (%s): expected %s, got %s",
+				key, i, context, expectedSorted[i], actualSorted[i])
 			return false
 		}
 	}
@@ -331,9 +325,9 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 			continue
 		}
 
-		// Use order-independent comparison for Tags
-		if key == "Tags" {
-			if !compareTags(t, expectedValue, actualValue, context) {
+		// Use order-independent comparison for all arrays
+		if _, isArray := expectedValue.([]any); isArray {
+			if !compareArrayUnordered(t, key, expectedValue, actualValue, context) {
 				hasErrors = true
 			}
 		} else {
