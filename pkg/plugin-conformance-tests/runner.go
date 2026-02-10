@@ -214,8 +214,56 @@ func isResolvable(value any) bool {
 	return ok && resBool
 }
 
+// compareResolvable validates that an actual resolvable has a resolved $value
+// and that its metadata fields match the expected resolvable.
+func compareResolvable(t *testing.T, name string, expected, actual any, context string) bool {
+	if !isResolvable(actual) {
+		t.Errorf("Expected resolvable but got non-resolvable for %s (%s)", name, context)
+		return false
+	}
+
+	expectedMap := expected.(map[string]any)
+	actualMap := actual.(map[string]any)
+
+	resolvedValue, hasValue := actualMap["$value"]
+	if !hasValue {
+		t.Errorf("Resolvable %s missing $value in actual resource (%s)", name, context)
+		return false
+	}
+	if resolvedValue == "" {
+		t.Errorf("Resolvable %s has empty $value in actual resource (%s)", name, context)
+		return false
+	}
+	t.Logf("Resolvable %s resolved to: %v", name, resolvedValue)
+
+	ok := true
+	for _, field := range []string{"$label", "$type", "$stack", "$property"} {
+		expectedFieldValue, expectedHasField := expectedMap[field]
+		actualFieldValue, actualHasField := actualMap[field]
+		if expectedHasField && actualHasField && expectedFieldValue != actualFieldValue {
+			t.Errorf("Resolvable %s field %s mismatch: expected %v, got %v (%s)",
+				name, field, expectedFieldValue, actualFieldValue, context)
+			ok = false
+		}
+	}
+	return ok
+}
+
+// resolvableMetadataKey returns a string key from a resolvable's metadata fields
+// for use in matching expected resolvables to actual ones in arrays.
+func resolvableMetadataKey(v any) string {
+	m := v.(map[string]any)
+	label, _ := m["$label"].(string)
+	typ, _ := m["$type"].(string)
+	stack, _ := m["$stack"].(string)
+	prop, _ := m["$property"].(string)
+	return label + "|" + typ + "|" + stack + "|" + prop
+}
+
 // compareArrayUnordered compares two arrays ignoring element order.
-// Elements are serialized to JSON for canonical comparison.
+// If the array contains resolvable elements, it uses element-wise matching
+// that validates resolvable metadata and $value. Otherwise, elements are
+// serialized to JSON for canonical comparison.
 func compareArrayUnordered(t *testing.T, key string, expected, actual any, context string) bool {
 	expectedArr, ok := expected.([]any)
 	if !ok {
@@ -233,6 +281,21 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 		return false
 	}
 
+	// Check if any expected element is a resolvable
+	hasResolvables := false
+	for _, v := range expectedArr {
+		if isResolvable(v) {
+			hasResolvables = true
+			break
+		}
+	}
+
+	// If array contains resolvables, use element-wise matching
+	if hasResolvables {
+		return compareArrayWithResolvables(t, key, expectedArr, actualArr, context)
+	}
+
+	// Fast path: serialize to JSON, sort, and compare
 	serialize := func(v any) string {
 		b, _ := json.Marshal(v)
 		return string(b)
@@ -261,6 +324,61 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 	return true
 }
 
+// compareArrayWithResolvables compares arrays element-wise, handling resolvable
+// elements by matching on metadata and validating $value, and non-resolvable
+// elements by JSON equality.
+func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualArr []any, context string) bool {
+	ok := true
+	matched := make([]bool, len(actualArr))
+
+	serialize := func(v any) string {
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+
+	for i, exp := range expectedArr {
+		elemName := fmt.Sprintf("%s[%d]", key, i)
+		found := false
+
+		if isResolvable(exp) {
+			expKey := resolvableMetadataKey(exp)
+			for j, act := range actualArr {
+				if matched[j] || !isResolvable(act) {
+					continue
+				}
+				if resolvableMetadataKey(act) == expKey {
+					if !compareResolvable(t, elemName, exp, act, context) {
+						ok = false
+					}
+					matched[j] = true
+					found = true
+					break
+				}
+			}
+		} else {
+			expJSON := serialize(exp)
+			for j, act := range actualArr {
+				if matched[j] {
+					continue
+				}
+				if serialize(act) == expJSON {
+					matched[j] = true
+					found = true
+					break
+				}
+			}
+		}
+
+		if !found {
+			t.Errorf("Array %s: no match found for expected element %d (%s): %s",
+				key, i, context, serialize(exp))
+			ok = false
+		}
+	}
+
+	return ok
+}
+
 // compareProperties compares expected properties against actual properties from inventory
 func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) bool {
 	hasErrors := false
@@ -283,45 +401,9 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 		// Validate resolvable properties - they should be resolved at apply time
 		if isResolvable(expectedValue) {
 			t.Logf("Validating resolvable property %s (resolved at runtime)", key)
-
-			// Verify the actual value is also a resolvable
-			if !isResolvable(actualValue) {
-				t.Errorf("Expected resolvable but got non-resolvable for property %s (%s)", key, context)
+			if !compareResolvable(t, key, expectedValue, actualValue, context) {
 				hasErrors = true
-				continue
 			}
-
-			// Both are resolvables - now validate the resolved value and metadata
-			expectedMap := expectedValue.(map[string]any)
-			actualMap := actualValue.(map[string]any)
-
-			// Check that $value exists and is non-empty in the actual resource
-			resolvedValue, hasValue := actualMap["$value"]
-			if !hasValue {
-				t.Errorf("Resolvable property %s missing $value in actual resource (%s)", key, context)
-				hasErrors = true
-				continue
-			}
-			if resolvedValue == "" {
-				t.Errorf("Resolvable property %s has empty $value in actual resource (%s)", key, context)
-				hasErrors = true
-				continue
-			}
-			t.Logf("Resolvable property %s resolved to: %v", key, resolvedValue)
-
-			// Validate that key resolvable metadata fields match
-			for _, field := range []string{"$label", "$type", "$stack", "$property"} {
-				expectedFieldValue, expectedHasField := expectedMap[field]
-				actualFieldValue, actualHasField := actualMap[field]
-
-				// Only validate if both have the field (some fields may be optional)
-				if expectedHasField && actualHasField && expectedFieldValue != actualFieldValue {
-					t.Errorf("Resolvable property %s field %s mismatch: expected %v, got %v (%s)",
-						key, field, expectedFieldValue, actualFieldValue, context)
-					hasErrors = true
-				}
-			}
-
 			continue
 		}
 
