@@ -16,8 +16,9 @@ import (
 func TestValidateDestroyOptions(t *testing.T) {
 	t.Run("either forma or query must be set", func(t *testing.T) {
 		opts := &DestroyOptions{
-			FormaFile: "",
-			Query:     "",
+			FormaFile:    "",
+			Query:        "",
+			OnDependents: OnDependentsAbort,
 		}
 		err := validateDestroyOptions(opts)
 		assert.Error(t, err)
@@ -26,8 +27,9 @@ func TestValidateDestroyOptions(t *testing.T) {
 
 	t.Run("forma and query cannot both be set", func(t *testing.T) {
 		opts := &DestroyOptions{
-			FormaFile: "example.pkl",
-			Query:     "name=my-resource",
+			FormaFile:    "example.pkl",
+			Query:        "name=my-resource",
+			OnDependents: OnDependentsAbort,
 		}
 		err := validateDestroyOptions(opts)
 		assert.Error(t, err)
@@ -39,6 +41,7 @@ func TestValidateDestroyOptions(t *testing.T) {
 			FormaFile:      "example.pkl",
 			Query:          "",
 			OutputConsumer: printer.Consumer("invalid_consumer"),
+			OnDependents:   OnDependentsAbort,
 		}
 		err := validateDestroyOptions(opts)
 		assert.Error(t, err)
@@ -52,9 +55,41 @@ func TestValidateDestroyOptions(t *testing.T) {
 			Query:          "",
 			OutputConsumer: "machine",
 			OutputSchema:   "invalid_schema",
+			OnDependents:   OnDependentsAbort,
 		}
 		err := validateDestroyOptions(opts)
 		assert.Error(t, err)
 		assert.Equal(t, "output schema must be either 'json' or 'yaml' for machine consumer", err.Error())
+	})
+
+	t.Run("on-dependents must be abort or cascade", func(t *testing.T) {
+		opts := &DestroyOptions{
+			FormaFile:      "example.pkl",
+			OutputConsumer: "human",
+			OnDependents:   "invalid",
+		}
+		err := validateDestroyOptions(opts)
+		assert.Error(t, err)
+		assert.Equal(t, "--on-dependents must be either 'abort' or 'cascade'", err.Error())
+	})
+
+	t.Run("on-dependents accepts abort", func(t *testing.T) {
+		opts := &DestroyOptions{
+			FormaFile:      "example.pkl",
+			OutputConsumer: "human",
+			OnDependents:   OnDependentsAbort,
+		}
+		err := validateDestroyOptions(opts)
+		assert.NoError(t, err)
+	})
+
+	t.Run("on-dependents accepts cascade", func(t *testing.T) {
+		opts := &DestroyOptions{
+			FormaFile:      "example.pkl",
+			OutputConsumer: "human",
+			OnDependents:   OnDependentsCascade,
+		}
+		err := validateDestroyOptions(opts)
+		assert.NoError(t, err)
 	})
 }
