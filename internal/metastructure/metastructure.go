@@ -447,6 +447,8 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			ErrorMessage:   ru.MostRecentFailureMessage(),
 			StatusMessage:  ru.MostRecentStatusMessage(),
 			GroupID:        ru.GroupID,
+			IsCascade:      ru.IsCascade,
+			CascadeSource:  ru.CascadeSource,
 		})
 	}
 

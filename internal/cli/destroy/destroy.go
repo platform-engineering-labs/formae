@@ -24,6 +24,16 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
+// OnDependents defines the behavior when resources depend on those being deleted.
+type OnDependents string
+
+const (
+	// OnDependentsAbort aborts the delete if dependent resources exist.
+	OnDependentsAbort OnDependents = "abort"
+	// OnDependentsCascade deletes dependent resources along with the target.
+	OnDependentsCascade OnDependents = "cascade"
+)
+
 type DestroyOptions struct {
 	FormaFile      string
 	Query          string
@@ -33,6 +43,7 @@ type DestroyOptions struct {
 	StatusOutput   status.StatusOutput
 	Simulate       bool
 	Yes            bool
+	OnDependents   OnDependents
 	Properties     map[string]string
 }
 
@@ -56,6 +67,8 @@ func DestroyCmd() *cobra.Command {
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
 			opts.Yes, _ = command.Flags().GetBool("yes")
+			onDependents, _ := command.Flags().GetString("on-dependents")
+			opts.OnDependents = OnDependents(onDependents)
 			opts.Properties = cmd.PropertiesFromCmd(command)
 
 			configFile, _ := command.Flags().GetString("config")
@@ -83,6 +96,7 @@ func DestroyCmd() *cobra.Command {
 	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
+	command.Flags().String("on-dependents", "abort", "Behavior when resources depend on those being deleted (abort | cascade)")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
@@ -102,6 +116,9 @@ func validateDestroyOptions(opts *DestroyOptions) error {
 		if opts.OutputSchema != "json" && opts.OutputSchema != "yaml" {
 			return cmd.FlagErrorf("output schema must be either 'json' or 'yaml' for machine consumer")
 		}
+	}
+	if opts.OnDependents != OnDependentsAbort && opts.OnDependents != OnDependentsCascade {
+		return cmd.FlagErrorf("--on-dependents must be either 'abort' or 'cascade'")
 	}
 
 	return nil
@@ -150,8 +167,34 @@ func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
 		return nil
 	}
 
+	// Check for cascade deletes
+	hasCascades := hasCascadeDeletes(&res.Simulation.Command)
+
+	// If --yes is specified with --on-dependents=abort and there are cascades, abort
+	if opts.Yes && hasCascades && opts.OnDependents == OnDependentsAbort {
+		fmt.Printf("\n%s\n\n", display.Red("Error: This operation would cascade delete additional resources."))
+		fmt.Printf("%s\n\n", display.Grey("The following resources depend on resources being deleted and would also be deleted:"))
+
+		for _, ru := range res.Simulation.Command.ResourceUpdates {
+			if ru.IsCascade {
+				fmt.Printf("  %s %s (depends on %s)\n",
+					display.Red("•"),
+					display.LightBlue(ru.ResourceLabel),
+					display.Grey(ru.CascadeSource))
+			}
+		}
+
+		fmt.Printf("\n%s\n", display.Grey("To proceed with cascade deletes, use --on-dependents=cascade"))
+		return fmt.Errorf("cascade deletes detected, aborting (use --on-dependents=cascade to proceed)")
+	}
+
 	// don't show anything if --yes is specified
 	if !opts.Yes {
+		// Show warning about cascades before simulation output
+		if hasCascades {
+			fmt.Printf("%s\n\n", display.Gold("Warning: This operation will cascade delete additional resources."))
+		}
+
 		p := printer.NewHumanReadablePrinter[apimodel.Simulation](os.Stdout)
 		err = p.Print(&res.Simulation, printer.PrintOptions{})
 		if err != nil {
@@ -214,4 +257,14 @@ func runDestroyForMachines(app *app.App, opts *DestroyOptions) error {
 	printer := printer.NewMachineReadablePrinter[apimodel.CommandID](os.Stdout, opts.OutputSchema)
 
 	return printer.Print(&apimodel.CommandID{CommandID: res.CommandID})
+}
+
+// hasCascadeDeletes checks if any resource updates in the command are cascade deletes
+func hasCascadeDeletes(cmd *apimodel.Command) bool {
+	for _, ru := range cmd.ResourceUpdates {
+		if ru.IsCascade {
+			return true
+		}
+	}
+	return false
 }

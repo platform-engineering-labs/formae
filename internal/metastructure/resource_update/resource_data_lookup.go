@@ -17,4 +17,5 @@ type ResourceDataLookup interface {
 	BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error)
 	GetKSUIDByTriplet(stack, label, resourceType string) (string, error)
 	LatestLabelForResource(label string) (string, error)
+	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
 }
