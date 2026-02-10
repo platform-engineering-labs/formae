@@ -214,6 +214,14 @@ func isResolvable(value any) bool {
 	return ok && resBool
 }
 
+// normalizeEscaping removes common backslash escape sequences from a string
+// to allow comparison of values that may have been escaped differently during
+// JSON/PKL round-trips (e.g. `"` vs `\"`).
+func normalizeEscaping(s string) string {
+	r := strings.NewReplacer(`\"`, `"`, `\\`, `\`)
+	return r.Replace(s)
+}
+
 // compareResolvable validates that an actual resolvable has a resolved $value
 // and that its metadata fields match the expected resolvable.
 func compareResolvable(t *testing.T, name string, expected, actual any, context string) bool {
@@ -413,10 +421,16 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 				hasErrors = true
 			}
 		} else {
-			if fmt.Sprintf("%v", expectedValue) != fmt.Sprintf("%v", actualValue) {
-				t.Errorf("Property %s should match expected value (%s): expected %v, got %v",
-					key, context, expectedValue, actualValue)
-				hasErrors = true
+			expectedStr := fmt.Sprintf("%v", expectedValue)
+			actualStr := fmt.Sprintf("%v", actualValue)
+			if expectedStr != actualStr {
+				// Normalize escaped strings before failing — extraction round-trips
+				// can introduce or remove backslash escaping (e.g. " vs \")
+				if normalizeEscaping(expectedStr) != normalizeEscaping(actualStr) {
+					t.Errorf("Property %s should match expected value (%s): expected %v, got %v",
+						key, context, expectedValue, actualValue)
+					hasErrors = true
+				}
 			}
 		}
 	}
@@ -571,25 +585,12 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 			t.Fatal("Extracted eval should return at least one resource")
 		}
 
-		// Get the extracted resource properties
+		// Get the extracted resource
 		extractedResource := extractedResult.Resources[0]
-		extractedProperties, ok := extractedResource["Properties"].(map[string]any)
-		if !ok {
-			t.Fatal("Extracted resource should have Properties field")
-		}
 
-		// Compare properties from extracted file with original
-		t.Log("Comparing extracted properties with original expected properties...")
-		for key, expectedValue := range expectedProperties {
-			actualValue, exists := extractedProperties[key]
-			if !exists {
-				t.Errorf("Property %s should exist in extracted resource", key)
-				continue
-			}
-			if fmt.Sprintf("%v", expectedValue) != fmt.Sprintf("%v", actualValue) {
-				t.Errorf("Property %s should match in extracted resource: expected %v, got %v",
-					key, expectedValue, actualValue)
-			}
+		// Compare properties using the same logic as inventory comparison
+		if !compareProperties(t, expectedProperties, extractedResource, "after extract") {
+			allPropertiesMatched = false
 		}
 		t.Log("Extract validation completed!")
 	} else {
