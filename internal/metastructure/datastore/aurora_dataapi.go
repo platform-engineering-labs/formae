@@ -3266,15 +3266,33 @@ func (d *DatastoreAuroraDataAPI) UpdatePolicy(policy pkgmodel.Policy, commandID 
 	ctx := context.Background()
 
 	// Get the existing policy to find its id
-	selectQuery := `
-		SELECT id FROM policies
-		WHERE label = :label AND stack_id = :stack_id
-		ORDER BY version DESC
-		LIMIT 1
-	`
-	selectParams := []types.SqlParameter{
-		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
-		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: policy.GetStackID()}},
+	// For standalone policies (empty stack_id), check for both NULL and empty string
+	var selectQuery string
+	var selectParams []types.SqlParameter
+
+	if policy.GetStackID() == "" {
+		// Standalone policy - check for NULL or empty string
+		selectQuery = `
+			SELECT id FROM policies
+			WHERE label = :label AND (stack_id IS NULL OR stack_id = '')
+			ORDER BY version COLLATE "C" DESC
+			LIMIT 1
+		`
+		selectParams = []types.SqlParameter{
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
+		}
+	} else {
+		// Inline policy - exact match on stack_id
+		selectQuery = `
+			SELECT id FROM policies
+			WHERE label = :label AND stack_id = :stack_id
+			ORDER BY version COLLATE "C" DESC
+			LIMIT 1
+		`
+		selectParams = []types.SqlParameter{
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
+			{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: policy.GetStackID()}},
+		}
 	}
 
 	result, err := d.executeStatement(ctx, selectQuery, selectParams)
@@ -3335,16 +3353,32 @@ func (d *DatastoreAuroraDataAPI) GetPoliciesForStack(stackID string) ([]pkgmodel
 	ctx := context.Background()
 
 	// Get the latest non-deleted version of each policy for the given stack
+	// This includes both:
+	// 1. Inline policies (stack_id set directly on the policy)
+	// 2. Standalone policies (attached via stack_policies junction table)
 	query := `
 		WITH latest_policies AS (
-			SELECT id, label, policy_type, policy_data, operation,
+			SELECT id, label, policy_type, policy_data, stack_id, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
 			FROM policies
-			WHERE stack_id = :stack_id
+		),
+		-- Inline policies: stack_id is set directly on the policy
+		inline_policies AS (
+			SELECT label, policy_type, policy_data, stack_id
+			FROM latest_policies
+			WHERE stack_id = :stack_id AND rn = 1 AND operation != 'delete'
+		),
+		-- Standalone policies: attached via stack_policies junction table
+		standalone_policies AS (
+			SELECT lp.label, lp.policy_type, lp.policy_data, lp.stack_id
+			FROM latest_policies lp
+			JOIN stack_policies sp ON sp.policy_id = lp.id
+			WHERE sp.stack_id = :stack_id AND lp.rn = 1 AND lp.operation != 'delete'
+			AND (lp.stack_id IS NULL OR lp.stack_id = '')
 		)
-		SELECT label, policy_type, policy_data
-		FROM latest_policies
-		WHERE rn = 1 AND operation != 'delete'
+		SELECT label, policy_type, policy_data, stack_id FROM inline_policies
+		UNION
+		SELECT label, policy_type, policy_data, stack_id FROM standalone_policies
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
@@ -3357,15 +3391,21 @@ func (d *DatastoreAuroraDataAPI) GetPoliciesForStack(stackID string) ([]pkgmodel
 
 	var policies []pkgmodel.Policy
 	for _, record := range result.Records {
-		if len(record) < 3 {
+		if len(record) < 4 {
 			continue
 		}
 
 		label, _ := getStringField(record[0])
 		policyType, _ := getStringField(record[1])
 		policyDataStr, _ := getStringField(record[2])
+		policyStackID, _ := getStringField(record[3])
 
-		policy, err := deserializePolicyAurora(label, policyType, policyDataStr, stackID)
+		// For standalone policies, use the queried stackID for display purposes
+		effectiveStackID := stackID
+		if policyStackID != "" {
+			effectiveStackID = policyStackID
+		}
+		policy, err := deserializePolicyAurora(label, policyType, policyDataStr, effectiveStackID)
 		if err != nil {
 			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
 			continue
@@ -3465,37 +3505,90 @@ func (d *DatastoreAuroraDataAPI) AttachPolicyToStack(stackID, policyLabel string
 	return nil
 }
 
+func (d *DatastoreAuroraDataAPI) IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error) {
+	ctx := context.Background()
+
+	// Check if the attachment exists in stack_policies by looking up stack and policy by label
+	query := `
+		WITH latest_stack AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+			WHERE label = :stack_label
+		),
+		latest_policy AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = :policy_label AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT 1 FROM stack_policies sp
+		JOIN latest_stack s ON s.id = sp.stack_id
+		JOIN latest_policy p ON p.id = sp.policy_id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_label"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
+		{Name: aws.String("policy_label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+	}
+
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return false, fmt.Errorf("failed to check policy attachment: %w", err)
+	}
+
+	return len(result.Records) > 0, nil
+}
+
 func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx := context.Background()
 
-	// Get all non-deleted policies for this stack and insert tombstone versions
-	policies, err := d.GetPoliciesForStack(stackID)
+	// First, remove any standalone policy attachments from the junction table
+	// This doesn't delete the standalone policies themselves, just the association
+	deleteAttachmentsQuery := `DELETE FROM stack_policies WHERE stack_id = :stack_id`
+	deleteAttachmentsParams := []types.SqlParameter{
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+	}
+	_, err := d.executeStatement(ctx, deleteAttachmentsQuery, deleteAttachmentsParams)
 	if err != nil {
-		return fmt.Errorf("failed to get policies for stack: %w", err)
+		slog.Warn("Failed to delete policy attachments for stack", "error", err, "stackID", stackID)
 	}
 
-	for _, policy := range policies {
-		// Get the existing policy ID
-		query := `
-			SELECT id FROM policies
-			WHERE label = :label AND stack_id = :stack_id
-			ORDER BY version COLLATE "C" DESC
-			LIMIT 1
-		`
-		params := []types.SqlParameter{
-			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
-			{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
-		}
+	// Now get and delete only inline policies (policies with stack_id set to this stack)
+	// We query directly for inline policies rather than using GetPoliciesForStack
+	// since that also returns standalone policies which shouldn't be deleted
+	inlinePoliciesQuery := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = :stack_id
+		)
+		SELECT id, label, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	inlinePoliciesParams := []types.SqlParameter{
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+	}
 
-		result, err := d.executeStatement(ctx, query, params)
-		if err != nil || len(result.Records) == 0 {
-			slog.Warn("Failed to get policy ID for deletion", "error", err, "label", policy.GetLabel())
+	result, err := d.executeStatement(ctx, inlinePoliciesQuery, inlinePoliciesParams)
+	if err != nil {
+		return fmt.Errorf("failed to get inline policies for stack: %w", err)
+	}
+
+	for _, record := range result.Records {
+		if len(record) < 3 {
 			continue
 		}
 
-		id, _ := getStringField(result.Records[0][0])
+		id, _ := getStringField(record[0])
+		label, _ := getStringField(record[1])
+		policyType, _ := getStringField(record[2])
 
-		// Insert tombstone version
+		// Insert tombstone version for inline policy
 		version := mksuid.New().String()
 		insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES (:id, :version, :command_id, :operation, :label, :policy_type, :stack_id, :policy_data)`
 		insertParams := []types.SqlParameter{
@@ -3503,18 +3596,18 @@ func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandI
 			{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
 			{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
 			{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "delete"}},
-			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policy.GetLabel()}},
-			{Name: aws.String("policy_type"), Value: &types.FieldMemberStringValue{Value: policy.GetType()}},
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+			{Name: aws.String("policy_type"), Value: &types.FieldMemberStringValue{Value: policyType}},
 			{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
 			{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: "{}"}},
 		}
 
 		_, err = d.executeStatement(ctx, insertQuery, insertParams)
 		if err != nil {
-			slog.Error("Failed to delete policy", "error", err, "label", policy.GetLabel())
+			slog.Error("Failed to delete inline policy", "error", err, "label", label)
 			continue
 		}
-		slog.Debug("Deleted policy as part of stack deletion", "label", policy.GetLabel(), "stackID", stackID)
+		slog.Debug("Deleted inline policy as part of stack deletion", "label", label, "stackID", stackID)
 	}
 
 	return nil

@@ -1431,14 +1431,30 @@ func (d DatastorePostgres) UpdatePolicy(policy pkgmodel.Policy, commandID string
 	defer span.End()
 
 	// Get the existing policy to find its id
-	query := `
-		SELECT id FROM policies
-		WHERE label = $1 AND stack_id = $2
-		ORDER BY version DESC
-		LIMIT 1
-	`
+	// For standalone policies (empty stack_id), check for both NULL and empty string
+	var query string
 	var id string
-	err := d.pool.QueryRow(ctx, query, policy.GetLabel(), policy.GetStackID()).Scan(&id)
+	var err error
+
+	if policy.GetStackID() == "" {
+		// Standalone policy - check for NULL or empty string
+		query = `
+			SELECT id FROM policies
+			WHERE label = $1 AND (stack_id IS NULL OR stack_id = '')
+			ORDER BY version COLLATE "C" DESC
+			LIMIT 1
+		`
+		err = d.pool.QueryRow(ctx, query, policy.GetLabel()).Scan(&id)
+	} else {
+		// Inline policy - exact match on stack_id
+		query = `
+			SELECT id FROM policies
+			WHERE label = $1 AND stack_id = $2
+			ORDER BY version COLLATE "C" DESC
+			LIMIT 1
+		`
+		err = d.pool.QueryRow(ctx, query, policy.GetLabel(), policy.GetStackID()).Scan(&id)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to find existing policy: %w", err)
 	}
@@ -1477,19 +1493,35 @@ func (d DatastorePostgres) GetPoliciesForStack(stackID string) ([]pkgmodel.Polic
 	defer span.End()
 
 	// Get the latest non-deleted version of each policy for the given stack
+	// This includes both:
+	// 1. Inline policies (stack_id set directly on the policy)
+	// 2. Standalone policies (attached via stack_policies junction table)
 	query := `
 		WITH latest_policies AS (
-			SELECT id, label, policy_type, policy_data, operation,
+			SELECT id, label, policy_type, policy_data, stack_id, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
 			FROM policies
-			WHERE stack_id = $1
+		),
+		-- Inline policies: stack_id is set directly on the policy
+		inline_policies AS (
+			SELECT label, policy_type, policy_data, stack_id
+			FROM latest_policies
+			WHERE stack_id = $1 AND rn = 1 AND operation != 'delete'
+		),
+		-- Standalone policies: attached via stack_policies junction table
+		standalone_policies AS (
+			SELECT lp.label, lp.policy_type, lp.policy_data, lp.stack_id
+			FROM latest_policies lp
+			JOIN stack_policies sp ON sp.policy_id = lp.id
+			WHERE sp.stack_id = $2 AND lp.rn = 1 AND lp.operation != 'delete'
+			AND (lp.stack_id IS NULL OR lp.stack_id = '')
 		)
-		SELECT label, policy_type, policy_data
-		FROM latest_policies
-		WHERE rn = 1 AND operation != 'delete'
+		SELECT label, policy_type, policy_data, stack_id FROM inline_policies
+		UNION
+		SELECT label, policy_type, policy_data, stack_id FROM standalone_policies
 	`
 
-	rows, err := d.pool.Query(ctx, query, stackID)
+	rows, err := d.pool.Query(ctx, query, stackID, stackID)
 	if err != nil {
 		return nil, err
 	}
@@ -1498,11 +1530,17 @@ func (d DatastorePostgres) GetPoliciesForStack(stackID string) ([]pkgmodel.Polic
 	var policies []pkgmodel.Policy
 	for rows.Next() {
 		var label, policyType, policyDataStr string
-		if err := rows.Scan(&label, &policyType, &policyDataStr); err != nil {
+		var policyStackID *string
+		if err := rows.Scan(&label, &policyType, &policyDataStr, &policyStackID); err != nil {
 			return nil, err
 		}
 
-		policy, err := deserializePolicyPostgres(label, policyType, policyDataStr, stackID)
+		// For standalone policies, use the queried stackID for display purposes
+		effectiveStackID := stackID
+		if policyStackID != nil && *policyStackID != "" {
+			effectiveStackID = *policyStackID
+		}
+		policy, err := deserializePolicyPostgres(label, policyType, policyDataStr, effectiveStackID)
 		if err != nil {
 			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
 			continue
@@ -1522,12 +1560,13 @@ func (d DatastorePostgres) GetStandalonePolicy(label string) (pkgmodel.Policy, e
 	defer span.End()
 
 	// Get the latest non-deleted version of the standalone policy with this label
+	// Check for both NULL and empty string for compatibility
 	query := `
 		WITH latest_policy AS (
 			SELECT id, label, policy_type, policy_data, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
 			FROM policies
-			WHERE label = $1 AND stack_id IS NULL
+			WHERE label = $1 AND (stack_id IS NULL OR stack_id = '')
 		)
 		SELECT label, policy_type, policy_data
 		FROM latest_policy
@@ -1586,40 +1625,90 @@ func (d DatastorePostgres) AttachPolicyToStack(stackID, policyLabel string) erro
 	return nil
 }
 
+func (d DatastorePostgres) IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error) {
+	ctx, span := tracer.Start(context.Background(), "IsPolicyAttachedToStack")
+	defer span.End()
+
+	// Check if the attachment exists in stack_policies by looking up stack and policy by label
+	query := `
+		WITH latest_stack AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+			WHERE label = $1
+		),
+		latest_policy AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = $2 AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT 1 FROM stack_policies sp
+		JOIN latest_stack s ON s.id = sp.stack_id
+		JOIN latest_policy p ON p.id = sp.policy_id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		LIMIT 1
+	`
+	var exists int
+	err := d.pool.QueryRow(ctx, query, stackLabel, policyLabel).Scan(&exists)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check policy attachment: %w", err)
+	}
+	return true, nil
+}
+
 func (d DatastorePostgres) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx, span := tracer.Start(context.Background(), "DeletePoliciesForStack")
 	defer span.End()
 
-	// Get all non-deleted policies for this stack and insert tombstone versions
-	policies, err := d.GetPoliciesForStack(stackID)
+	// First, remove any standalone policy attachments from the junction table
+	// This doesn't delete the standalone policies themselves, just the association
+	deleteAttachmentsQuery := `DELETE FROM stack_policies WHERE stack_id = $1`
+	_, err := d.pool.Exec(ctx, deleteAttachmentsQuery, stackID)
 	if err != nil {
-		return fmt.Errorf("failed to get policies for stack: %w", err)
+		slog.Warn("Failed to delete policy attachments for stack", "error", err, "stackID", stackID)
 	}
 
-	for _, policy := range policies {
-		// Get the existing policy ID
-		query := `
-			SELECT id FROM policies
-			WHERE label = $1 AND stack_id = $2
-			ORDER BY version COLLATE "C" DESC
-			LIMIT 1
-		`
-		var id string
-		err := d.pool.QueryRow(ctx, query, policy.GetLabel(), stackID).Scan(&id)
-		if err != nil {
-			slog.Warn("Failed to get policy ID for deletion", "error", err, "label", policy.GetLabel())
+	// Now get and delete only inline policies (policies with stack_id set to this stack)
+	// We query directly for inline policies rather than using GetPoliciesForStack
+	// since that also returns standalone policies which shouldn't be deleted
+	inlinePoliciesQuery := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = $1
+		)
+		SELECT id, label, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	rows, err := d.pool.Query(ctx, inlinePoliciesQuery, stackID)
+	if err != nil {
+		return fmt.Errorf("failed to get inline policies for stack: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, label, policyType string
+		if err := rows.Scan(&id, &label, &policyType); err != nil {
+			slog.Warn("Failed to scan policy for deletion", "error", err)
 			continue
 		}
 
-		// Insert tombstone version
+		// Insert tombstone version for inline policy
 		version := mksuid.New().String()
 		insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
-		_, err = d.pool.Exec(ctx, insertQuery, id, version, commandID, "delete", policy.GetLabel(), policy.GetType(), stackID, "{}")
+		_, err = d.pool.Exec(ctx, insertQuery, id, version, commandID, "delete", label, policyType, stackID, "{}")
 		if err != nil {
-			slog.Error("Failed to delete policy", "error", err, "label", policy.GetLabel())
+			slog.Error("Failed to delete inline policy", "error", err, "label", label)
 			continue
 		}
-		slog.Debug("Deleted policy as part of stack deletion", "label", policy.GetLabel(), "stackID", stackID)
+		slog.Debug("Deleted inline policy as part of stack deletion", "label", label, "stackID", stackID)
 	}
 
 	return nil

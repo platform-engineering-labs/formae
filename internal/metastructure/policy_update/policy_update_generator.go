@@ -22,6 +22,8 @@ type PolicyDatastore interface {
 	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
 	// Returns nil, nil if no policy is found
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
+	// IsPolicyAttachedToStack checks if a standalone policy is attached to a stack
+	IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error)
 }
 
 // PolicyUpdateGenerator generates policy updates by comparing desired state with existing state
@@ -180,6 +182,7 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 		}
 
 		var operation PolicyOperation
+		var existingPolicy pkgmodel.Policy
 
 		// Check if this standalone policy already exists
 		if pg.datastore != nil {
@@ -190,6 +193,13 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 					"error", err)
 			}
 			if existing != nil {
+				existingPolicy = existing
+				// Check if the policy has actually changed
+				if policiesEqual(existing, policy) {
+					slog.Debug("Standalone policy unchanged, skipping",
+						"label", policy.GetLabel())
+					continue
+				}
 				operation = PolicyOperationUpdate
 			} else {
 				operation = PolicyOperationCreate
@@ -199,12 +209,13 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 		}
 
 		update := PolicyUpdate{
-			Policy:     policy,
-			Operation:  operation,
-			State:      PolicyUpdateStateNotStarted,
-			StackLabel: "", // Empty = standalone
-			StartTs:    now,
-			ModifiedTs: now,
+			Policy:         policy,
+			ExistingPolicy: existingPolicy,
+			Operation:      operation,
+			State:          PolicyUpdateStateNotStarted,
+			StackLabel:     "", // Empty = standalone
+			StartTs:        now,
+			ModifiedTs:     now,
 		}
 
 		updates = append(updates, update)
@@ -215,6 +226,32 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 	}
 
 	return updates, nil
+}
+
+// policiesEqual compares two policies for equality
+func policiesEqual(a, b pkgmodel.Policy) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.GetType() != b.GetType() {
+		return false
+	}
+	if a.GetLabel() != b.GetLabel() {
+		return false
+	}
+
+	// Type-specific comparison
+	switch pa := a.(type) {
+	case *pkgmodel.TTLPolicy:
+		pb, ok := b.(*pkgmodel.TTLPolicy)
+		if !ok {
+			return false
+		}
+		return pa.TTLSeconds == pb.TTLSeconds && pa.OnDependents == pb.OnDependents
+	default:
+		// For unknown types, assume not equal to be safe
+		return false
+	}
 }
 
 // generatePolicyAttachments creates associations between stacks and standalone policies
@@ -231,6 +268,22 @@ func (pg *PolicyUpdateGenerator) generatePolicyAttachments(forma *pkgmodel.Forma
 			policyLabel, err := pkgmodel.ParsePolicyReference(raw)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse policy reference in stack %s: %w", stack.Label, err)
+			}
+
+			// Check if this attachment already exists
+			if pg.datastore != nil {
+				attached, err := pg.datastore.IsPolicyAttachedToStack(stack.Label, policyLabel)
+				if err != nil {
+					slog.Warn("Failed to check if policy is attached",
+						"stack", stack.Label,
+						"policyLabel", policyLabel,
+						"error", err)
+				} else if attached {
+					slog.Debug("Policy already attached to stack, skipping",
+						"stack", stack.Label,
+						"policyRef", policyLabel)
+					continue
+				}
 			}
 
 			// Create an attachment update
