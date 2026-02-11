@@ -19,6 +19,9 @@ type PolicyDatastore interface {
 	GetStackByLabel(label string) (*pkgmodel.Stack, error)
 	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
 	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
+	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
+	// Returns nil, nil if no policy is found
+	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
 }
 
 // PolicyUpdateGenerator generates policy updates by comparing desired state with existing state
@@ -58,6 +61,13 @@ func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, co
 	}
 	updates = append(updates, standaloneUpdates...)
 
+	// Process policy attachments (stack -> standalone policy references)
+	attachments, err := pg.generatePolicyAttachments(forma)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate policy attachments: %w", err)
+	}
+	updates = append(updates, attachments...)
+
 	return updates, nil
 }
 
@@ -66,7 +76,22 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 		return nil, nil
 	}
 
-	policies, err := pkgmodel.ParsePolicies(stack.Policies)
+	// Filter out policy references - they are handled as standalone policies
+	var inlinePolicies []json.RawMessage
+	for _, raw := range stack.Policies {
+		if pkgmodel.IsPolicyReference(raw) {
+			slog.Debug("Skipping policy reference in stack (handled as standalone)",
+				"stack", stack.Label)
+			continue
+		}
+		inlinePolicies = append(inlinePolicies, raw)
+	}
+
+	if len(inlinePolicies) == 0 {
+		return nil, nil
+	}
+
+	policies, err := pkgmodel.ParsePolicies(inlinePolicies)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse policies: %w", err)
 	}
@@ -154,10 +179,28 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 			return nil, fmt.Errorf("standalone policy of type %s must have a label", policy.GetType())
 		}
 
-		// For now, always create (we'll add update detection later)
+		var operation PolicyOperation
+
+		// Check if this standalone policy already exists
+		if pg.datastore != nil {
+			existing, err := pg.datastore.GetStandalonePolicy(policy.GetLabel())
+			if err != nil {
+				slog.Warn("Failed to check for existing standalone policy",
+					"label", policy.GetLabel(),
+					"error", err)
+			}
+			if existing != nil {
+				operation = PolicyOperationUpdate
+			} else {
+				operation = PolicyOperationCreate
+			}
+		} else {
+			operation = PolicyOperationCreate
+		}
+
 		update := PolicyUpdate{
 			Policy:     policy,
-			Operation:  PolicyOperationCreate,
+			Operation:  operation,
 			State:      PolicyUpdateStateNotStarted,
 			StackLabel: "", // Empty = standalone
 			StartTs:    now,
@@ -169,6 +212,42 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 			"label", policy.GetLabel(),
 			"type", policy.GetType(),
 			"operation", update.Operation)
+	}
+
+	return updates, nil
+}
+
+// generatePolicyAttachments creates associations between stacks and standalone policies
+func (pg *PolicyUpdateGenerator) generatePolicyAttachments(forma *pkgmodel.Forma) ([]PolicyUpdate, error) {
+	var updates []PolicyUpdate
+	now := util.TimeNow()
+
+	for _, stack := range forma.Stacks {
+		for _, raw := range stack.Policies {
+			if !pkgmodel.IsPolicyReference(raw) {
+				continue
+			}
+
+			policyLabel, err := pkgmodel.ParsePolicyReference(raw)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse policy reference in stack %s: %w", stack.Label, err)
+			}
+
+			// Create an attachment update
+			update := PolicyUpdate{
+				Policy:     nil, // Will be resolved from standalone policy
+				Operation:  PolicyOperationAttach,
+				State:      PolicyUpdateStateNotStarted,
+				StackLabel: stack.Label,
+				PolicyRef:  policyLabel, // Reference to standalone policy
+				StartTs:    now,
+				ModifiedTs: now,
+			}
+			updates = append(updates, update)
+			slog.Debug("Generated policy attachment",
+				"stack", stack.Label,
+				"policyRef", policyLabel)
+		}
 	}
 
 	return updates, nil

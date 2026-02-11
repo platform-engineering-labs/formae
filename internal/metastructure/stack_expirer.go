@@ -175,9 +175,9 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 		},
 		pkgmodel.CommandDestroy,
 		resourceUpdates,
-		nil,                           // No target updates on destroy
-		[]stack_update.StackUpdate{},  // No stack updates on destroy
-		nil,                           // No policy updates on destroy
+		nil,                          // No target updates on destroy
+		[]stack_update.StackUpdate{}, // No stack updates on destroy
+		nil,                          // No policy updates on destroy
 		"stack-expirer",
 	)
 

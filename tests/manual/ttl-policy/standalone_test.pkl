@@ -1,0 +1,43 @@
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/logs/loggroup.pkl"
+
+// Standalone policy defined at forma level
+local ephemeralPolicy = new formae.TTLPolicy {
+    label = "ephemeral-1h"
+    ttl = 1.h
+    onDependents = "abort"
+}
+
+local testTarget = new formae.Target {
+    label = "test-target"
+    config = new aws.Config {
+        region = "us-east-1"
+    }
+}
+
+local testStack = new formae.Stack {
+    label = "test-stack"
+    description = "Stack using standalone policy"
+    // Reference standalone policy via .res
+    policies = new Listing { ephemeralPolicy.res }
+}
+
+forma {
+    // Add standalone policy to forma
+    ephemeralPolicy
+
+    testTarget
+    testStack
+
+    // A simple LogGroup to test the standalone policy
+    new loggroup.LogGroup {
+        label = "standalone-policy-test-loggroup"
+        stack = testStack.res
+        target = testTarget.res
+        logGroupName = "/formae-standalone-policy-test/logs"
+        retentionInDays = 7
+    }
+}

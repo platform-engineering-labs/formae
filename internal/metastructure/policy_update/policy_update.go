@@ -19,6 +19,7 @@ const (
 	PolicyOperationCreate PolicyOperation = "create"
 	PolicyOperationUpdate PolicyOperation = "update"
 	PolicyOperationDelete PolicyOperation = "delete"
+	PolicyOperationAttach PolicyOperation = "attach"
 )
 
 // Re-export state constants for convenience
@@ -38,6 +39,7 @@ type PolicyUpdate struct {
 	Operation      PolicyOperation   `json:"Operation"`
 	State          PolicyUpdateState `json:"State"`
 	StackLabel     string            `json:"StackLabel"` // For inline policies - the stack this policy belongs to
+	PolicyRef      string            `json:"PolicyRef"`  // For attach operations - label of standalone policy being referenced
 	StartTs        time.Time         `json:"StartTs"`
 	ModifiedTs     time.Time         `json:"ModifiedTs"`
 	Version        string            `json:"Version"`
@@ -51,6 +53,7 @@ type policyUpdateJSON struct {
 	Operation      PolicyOperation   `json:"Operation"`
 	State          PolicyUpdateState `json:"State"`
 	StackLabel     string            `json:"StackLabel"`
+	PolicyRef      string            `json:"PolicyRef"`
 	StartTs        time.Time         `json:"StartTs"`
 	ModifiedTs     time.Time         `json:"ModifiedTs"`
 	Version        string            `json:"Version"`
@@ -82,6 +85,7 @@ func (pu PolicyUpdate) MarshalJSON() ([]byte, error) {
 		Operation:      pu.Operation,
 		State:          pu.State,
 		StackLabel:     pu.StackLabel,
+		PolicyRef:      pu.PolicyRef,
 		StartTs:        pu.StartTs,
 		ModifiedTs:     pu.ModifiedTs,
 		Version:        pu.Version,
@@ -99,6 +103,7 @@ func (pu *PolicyUpdate) UnmarshalJSON(data []byte) error {
 	pu.Operation = helper.Operation
 	pu.State = helper.State
 	pu.StackLabel = helper.StackLabel
+	pu.PolicyRef = helper.PolicyRef
 	pu.StartTs = helper.StartTs
 	pu.ModifiedTs = helper.ModifiedTs
 	pu.Version = helper.Version

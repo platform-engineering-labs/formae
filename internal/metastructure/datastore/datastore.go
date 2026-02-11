@@ -197,6 +197,12 @@ type Datastore interface {
 	UpdatePolicy(policy pkgmodel.Policy, commandID string) (string, error)
 	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
 	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
+	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
+	// Returns nil, nil if no policy is found
+	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
+	// AttachPolicyToStack creates an association between a standalone policy and a stack
+	// in the stack_policies junction table. Used for standalone policies referenced via $ref.
+	AttachPolicyToStack(stackID, policyLabel string) error
 	// DeletePoliciesForStack soft-deletes all policies for a stack (cascade delete)
 	DeletePoliciesForStack(stackID string, commandID string) error
 	// GetExpiredStacks returns stacks with TTL policies that have expired,

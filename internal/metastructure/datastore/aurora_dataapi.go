@@ -3376,6 +3376,95 @@ func (d *DatastoreAuroraDataAPI) GetPoliciesForStack(stackID string) ([]pkgmodel
 	return policies, nil
 }
 
+func (d *DatastoreAuroraDataAPI) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
+	ctx := context.Background()
+
+	// Get the latest non-deleted version of the standalone policy with this label
+	query := `
+		WITH latest_policy AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = :label AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policy
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+	}
+
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(result.Records) == 0 {
+		return nil, nil
+	}
+
+	record := result.Records[0]
+	if len(record) < 3 {
+		return nil, nil
+	}
+
+	policyLabel, _ := getStringField(record[0])
+	policyType, _ := getStringField(record[1])
+	policyDataStr, _ := getStringField(record[2])
+
+	return deserializePolicyAurora(policyLabel, policyType, policyDataStr, "")
+}
+
+func (d *DatastoreAuroraDataAPI) AttachPolicyToStack(stackID, policyLabel string) error {
+	ctx := context.Background()
+
+	// First, get the policy ID from the label
+	policyQuery := `
+		WITH latest_policy AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = :label AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT id FROM latest_policy
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+	}
+
+	result, err := d.executeStatement(ctx, policyQuery, params)
+	if err != nil {
+		return fmt.Errorf("failed to get policy ID: %w", err)
+	}
+
+	if len(result.Records) == 0 {
+		return fmt.Errorf("standalone policy not found: %s", policyLabel)
+	}
+
+	policyID, _ := getStringField(result.Records[0][0])
+
+	// Insert into stack_policies (ignore if already exists)
+	insertQuery := `INSERT INTO stack_policies (stack_id, policy_id) VALUES (:stack_id, :policy_id) ON CONFLICT DO NOTHING`
+	insertParams := []types.SqlParameter{
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+		{Name: aws.String("policy_id"), Value: &types.FieldMemberStringValue{Value: policyID}},
+	}
+
+	_, err = d.executeStatement(ctx, insertQuery, insertParams)
+	if err != nil {
+		return fmt.Errorf("failed to attach policy to stack: %w", err)
+	}
+
+	slog.Debug("Attached standalone policy to stack",
+		"stackID", stackID,
+		"policyLabel", policyLabel,
+		"policyID", policyID)
+
+	return nil
+}
+
 func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx := context.Background()
 
@@ -3458,7 +3547,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) 
 	ctx := context.Background()
 
 	// Get stacks with TTL policies that have expired:
-	// - Join stacks with policies on stack_id
+	// - Handles both inline policies (stack_id set) and standalone policies (via stack_policies junction)
 	// - Calculate expiration as stack.valid_from + policy.ttl_seconds
 	// - Exclude stacks with active forma commands
 	// - Only consider latest non-deleted versions of both stacks and policies
@@ -3472,21 +3561,48 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) 
 			SELECT id, label, stack_id, policy_type, policy_data, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
 			FROM policies
+		),
+		-- Inline policies: stack_id is set directly on the policy
+		inline_expired AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       p.policy_data->>'OnDependents' as on_dependents,
+			       s.valid_from
+			FROM latest_stacks s
+			JOIN latest_policies p ON p.stack_id = s.id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'ttl'
+			AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+		),
+		-- Standalone policies: attached via stack_policies junction table
+		standalone_expired AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       p.policy_data->>'OnDependents' as on_dependents,
+			       s.valid_from
+			FROM latest_stacks s
+			JOIN stack_policies sp ON sp.stack_id = s.id
+			JOIN latest_policies p ON p.id = sp.policy_id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'ttl'
+			AND (p.stack_id IS NULL OR p.stack_id = '')  -- standalone policies have NULL or empty stack_id
+			AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+		),
+		-- Combine both inline and standalone expired stacks
+		all_expired AS (
+			SELECT * FROM inline_expired
+			UNION
+			SELECT * FROM standalone_expired
 		)
-		SELECT s.label, s.id, p.policy_data->>'OnDependents'
-		FROM latest_stacks s
-		JOIN latest_policies p ON p.stack_id = s.id
-		WHERE s.rn = 1 AND s.operation != 'delete'
-		AND p.rn = 1 AND p.operation != 'delete'
-		AND p.policy_type = 'ttl'
-		AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
-		AND NOT EXISTS (
+		SELECT stack_label, stack_id, on_dependents
+		FROM all_expired
+		WHERE NOT EXISTS (
 			SELECT 1 FROM resource_updates ru
 			JOIN forma_commands fc ON ru.command_id = fc.command_id
-			WHERE ru.stack_label = s.label
+			WHERE ru.stack_label = all_expired.stack_label
 			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
 		)
-		ORDER BY s.valid_from
+		ORDER BY valid_from
 	`
 
 	output, err := d.executeStatement(ctx, query, nil)

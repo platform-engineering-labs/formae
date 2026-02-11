@@ -1517,6 +1517,75 @@ func (d DatastorePostgres) GetPoliciesForStack(stackID string) ([]pkgmodel.Polic
 	return policies, nil
 }
 
+func (d DatastorePostgres) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
+	ctx, span := tracer.Start(context.Background(), "GetStandalonePolicy")
+	defer span.End()
+
+	// Get the latest non-deleted version of the standalone policy with this label
+	query := `
+		WITH latest_policy AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = $1 AND stack_id IS NULL
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policy
+		WHERE rn = 1 AND operation != 'delete'
+	`
+
+	var policyLabel, policyType, policyDataStr string
+	err := d.pool.QueryRow(ctx, query, label).Scan(&policyLabel, &policyType, &policyDataStr)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return deserializePolicyPostgres(policyLabel, policyType, policyDataStr, "")
+}
+
+func (d DatastorePostgres) AttachPolicyToStack(stackID, policyLabel string) error {
+	ctx, span := tracer.Start(context.Background(), "AttachPolicyToStack")
+	defer span.End()
+
+	// First, get the policy ID from the label
+	// Check for both NULL and empty string for compatibility
+	policyQuery := `
+		WITH latest_policy AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = $1 AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT id FROM latest_policy
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	var policyID string
+	err := d.pool.QueryRow(ctx, policyQuery, policyLabel).Scan(&policyID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("standalone policy not found: %s", policyLabel)
+		}
+		return fmt.Errorf("failed to get policy ID: %w", err)
+	}
+
+	// Insert into stack_policies (ignore if already exists)
+	insertQuery := `INSERT INTO stack_policies (stack_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+	_, err = d.pool.Exec(ctx, insertQuery, stackID, policyID)
+	if err != nil {
+		return fmt.Errorf("failed to attach policy to stack: %w", err)
+	}
+
+	slog.Debug("Attached standalone policy to stack",
+		"stackID", stackID,
+		"policyLabel", policyLabel,
+		"policyID", policyID)
+
+	return nil
+}
+
 func (d DatastorePostgres) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx, span := tracer.Start(context.Background(), "DeletePoliciesForStack")
 	defer span.End()
@@ -1584,7 +1653,7 @@ func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 	defer span.End()
 
 	// Get stacks with TTL policies that have expired:
-	// - Join stacks with policies on stack_id
+	// - Handles both inline policies (stack_id set) and standalone policies (via stack_policies junction)
 	// - Calculate expiration as stack.valid_from + policy.ttl_seconds
 	// - Exclude stacks with active forma commands
 	// - Only consider latest non-deleted versions of both stacks and policies
@@ -1598,21 +1667,48 @@ func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 			SELECT id, label, stack_id, policy_type, policy_data, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
 			FROM policies
+		),
+		-- Inline policies: stack_id is set directly on the policy
+		inline_expired AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       p.policy_data->>'OnDependents' as on_dependents,
+			       s.valid_from
+			FROM latest_stacks s
+			JOIN latest_policies p ON p.stack_id = s.id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'ttl'
+			AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+		),
+		-- Standalone policies: attached via stack_policies junction table
+		standalone_expired AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       p.policy_data->>'OnDependents' as on_dependents,
+			       s.valid_from
+			FROM latest_stacks s
+			JOIN stack_policies sp ON sp.stack_id = s.id
+			JOIN latest_policies p ON p.id = sp.policy_id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'ttl'
+			AND (p.stack_id IS NULL OR p.stack_id = '')  -- standalone policies have NULL or empty stack_id
+			AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+		),
+		-- Combine both inline and standalone expired stacks
+		all_expired AS (
+			SELECT * FROM inline_expired
+			UNION
+			SELECT * FROM standalone_expired
 		)
-		SELECT s.label, s.id, p.policy_data->>'OnDependents'
-		FROM latest_stacks s
-		JOIN latest_policies p ON p.stack_id = s.id
-		WHERE s.rn = 1 AND s.operation != 'delete'
-		AND p.rn = 1 AND p.operation != 'delete'
-		AND p.policy_type = 'ttl'
-		AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
-		AND NOT EXISTS (
+		SELECT stack_label, stack_id, on_dependents
+		FROM all_expired
+		WHERE NOT EXISTS (
 			SELECT 1 FROM resource_updates ru
 			JOIN forma_commands fc ON ru.command_id = fc.command_id
-			WHERE ru.stack_label = s.label
+			WHERE ru.stack_label = all_expired.stack_label
 			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
 		)
-		ORDER BY s.valid_from
+		ORDER BY valid_from
 	`
 
 	rows, err := d.pool.Query(ctx, query)

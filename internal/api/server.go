@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	echoSwagger "github.com/swaggo/echo-swagger"
 
 	_ "github.com/platform-engineering-labs/formae/docs"
@@ -165,6 +166,18 @@ func (s *Server) configureEcho() *echo.Echo {
 
 	e.Logger = logging.NewEchoLogger()
 	e.StdLogger = log.Default()
+
+	// Recover middleware to catch panics and log them
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
+		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			slog.Error("Recovered from panic",
+				"error", err,
+				"method", c.Request().Method,
+				"path", c.Request().URL.Path,
+				"stack", string(stack))
+			return err
+		},
+	}))
 
 	// Forma command endpoints
 	e.POST(CommandsRoute, s.SubmitFormaCommand)

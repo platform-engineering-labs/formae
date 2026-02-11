@@ -54,7 +54,7 @@ open class SubResource {
 open class Stack {
     hidden label: String(length > 0)
     hidden description: String
-    hidden policies: Listing<Policy>?
+    hidden policies: Listing<Policy|PolicyResolvable>?
 
     local parent = this
     hidden res: StackResolvable = new {
@@ -64,7 +64,12 @@ open class Stack {
     // Output
     fixed Label: String = label
     fixed Description: String = description
-    fixed Policies: Listing<Dynamic>? = policies?.toList()?.map((p) -> p.render())?.toListing()
+    fixed Policies: Listing<Dynamic>? = policies?.toList()?.map((p) ->
+        if (p is PolicyResolvable)
+            new Dynamic { `$ref` = "policy://\(p.label)" }
+        else
+            p.render()
+    )?.toListing()
 }
 
 open class StackResolvable extends Resolvable {
@@ -291,6 +296,7 @@ class FormaRender {
     Properties: Dynamic?
     Stacks: Listing<Stack>
     Targets: Listing<Target>
+    Policies: Listing<Dynamic>?
     Resources: Listing<Resource>(validate(this))
     hidden Resolvables: Listing<Resolvable>
 

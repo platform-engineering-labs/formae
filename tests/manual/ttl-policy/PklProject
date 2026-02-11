@@ -2,5 +2,5 @@ amends "pkl:Project"
 
 dependencies {
   ["formae"] = import("../../../plugins/pkl/schema/PklProject")
-  ["aws"] = import("/home/jeroen/.pel/formae/plugins/aws/v0.1.0/schema/pkl/PklProject")
+  ["aws"] = import("../../../../../../.pel/formae/plugins/aws/v0.1.0/schema/pkl/PklProject")
 }

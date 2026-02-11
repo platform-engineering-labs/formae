@@ -545,9 +545,20 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			dur = pu.ModifiedTs.Sub(pu.StartTs)
 		}
 
+		// For attach operations, Policy is nil - use PolicyRef for the label
+		var policyLabel, policyType string
+		if pu.Policy != nil {
+			policyLabel = pu.Policy.GetLabel()
+			policyType = pu.Policy.GetType()
+		} else if pu.PolicyRef != "" {
+			// This is an attach operation - use the policy reference
+			policyLabel = pu.PolicyRef
+			policyType = "" // Type is unknown for attach operations until resolved
+		}
+
 		apiCommand.PolicyUpdates = append(apiCommand.PolicyUpdates, apimodel.PolicyUpdate{
-			PolicyLabel:  pu.Policy.GetLabel(),
-			PolicyType:   pu.Policy.GetType(),
+			PolicyLabel:  policyLabel,
+			PolicyType:   policyType,
 			StackLabel:   pu.StackLabel,
 			Operation:    string(pu.Operation),
 			State:        string(pu.State),

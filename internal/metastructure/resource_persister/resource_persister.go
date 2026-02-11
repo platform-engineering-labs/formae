@@ -547,12 +547,18 @@ func (rp *ResourcePersister) persistPolicyUpdates(updates []policy_update.Policy
 
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
-		rp.Log().Debug("Persisting policy update", "index", i, "label", updates[i].Policy.GetLabel())
-		if err := rp.persistPolicyUpdate(&updates[i], commandID, stackIDMap); err != nil {
-			rp.Log().Error("Failed to persist policy update", "index", i, "label", updates[i].Policy.GetLabel(), "error", err)
-			return nil, fmt.Errorf("failed to persist policy update for %s: %w", updates[i].Policy.GetLabel(), err)
+		// Get label safely - Policy can be nil for attach operations
+		label := updates[i].PolicyRef // Use PolicyRef for attach operations
+		if updates[i].Policy != nil {
+			label = updates[i].Policy.GetLabel()
 		}
-		rp.Log().Debug("Successfully persisted policy update", "index", i, "label", updates[i].Policy.GetLabel())
+
+		rp.Log().Debug("Persisting policy update", "index", i, "label", label, "operation", updates[i].Operation)
+		if err := rp.persistPolicyUpdate(&updates[i], commandID, stackIDMap); err != nil {
+			rp.Log().Error("Failed to persist policy update", "index", i, "label", label, "error", err)
+			return nil, fmt.Errorf("failed to persist policy update for %s: %w", label, err)
+		}
+		rp.Log().Debug("Successfully persisted policy update", "index", i, "label", label)
 		versions = append(versions, updates[i].Version)
 	}
 
@@ -561,8 +567,66 @@ func (rp *ResourcePersister) persistPolicyUpdates(updates []policy_update.Policy
 }
 
 func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpdate, commandID string, stackIDMap map[string]string) error {
+	// Debug: Log the update details
+	policyLabel := ""
+	policyIsNil := update.Policy == nil
+	if !policyIsNil {
+		policyLabel = update.Policy.GetLabel()
+	}
+	slog.Debug("persistPolicyUpdate called",
+		"operation", update.Operation,
+		"stackLabel", update.StackLabel,
+		"policyRef", update.PolicyRef,
+		"policyIsNil", policyIsNil,
+		"policyLabel", policyLabel)
+
+	// PolicyOperationAttach is for attaching a standalone policy to a stack.
+	// The standalone policy already exists, so we persist the attachment in the stack_policies table.
+	if update.Operation == policy_update.PolicyOperationAttach {
+		// Get stack ID from the map
+		stackID, ok := stackIDMap[update.StackLabel]
+		if !ok {
+			update.State = policy_update.PolicyUpdateStateFailed
+			update.ErrorMessage = fmt.Sprintf("stack ID not found for stack label %s", update.StackLabel)
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to attach policy: stack ID not found",
+				"stackLabel", update.StackLabel,
+				"policyRef", update.PolicyRef)
+			return fmt.Errorf("stack ID not found for stack label %s", update.StackLabel)
+		}
+
+		// Persist the attachment in the stack_policies junction table
+		err := rp.datastore.AttachPolicyToStack(stackID, update.PolicyRef)
+		if err != nil {
+			update.State = policy_update.PolicyUpdateStateFailed
+			update.ErrorMessage = err.Error()
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to attach policy to stack",
+				"stackLabel", update.StackLabel,
+				"stackID", stackID,
+				"policyRef", update.PolicyRef,
+				"error", err)
+			return err
+		}
+
+		update.State = policy_update.PolicyUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		slog.Debug("Policy attachment persisted",
+			"stackLabel", update.StackLabel,
+			"stackID", stackID,
+			"policyRef", update.PolicyRef)
+		return nil
+	}
+
+	// Sanity check: Policy should not be nil for create/update operations
+	if update.Policy == nil {
+		slog.Error("Policy is nil for non-attach operation",
+			"operation", update.Operation)
+		return fmt.Errorf("policy is nil for operation %s", update.Operation)
+	}
+
 	// For inline policies, set the stack ID from the map
-	if update.StackLabel != "" {
+	if update.StackLabel != "" && update.Policy != nil {
 		stackID, ok := stackIDMap[update.StackLabel]
 		if !ok {
 			return fmt.Errorf("stack ID not found for stack label %s", update.StackLabel)
@@ -586,8 +650,12 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 		update.State = policy_update.PolicyUpdateStateFailed
 		update.ErrorMessage = err.Error()
 		update.ModifiedTs = util.TimeNow()
+		label := ""
+		if update.Policy != nil {
+			label = update.Policy.GetLabel()
+		}
 		slog.Error("Failed to persist policy",
-			"label", update.Policy.GetLabel(),
+			"label", label,
 			"operation", update.Operation,
 			"error", err)
 		return err
@@ -596,8 +664,12 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 	update.Version = version
 	update.State = policy_update.PolicyUpdateStateSuccess
 	update.ModifiedTs = util.TimeNow()
+	label := ""
+	if update.Policy != nil {
+		label = update.Policy.GetLabel()
+	}
 	slog.Debug("Successfully persisted policy",
-		"label", update.Policy.GetLabel(),
+		"label", label,
 		"operation", update.Operation,
 		"version", version)
 
