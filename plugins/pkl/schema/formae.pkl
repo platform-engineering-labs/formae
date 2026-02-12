@@ -121,6 +121,7 @@ open class FieldHint extends Annotation {
     hidden writeOnly: Boolean = false
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
+    hidden hasProviderDefault: Boolean = false
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
 
@@ -133,6 +134,7 @@ open class FieldHint extends Annotation {
     fixed WriteOnly: Boolean = writeOnly
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
+    fixed HasProviderDefault: Boolean = hasProviderDefault
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
 }

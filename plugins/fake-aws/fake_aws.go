@@ -122,6 +122,14 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 				"Tags",
 				"VersioningConfiguration",
 				"WebsiteConfiguration"},
+			Hints: map[string]model.FieldHint{
+				"BucketEncryption": {
+					HasProviderDefault: true,
+				},
+				"OwnershipControls": {
+					HasProviderDefault: true,
+				},
+			},
 		}, nil
 	}
 }
