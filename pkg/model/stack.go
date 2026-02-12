@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Stack represents a logical grouping of resources with referential integrity.
@@ -16,6 +17,7 @@ type Stack struct {
 	Label       string            `json:"Label"`
 	Description string            `json:"Description"`
 	Policies    []json.RawMessage `json:"Policies,omitempty"` // Inline policies from PKL
+	CreatedAt   time.Time         `json:"CreatedAt,omitempty"`
 }
 
 // IsPolicyReference checks if a raw policy JSON is a reference ($ref) rather than inline

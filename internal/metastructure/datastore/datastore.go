@@ -205,6 +205,8 @@ type Datastore interface {
 	AttachPolicyToStack(stackID, policyLabel string) error
 	// IsPolicyAttachedToStack checks if a standalone policy is attached to a stack via the junction table
 	IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error)
+	// GetStacksReferencingPolicy returns the labels of all stacks that reference a standalone policy
+	GetStacksReferencingPolicy(policyLabel string) ([]string, error)
 	// DeletePoliciesForStack soft-deletes all policies for a stack (cascade delete)
 	DeletePoliciesForStack(stackID string, commandID string) error
 	// GetExpiredStacks returns stacks with TTL policies that have expired,

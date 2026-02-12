@@ -556,16 +556,28 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			policyType = "" // Type is unknown for attach operations until resolved
 		}
 
+		// Marshal policy configs for diff display
+		var policyConfig, oldPolicyConfig json.RawMessage
+		if pu.Policy != nil {
+			policyConfig, _ = json.Marshal(pu.Policy)
+		}
+		if pu.ExistingPolicy != nil {
+			oldPolicyConfig, _ = json.Marshal(pu.ExistingPolicy)
+		}
+
 		apiCommand.PolicyUpdates = append(apiCommand.PolicyUpdates, apimodel.PolicyUpdate{
-			PolicyLabel:  policyLabel,
-			PolicyType:   policyType,
-			StackLabel:   pu.StackLabel,
-			Operation:    string(pu.Operation),
-			State:        string(pu.State),
-			Duration:     dur.Milliseconds(),
-			ErrorMessage: pu.ErrorMessage,
-			StartTs:      pu.StartTs,
-			ModifiedTs:   pu.ModifiedTs,
+			PolicyLabel:       policyLabel,
+			PolicyType:        policyType,
+			StackLabel:        pu.StackLabel,
+			Operation:         string(pu.Operation),
+			State:             string(pu.State),
+			Duration:          dur.Milliseconds(),
+			ErrorMessage:      pu.ErrorMessage,
+			PolicyConfig:      policyConfig,
+			OldPolicyConfig:   oldPolicyConfig,
+			ReferencingStacks: pu.ReferencingStacks,
+			StartTs:           pu.StartTs,
+			ModifiedTs:        pu.ModifiedTs,
 		})
 	}
 

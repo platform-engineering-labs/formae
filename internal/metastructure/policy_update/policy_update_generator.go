@@ -24,6 +24,8 @@ type PolicyDatastore interface {
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
 	// IsPolicyAttachedToStack checks if a standalone policy is attached to a stack
 	IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error)
+	// GetStacksReferencingPolicy returns the labels of all stacks referencing a standalone policy
+	GetStacksReferencingPolicy(policyLabel string) ([]string, error)
 }
 
 // PolicyUpdateGenerator generates policy updates by comparing desired state with existing state
@@ -38,11 +40,10 @@ func NewPolicyUpdateGenerator(ds PolicyDatastore) *PolicyUpdateGenerator {
 
 // GeneratePolicyUpdates determines what policy changes are needed
 func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, command pkgmodel.Command) ([]PolicyUpdate, error) {
-	// For destroy commands, we don't generate policy updates here.
-	// Inline policy deletion happens implicitly when their stack is deleted
-	// (via cascade delete in DeleteStack).
+	// For destroy commands, handle standalone policy deletion
+	// Inline policies are NOT shown - they're deleted implicitly with their stack
 	if command == pkgmodel.CommandDestroy {
-		return nil, nil
+		return pg.generateStandalonePolicyDeletes(forma)
 	}
 
 	var updates []PolicyUpdate
@@ -259,6 +260,20 @@ func (pg *PolicyUpdateGenerator) generatePolicyAttachments(forma *pkgmodel.Forma
 	var updates []PolicyUpdate
 	now := util.TimeNow()
 
+	// Build a map of standalone policies from the forma for quick lookup
+	// (these may not be in the database yet if being created in the same command)
+	formaPolicies := make(map[string]pkgmodel.Policy)
+	if len(forma.Policies) > 0 {
+		policies, err := pkgmodel.ParsePolicies(forma.Policies)
+		if err == nil {
+			for _, p := range policies {
+				if p.GetLabel() != "" {
+					formaPolicies[p.GetLabel()] = p
+				}
+			}
+		}
+	}
+
 	for _, stack := range forma.Stacks {
 		for _, raw := range stack.Policies {
 			if !pkgmodel.IsPolicyReference(raw) {
@@ -268,6 +283,21 @@ func (pg *PolicyUpdateGenerator) generatePolicyAttachments(forma *pkgmodel.Forma
 			policyLabel, err := pkgmodel.ParsePolicyReference(raw)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse policy reference in stack %s: %w", stack.Label, err)
+			}
+
+			// Look up the standalone policy to get its type for display
+			// First check the forma (for policies being created in same command)
+			// Then fall back to the datastore (for existing policies)
+			var policy pkgmodel.Policy
+			if p, ok := formaPolicies[policyLabel]; ok {
+				policy = p
+			} else if pg.datastore != nil {
+				policy, err = pg.datastore.GetStandalonePolicy(policyLabel)
+				if err != nil {
+					slog.Warn("Failed to look up standalone policy",
+						"policyLabel", policyLabel,
+						"error", err)
+				}
 			}
 
 			// Check if this attachment already exists
@@ -288,7 +318,7 @@ func (pg *PolicyUpdateGenerator) generatePolicyAttachments(forma *pkgmodel.Forma
 
 			// Create an attachment update
 			update := PolicyUpdate{
-				Policy:     nil, // Will be resolved from standalone policy
+				Policy:     policy, // Resolved from forma or datastore (may be nil if not found)
 				Operation:  PolicyOperationAttach,
 				State:      PolicyUpdateStateNotStarted,
 				StackLabel: stack.Label,
@@ -299,7 +329,105 @@ func (pg *PolicyUpdateGenerator) generatePolicyAttachments(forma *pkgmodel.Forma
 			updates = append(updates, update)
 			slog.Debug("Generated policy attachment",
 				"stack", stack.Label,
-				"policyRef", policyLabel)
+				"policyRef", policyLabel,
+				"policyType", func() string {
+					if policy != nil {
+						return policy.GetType()
+					}
+					return "unknown"
+				}())
+		}
+	}
+
+	return updates, nil
+}
+
+// generateStandalonePolicyDeletes generates delete/skip operations for standalone policies on destroy
+// Inline policies are NOT included - they're deleted implicitly with their stack
+func (pg *PolicyUpdateGenerator) generateStandalonePolicyDeletes(forma *pkgmodel.Forma) ([]PolicyUpdate, error) {
+	if len(forma.Policies) == 0 {
+		return nil, nil
+	}
+
+	policies, err := pkgmodel.ParsePolicies(forma.Policies)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse standalone policies: %w", err)
+	}
+
+	// Collect all stack labels being destroyed in this command
+	destroyingStacks := make(map[string]bool)
+	for _, stack := range forma.Stacks {
+		destroyingStacks[stack.Label] = true
+	}
+
+	now := util.TimeNow()
+	var updates []PolicyUpdate
+
+	for _, policy := range policies {
+		if policy.GetLabel() == "" {
+			continue // Skip policies without labels
+		}
+
+		// Check if the policy exists in the database
+		if pg.datastore == nil {
+			continue
+		}
+
+		existing, err := pg.datastore.GetStandalonePolicy(policy.GetLabel())
+		if err != nil {
+			slog.Warn("Failed to check for existing standalone policy",
+				"label", policy.GetLabel(),
+				"error", err)
+			continue
+		}
+		if existing == nil {
+			// Policy doesn't exist in DB, nothing to delete
+			continue
+		}
+
+		// Get all stacks referencing this policy
+		referencingStacks, err := pg.datastore.GetStacksReferencingPolicy(policy.GetLabel())
+		if err != nil {
+			slog.Warn("Failed to get stacks referencing policy",
+				"label", policy.GetLabel(),
+				"error", err)
+			continue
+		}
+
+		// Filter out stacks that are being destroyed in this same command
+		var remainingRefs []string
+		for _, stackLabel := range referencingStacks {
+			if !destroyingStacks[stackLabel] {
+				remainingRefs = append(remainingRefs, stackLabel)
+			}
+		}
+
+		if len(remainingRefs) > 0 {
+			// Policy is still referenced by other stacks - skip deletion
+			update := PolicyUpdate{
+				Policy:            existing,
+				Operation:         PolicyOperationSkip,
+				State:             PolicyUpdateStateSuccess, // Skip is always "successful"
+				ReferencingStacks: remainingRefs,
+				StartTs:           now,
+				ModifiedTs:        now,
+			}
+			updates = append(updates, update)
+			slog.Debug("Standalone policy still referenced, skipping delete",
+				"label", policy.GetLabel(),
+				"referencingStacks", remainingRefs)
+		} else {
+			// No remaining references - can delete
+			update := PolicyUpdate{
+				Policy:     existing,
+				Operation:  PolicyOperationDelete,
+				State:      PolicyUpdateStateNotStarted,
+				StartTs:    now,
+				ModifiedTs: now,
+			}
+			updates = append(updates, update)
+			slog.Debug("Generated standalone policy delete",
+				"label", policy.GetLabel())
 		}
 	}
 

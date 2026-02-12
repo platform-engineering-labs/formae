@@ -399,6 +399,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/stacks/{stack}/drift": {
+            "get": {
+                "description": "Retrieves resource modifications (drift) detected since the last reconcile for a given stack.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stacks"
+                ],
+                "summary": "List drift for a stack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The stack label to check for drift.",
+                        "name": "stack",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: Drift report for the stack.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ModifiedStack"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/stats": {
             "get": {
                 "description": "Retrieves usage statistics of the Formae agent.",
@@ -638,6 +673,17 @@ const docTemplate = `{
                 }
             }
         },
+        "model.ModifiedStack": {
+            "type": "object",
+            "properties": {
+                "ModifiedResources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResourceModification"
+                    }
+                }
+            }
+        },
         "model.PluginInfo": {
             "type": "object",
             "properties": {
@@ -671,8 +717,22 @@ const docTemplate = `{
                 "ModifiedTs": {
                     "type": "string"
                 },
+                "OldPolicyConfig": {
+                    "description": "Previous policy configuration (for updates)",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "Operation": {
                     "type": "string"
+                },
+                "PolicyConfig": {
+                    "description": "Current policy configuration",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 },
                 "PolicyLabel": {
                     "type": "string"
@@ -750,6 +810,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "Target": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.ResourceModification": {
+            "type": "object",
+            "properties": {
+                "Label": {
+                    "type": "string"
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "Stack": {
                     "type": "string"
                 },
                 "Type": {
@@ -872,6 +949,9 @@ const docTemplate = `{
         "model.Stack": {
             "type": "object",
             "properties": {
+                "CreatedAt": {
+                    "type": "string"
+                },
                 "Description": {
                     "type": "string"
                 },

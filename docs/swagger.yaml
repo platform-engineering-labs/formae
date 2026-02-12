@@ -112,6 +112,13 @@ definitions:
           $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
         type: array
     type: object
+  model.ModifiedStack:
+    properties:
+      ModifiedResources:
+        items:
+          $ref: '#/definitions/model.ResourceModification'
+        type: array
+    type: object
   model.PluginInfo:
     properties:
       MaxRequestsPerSecond:
@@ -134,8 +141,18 @@ definitions:
         type: string
       ModifiedTs:
         type: string
+      OldPolicyConfig:
+        description: Previous policy configuration (for updates)
+        items:
+          type: integer
+        type: array
       Operation:
         type: string
+      PolicyConfig:
+        description: Current policy configuration
+        items:
+          type: integer
+        type: array
       PolicyLabel:
         type: string
       PolicyType:
@@ -188,6 +205,17 @@ definitions:
       Stack:
         type: string
       Target:
+        type: string
+      Type:
+        type: string
+    type: object
+  model.ResourceModification:
+    properties:
+      Label:
+        type: string
+      Operation:
+        type: string
+      Stack:
         type: string
       Type:
         type: string
@@ -268,6 +296,8 @@ definitions:
     type: object
   model.Stack:
     properties:
+      CreatedAt:
+        type: string
       Description:
         type: string
       ID:
@@ -670,6 +700,30 @@ paths:
           schema:
             type: string
       summary: List stacks
+      tags:
+      - stacks
+  /stacks/{stack}/drift:
+    get:
+      description: Retrieves resource modifications (drift) detected since the last
+        reconcile for a given stack.
+      parameters:
+      - description: The stack label to check for drift.
+        in: path
+        name: stack
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: Drift report for the stack.'
+          schema:
+            $ref: '#/definitions/model.ModifiedStack'
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List drift for a stack
       tags:
       - stacks
   /stats:

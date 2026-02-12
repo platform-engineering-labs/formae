@@ -3172,8 +3172,8 @@ func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	// Uses window function to reliably get the most recent version per stack id
 	// Note: Use COLLATE "C" for binary ordering of KSUID strings (en_US.utf8 collation breaks ASCII ordering)
 	query := `
-		SELECT id, label, description FROM (
-			SELECT id, label, description, operation,
+		SELECT id, label, description, valid_from FROM (
+			SELECT id, label, description, valid_from, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
 			FROM stacks
 		) sub
@@ -3188,7 +3188,7 @@ func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
 
 	var stacks []*pkgmodel.Stack
 	for _, record := range output.Records {
-		if len(record) < 3 {
+		if len(record) < 4 {
 			continue
 		}
 
@@ -3204,11 +3204,13 @@ func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
 		if err != nil {
 			return nil, err
 		}
+		validFrom, _ := getTimestampField(record[3])
 
 		stacks = append(stacks, &pkgmodel.Stack{
 			ID:          id,
 			Label:       label,
 			Description: description,
+			CreatedAt:   validFrom,
 		})
 	}
 
@@ -3540,6 +3542,53 @@ func (d *DatastoreAuroraDataAPI) IsPolicyAttachedToStack(stackLabel, policyLabel
 	}
 
 	return len(result.Records) > 0, nil
+}
+
+func (d *DatastoreAuroraDataAPI) GetStacksReferencingPolicy(policyLabel string) ([]string, error) {
+	ctx := context.Background()
+
+	// Get all stack labels that reference this standalone policy via the junction table
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		),
+		latest_policy AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = :policy_label AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT s.label FROM stack_policies sp
+		JOIN latest_stacks s ON s.id = sp.stack_id
+		JOIN latest_policy p ON p.id = sp.policy_id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		ORDER BY s.label
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("policy_label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+	}
+
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stacks referencing policy: %w", err)
+	}
+
+	var stackLabels []string
+	for _, record := range result.Records {
+		if len(record) < 1 {
+			continue
+		}
+		label, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get stack label: %w", err)
+		}
+		stackLabels = append(stackLabels, label)
+	}
+
+	return stackLabels, nil
 }
 
 func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandID string) error {

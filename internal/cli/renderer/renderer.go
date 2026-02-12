@@ -604,9 +604,78 @@ func formatStackUpdate(root *gtree.Node, su apimodel.StackUpdate) {
 
 // formatSimulatedPolicyUpdate formats a policy update for simulation view
 func formatSimulatedPolicyUpdate(root *gtree.Node, pu apimodel.PolicyUpdate) {
-	op := coloredOperation(pu.Operation)
 	label := formatPolicyLabel(pu)
-	root.Add(display.Greyf("%s policy %s", op, label))
+
+	// Handle "skip" operation specially - display as "not delete"
+	if pu.Operation == "skip" {
+		node := root.Add(display.Greyf("%s policy %s", display.Gold("not delete"), label))
+		if len(pu.ReferencingStacks) > 0 {
+			node.Add(display.Grey("still referenced by: ") + display.LightBlue(strings.Join(pu.ReferencingStacks, ", ")))
+		}
+		return
+	}
+
+	op := coloredOperation(pu.Operation)
+	node := root.Add(display.Greyf("%s policy %s", op, label))
+
+	// Show property changes for update operations
+	if pu.Operation == "update" && len(pu.PolicyConfig) > 0 && len(pu.OldPolicyConfig) > 0 {
+		formatPolicyChanges(node, pu.PolicyConfig, pu.OldPolicyConfig, pu.PolicyType)
+	}
+}
+
+// formatPolicyChanges shows the property changes for a policy update
+func formatPolicyChanges(node *gtree.Node, newConfig, oldConfig json.RawMessage, policyType string) {
+	switch policyType {
+	case "ttl":
+		formatTTLPolicyChanges(node, newConfig, oldConfig)
+	default:
+		// For unknown policy types, show a generic message
+		node.Add(display.Grey("policy configuration changed"))
+	}
+}
+
+// formatTTLPolicyChanges shows changes specific to TTL policies
+func formatTTLPolicyChanges(node *gtree.Node, newConfig, oldConfig json.RawMessage) {
+	var newPolicy, oldPolicy struct {
+		TTLSeconds   int64  `json:"TTLSeconds"`
+		OnDependents string `json:"OnDependents"`
+	}
+
+	if err := json.Unmarshal(newConfig, &newPolicy); err != nil {
+		return
+	}
+	if err := json.Unmarshal(oldConfig, &oldPolicy); err != nil {
+		return
+	}
+
+	changesNode := node.Add(display.Grey("by doing the following:"))
+
+	if newPolicy.TTLSeconds != oldPolicy.TTLSeconds {
+		oldDur := formatDurationFromSeconds(oldPolicy.TTLSeconds)
+		newDur := formatDurationFromSeconds(newPolicy.TTLSeconds)
+		changesNode.Add(display.Gold(fmt.Sprintf(`change "TTLSeconds" from "%s" to "%s"`, oldDur, newDur)))
+	}
+
+	if newPolicy.OnDependents != oldPolicy.OnDependents {
+		changesNode.Add(display.Gold(fmt.Sprintf(`change "OnDependents" from "%s" to "%s"`, oldPolicy.OnDependents, newPolicy.OnDependents)))
+	}
+}
+
+// formatDurationFromSeconds formats seconds into a human-readable duration
+func formatDurationFromSeconds(seconds int64) string {
+	d := time.Duration(seconds) * time.Second
+	if d >= 24*time.Hour {
+		days := int(d.Hours() / 24)
+		return fmt.Sprintf("%dd", days)
+	}
+	if d >= time.Hour {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	if d >= time.Minute {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
 // formatPolicyUpdate formats a policy update for status view
@@ -963,7 +1032,7 @@ func RenderInventoryStacks(stacks []*pkgmodel.Stack, maxRows int) (string, error
 		data[i] = make([]string, 3)
 		data[i][0] = display.LightBlue(stack.Label)
 		data[i][1] = stack.Description
-		data[i][2] = formatStackPolicies(stack.Policies)
+		data[i][2] = formatStackPolicies(stack.Policies, stack.CreatedAt)
 	}
 
 	err := table.Bulk(data)
@@ -1025,7 +1094,7 @@ func formatTargetConfig(configJSON json.RawMessage) string {
 }
 
 // formatStackPolicies formats the policies for display in the stacks table
-func formatStackPolicies(policies []json.RawMessage) string {
+func formatStackPolicies(policies []json.RawMessage, stackCreatedAt time.Time) string {
 	if len(policies) == 0 {
 		return "-"
 	}
@@ -1044,7 +1113,19 @@ func formatStackPolicies(policies []json.RawMessage) string {
 			ttlSeconds, _ := policy["TTLSeconds"].(float64)
 			duration := time.Duration(int64(ttlSeconds)) * time.Second
 			label, _ := policy["Label"].(string)
-			if label != "" {
+
+			// Calculate expiry time if we have a valid stack creation time
+			var expiryStr string
+			if !stackCreatedAt.IsZero() {
+				expiresAt := stackCreatedAt.Add(duration)
+				expiryStr = formatExpiryTime(expiresAt)
+			}
+
+			if label != "" && expiryStr != "" {
+				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s (%s)", formatTTLDuration(duration), expiryStr, label))
+			} else if expiryStr != "" {
+				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s", formatTTLDuration(duration), expiryStr))
+			} else if label != "" {
 				parts = append(parts, fmt.Sprintf("TTL: %s (%s)", formatTTLDuration(duration), label))
 			} else {
 				parts = append(parts, fmt.Sprintf("TTL: %s", formatTTLDuration(duration)))
@@ -1060,6 +1141,27 @@ func formatStackPolicies(policies []json.RawMessage) string {
 		return "-"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// formatExpiryTime formats an expiry time for display
+func formatExpiryTime(expiresAt time.Time) string {
+	now := time.Now()
+	if expiresAt.Before(now) {
+		return display.Red("expired")
+	}
+
+	remaining := expiresAt.Sub(now)
+
+	// If expiring within 24 hours, show relative time
+	if remaining < 24*time.Hour {
+		if remaining < time.Hour {
+			return display.Gold(fmt.Sprintf("in %dm", int(remaining.Minutes())))
+		}
+		return display.Gold(fmt.Sprintf("in %dh%dm", int(remaining.Hours()), int(remaining.Minutes())%60))
+	}
+
+	// Otherwise show the date and time
+	return expiresAt.Local().Format("Jan 2 15:04")
 }
 
 // formatTTLDuration formats a duration in a human-friendly way

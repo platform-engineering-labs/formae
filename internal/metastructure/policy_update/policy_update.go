@@ -20,6 +20,7 @@ const (
 	PolicyOperationUpdate PolicyOperation = "update"
 	PolicyOperationDelete PolicyOperation = "delete"
 	PolicyOperationAttach PolicyOperation = "attach"
+	PolicyOperationSkip   PolicyOperation = "skip" // Policy not deleted because still referenced
 )
 
 // Re-export state constants for convenience
@@ -34,30 +35,32 @@ type PolicyUpdateState = types.PolicyUpdateState
 
 // PolicyUpdate represents a policy change operation
 type PolicyUpdate struct {
-	Policy         pkgmodel.Policy   `json:"-"`
-	ExistingPolicy pkgmodel.Policy   `json:"-"`
-	Operation      PolicyOperation   `json:"Operation"`
-	State          PolicyUpdateState `json:"State"`
-	StackLabel     string            `json:"StackLabel"` // For inline policies - the stack this policy belongs to
-	PolicyRef      string            `json:"PolicyRef"`  // For attach operations - label of standalone policy being referenced
-	StartTs        time.Time         `json:"StartTs"`
-	ModifiedTs     time.Time         `json:"ModifiedTs"`
-	Version        string            `json:"Version"`
-	ErrorMessage   string            `json:"ErrorMessage,omitempty"`
+	Policy           pkgmodel.Policy   `json:"-"`
+	ExistingPolicy   pkgmodel.Policy   `json:"-"`
+	Operation        PolicyOperation   `json:"Operation"`
+	State            PolicyUpdateState `json:"State"`
+	StackLabel       string            `json:"StackLabel"`       // For inline policies - the stack this policy belongs to
+	PolicyRef        string            `json:"PolicyRef"`        // For attach operations - label of standalone policy being referenced
+	ReferencingStacks []string         `json:"ReferencingStacks"` // For skip operations - stacks still referencing this policy
+	StartTs          time.Time         `json:"StartTs"`
+	ModifiedTs       time.Time         `json:"ModifiedTs"`
+	Version          string            `json:"Version"`
+	ErrorMessage     string            `json:"ErrorMessage,omitempty"`
 }
 
 // policyUpdateJSON is a helper struct for JSON marshaling/unmarshaling
 type policyUpdateJSON struct {
-	Policy         json.RawMessage   `json:"Policy,omitempty"`
-	ExistingPolicy json.RawMessage   `json:"ExistingPolicy,omitempty"`
-	Operation      PolicyOperation   `json:"Operation"`
-	State          PolicyUpdateState `json:"State"`
-	StackLabel     string            `json:"StackLabel"`
-	PolicyRef      string            `json:"PolicyRef"`
-	StartTs        time.Time         `json:"StartTs"`
-	ModifiedTs     time.Time         `json:"ModifiedTs"`
-	Version        string            `json:"Version"`
-	ErrorMessage   string            `json:"ErrorMessage,omitempty"`
+	Policy            json.RawMessage   `json:"Policy,omitempty"`
+	ExistingPolicy    json.RawMessage   `json:"ExistingPolicy,omitempty"`
+	Operation         PolicyOperation   `json:"Operation"`
+	State             PolicyUpdateState `json:"State"`
+	StackLabel        string            `json:"StackLabel"`
+	PolicyRef         string            `json:"PolicyRef"`
+	ReferencingStacks []string          `json:"ReferencingStacks,omitempty"`
+	StartTs           time.Time         `json:"StartTs"`
+	ModifiedTs        time.Time         `json:"ModifiedTs"`
+	Version           string            `json:"Version"`
+	ErrorMessage      string            `json:"ErrorMessage,omitempty"`
 }
 
 // MarshalJSON implements custom JSON marshaling for PolicyUpdate
@@ -80,16 +83,17 @@ func (pu PolicyUpdate) MarshalJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(policyUpdateJSON{
-		Policy:         policyJSON,
-		ExistingPolicy: existingPolicyJSON,
-		Operation:      pu.Operation,
-		State:          pu.State,
-		StackLabel:     pu.StackLabel,
-		PolicyRef:      pu.PolicyRef,
-		StartTs:        pu.StartTs,
-		ModifiedTs:     pu.ModifiedTs,
-		Version:        pu.Version,
-		ErrorMessage:   pu.ErrorMessage,
+		Policy:            policyJSON,
+		ExistingPolicy:    existingPolicyJSON,
+		Operation:         pu.Operation,
+		State:             pu.State,
+		StackLabel:        pu.StackLabel,
+		PolicyRef:         pu.PolicyRef,
+		ReferencingStacks: pu.ReferencingStacks,
+		StartTs:           pu.StartTs,
+		ModifiedTs:        pu.ModifiedTs,
+		Version:           pu.Version,
+		ErrorMessage:      pu.ErrorMessage,
 	})
 }
 
@@ -104,6 +108,7 @@ func (pu *PolicyUpdate) UnmarshalJSON(data []byte) error {
 	pu.State = helper.State
 	pu.StackLabel = helper.StackLabel
 	pu.PolicyRef = helper.PolicyRef
+	pu.ReferencingStacks = helper.ReferencingStacks
 	pu.StartTs = helper.StartTs
 	pu.ModifiedTs = helper.ModifiedTs
 	pu.Version = helper.Version

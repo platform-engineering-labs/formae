@@ -1285,8 +1285,8 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	// Get all stacks at their latest version that aren't deleted
 	// Uses window function to reliably get the most recent version per stack id
 	query := `
-		SELECT id, label, description FROM (
-			SELECT id, label, description, operation,
+		SELECT id, label, description, valid_from FROM (
+			SELECT id, label, description, valid_from, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
 			FROM stacks
 		) sub
@@ -1302,13 +1302,15 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	var stacks []*pkgmodel.Stack
 	for rows.Next() {
 		var id, label, description string
-		if err := rows.Scan(&id, &label, &description); err != nil {
+		var validFrom time.Time
+		if err := rows.Scan(&id, &label, &description, &validFrom); err != nil {
 			return nil, err
 		}
 		stacks = append(stacks, &pkgmodel.Stack{
 			ID:          id,
 			Label:       label,
 			Description: description,
+			CreatedAt:   validFrom,
 		})
 	}
 
@@ -1589,6 +1591,52 @@ func (d DatastoreSQLite) IsPolicyAttachedToStack(stackLabel, policyLabel string)
 		return false, fmt.Errorf("failed to check policy attachment: %w", err)
 	}
 	return true, nil
+}
+
+func (d DatastoreSQLite) GetStacksReferencingPolicy(policyLabel string) ([]string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetStacksReferencingPolicy")
+	defer span.End()
+
+	// Get all stack labels that reference this standalone policy via the junction table
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM stacks
+		),
+		latest_policy AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM policies
+			WHERE label = ? AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT s.label FROM stack_policies sp
+		JOIN latest_stacks s ON s.id = sp.stack_id
+		JOIN latest_policy p ON p.id = sp.policy_id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		ORDER BY s.label
+	`
+	rows, err := d.conn.Query(query, policyLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stacks referencing policy: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stackLabels []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, fmt.Errorf("failed to scan stack label: %w", err)
+		}
+		stackLabels = append(stackLabels, label)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating stacks: %w", err)
+	}
+
+	return stackLabels, nil
 }
 
 func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string) error {
