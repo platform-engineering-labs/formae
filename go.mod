@@ -14,8 +14,6 @@ replace github.com/platform-engineering-labs/formae/pkg/api/model => ./pkg/api/m
 
 replace github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests => ./pkg/plugin-conformance-tests
 
-replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
-
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05

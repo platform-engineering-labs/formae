@@ -6,8 +6,6 @@ replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plug
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
-replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
-
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17 // indirect

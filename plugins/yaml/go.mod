@@ -6,8 +6,6 @@ replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plug
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
-replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
-
 require (
 	github.com/alecthomas/chroma/v2 v2.20.0
 	github.com/masterminds/semver v1.5.0

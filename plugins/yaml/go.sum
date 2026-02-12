@@ -1,7 +1,7 @@
+ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 h1:8b8Y8gLBvQrDIuKFSCwT089l1iltqsTEWXzhm/pSguE=
+ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5/go.mod h1:epgQDQTm93L3/plOnIejSYbl/SNhulI78aa1LC0tLn0=
 ergo.services/ergo v1.999.320 h1:IYyjCBJvXPLW8Mpy6pq5FoBa2RjNAS4QSL2lK7bBueQ=
 ergo.services/ergo v1.999.320/go.mod h1:bLQ6PoO6Mz/8gVuzvPv3xfMfo1P9w6rZV1WnMXMeMdg=
-github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4 h1:JdoPbqQSv9iDCfkBFH5wDZCNpYHgJJVsrD7Xg0Jp57o=
-github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4/go.mod h1:XbiEudzYCbg5YvbIMqylWXH2iWnUeKagDTfPR7uOaqg=
 github.com/Masterminds/semver v1.5.0 h1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=
 github.com/Masterminds/semver v1.5.0/go.mod h1:MB6lktGJrhw8PrUyiEoblNEGEQ+RzHPF078ddwwvV3Y=
 github.com/alecthomas/assert/v2 v2.11.0 h1:2Q9r3ki8+JYXvGsDyBXwH3LcJ+WK5D0gc5E8vS6K3D0=

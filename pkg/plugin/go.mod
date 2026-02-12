@@ -6,8 +6,6 @@ toolchain go1.25.1
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../model
 
-replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
-
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/ergo v1.999.320

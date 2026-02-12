@@ -62,5 +62,3 @@ require (
 replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plugin
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
-
-replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
