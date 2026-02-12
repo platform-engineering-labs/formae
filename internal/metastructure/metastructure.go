@@ -53,6 +53,7 @@ type MetastructureAPI interface {
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
 	ExtractStacks() ([]*pkgmodel.Stack, error)
+	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
@@ -945,6 +946,36 @@ func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 
 	slog.Debug("ExtractStacks returning", "count", len(stacks))
 	return stacks, nil
+}
+
+func (m *Metastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
+	policies, err := m.Datastore.ListAllStandalonePolicies()
+	if err != nil {
+		return nil, err
+	}
+
+	var items []apimodel.PolicyInventoryItem
+	for _, policy := range policies {
+		configJSON, err := json.Marshal(policy)
+		if err != nil {
+			slog.Warn("Failed to marshal policy config", "label", policy.GetLabel(), "error", err)
+			continue
+		}
+
+		stacks, err := m.Datastore.GetStacksReferencingPolicy(policy.GetLabel())
+		if err != nil {
+			slog.Warn("Failed to get stacks for policy", "label", policy.GetLabel(), "error", err)
+		}
+
+		items = append(items, apimodel.PolicyInventoryItem{
+			Label:          policy.GetLabel(),
+			Type:           policy.GetType(),
+			Config:         configJSON,
+			AttachedStacks: stacks,
+		})
+	}
+
+	return items, nil
 }
 
 func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) error {

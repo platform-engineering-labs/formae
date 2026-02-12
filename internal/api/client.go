@@ -495,6 +495,28 @@ func (c *Client) ListStacks() ([]*pkgmodel.Stack, error) {
 	}
 }
 
+func (c *Client) ListPolicies() ([]apimodel.PolicyInventoryItem, error) {
+	resp, err := c.resty.R().
+		Get(c.endpoint + "/api/v1/policies")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list policies: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var policies []apimodel.PolicyInventoryItem
+		if err := json.NewDecoder(resp.Body).Decode(&policies); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return policies, nil
+	case http.StatusNotFound:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
 func (c *Client) ForceSync() error {
 	_, err := c.resty.R().
 		Post(c.endpoint + "/api/v1/admin/synchronize")

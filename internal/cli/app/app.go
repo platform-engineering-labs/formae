@@ -548,6 +548,30 @@ func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
 	return stacks, nags, nil
 }
 
+func (a *App) ExtractPolicies() ([]apimodel.PolicyInventoryItem, []string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	policies, err := client.ListPolicies()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if policies == nil {
+		policies = []apimodel.PolicyInventoryItem{}
+	}
+
+	return policies, nags, nil
+}
+
 // Plugins
 
 func (p *Plugins) List() []*plugin.Plugin {

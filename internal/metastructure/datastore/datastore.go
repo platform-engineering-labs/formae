@@ -200,6 +200,8 @@ type Datastore interface {
 	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
 	// Returns nil, nil if no policy is found
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
+	// ListAllStandalonePolicies returns all non-deleted standalone policies (stack_id IS NULL)
+	ListAllStandalonePolicies() ([]pkgmodel.Policy, error)
 	// AttachPolicyToStack creates an association between a standalone policy and a stack
 	// in the stack_policies junction table. Used for standalone policies referenced via $ref.
 	AttachPolicyToStack(stackID, policyLabel string) error

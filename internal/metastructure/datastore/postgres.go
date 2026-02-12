@@ -1587,6 +1587,49 @@ func (d DatastorePostgres) GetStandalonePolicy(label string) (pkgmodel.Policy, e
 	return deserializePolicyPostgres(policyLabel, policyType, policyDataStr, "")
 }
 
+func (d DatastorePostgres) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
+	ctx, span := tracer.Start(context.Background(), "ListAllStandalonePolicies")
+	defer span.End()
+
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+		ORDER BY label
+	`
+	rows, err := d.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list standalone policies: %w", err)
+	}
+	defer rows.Close()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var label, policyType, policyDataStr string
+		if err := rows.Scan(&label, &policyType, &policyDataStr); err != nil {
+			return nil, fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policy, err := deserializePolicyPostgres(label, policyType, policyDataStr, "")
+		if err != nil {
+			slog.Warn("Failed to deserialize policy", "label", label, "error", err)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating policies: %w", err)
+	}
+
+	return policies, nil
+}
+
 func (d DatastorePostgres) AttachPolicyToStack(stackID, policyLabel string) error {
 	ctx, span := tracer.Start(context.Background(), "AttachPolicyToStack")
 	defer span.End()

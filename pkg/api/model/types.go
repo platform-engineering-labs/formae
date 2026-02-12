@@ -128,6 +128,14 @@ type PolicyUpdate struct {
 	ModifiedTs        time.Time       `json:"ModifiedTs,omitempty"`
 }
 
+// PolicyInventoryItem represents a standalone policy in the inventory
+type PolicyInventoryItem struct {
+	Label          string          `json:"Label"`
+	Type           string          `json:"Type"`
+	Config         json.RawMessage `json:"Config"`
+	AttachedStacks []string        `json:"AttachedStacks,omitempty"`
+}
+
 type Stats struct {
 	Version            string         `json:"Version"`
 	AgentID            string         `json:"AgentId"`

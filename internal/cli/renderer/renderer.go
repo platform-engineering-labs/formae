@@ -1187,6 +1187,85 @@ func formatTTLDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
+// RenderInventoryPolicies renders a list of standalone policies in a table format
+func RenderInventoryPolicies(policies []apimodel.PolicyInventoryItem, maxRows int) (string, error) {
+	var buf strings.Builder
+	table := tablewriter.NewTable(&buf,
+		tablewriter.WithRowAutoWrap(tw.WrapBreak),
+		tablewriter.WithHeaderAutoFormat(tw.Off),
+		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
+			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On, ShowHeader: tw.On}},
+		})))
+	table.Header(display.LightBlue("Label"), "Type", "Config", "Attached Stacks")
+
+	effectiveMaxRows := len(policies)
+	if maxRows > 0 && maxRows < len(policies) {
+		effectiveMaxRows = maxRows
+	}
+
+	data := make([][]string, effectiveMaxRows)
+	for i := 0; i < effectiveMaxRows; i++ {
+		policy := policies[i]
+
+		data[i] = make([]string, 4)
+		data[i][0] = display.LightBlue(policy.Label)
+		data[i][1] = policy.Type
+		data[i][2] = formatPolicyConfig(policy.Type, policy.Config)
+		if len(policy.AttachedStacks) > 0 {
+			data[i][3] = strings.Join(policy.AttachedStacks, ", ")
+		} else {
+			data[i][3] = display.Grey("none")
+		}
+	}
+
+	err := table.Bulk(data)
+	if err != nil {
+		return "", fmt.Errorf("error rendering policies: %v", err)
+	}
+
+	if len(policies) == 0 {
+		return display.Gold("No standalone policies found.\n"), nil
+	}
+
+	err = table.Render()
+	if err != nil {
+		return "", fmt.Errorf("error rendering policies: %v", err)
+	}
+
+	summary := fmt.Sprintf("\n%s Showing %d of %d total policies",
+		display.Gold("Summary:"),
+		effectiveMaxRows,
+		len(policies))
+
+	if maxRows > 0 && len(policies) > maxRows {
+		summary += fmt.Sprintf(" (use --max-results %d to see all)", len(policies))
+	}
+
+	return buf.String() + summary + "\n", nil
+}
+
+// formatPolicyConfig formats policy config for display in the inventory table
+func formatPolicyConfig(policyType string, configJSON json.RawMessage) string {
+	if len(configJSON) == 0 {
+		return "-"
+	}
+
+	switch policyType {
+	case "ttl":
+		var config map[string]any
+		if err := json.Unmarshal(configJSON, &config); err != nil {
+			return string(configJSON)
+		}
+		if ttlSeconds, ok := config["TTLSeconds"].(float64); ok {
+			duration := time.Duration(int64(ttlSeconds)) * time.Second
+			return fmt.Sprintf("TTL: %s", formatTTLDuration(duration))
+		}
+		return string(configJSON)
+	default:
+		return string(configJSON)
+	}
+}
+
 // RenderCancelCommandResponse renders the result of a cancel command
 func RenderCancelCommandResponse(response *apimodel.CancelCommandResponse) (string, error) {
 	var buf strings.Builder

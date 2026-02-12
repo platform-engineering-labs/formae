@@ -3458,6 +3458,46 @@ func (d *DatastoreAuroraDataAPI) GetStandalonePolicy(label string) (pkgmodel.Pol
 	return deserializePolicyAurora(policyLabel, policyType, policyDataStr, "")
 }
 
+func (d *DatastoreAuroraDataAPI) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
+	ctx := context.Background()
+
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+		ORDER BY label
+	`
+	result, err := d.executeStatement(ctx, query, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list standalone policies: %w", err)
+	}
+
+	var policies []pkgmodel.Policy
+	for _, record := range result.Records {
+		if len(record) < 3 {
+			continue
+		}
+		label, _ := getStringField(record[0])
+		policyType, _ := getStringField(record[1])
+		policyDataStr, _ := getStringField(record[2])
+
+		policy, err := deserializePolicyAurora(label, policyType, policyDataStr, "")
+		if err != nil {
+			slog.Warn("Failed to deserialize policy", "label", label, "error", err)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	return policies, nil
+}
+
 func (d *DatastoreAuroraDataAPI) AttachPolicyToStack(stackID, policyLabel string) error {
 	ctx := context.Background()
 
