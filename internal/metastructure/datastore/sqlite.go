@@ -80,6 +80,21 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 		return nil, err
 	}
 
+	// Enable WAL mode for better concurrency - allows readers to proceed during writes.
+	// This prevents timeouts when concurrent operations (like CleanupEmptyStacks) need
+	// to read while bulk operations are writing.
+	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		slog.Error("Failed to enable WAL mode", "error", err)
+		return nil, err
+	}
+
+	// Set a busy timeout so SQLite waits instead of immediately failing when locked.
+	// 10 seconds should be more than enough for any operation to complete.
+	if _, err := conn.Exec("PRAGMA busy_timeout=10000"); err != nil {
+		slog.Error("Failed to set busy timeout", "error", err)
+		return nil, err
+	}
+
 	// SQLite doesn't handle concurrent writes well - limit to a single connection
 	// to avoid "database is locked" errors during concurrent operations.
 	conn.SetMaxOpenConns(1)
@@ -1909,6 +1924,56 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	loadedResource.Ksuid = ksuidResult
 
 	return &loadedResource, nil
+}
+
+// FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
+// This is essential for referential integrity — without it we risk leaving orphaned resources in an
+// inconsistent state. Currently this requires a full table scan (LIKE on the data column) which will
+// be slow for users with large resource counts.
+// TODO: make the dependency graph discoverable from the schema so we can query edges directly.
+func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "FindResourcesDependingOn")
+	defer span.End()
+
+	// Search for resources that contain a $ref to this KSUID in their properties
+	// The format is: "formae://KSUID#/..." (JSON without spaces after colons)
+	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE data LIKE ?
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version > r1.version
+	)
+	AND operation != ?
+	`
+
+	rows, err := d.conn.Query(query, pattern, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, nil
 }
 
 func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {

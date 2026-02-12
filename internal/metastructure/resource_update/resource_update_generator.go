@@ -164,6 +164,9 @@ func generateResourceUpdatesForDestroy(
 
 	var resourceDestroys []ResourceUpdate
 
+	// Track KSUIDs of resources being explicitly deleted
+	explicitDeleteKSUIDs := make(map[string]bool)
+
 	for _, stack := range forma.SplitByStack() {
 		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -191,13 +194,105 @@ func generateResourceUpdatesForDestroy(
 						return nil, fmt.Errorf("failed to create resource destroy for %s: %w", existingResource.Label, err)
 					}
 
+					explicitDeleteKSUIDs[existingResource.Ksuid] = true
 					resourceDestroys = append(resourceDestroys, resourceDestroy)
 				}
 			}
 		}
 	}
 
+	// Find cascade deletes - resources that reference the resources being deleted
+	cascadeDeletes, err := findCascadeDeletes(explicitDeleteKSUIDs, targetMap, source, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find cascade deletes: %w", err)
+	}
+
+	resourceDestroys = append(resourceDestroys, cascadeDeletes...)
+
 	return resourceDestroys, nil
+}
+
+// findCascadeDeletes finds all resources that must be deleted because they reference
+// resources being deleted. Uses BFS to find the full cascade chain.
+func findCascadeDeletes(
+	toDelete map[string]bool,
+	targetMap map[string]*pkgmodel.Target,
+	source FormaCommandSource,
+	ds ResourceDataLookup) ([]ResourceUpdate, error) {
+
+	var cascadeDeletes []ResourceUpdate
+	processed := make(map[string]bool)
+
+	// Copy toDelete to processed - these are already being deleted
+	for ksuid := range toDelete {
+		processed[ksuid] = true
+	}
+
+	// BFS queue - start with all explicit deletes
+	queue := make([]string, 0, len(toDelete))
+	for ksuid := range toDelete {
+		queue = append(queue, ksuid)
+	}
+
+	for len(queue) > 0 {
+		currentKSUID := queue[0]
+		queue = queue[1:]
+
+		// Find resources that depend on the current resource
+		dependents, err := ds.FindResourcesDependingOn(currentKSUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find resources depending on %s: %w", currentKSUID, err)
+		}
+
+		for _, dependent := range dependents {
+			if processed[dependent.Ksuid] {
+				continue
+			}
+			processed[dependent.Ksuid] = true
+
+			// Skip unmanaged (discovered) resources - they have implicit lifecycle
+			// ties to their parents and the provider will handle their deletion automatically.
+			// If they can't be deleted, the user will see an error from the provider explaining why.
+			if dependent.Stack == constants.UnmanagedStack {
+				slog.Debug("Skipping cascade delete for unmanaged resource",
+					"resource", dependent.Label,
+					"type", dependent.Type,
+					"dependsOn", currentKSUID)
+				continue
+			}
+
+			// Find the source resource label for the cascade message
+			sourceLabel := currentKSUID // fallback to KSUID
+			if _, isExplicit := toDelete[currentKSUID]; isExplicit {
+				sourceLabel = currentKSUID
+			}
+
+			target, ok := targetMap[dependent.Target]
+			if !ok {
+				slog.Warn("Target not found for cascade delete", "target", dependent.Target, "resource", dependent.Label)
+				continue
+			}
+
+			resourceDestroy, err := NewResourceUpdateForDestroy(
+				*dependent,
+				*target,
+				source,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create cascade destroy for %s: %w", dependent.Label, err)
+			}
+
+			resourceDestroy.IsCascade = true
+			resourceDestroy.CascadeSource = sourceLabel
+
+			cascadeDeletes = append(cascadeDeletes, resourceDestroy)
+
+			// Add to queue for further cascade detection
+			queue = append(queue, dependent.Ksuid)
+		}
+	}
+
+	return cascadeDeletes, nil
 }
 
 func generateResourceUpdatesForApply(
@@ -275,6 +370,10 @@ func generateResourceUpdatesForSync(
 				if resource.Stack == stack.SingleStackLabel() &&
 					resource.Label == existingResource.Label &&
 					resource.Type == existingResource.Type {
+
+					// Use the schema from the forma resource (which may have been refreshed
+					// from the plugin) rather than the stale schema stored in the DB
+					existingResource.Schema = resource.Schema
 
 					resourceUpdate, err := NewResourceUpdateForSync(
 						*existingResource,

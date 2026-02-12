@@ -704,6 +704,9 @@
         "model.ResourceUpdate": {
             "type": "object",
             "properties": {
+                "CascadeSource": {
+                    "type": "string"
+                },
                 "CurrentAttempt": {
                     "type": "integer"
                 },
@@ -716,6 +719,9 @@
                 },
                 "GroupId": {
                     "type": "string"
+                },
+                "IsCascade": {
+                    "type": "boolean"
                 },
                 "MaxAttempts": {
                     "type": "integer"

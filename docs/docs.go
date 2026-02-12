@@ -710,6 +710,9 @@ const docTemplate = `{
         "model.ResourceUpdate": {
             "type": "object",
             "properties": {
+                "CascadeSource": {
+                    "type": "string"
+                },
                 "CurrentAttempt": {
                     "type": "integer"
                 },
@@ -722,6 +725,9 @@ const docTemplate = `{
                 },
                 "GroupId": {
                     "type": "string"
+                },
+                "IsCascade": {
+                    "type": "boolean"
                 },
                 "MaxAttempts": {
                     "type": "integer"

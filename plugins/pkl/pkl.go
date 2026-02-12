@@ -127,15 +127,15 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 	translated := pkgmodel.Config{
 		Agent: pkgmodel.AgentConfig{
 			Server: pkgmodel.ServerConfig{
-				Nodename:     config.Agent.Server.Nodename,
-				Hostname:     config.Agent.Server.Hostname,
-				Port:         int(config.Agent.Server.Port),
+				Nodename:      config.Agent.Server.Nodename,
+				Hostname:      config.Agent.Server.Hostname,
+				Port:          int(config.Agent.Server.Port),
 				ErgoPort:      int(config.Agent.Server.ErgoPort),
 				RegistrarPort: int(config.Agent.Server.RegistrarPort),
 				Secret:        config.Agent.Server.Secret,
-				ObserverPort: int(config.Agent.Server.ObserverPort),
-				TLSCert:      config.Agent.Server.TLSCert,
-				TLSKey:       config.Agent.Server.TLSKey,
+				ObserverPort:  int(config.Agent.Server.ObserverPort),
+				TLSCert:       config.Agent.Server.TLSCert,
+				TLSKey:        config.Agent.Server.TLSKey,
 			},
 			Datastore: pkgmodel.DatastoreConfig{
 				DatastoreType: config.Agent.Datastore.DatastoreType,
@@ -429,7 +429,8 @@ func (p PKL) ProjectProperties(path string) (map[string]pkgmodel.Prop, error) {
 }
 
 func (p PKL) Serialize(resource *pkgmodel.Resource, options *plugin.SerializeOptions) (string, error) {
-	return p.serializeWithPKL(resource, options)
+	forma := pkgmodel.FormaFromResources([]*pkgmodel.Resource{resource})
+	return p.serializeWithPKL(forma, options)
 }
 
 func (p PKL) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOptions) (string, error) {

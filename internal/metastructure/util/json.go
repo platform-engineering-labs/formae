@@ -25,18 +25,25 @@ func JsonEqual(s1, s2 string) bool {
 	return reflect.DeepEqual(j1, j2)
 }
 
-func JsonEqualRaw(a, b json.RawMessage) bool {
-	if a == nil && b == nil {
+// isEmptyConfig checks if a json.RawMessage represents an empty/absent config
+// (nil, empty slice, or empty object {})
+func isEmptyConfig(msg json.RawMessage) bool {
+	if len(msg) == 0 {
 		return true
 	}
-	if a == nil || b == nil {
-		return false
-	}
+	// Check for empty object "{}" (possibly with whitespace)
+	trimmed := string(msg)
+	return trimmed == "{}" || trimmed == "{ }" || trimmed == "null"
+}
 
-	if len(a) == 0 && len(b) == 0 {
+func JsonEqualRaw(a, b json.RawMessage) bool {
+	// Treat nil, empty slice, empty object {}, and null as equivalent
+	aEmpty := isEmptyConfig(a)
+	bEmpty := isEmptyConfig(b)
+	if aEmpty && bEmpty {
 		return true
 	}
-	if len(a) == 0 || len(b) == 0 {
+	if aEmpty || bEmpty {
 		return false
 	}
 

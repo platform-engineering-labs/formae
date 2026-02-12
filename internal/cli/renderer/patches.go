@@ -321,14 +321,16 @@ func cleanPatchPath(path string) string {
 
 	// Convert array indices
 	// e.g. "Tags/3/Value" -> "Tags[3].Value"
-	parts := strings.Split(path, "/")
-	for i, part := range parts {
-		if i > 0 {
+	segments := strings.Split(path, "/")
+	var parts []string
+	for _, part := range segments {
+		if len(parts) > 0 {
 			if _, err := strconv.Atoi(part); err == nil {
-				parts[i-1] = parts[i-1] + "[" + part + "]"
-				parts = append(parts[:i], parts[i+1:]...)
+				parts[len(parts)-1] = parts[len(parts)-1] + "[" + part + "]"
+				continue
 			}
 		}
+		parts = append(parts, part)
 	}
 
 	return strings.Join(parts, ".")

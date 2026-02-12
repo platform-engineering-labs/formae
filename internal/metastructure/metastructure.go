@@ -54,6 +54,7 @@ type MetastructureAPI interface {
 	ExtractStacks() ([]*pkgmodel.Stack, error)
 	ForceSync() error
 	ForceDiscovery() error
+	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
 }
 
@@ -446,6 +447,8 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			ErrorMessage:   ru.MostRecentFailureMessage(),
 			StatusMessage:  ru.MostRecentStatusMessage(),
 			GroupID:        ru.GroupID,
+			IsCascade:      ru.IsCascade,
+			CascadeSource:  ru.CascadeSource,
 		})
 	}
 
@@ -725,12 +728,20 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 
 	targetNames := make([]string, 0)
 	uniqueTargets := make(map[string]struct{})
+	stackLabels := make([]string, 0)
+	uniqueStacks := make(map[string]struct{})
 
 	for _, resource := range resources {
 		if resource.Target != "" {
 			if _, exists := uniqueTargets[resource.Target]; !exists {
 				uniqueTargets[resource.Target] = struct{}{}
 				targetNames = append(targetNames, resource.Target)
+			}
+		}
+		if resource.Stack != "" {
+			if _, exists := uniqueStacks[resource.Stack]; !exists {
+				uniqueStacks[resource.Stack] = struct{}{}
+				stackLabels = append(stackLabels, resource.Stack)
 			}
 		}
 	}
@@ -748,6 +759,20 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 		for _, t := range targets {
 			if t != nil {
 				forma.Targets = append(forma.Targets, *t)
+			}
+		}
+	}
+
+	if len(stackLabels) > 0 {
+		forma.Stacks = make([]pkgmodel.Stack, 0, len(stackLabels))
+		for _, label := range stackLabels {
+			stack, err := m.Datastore.GetStackByLabel(label)
+			if err != nil {
+				slog.Error("Failed to load stack by label", "label", label, "error", err)
+				continue
+			}
+			if stack != nil {
+				forma.Stacks = append(forma.Stacks, *stack)
 			}
 		}
 	}
@@ -849,6 +874,21 @@ func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.R
 	}
 
 	return nil
+}
+
+func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
+	modifications, err := m.Datastore.GetResourceModificationsSinceLastReconcile(stack)
+	if err != nil {
+		slog.Error("Failed to get drift for stack", "stack", stack, "error", err)
+		return nil, fmt.Errorf("failed to get drift for stack %s: %w", stack, err)
+	}
+
+	modifiedResources := make([]apimodel.ResourceModification, 0, len(modifications))
+	for _, modification := range modifications {
+		modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
+	}
+
+	return &apimodel.ModifiedStack{ModifiedResources: modifiedResources}, nil
 }
 
 func (m *Metastructure) ForceSync() error {
