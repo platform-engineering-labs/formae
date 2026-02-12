@@ -13,10 +13,11 @@ type Schema struct {
 }
 
 type FieldHint struct {
-	CreateOnly       bool `json:"CreateOnly" pkl:"CreateOnly"`
-	WriteOnly        bool `json:"WriteOnly" pkl:"WriteOnly"`
-	Required         bool `json:"Required" pkl:"Required"`
-	RequiredOnCreate bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
+	CreateOnly         bool `json:"CreateOnly" pkl:"CreateOnly"`
+	WriteOnly          bool `json:"WriteOnly" pkl:"WriteOnly"`
+	Required           bool `json:"Required" pkl:"Required"`
+	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
+	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
@@ -55,4 +56,8 @@ func (s Schema) RequiredOnCreate() []string {
 
 func (s Schema) WriteOnly() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.WriteOnly }, true)
+}
+
+func (s Schema) HasProviderDefault() []string {
+	return filterFields(s, func(h FieldHint) bool { return h.HasProviderDefault }, true)
 }

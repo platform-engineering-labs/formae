@@ -157,7 +157,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 
 	for _, tc := range testCases[1:2] {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -229,7 +229,7 @@ func TestCreatePatchDocument_ObjectArrayWithKeyValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -303,7 +303,7 @@ func TestCreatePatchDocument_ObjectArrayWithValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -695,4 +695,252 @@ func TestGeneratePatch_AddTagsWhileRetainingExisting(t *testing.T) {
 	require.True(t, ok, "Second patch value should be a map")
 	assert.Equal(t, "FormaeStackLabel", tag2["Key"])
 	assert.Equal(t, "network-stack", tag2["Value"])
+}
+
+func TestGeneratePatch_HasProviderDefaultFieldsNotRemoved(t *testing.T) {
+	// This simulates a scenario where:
+	// - BucketEncryption is a field with HasProviderDefault (AWS assigns a default)
+	// - The user's PKL file doesn't specify BucketEncryption
+	// - The actual state from AWS has BucketEncryption with provider-assigned default
+	// - We should NOT generate a "remove" operation for BucketEncryption
+
+	// Existing state (what AWS has - includes provider-assigned BucketEncryption)
+	document := []byte(`{
+		"BucketName": "my-bucket",
+		"BucketEncryption": {
+			"ServerSideEncryptionConfiguration": [{
+				"ServerSideEncryptionByDefault": {
+					"SSEAlgorithm": "AES256"
+				}
+			}]
+		}
+	}`)
+
+	// Desired state (from PKL file - user didn't specify BucketEncryption)
+	patch := []byte(`{
+		"BucketName": "my-bucket"
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"BucketName", "BucketEncryption"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"BucketEncryption": {
+				HasProviderDefault: true,
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	// There should be NO patch operations since BucketEncryption has a provider default
+	// and the user didn't specify it (so we accept the provider's default)
+	assert.Empty(t, patchDoc, "Expected no patch operations when provider default field is not specified by user")
+}
+
+func TestGeneratePatch_HasProviderDefaultFieldsOverridden(t *testing.T) {
+	// This simulates a scenario where:
+	// - BucketEncryption is a field with HasProviderDefault
+	// - The user's PKL file DOES specify BucketEncryption (they want to override the default)
+	// - The actual state from AWS has a different BucketEncryption value
+	// - We SHOULD generate a patch operation to apply the user's override
+
+	// Existing state (what AWS has - provider-assigned default using AES256)
+	document := []byte(`{
+		"BucketName": "my-bucket",
+		"BucketEncryption": {
+			"SSEAlgorithm": "AES256"
+		}
+	}`)
+
+	// Desired state (from PKL file - user wants KMS encryption instead)
+	patch := []byte(`{
+		"BucketName": "my-bucket",
+		"BucketEncryption": {
+			"SSEAlgorithm": "aws:kms",
+			"KMSMasterKeyID": "arn:aws:kms:us-east-1:123456789012:key/my-key"
+		}
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"BucketName", "BucketEncryption"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"BucketEncryption": {
+				HasProviderDefault: true,
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	// patchDoc should not be empty when there are actual differences
+	require.NotEmpty(t, patchDoc, "Expected patch document when user overrides provider default")
+
+	var patches []jsonpatch.JsonPatchOperation
+	err = json.Unmarshal(patchDoc, &patches)
+	require.NoError(t, err)
+
+	// We expect patch operations to change the encryption settings
+	assert.NotEmpty(t, patches, "Expected patch operations when user overrides provider default")
+
+	// Verify that there's at least one operation related to encryption
+	hasEncryptionOp := false
+	for _, p := range patches {
+		if p.Path == "/BucketEncryption" || (len(p.Path) > len("/BucketEncryption") && p.Path[:len("/BucketEncryption")] == "/BucketEncryption") {
+			hasEncryptionOp = true
+			break
+		}
+	}
+	assert.True(t, hasEncryptionOp, "Expected patch operation for BucketEncryption")
+}
+
+func TestRemoveProviderDefaultFields_FieldNotInDesired(t *testing.T) {
+	// When field is in document but NOT in patch, it should be removed from document
+	document := []byte(`{
+		"Name": "test",
+		"Encryption": {
+			"Algorithm": "AES256"
+		}
+	}`)
+
+	patch := []byte(`{
+		"Name": "test"
+	}`)
+
+	result, err := removeProviderDefaultFields(document, patch, []string{"Encryption"})
+	require.NoError(t, err)
+
+	var resultMap map[string]any
+	err = json.Unmarshal(result, &resultMap)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test", resultMap["Name"])
+	_, hasEncryption := resultMap["Encryption"]
+	assert.False(t, hasEncryption, "Encryption should be removed when not in desired state")
+}
+
+func TestRemoveProviderDefaultFields_FieldInDesired(t *testing.T) {
+	// When field is in BOTH document and patch, it should NOT be removed from document
+	document := []byte(`{
+		"Name": "test",
+		"Encryption": {
+			"Algorithm": "AES256"
+		}
+	}`)
+
+	patch := []byte(`{
+		"Name": "test",
+		"Encryption": {
+			"Algorithm": "aws:kms"
+		}
+	}`)
+
+	result, err := removeProviderDefaultFields(document, patch, []string{"Encryption"})
+	require.NoError(t, err)
+
+	var resultMap map[string]any
+	err = json.Unmarshal(result, &resultMap)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test", resultMap["Name"])
+	encryption, hasEncryption := resultMap["Encryption"]
+	assert.True(t, hasEncryption, "Encryption should NOT be removed when in desired state")
+	encMap, ok := encryption.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "AES256", encMap["Algorithm"], "Original encryption value should be preserved")
+}
+
+func TestFieldExistsInMap_TopLevel(t *testing.T) {
+	obj := map[string]any{
+		"Name": "test",
+		"Tags": []any{},
+	}
+
+	assert.True(t, fieldExistsInMap(obj, []string{"Name"}))
+	assert.True(t, fieldExistsInMap(obj, []string{"Tags"}))
+	assert.False(t, fieldExistsInMap(obj, []string{"NotPresent"}))
+}
+
+func TestFieldExistsInMap_Nested(t *testing.T) {
+	obj := map[string]any{
+		"Name": "test",
+		"Config": map[string]any{
+			"Encryption": map[string]any{
+				"Algorithm": "AES256",
+			},
+		},
+	}
+
+	assert.True(t, fieldExistsInMap(obj, []string{"Config"}))
+	assert.True(t, fieldExistsInMap(obj, []string{"Config", "Encryption"}))
+	assert.True(t, fieldExistsInMap(obj, []string{"Config", "Encryption", "Algorithm"}))
+	assert.False(t, fieldExistsInMap(obj, []string{"Config", "NotPresent"}))
+	assert.False(t, fieldExistsInMap(obj, []string{"Config", "Encryption", "NotPresent"}))
+}
+
+func TestFieldExistsInMap_EmptyPath(t *testing.T) {
+	obj := map[string]any{
+		"Name": "test",
+	}
+
+	assert.False(t, fieldExistsInMap(obj, []string{}))
+}
+
+func TestRemoveProviderDefaultFields_NestedField(t *testing.T) {
+	// Test nested field path like "BucketEncryption.ServerSideEncryptionConfiguration"
+	document := []byte(`{
+		"Name": "test",
+		"BucketEncryption": {
+			"ServerSideEncryptionConfiguration": [{
+				"SSEAlgorithm": "AES256"
+			}],
+			"OtherSetting": "value"
+		}
+	}`)
+
+	patch := []byte(`{
+		"Name": "test",
+		"BucketEncryption": {
+			"OtherSetting": "value"
+		}
+	}`)
+
+	// Only remove the nested field, not the parent
+	result, err := removeProviderDefaultFields(document, patch, []string{"BucketEncryption.ServerSideEncryptionConfiguration"})
+	require.NoError(t, err)
+
+	var resultMap map[string]any
+	err = json.Unmarshal(result, &resultMap)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test", resultMap["Name"])
+
+	bucketEncryption, hasBE := resultMap["BucketEncryption"]
+	assert.True(t, hasBE, "BucketEncryption should still exist")
+
+	beMap, ok := bucketEncryption.(map[string]any)
+	require.True(t, ok)
+
+	_, hasSSEC := beMap["ServerSideEncryptionConfiguration"]
+	assert.False(t, hasSSEC, "ServerSideEncryptionConfiguration should be removed")
+
+	assert.Equal(t, "value", beMap["OtherSetting"], "OtherSetting should be preserved")
+}
+
+func TestRemoveProviderDefaultFields_EmptyList(t *testing.T) {
+	// When no fields are specified, document should be unchanged
+	document := []byte(`{
+		"Name": "test",
+		"Encryption": "AES256"
+	}`)
+
+	result, err := removeProviderDefaultFields(document, []byte(`{"Name": "test"}`), []string{})
+	require.NoError(t, err)
+
+	assert.Equal(t, string(document), string(result))
 }

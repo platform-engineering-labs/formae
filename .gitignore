@@ -94,6 +94,9 @@ docs/design/
 .serena/
 .handoffs/
 
+# Git worktrees
+.worktrees/
+
 # External plugin cache (cloned plugin repos during build)
 .plugins/
 
