@@ -606,6 +606,12 @@ func formatStackUpdate(root *gtree.Node, su apimodel.StackUpdate) {
 func formatSimulatedPolicyUpdate(root *gtree.Node, pu apimodel.PolicyUpdate) {
 	label := formatPolicyLabel(pu)
 
+	// Handle "detach" - show as removing the policy from the stack
+	if pu.Operation == "detach" {
+		root.Add(display.Greyf("%s policy %s", display.Gold("detach"), label))
+		return
+	}
+
 	// Handle "skip" operation specially - display as "not delete"
 	if pu.Operation == "skip" {
 		node := root.Add(display.Greyf("%s policy %s", display.Gold("not delete"), label))

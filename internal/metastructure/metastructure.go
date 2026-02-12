@@ -545,15 +545,14 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			dur = pu.ModifiedTs.Sub(pu.StartTs)
 		}
 
-		// For attach operations, Policy is nil - use PolicyRef for the label
+		// For attach/detach operations, Policy may be nil - use PolicyRef for the label
 		var policyLabel, policyType string
 		if pu.Policy != nil {
 			policyLabel = pu.Policy.GetLabel()
 			policyType = pu.Policy.GetType()
 		} else if pu.PolicyRef != "" {
-			// This is an attach operation - use the policy reference
 			policyLabel = pu.PolicyRef
-			policyType = "" // Type is unknown for attach operations until resolved
+			policyType = "" // Type unknown until resolved
 		}
 
 		// Marshal policy configs for diff display

@@ -26,6 +26,8 @@ type PolicyDatastore interface {
 	IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error)
 	// GetStacksReferencingPolicy returns the labels of all stacks referencing a standalone policy
 	GetStacksReferencingPolicy(policyLabel string) ([]string, error)
+	// GetAttachedPolicyLabelsForStack returns the labels of all standalone policies attached to a stack
+	GetAttachedPolicyLabelsForStack(stackLabel string) ([]string, error)
 }
 
 // PolicyUpdateGenerator generates policy updates by comparing desired state with existing state
@@ -70,6 +72,13 @@ func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, co
 		return nil, fmt.Errorf("failed to generate policy attachments: %w", err)
 	}
 	updates = append(updates, attachments...)
+
+	// Process policy detachments (existing attachments no longer in desired state)
+	detachments, err := pg.generatePolicyDetachments(forma)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate policy detachments: %w", err)
+	}
+	updates = append(updates, detachments...)
 
 	return updates, nil
 }
@@ -336,6 +345,78 @@ func (pg *PolicyUpdateGenerator) generatePolicyAttachments(forma *pkgmodel.Forma
 					}
 					return "unknown"
 				}())
+		}
+	}
+
+	return updates, nil
+}
+
+// generatePolicyDetachments detects standalone policies that are currently attached to a stack
+// but are no longer referenced in the desired state, and generates detach operations.
+func (pg *PolicyUpdateGenerator) generatePolicyDetachments(forma *pkgmodel.Forma) ([]PolicyUpdate, error) {
+	if pg.datastore == nil {
+		return nil, nil
+	}
+
+	// Build a set of desired policy references per stack
+	desiredRefs := make(map[string]map[string]bool) // stack label -> set of policy labels
+	for _, stack := range forma.Stacks {
+		refs := make(map[string]bool)
+		for _, raw := range stack.Policies {
+			if !pkgmodel.IsPolicyReference(raw) {
+				continue
+			}
+			policyLabel, err := pkgmodel.ParsePolicyReference(raw)
+			if err != nil {
+				continue
+			}
+			refs[policyLabel] = true
+		}
+		desiredRefs[stack.Label] = refs
+	}
+
+	now := util.TimeNow()
+	var updates []PolicyUpdate
+
+	for _, stack := range forma.Stacks {
+		// Get currently attached standalone policies for this stack
+		attachedLabels, err := pg.datastore.GetAttachedPolicyLabelsForStack(stack.Label)
+		if err != nil {
+			slog.Warn("Failed to get attached policies for stack",
+				"stack", stack.Label,
+				"error", err)
+			continue
+		}
+
+		desired := desiredRefs[stack.Label]
+
+		for _, policyLabel := range attachedLabels {
+			if desired[policyLabel] {
+				continue // Still referenced, no detach needed
+			}
+
+			// Look up the policy for type display
+			var policy pkgmodel.Policy
+			policy, err = pg.datastore.GetStandalonePolicy(policyLabel)
+			if err != nil {
+				slog.Warn("Failed to look up standalone policy for detach",
+					"policyLabel", policyLabel,
+					"error", err)
+			}
+
+			update := PolicyUpdate{
+				Policy:     policy,
+				Operation:  PolicyOperationDetach,
+				State:      PolicyUpdateStateNotStarted,
+				StackLabel: stack.Label,
+				PolicyRef:  policyLabel,
+				StartTs:    now,
+				ModifiedTs: now,
+			}
+			updates = append(updates, update)
+			slog.Debug("Generated policy detachment",
+				"stack", stack.Label,
+				"policyRef", policyLabel)
 		}
 	}
 

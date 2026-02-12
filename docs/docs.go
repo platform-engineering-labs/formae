@@ -741,6 +741,13 @@ const docTemplate = `{
                     "description": "\"ttl\", etc.",
                     "type": "string"
                 },
+                "ReferencingStacks": {
+                    "description": "For skip operations - stacks still referencing this policy",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "StackLabel": {
                     "type": "string"
                 },

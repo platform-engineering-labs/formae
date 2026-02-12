@@ -158,6 +158,11 @@ definitions:
       PolicyType:
         description: '"ttl", etc.'
         type: string
+      ReferencingStacks:
+        description: For skip operations - stacks still referencing this policy
+        items:
+          type: string
+        type: array
       StackLabel:
         type: string
       StartTs:

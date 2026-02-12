@@ -1709,6 +1709,87 @@ func (d DatastorePostgres) GetStacksReferencingPolicy(policyLabel string) ([]str
 	return stackLabels, nil
 }
 
+func (d DatastorePostgres) GetAttachedPolicyLabelsForStack(stackLabel string) ([]string, error) {
+	ctx, span := tracer.Start(context.Background(), "GetAttachedPolicyLabelsForStack")
+	defer span.End()
+
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+			WHERE label = $1
+		),
+		latest_policies AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT p.label FROM stack_policies sp
+		JOIN latest_stacks s ON s.id = sp.stack_id
+		JOIN latest_policies p ON p.id = sp.policy_id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		ORDER BY p.label
+	`
+	rows, err := d.pool.Query(ctx, query, stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get attached policies for stack: %w", err)
+	}
+	defer rows.Close()
+
+	var policyLabels []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, fmt.Errorf("failed to scan policy label: %w", err)
+		}
+		policyLabels = append(policyLabels, label)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating policies: %w", err)
+	}
+
+	return policyLabels, nil
+}
+
+func (d DatastorePostgres) DetachPolicyFromStack(stackLabel, policyLabel string) error {
+	ctx, span := tracer.Start(context.Background(), "DetachPolicyFromStack")
+	defer span.End()
+
+	query := `
+		DELETE FROM stack_policies
+		WHERE stack_id IN (
+			SELECT id FROM (
+				SELECT id, label, operation,
+				       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+				FROM stacks
+				WHERE label = $1
+			) sub WHERE rn = 1 AND operation != 'delete'
+		)
+		AND policy_id IN (
+			SELECT id FROM (
+				SELECT id, label, operation,
+				       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+				FROM policies
+				WHERE label = $2 AND (stack_id IS NULL OR stack_id = '')
+			) sub WHERE rn = 1 AND operation != 'delete'
+		)
+	`
+	_, err := d.pool.Exec(ctx, query, stackLabel, policyLabel)
+	if err != nil {
+		return fmt.Errorf("failed to detach policy from stack: %w", err)
+	}
+
+	slog.Debug("Detached standalone policy from stack",
+		"stackLabel", stackLabel,
+		"policyLabel", policyLabel)
+
+	return nil
+}
+
 func (d DatastorePostgres) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx, span := tracer.Start(context.Background(), "DeletePoliciesForStack")
 	defer span.End()

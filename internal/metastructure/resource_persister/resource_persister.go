@@ -618,6 +618,35 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 		return nil
 	}
 
+	// PolicyOperationDetach removes a standalone policy attachment from a stack.
+	if update.Operation == policy_update.PolicyOperationDetach {
+		err := rp.datastore.DetachPolicyFromStack(update.StackLabel, update.PolicyRef)
+		if err != nil {
+			update.State = policy_update.PolicyUpdateStateFailed
+			update.ErrorMessage = err.Error()
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to detach policy from stack",
+				"stackLabel", update.StackLabel,
+				"policyRef", update.PolicyRef,
+				"error", err)
+			return err
+		}
+
+		update.State = policy_update.PolicyUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		slog.Debug("Policy detachment persisted",
+			"stackLabel", update.StackLabel,
+			"policyRef", update.PolicyRef)
+		return nil
+	}
+
+	// PolicyOperationSkip doesn't require persistence - it's informational only
+	if update.Operation == policy_update.PolicyOperationSkip {
+		update.State = policy_update.PolicyUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		return nil
+	}
+
 	// Sanity check: Policy should not be nil for create/update operations
 	if update.Policy == nil {
 		slog.Error("Policy is nil for non-attach operation",

@@ -3591,6 +3591,92 @@ func (d *DatastoreAuroraDataAPI) GetStacksReferencingPolicy(policyLabel string) 
 	return stackLabels, nil
 }
 
+func (d *DatastoreAuroraDataAPI) GetAttachedPolicyLabelsForStack(stackLabel string) ([]string, error) {
+	ctx := context.Background()
+
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+			WHERE label = :stack_label
+		),
+		latest_policies AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT p.label FROM stack_policies sp
+		JOIN latest_stacks s ON s.id = sp.stack_id
+		JOIN latest_policies p ON p.id = sp.policy_id
+		WHERE s.rn = 1 AND s.operation != 'delete'
+		AND p.rn = 1 AND p.operation != 'delete'
+		ORDER BY p.label
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_label"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
+	}
+
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get attached policies for stack: %w", err)
+	}
+
+	var policyLabels []string
+	for _, record := range result.Records {
+		if len(record) < 1 {
+			continue
+		}
+		label, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get policy label: %w", err)
+		}
+		policyLabels = append(policyLabels, label)
+	}
+
+	return policyLabels, nil
+}
+
+func (d *DatastoreAuroraDataAPI) DetachPolicyFromStack(stackLabel, policyLabel string) error {
+	ctx := context.Background()
+
+	query := `
+		DELETE FROM stack_policies
+		WHERE stack_id IN (
+			SELECT id FROM (
+				SELECT id, label, operation,
+				       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+				FROM stacks
+				WHERE label = :stack_label
+			) sub WHERE rn = 1 AND operation != 'delete'
+		)
+		AND policy_id IN (
+			SELECT id FROM (
+				SELECT id, label, operation,
+				       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+				FROM policies
+				WHERE label = :policy_label AND (stack_id IS NULL OR stack_id = '')
+			) sub WHERE rn = 1 AND operation != 'delete'
+		)
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_label"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
+		{Name: aws.String("policy_label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+	}
+
+	_, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return fmt.Errorf("failed to detach policy from stack: %w", err)
+	}
+
+	slog.Debug("Detached standalone policy from stack",
+		"stackLabel", stackLabel,
+		"policyLabel", policyLabel)
+
+	return nil
+}
+
 func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx := context.Background()
 

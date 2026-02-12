@@ -20,7 +20,8 @@ const (
 	PolicyOperationUpdate PolicyOperation = "update"
 	PolicyOperationDelete PolicyOperation = "delete"
 	PolicyOperationAttach PolicyOperation = "attach"
-	PolicyOperationSkip   PolicyOperation = "skip" // Policy not deleted because still referenced
+	PolicyOperationDetach PolicyOperation = "detach" // Remove standalone policy attachment from stack
+	PolicyOperationSkip   PolicyOperation = "skip"   // Policy not deleted because still referenced
 )
 
 // Re-export state constants for convenience
