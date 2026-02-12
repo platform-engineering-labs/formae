@@ -73,7 +73,9 @@ type ResourceUpdate struct {
 	GroupID                  string                   `json:"GroupId,omitempty"`
 	ReferenceLabels          map[string]string        `json:"ReferenceLabels,omitempty"`
 	PreviousProperties       json.RawMessage          `json:"PreviousProperties,omitempty"`
-	MatchFilters             []plugin.MatchFilter     `json:"matchFilters,omitempty"` // Declarative filters (any match = exclude)
+	MatchFilters             []plugin.MatchFilter     `json:"matchFilters,omitempty"`  // Declarative filters (any match = exclude)
+	IsCascade                bool                     `json:"IsCascade,omitempty"`     // True if this delete is triggered by cascade
+	CascadeSource            string                   `json:"CascadeSource,omitempty"` // Label of resource that triggered the cascade
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {

@@ -1126,13 +1126,15 @@ func TestResourcePersister_CleanupEmptyStacks(t *testing.T) {
 	assert.NotNil(t, stack)
 
 	// Send CleanupEmptyStacks - stack should NOT be deleted because it has resources
-	result := persister.Call(sender, messages.CleanupEmptyStacks{
+	// Use SendMessage (async) to match production code which uses proc.Send
+	persister.SendMessage(sender, messages.CleanupEmptyStacks{
 		StackLabels: []string{"test-stack"},
 		CommandID:   "cmd-2",
 	})
-	assert.NoError(t, result.Error)
 
-	// Verify stack still exists
+	// Give time for the async message to be processed, then verify stack still exists
+	// (we need to wait to prove CleanupEmptyStacks correctly preserved the non-empty stack)
+	time.Sleep(100 * time.Millisecond)
 	stack, err = ds.GetStackByLabel("test-stack")
 	assert.NoError(t, err)
 	assert.NotNil(t, stack, "Stack should still exist because it has resources")
@@ -1145,16 +1147,16 @@ func TestResourcePersister_CleanupEmptyStacks(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Send CleanupEmptyStacks - stack should be deleted because it's now empty
-	result = persister.Call(sender, messages.CleanupEmptyStacks{
+	persister.SendMessage(sender, messages.CleanupEmptyStacks{
 		StackLabels: []string{"test-stack"},
 		CommandID:   "cmd-4",
 	})
-	assert.NoError(t, result.Error)
 
-	// Verify stack was deleted
-	stack, err = ds.GetStackByLabel("test-stack")
-	assert.NoError(t, err)
-	assert.Nil(t, stack, "Stack should be deleted because it's empty")
+	// Verify stack was deleted - use Eventually since SendMessage is async
+	assert.Eventually(t, func() bool {
+		stack, err = ds.GetStackByLabel("test-stack")
+		return err == nil && stack == nil
+	}, 5*time.Second, 100*time.Millisecond, "Stack should be deleted because it's empty")
 }
 
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.

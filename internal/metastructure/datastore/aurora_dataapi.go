@@ -1666,6 +1666,67 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 	return &resource, nil
 }
 
+// FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
+// This is essential for referential integrity — without it we risk leaving orphaned resources in an
+// inconsistent state. Currently this requires a full table scan (LIKE on the data column) which will
+// be slow for users with large resource counts.
+// TODO: make the dependency graph discoverable from the schema so we can query edges directly.
+func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
+	ctx := context.Background()
+
+	// Search for resources that contain a $ref to this KSUID in their properties
+	// The format is: "formae://KSUID#/..." (JSON without spaces after colons)
+	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE data LIKE :pattern
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != :operation
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("pattern"), Value: &types.FieldMemberStringValue{Value: pattern}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resources []*pkgmodel.Resource
+	for _, record := range output.Records {
+		if len(record) < 2 {
+			return nil, fmt.Errorf("unexpected record length: %d", len(record))
+		}
+
+		jsonData, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse data: %w", err)
+		}
+
+		ksuidResult, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, nil
+}
+
 func (d *DatastoreAuroraDataAPI) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
 	var lastVersionID string
 	for _, resource := range stack.Resources {

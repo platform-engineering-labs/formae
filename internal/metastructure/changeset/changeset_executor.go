@@ -120,7 +120,9 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 		proc.Log().Debug("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
 			resourcePersisterPID := gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()}
-			_, err := proc.Call(resourcePersisterPID, messages.CleanupEmptyStacks{
+			// Use Send instead of Call - we don't need the response (CleanupEmptyStacks returns nil),
+			// and Call can timeout in state enter callbacks due to Ergo framework limitations.
+			err := proc.Send(resourcePersisterPID, messages.CleanupEmptyStacks{
 				StackLabels: data.stacksWithDeletes,
 				CommandID:   data.changeset.CommandID,
 			})

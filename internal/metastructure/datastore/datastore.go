@@ -122,6 +122,8 @@ type Datastore interface {
 	LatestLabelForResource(label string) (string, error)
 	// LoadResourceById retrieves a resource by its KSUID
 	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
+	// FindResourcesDependingOn returns all resources that reference the given resource via $ref
+	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
 
 	// Resource-by-stack operations - query resources grouped by stack
 

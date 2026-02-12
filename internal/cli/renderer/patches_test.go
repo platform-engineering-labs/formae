@@ -182,6 +182,43 @@ func TestFormatReferenceValue(t *testing.T) {
 	})
 }
 
+func TestCleanPatchPath(t *testing.T) {
+	t.Run("simple path without indices", func(t *testing.T) {
+		assert.Equal(t, "spec.replicas", cleanPatchPath("/spec/replicas"))
+	})
+
+	t.Run("single array index", func(t *testing.T) {
+		assert.Equal(t, "Tags[3].Value", cleanPatchPath("/Tags/3/Value"))
+	})
+
+	t.Run("multiple array indices", func(t *testing.T) {
+		assert.Equal(t,
+			"spec.template.spec.containers[0].args[0]",
+			cleanPatchPath("/spec/template/spec/containers/0/args/0"),
+		)
+	})
+
+	t.Run("consecutive array indices", func(t *testing.T) {
+		assert.Equal(t, "matrix[1][2]", cleanPatchPath("/matrix/1/2"))
+	})
+
+	t.Run("path without leading slash", func(t *testing.T) {
+		assert.Equal(t, "metadata.name", cleanPatchPath("metadata/name"))
+	})
+
+	t.Run("single segment", func(t *testing.T) {
+		assert.Equal(t, "name", cleanPatchPath("/name"))
+	})
+
+	t.Run("empty path", func(t *testing.T) {
+		assert.Equal(t, "", cleanPatchPath(""))
+	})
+
+	t.Run("index at end of path", func(t *testing.T) {
+		assert.Equal(t, "items[0]", cleanPatchPath("/items/0"))
+	})
+}
+
 func TestFormatPatchDocument_TagsPropertyCreated_ShowsTagsAndManagementMessage(t *testing.T) {
 	node := gtree.NewRoot("")
 	patchDoc := []map[string]any{

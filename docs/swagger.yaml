@@ -160,6 +160,8 @@ definitions:
     type: object
   model.ResourceUpdate:
     properties:
+      CascadeSource:
+        type: string
       CurrentAttempt:
         type: integer
       Duration:
@@ -169,6 +171,8 @@ definitions:
         type: string
       GroupId:
         type: string
+      IsCascade:
+        type: boolean
       MaxAttempts:
         type: integer
       OldProperties:

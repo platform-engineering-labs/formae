@@ -15,12 +15,7 @@ import (
 	"github.com/platform-engineering-labs/jsonpatch"
 )
 
-var defaultIgnoredFields = []jsonpatch.Path{
-	"$.SecurityGroupIngress[*].SourceSecurityGroupOwnerId",
-	"$.BucketEncryption.ServerSideEncryptionConfiguration",
-	"$.SecurityGroupIngress",
-	"$.SecurityGroupEgress",
-}
+var defaultIgnoredFields = []jsonpatch.Path{}
 
 func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
 	return generatePatch(document, patch, properties, schema, mode)
@@ -61,7 +56,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), schema.HasProviderDefault(), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -79,7 +74,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	return json.RawMessage(patchJson), needsReplacement, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, hasProviderDefaultFields []string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
 	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields)
 	if err != nil {
 		return nil, err
@@ -95,8 +90,18 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 		return nil, err
 	}
 
+	// Remove provider default fields from the document (existing state) if they are not in the desired state (patch).
+	// Provider default fields are optional fields that cloud providers assign default values to.
+	// If the user didn't specify the field in their PKL, we don't want to generate a "remove" operation
+	// that would delete the provider-assigned default. By removing these fields from the document
+	// before comparison (only when they're not in the desired state), we prevent oscillation.
+	documentWithoutProviderDefaults, err := removeProviderDefaultFields(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, hasProviderDefaultFields)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create the actual patch document
-	patchDoc, err := jsonpatch.CreatePatch(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
+	patchDoc, err := jsonpatch.CreatePatch(documentWithoutProviderDefaults, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JSON patch: %w", err)
 	}
@@ -144,6 +149,64 @@ func removeNestedField(obj map[string]any, path []string) {
 	if nested, ok := obj[path[0]].(map[string]any); ok {
 		removeNestedField(nested, path[1:])
 	}
+}
+
+// removeProviderDefaultFields removes fields from the document (actual state) that have provider defaults,
+// but only if those fields are NOT present in the patch (desired state).
+// This prevents "remove" operations for fields where the cloud provider assigns default values.
+func removeProviderDefaultFields(document []byte, patch []byte, hasProviderDefaultFields []string) ([]byte, error) {
+	if len(hasProviderDefaultFields) == 0 {
+		return document, nil
+	}
+
+	var docMap map[string]any
+	if err := json.Unmarshal(document, &docMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal document: %w", err)
+	}
+
+	var patchMap map[string]any
+	if err := json.Unmarshal(patch, &patchMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal patch: %w", err)
+	}
+
+	for _, fieldPath := range hasProviderDefaultFields {
+		pathParts := strings.Split(fieldPath, ".")
+		// Only remove from document if the field is NOT in the desired state (patch)
+		if !fieldExistsInMap(patchMap, pathParts) {
+			removeNestedField(docMap, pathParts)
+		}
+	}
+
+	serialized, err := json.Marshal(docMap)
+	if err != nil {
+		return nil, err
+	}
+
+	return serialized, nil
+}
+
+// fieldExistsInMap checks if a field at the given path exists in a nested map structure.
+// For example, path ["BucketEncryption", "Rules"] checks if obj["BucketEncryption"]["Rules"] exists.
+func fieldExistsInMap(obj map[string]any, path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+
+	val, exists := obj[path[0]]
+	if !exists {
+		return false
+	}
+
+	if len(path) == 1 {
+		return true
+	}
+
+	// Navigate to the nested object
+	if nested, ok := val.(map[string]any); ok {
+		return fieldExistsInMap(nested, path[1:])
+	}
+
+	return false
 }
 
 func removeNonSchemaFields(patch []byte, schemaFields []string) ([]byte, error) {
