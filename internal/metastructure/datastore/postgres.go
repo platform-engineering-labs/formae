@@ -1316,11 +1316,112 @@ func (d DatastorePostgres) GetStackByLabel(label string) (*pkgmodel.Stack, error
 		return nil, nil
 	}
 
-	return &pkgmodel.Stack{
+	stack := &pkgmodel.Stack{
 		ID:          id,
 		Label:       label,
 		Description: description,
-	}, nil
+	}
+
+	// Load policies for this stack (both inline and standalone references)
+	policies, err := d.loadPoliciesForStackAsJSON(ctx, id)
+	if err != nil {
+		slog.Warn("Failed to load policies for stack", "label", label, "error", err)
+		// Don't fail the whole operation, just return stack without policies
+	} else {
+		stack.Policies = policies
+	}
+
+	return stack, nil
+}
+
+// loadPoliciesForStackAsJSON loads all policies for a stack and returns them as JSON.
+// For inline policies, returns the full policy JSON including Type and Label.
+// For standalone policies, returns {"$ref": "policy://label"} format.
+func (d DatastorePostgres) loadPoliciesForStackAsJSON(ctx context.Context, stackID string) ([]json.RawMessage, error) {
+	var policies []json.RawMessage
+
+	// 1. Load inline policies (stack_id set directly on the policy)
+	inlineQuery := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = $1
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	rows, err := d.pool.Query(ctx, inlineQuery, stackID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query inline policies: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var label, policyType, policyData string
+		if err := rows.Scan(&label, &policyType, &policyData); err != nil {
+			continue
+		}
+		// Reconstruct full policy JSON by merging stored data with type and label
+		fullPolicyJSON, err := reconstructPolicyJSONPg(label, policyType, policyData)
+		if err != nil {
+			slog.Warn("Failed to reconstruct policy JSON", "label", label, "error", err)
+			continue
+		}
+		policies = append(policies, fullPolicyJSON)
+	}
+
+	// 2. Load standalone policy references (via stack_policies junction table)
+	standaloneQuery := `
+		WITH latest_policies AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT p.label FROM stack_policies sp
+		JOIN latest_policies p ON p.id = sp.policy_id
+		WHERE sp.stack_id = $1
+		AND p.rn = 1 AND p.operation != 'delete'
+	`
+	rows2, err := d.pool.Query(ctx, standaloneQuery, stackID)
+	if err != nil {
+		return policies, fmt.Errorf("failed to query standalone policies: %w", err)
+	}
+	defer rows2.Close()
+
+	for rows2.Next() {
+		var policyLabel string
+		if err := rows2.Scan(&policyLabel); err != nil {
+			continue
+		}
+		// Create a $ref entry for the standalone policy
+		refJSON := fmt.Sprintf(`{"$ref":"policy://%s"}`, policyLabel)
+		policies = append(policies, json.RawMessage(refJSON))
+	}
+
+	return policies, nil
+}
+
+// reconstructPolicyJSONPg merges policy_data with type and label to create full policy JSON
+func reconstructPolicyJSONPg(label, policyType, policyData string) (json.RawMessage, error) {
+	// Parse the stored policy data
+	var data map[string]any
+	if err := json.Unmarshal([]byte(policyData), &data); err != nil {
+		return nil, fmt.Errorf("failed to parse policy data: %w", err)
+	}
+
+	// Add Type and Label
+	data["Type"] = policyType
+	data["Label"] = label
+
+	// Marshal back to JSON
+	result, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal full policy: %w", err)
+	}
+	return result, nil
 }
 
 func (d DatastorePostgres) CountResourcesInStack(label string) (int, error) {
@@ -1831,6 +1932,41 @@ func (d DatastorePostgres) DetachPolicyFromStack(stackLabel, policyLabel string)
 		"policyLabel", policyLabel)
 
 	return nil
+}
+
+func (d DatastorePostgres) DeletePolicy(policyLabel string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "DeletePolicy")
+	defer span.End()
+
+	// Get the current policy to get its ID and type
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE label = $1 AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT id, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	var id, policyType string
+	err := d.pool.QueryRow(ctx, query, policyLabel).Scan(&id, &policyType)
+	if err != nil {
+		return "", fmt.Errorf("failed to get policy for deletion: %w", err)
+	}
+
+	// Insert tombstone version
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err = d.pool.Exec(ctx, insertQuery, id, version, "", "delete", policyLabel, policyType, nil, "{}")
+	if err != nil {
+		return "", fmt.Errorf("failed to delete policy: %w", err)
+	}
+
+	slog.Debug("Deleted standalone policy", "label", policyLabel, "id", id)
+
+	return version, nil
 }
 
 func (d DatastorePostgres) DeletePoliciesForStack(stackID string, commandID string) error {

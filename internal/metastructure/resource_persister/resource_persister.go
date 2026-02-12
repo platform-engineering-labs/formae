@@ -671,6 +671,23 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 		version, err = rp.datastore.CreatePolicy(update.Policy, commandID)
 	case policy_update.PolicyOperationUpdate:
 		version, err = rp.datastore.UpdatePolicy(update.Policy, commandID)
+	case policy_update.PolicyOperationDelete:
+		version, err = rp.datastore.DeletePolicy(update.Policy.GetLabel())
+	case policy_update.PolicyOperationAttach:
+		// Attach standalone policy to stack via junction table
+		// We need to get the stack ID from the stack label
+		stackID, ok := stackIDMap[update.StackLabel]
+		if !ok {
+			err = fmt.Errorf("stack ID not found for stack label %s during attach", update.StackLabel)
+		} else {
+			err = rp.datastore.AttachPolicyToStack(stackID, update.PolicyRef)
+		}
+	case policy_update.PolicyOperationDetach:
+		// Detach standalone policy from stack
+		err = rp.datastore.DetachPolicyFromStack(update.StackLabel, update.PolicyRef)
+	case policy_update.PolicyOperationSkip:
+		// Skip operations are already marked as Success, nothing to persist
+		// The policy is retained because it's still referenced by other stacks
 	default:
 		err = fmt.Errorf("unknown policy operation: %s", update.Operation)
 	}

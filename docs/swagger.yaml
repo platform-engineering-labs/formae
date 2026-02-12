@@ -54,6 +54,8 @@ definitions:
     properties:
       CreateOnly:
         type: boolean
+      HasProviderDefault:
+        type: boolean
       IndexField:
         type: string
       Required:
@@ -130,6 +132,21 @@ definitions:
       ResourceCount:
         type: integer
       Version:
+        type: string
+    type: object
+  model.PolicyInventoryItem:
+    properties:
+      AttachedStacks:
+        items:
+          type: string
+        type: array
+      Config:
+        items:
+          type: integer
+        type: array
+      Label:
+        type: string
+      Type:
         type: string
     type: object
   model.PolicyUpdate:
@@ -644,6 +661,29 @@ paths:
       summary: Health Check
       tags:
       - health
+  /policies:
+    get:
+      description: Retrieves all standalone policies with their attached stacks
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: List of standalone policies.'
+          schema:
+            items:
+              $ref: '#/definitions/model.PolicyInventoryItem'
+            type: array
+        "404":
+          description: 'Not Found: No policies found.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List standalone policies
+      tags:
+      - policies
   /resources:
     get:
       description: Extracts and lists resources based on a provided query string.

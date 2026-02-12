@@ -4,40 +4,109 @@ import "@formae/formae.pkl"
 import "@aws/aws.pkl"
 import "@aws/logs/loggroup.pkl"
 
-// Standalone policy defined at forma level
+// === Standalone Policies ===
+// Policy 1: Short-lived ephemeral resources (attached to stack-alpha and stack-beta)
 local ephemeralPolicy = new formae.TTLPolicy {
     label = "ephemeral-1h"
-    ttl = 1.h
-    onDependents = "abort"
+        ttl = 3.min
+        onDependents = "abort"
 }
 
+// Policy 2: Development environment policy (attached to stack-gamma)
+local devPolicy = new formae.TTLPolicy {
+    label = "dev-env-4h"
+        ttl = 4.h
+        onDependents = "cascade"
+}
+
+// === Target ===
 local testTarget = new formae.Target {
     label = "test-target"
-    config = new aws.Config {
-        region = "us-east-1"
-    }
+        config = new aws.Config {
+            region = "us-east-1"
+        }
 }
 
-local testStack = new formae.Stack {
-    label = "test-stack"
-    description = "Stack using standalone policy"
-    // Reference standalone policy via .res
-    policies = new Listing { ephemeralPolicy.res }
+// === Stacks ===
+// Stack Alpha: Uses ephemeral policy
+local stackAlpha = new formae.Stack {
+    label = "stack-alpha"
+        description = "First stack using ephemeral policy"
+        policies = new Listing { ephemeralPolicy.res }
 }
 
+// Stack Beta: Also uses ephemeral policy (shared)
+local stackBeta = new formae.Stack {
+    label = "stack-beta"
+        description = "Second stack using ephemeral policy"
+        policies = new Listing { ephemeralPolicy.res }
+}
+
+// Stack Gamma: Uses dev policy
+local stackGamma = new formae.Stack {
+    label = "stack-gamma"
+        description = "Third stack using dev environment policy"
+        policies = new Listing { devPolicy.res }
+}
+
+// Stack Delta: Uses inline policy (not a standalone reference)
+local stackDelta = new formae.Stack {
+    label = "stack-delta"
+        description = "Fourth stack with inline policy"
+        policies = new Listing {
+            new formae.TTLPolicy {
+                label = "inline-policy-2h"
+                ttl = 2.h
+                onDependents = "abort"
+            }
+        }
+}
+
+// === Resources ===
 forma {
-    // Add standalone policy to forma
+    // Add standalone policies to forma
     ephemeralPolicy
+        devPolicy
 
-    testTarget
-    testStack
+        testTarget
+        stackAlpha
+        stackBeta
+        stackGamma
+        stackDelta
 
-    // A simple LogGroup to test the standalone policy
+        // Resource in stack-alpha
+        new loggroup.LogGroup {
+            label = "alpha-logs"
+                stack = stackAlpha.res
+                target = testTarget.res
+                logGroupName = "/formae-test/alpha/logs"
+                retentionInDays = 7
+        }
+
+    // Resource in stack-beta
     new loggroup.LogGroup {
-        label = "standalone-policy-test-loggroup"
-        stack = testStack.res
-        target = testTarget.res
-        logGroupName = "/formae-standalone-policy-test/logs"
-        retentionInDays = 7
+        label = "beta-logs"
+            stack = stackBeta.res
+            target = testTarget.res
+            logGroupName = "/formae-test/beta/logs"
+            retentionInDays = 7
+    }
+
+    // Resource in stack-gamma
+    new loggroup.LogGroup {
+        label = "gamma-logs"
+            stack = stackGamma.res
+            target = testTarget.res
+            logGroupName = "/formae-test/gamma/logs"
+            retentionInDays = 14
+    }
+
+    // Resource in stack-delta (with inline policy)
+    new loggroup.LogGroup {
+        label = "delta-logs"
+            stack = stackDelta.res
+            target = testTarget.res
+            logGroupName = "/formae-test/delta/logs"
+            retentionInDays = 3
     }
 }

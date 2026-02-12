@@ -213,6 +213,8 @@ type Datastore interface {
 	GetAttachedPolicyLabelsForStack(stackLabel string) ([]string, error)
 	// DetachPolicyFromStack removes the association between a standalone policy and a stack
 	DetachPolicyFromStack(stackLabel, policyLabel string) error
+	// DeletePolicy soft-deletes a standalone policy by label (returns version string)
+	DeletePolicy(policyLabel string) (string, error)
 	// DeletePoliciesForStack soft-deletes all policies for a stack (cascade delete)
 	DeletePoliciesForStack(stackID string, commandID string) error
 	// GetExpiredStacks returns stacks with TTL policies that have expired,

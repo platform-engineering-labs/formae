@@ -304,6 +304,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/policies": {
+            "get": {
+                "description": "Retrieves all standalone policies with their attached stacks",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policies"
+                ],
+                "summary": "List standalone policies",
+                "responses": {
+                    "200": {
+                        "description": "OK: List of standalone policies.",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.PolicyInventoryItem"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No policies found.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/resources": {
             "get": {
                 "description": "Extracts and lists resources based on a provided query string.",
@@ -588,6 +623,9 @@ const docTemplate = `{
                 "CreateOnly": {
                     "type": "boolean"
                 },
+                "HasProviderDefault": {
+                    "type": "boolean"
+                },
                 "IndexField": {
                     "type": "string"
                 },
@@ -700,6 +738,29 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "Version": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.PolicyInventoryItem": {
+            "type": "object",
+            "properties": {
+                "AttachedStacks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "Config": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "Type": {
                     "type": "string"
                 }
             }

@@ -658,6 +658,34 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
+	if len(fa.PolicyUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			policy_update.PersistPolicyUpdates{
+				PolicyUpdates: fa.PolicyUpdates,
+				CommandID:     fa.ID,
+				StackIDMap:    nil, // For destroy, policies are being deleted, no stack mapping needed
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist policy updates", "error", err)
+			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			messages.UpdatePolicyStates{
+				CommandID:     fa.ID,
+				PolicyUpdates: fa.PolicyUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with policy states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with policy states: %w", err)
+		}
+	}
+
 	if len(fa.ResourceUpdates) > 0 {
 		cs, err := changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, pkgmodel.CommandDestroy)
 		if err != nil {
@@ -866,6 +894,41 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 			}
 			if stack != nil {
 				forma.Stacks = append(forma.Stacks, *stack)
+			}
+		}
+	}
+
+	// Collect referenced standalone policy labels from stacks
+	uniquePolicyLabels := make(map[string]struct{})
+	for _, stack := range forma.Stacks {
+		for _, rawPolicy := range stack.Policies {
+			if pkgmodel.IsPolicyReference(rawPolicy) {
+				policyLabel, err := pkgmodel.ParsePolicyReference(rawPolicy)
+				if err != nil {
+					slog.Debug("Failed to parse policy reference", "error", err)
+					continue
+				}
+				uniquePolicyLabels[policyLabel] = struct{}{}
+			}
+		}
+	}
+
+	// Load standalone policies and add to forma
+	if len(uniquePolicyLabels) > 0 {
+		forma.Policies = make([]json.RawMessage, 0, len(uniquePolicyLabels))
+		for label := range uniquePolicyLabels {
+			policy, err := m.Datastore.GetStandalonePolicy(label)
+			if err != nil {
+				slog.Error("Failed to load standalone policy", "label", label, "error", err)
+				continue
+			}
+			if policy != nil {
+				policyJSON, err := json.Marshal(policy)
+				if err != nil {
+					slog.Error("Failed to marshal standalone policy", "label", label, "error", err)
+					continue
+				}
+				forma.Policies = append(forma.Policies, policyJSON)
 			}
 		}
 	}

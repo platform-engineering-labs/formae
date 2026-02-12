@@ -1246,11 +1246,112 @@ func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 		return nil, nil
 	}
 
-	return &pkgmodel.Stack{
+	stack := &pkgmodel.Stack{
 		ID:          id,
 		Label:       label,
 		Description: description,
-	}, nil
+	}
+
+	// Load policies for this stack (both inline and standalone references)
+	policies, err := d.loadPoliciesForStackAsJSON(id)
+	if err != nil {
+		slog.Warn("Failed to load policies for stack", "label", label, "error", err)
+		// Don't fail the whole operation, just return stack without policies
+	} else {
+		stack.Policies = policies
+	}
+
+	return stack, nil
+}
+
+// loadPoliciesForStackAsJSON loads all policies for a stack and returns them as JSON.
+// For inline policies, returns the full policy JSON including Type and Label.
+// For standalone policies, returns {"$ref": "policy://label"} format.
+func (d DatastoreSQLite) loadPoliciesForStackAsJSON(stackID string) ([]json.RawMessage, error) {
+	var policies []json.RawMessage
+
+	// 1. Load inline policies (stack_id set directly on the policy)
+	inlineQuery := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM policies
+			WHERE stack_id = ?
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	rows, err := d.conn.Query(inlineQuery, stackID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query inline policies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var label, policyType, policyData string
+		if err := rows.Scan(&label, &policyType, &policyData); err != nil {
+			continue
+		}
+		// Reconstruct full policy JSON by merging stored data with type and label
+		fullPolicyJSON, err := reconstructPolicyJSON(label, policyType, policyData)
+		if err != nil {
+			slog.Warn("Failed to reconstruct policy JSON", "label", label, "error", err)
+			continue
+		}
+		policies = append(policies, fullPolicyJSON)
+	}
+
+	// 2. Load standalone policy references (via stack_policies junction table)
+	standaloneQuery := `
+		WITH latest_policies AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM policies
+			WHERE (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT p.label FROM stack_policies sp
+		JOIN latest_policies p ON p.id = sp.policy_id
+		WHERE sp.stack_id = ?
+		AND p.rn = 1 AND p.operation != 'delete'
+	`
+	rows2, err := d.conn.Query(standaloneQuery, stackID)
+	if err != nil {
+		return policies, fmt.Errorf("failed to query standalone policies: %w", err)
+	}
+	defer func() { _ = rows2.Close() }()
+
+	for rows2.Next() {
+		var policyLabel string
+		if err := rows2.Scan(&policyLabel); err != nil {
+			continue
+		}
+		// Create a $ref entry for the standalone policy
+		refJSON := fmt.Sprintf(`{"$ref":"policy://%s"}`, policyLabel)
+		policies = append(policies, json.RawMessage(refJSON))
+	}
+
+	return policies, nil
+}
+
+// reconstructPolicyJSON merges policy_data with type and label to create full policy JSON
+func reconstructPolicyJSON(label, policyType, policyData string) (json.RawMessage, error) {
+	// Parse the stored policy data
+	var data map[string]any
+	if err := json.Unmarshal([]byte(policyData), &data); err != nil {
+		return nil, fmt.Errorf("failed to parse policy data: %w", err)
+	}
+
+	// Add Type and Label
+	data["Type"] = policyType
+	data["Label"] = label
+
+	// Marshal back to JSON
+	result, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal full policy: %w", err)
+	}
+	return result, nil
 }
 
 func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
@@ -1761,6 +1862,41 @@ func (d DatastoreSQLite) DetachPolicyFromStack(stackLabel, policyLabel string) e
 		"policyLabel", policyLabel)
 
 	return nil
+}
+
+func (d DatastoreSQLite) DeletePolicy(policyLabel string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "DeletePolicy")
+	defer span.End()
+
+	// Get the current policy to get its ID and type
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM policies
+			WHERE label = ? AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT id, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	var id, policyType string
+	err := d.conn.QueryRow(query, policyLabel).Scan(&id, &policyType)
+	if err != nil {
+		return "", fmt.Errorf("failed to get policy for deletion: %w", err)
+	}
+
+	// Insert tombstone version
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, id, version, "", "delete", policyLabel, policyType, nil, "{}")
+	if err != nil {
+		return "", fmt.Errorf("failed to delete policy: %w", err)
+	}
+
+	slog.Debug("Deleted standalone policy", "label", policyLabel, "id", id)
+
+	return version, nil
 }
 
 func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string) error {
