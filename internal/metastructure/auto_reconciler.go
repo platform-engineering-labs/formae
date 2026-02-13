@@ -69,7 +69,6 @@ type ReconcileStack struct {
 	StackLabel string
 }
 
-
 func (ar *AutoReconciler) Init(args ...any) (statemachine.StateMachineSpec[AutoReconcilerData], error) {
 	ds, ok := ar.Env("Datastore")
 	if !ok {
