@@ -36,17 +36,17 @@ type PolicyUpdateState = types.PolicyUpdateState
 
 // PolicyUpdate represents a policy change operation
 type PolicyUpdate struct {
-	Policy           pkgmodel.Policy   `json:"-"`
-	ExistingPolicy   pkgmodel.Policy   `json:"-"`
-	Operation        PolicyOperation   `json:"Operation"`
-	State            PolicyUpdateState `json:"State"`
-	StackLabel       string            `json:"StackLabel"`       // For inline policies - the stack this policy belongs to
-	PolicyRef        string            `json:"PolicyRef"`        // For attach operations - label of standalone policy being referenced
-	ReferencingStacks []string         `json:"ReferencingStacks"` // For skip operations - stacks still referencing this policy
-	StartTs          time.Time         `json:"StartTs"`
-	ModifiedTs       time.Time         `json:"ModifiedTs"`
-	Version          string            `json:"Version"`
-	ErrorMessage     string            `json:"ErrorMessage,omitempty"`
+	Policy            pkgmodel.Policy   `json:"-"`
+	ExistingPolicy    pkgmodel.Policy   `json:"-"`
+	Operation         PolicyOperation   `json:"Operation"`
+	State             PolicyUpdateState `json:"State"`
+	StackLabel        string            `json:"StackLabel"`        // For inline policies - the stack this policy belongs to
+	PolicyRef         string            `json:"PolicyRef"`         // For attach operations - label of standalone policy being referenced
+	ReferencingStacks []string          `json:"ReferencingStacks"` // For skip operations - stacks still referencing this policy
+	StartTs           time.Time         `json:"StartTs"`
+	ModifiedTs        time.Time         `json:"ModifiedTs"`
+	Version           string            `json:"Version"`
+	ErrorMessage      string            `json:"ErrorMessage,omitempty"`
 }
 
 // policyUpdateJSON is a helper struct for JSON marshaling/unmarshaling

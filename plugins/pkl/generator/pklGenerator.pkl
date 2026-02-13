@@ -102,6 +102,13 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
                                     onDependents = "\(onDependents)"
                                 }
                         """
+                    else if (policyType == "auto-reconcile")
+                        let (intervalSeconds = policy.getPropertyOrNull("IntervalSeconds") as Number? ?? 0)
+                        """
+                        new formae.AutoReconcilePolicy {
+                                    interval = \(intervalSeconds).s
+                                }
+                        """
                     else
                         null
             ).filter((p) -> p != null))
@@ -140,6 +147,16 @@ function parsePolicies(policiesData: List<Map<String, Any>>): String =
         label = "\(label)"
         ttl = \(ttlSeconds).s
         onDependents = "\(onDependents)"
+      }
+      \(camelCaseLabel)
+      """
+        else if (policyType == "auto-reconcile")
+            let (intervalSeconds = policyData["IntervalSeconds"] as Number)
+            """
+
+      local \(camelCaseLabel) = new formae.AutoReconcilePolicy {
+        label = "\(label)"
+        interval = \(intervalSeconds).s
       }
       \(camelCaseLabel)
       """

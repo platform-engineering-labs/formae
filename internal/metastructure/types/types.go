@@ -8,9 +8,10 @@ package types
 type FormaCommandSource string
 
 const (
-	FormaCommandSourceUser        FormaCommandSource = "user"
-	FormaCommandSourceSynchronize FormaCommandSource = "synchronize"
-	FormaCommandSourceDiscovery   FormaCommandSource = "discovery"
+	FormaCommandSourceUser                FormaCommandSource = "user"
+	FormaCommandSourceSynchronize         FormaCommandSource = "synchronize"
+	FormaCommandSourceDiscovery           FormaCommandSource = "discovery"
+	FormaCommandSourcePolicyAutoReconcile FormaCommandSource = "policy:auto-reconcile"
 )
 
 // OperationType is the high-level operation being performed on a resource or target.

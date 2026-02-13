@@ -5,6 +5,7 @@
 package datastore
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -88,6 +89,25 @@ type ExpiredStackInfo struct {
 	OnDependents string // "abort" or "cascade"
 }
 
+// StackReconcileInfo contains information about a stack with an auto-reconcile policy
+type StackReconcileInfo struct {
+	StackLabel      string
+	StackID         string
+	IntervalSeconds int64
+	LastReconcileAt time.Time
+}
+
+// ResourceSnapshot contains resource state at a point in time
+type ResourceSnapshot struct {
+	KSUID      string
+	Type       string
+	Label      string
+	Target     string
+	Properties json.RawMessage
+	NativeID   string
+	Schema     pkgmodel.Schema
+}
+
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
@@ -131,6 +151,9 @@ type Datastore interface {
 	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
 	// FindResourcesDependingOn returns all resources that reference the given resource via $ref
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
+	// FindResourcesDependingOnMany returns all resources that reference any of the given resources via $ref.
+	// Returns a map from referenced KSUID to the resources that depend on it.
+	FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error)
 
 	// Resource-by-stack operations - query resources grouped by stack
 
@@ -220,6 +243,12 @@ type Datastore interface {
 	// GetExpiredStacks returns stacks with TTL policies that have expired,
 	// excluding stacks with active forma commands to avoid inconsistent state
 	GetExpiredStacks() ([]ExpiredStackInfo, error)
+	// GetStacksWithAutoReconcilePolicy returns stacks with auto-reconcile policies,
+	// along with their interval configuration and last reconcile timestamp
+	GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error)
+	// GetResourcesAtLastReconcile returns the resource state as of the last reconcile
+	// command for the given stack
+	GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error)
 
 	// Close releases database connections
 	Close()

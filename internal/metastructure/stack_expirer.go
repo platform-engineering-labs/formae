@@ -59,7 +59,7 @@ func (s *StackExpirer) Init(args ...any) error {
 	if _, err := s.SendAfter(s.PID(), CheckExpiredStacks{}, DefaultStackExpirerInterval); err != nil {
 		return fmt.Errorf("failed to send initial check message: %s", err)
 	}
-	s.Log().Info("Stack expirer ready", "interval", DefaultStackExpirerInterval)
+	s.Log().Info("Stack expirer ready, interval=%s", DefaultStackExpirerInterval)
 
 	return nil
 }
@@ -69,7 +69,7 @@ func (s *StackExpirer) HandleMessage(from gen.PID, message any) error {
 	case CheckExpiredStacks:
 		s.checkExpiredStacks()
 	default:
-		s.Log().Warning("Received unknown message type", "type", fmt.Sprintf("%T", message))
+		s.Log().Warning("Received unknown message type: %T", message)
 	}
 	return nil
 }
@@ -78,7 +78,7 @@ func (s *StackExpirer) checkExpiredStacks() {
 	// Query for expired stacks
 	expiredStacks, err := s.datastore.GetExpiredStacks()
 	if err != nil {
-		s.Log().Error("Failed to query expired stacks", "error", err)
+		s.Log().Error("Failed to query expired stacks: %v", err)
 		s.scheduleNextExpirationCheck()
 		return
 	}
@@ -90,10 +90,10 @@ func (s *StackExpirer) checkExpiredStacks() {
 
 	// For each expired stack, trigger a destroy command
 	for _, stackInfo := range expiredStacks {
-		s.Log().Info("Expiring stack", "label", stackInfo.StackLabel, "onDependents", stackInfo.OnDependents)
+		s.Log().Info("Expiring stack label=%s onDependents=%s", stackInfo.StackLabel, stackInfo.OnDependents)
 
 		if err := s.destroyExpiredStack(stackInfo); err != nil {
-			s.Log().Error("Failed to destroy expired stack", "label", stackInfo.StackLabel, "error", err)
+			s.Log().Error("Failed to destroy expired stack label=%s: %v", stackInfo.StackLabel, err)
 			// Continue with other stacks even if one fails
 		}
 	}
@@ -110,24 +110,36 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 		return fmt.Errorf("failed to load stack %s: %w", stackInfo.StackLabel, err)
 	}
 	if len(resources) == 0 {
+		// Stack is expired but has no resources - delete the empty stack directly
+		_, err := s.datastore.DeleteStack(stackInfo.StackLabel, "stack-expirer-cleanup")
+		if err != nil {
+			return fmt.Errorf("failed to delete empty expired stack %s: %w", stackInfo.StackLabel, err)
+		}
+		s.Log().Info("Deleted empty expired stack label=%s", stackInfo.StackLabel)
 		return nil
 	}
 
 	// Check for dependents if onDependents is "abort"
 	if stackInfo.OnDependents == "abort" {
-		for _, res := range resources {
-			dependents, err := s.datastore.FindResourcesDependingOn(res.Ksuid)
-			if err != nil {
-				return fmt.Errorf("failed to check dependents for resource %s: %w", res.Ksuid, err)
-			}
-			// Filter out dependents that are in the same stack (those will be deleted together)
+		// Collect all KSUIDs for a single batched query
+		ksuids := make([]string, len(resources))
+		ksuidToLabel := make(map[string]string, len(resources))
+		for i, res := range resources {
+			ksuids[i] = res.Ksuid
+			ksuidToLabel[res.Ksuid] = res.Label
+		}
+
+		dependentsMap, err := s.datastore.FindResourcesDependingOnMany(ksuids)
+		if err != nil {
+			return fmt.Errorf("failed to check dependents for stack %s: %w", stackInfo.StackLabel, err)
+		}
+
+		// Filter out dependents that are in the same stack (those will be deleted together)
+		for sourceKSUID, dependents := range dependentsMap {
 			for _, dep := range dependents {
 				if dep.Stack != stackInfo.StackLabel {
-					s.Log().Warning("Stack expiration aborted: external resource depends on stack resources",
-						"stack", stackInfo.StackLabel,
-						"resource", res.Label,
-						"dependent", dep.Label,
-						"dependentStack", dep.Stack)
+					s.Log().Warning("Stack expiration aborted: external resource depends on stack resources, stack=%s resource=%s dependent=%s dependentStack=%s",
+						stackInfo.StackLabel, ksuidToLabel[sourceKSUID], dep.Label, dep.Stack)
 					return nil // Skip this stack, try again next interval
 				}
 			}
@@ -219,6 +231,6 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 
 func (s *StackExpirer) scheduleNextExpirationCheck() {
 	if _, err := s.SendAfter(s.PID(), CheckExpiredStacks{}, s.interval); err != nil {
-		s.Log().Error("Failed to schedule next expiration check", "error", err)
+		s.Log().Error("Failed to schedule next expiration check: %v", err)
 	}
 }

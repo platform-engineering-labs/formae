@@ -18,4 +18,5 @@ type ResourceDataLookup interface {
 	GetKSUIDByTriplet(stack, label, resourceType string) (string, error)
 	LatestLabelForResource(label string) (string, error)
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
+	FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error)
 }

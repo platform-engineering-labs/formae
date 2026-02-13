@@ -30,9 +30,10 @@ type (
 
 // Re-export constants for backward compatibility
 const (
-	FormaCommandSourceUser        = types.FormaCommandSourceUser
-	FormaCommandSourceSynchronize = types.FormaCommandSourceSynchronize
-	FormaCommandSourceDiscovery   = types.FormaCommandSourceDiscovery
+	FormaCommandSourceUser                = types.FormaCommandSourceUser
+	FormaCommandSourceSynchronize         = types.FormaCommandSourceSynchronize
+	FormaCommandSourceDiscovery           = types.FormaCommandSourceDiscovery
+	FormaCommandSourcePolicyAutoReconcile = types.FormaCommandSourcePolicyAutoReconcile
 
 	OperationCreate  = types.OperationCreate
 	OperationUpdate  = types.OperationUpdate

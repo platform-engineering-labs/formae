@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	AutoReconciler            = gen.Atom("AutoReconciler")
 	ChangesetSupervisor       = gen.Atom("ChangesetSupervisor")
 	Discovery                 = gen.Atom("Discovery")
 	FormaCommandPersister     = gen.Atom("FormaCommandPersister")

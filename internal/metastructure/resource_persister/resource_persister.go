@@ -615,6 +615,31 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 			"stackLabel", update.StackLabel,
 			"stackID", stackID,
 			"policyRef", update.PolicyRef)
+
+		// If this is an auto-reconcile policy, notify the AutoReconciler
+		policy, err := rp.datastore.GetStandalonePolicy(update.PolicyRef)
+		if err != nil {
+			slog.Warn("Failed to look up standalone policy for AutoReconciler notification",
+				"policyRef", update.PolicyRef,
+				"error", err)
+		} else if policy != nil && policy.GetType() == "auto-reconcile" {
+			if autoReconcilePolicy, ok := policy.(*pkgmodel.AutoReconcilePolicy); ok {
+				if err := rp.Send(
+					gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+					messages.PolicyAttached{
+						StackLabel:      update.StackLabel,
+						IntervalSeconds: autoReconcilePolicy.IntervalSeconds,
+					},
+				); err != nil {
+					slog.Error("Failed to notify AutoReconciler of standalone policy attachment",
+						"stackLabel", update.StackLabel,
+						"policyRef", update.PolicyRef,
+						"error", err)
+					// Don't fail the operation - just log the error
+				}
+			}
+		}
+
 		return nil
 	}
 
@@ -630,6 +655,34 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 				"policyRef", update.PolicyRef,
 				"error", err)
 			return err
+		}
+
+		// If this was an auto-reconcile policy, notify the AutoReconciler
+		// For standalone policy detach, update.Policy is nil, so look it up by label
+		var policyType string
+		if update.Policy != nil {
+			policyType = update.Policy.GetType()
+		} else {
+			// Look up standalone policy to get its type
+			policy, lookupErr := rp.datastore.GetStandalonePolicy(update.PolicyRef)
+			if lookupErr != nil {
+				slog.Warn("Failed to look up standalone policy for AutoReconciler notification",
+					"policyRef", update.PolicyRef,
+					"error", lookupErr)
+			} else if policy != nil {
+				policyType = policy.GetType()
+			}
+		}
+		if policyType == "auto-reconcile" {
+			if err := rp.Send(
+				gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+				messages.PolicyRemoved{StackLabel: update.StackLabel},
+			); err != nil {
+				slog.Error("Failed to notify AutoReconciler of policy removal",
+					"stackLabel", update.StackLabel,
+					"error", err)
+				// Don't fail the operation - just log the error
+			}
 		}
 
 		update.State = policy_update.PolicyUpdateStateSuccess
@@ -719,6 +772,25 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 		"operation", update.Operation,
 		"version", version)
 
+	// Notify AutoReconciler if an auto-reconcile policy was created or attached
+	if update.Policy != nil && update.Policy.GetType() == "auto-reconcile" &&
+		(update.Operation == policy_update.PolicyOperationCreate || update.Operation == policy_update.PolicyOperationAttach) {
+		if autoReconcilePolicy, ok := update.Policy.(*pkgmodel.AutoReconcilePolicy); ok {
+			if err := rp.Send(
+				gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+				messages.PolicyAttached{
+					StackLabel:      update.StackLabel,
+					IntervalSeconds: autoReconcilePolicy.IntervalSeconds,
+				},
+			); err != nil {
+				slog.Error("Failed to notify AutoReconciler of policy attachment",
+					"stackLabel", update.StackLabel,
+					"error", err)
+				// Don't fail the operation - just log the error
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -726,7 +798,6 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 // This is called after a changeset completes to clean up stacks that became empty
 // due to resource deletions.
 func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID string) {
-	rp.Log().Info("cleanupEmptyStacks called", "stackLabels", stackLabels, "commandID", commandID)
 	for _, stackLabel := range stackLabels {
 		count, err := rp.datastore.CountResourcesInStack(stackLabel)
 		if err != nil {
@@ -739,12 +810,9 @@ func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID 
 		if count == 0 {
 			_, err := rp.datastore.DeleteStack(stackLabel, commandID)
 			if err != nil {
-				rp.Log().Error("Failed to delete empty stack",
-					"stackLabel", stackLabel,
-					"error", err)
+				rp.Log().Error("Failed to delete empty stack stackLabel=%s: %v", stackLabel, err)
 			} else {
-				rp.Log().Info("Deleted empty stack",
-					"stackLabel", stackLabel)
+				rp.Log().Info("Deleted empty stack stackLabel=%s", stackLabel)
 			}
 		}
 	}

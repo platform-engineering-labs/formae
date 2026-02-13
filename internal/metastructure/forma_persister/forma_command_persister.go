@@ -221,6 +221,10 @@ type MarkResourcesAsCanceled struct {
 }
 
 func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message any) (any, error) {
+	start := time.Now()
+	defer func() {
+		f.Log().Debug("FormaCommandPersister HandleCall timing", "messageType", fmt.Sprintf("%T", message), "duration", time.Since(start))
+	}()
 	switch msg := message.(type) {
 	case StoreNewFormaCommand:
 		return f.storeNewFormaCommand(&msg.Command)

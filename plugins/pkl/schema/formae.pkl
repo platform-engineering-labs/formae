@@ -108,6 +108,19 @@ open class TTLPolicy extends Policy {
     }
 }
 
+// Auto-Reconcile Policy - periodically reconciles stack to declared state
+open class AutoReconcilePolicy extends Policy {
+    hidden interval: Duration
+
+    local self = this
+    // Output
+    function render(): Dynamic = new {
+        Type = "auto-reconcile"
+        Label = self.label
+        IntervalSeconds = self.interval.toUnit("s").value.toInt()
+    }
+}
+
 /// DEPRECATED: Use aws#Tag instead.
 /// This class will be removed in a future version.
 /// AWS resources should use `aws.Tag` from `@aws/aws.pkl`.

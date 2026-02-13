@@ -53,7 +53,7 @@ func init() {
 }
 
 type DatastoreSQLite struct {
-	conn    *sql.DB
+	conn    *sql.DB // Write connection (single connection for SQLite write safety)
 	agentID string
 	ctx     context.Context
 }
@@ -120,6 +120,11 @@ func (d DatastoreSQLite) ClearCommandsTable() error {
 }
 
 func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	slog.Debug("SQLite START", "method", "StoreFormaCommand", "commandID", commandID, "resourceUpdates", len(fa.ResourceUpdates))
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "StoreFormaCommand", "commandID", commandID, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "StoreFormaCommand")
 	defer span.End()
 
@@ -453,6 +458,11 @@ func (d DatastoreSQLite) LoadIncompleteFormaCommands() ([]*forma_command.FormaCo
 }
 
 func (d DatastoreSQLite) DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	slog.Debug("SQLite START", "method", "DeleteFormaCommand", "commandID", commandID)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "DeleteFormaCommand", "commandID", commandID, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "DeleteFormaCommand")
 	defer span.End()
 
@@ -468,6 +478,11 @@ func (d DatastoreSQLite) DeleteFormaCommand(fa *forma_command.FormaCommand, comm
 }
 
 func (d DatastoreSQLite) GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error) {
+	slog.Debug("SQLite START", "method", "GetFormaCommandByCommandID", "commandID", commandID)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "GetFormaCommandByCommandID", "commandID", commandID, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "GetFormaCommandByCommandID")
 	defer span.End()
 
@@ -734,6 +749,11 @@ func (d DatastoreSQLite) QueryResources(query *ResourceQuery) ([]*pkgmodel.Resou
 }
 
 func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+	slog.Debug("SQLite START", "method", "storeResource", "ksuid", resource.Ksuid, "label", resource.Label, "operation", operation)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "storeResource", "ksuid", resource.Ksuid, "operation", operation, "duration", time.Since(start))
+	}()
 	if resource.Ksuid == "" {
 		existingResource, err := d.LoadResource(resource.URI())
 		if err != nil {
@@ -869,6 +889,11 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 }
 
 func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+	slog.Debug("SQLite START", "method", "StoreResource", "ksuid", resource.Ksuid, "label", resource.Label)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "StoreResource", "ksuid", resource.Ksuid, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "StoreResource")
 	defer span.End()
 
@@ -881,6 +906,11 @@ func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID st
 }
 
 func (d DatastoreSQLite) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+	slog.Debug("SQLite START", "method", "DeleteResource", "ksuid", resource.Ksuid, "label", resource.Label)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "DeleteResource", "ksuid", resource.Ksuid, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "DeleteResource")
 	defer span.End()
 
@@ -1063,6 +1093,11 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 }
 
 func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
+	slog.Debug("SQLite START", "method", "LoadResourcesByStack", "stack", stackLabel)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "LoadResourcesByStack", "stack", stackLabel, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "LoadResourcesByStack")
 	defer span.End()
 
@@ -1176,6 +1211,11 @@ func (d DatastoreSQLite) UpdateStack(stack *pkgmodel.Stack, commandID string) (s
 }
 
 func (d DatastoreSQLite) DeleteStack(label string, commandID string) (string, error) {
+	slog.Debug("SQLite START", "method", "DeleteStack", "label", label)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "DeleteStack", "label", label, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "DeleteStack")
 	defer span.End()
 
@@ -1186,15 +1226,19 @@ func (d DatastoreSQLite) DeleteStack(label string, commandID string) (string, er
 		ORDER BY version DESC
 		LIMIT 1
 	`
+	slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "QueryRow-SELECT", "phase", "before")
+	queryStart := time.Now()
 	row := d.conn.QueryRow(query, label)
 
 	var id, operation string
 	if err := row.Scan(&id, &operation); err != nil {
+		slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "QueryRow-SELECT", "phase", "after-error", "duration", time.Since(queryStart), "error", err)
 		if err == sql.ErrNoRows {
 			return "", fmt.Errorf("stack not found: %s", label)
 		}
 		return "", err
 	}
+	slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "QueryRow-SELECT", "phase", "after", "duration", time.Since(queryStart), "stackID", id)
 
 	// If the most recent version is a delete, the stack doesn't exist
 	if operation == "delete" {
@@ -1202,19 +1246,26 @@ func (d DatastoreSQLite) DeleteStack(label string, commandID string) (string, er
 	}
 
 	// Cascade delete: delete all policies associated with this stack
+	slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "DeletePoliciesForStack", "phase", "before-call")
+	policyDeleteStart := time.Now()
 	if err := d.DeletePoliciesForStack(id, commandID); err != nil {
-		slog.Warn("Failed to delete policies for stack", "error", err, "stackID", id, "label", label)
+		slog.Warn("Failed to delete policies for stack", "error", err, "stackID", id, "label", label, "duration", time.Since(policyDeleteStart))
 		// Continue with stack deletion even if policy deletion fails
 	}
+	slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "DeletePoliciesForStack", "phase", "after-call", "duration", time.Since(policyDeleteStart))
 
 	// Insert tombstone version
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (?, ?, ?, ?, ?, ?)`
+	slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "Exec-INSERT", "phase", "before")
+	execStart := time.Now()
 	_, execErr := d.conn.Exec(insertQuery, id, version, commandID, "delete", label, "")
 	if execErr != nil {
+		slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "Exec-INSERT", "phase", "after-error", "duration", time.Since(execStart), "error", execErr)
 		slog.Error("Failed to delete stack", "error", execErr, "label", label)
 		return "", execErr
 	}
+	slog.Debug("SQLite STMT", "method", "DeleteStack", "stmt", "Exec-INSERT", "phase", "after", "duration", time.Since(execStart))
 
 	return version, nil
 }
@@ -1267,6 +1318,9 @@ func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 // loadPoliciesForStackAsJSON loads all policies for a stack and returns them as JSON.
 // For inline policies, returns the full policy JSON including Type and Label.
 // For standalone policies, returns {"$ref": "policy://label"} format.
+//
+// IMPORTANT: With SetMaxOpenConns(1), we must close rows before doing another Query.
+// Otherwise we get a deadlock because rows holds the only connection.
 func (d DatastoreSQLite) loadPoliciesForStackAsJSON(stackID string) ([]json.RawMessage, error) {
 	var policies []json.RawMessage
 
@@ -1286,23 +1340,33 @@ func (d DatastoreSQLite) loadPoliciesForStackAsJSON(stackID string) ([]json.RawM
 	if err != nil {
 		return nil, fmt.Errorf("failed to query inline policies: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
+	// Collect all inline policy data first, then close rows to release the connection
+	type inlinePolicyData struct {
+		label, policyType, policyData string
+	}
+	var inlinePolicies []inlinePolicyData
 	for rows.Next() {
-		var label, policyType, policyData string
-		if err := rows.Scan(&label, &policyType, &policyData); err != nil {
+		var data inlinePolicyData
+		if err := rows.Scan(&data.label, &data.policyType, &data.policyData); err != nil {
 			continue
 		}
-		// Reconstruct full policy JSON by merging stored data with type and label
-		fullPolicyJSON, err := reconstructPolicyJSON(label, policyType, policyData)
+		inlinePolicies = append(inlinePolicies, data)
+	}
+	_ = rows.Close() // Close rows NOW to release connection before next Query
+
+	// Process collected inline policies (no DB connection needed)
+	for _, data := range inlinePolicies {
+		fullPolicyJSON, err := reconstructPolicyJSON(data.label, data.policyType, data.policyData)
 		if err != nil {
-			slog.Warn("Failed to reconstruct policy JSON", "label", label, "error", err)
+			slog.Warn("Failed to reconstruct policy JSON", "label", data.label, "error", err)
 			continue
 		}
 		policies = append(policies, fullPolicyJSON)
 	}
 
 	// 2. Load standalone policy references (via stack_policies junction table)
+	// Now safe to Query again since we closed the previous rows
 	standaloneQuery := `
 		WITH latest_policies AS (
 			SELECT id, label, operation,
@@ -1441,6 +1505,10 @@ func (d DatastoreSQLite) CreatePolicy(policy pkgmodel.Policy, commandID string) 
 			"TTLSeconds":   p.TTLSeconds,
 			"OnDependents": p.OnDependents,
 		})
+	case *pkgmodel.AutoReconcilePolicy:
+		policyData, err = json.Marshal(map[string]any{
+			"IntervalSeconds": p.IntervalSeconds,
+		})
 	default:
 		return "", fmt.Errorf("unsupported policy type: %T", policy)
 	}
@@ -1502,6 +1570,10 @@ func (d DatastoreSQLite) UpdatePolicy(policy pkgmodel.Policy, commandID string) 
 		policyData, err = json.Marshal(map[string]any{
 			"TTLSeconds":   p.TTLSeconds,
 			"OnDependents": p.OnDependents,
+		})
+	case *pkgmodel.AutoReconcilePolicy:
+		policyData, err = json.Marshal(map[string]any{
+			"IntervalSeconds": p.IntervalSeconds,
 		})
 	default:
 		return "", fmt.Errorf("unsupported policy type: %T", policy)
@@ -1900,13 +1972,21 @@ func (d DatastoreSQLite) DeletePolicy(policyLabel string) (string, error) {
 }
 
 func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string) error {
+	slog.Debug("SQLite START", "method", "DeletePoliciesForStack", "stackID", stackID)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "DeletePoliciesForStack", "stackID", stackID, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "DeletePoliciesForStack")
 	defer span.End()
 
 	// First, remove any standalone policy attachments from the junction table
 	// This doesn't delete the standalone policies themselves, just the association
 	deleteAttachmentsQuery := `DELETE FROM stack_policies WHERE stack_id = ?`
+	slog.Debug("SQLite STMT", "method", "DeletePoliciesForStack", "stmt", "Exec-DELETE-attachments", "phase", "before")
+	execStart := time.Now()
 	_, err := d.conn.Exec(deleteAttachmentsQuery, stackID)
+	slog.Debug("SQLite STMT", "method", "DeletePoliciesForStack", "stmt", "Exec-DELETE-attachments", "phase", "after", "duration", time.Since(execStart), "error", err)
 	if err != nil {
 		slog.Warn("Failed to delete policy attachments for stack", "error", err, "stackID", stackID)
 	}
@@ -1914,6 +1994,10 @@ func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string
 	// Now get and delete only inline policies (policies with stack_id set to this stack)
 	// We query directly for inline policies rather than using GetPoliciesForStack
 	// since that also returns standalone policies which shouldn't be deleted
+	//
+	// IMPORTANT: With SetMaxOpenConns(1), we must collect all data from rows and close it
+	// BEFORE doing any Exec operations. Otherwise we get a deadlock because rows holds
+	// the only connection.
 	inlinePoliciesQuery := `
 		WITH latest_policies AS (
 			SELECT id, label, policy_type, policy_data, operation,
@@ -1925,28 +2009,43 @@ func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string
 		FROM latest_policies
 		WHERE rn = 1 AND operation != 'delete'
 	`
+	slog.Debug("SQLite STMT", "method", "DeletePoliciesForStack", "stmt", "Query-SELECT-policies", "phase", "before")
+	queryStart := time.Now()
 	rows, err := d.conn.Query(inlinePoliciesQuery, stackID)
+	slog.Debug("SQLite STMT", "method", "DeletePoliciesForStack", "stmt", "Query-SELECT-policies", "phase", "after", "duration", time.Since(queryStart), "error", err)
 	if err != nil {
 		return fmt.Errorf("failed to get inline policies for stack: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
+	// Collect all policy data first, then close rows to release the connection
+	type policyToDelete struct {
+		id, label, policyType string
+	}
+	var policiesToDelete []policyToDelete
 	for rows.Next() {
-		var id, label, policyType string
-		if err := rows.Scan(&id, &label, &policyType); err != nil {
+		var p policyToDelete
+		if err := rows.Scan(&p.id, &p.label, &p.policyType); err != nil {
 			slog.Warn("Failed to scan policy for deletion", "error", err)
 			continue
 		}
+		policiesToDelete = append(policiesToDelete, p)
+	}
+	_ = rows.Close() // Close rows NOW to release connection before doing Exec operations
+	slog.Debug("SQLite STMT", "method", "DeletePoliciesForStack", "stmt", "rows-collected-and-closed", "policyCount", len(policiesToDelete))
 
-		// Insert tombstone version for inline policy
+	// Now safe to do Exec operations since rows is closed
+	for _, p := range policiesToDelete {
 		version := mksuid.New().String()
 		insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-		_, err = d.conn.Exec(insertQuery, id, version, commandID, "delete", label, policyType, stackID, "{}")
+		slog.Debug("SQLite STMT", "method", "DeletePoliciesForStack", "stmt", "Exec-INSERT-tombstone", "phase", "before", "policyLabel", p.label)
+		insertStart := time.Now()
+		_, err = d.conn.Exec(insertQuery, p.id, version, commandID, "delete", p.label, p.policyType, stackID, "{}")
+		slog.Debug("SQLite STMT", "method", "DeletePoliciesForStack", "stmt", "Exec-INSERT-tombstone", "phase", "after", "duration", time.Since(insertStart), "policyLabel", p.label, "error", err)
 		if err != nil {
-			slog.Error("Failed to delete inline policy", "error", err, "label", label)
+			slog.Error("Failed to delete inline policy", "error", err, "label", p.label)
 			continue
 		}
-		slog.Debug("Deleted inline policy as part of stack deletion", "label", label, "stackID", stackID)
+		slog.Debug("Deleted inline policy as part of stack deletion", "label", p.label, "stackID", stackID)
 	}
 
 	return nil
@@ -1970,12 +2069,28 @@ func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmod
 			OnDependents: data.OnDependents,
 			StackID:      stackID,
 		}, nil
+	case "auto-reconcile":
+		var data struct {
+			IntervalSeconds int64 `json:"IntervalSeconds"`
+		}
+		if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal auto-reconcile policy data: %w", err)
+		}
+		return &pkgmodel.AutoReconcilePolicy{
+			Type:            "auto-reconcile",
+			Label:           label,
+			IntervalSeconds: data.IntervalSeconds,
+			StackID:         stackID,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown policy type: %s", policyType)
 	}
 }
 
 func (d DatastoreSQLite) GetExpiredStacks() ([]ExpiredStackInfo, error) {
+	slog.Debug("SQLite START", "method", "GetExpiredStacks")
+	start := time.Now()
+	defer func() { slog.Debug("SQLite END", "method", "GetExpiredStacks", "duration", time.Since(start)) }()
 	_, span := sqliteTracer.Start(context.Background(), "GetExpiredStacks")
 	defer span.End()
 
@@ -2057,6 +2172,153 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 			info.OnDependents = "abort" // default
 		}
 		result = append(result, info)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetStacksWithAutoReconcilePolicy")
+	defer span.End()
+
+	// Get stacks with auto-reconcile policies:
+	// - Handles both inline policies (stack_id set) and standalone policies (via stack_policies junction)
+	// - Extract IntervalSeconds from policy_data
+	// - Find last reconcile timestamp from forma_commands
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, valid_from, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM stacks
+		),
+		latest_policies AS (
+			SELECT id, label, stack_id, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM policies
+		),
+		-- Inline auto-reconcile policies: stack_id is set directly on the policy
+		inline_auto_reconcile AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       CAST(json_extract(p.policy_data, '$.IntervalSeconds') AS INTEGER) as interval_seconds
+			FROM latest_stacks s
+			JOIN latest_policies p ON p.stack_id = s.id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'auto-reconcile'
+		),
+		-- Standalone auto-reconcile policies: attached via stack_policies junction table
+		standalone_auto_reconcile AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       CAST(json_extract(p.policy_data, '$.IntervalSeconds') AS INTEGER) as interval_seconds
+			FROM latest_stacks s
+			JOIN stack_policies sp ON sp.stack_id = s.id
+			JOIN latest_policies p ON p.id = sp.policy_id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'auto-reconcile'
+			AND (p.stack_id IS NULL OR p.stack_id = '')
+		),
+		-- Combine both inline and standalone
+		all_auto_reconcile AS (
+			SELECT * FROM inline_auto_reconcile
+			UNION
+			SELECT * FROM standalone_auto_reconcile
+		),
+		-- Find last reconcile timestamp for each stack
+		last_reconcile AS (
+			SELECT ru.stack_label, MAX(fc.timestamp) as last_reconcile_at
+			FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE fc.config_mode = 'reconcile'
+			AND fc.state = 'Success'
+			GROUP BY ru.stack_label
+		)
+		SELECT ar.stack_label, ar.stack_id, ar.interval_seconds,
+		       COALESCE(lr.last_reconcile_at, '1970-01-01 00:00:00') as last_reconcile_at
+		FROM all_auto_reconcile ar
+		LEFT JOIN last_reconcile lr ON ar.stack_label = lr.stack_label
+	`
+
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []StackReconcileInfo
+	for rows.Next() {
+		var info StackReconcileInfo
+		var lastReconcileStr string
+		if err := rows.Scan(&info.StackLabel, &info.StackID, &info.IntervalSeconds, &lastReconcileStr); err != nil {
+			return nil, err
+		}
+		info.LastReconcileAt, _ = time.Parse("2006-01-02 15:04:05", lastReconcileStr)
+		result = append(result, info)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetResourcesAtLastReconcile")
+	defer span.End()
+
+	// Find the resource versions that were created/updated by the last successful reconcile command for this stack
+	// Note: r.data contains the full Resource JSON, we extract Properties and Schema separately
+	query := `
+		WITH last_reconcile_command AS (
+			SELECT fc.command_id, fc.timestamp
+			FROM forma_commands fc
+			JOIN resource_updates ru ON fc.command_id = ru.command_id
+			WHERE fc.config_mode = 'reconcile'
+			AND fc.state = 'Success'
+			AND ru.stack_label = ?
+			ORDER BY fc.timestamp DESC
+			LIMIT 1
+		)
+		SELECT r.ksuid, r.type, r.label, r.target,
+		       json_extract(r.data, '$.Properties') as properties,
+		       json_extract(r.data, '$.Schema') as schema,
+		       r.native_id
+		FROM resources r
+		JOIN last_reconcile_command lrc ON r.command_id = lrc.command_id
+		WHERE r.stack = ?
+		AND r.operation != 'delete'
+	`
+
+	rows, err := d.conn.Query(query, stackLabel, stackLabel)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []ResourceSnapshot
+	for rows.Next() {
+		var snapshot ResourceSnapshot
+		var propsData, schemaData, nativeID sql.NullString
+		if err := rows.Scan(&snapshot.KSUID, &snapshot.Type, &snapshot.Label, &snapshot.Target, &propsData, &schemaData, &nativeID); err != nil {
+			return nil, err
+		}
+		if propsData.Valid {
+			snapshot.Properties = json.RawMessage(propsData.String)
+		}
+		if schemaData.Valid {
+			if err := json.Unmarshal([]byte(schemaData.String), &snapshot.Schema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal schema for resource %s: %w", snapshot.Label, err)
+			}
+		}
+		if nativeID.Valid {
+			snapshot.NativeID = nativeID.String
+		}
+		result = append(result, snapshot)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -2195,6 +2457,9 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 }
 
 func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
+	slog.Debug("SQLite START", "method", "LoadAllTargets")
+	start := time.Now()
+	defer func() { slog.Debug("SQLite END", "method", "LoadAllTargets", "duration", time.Since(start)) }()
 	_, span := sqliteTracer.Start(context.Background(), "LoadAllTargets")
 	defer span.End()
 
@@ -2701,6 +2966,11 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 // be slow for users with large resource counts.
 // TODO: make the dependency graph discoverable from the schema so we can query edges directly.
 func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
+	slog.Debug("SQLite START", "method", "FindResourcesDependingOn", "ksuid", ksuid)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "FindResourcesDependingOn", "ksuid", ksuid, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "FindResourcesDependingOn")
 	defer span.End()
 
@@ -2743,6 +3013,75 @@ func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 	}
 
 	return resources, nil
+}
+
+func (d DatastoreSQLite) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
+	slog.Debug("SQLite START", "method", "FindResourcesDependingOnMany", "ksuids", len(ksuids))
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "FindResourcesDependingOnMany", "ksuids", len(ksuids), "duration", time.Since(start))
+	}()
+	_, span := sqliteTracer.Start(context.Background(), "FindResourcesDependingOnMany")
+	defer span.End()
+
+	if len(ksuids) == 0 {
+		return make(map[string][]*pkgmodel.Resource), nil
+	}
+
+	// Build OR conditions for each KSUID pattern
+	// The format is: "$ref":"formae://KSUID#/..."
+	var conditions []string
+	var args []any
+	for _, ksuid := range ksuids {
+		pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+		conditions = append(conditions, "data LIKE ?")
+		args = append(args, pattern)
+	}
+	args = append(args, resource_update.OperationDelete)
+
+	query := fmt.Sprintf(`
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version > r1.version
+	)
+	AND operation != ?
+	`, strings.Join(conditions, " OR "))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	// Build a map of KSUID -> resources that depend on it
+	result := make(map[string][]*pkgmodel.Resource)
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+
+		// Find which of the input KSUIDs this resource depends on
+		for _, ksuid := range ksuids {
+			pattern := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(jsonData, pattern) {
+				result[ksuid] = append(result[ksuid], &resource)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {
@@ -2875,6 +3214,11 @@ func (d DatastoreSQLite) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]p
 // BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
 // This is the key performance optimization: insert all updates in one transaction
 func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
+	slog.Debug("SQLite START", "method", "BulkStoreResourceUpdates", "commandID", commandID, "count", len(updates))
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "BulkStoreResourceUpdates", "commandID", commandID, "count", len(updates), "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "BulkStoreResourceUpdates")
 	defer span.End()
 
@@ -2882,6 +3226,8 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 		return nil
 	}
 
+	slog.Debug("SQLite TX BEGIN", "method", "BulkStoreResourceUpdates", "commandID", commandID)
+	txStart := time.Now()
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -2985,6 +3331,7 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 		}
 	}
 
+	slog.Debug("SQLite TX COMMIT", "method", "BulkStoreResourceUpdates", "commandID", commandID, "txDuration", time.Since(txStart))
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -2994,6 +3341,11 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 
 // LoadResourceUpdates loads all ResourceUpdates for a given command
 func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
+	slog.Debug("SQLite START", "method", "LoadResourceUpdates", "commandID", commandID)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "LoadResourceUpdates", "commandID", commandID, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "LoadResourceUpdates")
 	defer span.End()
 
@@ -3116,6 +3468,11 @@ func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_updat
 // UpdateResourceUpdateState updates the state of a single ResourceUpdate
 // This is the key performance improvement: updating one row instead of re-serializing entire command
 func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	slog.Debug("SQLite START", "method", "UpdateResourceUpdateState", "commandID", commandID, "ksuid", ksuid, "state", state)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "UpdateResourceUpdateState", "commandID", commandID, "ksuid", ksuid, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "UpdateResourceUpdateState")
 	defer span.End()
 
@@ -3145,6 +3502,11 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
 func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+	slog.Debug("SQLite START", "method", "UpdateResourceUpdateProgress", "commandID", commandID, "ksuid", ksuid, "state", state)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "UpdateResourceUpdateProgress", "commandID", commandID, "ksuid", ksuid, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -3203,6 +3565,11 @@ func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid st
 // BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 // Used for bulk operations like marking dependent resources as failed
 func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+	slog.Debug("SQLite START", "method", "BatchUpdateResourceUpdateState", "commandID", commandID, "count", len(refs), "state", state)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "BatchUpdateResourceUpdateState", "commandID", commandID, "count", len(refs), "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "BatchUpdateResourceUpdateState")
 	defer span.End()
 
@@ -3210,6 +3577,8 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 		return nil
 	}
 
+	slog.Debug("SQLite TX BEGIN", "method", "BatchUpdateResourceUpdateState", "commandID", commandID)
+	txStart := time.Now()
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -3239,6 +3608,7 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 		}
 	}
 
+	slog.Debug("SQLite TX COMMIT", "method", "BatchUpdateResourceUpdateState", "commandID", commandID, "txDuration", time.Since(txStart))
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -3250,15 +3620,23 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 // without re-writing all ResourceUpdates. This is a performance optimization for
 // progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
 func (d DatastoreSQLite) UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
+	slog.Debug("SQLite START", "method", "UpdateFormaCommandProgress", "commandID", commandID, "state", state)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "UpdateFormaCommandProgress", "commandID", commandID, "duration", time.Since(start))
+	}()
 	_, span := sqliteTracer.Start(context.Background(), "UpdateFormaCommandProgress")
 	defer span.End()
 
 	modifiedTsUTC := modifiedTs.UTC().Format(time.RFC3339Nano)
 
+	slog.Debug("SQLite STMT", "method", "UpdateFormaCommandProgress", "stmt", "Exec-UPDATE", "phase", "before")
+	execStart := time.Now()
 	result, err := d.conn.Exec(
 		`UPDATE forma_commands SET state = ?, modified_ts = ? WHERE command_id = ?`,
 		string(state), modifiedTsUTC, commandID,
 	)
+	slog.Debug("SQLite STMT", "method", "UpdateFormaCommandProgress", "stmt", "Exec-UPDATE", "phase", "after", "duration", time.Since(execStart), "error", err)
 	if err != nil {
 		return fmt.Errorf("failed to update forma command meta: %w", err)
 	}

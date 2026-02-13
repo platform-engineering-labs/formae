@@ -1061,7 +1061,7 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
-	WHERE data LIKE $1
+	WHERE data::text LIKE $1
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -1093,6 +1093,70 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 	}
 
 	return resources, nil
+}
+
+func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "FindResourcesDependingOnMany")
+	defer span.End()
+
+	if len(ksuids) == 0 {
+		return make(map[string][]*pkgmodel.Resource), nil
+	}
+
+	// Build OR conditions for each KSUID pattern with numbered placeholders
+	var conditions []string
+	var args []any
+	for i, ksuid := range ksuids {
+		pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+		conditions = append(conditions, fmt.Sprintf("data::text LIKE $%d", i+1))
+		args = append(args, pattern)
+	}
+	args = append(args, resource_update.OperationDelete)
+	deleteArgNum := len(ksuids) + 1
+
+	query := fmt.Sprintf(`
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != $%d
+	`, strings.Join(conditions, " OR "), deleteArgNum)
+
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Build a map of KSUID -> resources that depend on it
+	result := make(map[string][]*pkgmodel.Resource)
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+
+		// Find which of the input KSUIDs this resource depends on
+		for _, ksuid := range ksuids {
+			pattern := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(jsonData, pattern) {
+				result[ksuid] = append(result[ksuid], &resource)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error) {
@@ -1511,6 +1575,10 @@ func (d DatastorePostgres) CreatePolicy(policy pkgmodel.Policy, commandID string
 			"TTLSeconds":   p.TTLSeconds,
 			"OnDependents": p.OnDependents,
 		})
+	case *pkgmodel.AutoReconcilePolicy:
+		policyData, err = json.Marshal(map[string]any{
+			"IntervalSeconds": p.IntervalSeconds,
+		})
 	default:
 		return "", fmt.Errorf("unsupported policy type: %T", policy)
 	}
@@ -1572,6 +1640,10 @@ func (d DatastorePostgres) UpdatePolicy(policy pkgmodel.Policy, commandID string
 		policyData, err = json.Marshal(map[string]any{
 			"TTLSeconds":   p.TTLSeconds,
 			"OnDependents": p.OnDependents,
+		})
+	case *pkgmodel.AutoReconcilePolicy:
+		policyData, err = json.Marshal(map[string]any{
+			"IntervalSeconds": p.IntervalSeconds,
 		})
 	default:
 		return "", fmt.Errorf("unsupported policy type: %T", policy)
@@ -2127,6 +2199,143 @@ func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 			info.OnDependents = "abort" // default
 		}
 		result = append(result, info)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {
+	ctx, span := tracer.Start(context.Background(), "GetStacksWithAutoReconcilePolicy")
+	defer span.End()
+
+	query := `
+		WITH latest_stacks AS (
+			SELECT id, label, valid_from, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		),
+		latest_policies AS (
+			SELECT id, label, stack_id, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+		),
+		inline_auto_reconcile AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       (p.policy_data->>'IntervalSeconds')::bigint as interval_seconds
+			FROM latest_stacks s
+			JOIN latest_policies p ON p.stack_id = s.id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'auto-reconcile'
+		),
+		standalone_auto_reconcile AS (
+			SELECT s.label as stack_label, s.id as stack_id,
+			       (p.policy_data->>'IntervalSeconds')::bigint as interval_seconds
+			FROM latest_stacks s
+			JOIN stack_policies sp ON sp.stack_id = s.id
+			JOIN latest_policies p ON p.id = sp.policy_id
+			WHERE s.rn = 1 AND s.operation != 'delete'
+			AND p.rn = 1 AND p.operation != 'delete'
+			AND p.policy_type = 'auto-reconcile'
+			AND (p.stack_id IS NULL OR p.stack_id = '')
+		),
+		all_auto_reconcile AS (
+			SELECT * FROM inline_auto_reconcile
+			UNION
+			SELECT * FROM standalone_auto_reconcile
+		),
+		last_reconcile AS (
+			SELECT ru.stack_label, MAX(fc.timestamp) as last_reconcile_at
+			FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE fc.config_mode = 'reconcile'
+			AND fc.state = 'Success'
+			GROUP BY ru.stack_label
+		)
+		SELECT ar.stack_label, ar.stack_id, ar.interval_seconds,
+		       COALESCE(lr.last_reconcile_at, '1970-01-01 00:00:00'::timestamp) as last_reconcile_at
+		FROM all_auto_reconcile ar
+		LEFT JOIN last_reconcile lr ON ar.stack_label = lr.stack_label
+	`
+
+	rows, err := d.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []StackReconcileInfo
+	for rows.Next() {
+		var info StackReconcileInfo
+		if err := rows.Scan(&info.StackLabel, &info.StackID, &info.IntervalSeconds, &info.LastReconcileAt); err != nil {
+			return nil, err
+		}
+		result = append(result, info)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error) {
+	ctx, span := tracer.Start(context.Background(), "GetResourcesAtLastReconcile")
+	defer span.End()
+
+	// Note: r.data contains the full Resource JSON, we extract Properties and Schema separately
+	query := `
+		WITH last_reconcile_command AS (
+			SELECT fc.command_id, fc.timestamp
+			FROM forma_commands fc
+			JOIN resource_updates ru ON fc.command_id = ru.command_id
+			WHERE fc.config_mode = 'reconcile'
+			AND fc.state = 'Success'
+			AND ru.stack_label = $1
+			ORDER BY fc.timestamp DESC
+			LIMIT 1
+		)
+		SELECT r.ksuid, r.type, r.label, r.target,
+		       r.data->'Properties' as properties,
+		       r.data->'Schema' as schema,
+		       r.native_id
+		FROM resources r
+		JOIN last_reconcile_command lrc ON r.command_id = lrc.command_id
+		WHERE r.stack = $2
+		AND r.operation != 'delete'
+	`
+
+	rows, err := d.pool.Query(ctx, query, stackLabel, stackLabel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ResourceSnapshot
+	for rows.Next() {
+		var snapshot ResourceSnapshot
+		var propsData, schemaData []byte
+		var nativeID *string
+		if err := rows.Scan(&snapshot.KSUID, &snapshot.Type, &snapshot.Label, &snapshot.Target, &propsData, &schemaData, &nativeID); err != nil {
+			return nil, err
+		}
+		if propsData != nil {
+			snapshot.Properties = json.RawMessage(propsData)
+		}
+		if schemaData != nil {
+			if err := json.Unmarshal(schemaData, &snapshot.Schema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal schema for resource %s: %w", snapshot.Label, err)
+			}
+		}
+		if nativeID != nil {
+			snapshot.NativeID = *nativeID
+		}
+		result = append(result, snapshot)
 	}
 
 	if err := rows.Err(); err != nil {
