@@ -1,2 +1,5 @@
 tmp/
+imports.pkl
+resources.pkl
+resolvables.pkl
 pkl_generation_errors.log

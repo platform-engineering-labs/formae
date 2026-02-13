@@ -459,8 +459,9 @@ local function parseValueEnhanced(value: Any): Any =
       if (typeName == "FakeResolvable")
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
       else if (typeName == "Tag" && (getImportInfo(value.getClass()) == "types" || getImportInfo(value.getClass()) == "formae" || getImportInfo(value.getClass()) == importPlaceholder))
-        // Tag import: aws.Tag is in types.pkl but exported via aws.pkl. Include import for dependency collection.
-        Map("__type__", typeName, "__import__", importInfo, "__import_statement__", "@aws/aws.pkl")
+        // Tag import: Tag is in types.pkl but exported via the namespace base module. Derive the import from the package name.
+        let (pkgName = getPackageName(value.getClass()))
+        Map("__type__", typeName, "__import__", importInfo, "__import_statement__", "@\(pkgName)/\(pkgName).pkl")
       else
         Map("__type__", typeName, "__import__", importInfo))
       m.fold(defaultMap, (acc: Map<String, Any>, k: String, v: Any) ->
@@ -489,10 +490,10 @@ local function parseValueEnhanced(value: Any): Any =
 local function getImportInfoForType(clazz: Class, typeName: String, value: Any): String =
   // Get the actual import info from the class
   let (actualImport = getImportInfo(clazz))
-  // Tag handling: aws.Tag is defined in types.pkl but exported via aws.pkl.
-  // Redirect "types" (from @aws/types.pkl) or legacy fallbacks to "aws".
+  // Tag handling: Tag is defined in types.pkl but exported via the namespace base module.
+  // Redirect "types" or legacy fallbacks to the package name derived from the module URI.
   if (typeName == "Tag" && (actualImport == "types" || actualImport == "formae" || actualImport == importPlaceholder))
-    "aws"
+    getPackageName(clazz)
   else if (typeName == "FakeValue")
     "formae"
   else if (typeName == "FakeResolvable")
@@ -507,6 +508,32 @@ function getImportInfo(clazz: Class): String =
   let (enclosingModule = reflectClass.enclosingDeclaration)
   let (moduleUri = enclosingModule.uri)
   parseModuleUri(moduleUri)
+
+/// Extracts the package name from a class's module URI.
+/// For @fakeaws/types.pkl → "fakeaws", for @aws/types.pkl → "aws"
+function getPackageName(clazz: Class): String =
+  let (reflectClass = reflect.Class(clazz))
+  let (moduleUri = reflectClass.enclosingDeclaration.uri)
+  parsePackageName(moduleUri)
+
+/// Parses a module URI to extract the package name (the dependency name).
+/// Examples:
+///   @fakeaws/types.pkl → "fakeaws"
+///   @aws/ec2/vpc.pkl → "aws"
+///   package://hub.example.com/aws/aws@1.0.0#/types.pkl → "aws"
+///   projectpackage://fake.local/fakeaws@1.0.0#/types.pkl → "fakeaws"
+function parsePackageName(uri: String): String =
+  if (uri.startsWith("@"))
+    uri.substring(1).split("/").first
+  else if (uri.contains("://"))
+    // Extract package name from URL-style URIs
+    // e.g., projectpackage://fake.local/fakeaws@1.0.0#/types.pkl → "fakeaws"
+    // e.g., package://hub.example.com/plugins/pkl/schema/pkl/aws/aws@0.81.0#/types.pkl → "aws"
+    let (beforeHash = uri.split("#").first)
+    let (pathSegment = beforeHash.split("/").last)  // "fakeaws@1.0.0" or "aws@0.81.0"
+    pathSegment.split("@").first  // "fakeaws" or "aws"
+  else
+    importPlaceholder
 
 /// Parses a module URI to extract the import name (used in generated code).
 /// Examples:
