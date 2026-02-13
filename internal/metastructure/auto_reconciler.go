@@ -121,12 +121,14 @@ func scheduleInitialReconciles(proc gen.Process, data *AutoReconcilerData) error
 		return fmt.Errorf("failed to get stacks with auto-reconcile policy: %w", err)
 	}
 
+	proc.Log().Info("Found %d stacks with auto-reconcile policies", len(policies))
+
 	now := time.Now()
 	for _, p := range policies {
 		nextDue := p.LastReconcileAt.Add(time.Duration(p.IntervalSeconds) * time.Second)
 		delay := nextDue.Sub(now)
-		if delay < 0 {
-			delay = 0
+		if delay < time.Second {
+			delay = time.Second // Minimum 1s delay - SendAfter(0) doesn't work reliably
 		}
 
 		data.scheduled[p.StackLabel] = true
