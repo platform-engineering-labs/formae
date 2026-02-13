@@ -311,12 +311,25 @@ test-schema-pkl:
 	cd plugins/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
 
 test-generator-pkl:
-	# Generate static files for local development
+	# Stage 1: Generate intermediate files from PklProject dependencies
 	cd plugins/pkl/generator && pkl eval ImportsGenerator.pkl -o imports.pkl
 	cd plugins/pkl/generator && pkl eval ResourcesGenerator.pkl -o resources.pkl
 	cd plugins/pkl/generator && pkl eval ResolvablesGenerator.pkl -o resolvables.pkl
-	cd plugins/pkl/generator/ && pkl test tests/gen.pkl
-	# Note: AWS-specific generator examples removed - AWS plugin now external
+	# Stage 2: Unit tests
+	cd plugins/pkl/generator && pkl test tests/gen.pkl
+	cd plugins/pkl/generator && pkl test tests/jsonhelper.pkl
+	# Stage 3: Integration test - generate + validate
+	cd plugins/pkl/generator && pkl test tests/pklGenerator.pkl
+	# Stage 4: Full pipeline validation - generate PKL and evaluate it
+	@cd plugins/pkl/generator && mkdir -p tmp && \
+	for f in examples/json/*.json; do \
+		name=$$(basename $$f .json); \
+		echo "Testing $$name..."; \
+		pkl eval runPklGenerator.pkl \
+			-p Json="$$(cat $$f)" > tmp/$$name.pkl && \
+		pkl eval tmp/$$name.pkl > /dev/null && \
+		echo "  OK" || echo "  FAILED"; \
+	done
 
 test-descriptors-pkl:
 	pkl test pkg/plugin/descriptors/test/PklProjectGenerator_test.pkl

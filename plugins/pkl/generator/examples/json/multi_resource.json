@@ -1,0 +1,95 @@
+{
+  "Targets": [
+    {
+      "Label": "fakeaws-target",
+      "Namespace": "FakeAWS",
+      "Config": {
+        "Type": "FakeAWS",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "network-stack",
+      "Description": "Network infrastructure stack"
+    },
+    {
+      "Label": "app-stack",
+      "Description": "Application resources stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "main-vpc",
+      "Type": "FakeAWS::EC2::VPC",
+      "Stack": "network-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true,
+        "Tags": [
+          { "Key": "Name", "Value": "main-vpc" }
+        ]
+      }
+    },
+    {
+      "Label": "public-subnet",
+      "Type": "FakeAWS::EC2::Subnet",
+      "Stack": "network-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "CidrBlock": "10.0.1.0/24",
+        "AvailabilityZone": "us-east-1a",
+        "MapPublicIpOnLaunch": true,
+        "VpcId": {
+          "$res": true,
+          "$label": "main-vpc",
+          "$stack": "network-stack",
+          "$type": "FakeAWS::EC2::VPC",
+          "$property": "VpcId",
+          "$value": "vpc-12345"
+        },
+        "Tags": [
+          { "Key": "Name", "Value": "public-subnet" }
+        ]
+      }
+    },
+    {
+      "Label": "app-sg",
+      "Type": "FakeAWS::EC2::SecurityGroup",
+      "Stack": "network-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "GroupDescription": "Application security group",
+        "GroupName": "app-sg",
+        "VpcId": {
+          "$res": true,
+          "$label": "main-vpc",
+          "$stack": "network-stack",
+          "$type": "FakeAWS::EC2::VPC",
+          "$property": "VpcId",
+          "$value": "vpc-12345"
+        },
+        "Tags": [
+          { "Key": "Name", "Value": "app-sg" }
+        ]
+      }
+    },
+    {
+      "Label": "app-queue",
+      "Type": "FakeAWS::SQS::Queue",
+      "Stack": "app-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "QueueName": "app-events",
+        "DelaySeconds": 0,
+        "VisibilityTimeout": 30,
+        "Tags": [
+          { "Key": "Name", "Value": "app-queue" }
+        ]
+      }
+    }
+  ]
+}

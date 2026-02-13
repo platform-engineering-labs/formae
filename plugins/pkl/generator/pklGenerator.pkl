@@ -174,31 +174,23 @@ function generateFormaFile(parsed: json.Value): String =
     ))
 
     // Extract target data from the parsed JSON
-    let (targetsFromJson = if (parsed.Targets != null)
-        parsed.Targets.toList().map((target) -> Map(
+    let (targetsFromJson = parsed.Targets.toList().map((target) -> Map(
             "label", target.Label,
             "namespace", target.Namespace ?? "aws",
             "config", target.Config,
             "discoverable", target.getPropertyOrNull("Discoverable")
             )
         )
-    else
-        List()
     )
 
     // Extract stack data from the parsed JSON, falling back to resource stack labels if Stacks is not present
-    let (stacksFromJson = if (parsed.Stacks != null)
-        parsed.Stacks.toList().map((stack) -> Map(
+    let (stacksFromJson = parsed.Stacks.toList().map((stack) -> Map(
             "label", stack.Label,
             "description", stack.Description
             )
         )
-    else
-        // Fallback: extract stack labels from resources (for backwards compatibility)
-        resourceData.map((r) -> r["stack"]).distinct.map((stackLabel) ->
-            Map("label", stackLabel)
-        )
     )
+
 
     // Create mapping from original labels to camelCase labels for targets
     let (targetLabelMap = targetsFromJson.fold(Map(), (acc: Map<String, String>, targetData) ->
