@@ -89,6 +89,15 @@ func (m *mockDatastore) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Reso
 	return nil, nil
 }
 
+func (m *mockDatastore) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// For testing purposes, return empty map - no dependents.
+	// Tests that need this behavior should set up the expected results explicitly.
+	return make(map[string][]*pkgmodel.Resource), nil
+}
+
 // StoreStack is a helper for tests to populate the mock datastore
 func (m *mockDatastore) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
 	m.mu.Lock()

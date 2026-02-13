@@ -1,0 +1,79 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Test file demonstrating two stacks sharing a standalone TTL policy.
+/// Both stacks reference the same policy object (myPolicy), which means
+/// the policy is created once and associated with both stacks.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+import "@aws/logs/loggroup.pkl"
+
+// Shared TTL policy - both stacks will reference this same policy
+local myPolicy = new formae.TTLPolicy {
+    label = "shared-ttl"
+    ttl = 30.min
+    onDependents = "cascade"
+}
+
+local stack1 = new formae.Stack {
+    label = "stack1"
+    description = "First stack with shared TTL policy"
+    policies = new Listing { myPolicy }
+}
+
+local stack2 = new formae.Stack {
+    label = "stack2"
+    description = "Second stack with shared TTL policy"
+    policies = new Listing { myPolicy }
+}
+
+local testTarget = new formae.Target {
+    label = "aws-target-shared"
+    config = new aws.Config {
+        region = "us-east-1"
+    }
+}
+
+forma {
+    stack1
+    stack2
+    testTarget
+
+    // Resources in stack1
+    new loggroup.LogGroup {
+        label = "app-logs-1"
+        stack = stack1.res
+        target = testTarget.res
+        logGroupName = "/formae-shared-test/stack1/logs"
+        retentionInDays = 7
+    }
+    new loggroup.LogGroup {
+        label = "audit-logs-1"
+        stack = stack1.res
+        target = testTarget.res
+        logGroupName = "/formae-shared-test/stack1/audit"
+        retentionInDays = 30
+    }
+
+    // Resources in stack2
+    new loggroup.LogGroup {
+        label = "app-logs-2"
+        stack = stack2.res
+        target = testTarget.res
+        logGroupName = "/formae-shared-test/stack2/logs"
+        retentionInDays = 7
+    }
+    new loggroup.LogGroup {
+        label = "audit-logs-2"
+        stack = stack2.res
+        target = testTarget.res
+        logGroupName = "/formae-shared-test/stack2/audit"
+        retentionInDays = 30
+    }
+}

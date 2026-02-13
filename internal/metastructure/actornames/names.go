@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	AutoReconciler            = gen.Atom("AutoReconciler")
 	ChangesetSupervisor       = gen.Atom("ChangesetSupervisor")
 	Discovery                 = gen.Atom("Discovery")
 	FormaCommandPersister     = gen.Atom("FormaCommandPersister")
@@ -21,6 +22,7 @@ const (
 	RateLimiter               = gen.Atom("RateLimiter")
 	ResourcePersister         = gen.Atom("ResourcePersister")
 	ResourceUpdaterSupervisor = gen.Atom("ResourceUpdaterSupervisor")
+	StackExpirer              = gen.Atom("StackExpirer")
 	Synchronizer              = gen.Atom("Synchronizer")
 )
 

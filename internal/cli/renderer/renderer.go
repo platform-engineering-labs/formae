@@ -24,7 +24,7 @@ import (
 
 func RenderSimulation(s *apimodel.Simulation) (string, error) {
 	renderHeader := func(cmd apimodel.Command) string { return "Command will" }
-	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate, formatSimulatedStackUpdate)
+	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate, formatSimulatedStackUpdate, formatSimulatedPolicyUpdate)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +88,7 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 
 		data[i][2] = status
 
-		statusData := countUpdateStates(command.ResourceUpdates, command.TargetUpdates, command.StackUpdates)
+		statusData := countUpdateStates(command.ResourceUpdates, command.TargetUpdates, command.StackUpdates, command.PolicyUpdates)
 
 		data[i][3] = fmt.Sprintf("%d", statusData[0])
 		data[i][4] = display.Grey(fmt.Sprintf("%d", statusData[1]))
@@ -118,9 +118,9 @@ func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, er
 	}
 }
 
-// countUpdateStates counts states for resource, target, and stack updates
+// countUpdateStates counts states for resource, target, stack, and policy updates
 // Returns [total, waiting, inProgress, success, retry, failed, canceled]
-func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates []apimodel.TargetUpdate, stackUpdates []apimodel.StackUpdate) []int {
+func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates []apimodel.TargetUpdate, stackUpdates []apimodel.StackUpdate, policyUpdates []apimodel.PolicyUpdate) []int {
 	statusData := make([]int, 7)
 
 	// Count resource updates
@@ -175,6 +175,20 @@ func countUpdateStates(resourceUpdates []apimodel.ResourceUpdate, targetUpdates 
 		}
 	}
 
+	// Count policy updates
+	for _, pu := range policyUpdates {
+		statusData[0]++ // Total changes
+
+		switch pu.State {
+		case "NotStarted":
+			statusData[1]++ // Waiting
+		case "Success":
+			statusData[3]++ // Success
+		case "Failed":
+			statusData[5]++ // Failed
+		}
+	}
+
 	return statusData
 }
 
@@ -198,7 +212,7 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 			formatter = formatResourceUpdate
 		}
 
-		s, err := renderCommand(cmd, renderHeader, formatter, formatTargetUpdate, formatStackUpdate)
+		s, err := renderCommand(cmd, renderHeader, formatter, formatTargetUpdate, formatStackUpdate, formatPolicyUpdate)
 		if err != nil {
 			return "", err
 		}
@@ -208,12 +222,17 @@ func RenderStatus(s *apimodel.ListCommandStatusResponse) (string, error) {
 	return result, nil
 }
 
-func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate), renderTargetUpdate func(*gtree.Node, apimodel.TargetUpdate), renderStackUpdate func(*gtree.Node, apimodel.StackUpdate)) (string, error) {
+func renderCommand(cmd apimodel.Command, renderHeader func(apimodel.Command) string, renderResourceUpdate func(*gtree.Node, apimodel.ResourceUpdate), renderTargetUpdate func(*gtree.Node, apimodel.TargetUpdate), renderStackUpdate func(*gtree.Node, apimodel.StackUpdate), renderPolicyUpdate func(*gtree.Node, apimodel.PolicyUpdate)) (string, error) {
 	root := gtree.NewRoot(renderHeader(cmd))
 
 	// Render stack updates first (before targets and resources)
 	for _, su := range cmd.StackUpdates {
 		renderStackUpdate(root, su)
+	}
+
+	// Render policy updates (after stacks, before targets)
+	for _, pu := range cmd.PolicyUpdates {
+		renderPolicyUpdate(root, pu)
 	}
 
 	// Render target updates (before resources)
@@ -583,15 +602,142 @@ func formatStackUpdate(root *gtree.Node, su apimodel.StackUpdate) {
 	}
 }
 
+// formatSimulatedPolicyUpdate formats a policy update for simulation view
+func formatSimulatedPolicyUpdate(root *gtree.Node, pu apimodel.PolicyUpdate) {
+	label := formatPolicyLabel(pu)
+
+	// Handle "detach" - show as removing the policy from the stack
+	if pu.Operation == "detach" {
+		root.Add(display.Greyf("%s policy %s", display.Gold("detach"), label))
+		return
+	}
+
+	// Handle "skip" operation specially - display as "not delete"
+	if pu.Operation == "skip" {
+		node := root.Add(display.Greyf("%s policy %s", display.Gold("not delete"), label))
+		if len(pu.ReferencingStacks) > 0 {
+			node.Add(display.Grey("still referenced by: ") + display.LightBlue(strings.Join(pu.ReferencingStacks, ", ")))
+		}
+		return
+	}
+
+	op := coloredOperation(pu.Operation)
+	node := root.Add(display.Greyf("%s policy %s", op, label))
+
+	// Show property changes for update operations
+	if pu.Operation == "update" && len(pu.PolicyConfig) > 0 && len(pu.OldPolicyConfig) > 0 {
+		formatPolicyChanges(node, pu.PolicyConfig, pu.OldPolicyConfig, pu.PolicyType)
+	}
+}
+
+// formatPolicyChanges shows the property changes for a policy update
+func formatPolicyChanges(node *gtree.Node, newConfig, oldConfig json.RawMessage, policyType string) {
+	switch policyType {
+	case "ttl":
+		formatTTLPolicyChanges(node, newConfig, oldConfig)
+	default:
+		// For unknown policy types, show a generic message
+		node.Add(display.Grey("policy configuration changed"))
+	}
+}
+
+// formatTTLPolicyChanges shows changes specific to TTL policies
+func formatTTLPolicyChanges(node *gtree.Node, newConfig, oldConfig json.RawMessage) {
+	var newPolicy, oldPolicy struct {
+		TTLSeconds   int64  `json:"TTLSeconds"`
+		OnDependents string `json:"OnDependents"`
+	}
+
+	if err := json.Unmarshal(newConfig, &newPolicy); err != nil {
+		return
+	}
+	if err := json.Unmarshal(oldConfig, &oldPolicy); err != nil {
+		return
+	}
+
+	changesNode := node.Add(display.Grey("by doing the following:"))
+
+	if newPolicy.TTLSeconds != oldPolicy.TTLSeconds {
+		oldDur := formatDurationFromSeconds(oldPolicy.TTLSeconds)
+		newDur := formatDurationFromSeconds(newPolicy.TTLSeconds)
+		changesNode.Add(display.Gold(fmt.Sprintf(`change "TTLSeconds" from "%s" to "%s"`, oldDur, newDur)))
+	}
+
+	if newPolicy.OnDependents != oldPolicy.OnDependents {
+		changesNode.Add(display.Gold(fmt.Sprintf(`change "OnDependents" from "%s" to "%s"`, oldPolicy.OnDependents, newPolicy.OnDependents)))
+	}
+}
+
+// formatDurationFromSeconds formats seconds into a human-readable duration
+func formatDurationFromSeconds(seconds int64) string {
+	d := time.Duration(seconds) * time.Second
+	if d >= 24*time.Hour {
+		days := int(d.Hours() / 24)
+		return fmt.Sprintf("%dd", days)
+	}
+	if d >= time.Hour {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	if d >= time.Minute {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+// formatPolicyUpdate formats a policy update for status view
+func formatPolicyUpdate(root *gtree.Node, pu apimodel.PolicyUpdate) {
+	op := coloredOperation(pu.Operation)
+	label := formatPolicyLabel(pu)
+	line := display.Greyf("%s policy %s", op, label)
+	line = line + fmt.Sprintf(": %s", coloredUpdateState(pu.State))
+	line = line + formatDurationLine(pu.Duration)
+
+	node := root.Add(line)
+
+	// Add error details if failed
+	if pu.State == "Failed" && pu.ErrorMessage != "" {
+		node.Add(display.Grey("reason for failure: ") + display.Red(pu.ErrorMessage))
+	}
+}
+
+// formatPolicyLabel formats a policy label for display
+// For inline policies (auto-generated labels like "stackName-policyType-ksuid"),
+// we simplify the display to just show the type and stack.
+func formatPolicyLabel(pu apimodel.PolicyUpdate) string {
+	// Check if this is an auto-generated label (inline policy)
+	// Auto-generated labels follow the pattern: {stackLabel}-{policyType}-{ksuidPrefix}
+	isAutoGenerated := false
+	if pu.StackLabel != "" && pu.PolicyLabel != "" {
+		prefix := pu.StackLabel + "-" + pu.PolicyType + "-"
+		if strings.HasPrefix(pu.PolicyLabel, prefix) {
+			isAutoGenerated = true
+		}
+	}
+
+	var result string
+	if isAutoGenerated || pu.PolicyLabel == "" {
+		// For inline policies, just show the type
+		result = pu.PolicyType
+	} else {
+		// For standalone policies with explicit labels, show label and type
+		result = fmt.Sprintf("%s (%s)", pu.PolicyLabel, pu.PolicyType)
+	}
+
+	if pu.StackLabel != "" {
+		result += display.Greyf(" on stack %s", pu.StackLabel)
+	}
+	return result
+}
+
 // PromptForOperations returns a prompt based on the operations to be performed
 func PromptForOperations(cmd *apimodel.Command) string {
-	targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
+	targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
 
-	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	summary := operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
+	summary := operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
 	if summary == "" {
 		return ""
 	}
@@ -602,7 +748,7 @@ func PromptForOperations(cmd *apimodel.Command) string {
 }
 
 // analyzeCommands analyzes the resource and target commands and returns operation type counts
-func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
+func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
 	// Group operations by GroupId
 	groupedOperations := make(map[string][]apimodel.ResourceUpdate)
 	ungroupedOperations := make([]apimodel.ResourceUpdate, 0)
@@ -684,11 +830,21 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 		}
 	}
 
+	// Count policy updates
+	for _, pu := range cmd.PolicyUpdates {
+		switch pu.Operation {
+		case "create":
+			policyCreates++
+		case "update":
+			policyUpdates++
+		}
+	}
+
 	return
 }
 
-func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
-	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
+	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
@@ -702,9 +858,12 @@ func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, 
 		parts = append(parts, display.Redf("replace %d resource(s)", resourceReplaces))
 	}
 
-	// Creates (stacks, targets, resources)
+	// Creates (stacks, policies, targets, resources)
 	if stackCreates > 0 {
 		parts = append(parts, display.Greenf("create %d stack(s)", stackCreates))
+	}
+	if policyCreates > 0 {
+		parts = append(parts, display.Greenf("create %d policy(ies)", policyCreates))
 	}
 	if targetCreates > 0 {
 		parts = append(parts, display.Greenf("create %d target(s)", targetCreates))
@@ -713,9 +872,12 @@ func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, 
 		parts = append(parts, display.Greenf("create %d resource(s)", resourceCreates))
 	}
 
-	// Updates (stacks, targets, resources)
+	// Updates (stacks, policies, targets, resources)
 	if stackUpdates > 0 {
 		parts = append(parts, display.Goldf("update %d stack(s)", stackUpdates))
+	}
+	if policyUpdates > 0 {
+		parts = append(parts, display.Goldf("update %d policy(ies)", policyUpdates))
 	}
 	if targetUpdates > 0 {
 		parts = append(parts, display.Goldf("update %d target(s)", targetUpdates))
@@ -862,7 +1024,7 @@ func RenderInventoryStacks(stacks []*pkgmodel.Stack, maxRows int) (string, error
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
 			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On, ShowHeader: tw.On}},
 		})))
-	table.Header(display.LightBlue("Label"), "Description")
+	table.Header(display.LightBlue("Label"), "Description", "Policies")
 
 	effectiveMaxRows := len(stacks)
 	if maxRows > 0 && maxRows < len(stacks) {
@@ -873,9 +1035,10 @@ func RenderInventoryStacks(stacks []*pkgmodel.Stack, maxRows int) (string, error
 	for i := 0; i < effectiveMaxRows; i++ {
 		stack := stacks[i]
 
-		data[i] = make([]string, 2)
+		data[i] = make([]string, 3)
 		data[i][0] = display.LightBlue(stack.Label)
 		data[i][1] = stack.Description
+		data[i][2] = formatStackPolicies(stack.Policies, stack.CreatedAt)
 	}
 
 	err := table.Bulk(data)
@@ -934,6 +1097,221 @@ func formatTargetConfig(configJSON json.RawMessage) string {
 	sort.Strings(parts)
 
 	return strings.Join(parts, ", ")
+}
+
+// formatStackPolicies formats the policies for display in the stacks table
+func formatStackPolicies(policies []json.RawMessage, stackCreatedAt time.Time) string {
+	if len(policies) == 0 {
+		return "-"
+	}
+
+	var parts []string
+	for _, policyJSON := range policies {
+		// Parse the policy to get type and details
+		var policy map[string]any
+		if err := json.Unmarshal(policyJSON, &policy); err != nil {
+			continue
+		}
+
+		policyType, _ := policy["Type"].(string)
+		switch policyType {
+		case "ttl":
+			ttlSeconds, _ := policy["TTLSeconds"].(float64)
+			duration := time.Duration(int64(ttlSeconds)) * time.Second
+			label, _ := policy["Label"].(string)
+
+			// Calculate expiry time if we have a valid stack creation time
+			var expiryStr string
+			if !stackCreatedAt.IsZero() {
+				expiresAt := stackCreatedAt.Add(duration)
+				expiryStr = formatExpiryTime(expiresAt)
+			}
+
+			if label != "" && expiryStr != "" {
+				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s (%s)", formatTTLDuration(duration), expiryStr, label))
+			} else if expiryStr != "" {
+				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s", formatTTLDuration(duration), expiryStr))
+			} else if label != "" {
+				parts = append(parts, fmt.Sprintf("TTL: %s (%s)", formatTTLDuration(duration), label))
+			} else {
+				parts = append(parts, fmt.Sprintf("TTL: %s", formatTTLDuration(duration)))
+			}
+		case "auto-reconcile":
+			intervalSeconds, _ := policy["IntervalSeconds"].(float64)
+			duration := time.Duration(int64(intervalSeconds)) * time.Second
+			label, _ := policy["Label"].(string)
+
+			var lastReconStr string
+			if lastReconAt, ok := policy["LastReconcileAt"].(string); ok && lastReconAt != "" {
+				if t, err := time.Parse(time.RFC3339, lastReconAt); err == nil && !t.IsZero() {
+					lastReconStr = formatLastReconcileTime(t)
+				}
+			}
+
+			var part string
+			if lastReconStr != "" && label != "" {
+				part = fmt.Sprintf("Interval: %s, last %s (%s)", formatTTLDuration(duration), lastReconStr, label)
+			} else if lastReconStr != "" {
+				part = fmt.Sprintf("Interval: %s, last %s", formatTTLDuration(duration), lastReconStr)
+			} else if label != "" {
+				part = fmt.Sprintf("Interval: %s (%s)", formatTTLDuration(duration), label)
+			} else {
+				part = fmt.Sprintf("Interval: %s", formatTTLDuration(duration))
+			}
+			parts = append(parts, part)
+		default:
+			if policyType != "" {
+				parts = append(parts, policyType)
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatExpiryTime formats an expiry time for display
+func formatExpiryTime(expiresAt time.Time) string {
+	now := time.Now()
+	if expiresAt.Before(now) {
+		return display.Red("expired")
+	}
+
+	remaining := expiresAt.Sub(now)
+
+	// If expiring within 24 hours, show relative time
+	if remaining < 24*time.Hour {
+		if remaining < time.Hour {
+			return display.Gold(fmt.Sprintf("in %dm", int(remaining.Minutes())))
+		}
+		return display.Gold(fmt.Sprintf("in %dh%dm", int(remaining.Hours()), int(remaining.Minutes())%60))
+	}
+
+	// Otherwise show the date and time
+	return expiresAt.Local().Format("Jan 2 15:04")
+}
+
+// formatLastReconcileTime formats the last reconcile timestamp for display
+func formatLastReconcileTime(t time.Time) string {
+	ago := time.Since(t)
+	if ago < time.Minute {
+		return "just now"
+	}
+	if ago < time.Hour {
+		return fmt.Sprintf("%dm ago", int(ago.Minutes()))
+	}
+	if ago < 24*time.Hour {
+		return fmt.Sprintf("%dh%dm ago", int(ago.Hours()), int(ago.Minutes())%60)
+	}
+	return t.Local().Format("Jan 2 15:04")
+}
+
+// formatTTLDuration formats a duration in a human-friendly way
+func formatTTLDuration(d time.Duration) string {
+	if d >= 24*time.Hour {
+		days := d / (24 * time.Hour)
+		return fmt.Sprintf("%dd", days)
+	}
+	if d >= time.Hour {
+		hours := d / time.Hour
+		return fmt.Sprintf("%dh", hours)
+	}
+	if d >= time.Minute {
+		minutes := d / time.Minute
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+// RenderInventoryPolicies renders a list of standalone policies in a table format
+func RenderInventoryPolicies(policies []apimodel.PolicyInventoryItem, maxRows int) (string, error) {
+	var buf strings.Builder
+	table := tablewriter.NewTable(&buf,
+		tablewriter.WithRowAutoWrap(tw.WrapBreak),
+		tablewriter.WithHeaderAutoFormat(tw.Off),
+		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
+			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On, ShowHeader: tw.On}},
+		})))
+	table.Header(display.LightBlue("Label"), "Type", "Config", "Attached Stacks")
+
+	effectiveMaxRows := len(policies)
+	if maxRows > 0 && maxRows < len(policies) {
+		effectiveMaxRows = maxRows
+	}
+
+	data := make([][]string, effectiveMaxRows)
+	for i := 0; i < effectiveMaxRows; i++ {
+		policy := policies[i]
+
+		data[i] = make([]string, 4)
+		data[i][0] = display.LightBlue(policy.Label)
+		data[i][1] = policy.Type
+		data[i][2] = formatPolicyConfig(policy.Type, policy.Config)
+		if len(policy.AttachedStacks) > 0 {
+			data[i][3] = strings.Join(policy.AttachedStacks, ", ")
+		} else {
+			data[i][3] = display.Grey("none")
+		}
+	}
+
+	err := table.Bulk(data)
+	if err != nil {
+		return "", fmt.Errorf("error rendering policies: %v", err)
+	}
+
+	if len(policies) == 0 {
+		return display.Gold("No standalone policies found.\n"), nil
+	}
+
+	err = table.Render()
+	if err != nil {
+		return "", fmt.Errorf("error rendering policies: %v", err)
+	}
+
+	summary := fmt.Sprintf("\n%s Showing %d of %d total policies",
+		display.Gold("Summary:"),
+		effectiveMaxRows,
+		len(policies))
+
+	if maxRows > 0 && len(policies) > maxRows {
+		summary += fmt.Sprintf(" (use --max-results %d to see all)", len(policies))
+	}
+
+	return buf.String() + summary + "\n", nil
+}
+
+// formatPolicyConfig formats policy config for display in the inventory table
+func formatPolicyConfig(policyType string, configJSON json.RawMessage) string {
+	if len(configJSON) == 0 {
+		return "-"
+	}
+
+	switch policyType {
+	case "ttl":
+		var config map[string]any
+		if err := json.Unmarshal(configJSON, &config); err != nil {
+			return string(configJSON)
+		}
+		if ttlSeconds, ok := config["TTLSeconds"].(float64); ok {
+			duration := time.Duration(int64(ttlSeconds)) * time.Second
+			return fmt.Sprintf("TTL: %s", formatTTLDuration(duration))
+		}
+		return string(configJSON)
+	case "auto-reconcile":
+		var config map[string]any
+		if err := json.Unmarshal(configJSON, &config); err != nil {
+			return string(configJSON)
+		}
+		if intervalSeconds, ok := config["IntervalSeconds"].(float64); ok {
+			duration := time.Duration(int64(intervalSeconds)) * time.Second
+			return fmt.Sprintf("Interval: %s", formatTTLDuration(duration))
+		}
+		return string(configJSON)
+	default:
+		return string(configJSON)
+	}
 }
 
 // RenderCancelCommandResponse renders the result of a cancel command

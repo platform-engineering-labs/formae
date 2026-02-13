@@ -1,0 +1,44 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+import "@aws/logs/loggroup.pkl"
+
+// Stack with a 5-minute TTL policy for testing
+local ttlStack = new formae.Stack {
+    label = "ttl-test-stack"
+    description = "Test stack with inline TTL policy"
+    policies = new Listing {
+        new formae.TTLPolicy {
+            ttl = 2.min  // Short TTL for testing
+            onDependents = "cascade"
+        }
+    }
+}
+
+local ttlTarget = new formae.Target {
+    label = "aws-target-ttl-test"
+    config = new aws.Config {
+        region = "us-east-1"
+    }
+}
+
+forma {
+    ttlStack
+    ttlTarget
+
+    // A simple LogGroup to test the TTL policy
+    new loggroup.LogGroup {
+        label = "ttl-test-loggroup"
+        stack = ttlStack.res
+        target = ttlTarget.res
+        logGroupName = "/formae-ttl-test/logs"
+        retentionInDays = 7
+    }
+}

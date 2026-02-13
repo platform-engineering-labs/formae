@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
@@ -48,4 +49,9 @@ type UpdateTargetStates struct {
 type UpdateStackStates struct {
 	CommandID    string
 	StackUpdates []stack_update.StackUpdate
+}
+
+type UpdatePolicyStates struct {
+	CommandID     string
+	PolicyUpdates []policy_update.PolicyUpdate
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
@@ -52,6 +53,7 @@ type MetastructureAPI interface {
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
 	ExtractStacks() ([]*pkgmodel.Stack, error)
+	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
@@ -389,6 +391,56 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			return nil, fmt.Errorf("failed to update forma command with stack states: %w", err)
 		}
 	}
+
+	if len(fa.PolicyUpdates) > 0 {
+		// Build StackIDMap from persisted stack updates
+		stackIDMap := make(map[string]string)
+		for _, su := range fa.StackUpdates {
+			if su.Stack.ID != "" {
+				stackIDMap[su.Stack.Label] = su.Stack.ID
+			}
+		}
+
+		// For inline policies whose stacks aren't in the map (existing stacks with no changes),
+		// look up the stack ID from the database
+		for _, pu := range fa.PolicyUpdates {
+			if pu.StackLabel != "" {
+				if _, ok := stackIDMap[pu.StackLabel]; !ok {
+					stack, err := m.Datastore.GetStackByLabel(pu.StackLabel)
+					if err == nil && stack != nil {
+						stackIDMap[pu.StackLabel] = stack.ID
+					}
+				}
+			}
+		}
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			policy_update.PersistPolicyUpdates{
+				PolicyUpdates: fa.PolicyUpdates,
+				CommandID:     fa.ID,
+				StackIDMap:    stackIDMap,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist policy updates", "error", err)
+			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			messages.UpdatePolicyStates{
+				CommandID:     fa.ID,
+				PolicyUpdates: fa.PolicyUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with policy states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with policy states: %w", err)
+		}
+	}
+
 	if len(fa.ResourceUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
 		_, err = m.callActor(
@@ -488,6 +540,47 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		})
 	}
 
+	for _, pu := range fa.PolicyUpdates {
+		var dur time.Duration = 0
+		if !pu.StartTs.IsZero() {
+			dur = pu.ModifiedTs.Sub(pu.StartTs)
+		}
+
+		// For attach/detach operations, Policy may be nil - use PolicyRef for the label
+		var policyLabel, policyType string
+		if pu.Policy != nil {
+			policyLabel = pu.Policy.GetLabel()
+			policyType = pu.Policy.GetType()
+		} else if pu.PolicyRef != "" {
+			policyLabel = pu.PolicyRef
+			policyType = "" // Type unknown until resolved
+		}
+
+		// Marshal policy configs for diff display
+		var policyConfig, oldPolicyConfig json.RawMessage
+		if pu.Policy != nil {
+			policyConfig, _ = json.Marshal(pu.Policy)
+		}
+		if pu.ExistingPolicy != nil {
+			oldPolicyConfig, _ = json.Marshal(pu.ExistingPolicy)
+		}
+
+		apiCommand.PolicyUpdates = append(apiCommand.PolicyUpdates, apimodel.PolicyUpdate{
+			PolicyLabel:       policyLabel,
+			PolicyType:        policyType,
+			StackLabel:        pu.StackLabel,
+			Operation:         string(pu.Operation),
+			State:             string(pu.State),
+			Duration:          dur.Milliseconds(),
+			ErrorMessage:      pu.ErrorMessage,
+			PolicyConfig:      policyConfig,
+			OldPolicyConfig:   oldPolicyConfig,
+			ReferencingStacks: pu.ReferencingStacks,
+			StartTs:           pu.StartTs,
+			ModifiedTs:        pu.ModifiedTs,
+		})
+	}
+
 	return apiCommand
 }
 
@@ -562,6 +655,34 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		if err != nil {
 			slog.Error("Failed to update forma command with target states", "error", err)
 			return nil, fmt.Errorf("failed to update forma command with target states: %w", err)
+		}
+	}
+
+	if len(fa.PolicyUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			policy_update.PersistPolicyUpdates{
+				PolicyUpdates: fa.PolicyUpdates,
+				CommandID:     fa.ID,
+				StackIDMap:    nil, // For destroy, policies are being deleted, no stack mapping needed
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist policy updates", "error", err)
+			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			messages.UpdatePolicyStates{
+				CommandID:     fa.ID,
+				PolicyUpdates: fa.PolicyUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with policy states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with policy states: %w", err)
 		}
 	}
 
@@ -777,6 +898,41 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 		}
 	}
 
+	// Collect referenced standalone policy labels from stacks
+	uniquePolicyLabels := make(map[string]struct{})
+	for _, stack := range forma.Stacks {
+		for _, rawPolicy := range stack.Policies {
+			if pkgmodel.IsPolicyReference(rawPolicy) {
+				policyLabel, err := pkgmodel.ParsePolicyReference(rawPolicy)
+				if err != nil {
+					slog.Debug("Failed to parse policy reference", "error", err)
+					continue
+				}
+				uniquePolicyLabels[policyLabel] = struct{}{}
+			}
+		}
+	}
+
+	// Load standalone policies and add to forma
+	if len(uniquePolicyLabels) > 0 {
+		forma.Policies = make([]json.RawMessage, 0, len(uniquePolicyLabels))
+		for label := range uniquePolicyLabels {
+			policy, err := m.Datastore.GetStandalonePolicy(label)
+			if err != nil {
+				slog.Error("Failed to load standalone policy", "label", label, "error", err)
+				continue
+			}
+			if policy != nil {
+				policyJSON, err := json.Marshal(policy)
+				if err != nil {
+					slog.Error("Failed to marshal standalone policy", "label", label, "error", err)
+					continue
+				}
+				forma.Policies = append(forma.Policies, policyJSON)
+			}
+		}
+	}
+
 	return forma, nil
 }
 
@@ -833,8 +989,73 @@ func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 		return nil, err
 	}
 
+	// Build a lookup of last reconcile times per stack
+	reconcileInfos, err := m.Datastore.GetStacksWithAutoReconcilePolicy()
+	lastReconcileByStack := make(map[string]time.Time)
+	if err != nil {
+		slog.Warn("Failed to get auto-reconcile info", "error", err)
+	} else {
+		for _, info := range reconcileInfos {
+			lastReconcileByStack[info.StackLabel] = info.LastReconcileAt
+		}
+	}
+
+	// Populate policies for each stack
+	for _, stack := range stacks {
+		policies, err := m.Datastore.GetPoliciesForStack(stack.ID)
+		if err != nil {
+			slog.Warn("Failed to get policies for stack", "stack", stack.Label, "error", err)
+			continue
+		}
+		// Convert policies to json.RawMessage for the Stack.Policies field
+		for _, policy := range policies {
+			// Enrich auto-reconcile policies with last reconcile time
+			if arPolicy, ok := policy.(*pkgmodel.AutoReconcilePolicy); ok {
+				if lastRecon, found := lastReconcileByStack[stack.Label]; found {
+					arPolicy.LastReconcileAt = lastRecon
+				}
+			}
+			policyJSON, err := json.Marshal(policy)
+			if err != nil {
+				slog.Warn("Failed to marshal policy", "policy", policy.GetLabel(), "error", err)
+				continue
+			}
+			stack.Policies = append(stack.Policies, json.RawMessage(policyJSON))
+		}
+	}
+
 	slog.Debug("ExtractStacks returning", "count", len(stacks))
 	return stacks, nil
+}
+
+func (m *Metastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
+	policies, err := m.Datastore.ListAllStandalonePolicies()
+	if err != nil {
+		return nil, err
+	}
+
+	var items []apimodel.PolicyInventoryItem
+	for _, policy := range policies {
+		configJSON, err := json.Marshal(policy)
+		if err != nil {
+			slog.Warn("Failed to marshal policy config", "label", policy.GetLabel(), "error", err)
+			continue
+		}
+
+		stacks, err := m.Datastore.GetStacksReferencingPolicy(policy.GetLabel())
+		if err != nil {
+			slog.Warn("Failed to get stacks for policy", "label", policy.GetLabel(), "error", err)
+		}
+
+		items = append(items, apimodel.PolicyInventoryItem{
+			Label:          policy.GetLabel(),
+			Type:           policy.GetType(),
+			Config:         configJSON,
+			AttachedStacks: stacks,
+		})
+	}
+
+	return items, nil
 }
 
 func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) error {
@@ -1130,6 +1351,11 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
+	policyUpdates, err := policy_update.NewPolicyUpdateGenerator(ds).GeneratePolicyUpdates(forma, command)
+	if err != nil {
+		return nil, err
+	}
+
 	return forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
@@ -1137,6 +1363,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		resourceUpdates,
 		targetUpdates,
 		stackUpdates,
+		policyUpdates,
 		clientID,
 	), nil
 }

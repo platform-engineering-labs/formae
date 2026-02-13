@@ -29,8 +29,9 @@ func NewStackUpdateGenerator(ds StackDatastore) *StackUpdateGenerator {
 
 // GenerateStackUpdates determines what stack changes are needed
 func (sg *StackUpdateGenerator) GenerateStackUpdates(stacks []pkgmodel.Stack, command pkgmodel.Command) ([]StackUpdate, error) {
-	// For destroy commands, we don't delete stacks here.
-	// Stack deletion happens when all resources in a stack are deleted.
+	// For destroy commands, we don't generate stack updates here.
+	// Stack deletion happens implicitly when all resources in a stack are deleted
+	// (via cleanupEmptyStacks in the changeset executor).
 	if command == pkgmodel.CommandDestroy {
 		return nil, nil
 	}
@@ -68,12 +69,16 @@ func (sg *StackUpdateGenerator) determineStackUpdate(stack pkgmodel.Stack) (Stac
 	var operation StackOperation
 	if existing == nil {
 		operation = StackOperationCreate
+		// Generate ID upfront for new stacks so it's available throughout the flow
+		stack.ID = util.NewID()
 	} else {
 		// Check if there's any change
 		if existing.Description == stack.Description {
 			return StackUpdate{}, false, nil
 		}
 		operation = StackOperationUpdate
+		// Use the existing stack's ID
+		stack.ID = existing.ID
 	}
 
 	return StackUpdate{

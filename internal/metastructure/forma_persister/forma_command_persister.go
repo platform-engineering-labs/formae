@@ -221,6 +221,10 @@ type MarkResourcesAsCanceled struct {
 }
 
 func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message any) (any, error) {
+	start := time.Now()
+	defer func() {
+		f.Log().Debug("FormaCommandPersister HandleCall timing", "messageType", fmt.Sprintf("%T", message), "duration", time.Since(start))
+	}()
 	switch msg := message.(type) {
 	case StoreNewFormaCommand:
 		return f.storeNewFormaCommand(&msg.Command)
@@ -232,6 +236,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.updateTargetStates(&msg)
 	case messages.UpdateStackStates:
 		return f.updateStackStates(&msg)
+	case messages.UpdatePolicyStates:
+		return f.updatePolicyStates(&msg)
 	case MarkResourcesAsRejected:
 		return f.markResourcesAsRejected(&msg)
 	case MarkResourcesAsFailed:
@@ -406,6 +412,28 @@ func (f *FormaCommandPersister) updateStackStates(msg *messages.UpdateStackState
 	}
 
 	f.Log().Debug("Successfully updated Forma command with stack states", "commandID", msg.CommandID)
+	return true, nil
+}
+
+func (f *FormaCommandPersister) updatePolicyStates(msg *messages.UpdatePolicyStates) (bool, error) {
+	f.Log().Debug("Updating Forma command with policy states", "commandID", msg.CommandID, "policyCount", len(msg.PolicyUpdates))
+
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		f.Log().Error("Failed to load Forma command for policy state update", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to load Forma command for policy state update: %w", err)
+	}
+
+	command := cached.command
+	command.PolicyUpdates = msg.PolicyUpdates
+	command.State = overallCommandState(command)
+
+	if err := f.persistCommand(cached); err != nil {
+		f.Log().Error("Failed to update Forma command with policy states", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to update Forma command with policy states: %w", err)
+	}
+
+	f.Log().Debug("Successfully updated Forma command with policy states", "commandID", msg.CommandID)
 	return true, nil
 }
 

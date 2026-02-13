@@ -1,0 +1,22 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+
+// A forma with only a standalone policy - no stacks, no resources
+// Used to test: formae destroy tests/manual/ttl-policy/policy_only.pkl
+
+local ephemeralPolicy = new formae.TTLPolicy {
+    label = "ephemeral-1h"
+    ttl = 1.h
+    onDependents = "abort"
+}
+
+forma {
+    ephemeralPolicy
+}

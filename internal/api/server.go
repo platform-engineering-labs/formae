@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	echoSwagger "github.com/swaggo/echo-swagger"
 
 	_ "github.com/platform-engineering-labs/formae/docs"
@@ -38,6 +39,7 @@ const (
 	ListResourcesRoute     = BasePath + "/resources"
 	ListTargetsRoute       = BasePath + "/targets"
 	ListStacksRoute        = BasePath + "/stacks"
+	ListPoliciesRoute      = BasePath + "/policies"
 	StackDriftRoute        = BasePath + "/stacks/:stack/drift"
 	StatsRoute             = BasePath + "/stats"
 
@@ -166,6 +168,18 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.Logger = logging.NewEchoLogger()
 	e.StdLogger = log.Default()
 
+	// Recover middleware to catch panics and log them
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
+		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			slog.Error("Recovered from panic",
+				"error", err,
+				"method", c.Request().Method,
+				"path", c.Request().URL.Path,
+				"stack", string(stack))
+			return err
+		},
+	}))
+
 	// Forma command endpoints
 	e.POST(CommandsRoute, s.SubmitFormaCommand)
 	e.GET(CommandStatusRoute, s.CommandStatus)
@@ -178,6 +192,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	// Target listing endpoint
 	e.GET(ListTargetsRoute, s.ListTargets)
 	e.GET(ListStacksRoute, s.ListStacks)
+	e.GET(ListPoliciesRoute, s.ListPolicies)
 	e.GET(StackDriftRoute, s.ListDrift)
 
 	// Usage stats endpoint
@@ -405,6 +420,28 @@ func (s *Server) ListStacks(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, stacks)
+}
+
+// @Summary List standalone policies
+// @Description Retrieves all standalone policies with their attached stacks
+// @Tags policies
+// @Produce json
+// @Success 200 {array} apimodel.PolicyInventoryItem "OK: List of standalone policies."
+// @Failure 404 {string} string "Not Found: No policies found."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /policies [get]
+func (s *Server) ListPolicies(c echo.Context) error {
+	policies, err := s.metastructure.ExtractPolicies()
+	if err != nil {
+		return mapError(c, err)
+	}
+	if len(policies) == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "No policies found",
+		})
+	}
+
+	return c.JSON(http.StatusOK, policies)
 }
 
 // @Summary List drift for a stack

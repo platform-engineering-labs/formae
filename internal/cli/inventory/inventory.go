@@ -15,6 +15,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/logging"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/spf13/cobra"
 )
@@ -138,9 +139,11 @@ func InventoryCmd() *cobra.Command {
 	resources := resourcesCmd()
 	targets := targetsCmd()
 	stacks := stacksCmd()
+	policies := policiesCmd()
 	command.AddCommand(resources)
 	command.AddCommand(targets)
 	command.AddCommand(stacks)
+	command.AddCommand(policies)
 
 	return command
 }
@@ -262,6 +265,75 @@ func runStacks(app *app.App, opts *InventoryOptions) error {
 		return runStacksForMachines(app, opts)
 	}
 	return runStacksForHumans(app, opts)
+}
+
+func policiesCmd() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "policies",
+		Short: "Query inventory of standalone policies",
+		PreRun: func(cmd *cobra.Command, args []string) {
+			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
+		},
+		RunE: func(command *cobra.Command, args []string) error {
+			opts := &InventoryOptions{}
+			consumer, _ := command.Flags().GetString("output-consumer")
+			opts.OutputConsumer = printer.Consumer(consumer)
+			opts.MaxResults, _ = command.Flags().GetInt("max-results")
+			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
+
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
+			if err != nil {
+				return err
+			}
+
+			return runPolicies(app, opts)
+		},
+		Annotations: map[string]string{
+			"examples": "{{.Name}} {{.Command}} inventory policies --max-results 50",
+		},
+		SilenceErrors: true,
+	}
+
+	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
+	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
+	command.Flags().Int("max-results", 10, "Maximum number of policies to display in the table (0 = unlimited)")
+	command.Flags().String("config", "", "Path to config file")
+
+	return command
+}
+
+func runPolicies(app *app.App, opts *InventoryOptions) error {
+	if err := validateInventoryOptions(opts); err != nil {
+		return err
+	}
+
+	if opts.OutputConsumer == printer.ConsumerMachine {
+		return runPoliciesForMachines(app, opts)
+	}
+	return runPoliciesForHumans(app, opts)
+}
+
+func runPoliciesForMachines(app *app.App, opts *InventoryOptions) error {
+	policies, _, err := app.ExtractPolicies()
+	if err != nil {
+		return err
+	}
+
+	p := printer.NewMachineReadablePrinter[[]apimodel.PolicyInventoryItem](os.Stdout, opts.OutputSchema)
+	return p.Print(&policies)
+}
+
+func runPoliciesForHumans(app *app.App, opts *InventoryOptions) error {
+	display.PrintBanner()
+
+	policies, _, err := app.ExtractPolicies()
+	if err != nil {
+		return err
+	}
+
+	p := printer.NewHumanReadablePrinter[[]apimodel.PolicyInventoryItem](os.Stdout)
+	return p.Print(&policies, printer.PrintOptions{MaxResults: opts.MaxResults})
 }
 
 func runStacksForMachines(app *app.App, opts *InventoryOptions) error {

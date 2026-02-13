@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -37,6 +38,7 @@ type FormaCommand struct {
 	ResourceUpdates []resource_update.ResourceUpdate `json:"ResourceUpdates,omitempty"`
 	TargetUpdates   []target_update.TargetUpdate     `json:"TargetUpdates,omitempty"`
 	StackUpdates    []stack_update.StackUpdate       `json:"StackUpdates,omitempty"`
+	PolicyUpdates   []policy_update.PolicyUpdate     `json:"PolicyUpdates,omitempty"`
 	Config          config.FormaCommandConfig        `json:"Config"`
 	Command         pkgmodel.Command                 `json:"Command"`
 	ClientID        string                           `json:"ClientId,omitempty"`
@@ -58,6 +60,7 @@ func NewFormaCommand(
 	resourceUpdates []resource_update.ResourceUpdate,
 	targetUpdates []target_update.TargetUpdate,
 	stackUpdates []stack_update.StackUpdate,
+	policyUpdates []policy_update.PolicyUpdate,
 	clientID string,
 ) *FormaCommand {
 	return &FormaCommand{
@@ -67,6 +70,7 @@ func NewFormaCommand(
 		ResourceUpdates: resourceUpdates,
 		TargetUpdates:   targetUpdates,
 		StackUpdates:    stackUpdates,
+		PolicyUpdates:   policyUpdates,
 		Config:          *formaCommandConfig,
 		Command:         command,
 		Description:     forma.Description,
@@ -75,9 +79,9 @@ func NewFormaCommand(
 	}
 }
 
-// HasChanges returns true if the command has any resource, target, or stack updates
+// HasChanges returns true if the command has any resource, target, stack, or policy updates
 func (fc *FormaCommand) HasChanges() bool {
-	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0 || len(fc.StackUpdates) > 0
+	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0 || len(fc.StackUpdates) > 0 || len(fc.PolicyUpdates) > 0
 }
 
 // IsInFinalState returns true if the command is in a final state (Success, Failed, or Canceled)

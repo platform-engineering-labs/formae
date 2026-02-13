@@ -63,11 +63,12 @@ function importFormatting(imports: List<String>): String =
     ))
     importsString.join("\n")
 
-function parseStacks(stacksData: List<Map<String, Any>>): String =
+function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<String, String>): String =
     let (stacksString = stacksData.map((stackData) ->
         let (label = stackData["label"])
         let (camelCaseLabel = toCamelCase(label))
         let (description = stackData.getOrNull("description") ?? "This was generated")
+        let (policies = stackData.getOrNull("policies") as List?)
 
         let (labelLine = if (label == "$unmanaged")
             """
@@ -78,16 +79,95 @@ function parseStacks(stacksData: List<Map<String, Any>>): String =
             "        label = \"\(label)\""
         )
 
+        // Generate policies line if stack has policy references or inline policies
+        let (policiesLine = if (policies != null && policies.length > 0)
+            let (policyEntries = policies.map((policy) ->
+                // Check if it's a $ref (policy reference) or inline policy
+                // Policy comes as Dynamic from JSON, access properties directly
+                let (ref = policy.getPropertyOrNull("$ref") as String?)
+                if (ref != null && ref.startsWith("policy://"))
+                    // It's a policy reference - extract label and look up camelCase name
+                    let (policyLabel = ref.replaceFirst("policy://", ""))
+                    let (policyVarName = policyLabelMap.getOrNull(policyLabel) ?? toCamelCase(policyLabel))
+                    "\(policyVarName).res"
+                else
+                    // Inline policy - render directly (without label, as it's typically auto-generated)
+                    let (policyType = policy.getPropertyOrNull("Type") as String?)
+                    if (policyType == "ttl")
+                        let (ttlSeconds = policy.getPropertyOrNull("TTLSeconds") as Number? ?? 0)
+                        let (onDependents = policy.getPropertyOrNull("OnDependents") as String? ?? "abort")
+                        """
+                        new formae.TTLPolicy {
+                                    ttl = \(ttlSeconds).s
+                                    onDependents = "\(onDependents)"
+                                }
+                        """
+                    else if (policyType == "auto-reconcile")
+                        let (intervalSeconds = policy.getPropertyOrNull("IntervalSeconds") as Number? ?? 0)
+                        """
+                        new formae.AutoReconcilePolicy {
+                                    interval = \(intervalSeconds).s
+                                }
+                        """
+                    else
+                        null
+            ).filter((p) -> p != null))
+            if (policyEntries.length > 0)
+                "\n        policies = new Listing { \(policyEntries.join("; ")) }"
+            else
+                ""
+        else
+            ""
+        )
+
         """
 
       local \(camelCaseLabel) = new formae.Stack {
         \(labelLine)
-        description = "\(description)"
+        description = "\(description)"\(policiesLine)
       }
       \(camelCaseLabel)
       """
     ))
     stacksString.join("\n")
+
+/// Parses standalone policies and generates PKL output
+function parsePolicies(policiesData: List<Map<String, Any>>): String =
+    let (policiesString = policiesData.map((policyData) ->
+        let (policyType = policyData["Type"] as String)
+        let (label = policyData["Label"] as String)
+        let (camelCaseLabel = toCamelCase(label))
+
+        if (policyType == "ttl")
+            let (ttlSeconds = policyData["TTLSeconds"] as Number)
+            let (onDependents = policyData.getOrNull("OnDependents") as String? ?? "abort")
+            """
+
+      local \(camelCaseLabel) = new formae.TTLPolicy {
+        label = "\(label)"
+        ttl = \(ttlSeconds).s
+        onDependents = "\(onDependents)"
+      }
+      \(camelCaseLabel)
+      """
+        else if (policyType == "auto-reconcile")
+            let (intervalSeconds = policyData["IntervalSeconds"] as Number)
+            """
+
+      local \(camelCaseLabel) = new formae.AutoReconcilePolicy {
+        label = "\(label)"
+        interval = \(intervalSeconds).s
+      }
+      \(camelCaseLabel)
+      """
+        else
+            // Unknown policy type - skip with comment
+            """
+
+      // Skipped unknown policy type: \(policyType) (label: \(label))
+      """
+    ))
+    policiesString.join("\n")
 
 function parseTargets(targetsData: List<Map<String, Any>>): String =
     let (targetsString = targetsData.map((targetData) ->
@@ -186,11 +266,25 @@ function generateFormaFile(parsed: json.Value): String =
     // Extract stack data from the parsed JSON, falling back to resource stack labels if Stacks is not present
     let (stacksFromJson = parsed.Stacks.toList().map((stack) -> Map(
             "label", stack.Label,
-            "description", stack.Description
+            "description", stack.Description,
+            "policies", stack.getPropertyOrNull("Policies")?.toList() ?? List()
             )
         )
     )
 
+
+    // Extract standalone policies from the parsed JSON
+    let (policiesFromJson = if (parsed.getPropertyOrNull("Policies") != null)
+        parsed.Policies.toList().map((policy) -> Map(
+            "Type", policy.Type,
+            "Label", policy.Label,
+            "TTLSeconds", policy.getPropertyOrNull("TTLSeconds"),
+            "OnDependents", policy.getPropertyOrNull("OnDependents")
+            )
+        )
+    else
+        List()
+    )
 
     // Create mapping from original labels to camelCase labels for targets
     let (targetLabelMap = targetsFromJson.fold(Map(), (acc: Map<String, String>, targetData) ->
@@ -202,6 +296,13 @@ function generateFormaFile(parsed: json.Value): String =
     // Create mapping from original labels to camelCase labels for stacks
     let (stackLabelMap = stacksFromJson.fold(Map(), (acc: Map<String, String>, stackData) ->
         let (originalLabel = stackData["label"])
+        let (camelCaseLabel = toCamelCase(originalLabel))
+        acc.put(originalLabel, camelCaseLabel)
+    ))
+
+    // Create mapping from original labels to camelCase labels for policies
+    let (policyLabelMap = policiesFromJson.fold(Map(), (acc: Map<String, String>, policyData) ->
+        let (originalLabel = policyData["Label"] as String)
         let (camelCaseLabel = toCamelCase(originalLabel))
         acc.put(originalLabel, camelCaseLabel)
     ))
@@ -224,21 +325,24 @@ function generateFormaFile(parsed: json.Value): String =
         ""
     )
 
+    // Generate policies section (only if there are standalone policies)
+    let (policiesSection = if (policiesFromJson.length > 0)
+        parsePolicies(policiesFromJson) + "\n"
+    else
+        ""
+    )
+
     """
     \(headerImports())
 
     // Resource imports
     \(importFormatting(imports))\(dependencyImportsSection)
 
-    forma {
-        \(parseStacks(stacksFromJson))
+    forma {\(policiesSection)
+        \(parseStacks(stacksFromJson, policyLabelMap))
 
         \(parseTargets(targetsFromJson))
 
         \(parseResources(resources, targetLabelMap, stackLabelMap))
     }
     """
-
-output {
-    text = generateFormaFile(parsed)
-}

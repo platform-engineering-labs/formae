@@ -304,6 +304,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/policies": {
+            "get": {
+                "description": "Retrieves all standalone policies with their attached stacks",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policies"
+                ],
+                "summary": "List standalone policies",
+                "responses": {
+                    "200": {
+                        "description": "OK: List of standalone policies.",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.PolicyInventoryItem"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No policies found.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/resources": {
             "get": {
                 "description": "Extracts and lists resources based on a provided query string.",
@@ -399,6 +434,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/stacks/{stack}/drift": {
+            "get": {
+                "description": "Retrieves resource modifications (drift) detected since the last reconcile for a given stack.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stacks"
+                ],
+                "summary": "List drift for a stack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The stack label to check for drift.",
+                        "name": "stack",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: Drift report for the stack.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ModifiedStack"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/stats": {
             "get": {
                 "description": "Retrieves usage statistics of the Formae agent.",
@@ -482,6 +552,12 @@ const docTemplate = `{
                 "EndTs": {
                     "type": "string"
                 },
+                "PolicyUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.PolicyUpdate"
+                    }
+                },
                 "ResourceUpdates": {
                     "type": "array",
                     "items": {
@@ -547,6 +623,9 @@ const docTemplate = `{
                 "CreateOnly": {
                     "type": "boolean"
                 },
+                "HasProviderDefault": {
+                    "type": "boolean"
+                },
                 "IndexField": {
                     "type": "string"
                 },
@@ -585,6 +664,16 @@ const docTemplate = `{
                 "Description": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description"
                 },
+                "Policies": {
+                    "description": "Standalone policies",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
                 "Properties": {
                     "type": "object",
                     "additionalProperties": {
@@ -622,6 +711,17 @@ const docTemplate = `{
                 }
             }
         },
+        "model.ModifiedStack": {
+            "type": "object",
+            "properties": {
+                "ModifiedResources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResourceModification"
+                    }
+                }
+            }
+        },
         "model.PluginInfo": {
             "type": "object",
             "properties": {
@@ -638,6 +738,84 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "Version": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.PolicyInventoryItem": {
+            "type": "object",
+            "properties": {
+                "AttachedStacks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "Config": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.PolicyUpdate": {
+            "type": "object",
+            "properties": {
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "ModifiedTs": {
+                    "type": "string"
+                },
+                "OldPolicyConfig": {
+                    "description": "Previous policy configuration (for updates)",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "PolicyConfig": {
+                    "description": "Current policy configuration",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "PolicyLabel": {
+                    "type": "string"
+                },
+                "PolicyType": {
+                    "description": "\"ttl\", etc.",
+                    "type": "string"
+                },
+                "ReferencingStacks": {
+                    "description": "For skip operations - stacks still referencing this policy",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "StackLabel": {
+                    "type": "string"
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
                     "type": "string"
                 }
             }
@@ -700,6 +878,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "Target": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.ResourceModification": {
+            "type": "object",
+            "properties": {
+                "Label": {
+                    "type": "string"
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "Stack": {
                     "type": "string"
                 },
                 "Type": {
@@ -822,6 +1017,9 @@ const docTemplate = `{
         "model.Stack": {
             "type": "object",
             "properties": {
+                "CreatedAt": {
+                    "type": "string"
+                },
                 "Description": {
                     "type": "string"
                 },
@@ -830,6 +1028,16 @@ const docTemplate = `{
                 },
                 "Label": {
                     "type": "string"
+                },
+                "Policies": {
+                    "description": "Inline policies from PKL",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
                 }
             }
         },

@@ -54,6 +54,7 @@ open class SubResource {
 open class Stack {
     hidden label: String(length > 0)
     hidden description: String
+    hidden policies: Listing<Policy|PolicyResolvable>?
 
     local parent = this
     hidden res: StackResolvable = new {
@@ -63,10 +64,61 @@ open class Stack {
     // Output
     fixed Label: String = label
     fixed Description: String = description
+    fixed Policies: Listing<Dynamic>? = policies?.toList()?.map((p) ->
+        if (p is PolicyResolvable)
+            new Dynamic { `$ref` = "policy://\(p.label)" }
+        else
+            p.render()
+    )?.toListing()
 }
 
 open class StackResolvable extends Resolvable {
     hidden type = "Formae::Stack"
+}
+
+// Policy base class - all policies extend this
+abstract class Policy {
+    hidden label: String?
+
+    local self = this
+    hidden res: PolicyResolvable = new {
+        label = self.label
+    }
+
+    abstract function render(): Dynamic
+}
+
+// Reference type for policies (future: shared/standalone policies)
+open class PolicyResolvable extends Resolvable {
+    hidden type = "Formae::Policy"
+}
+
+// TTL Policy - destroys stack after duration
+open class TTLPolicy extends Policy {
+    hidden ttl: Duration
+    hidden onDependents: ("abort"|"cascade") = "abort"
+
+    local self = this
+    // Output
+    function render(): Dynamic = new {
+        Type = "ttl"
+        Label = self.label
+        TTLSeconds = self.ttl.toUnit("s").value.toInt()
+        OnDependents = self.onDependents
+    }
+}
+
+// Auto-Reconcile Policy - periodically reconciles stack to declared state
+open class AutoReconcilePolicy extends Policy {
+    hidden interval: Duration
+
+    local self = this
+    // Output
+    function render(): Dynamic = new {
+        Type = "auto-reconcile"
+        Label = self.label
+        IntervalSeconds = self.interval.toUnit("s").value.toInt()
+    }
 }
 
 /// DEPRECATED: Use aws#Tag instead.
@@ -257,6 +309,7 @@ class FormaRender {
     Properties: Dynamic?
     Stacks: Listing<Stack>
     Targets: Listing<Target>
+    Policies: Listing<Dynamic>?
     Resources: Listing<Resource>(validate(this))
     hidden Resolvables: Listing<Resolvable>
 

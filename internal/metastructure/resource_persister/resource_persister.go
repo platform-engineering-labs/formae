@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -78,6 +79,12 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return versions, nil
 	case stack_update.PersistStackUpdates:
 		versions, err := rp.persistStackUpdates(req.StackUpdates, req.CommandID)
+		if err != nil {
+			return nil, err
+		}
+		return versions, nil
+	case policy_update.PersistPolicyUpdates:
+		versions, err := rp.persistPolicyUpdates(req.PolicyUpdates, req.CommandID, req.StackIDMap)
 		if err != nil {
 			return nil, err
 		}
@@ -535,11 +542,262 @@ func (rp *ResourcePersister) persistStackUpdate(update *stack_update.StackUpdate
 	return nil
 }
 
+func (rp *ResourcePersister) persistPolicyUpdates(updates []policy_update.PolicyUpdate, commandID string, stackIDMap map[string]string) ([]string, error) {
+	rp.Log().Debug("Starting to persist policy updates", "count", len(updates), "commandID", commandID)
+
+	versions := make([]string, 0, len(updates))
+	for i := range updates {
+		// Get label safely - Policy can be nil for attach operations
+		label := updates[i].PolicyRef // Use PolicyRef for attach operations
+		if updates[i].Policy != nil {
+			label = updates[i].Policy.GetLabel()
+		}
+
+		rp.Log().Debug("Persisting policy update", "index", i, "label", label, "operation", updates[i].Operation)
+		if err := rp.persistPolicyUpdate(&updates[i], commandID, stackIDMap); err != nil {
+			rp.Log().Error("Failed to persist policy update", "index", i, "label", label, "error", err)
+			return nil, fmt.Errorf("failed to persist policy update for %s: %w", label, err)
+		}
+		rp.Log().Debug("Successfully persisted policy update", "index", i, "label", label)
+		versions = append(versions, updates[i].Version)
+	}
+
+	rp.Log().Debug("Finished persisting all policy updates", "commandID", commandID)
+	return versions, nil
+}
+
+func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpdate, commandID string, stackIDMap map[string]string) error {
+	// Debug: Log the update details
+	policyLabel := ""
+	policyIsNil := update.Policy == nil
+	if !policyIsNil {
+		policyLabel = update.Policy.GetLabel()
+	}
+	slog.Debug("persistPolicyUpdate called",
+		"operation", update.Operation,
+		"stackLabel", update.StackLabel,
+		"policyRef", update.PolicyRef,
+		"policyIsNil", policyIsNil,
+		"policyLabel", policyLabel)
+
+	// PolicyOperationAttach is for attaching a standalone policy to a stack.
+	// The standalone policy already exists, so we persist the attachment in the stack_policies table.
+	if update.Operation == policy_update.PolicyOperationAttach {
+		// Get stack ID from the map
+		stackID, ok := stackIDMap[update.StackLabel]
+		if !ok {
+			update.State = policy_update.PolicyUpdateStateFailed
+			update.ErrorMessage = fmt.Sprintf("stack ID not found for stack label %s", update.StackLabel)
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to attach policy: stack ID not found",
+				"stackLabel", update.StackLabel,
+				"policyRef", update.PolicyRef)
+			return fmt.Errorf("stack ID not found for stack label %s", update.StackLabel)
+		}
+
+		// Persist the attachment in the stack_policies junction table
+		err := rp.datastore.AttachPolicyToStack(stackID, update.PolicyRef)
+		if err != nil {
+			update.State = policy_update.PolicyUpdateStateFailed
+			update.ErrorMessage = err.Error()
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to attach policy to stack",
+				"stackLabel", update.StackLabel,
+				"stackID", stackID,
+				"policyRef", update.PolicyRef,
+				"error", err)
+			return err
+		}
+
+		update.State = policy_update.PolicyUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		slog.Debug("Policy attachment persisted",
+			"stackLabel", update.StackLabel,
+			"stackID", stackID,
+			"policyRef", update.PolicyRef)
+
+		// If this is an auto-reconcile policy, notify the AutoReconciler
+		policy, err := rp.datastore.GetStandalonePolicy(update.PolicyRef)
+		if err != nil {
+			slog.Warn("Failed to look up standalone policy for AutoReconciler notification",
+				"policyRef", update.PolicyRef,
+				"error", err)
+		} else if policy != nil && policy.GetType() == "auto-reconcile" {
+			if autoReconcilePolicy, ok := policy.(*pkgmodel.AutoReconcilePolicy); ok {
+				if err := rp.Send(
+					gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+					messages.PolicyAttached{
+						StackLabel:      update.StackLabel,
+						IntervalSeconds: autoReconcilePolicy.IntervalSeconds,
+					},
+				); err != nil {
+					slog.Error("Failed to notify AutoReconciler of standalone policy attachment",
+						"stackLabel", update.StackLabel,
+						"policyRef", update.PolicyRef,
+						"error", err)
+					// Don't fail the operation - just log the error
+				}
+			}
+		}
+
+		return nil
+	}
+
+	// PolicyOperationDetach removes a standalone policy attachment from a stack.
+	if update.Operation == policy_update.PolicyOperationDetach {
+		err := rp.datastore.DetachPolicyFromStack(update.StackLabel, update.PolicyRef)
+		if err != nil {
+			update.State = policy_update.PolicyUpdateStateFailed
+			update.ErrorMessage = err.Error()
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to detach policy from stack",
+				"stackLabel", update.StackLabel,
+				"policyRef", update.PolicyRef,
+				"error", err)
+			return err
+		}
+
+		// If this was an auto-reconcile policy, notify the AutoReconciler
+		// For standalone policy detach, update.Policy is nil, so look it up by label
+		var policyType string
+		if update.Policy != nil {
+			policyType = update.Policy.GetType()
+		} else {
+			// Look up standalone policy to get its type
+			policy, lookupErr := rp.datastore.GetStandalonePolicy(update.PolicyRef)
+			if lookupErr != nil {
+				slog.Warn("Failed to look up standalone policy for AutoReconciler notification",
+					"policyRef", update.PolicyRef,
+					"error", lookupErr)
+			} else if policy != nil {
+				policyType = policy.GetType()
+			}
+		}
+		if policyType == "auto-reconcile" {
+			if err := rp.Send(
+				gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+				messages.PolicyRemoved{StackLabel: update.StackLabel},
+			); err != nil {
+				slog.Error("Failed to notify AutoReconciler of policy removal",
+					"stackLabel", update.StackLabel,
+					"error", err)
+				// Don't fail the operation - just log the error
+			}
+		}
+
+		update.State = policy_update.PolicyUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		slog.Debug("Policy detachment persisted",
+			"stackLabel", update.StackLabel,
+			"policyRef", update.PolicyRef)
+		return nil
+	}
+
+	// PolicyOperationSkip doesn't require persistence - it's informational only
+	if update.Operation == policy_update.PolicyOperationSkip {
+		update.State = policy_update.PolicyUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		return nil
+	}
+
+	// Sanity check: Policy should not be nil for create/update operations
+	if update.Policy == nil {
+		slog.Error("Policy is nil for non-attach operation",
+			"operation", update.Operation)
+		return fmt.Errorf("policy is nil for operation %s", update.Operation)
+	}
+
+	// For inline policies, set the stack ID from the map
+	if update.StackLabel != "" && update.Policy != nil {
+		stackID, ok := stackIDMap[update.StackLabel]
+		if !ok {
+			return fmt.Errorf("stack ID not found for stack label %s", update.StackLabel)
+		}
+		update.Policy.SetStackID(stackID)
+	}
+
+	var version string
+	var err error
+
+	switch update.Operation {
+	case policy_update.PolicyOperationCreate:
+		version, err = rp.datastore.CreatePolicy(update.Policy, commandID)
+	case policy_update.PolicyOperationUpdate:
+		version, err = rp.datastore.UpdatePolicy(update.Policy, commandID)
+	case policy_update.PolicyOperationDelete:
+		version, err = rp.datastore.DeletePolicy(update.Policy.GetLabel())
+	case policy_update.PolicyOperationAttach:
+		// Attach standalone policy to stack via junction table
+		// We need to get the stack ID from the stack label
+		stackID, ok := stackIDMap[update.StackLabel]
+		if !ok {
+			err = fmt.Errorf("stack ID not found for stack label %s during attach", update.StackLabel)
+		} else {
+			err = rp.datastore.AttachPolicyToStack(stackID, update.PolicyRef)
+		}
+	case policy_update.PolicyOperationDetach:
+		// Detach standalone policy from stack
+		err = rp.datastore.DetachPolicyFromStack(update.StackLabel, update.PolicyRef)
+	case policy_update.PolicyOperationSkip:
+		// Skip operations are already marked as Success, nothing to persist
+		// The policy is retained because it's still referenced by other stacks
+	default:
+		err = fmt.Errorf("unknown policy operation: %s", update.Operation)
+	}
+
+	if err != nil {
+		update.State = policy_update.PolicyUpdateStateFailed
+		update.ErrorMessage = err.Error()
+		update.ModifiedTs = util.TimeNow()
+		label := ""
+		if update.Policy != nil {
+			label = update.Policy.GetLabel()
+		}
+		slog.Error("Failed to persist policy",
+			"label", label,
+			"operation", update.Operation,
+			"error", err)
+		return err
+	}
+
+	update.Version = version
+	update.State = policy_update.PolicyUpdateStateSuccess
+	update.ModifiedTs = util.TimeNow()
+	label := ""
+	if update.Policy != nil {
+		label = update.Policy.GetLabel()
+	}
+	slog.Debug("Successfully persisted policy",
+		"label", label,
+		"operation", update.Operation,
+		"version", version)
+
+	// Notify AutoReconciler if an auto-reconcile policy was created or attached
+	if update.Policy != nil && update.Policy.GetType() == "auto-reconcile" &&
+		(update.Operation == policy_update.PolicyOperationCreate || update.Operation == policy_update.PolicyOperationAttach) {
+		if autoReconcilePolicy, ok := update.Policy.(*pkgmodel.AutoReconcilePolicy); ok {
+			if err := rp.Send(
+				gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+				messages.PolicyAttached{
+					StackLabel:      update.StackLabel,
+					IntervalSeconds: autoReconcilePolicy.IntervalSeconds,
+				},
+			); err != nil {
+				slog.Error("Failed to notify AutoReconciler of policy attachment",
+					"stackLabel", update.StackLabel,
+					"error", err)
+				// Don't fail the operation - just log the error
+			}
+		}
+	}
+
+	return nil
+}
+
 // cleanupEmptyStacks checks each stack and deletes it if it has no remaining resources.
 // This is called after a changeset completes to clean up stacks that became empty
 // due to resource deletions.
 func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID string) {
-	rp.Log().Info("cleanupEmptyStacks called", "stackLabels", stackLabels, "commandID", commandID)
 	for _, stackLabel := range stackLabels {
 		count, err := rp.datastore.CountResourcesInStack(stackLabel)
 		if err != nil {
@@ -552,12 +810,9 @@ func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID 
 		if count == 0 {
 			_, err := rp.datastore.DeleteStack(stackLabel, commandID)
 			if err != nil {
-				rp.Log().Error("Failed to delete empty stack",
-					"stackLabel", stackLabel,
-					"error", err)
+				rp.Log().Error("Failed to delete empty stack stackLabel=%s: %v", stackLabel, err)
 			} else {
-				rp.Log().Info("Deleted empty stack",
-					"stackLabel", stackLabel)
+				rp.Log().Info("Deleted empty stack stackLabel=%s", stackLabel)
 			}
 		}
 	}

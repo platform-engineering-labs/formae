@@ -122,6 +122,10 @@ func (m *FakeMetastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 	return []*pkgmodel.Stack{}, nil
 }
 
+func (m *FakeMetastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
+	return []apimodel.PolicyInventoryItem{}, nil
+}
+
 func (m *FakeMetastructure) ForceSync() error {
 	return nil
 }

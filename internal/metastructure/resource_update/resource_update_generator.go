@@ -213,7 +213,7 @@ func generateResourceUpdatesForDestroy(
 }
 
 // findCascadeDeletes finds all resources that must be deleted because they reference
-// resources being deleted. Uses BFS to find the full cascade chain.
+// resources being deleted. Uses level-by-level BFS with batched queries to find the full cascade chain.
 func findCascadeDeletes(
 	toDelete map[string]bool,
 	targetMap map[string]*pkgmodel.Target,
@@ -228,68 +228,73 @@ func findCascadeDeletes(
 		processed[ksuid] = true
 	}
 
-	// BFS queue - start with all explicit deletes
-	queue := make([]string, 0, len(toDelete))
+	// BFS level - start with all explicit deletes
+	currentLevel := make([]string, 0, len(toDelete))
 	for ksuid := range toDelete {
-		queue = append(queue, ksuid)
+		currentLevel = append(currentLevel, ksuid)
 	}
 
-	for len(queue) > 0 {
-		currentKSUID := queue[0]
-		queue = queue[1:]
-
-		// Find resources that depend on the current resource
-		dependents, err := ds.FindResourcesDependingOn(currentKSUID)
+	// Process level by level with batched queries (O(depth) queries instead of O(N))
+	for len(currentLevel) > 0 {
+		// Batch query: find all resources that depend on any KSUID in the current level
+		dependentsMap, err := ds.FindResourcesDependingOnMany(currentLevel)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find resources depending on %s: %w", currentKSUID, err)
+			return nil, fmt.Errorf("failed to find resources depending on batch: %w", err)
 		}
 
-		for _, dependent := range dependents {
-			if processed[dependent.Ksuid] {
-				continue
+		var nextLevel []string
+
+		// Process all dependents found in this level
+		for sourceKSUID, dependents := range dependentsMap {
+			for _, dependent := range dependents {
+				if processed[dependent.Ksuid] {
+					continue
+				}
+				processed[dependent.Ksuid] = true
+
+				// Skip unmanaged (discovered) resources - they have implicit lifecycle
+				// ties to their parents and the provider will handle their deletion automatically.
+				// If they can't be deleted, the user will see an error from the provider explaining why.
+				if dependent.Stack == constants.UnmanagedStack {
+					slog.Debug("Skipping cascade delete for unmanaged resource",
+						"resource", dependent.Label,
+						"type", dependent.Type,
+						"dependsOn", sourceKSUID)
+					continue
+				}
+
+				// Use the source KSUID for the cascade message
+				sourceLabel := sourceKSUID
+				if _, isExplicit := toDelete[sourceKSUID]; isExplicit {
+					sourceLabel = sourceKSUID
+				}
+
+				target, ok := targetMap[dependent.Target]
+				if !ok {
+					slog.Warn("Target not found for cascade delete", "target", dependent.Target, "resource", dependent.Label)
+					continue
+				}
+
+				resourceDestroy, err := NewResourceUpdateForDestroy(
+					*dependent,
+					*target,
+					source,
+				)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create cascade destroy for %s: %w", dependent.Label, err)
+				}
+
+				resourceDestroy.IsCascade = true
+				resourceDestroy.CascadeSource = sourceLabel
+
+				cascadeDeletes = append(cascadeDeletes, resourceDestroy)
+
+				// Add to next level for further cascade detection
+				nextLevel = append(nextLevel, dependent.Ksuid)
 			}
-			processed[dependent.Ksuid] = true
-
-			// Skip unmanaged (discovered) resources - they have implicit lifecycle
-			// ties to their parents and the provider will handle their deletion automatically.
-			// If they can't be deleted, the user will see an error from the provider explaining why.
-			if dependent.Stack == constants.UnmanagedStack {
-				slog.Debug("Skipping cascade delete for unmanaged resource",
-					"resource", dependent.Label,
-					"type", dependent.Type,
-					"dependsOn", currentKSUID)
-				continue
-			}
-
-			// Find the source resource label for the cascade message
-			sourceLabel := currentKSUID // fallback to KSUID
-			if _, isExplicit := toDelete[currentKSUID]; isExplicit {
-				sourceLabel = currentKSUID
-			}
-
-			target, ok := targetMap[dependent.Target]
-			if !ok {
-				slog.Warn("Target not found for cascade delete", "target", dependent.Target, "resource", dependent.Label)
-				continue
-			}
-
-			resourceDestroy, err := NewResourceUpdateForDestroy(
-				*dependent,
-				*target,
-				source,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create cascade destroy for %s: %w", dependent.Label, err)
-			}
-
-			resourceDestroy.IsCascade = true
-			resourceDestroy.CascadeSource = sourceLabel
-
-			cascadeDeletes = append(cascadeDeletes, resourceDestroy)
-
-			// Add to queue for further cascade detection
-			queue = append(queue, dependent.Ksuid)
 		}
+
+		currentLevel = nextLevel
 	}
 
 	return cascadeDeletes, nil

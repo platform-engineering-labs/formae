@@ -9,11 +9,12 @@ import (
 )
 
 type Forma struct {
-	Description Description     `json:"Description"`
-	Properties  map[string]Prop `json:"Properties,omitempty"`
-	Stacks      []Stack         `json:"Stacks,omitempty"`
-	Targets     []Target        `json:"Targets,omitempty"`
-	Resources   []Resource      `json:"Resources,omitempty"`
+	Description Description       `json:"Description"`
+	Properties  map[string]Prop   `json:"Properties,omitempty"`
+	Stacks      []Stack           `json:"Stacks,omitempty"`
+	Targets     []Target          `json:"Targets,omitempty"`
+	Resources   []Resource        `json:"Resources,omitempty"`
+	Policies    []json.RawMessage `json:"Policies,omitempty"` // Standalone policies
 }
 
 type Prop struct {

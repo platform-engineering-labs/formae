@@ -5,6 +5,7 @@
 package datastore
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -81,6 +82,32 @@ type ResourceUpdateRef struct {
 	Operation types.OperationType
 }
 
+// ExpiredStackInfo contains information about a stack whose TTL policy has expired
+type ExpiredStackInfo struct {
+	StackLabel   string
+	StackID      string
+	OnDependents string // "abort" or "cascade"
+}
+
+// StackReconcileInfo contains information about a stack with an auto-reconcile policy
+type StackReconcileInfo struct {
+	StackLabel      string
+	StackID         string
+	IntervalSeconds int64
+	LastReconcileAt time.Time
+}
+
+// ResourceSnapshot contains resource state at a point in time
+type ResourceSnapshot struct {
+	KSUID      string
+	Type       string
+	Label      string
+	Target     string
+	Properties json.RawMessage
+	NativeID   string
+	Schema     pkgmodel.Schema
+}
+
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
@@ -124,6 +151,9 @@ type Datastore interface {
 	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
 	// FindResourcesDependingOn returns all resources that reference the given resource via $ref
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
+	// FindResourcesDependingOnMany returns all resources that reference any of the given resources via $ref.
+	// Returns a map from referenced KSUID to the resources that depend on it.
+	FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error)
 
 	// Resource-by-stack operations - query resources grouped by stack
 
@@ -181,6 +211,47 @@ type Datastore interface {
 	BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error)
 	// BatchGetTripletsByKSUIDs converts multiple KSUIDs to triplets in one query
 	BatchGetTripletsByKSUIDs(ksuids []string) (map[string]pkgmodel.TripletKey, error)
+
+	// Policy operations - policies define behaviors attached to stacks
+
+	// CreatePolicy persists a new policy (returns version string)
+	CreatePolicy(policy pkgmodel.Policy, commandID string) (string, error)
+	// UpdatePolicy updates an existing policy (returns version string)
+	UpdatePolicy(policy pkgmodel.Policy, commandID string) (string, error)
+	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
+	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
+	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
+	// Returns nil, nil if no policy is found
+	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
+	// ListAllStandalonePolicies returns all non-deleted standalone policies (stack_id IS NULL)
+	ListAllStandalonePolicies() ([]pkgmodel.Policy, error)
+	// AttachPolicyToStack creates an association between a standalone policy and a stack
+	// in the stack_policies junction table. Used for standalone policies referenced via $ref.
+	AttachPolicyToStack(stackID, policyLabel string) error
+	// IsPolicyAttachedToStack checks if a standalone policy is attached to a stack via the junction table
+	IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error)
+	// GetStacksReferencingPolicy returns the labels of all stacks that reference a standalone policy
+	GetStacksReferencingPolicy(policyLabel string) ([]string, error)
+	// GetAttachedPolicyLabelsForStack returns the labels of all standalone policies attached to a stack
+	GetAttachedPolicyLabelsForStack(stackLabel string) ([]string, error)
+	// DetachPolicyFromStack removes the association between a standalone policy and a stack
+	DetachPolicyFromStack(stackLabel, policyLabel string) error
+	// DeletePolicy soft-deletes a standalone policy by label (returns version string)
+	DeletePolicy(policyLabel string) (string, error)
+	// DeletePoliciesForStack soft-deletes all policies for a stack (cascade delete)
+	DeletePoliciesForStack(stackID string, commandID string) error
+	// GetExpiredStacks returns stacks with TTL policies that have expired,
+	// excluding stacks with active forma commands to avoid inconsistent state
+	GetExpiredStacks() ([]ExpiredStackInfo, error)
+	// GetStacksWithAutoReconcilePolicy returns stacks with auto-reconcile policies,
+	// along with their interval configuration and last reconcile timestamp
+	GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error)
+	// GetResourcesAtLastReconcile returns the resource state as of the last reconcile
+	// command for the given stack
+	GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error)
+	// StackHasActiveCommands returns true if the stack has any forma commands
+	// that are not in a terminal state (Success, Failed, Canceled)
+	StackHasActiveCommands(stackLabel string) (bool, error)
 
 	// Close releases database connections
 	Close()

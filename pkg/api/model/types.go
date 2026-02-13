@@ -38,6 +38,7 @@ type Command struct {
 	ResourceUpdates []ResourceUpdate `json:"ResourceUpdates,omitempty"`
 	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
 	StackUpdates    []StackUpdate    `json:"StackUpdates,omitempty"`
+	PolicyUpdates   []PolicyUpdate   `json:"PolicyUpdates,omitempty"`
 }
 
 // wrapper for machine-readable output
@@ -110,6 +111,29 @@ type StackUpdate struct {
 	Description  string    `json:"Description"`
 	StartTs      time.Time `json:"StartTs,omitempty"`
 	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
+}
+
+type PolicyUpdate struct {
+	PolicyLabel       string          `json:"PolicyLabel"`
+	PolicyType        string          `json:"PolicyType"` // "ttl", etc.
+	StackLabel        string          `json:"StackLabel,omitempty"`
+	Operation         string          `json:"Operation"`
+	State             string          `json:"State"`
+	Duration          int64           `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage      string          `json:"ErrorMessage,omitempty"`
+	PolicyConfig      json.RawMessage `json:"PolicyConfig,omitempty"`    // Current policy configuration
+	OldPolicyConfig   json.RawMessage `json:"OldPolicyConfig,omitempty"` // Previous policy configuration (for updates)
+	ReferencingStacks []string        `json:"ReferencingStacks,omitempty"` // For skip operations - stacks still referencing this policy
+	StartTs           time.Time       `json:"StartTs,omitempty"`
+	ModifiedTs        time.Time       `json:"ModifiedTs,omitempty"`
+}
+
+// PolicyInventoryItem represents a standalone policy in the inventory
+type PolicyInventoryItem struct {
+	Label          string          `json:"Label"`
+	Type           string          `json:"Type"`
+	Config         json.RawMessage `json:"Config"`
+	AttachedStacks []string        `json:"AttachedStacks,omitempty"`
 }
 
 type Stats struct {

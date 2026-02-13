@@ -8,6 +8,10 @@ definitions:
         type: string
       EndTs:
         type: string
+      PolicyUpdates:
+        items:
+          $ref: '#/definitions/model.PolicyUpdate'
+        type: array
       ResourceUpdates:
         items:
           $ref: '#/definitions/model.ResourceUpdate'
@@ -50,6 +54,8 @@ definitions:
     properties:
       CreateOnly:
         type: boolean
+      HasProviderDefault:
+        type: boolean
       IndexField:
         type: string
       Required:
@@ -77,6 +83,13 @@ definitions:
     properties:
       Description:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description'
+      Policies:
+        description: Standalone policies
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
       Properties:
         additionalProperties:
           $ref: '#/definitions/model.Prop'
@@ -101,6 +114,13 @@ definitions:
           $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
         type: array
     type: object
+  model.ModifiedStack:
+    properties:
+      ModifiedResources:
+        items:
+          $ref: '#/definitions/model.ResourceModification'
+        type: array
+    type: object
   model.PluginInfo:
     properties:
       MaxRequestsPerSecond:
@@ -112,6 +132,59 @@ definitions:
       ResourceCount:
         type: integer
       Version:
+        type: string
+    type: object
+  model.PolicyInventoryItem:
+    properties:
+      AttachedStacks:
+        items:
+          type: string
+        type: array
+      Config:
+        items:
+          type: integer
+        type: array
+      Label:
+        type: string
+      Type:
+        type: string
+    type: object
+  model.PolicyUpdate:
+    properties:
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      ModifiedTs:
+        type: string
+      OldPolicyConfig:
+        description: Previous policy configuration (for updates)
+        items:
+          type: integer
+        type: array
+      Operation:
+        type: string
+      PolicyConfig:
+        description: Current policy configuration
+        items:
+          type: integer
+        type: array
+      PolicyLabel:
+        type: string
+      PolicyType:
+        description: '"ttl", etc.'
+        type: string
+      ReferencingStacks:
+        description: For skip operations - stacks still referencing this policy
+        items:
+          type: string
+        type: array
+      StackLabel:
+        type: string
+      StartTs:
+        type: string
+      State:
         type: string
     type: object
   model.Prop:
@@ -154,6 +227,17 @@ definitions:
       Stack:
         type: string
       Target:
+        type: string
+      Type:
+        type: string
+    type: object
+  model.ResourceModification:
+    properties:
+      Label:
+        type: string
+      Operation:
+        type: string
+      Stack:
         type: string
       Type:
         type: string
@@ -234,12 +318,21 @@ definitions:
     type: object
   model.Stack:
     properties:
+      CreatedAt:
+        type: string
       Description:
         type: string
       ID:
         type: string
       Label:
         type: string
+      Policies:
+        description: Inline policies from PKL
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
     type: object
   model.StackUpdate:
     properties:
@@ -568,6 +661,29 @@ paths:
       summary: Health Check
       tags:
       - health
+  /policies:
+    get:
+      description: Retrieves all standalone policies with their attached stacks
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: List of standalone policies.'
+          schema:
+            items:
+              $ref: '#/definitions/model.PolicyInventoryItem'
+            type: array
+        "404":
+          description: 'Not Found: No policies found.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List standalone policies
+      tags:
+      - policies
   /resources:
     get:
       description: Extracts and lists resources based on a provided query string.
@@ -629,6 +745,30 @@ paths:
           schema:
             type: string
       summary: List stacks
+      tags:
+      - stacks
+  /stacks/{stack}/drift:
+    get:
+      description: Retrieves resource modifications (drift) detected since the last
+        reconcile for a given stack.
+      parameters:
+      - description: The stack label to check for drift.
+        in: path
+        name: stack
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: Drift report for the stack.'
+          schema:
+            $ref: '#/definitions/model.ModifiedStack'
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List drift for a stack
       tags:
       - stacks
   /stats:
