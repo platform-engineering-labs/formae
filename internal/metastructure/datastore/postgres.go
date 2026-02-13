@@ -2346,6 +2346,28 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]Res
 	return result, nil
 }
 
+func (d DatastorePostgres) StackHasActiveCommands(stackLabel string) (bool, error) {
+	ctx, span := tracer.Start(context.Background(), "StackHasActiveCommands")
+	defer span.End()
+
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE ru.stack_label = $1
+			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		)
+	`
+
+	var exists bool
+	err := d.pool.QueryRow(ctx, query, stackLabel).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
 func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	ctx, span := tracer.Start(context.Background(), "LoadTarget")
 	defer span.End()

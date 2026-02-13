@@ -249,6 +249,9 @@ type Datastore interface {
 	// GetResourcesAtLastReconcile returns the resource state as of the last reconcile
 	// command for the given stack
 	GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error)
+	// StackHasActiveCommands returns true if the stack has any forma commands
+	// that are not in a terminal state (Success, Failed, Canceled)
+	StackHasActiveCommands(stackLabel string) (bool, error)
 
 	// Close releases database connections
 	Close()

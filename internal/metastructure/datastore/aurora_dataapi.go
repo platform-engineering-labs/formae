@@ -4324,6 +4324,35 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 	return result, nil
 }
 
+func (d *DatastoreAuroraDataAPI) StackHasActiveCommands(stackLabel string) (bool, error) {
+	ctx := context.Background()
+
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE ru.stack_label = :stack_label
+			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		)
+	`
+
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_label"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return false, err
+	}
+
+	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+		return false, nil
+	}
+
+	exists, _ := getBoolField(output.Records[0][0])
+	return exists, nil
+}
+
 func (d *DatastoreAuroraDataAPI) DeleteTarget(targetLabel string) (string, error) {
 	ctx := context.Background()
 

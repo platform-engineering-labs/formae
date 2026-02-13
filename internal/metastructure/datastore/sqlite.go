@@ -2328,6 +2328,28 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]Resou
 	return result, nil
 }
 
+func (d DatastoreSQLite) StackHasActiveCommands(stackLabel string) (bool, error) {
+	_, span := sqliteTracer.Start(context.Background(), "StackHasActiveCommands")
+	defer span.End()
+
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM resource_updates ru
+			JOIN forma_commands fc ON ru.command_id = fc.command_id
+			WHERE ru.stack_label = ?
+			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		)
+	`
+
+	var exists bool
+	err := d.conn.QueryRow(query, stackLabel).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
 func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "CreateTarget")
 	defer span.End()

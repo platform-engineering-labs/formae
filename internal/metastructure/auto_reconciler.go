@@ -256,6 +256,16 @@ func scheduleNextReconcile(proc gen.Process, data *AutoReconcilerData, stackLabe
 }
 
 func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel string) (string, error) {
+	// Skip if stack has active commands (user-initiated operations take priority)
+	hasActive, err := data.datastore.StackHasActiveCommands(stackLabel)
+	if err != nil {
+		return "", fmt.Errorf("failed to check for active commands: %w", err)
+	}
+	if hasActive {
+		proc.Log().Info("Skipping auto-reconcile, stack has active commands stack=%s", stackLabel)
+		return "", nil // Not an error - just skip and reschedule
+	}
+
 	// Get resources at last reconcile as full Resource objects
 	snapshots, err := data.datastore.GetResourcesAtLastReconcile(stackLabel)
 	if err != nil {
