@@ -1150,13 +1150,13 @@ func formatStackPolicies(policies []json.RawMessage, stackCreatedAt time.Time) s
 
 			var part string
 			if lastReconStr != "" && label != "" {
-				part = fmt.Sprintf("Interval: %s, last %s (%s)", formatTTLDuration(duration), lastReconStr, label)
+				part = fmt.Sprintf("Auto-reconcile: every %s, last %s (%s)", formatTTLDuration(duration), lastReconStr, label)
 			} else if lastReconStr != "" {
-				part = fmt.Sprintf("Interval: %s, last %s", formatTTLDuration(duration), lastReconStr)
+				part = fmt.Sprintf("Auto-reconcile: every %s, last %s", formatTTLDuration(duration), lastReconStr)
 			} else if label != "" {
-				part = fmt.Sprintf("Interval: %s (%s)", formatTTLDuration(duration), label)
+				part = fmt.Sprintf("Auto-reconcile: every %s (%s)", formatTTLDuration(duration), label)
 			} else {
-				part = fmt.Sprintf("Interval: %s", formatTTLDuration(duration))
+				part = fmt.Sprintf("Auto-reconcile: every %s", formatTTLDuration(duration))
 			}
 			parts = append(parts, part)
 		default:
@@ -1306,7 +1306,7 @@ func formatPolicyConfig(policyType string, configJSON json.RawMessage) string {
 		}
 		if intervalSeconds, ok := config["IntervalSeconds"].(float64); ok {
 			duration := time.Duration(int64(intervalSeconds)) * time.Second
-			return fmt.Sprintf("Interval: %s", formatTTLDuration(duration))
+			return fmt.Sprintf("Auto-reconcile: every %s", formatTTLDuration(duration))
 		}
 		return string(configJSON)
 	default:
