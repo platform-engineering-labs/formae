@@ -2289,15 +2289,22 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]Res
 	ctx, span := tracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()
 
-	// Note: r.data contains the full Resource JSON, we extract Properties and Schema separately
+	// Get resources from the last USER reconcile command for this stack.
+	// This gives us the "declared state" - what the user specified in their Forma file.
+	// We exclude auto-reconciler commands because they shouldn't change the declared state,
+	// they only enforce it. Sync commands may have updated resources with out-of-band changes,
+	// but we want the original declared state to compare against.
 	query := `
-		WITH last_reconcile_command AS (
-			SELECT fc.command_id, fc.timestamp
+		WITH last_user_reconcile_for_stack AS (
+			SELECT fc.command_id
 			FROM forma_commands fc
-			JOIN resource_updates ru ON fc.command_id = ru.command_id
+			INNER JOIN resources r ON r.command_id = fc.command_id
 			WHERE fc.config_mode = 'reconcile'
 			AND fc.state = 'Success'
-			AND ru.stack_label = $1
+			AND fc.command = 'apply'
+			AND fc.client_id != 'auto-reconciler'
+			AND r.stack = $1
+			GROUP BY fc.command_id
 			ORDER BY fc.timestamp DESC
 			LIMIT 1
 		)
@@ -2306,8 +2313,8 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]Res
 		       r.data->'Schema' as schema,
 		       r.native_id
 		FROM resources r
-		JOIN last_reconcile_command lrc ON r.command_id = lrc.command_id
-		WHERE r.stack = $2
+		WHERE r.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
+		AND r.stack = $2
 		AND r.operation != 'delete'
 	`
 

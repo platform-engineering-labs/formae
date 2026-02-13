@@ -4256,16 +4256,22 @@ func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]StackReco
 func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error) {
 	ctx := context.Background()
 
-	// Note: r.data contains the full Resource JSON, we extract Properties and Schema separately
-	// Using PostgreSQL JSON syntax (Aurora Serverless v2 with PostgreSQL)
+	// Get resources from the last USER reconcile command for this stack.
+	// This gives us the "declared state" - what the user specified in their Forma file.
+	// We exclude auto-reconciler commands because they shouldn't change the declared state,
+	// they only enforce it. Sync commands may have updated resources with out-of-band changes,
+	// but we want the original declared state to compare against.
 	query := `
-		WITH last_reconcile_command AS (
-			SELECT fc.command_id, fc.timestamp
+		WITH last_user_reconcile_for_stack AS (
+			SELECT fc.command_id
 			FROM forma_commands fc
-			JOIN resource_updates ru ON fc.command_id = ru.command_id
+			INNER JOIN resources r ON r.command_id = fc.command_id
 			WHERE fc.config_mode = 'reconcile'
 			AND fc.state = 'Success'
-			AND ru.stack_label = :stack_label
+			AND fc.command = 'apply'
+			AND fc.client_id != 'auto-reconciler'
+			AND r.stack = :stack_label
+			GROUP BY fc.command_id
 			ORDER BY fc.timestamp DESC
 			LIMIT 1
 		)
@@ -4274,14 +4280,13 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 		       r.data->'Schema' as schema,
 		       r.native_id
 		FROM resources r
-		JOIN last_reconcile_command lrc ON r.command_id = lrc.command_id
-		WHERE r.stack = :stack_label2
+		WHERE r.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
+		AND r.stack = :stack_label
 		AND r.operation != 'delete'
 	`
 
 	params := []types.SqlParameter{
 		{Name: aws.String("stack_label"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
-		{Name: aws.String("stack_label2"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
 	}
 
 	output, err := d.executeStatement(ctx, query, params)
