@@ -15,12 +15,13 @@ CREATE INDEX IF NOT EXISTS idx_stacks_valid_from ON stacks (valid_from);
 CREATE INDEX IF NOT EXISTS idx_stacks_command_id ON stacks (command_id);
 
 -- Seed with existing stack labels from resources (excluding $unmanaged stack)
--- Note: id uses md5 of label (deterministic, unique), version uses '0' prefix
--- to sort before real KSUIDs (which start with timestamps).
+-- Note: id is a UUID (just needs uniqueness), version uses '0' prefix to sort
+-- before real KSUIDs (which start with timestamps).
+-- This approach is compatible with both regular PostgreSQL and Aurora Data API.
 INSERT INTO stacks (id, version, operation, label, description)
 SELECT
-    md5(stack) AS id,
-    '0' || substring(md5(stack || '_version'), 1, 26) AS version,
+    gen_random_uuid()::text AS id,
+    '0' || substring(replace(gen_random_uuid()::text, '-', ''), 1, 26) AS version,
     'create',
     stack,
     ''

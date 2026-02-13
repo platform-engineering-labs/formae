@@ -3,10 +3,10 @@
 -- This ensures seeded ids sort before newly generated KSUIDs (which start with timestamp)
 
 -- Create a temp table mapping old ids to new KSUID-like ids
--- Format: '0' + 26 hex chars from md5 = 27 chars (same length as KSUID)
+-- Format: '0' + 26 random hex chars = 27 chars (same length as KSUID)
 CREATE TEMP TABLE stack_id_mapping AS
 SELECT DISTINCT id as old_id,
-    '0' || substring(md5(id || '_ksuid'), 1, 26) as new_id
+    '0' || substr(encode(gen_random_bytes(13), 'hex'), 1, 26) as new_id
 FROM stacks;
 
 -- Update all rows to use the new ids
