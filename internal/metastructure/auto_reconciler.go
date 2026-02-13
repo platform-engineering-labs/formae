@@ -69,12 +69,6 @@ type ReconcileStack struct {
 	StackLabel string
 }
 
-// ReconcileComplete is sent when a stack reconciliation completes
-type ReconcileComplete struct {
-	StackLabel string
-	CommandID  string
-	Success    bool
-}
 
 func (ar *AutoReconciler) Init(args ...any) (statemachine.StateMachineSpec[AutoReconcilerData], error) {
 	ds, ok := ar.Env("Datastore")
@@ -109,12 +103,13 @@ func (ar *AutoReconciler) Init(args ...any) (statemachine.StateMachineSpec[AutoR
 
 		// Idle state handlers
 		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handleReconcileStack),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handleChangesetCompleted),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handlePolicyAttached),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handlePolicyRemoved),
 
 		// Reconciling state handlers
 		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleReconcileStack),
-		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleReconcileComplete),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleChangesetCompleted),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handlePolicyAttached),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handlePolicyRemoved),
 	), nil
@@ -180,14 +175,29 @@ func handleReconcileStack(from gen.PID, state gen.Atom, data AutoReconcilerData,
 	return AutoReconcilerStateReconciling, data, nil, nil
 }
 
-func handleReconcileComplete(from gen.PID, state gen.Atom, data AutoReconcilerData, msg ReconcileComplete, proc gen.Process) (gen.Atom, AutoReconcilerData, []statemachine.Action, error) {
-	proc.Log().Info("Reconcile complete stack=%s success=%v", msg.StackLabel, msg.Success)
+func handleChangesetCompleted(from gen.PID, state gen.Atom, data AutoReconcilerData, msg changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, AutoReconcilerData, []statemachine.Action, error) {
+	// Find the stack label for this command ID (reverse lookup)
+	var stackLabel string
+	for label, cmdID := range data.activeReconciles {
+		if cmdID == msg.CommandID {
+			stackLabel = label
+			break
+		}
+	}
 
-	delete(data.activeReconciles, msg.StackLabel)
+	if stackLabel == "" {
+		proc.Log().Debug("Received ChangesetCompleted for unknown command (not from auto-reconcile) commandID=%s", msg.CommandID)
+		return state, data, nil, nil
+	}
+
+	success := msg.State == changeset.ChangeSetStateFinishedSuccessfully
+	proc.Log().Info("Auto-reconcile complete stack=%s success=%v", stackLabel, success)
+
+	delete(data.activeReconciles, stackLabel)
 
 	// Schedule next reconcile if policy still attached
-	if data.scheduled[msg.StackLabel] {
-		scheduleNextReconcile(proc, &data, msg.StackLabel)
+	if data.scheduled[stackLabel] {
+		scheduleNextReconcile(proc, &data, stackLabel)
 	}
 
 	// Transition to idle if no active reconciles
@@ -374,10 +384,10 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		return "", fmt.Errorf("failed to ensure changeset executor: %w", err)
 	}
 
-	// Start the changeset execution
+	// Start the changeset execution with notification so we know when to schedule next
 	err = proc.Send(
 		gen.ProcessID{Name: actornames.ChangesetExecutor(reconcileCommand.ID), Node: proc.Node().Name()},
-		changeset.Start{Changeset: cs},
+		changeset.Start{Changeset: cs, NotifyOnComplete: true},
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to start changeset executor: %w", err)
