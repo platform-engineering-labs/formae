@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"ergo.services/ergo/act"
+	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -24,22 +24,33 @@ import (
 )
 
 // AutoReconciler is the actor responsible for automatically reconciling stacks
-// that have auto-reconcile policies attached. It maintains a state machine to track
+// that have auto-reconcile policies attached. It uses the ergo statemachine to track
 // active reconciliations and uses SendAfter to schedule per-stack reconcile intervals.
+//
+// State transitions:
+//
+//	+-------------------+                     +-------------------+
+//	|    StateIdle      | --(reconcile)--->   | StateReconciling  |
+//	+-------------------+                     +-------------------+
+//	        ^                                         |
+//	        |         (last reconcile completes)      |
+//	        +-----------------------------------------+
 
-type autoReconcilerState int
-
+// State constants for AutoReconciler (prefixed to avoid collision with Synchronizer states)
 const (
-	autoReconcilerStateIdle autoReconcilerState = iota
-	autoReconcilerStateReconciling
+	AutoReconcilerStateIdle        = gen.Atom("auto_reconciler_idle")
+	AutoReconcilerStateReconciling = gen.Atom("auto_reconciler_reconciling")
 )
 
+// AutoReconciler embeds the ergo statemachine for state management
 type AutoReconciler struct {
-	act.Actor
+	statemachine.StateMachine[AutoReconcilerData]
+}
 
+// AutoReconcilerData holds the data associated with the statemachine
+type AutoReconcilerData struct {
 	datastore     datastore.Datastore
 	pluginManager *plugin.Manager
-	state         autoReconcilerState
 
 	// activeReconciles tracks stacks currently being reconciled: stackLabel -> commandID
 	activeReconciles map[string]string
@@ -65,158 +76,161 @@ type ReconcileComplete struct {
 	Success    bool
 }
 
-func (ar *AutoReconciler) Init(args ...any) error {
+func (ar *AutoReconciler) Init(args ...any) (statemachine.StateMachineSpec[AutoReconcilerData], error) {
 	ds, ok := ar.Env("Datastore")
 	if !ok {
 		ar.Log().Error("Missing 'Datastore' environment variable")
-		return fmt.Errorf("auto_reconciler: missing 'Datastore' environment variable")
+		return statemachine.StateMachineSpec[AutoReconcilerData]{}, fmt.Errorf("auto_reconciler: missing 'Datastore' environment variable")
 	}
-	ar.datastore = ds.(datastore.Datastore)
 
 	pm, ok := ar.Env("PluginManager")
 	if !ok {
 		ar.Log().Error("Missing 'PluginManager' environment variable")
-		return fmt.Errorf("auto_reconciler: missing 'PluginManager' environment variable")
+		return statemachine.StateMachineSpec[AutoReconcilerData]{}, fmt.Errorf("auto_reconciler: missing 'PluginManager' environment variable")
 	}
-	ar.pluginManager = pm.(*plugin.Manager)
 
-	ar.state = autoReconcilerStateIdle
-	ar.activeReconciles = make(map[string]string)
-	ar.scheduled = make(map[string]bool)
+	data := AutoReconcilerData{
+		datastore:        ds.(datastore.Datastore),
+		pluginManager:    pm.(*plugin.Manager),
+		activeReconciles: make(map[string]string),
+		scheduled:        make(map[string]bool),
+	}
 
 	// Schedule initial reconciles for all stacks with auto-reconcile policies
-	if err := ar.scheduleInitialReconciles(); err != nil {
+	if err := scheduleInitialReconciles(ar, &data); err != nil {
 		ar.Log().Error("Failed to schedule initial reconciles: %v", err)
 		// Don't fail init, just log the error
 	}
 
 	ar.Log().Info("Auto reconciler ready")
-	return nil
+
+	return statemachine.NewStateMachineSpec(AutoReconcilerStateIdle,
+		statemachine.WithData(data),
+
+		// Idle state handlers
+		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handleReconcileStack),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handlePolicyAttached),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handlePolicyRemoved),
+
+		// Reconciling state handlers
+		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleReconcileStack),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleReconcileComplete),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handlePolicyAttached),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handlePolicyRemoved),
+	), nil
 }
 
-func (ar *AutoReconciler) HandleMessage(from gen.PID, message any) error {
-	switch msg := message.(type) {
-	case ReconcileStack:
-		ar.handleReconcileStack(msg)
-	case ReconcileComplete:
-		ar.handleReconcileComplete(msg)
-	case messages.PolicyAttached:
-		ar.handlePolicyAttached(msg)
-	case messages.PolicyRemoved:
-		ar.handlePolicyRemoved(msg)
-	default:
-		ar.Log().Warning("Received unknown message type: %T", message)
-	}
-	return nil
-}
-
-func (ar *AutoReconciler) scheduleInitialReconciles() error {
-	policies, err := ar.datastore.GetStacksWithAutoReconcilePolicy()
+func scheduleInitialReconciles(proc gen.Process, data *AutoReconcilerData) error {
+	policies, err := data.datastore.GetStacksWithAutoReconcilePolicy()
 	if err != nil {
 		return fmt.Errorf("failed to get stacks with auto-reconcile policy: %w", err)
 	}
-
-	// Minimum delay for SendAfter - Ergo's SendAfter may not fire with delay=0
-	const minDelay = 1 * time.Second
 
 	now := time.Now()
 	for _, p := range policies {
 		nextDue := p.LastReconcileAt.Add(time.Duration(p.IntervalSeconds) * time.Second)
 		delay := nextDue.Sub(now)
-		if delay < minDelay {
-			delay = minDelay // Use minimum delay to ensure timer fires
+		if delay < 0 {
+			delay = 0
 		}
 
-		ar.scheduled[p.StackLabel] = true
-		if _, err := ar.SendAfter(ar.PID(), ReconcileStack{StackLabel: p.StackLabel}, delay); err != nil {
-			ar.Log().Error("Failed to schedule reconcile stack=%s: %v", p.StackLabel, err)
+		data.scheduled[p.StackLabel] = true
+		if _, err := proc.SendAfter(proc.PID(), ReconcileStack{StackLabel: p.StackLabel}, delay); err != nil {
+			proc.Log().Error("Failed to schedule reconcile stack=%s: %v", p.StackLabel, err)
 		} else {
-			ar.Log().Info("Scheduled reconcile stack=%s delay=%s", p.StackLabel, delay)
+			proc.Log().Info("Scheduled reconcile stack=%s delay=%s", p.StackLabel, delay)
 		}
 	}
 
 	return nil
 }
 
-func (ar *AutoReconciler) handleReconcileStack(msg ReconcileStack) {
+func handleReconcileStack(from gen.PID, state gen.Atom, data AutoReconcilerData, msg ReconcileStack, proc gen.Process) (gen.Atom, AutoReconcilerData, []statemachine.Action, error) {
 	// Check if policy was removed (stale message)
-	if !ar.scheduled[msg.StackLabel] {
-		ar.Log().Debug("Ignoring reconcile for unscheduled stack (policy may have been removed) stack=%s", msg.StackLabel)
-		return
+	if !data.scheduled[msg.StackLabel] {
+		proc.Log().Debug("Ignoring reconcile for unscheduled stack (policy may have been removed) stack=%s", msg.StackLabel)
+		return state, data, nil, nil
 	}
 
 	// Check if already reconciling this stack (shouldn't happen, but be safe)
-	if _, exists := ar.activeReconciles[msg.StackLabel]; exists {
-		ar.Log().Warning("Stack already reconciling, skipping stack=%s", msg.StackLabel)
-		return
+	if _, exists := data.activeReconciles[msg.StackLabel]; exists {
+		proc.Log().Warning("Stack already reconciling, skipping stack=%s", msg.StackLabel)
+		return state, data, nil, nil
 	}
 
-	ar.Log().Info("Starting auto-reconcile stack=%s", msg.StackLabel)
+	proc.Log().Info("Starting auto-reconcile stack=%s", msg.StackLabel)
 
-	commandID, err := ar.startReconcile(msg.StackLabel)
+	commandID, err := startReconcile(proc, &data, msg.StackLabel)
 	if err != nil {
-		ar.Log().Debug("Failed to start reconcile stack=%s: %v", msg.StackLabel, err)
+		proc.Log().Debug("Failed to start reconcile stack=%s: %v", msg.StackLabel, err)
 		// Schedule next reconcile anyway
-		ar.scheduleNextReconcile(msg.StackLabel)
-		return
+		scheduleNextReconcile(proc, &data, msg.StackLabel)
+		return state, data, nil, nil
 	}
 
 	// Empty commandID means nothing to reconcile (no drift)
 	if commandID == "" {
-		ar.scheduleNextReconcile(msg.StackLabel)
-		return
+		scheduleNextReconcile(proc, &data, msg.StackLabel)
+		return state, data, nil, nil
 	}
 
-	ar.activeReconciles[msg.StackLabel] = commandID
-	ar.state = autoReconcilerStateReconciling
+	data.activeReconciles[msg.StackLabel] = commandID
+
+	// Transition to reconciling state if we weren't already
+	return AutoReconcilerStateReconciling, data, nil, nil
 }
 
-func (ar *AutoReconciler) handleReconcileComplete(msg ReconcileComplete) {
-	ar.Log().Info("Reconcile complete stack=%s success=%v", msg.StackLabel, msg.Success)
+func handleReconcileComplete(from gen.PID, state gen.Atom, data AutoReconcilerData, msg ReconcileComplete, proc gen.Process) (gen.Atom, AutoReconcilerData, []statemachine.Action, error) {
+	proc.Log().Info("Reconcile complete stack=%s success=%v", msg.StackLabel, msg.Success)
 
-	delete(ar.activeReconciles, msg.StackLabel)
+	delete(data.activeReconciles, msg.StackLabel)
 
 	// Schedule next reconcile if policy still attached
-	if ar.scheduled[msg.StackLabel] {
-		ar.scheduleNextReconcile(msg.StackLabel)
+	if data.scheduled[msg.StackLabel] {
+		scheduleNextReconcile(proc, &data, msg.StackLabel)
 	}
 
 	// Transition to idle if no active reconciles
-	if len(ar.activeReconciles) == 0 {
-		ar.state = autoReconcilerStateIdle
+	if len(data.activeReconciles) == 0 {
+		return AutoReconcilerStateIdle, data, nil, nil
 	}
+
+	return state, data, nil, nil
 }
 
-func (ar *AutoReconciler) handlePolicyAttached(msg messages.PolicyAttached) {
-	ar.Log().Info("Auto-reconcile policy attached stack=%s interval=%ds", msg.StackLabel, msg.IntervalSeconds)
+func handlePolicyAttached(from gen.PID, state gen.Atom, data AutoReconcilerData, msg messages.PolicyAttached, proc gen.Process) (gen.Atom, AutoReconcilerData, []statemachine.Action, error) {
+	proc.Log().Info("Auto-reconcile policy attached stack=%s interval=%ds", msg.StackLabel, msg.IntervalSeconds)
 
 	// If already scheduled, don't reschedule (could happen if policy is updated)
-	if ar.scheduled[msg.StackLabel] {
-		ar.Log().Debug("Stack already scheduled for reconcile, skipping stack=%s", msg.StackLabel)
-		return
+	if data.scheduled[msg.StackLabel] {
+		proc.Log().Debug("Stack already scheduled for reconcile, skipping stack=%s", msg.StackLabel)
+		return state, data, nil, nil
 	}
 
 	// Schedule the first reconcile after the interval
-	ar.scheduled[msg.StackLabel] = true
+	data.scheduled[msg.StackLabel] = true
 	interval := time.Duration(msg.IntervalSeconds) * time.Second
-	if _, err := ar.SendAfter(ar.PID(), ReconcileStack{StackLabel: msg.StackLabel}, interval); err != nil {
-		ar.Log().Error("Failed to schedule reconcile stack=%s: %v", msg.StackLabel, err)
+	if _, err := proc.SendAfter(proc.PID(), ReconcileStack{StackLabel: msg.StackLabel}, interval); err != nil {
+		proc.Log().Error("Failed to schedule reconcile stack=%s: %v", msg.StackLabel, err)
 	} else {
-		ar.Log().Info("Scheduled reconcile stack=%s delay=%s", msg.StackLabel, interval)
+		proc.Log().Info("Scheduled reconcile stack=%s delay=%s", msg.StackLabel, interval)
 	}
+
+	return state, data, nil, nil
 }
 
-func (ar *AutoReconciler) handlePolicyRemoved(msg messages.PolicyRemoved) {
-	ar.Log().Info("Auto-reconcile policy removed stack=%s", msg.StackLabel)
-	delete(ar.scheduled, msg.StackLabel)
+func handlePolicyRemoved(from gen.PID, state gen.Atom, data AutoReconcilerData, msg messages.PolicyRemoved, proc gen.Process) (gen.Atom, AutoReconcilerData, []statemachine.Action, error) {
+	proc.Log().Info("Auto-reconcile policy removed stack=%s", msg.StackLabel)
+	delete(data.scheduled, msg.StackLabel)
 	// Note: if a reconcile is in progress, it will complete but won't reschedule
+	return state, data, nil, nil
 }
 
-func (ar *AutoReconciler) scheduleNextReconcile(stackLabel string) {
+func scheduleNextReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel string) {
 	// Get current interval from database (may have changed)
-	policies, err := ar.datastore.GetStacksWithAutoReconcilePolicy()
+	policies, err := data.datastore.GetStacksWithAutoReconcilePolicy()
 	if err != nil {
-		ar.Log().Error("Failed to get policy for scheduling stack=%s: %v", stackLabel, err)
+		proc.Log().Error("Failed to get policy for scheduling stack=%s: %v", stackLabel, err)
 		return
 	}
 
@@ -230,26 +244,26 @@ func (ar *AutoReconciler) scheduleNextReconcile(stackLabel string) {
 
 	if interval == 0 {
 		// Policy no longer exists
-		delete(ar.scheduled, stackLabel)
+		delete(data.scheduled, stackLabel)
 		return
 	}
 
-	if _, err := ar.SendAfter(ar.PID(), ReconcileStack{StackLabel: stackLabel}, interval); err != nil {
-		ar.Log().Error("Failed to schedule next reconcile stack=%s: %v", stackLabel, err)
+	if _, err := proc.SendAfter(proc.PID(), ReconcileStack{StackLabel: stackLabel}, interval); err != nil {
+		proc.Log().Error("Failed to schedule next reconcile stack=%s: %v", stackLabel, err)
 	} else {
-		ar.Log().Debug("Scheduled next reconcile stack=%s interval=%s", stackLabel, interval)
+		proc.Log().Debug("Scheduled next reconcile stack=%s interval=%s", stackLabel, interval)
 	}
 }
 
-func (ar *AutoReconciler) startReconcile(stackLabel string) (string, error) {
+func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel string) (string, error) {
 	// Get resources at last reconcile as full Resource objects
-	snapshots, err := ar.datastore.GetResourcesAtLastReconcile(stackLabel)
+	snapshots, err := data.datastore.GetResourcesAtLastReconcile(stackLabel)
 	if err != nil {
 		return "", fmt.Errorf("failed to get resources at last reconcile: %w", err)
 	}
 
 	if len(snapshots) == 0 {
-		ar.Log().Debug("No resources to reconcile stack=%s", stackLabel)
+		proc.Log().Debug("No resources to reconcile stack=%s", stackLabel)
 		return "", fmt.Errorf("no resources to reconcile")
 	}
 
@@ -274,7 +288,7 @@ func (ar *AutoReconciler) startReconcile(stackLabel string) (string, error) {
 	forma := pkgmodel.FormaFromResources(resources)
 
 	// Load existing targets for resource update generation
-	existingTargets, err := ar.datastore.LoadAllTargets()
+	existingTargets, err := data.datastore.LoadAllTargets()
 	if err != nil {
 		return "", fmt.Errorf("failed to load targets: %w", err)
 	}
@@ -298,16 +312,16 @@ func (ar *AutoReconciler) startReconcile(stackLabel string) (string, error) {
 		pkgmodel.FormaApplyModeReconcile,
 		resource_update.FormaCommandSourcePolicyAutoReconcile,
 		existingTargets,
-		ar.datastore,
+		data.datastore,
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate resource updates: %w", err)
 	}
 
-	ar.Log().Debug("Generated %d resource updates for stack=%s", len(resourceUpdates), stackLabel)
+	proc.Log().Debug("Generated %d resource updates for stack=%s", len(resourceUpdates), stackLabel)
 
 	if len(resourceUpdates) == 0 {
-		ar.Log().Debug("No drift detected, nothing to reconcile stack=%s", stackLabel)
+		proc.Log().Debug("No drift detected, nothing to reconcile stack=%s", stackLabel)
 		return "", nil // Not an error - just nothing to do
 	}
 
@@ -327,8 +341,8 @@ func (ar *AutoReconciler) startReconcile(stackLabel string) (string, error) {
 	)
 
 	// Store the forma command
-	_, err = ar.Call(
-		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: ar.Node().Name()},
+	_, err = proc.Call(
+		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *reconcileCommand},
 	)
 	if err != nil {
@@ -342,8 +356,8 @@ func (ar *AutoReconciler) startReconcile(stackLabel string) (string, error) {
 	}
 
 	// Ensure ChangesetExecutor exists
-	_, err = ar.Call(
-		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: ar.Node().Name()},
+	_, err = proc.Call(
+		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: proc.Node().Name()},
 		changeset.EnsureChangesetExecutor{CommandID: reconcileCommand.ID},
 	)
 	if err != nil {
@@ -351,8 +365,8 @@ func (ar *AutoReconciler) startReconcile(stackLabel string) (string, error) {
 	}
 
 	// Start the changeset execution
-	err = ar.Send(
-		gen.ProcessID{Name: actornames.ChangesetExecutor(reconcileCommand.ID), Node: ar.Node().Name()},
+	err = proc.Send(
+		gen.ProcessID{Name: actornames.ChangesetExecutor(reconcileCommand.ID), Node: proc.Node().Name()},
 		changeset.Start{Changeset: cs},
 	)
 	if err != nil {

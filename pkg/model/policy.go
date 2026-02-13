@@ -7,6 +7,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Policy is the base interface for all policy types
@@ -33,10 +34,11 @@ func (p *TTLPolicy) SetStackID(id string) { p.StackID = id }
 
 // AutoReconcilePolicy periodically reconciles a stack to its declared state
 type AutoReconcilePolicy struct {
-	Type            string `json:"Type"`            // "auto-reconcile"
-	Label           string `json:"Label,omitempty"`
-	IntervalSeconds int64  `json:"IntervalSeconds"`
-	StackID         string `json:"-"`              // Set during processing, not from PKL
+	Type            string    `json:"Type"`                        // "auto-reconcile"
+	Label           string    `json:"Label,omitempty"`
+	IntervalSeconds int64     `json:"IntervalSeconds"`
+	LastReconcileAt time.Time `json:"LastReconcileAt,omitzero"`    // Populated at query time, not from PKL
+	StackID         string    `json:"-"`                           // Set during processing, not from PKL
 }
 
 func (p *AutoReconcilePolicy) GetLabel() string     { return p.Label }

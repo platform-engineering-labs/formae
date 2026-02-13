@@ -989,6 +989,17 @@ func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 		return nil, err
 	}
 
+	// Build a lookup of last reconcile times per stack
+	reconcileInfos, err := m.Datastore.GetStacksWithAutoReconcilePolicy()
+	lastReconcileByStack := make(map[string]time.Time)
+	if err != nil {
+		slog.Warn("Failed to get auto-reconcile info", "error", err)
+	} else {
+		for _, info := range reconcileInfos {
+			lastReconcileByStack[info.StackLabel] = info.LastReconcileAt
+		}
+	}
+
 	// Populate policies for each stack
 	for _, stack := range stacks {
 		policies, err := m.Datastore.GetPoliciesForStack(stack.ID)
@@ -998,6 +1009,12 @@ func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 		}
 		// Convert policies to json.RawMessage for the Stack.Policies field
 		for _, policy := range policies {
+			// Enrich auto-reconcile policies with last reconcile time
+			if arPolicy, ok := policy.(*pkgmodel.AutoReconcilePolicy); ok {
+				if lastRecon, found := lastReconcileByStack[stack.Label]; found {
+					arPolicy.LastReconcileAt = lastRecon
+				}
+			}
 			policyJSON, err := json.Marshal(policy)
 			if err != nil {
 				slog.Warn("Failed to marshal policy", "policy", policy.GetLabel(), "error", err)

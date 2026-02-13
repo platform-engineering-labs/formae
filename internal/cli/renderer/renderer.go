@@ -1136,6 +1136,29 @@ func formatStackPolicies(policies []json.RawMessage, stackCreatedAt time.Time) s
 			} else {
 				parts = append(parts, fmt.Sprintf("TTL: %s", formatTTLDuration(duration)))
 			}
+		case "auto-reconcile":
+			intervalSeconds, _ := policy["IntervalSeconds"].(float64)
+			duration := time.Duration(int64(intervalSeconds)) * time.Second
+			label, _ := policy["Label"].(string)
+
+			var lastReconStr string
+			if lastReconAt, ok := policy["LastReconcileAt"].(string); ok && lastReconAt != "" {
+				if t, err := time.Parse(time.RFC3339, lastReconAt); err == nil && !t.IsZero() {
+					lastReconStr = formatLastReconcileTime(t)
+				}
+			}
+
+			var part string
+			if lastReconStr != "" && label != "" {
+				part = fmt.Sprintf("Interval: %s, last %s (%s)", formatTTLDuration(duration), lastReconStr, label)
+			} else if lastReconStr != "" {
+				part = fmt.Sprintf("Interval: %s, last %s", formatTTLDuration(duration), lastReconStr)
+			} else if label != "" {
+				part = fmt.Sprintf("Interval: %s (%s)", formatTTLDuration(duration), label)
+			} else {
+				part = fmt.Sprintf("Interval: %s", formatTTLDuration(duration))
+			}
+			parts = append(parts, part)
 		default:
 			if policyType != "" {
 				parts = append(parts, policyType)
@@ -1168,6 +1191,21 @@ func formatExpiryTime(expiresAt time.Time) string {
 
 	// Otherwise show the date and time
 	return expiresAt.Local().Format("Jan 2 15:04")
+}
+
+// formatLastReconcileTime formats the last reconcile timestamp for display
+func formatLastReconcileTime(t time.Time) string {
+	ago := time.Since(t)
+	if ago < time.Minute {
+		return "just now"
+	}
+	if ago < time.Hour {
+		return fmt.Sprintf("%dm ago", int(ago.Minutes()))
+	}
+	if ago < 24*time.Hour {
+		return fmt.Sprintf("%dh%dm ago", int(ago.Hours()), int(ago.Minutes())%60)
+	}
+	return t.Local().Format("Jan 2 15:04")
 }
 
 // formatTTLDuration formats a duration in a human-friendly way
@@ -1259,6 +1297,16 @@ func formatPolicyConfig(policyType string, configJSON json.RawMessage) string {
 		if ttlSeconds, ok := config["TTLSeconds"].(float64); ok {
 			duration := time.Duration(int64(ttlSeconds)) * time.Second
 			return fmt.Sprintf("TTL: %s", formatTTLDuration(duration))
+		}
+		return string(configJSON)
+	case "auto-reconcile":
+		var config map[string]any
+		if err := json.Unmarshal(configJSON, &config); err != nil {
+			return string(configJSON)
+		}
+		if intervalSeconds, ok := config["IntervalSeconds"].(float64); ok {
+			duration := time.Duration(int64(intervalSeconds)) * time.Second
+			return fmt.Sprintf("Interval: %s", formatTTLDuration(duration))
 		}
 		return string(configJSON)
 	default:

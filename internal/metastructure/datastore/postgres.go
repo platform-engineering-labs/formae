@@ -1055,13 +1055,13 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 	defer span.End()
 
 	// Search for resources that contain a $ref to this KSUID in their properties
-	// The format is: "formae://KSUID#/..." (JSON without spaces after colons)
-	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+	// Use regex to handle Postgres JSONB text formatting which adds spaces after colons
+	pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
 
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
-	WHERE data::text LIKE $1
+	WHERE data::text ~ $1
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -1104,11 +1104,12 @@ func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[st
 	}
 
 	// Build OR conditions for each KSUID pattern with numbered placeholders
+	// Use regex to handle Postgres JSONB text formatting which adds spaces after colons
 	var conditions []string
 	var args []any
 	for i, ksuid := range ksuids {
-		pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
-		conditions = append(conditions, fmt.Sprintf("data::text LIKE $%d", i+1))
+		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
+		conditions = append(conditions, fmt.Sprintf("data::text ~ $%d", i+1))
 		args = append(args, pattern)
 	}
 	args = append(args, resource_update.OperationDelete)

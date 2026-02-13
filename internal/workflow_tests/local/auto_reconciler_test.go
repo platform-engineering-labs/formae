@@ -25,18 +25,7 @@ import (
 
 // TestAutoReconciler_ReconcileAfterSyncChange tests that the auto-reconciler reverts
 // changes detected via synchronization to the state at last reconcile.
-//
-// SKIP: This test is flawed. The auto-reconciler's startReconcile() compares
-// resources at "last reconcile" (from GetResourcesAtLastReconcile) with current
-// resources in the datastore (via GenerateResourceUpdates). However, the comparison
-// in generateResourceUpdatesForReconcile doesn't detect property changes correctly
-// because:
-// 1. GetResourcesAtLastReconcile returns snapshots filtered by command_id of the last reconcile
-// 2. GenerateResourceUpdates compares properties, but the comparison logic doesn't
-//    properly handle the case where only properties changed (same resource identity)
-// This needs investigation into how property-only changes are detected.
 func TestAutoReconciler_ReconcileAfterSyncChange(t *testing.T) {
-	t.Skip("Test disabled - see comment above for details")
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// Track the current state of resource properties
 		currentProps := `{"foo":"original"}`
