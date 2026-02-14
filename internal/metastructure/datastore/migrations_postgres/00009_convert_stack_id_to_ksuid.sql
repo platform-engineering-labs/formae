@@ -6,7 +6,7 @@
 -- Format: '0' + 26 random hex chars = 27 chars (same length as KSUID)
 CREATE TEMP TABLE stack_id_mapping AS
 SELECT DISTINCT id as old_id,
-    '0' || substr(encode(gen_random_bytes(13), 'hex'), 1, 26) as new_id
+    '0' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 26) as new_id
 FROM stacks;
 
 -- Update all rows to use the new ids
