@@ -2113,6 +2113,19 @@ func deserializePolicyPostgres(label, policyType, policyDataStr, stackID string)
 			OnDependents: data.OnDependents,
 			StackID:      stackID,
 		}, nil
+	case "auto-reconcile":
+		var data struct {
+			IntervalSeconds int64 `json:"IntervalSeconds"`
+		}
+		if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal auto-reconcile policy data: %w", err)
+		}
+		return &pkgmodel.AutoReconcilePolicy{
+			Type:            "auto-reconcile",
+			Label:           label,
+			IntervalSeconds: data.IntervalSeconds,
+			StackID:         stackID,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown policy type: %s", policyType)
 	}
