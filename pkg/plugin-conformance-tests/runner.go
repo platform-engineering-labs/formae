@@ -402,14 +402,108 @@ func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualAr
 	return ok
 }
 
-// compareProperties compares expected properties against actual properties from inventory
-func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) bool {
+// extractHasProviderDefaultFields returns dot-separated field paths that have
+// HasProviderDefault=true in the resource's Schema.Hints map.
+func extractHasProviderDefaultFields(expectedResource map[string]any) []string {
+	schema, ok := expectedResource["Schema"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	hints, ok := schema["Hints"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var fields []string
+	for fieldPath, hint := range hints {
+		hintMap, ok := hint.(map[string]any)
+		if !ok {
+			continue
+		}
+		if hasDefault, ok := hintMap["HasProviderDefault"].(bool); ok && hasDefault {
+			fields = append(fields, fieldPath)
+		}
+	}
+	return fields
+}
+
+// removeProviderDefaultsFromActual removes fields with provider defaults from actual
+// properties, but only if those fields are NOT present in expected properties.
+// This prevents false failures when cloud providers return default values for fields
+// that were not specified in the test PKL file.
+func removeProviderDefaultsFromActual(actual, expected map[string]any, fields []string) {
+	for _, fieldPath := range fields {
+		pathParts := strings.Split(fieldPath, ".")
+		if !fieldExistsInNestedMap(expected, pathParts) {
+			removeNestedField(actual, pathParts)
+		}
+	}
+}
+
+// fieldExistsInNestedMap checks if a field at the given dot-separated path exists
+// in a nested map structure.
+func fieldExistsInNestedMap(obj map[string]any, path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+
+	val, exists := obj[path[0]]
+	if !exists {
+		return false
+	}
+
+	if len(path) == 1 {
+		return true
+	}
+
+	if nested, ok := val.(map[string]any); ok {
+		return fieldExistsInNestedMap(nested, path[1:])
+	}
+
+	return false
+}
+
+// removeNestedField removes a field at the given path from a nested map structure.
+func removeNestedField(obj map[string]any, path []string) {
+	if len(path) == 0 {
+		return
+	}
+
+	if len(path) == 1 {
+		delete(obj, path[0])
+		return
+	}
+
+	if nested, ok := obj[path[0]].(map[string]any); ok {
+		removeNestedField(nested, path[1:])
+	}
+}
+
+// deepCopyMap creates a deep copy of a map[string]any to avoid mutating the original.
+func deepCopyMap(m map[string]any) map[string]any {
+	b, _ := json.Marshal(m)
+	var copy map[string]any
+	_ = json.Unmarshal(b, &copy)
+	return copy
+}
+
+// compareProperties compares expected properties against actual properties from inventory.
+// hasProviderDefaultFields contains dot-separated field paths that have provider defaults.
+// Fields with provider defaults are stripped from actual properties before comparison,
+// but only if they are NOT present in expected properties.
+func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string, hasProviderDefaultFields []string) bool {
 	hasErrors := false
 
 	actualProperties, ok := actualResource["Properties"].(map[string]any)
 	if !ok {
 		t.Errorf("Could not extract Properties from inventory resource (%s)", context)
 		return false
+	}
+
+	// Strip provider-default fields from actual properties (deep copy to avoid mutation)
+	if len(hasProviderDefaultFields) > 0 {
+		actualProperties = deepCopyMap(actualProperties)
+		removeProviderDefaultsFromActual(actualProperties, expectedProperties, hasProviderDefaultFields)
 	}
 
 	t.Logf("Comparing expected properties with actual properties (%s)...", context)
@@ -505,6 +599,12 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 	t.Logf("Expected resource type: %s", actualResourceType)
 
+	// Extract fields with provider defaults from schema hints
+	hasProviderDefaultFields := extractHasProviderDefaultFields(expectedResource)
+	if len(hasProviderDefaultFields) > 0 {
+		t.Logf("Found %d field(s) with provider defaults: %v", len(hasProviderDefaultFields), hasProviderDefaultFields)
+	}
+
 	// === Step 2: Wait for plugin to be registered before any commands ===
 	t.Log("Step 2: Waiting for plugin to be registered...")
 	namespace := strings.Split(actualResourceType, "::")[0]
@@ -554,7 +654,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 
 	// Compare properties using helper
-	if !compareProperties(t, expectedProperties, actualResource, "after create") {
+	if !compareProperties(t, expectedProperties, actualResource, "after create", hasProviderDefaultFields) {
 		allPropertiesMatched = false
 	}
 
@@ -604,7 +704,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 		extractedResource := extractedResult.Resources[0]
 
 		// Compare properties using the same logic as inventory comparison
-		if !compareProperties(t, expectedProperties, extractedResource, "after extract") {
+		if !compareProperties(t, expectedProperties, extractedResource, "after extract", hasProviderDefaultFields) {
 			allPropertiesMatched = false
 		}
 		t.Log("Extract validation completed!")
@@ -637,7 +737,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	resourceAfterSync := inventoryAfterSync.Resources[0]
 
 	// Compare properties using helper - verifies idempotency
-	if !compareProperties(t, expectedProperties, resourceAfterSync, "after sync") {
+	if !compareProperties(t, expectedProperties, resourceAfterSync, "after sync", hasProviderDefaultFields) {
 		allPropertiesMatched = false
 	}
 	t.Log("Idempotency verified!")
@@ -681,6 +781,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 		if !ok {
 			t.Fatal("Update expected resource should have Properties field")
 		}
+		updateHasProviderDefaultFields := extractHasProviderDefaultFields(updateExpectedResource)
 
 		// Apply with patch mode
 		updateCmdID, err := harness.ApplyWithMode(tc.UpdateFile, "patch")
@@ -724,7 +825,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 				oldNativeID, newNativeID)
 		}
 
-		if !compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update") {
+		if !compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update", updateHasProviderDefaultFields) {
 			allPropertiesMatched = false
 		}
 		t.Log("Update test completed successfully!")
@@ -771,6 +872,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 		if !ok {
 			t.Fatal("Replace expected resource should have Properties field")
 		}
+		replaceHasProviderDefaultFields := extractHasProviderDefaultFields(replaceExpectedResource)
 
 		// Apply with patch mode (createOnly change triggers delete+create)
 		replaceCmdID, err := harness.ApplyWithMode(tc.ReplaceFile, "patch")
@@ -813,7 +915,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 		// Verify properties match expected state
 		resourceAfterReplace := inventoryAfterReplace.Resources[0]
-		if !compareProperties(t, replaceExpectedProperties, resourceAfterReplace, "after replace") {
+		if !compareProperties(t, replaceExpectedProperties, resourceAfterReplace, "after replace", replaceHasProviderDefaultFields) {
 			allPropertiesMatched = false
 		}
 
