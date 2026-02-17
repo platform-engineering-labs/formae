@@ -19,8 +19,8 @@ ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 h1:8b8Y8gLBv
 ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5/go.mod h1:epgQDQTm93L3/plOnIejSYbl/SNhulI78aa1LC0tLn0=
 ergo.services/application v0.0.0-20240904055159-7f2e1a954c05 h1:EeLfravNUGx3tPsBdP2W9TpgHD34o1WuDO4OQrbMAiw=
 ergo.services/application v0.0.0-20240904055159-7f2e1a954c05/go.mod h1:huT9GXrAFMIHbRwnzXu0zxna7XjXl3tEpXWnW+IVR2o=
-ergo.services/ergo v1.999.310 h1:qHx35J5UxCheNJaFrOK/1K6/p7jir680+NTPZo6bhbI=
-ergo.services/ergo v1.999.310/go.mod h1:bLQ6PoO6Mz/8gVuzvPv3xfMfo1P9w6rZV1WnMXMeMdg=
+ergo.services/ergo v1.999.320 h1:IYyjCBJvXPLW8Mpy6pq5FoBa2RjNAS4QSL2lK7bBueQ=
+ergo.services/ergo v1.999.320/go.mod h1:bLQ6PoO6Mz/8gVuzvPv3xfMfo1P9w6rZV1WnMXMeMdg=
 ergo.services/meta v0.0.0-20240904054930-a97f6add8a78 h1:YXdrLtG0aaWuUf8efXHJ+Jn1WIJXa0+hNPpTpHDTxA4=
 ergo.services/meta v0.0.0-20240904054930-a97f6add8a78/go.mod h1:xS6UTIK9KGYAOUAVdAwXTe+CchjSrqi1wHYiEsRQrJo=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=

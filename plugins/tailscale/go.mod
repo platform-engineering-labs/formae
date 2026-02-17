@@ -17,7 +17,7 @@ require (
 
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5 // indirect
-	ergo.services/ergo v1.999.310 // indirect
+	ergo.services/ergo v1.999.320 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa // indirect
