@@ -402,6 +402,52 @@ func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualAr
 	return ok
 }
 
+// compareMap recursively compares two maps, handling nested Resolvables,
+// arrays, and sub-maps. This is needed for SubResource properties that
+// contain Resolvable references (e.g. ResourceLifecycleConfig.ServiceRole).
+func compareMap(t *testing.T, name string, expected, actual map[string]any, context string) bool {
+	ok := true
+	for key, expectedValue := range expected {
+		actualValue, exists := actual[key]
+		if !exists {
+			t.Errorf("Property %s.%s should exist (%s)", name, key, context)
+			ok = false
+			continue
+		}
+		if isResolvable(expectedValue) {
+			if !compareResolvable(t, name+"."+key, expectedValue, actualValue, context) {
+				ok = false
+			}
+			continue
+		}
+		if expectedArr, isArray := expectedValue.([]any); isArray {
+			if !compareArrayUnordered(t, name+"."+key, expectedArr, actualValue, context) {
+				ok = false
+			}
+			continue
+		}
+		if expectedMap, isMap := expectedValue.(map[string]any); isMap {
+			if actualMap, isActualMap := actualValue.(map[string]any); isActualMap {
+				if !compareMap(t, name+"."+key, expectedMap, actualMap, context) {
+					ok = false
+				}
+				continue
+			}
+		}
+		// Scalar comparison
+		expectedStr := fmt.Sprintf("%v", expectedValue)
+		actualStr := fmt.Sprintf("%v", actualValue)
+		if expectedStr != actualStr {
+			if normalizeEscaping(expectedStr) != normalizeEscaping(actualStr) {
+				t.Errorf("Property %s.%s should match expected value (%s): expected %v, got %v",
+					name, key, context, expectedValue, actualValue)
+				ok = false
+			}
+		}
+	}
+	return ok
+}
+
 // compareProperties compares expected properties against actual properties from inventory
 func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) bool {
 	hasErrors := false
@@ -433,6 +479,15 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 		// Use order-independent comparison for all arrays
 		if _, isArray := expectedValue.([]any); isArray {
 			if !compareArrayUnordered(t, key, expectedValue, actualValue, context) {
+				hasErrors = true
+			}
+		} else if expectedMap, isMap := expectedValue.(map[string]any); isMap {
+			if actualMap, isActualMap := actualValue.(map[string]any); isActualMap {
+				if !compareMap(t, key, expectedMap, actualMap, context) {
+					hasErrors = true
+				}
+			} else {
+				t.Errorf("Property %s should be a map (%s): expected map, got %T", key, context, actualValue)
 				hasErrors = true
 			}
 		} else {

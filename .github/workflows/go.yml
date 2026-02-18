@@ -7,6 +7,19 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest-m
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
     - uses: actions/checkout@v4
       with:
@@ -35,12 +48,6 @@ jobs:
         timeout_minutes: 10
         max_attempts: 3
         command: make test-all
-
-    - name: Setup PostgreSQL
-      uses: Harmon758/postgresql-action@v1.0.0
-      with:
-        postgresql user: postgres
-        postgresql password: admin
 
     - name: Postgres unit tests
       run: |

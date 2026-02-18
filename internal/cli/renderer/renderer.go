@@ -1324,10 +1324,10 @@ func RenderCancelCommandResponse(response *apimodel.CancelCommandResponse) (stri
 
 	buf.WriteString(display.Gold("Commands are being canceled:\n\n"))
 	for _, cmdID := range response.CommandIDs {
-		buf.WriteString(fmt.Sprintf("  %s %s\n", display.Green("•"), cmdID))
+		fmt.Fprintf(&buf, "  %s %s\n", display.Green("•"), cmdID)
 	}
 
-	buf.WriteString(fmt.Sprintf("\n%s\n", display.Grey("Use 'formae status' to check the cancellation progress.")))
+	fmt.Fprintf(&buf, "\n%s\n", display.Grey("Use 'formae status' to check the cancellation progress."))
 
 	return buf.String(), nil
 }

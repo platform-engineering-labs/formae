@@ -153,8 +153,8 @@ func (r *DocsResult) FormatMarkdownTable() string {
 			comment = *res.DocComment
 		}
 
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
-			res.Type, discoverable, extractable, comment))
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s |\n",
+			res.Type, discoverable, extractable, comment)
 	}
 
 	return sb.String()
@@ -182,8 +182,8 @@ func (r *DocsResult) FormatPlainTable() string {
 			comment = *res.DocComment
 		}
 
-		sb.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\n",
-			res.Type, discoverable, extractable, comment))
+		fmt.Fprintf(&sb, "%s\t%s\t%s\t%s\n",
+			res.Type, discoverable, extractable, comment)
 	}
 
 	return sb.String()

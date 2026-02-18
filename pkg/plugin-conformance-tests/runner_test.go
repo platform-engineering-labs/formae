@@ -187,6 +187,176 @@ func TestTestCaseNames_Empty(t *testing.T) {
 	}
 }
 
+// TestCompareProperties_NestedResolvable verifies that compareProperties handles
+// Resolvable references nested inside SubResource maps. This reproduces the
+// elasticbeanstalk failure where ResourceLifecycleConfig.ServiceRole is a
+// Resolvable: Pkl eval produces $visibility:Clear, but after Formae resolves
+// the reference the inventory has $value with the actual ARN.
+func TestCompareProperties_NestedResolvable(t *testing.T) {
+	// Expected: from Pkl eval — Resolvable has $visibility but no $value
+	expectedProperties := map[string]any{
+		"ApplicationName": "my-app",
+		"ResourceLifecycleConfig": map[string]any{
+			"ServiceRole": map[string]any{
+				"$label":      "eb-service-role",
+				"$property":   "Arn",
+				"$res":        true,
+				"$stack":      "my-stack",
+				"$type":       "AWS::IAM::Role",
+				"$visibility": "Clear",
+			},
+			"VersionLifecycleConfig": map[string]any{
+				"MaxAgeRule": map[string]any{
+					"DeleteSourceFromS3": false,
+					"Enabled":            false,
+					"MaxAgeInDays":       float64(180),
+				},
+				"MaxCountRule": map[string]any{
+					"DeleteSourceFromS3": false,
+					"Enabled":            false,
+					"MaxCount":           float64(200),
+				},
+			},
+		},
+	}
+
+	// Actual: from inventory after resolution — Resolvable has $value instead of $visibility
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"ApplicationName": "my-app",
+			"ResourceLifecycleConfig": map[string]any{
+				"ServiceRole": map[string]any{
+					"$label":    "eb-service-role",
+					"$property": "Arn",
+					"$res":      true,
+					"$stack":    "my-stack",
+					"$type":     "AWS::IAM::Role",
+					"$value":    "arn:aws:iam::123456789012:role/my-role",
+				},
+				"VersionLifecycleConfig": map[string]any{
+					"MaxAgeRule": map[string]any{
+						"DeleteSourceFromS3": false,
+						"Enabled":            false,
+						"MaxAgeInDays":       float64(180),
+					},
+					"MaxCountRule": map[string]any{
+						"DeleteSourceFromS3": false,
+						"Enabled":            false,
+						"MaxCount":           float64(200),
+					},
+				},
+			},
+		},
+	}
+
+	result := compareProperties(t, expectedProperties, actualResource, "after create")
+	if !result {
+		t.Errorf("compareProperties should pass when SubResource contains a nested Resolvable with resolved $value")
+	}
+}
+
+func TestCompareMap(t *testing.T) {
+	t.Run("nested resolvable passes", func(t *testing.T) {
+		expected := map[string]any{
+			"ServiceRole": map[string]any{
+				"$label":      "eb-service-role",
+				"$property":   "Arn",
+				"$res":        true,
+				"$stack":      "my-stack",
+				"$type":       "AWS::IAM::Role",
+				"$visibility": "Clear",
+			},
+		}
+		actual := map[string]any{
+			"ServiceRole": map[string]any{
+				"$label":    "eb-service-role",
+				"$property": "Arn",
+				"$res":      true,
+				"$stack":    "my-stack",
+				"$type":     "AWS::IAM::Role",
+				"$value":    "arn:aws:iam::123456789012:role/my-role",
+			},
+		}
+		if !compareMap(t, "Config", expected, actual, "test") {
+			t.Error("compareMap should pass for nested resolvable")
+		}
+	})
+
+	t.Run("scalar mismatch fails", func(t *testing.T) {
+		fakeT := &testing.T{}
+		expected := map[string]any{
+			"Name": "expected-value",
+		}
+		actual := map[string]any{
+			"Name": "different-value",
+		}
+		if compareMap(fakeT, "Config", expected, actual, "test") {
+			t.Error("compareMap should fail for scalar mismatch")
+		}
+	})
+
+	t.Run("extra keys in actual are ignored", func(t *testing.T) {
+		expected := map[string]any{
+			"Name": "my-app",
+		}
+		actual := map[string]any{
+			"Name":    "my-app",
+			"ExtraID": "extra-value",
+		}
+		if !compareMap(t, "Config", expected, actual, "test") {
+			t.Error("compareMap should pass when actual has extra keys not in expected")
+		}
+	})
+
+	t.Run("deeply nested resolvable passes", func(t *testing.T) {
+		expected := map[string]any{
+			"Outer": map[string]any{
+				"Inner": map[string]any{
+					"Ref": map[string]any{
+						"$label":      "my-ref",
+						"$property":   "Id",
+						"$res":        true,
+						"$stack":      "stack",
+						"$type":       "AWS::EC2::VPC",
+						"$visibility": "Clear",
+					},
+				},
+			},
+		}
+		actual := map[string]any{
+			"Outer": map[string]any{
+				"Inner": map[string]any{
+					"Ref": map[string]any{
+						"$label":    "my-ref",
+						"$property": "Id",
+						"$res":      true,
+						"$stack":    "stack",
+						"$type":     "AWS::EC2::VPC",
+						"$value":    "vpc-12345",
+					},
+				},
+			},
+		}
+		if !compareMap(t, "Config", expected, actual, "test") {
+			t.Error("compareMap should pass for deeply nested resolvable")
+		}
+	})
+
+	t.Run("missing key in actual fails", func(t *testing.T) {
+		fakeT := &testing.T{}
+		expected := map[string]any{
+			"Name":    "my-app",
+			"Missing": "value",
+		}
+		actual := map[string]any{
+			"Name": "my-app",
+		}
+		if compareMap(fakeT, "Config", expected, actual, "test") {
+			t.Error("compareMap should fail when expected key is missing from actual")
+		}
+	})
+}
+
 func TestGetTestType(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -257,21 +257,21 @@ func runVerification(ctx context.Context, workDir string) (*VerifyResult, error)
 func (r *VerifyResult) FormatReport(namespace string) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("%s PKL Schema Verification Report\n", strings.ToUpper(namespace)))
+	fmt.Fprintf(&sb, "%s PKL Schema Verification Report\n", strings.ToUpper(namespace))
 	sb.WriteString(strings.Repeat("=", 40) + "\n\n")
-	sb.WriteString(fmt.Sprintf("Status: %s\n\n", r.Status))
+	fmt.Fprintf(&sb, "Status: %s\n\n", r.Status)
 	sb.WriteString("Summary:\n")
-	sb.WriteString(fmt.Sprintf("- Total modules: %d\n", r.TotalModules))
-	sb.WriteString(fmt.Sprintf("- Total resource types: %d\n", r.TotalResourceTypes))
-	sb.WriteString(fmt.Sprintf("- Duplicate files found: %d\n", r.DuplicateFileCount))
-	sb.WriteString(fmt.Sprintf("- Duplicate types found: %d\n\n", r.DuplicateTypeCount))
+	fmt.Fprintf(&sb, "- Total modules: %d\n", r.TotalModules)
+	fmt.Fprintf(&sb, "- Total resource types: %d\n", r.TotalResourceTypes)
+	fmt.Fprintf(&sb, "- Duplicate files found: %d\n", r.DuplicateFileCount)
+	fmt.Fprintf(&sb, "- Duplicate types found: %d\n\n", r.DuplicateTypeCount)
 
 	if len(r.DuplicateFiles) > 0 {
 		sb.WriteString("DUPLICATE FILES DETECTED:\n")
 		for _, dup := range r.DuplicateFiles {
-			sb.WriteString(fmt.Sprintf("  File '%s' appears %d times:\n", dup.FileName, len(dup.Modules)))
+			fmt.Fprintf(&sb, "  File '%s' appears %d times:\n", dup.FileName, len(dup.Modules))
 			for _, mod := range dup.Modules {
-				sb.WriteString(fmt.Sprintf("    - %s\n", mod))
+				fmt.Fprintf(&sb, "    - %s\n", mod)
 			}
 		}
 		sb.WriteString("\n")
@@ -282,7 +282,7 @@ func (r *VerifyResult) FormatReport(namespace string) string {
 	if len(r.DuplicateTypes) > 0 {
 		sb.WriteString("DUPLICATE RESOURCE TYPES DETECTED:\n")
 		for _, dup := range r.DuplicateTypes {
-			sb.WriteString(fmt.Sprintf("  %s\n", dup))
+			fmt.Fprintf(&sb, "  %s\n", dup)
 		}
 		sb.WriteString("\n")
 	} else {
