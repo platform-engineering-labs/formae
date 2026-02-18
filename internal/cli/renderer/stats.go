@@ -170,7 +170,7 @@ func renderTablesSideBySide(tables []struct {
 		var buf strings.Builder
 
 		// Add headline
-		buf.WriteString(fmt.Sprintf("%s\n", display.LightBlue(table.Headline)))
+		fmt.Fprintf(&buf, "%s\n", display.LightBlue(table.Headline))
 
 		// Create tablewriter table
 		tw := tablewriter.NewTable(&buf,
