@@ -934,7 +934,7 @@ func renderSummary(summary map[string]int) string {
 
 	// Write the header row.
 	headerFormat := fmt.Sprintf("%%-%ds  %%-%ds\n", resourceWidth, countWidth)
-	builder.WriteString(fmt.Sprintf(headerFormat, resourceHeader, countHeader))
+	fmt.Fprintf(&builder, headerFormat, resourceHeader, countHeader)
 
 	// Write a separator line for the header.
 	builder.WriteString(strings.Repeat("-", resourceWidth+countWidth+2) + "\n")
@@ -942,7 +942,7 @@ func renderSummary(summary map[string]int) string {
 	// Iterate over the map and add resource types and counts as a row.
 	rowFormat := fmt.Sprintf("%%-%ds  %%-%dd\n", resourceWidth, countWidth)
 	for key, value := range summary {
-		builder.WriteString(fmt.Sprintf(rowFormat, key, value))
+		fmt.Fprintf(&builder, rowFormat, key, value)
 	}
 
 	return builder.String()

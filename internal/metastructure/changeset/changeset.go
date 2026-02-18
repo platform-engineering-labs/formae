@@ -536,24 +536,24 @@ func (c *Changeset) getExecutableUpdates() []*resource_update.ResourceUpdate {
 func (c *Changeset) PrintPipeline() string {
 
 	var result strings.Builder
-	result.WriteString(fmt.Sprintf("Changeset Pipeline: %s\n", c.CommandID))
+	fmt.Fprintf(&result, "Changeset Pipeline: %s\n", c.CommandID)
 	result.WriteString("========================\n")
 
 	for uri, group := range c.Pipeline.ResourceUpdateGroups {
-		result.WriteString(fmt.Sprintf("Group: %s\n", uri))
+		fmt.Fprintf(&result, "Group: %s\n", uri)
 		result.WriteString("  Updates:\n")
 		for _, update := range group.Updates {
-			result.WriteString(fmt.Sprintf("    - %s (%s)\n", update.Operation, update.State))
+			fmt.Fprintf(&result, "    - %s (%s)\n", update.Operation, update.State)
 		}
 
 		result.WriteString("  Upstream Dependencies:\n")
 		for _, dep := range group.UpstreamGroups {
-			result.WriteString(fmt.Sprintf("    - %s\n", dep.URI))
+			fmt.Fprintf(&result, "    - %s\n", dep.URI)
 		}
 
 		result.WriteString("  Downstream Dependents:\n")
 		for _, dep := range group.DownstreamGroups {
-			result.WriteString(fmt.Sprintf("    - %s\n", dep.URI))
+			fmt.Fprintf(&result, "    - %s\n", dep.URI)
 		}
 
 		result.WriteString("\n")

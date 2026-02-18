@@ -868,7 +868,7 @@ func GenerateReproductionTest(ops []Operation, testName string) string {
 	sb.WriteString(")\n\n")
 
 	// Generate the test function
-	sb.WriteString(fmt.Sprintf("func %s(t *testing.T) {\n", testName))
+	fmt.Fprintf(&sb, "func %s(t *testing.T) {\n", testName)
 	sb.WriteString("\ttestutil.RunTestFromProjectRoot(t, func(t *testing.T) {\n")
 	sb.WriteString("\t\tpt, err := NewReproductionTest(t, 5)\n")
 	sb.WriteString("\t\tif err != nil {\n")
@@ -878,16 +878,16 @@ func GenerateReproductionTest(ops []Operation, testName string) string {
 
 	// Add each operation
 	for i, op := range ops {
-		sb.WriteString(fmt.Sprintf("\t\t// Operation %d: %s\n", i+1, op.Kind.String()))
+		fmt.Fprintf(&sb, "\t\t// Operation %d: %s\n", i+1, op.Kind.String())
 
 		switch op.Kind {
 		case OpUserApply:
-			sb.WriteString(fmt.Sprintf("\t\tpt.Apply([]int{%s}, \"%s\")\n",
-				intSliceToString(op.ResourceIds), op.ApplyMode))
+			fmt.Fprintf(&sb, "\t\tpt.Apply([]int{%s}, \"%s\")\n",
+				intSliceToString(op.ResourceIds), op.ApplyMode)
 
 		case OpUserDestroy:
-			sb.WriteString(fmt.Sprintf("\t\tpt.Destroy([]int{%s})\n",
-				intSliceToString(op.ResourceIds)))
+			fmt.Fprintf(&sb, "\t\tpt.Destroy([]int{%s})\n",
+				intSliceToString(op.ResourceIds))
 
 		case OpVerifyState:
 			sb.WriteString("\t\tpt.VerifyState()\n")
