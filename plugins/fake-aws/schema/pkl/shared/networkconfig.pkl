@@ -1,0 +1,20 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS shared NetworkConfig - a SubResource defined in its own module
+ * to test cross-module SubResource import generation.
+ */
+module fakeaws.shared.networkconfig
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+@fakeaws.SubResourceHint
+open class NetworkConfig extends formae.SubResource {
+    subnetId: String?
+    securityGroupIds: Listing<String>?
+}

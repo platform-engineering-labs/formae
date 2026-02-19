@@ -1,0 +1,43 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS AppRunner Service - uses a plain shared type (not SubResource)
+ * to test generalized import generation for arbitrary Typed values.
+ */
+module fakeaws.apprunner.service
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+import "../shared/deploymentconfig.pkl" as deploymentconfig
+
+const type = "FakeAWS::AppRunner::Service"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "ServiceId"
+}
+open class Service extends formae.Resource {
+    @fakeaws.FieldHint
+    serviceName: String
+
+    @fakeaws.FieldHint
+    imageUri: String
+
+    @fakeaws.FieldHint
+    deploymentConfig: deploymentconfig.DeploymentConfig?
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res = new formae.Resolvable {
+        label = parent.label
+        stack = parent.stack?.label
+        type = module.type
+    }
+}

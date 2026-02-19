@@ -1,0 +1,37 @@
+{
+  "Targets": [
+    {
+      "Label": "fakeaws-target",
+      "Namespace": "FakeAWS",
+      "Config": {
+        "Type": "FakeAWS",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "compute-stack",
+      "Description": "Compute infrastructure stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "web-server",
+      "Type": "FakeAWS::Compute::Instance",
+      "Stack": "compute-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "InstanceType": "t3.medium",
+        "ImageId": "ami-12345678",
+        "NetworkConfig": {
+          "SubnetId": "subnet-abc123",
+          "SecurityGroupIds": ["sg-xyz789"]
+        },
+        "Tags": [
+          { "Key": "Name", "Value": "web-server" }
+        ]
+      }
+    }
+  ]
+}

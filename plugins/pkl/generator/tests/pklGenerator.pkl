@@ -14,6 +14,9 @@ import "../pklGenerator.pkl" as generator
 local sqsJson = new json.Parser {}.parse(read("../examples/json/sqs_queue.json"))
 local vpcJson = new json.Parser {}.parse(read("../examples/json/ec2_vpc.json"))
 local multiJson = new json.Parser {}.parse(read("../examples/json/multi_resource.json"))
+local hostedZoneJson = new json.Parser {}.parse(read("../examples/json/route53_hosted_zone.json"))
+local computeInstanceJson = new json.Parser {}.parse(read("../examples/json/compute_instance.json"))
+local appRunnerServiceJson = new json.Parser {}.parse(read("../examples/json/apprunner_service.json"))
 
 facts {
     ["SQS Queue - generates correct imports"] {
@@ -91,5 +94,135 @@ facts {
         result.contains("subnet.Subnet") &&
         result.contains("securitygroup.SecurityGroup") &&
         result.contains("queue.Queue")
+    }
+
+    // --- modulePathToAlias unit tests ---
+
+    ["modulePathToAlias - no collision returns simple name"] {
+        generator.modulePathToAlias("@aws/ec2/ec2.pkl", List("@aws/ec2/ec2.pkl", "@aws/sqs/queue.pkl")) == "ec2" &&
+        generator.modulePathToAlias("@aws/sqs/queue.pkl", List("@aws/ec2/ec2.pkl", "@aws/sqs/queue.pkl")) == "queue"
+    }
+
+    ["modulePathToAlias - collision disambiguates with parent segment"] {
+        let (allPaths = List("@aws/ecs/service.pkl", "@gcp/cloudrun/service.pkl"))
+        generator.modulePathToAlias("@aws/ecs/service.pkl", allPaths) == "ecs_service" &&
+        generator.modulePathToAlias("@gcp/cloudrun/service.pkl", allPaths) == "cloudrun_service"
+    }
+
+    ["modulePathToAlias - collision with @-prefixed parent strips @"] {
+        let (allPaths = List("@aws/types.pkl", "@gcp/types.pkl"))
+        generator.modulePathToAlias("@aws/types.pkl", allPaths) == "aws_types" &&
+        generator.modulePathToAlias("@gcp/types.pkl", allPaths) == "gcp_types"
+    }
+
+    ["modulePathToAlias - dashes converted to underscores"] {
+        generator.modulePathToAlias("@cloudflare-dns/cloudflare-dns.pkl", List("@cloudflare-dns/cloudflare-dns.pkl")) == "cloudflare_dns"
+    }
+
+    ["modulePathToAlias - single path never collides"] {
+        generator.modulePathToAlias("@aws/ec2/ec2.pkl", List("@aws/ec2/ec2.pkl")) == "ec2"
+    }
+
+    // --- importFormatting unit tests ---
+
+    ["importFormatting - generates collision-aware aliases"] {
+        let (imports = List("@aws/ecs/service.pkl", "@gcp/cloudrun/service.pkl"))
+        let (result = generator.importFormatting(imports, imports))
+        result.contains("import \"@aws/ecs/service.pkl\" as ecs_service") &&
+        result.contains("import \"@gcp/cloudrun/service.pkl\" as cloudrun_service")
+    }
+
+    ["importFormatting - no collision uses simple alias"] {
+        let (imports = List("@aws/ec2/ec2.pkl", "@aws/sqs/queue.pkl"))
+        let (result = generator.importFormatting(imports, imports))
+        result.contains("import \"@aws/ec2/ec2.pkl\" as ec2") &&
+        result.contains("import \"@aws/sqs/queue.pkl\" as queue")
+    }
+
+    ["importFormatting - cross-group collision detected via allImports"] {
+        // dependencyImports rendered separately but allImports includes both groups
+        let (mainImports = List("@aws/ecs/service.pkl"))
+        let (depImports = List("@gcp/cloudrun/service.pkl"))
+        let (allImports = mainImports + depImports)
+        let (mainResult = generator.importFormatting(mainImports, allImports))
+        let (depResult = generator.importFormatting(depImports, allImports))
+        mainResult.contains("as ecs_service") &&
+        depResult.contains("as cloudrun_service")
+    }
+
+    // --- HostedZone SubResource integration tests ---
+
+    ["HostedZone - generates correct imports"] {
+        let (result = generator.generateFormaFile(hostedZoneJson))
+        result.contains("@fakeaws/route53/hostedzone.pkl") &&
+        result.contains("@fakeaws/fakeaws.pkl")
+    }
+
+    ["HostedZone - generates resource with SubResource property"] {
+        let (result = generator.generateFormaFile(hostedZoneJson))
+        // The HostedZoneConfig SubResource should be rendered inline
+        result.contains("hostedzone.HostedZone") &&
+        result.contains("HostedZoneConfig") &&
+        result.contains("comment = \"Primary hosted zone\"")
+    }
+
+    ["HostedZone - generates forma block with stack and target"] {
+        let (result = generator.generateFormaFile(hostedZoneJson))
+        result.contains("label = \"dns-stack\"") &&
+        result.contains("label = \"fakeaws-target\"") &&
+        result.contains("namespace = \"FakeAWS\"")
+    }
+
+    // --- Cross-module SubResource import tests ---
+    // Instance uses NetworkConfig from @fakeaws/shared/networkconfig.pkl (a different module).
+    // Without the SubResource import fix, this import would be missing and pkl eval would fail.
+
+    ["Compute Instance - generates cross-module SubResource dependency import"] {
+        let (result = generator.generateFormaFile(computeInstanceJson))
+        // The resource import is @fakeaws/compute/instance.pkl
+        result.contains("@fakeaws/compute/instance.pkl") &&
+        // The SubResource import must also appear (from a DIFFERENT module)
+        result.contains("@fakeaws/shared/networkconfig.pkl")
+    }
+
+    ["Compute Instance - generates resource with cross-module SubResource"] {
+        let (result = generator.generateFormaFile(computeInstanceJson))
+        result.contains("instance.Instance") &&
+        result.contains("networkconfig.NetworkConfig") &&
+        result.contains("subnetId = \"subnet-abc123\"")
+    }
+
+    // --- Plain shared type (not SubResource) import tests ---
+    // Service uses DeploymentConfig from @fakeaws/shared/deploymentconfig.pkl.
+    // DeploymentConfig is a plain class, not a SubResource. The generalized
+    // import logic should emit the correct import without any special-case branch.
+
+    ["AppRunner Service - generates plain shared type dependency import"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        result.contains("@fakeaws/apprunner/service.pkl") &&
+        result.contains("@fakeaws/shared/deploymentconfig.pkl")
+    }
+
+    ["AppRunner Service - generates resource with plain shared type"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        result.contains("service.Service") &&
+        result.contains("deploymentconfig.DeploymentConfig") &&
+        result.contains("environment = \"production\"") &&
+        result.contains("version = \"1.2.3\"") &&
+        result.contains("replicas = 3")
+    }
+
+    ["AppRunner Service - generates Tag import via generalized path"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        // Tag is now imported directly from types.pkl (where it's defined)
+        // rather than re-exported via fakeaws.pkl
+        result.contains("@fakeaws/types.pkl")
+    }
+
+    ["AppRunner Service - generates forma block"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        result.contains("label = \"app-stack\"") &&
+        result.contains("label = \"fakeaws-target\"") &&
+        result.contains("namespace = \"FakeAWS\"")
     }
 }

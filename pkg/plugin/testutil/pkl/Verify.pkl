@@ -53,7 +53,9 @@ function getAllResourceTypes(): Listing<ResourceType> = new Listing {
 function extractFileName(modulePath: String): String =
     modulePath.split("/").last
 
-/// Check for duplicate filenames
+/// Check for duplicate filenames.
+/// Only flags as error when modules share both filename AND parent directory.
+/// Same-name files in different directories are allowed (e.g., ecs/service.pkl and cloudrun/service.pkl).
 function verifyNoDuplicateFiles(): Listing<DuplicateFileError> =
     let (modulesByFileName = schemaModules.toMap().keys.fold(Map(),
         (acc: Map<String, List<String>>, moduleName: String) ->
@@ -66,7 +68,11 @@ function verifyNoDuplicateFiles(): Listing<DuplicateFileError> =
     ))
     new Listing {
         for (moduleFileName, mods in modulesByFileName) {
-            when (mods.length > 1) {
+            // Only error if modules are in the SAME directory
+            when (mods.length > 1 && mods.map((m) ->
+                let (parts = m.split("/"))
+                if (parts.length > 1) parts.take(parts.length - 1).join("/") else ""
+            ).distinct.length < mods.length) {
                 new DuplicateFileError {
                     fileName = moduleFileName
                     modules = mods.toListing()
