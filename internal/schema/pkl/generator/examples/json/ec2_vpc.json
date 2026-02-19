@@ -1,10 +1,10 @@
 {
   "Targets": [
     {
-      "Label": "fakeaws-target",
-      "Namespace": "FakeAWS",
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
       "Config": {
-        "Type": "FakeAWS",
+        "Type": "TestProvider",
         "Region": "us-west-2"
       }
     }
@@ -18,9 +18,9 @@
   "Resources": [
     {
       "Label": "my-vpc",
-      "Type": "FakeAWS::EC2::VPC",
+      "Type": "TestProvider::EC2::VPC",
       "Stack": "vpc-stack",
-      "Target": "fakeaws-target",
+      "Target": "testprovider-target",
       "Properties": {
         "CidrBlock": "10.0.0.0/16",
         "EnableDnsHostnames": true,

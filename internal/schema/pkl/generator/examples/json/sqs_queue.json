@@ -1,10 +1,10 @@
 {
   "Targets": [
     {
-      "Label": "fakeaws-target",
-      "Namespace": "FakeAWS",
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
       "Config": {
-        "Type": "FakeAWS",
+        "Type": "TestProvider",
         "Region": "us-east-1"
       }
     }
@@ -18,9 +18,9 @@
   "Resources": [
     {
       "Label": "dead-letter-queue",
-      "Type": "FakeAWS::SQS::Queue",
+      "Type": "TestProvider::SQS::Queue",
       "Stack": "queue-stack",
-      "Target": "fakeaws-target",
+      "Target": "testprovider-target",
       "Properties": {
         "QueueName": "my-dlq",
         "MessageRetentionPeriod": 1209600,
@@ -32,9 +32,9 @@
     },
     {
       "Label": "main-queue",
-      "Type": "FakeAWS::SQS::Queue",
+      "Type": "TestProvider::SQS::Queue",
       "Stack": "queue-stack",
-      "Target": "fakeaws-target",
+      "Target": "testprovider-target",
       "Properties": {
         "QueueName": "my-main-queue",
         "DelaySeconds": 5,

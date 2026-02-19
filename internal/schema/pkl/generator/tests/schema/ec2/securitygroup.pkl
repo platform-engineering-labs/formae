@@ -1,0 +1,49 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module testprovider.ec2.securitygroup
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+
+const type = "TestProvider::EC2::SecurityGroup"
+
+open class SecurityGroupResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden groupId: SecurityGroupResolvable = (this) {
+        property = "GroupId"
+    }
+}
+
+@testprovider.ResourceHint {
+    type = module.type
+    identifier = "GroupId"
+}
+open class SecurityGroup extends formae.Resource {
+    @testprovider.FieldHint {
+        createOnly = true
+    }
+    groupDescription: String
+
+    @testprovider.FieldHint
+    groupName: String?
+
+    @testprovider.FieldHint {
+        createOnly = true
+    }
+    vpcId: String|formae.Resolvable
+
+    @testprovider.FieldHint
+    tags: Listing<testprovider.Tag>?
+
+    local parent = this
+
+    hidden res: SecurityGroupResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

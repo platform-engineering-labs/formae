@@ -1,0 +1,40 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Uses cross-module SubResource (NetworkConfig from shared/) to test import generation.
+module testprovider.compute.server
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+import "../shared/networkconfig.pkl" as networkconfig
+
+const type = "TestProvider::Compute::Server"
+
+@testprovider.ResourceHint {
+    type = module.type
+    identifier = "ServerId"
+}
+open class Server extends formae.Resource {
+    @testprovider.FieldHint
+    serverType: String
+
+    @testprovider.FieldHint
+    imageId: String
+
+    @testprovider.FieldHint
+    networkConfig: networkconfig.NetworkConfig?
+
+    @testprovider.FieldHint
+    tags: Listing<testprovider.Tag>?
+
+    local parent = this
+
+    hidden res = new formae.Resolvable {
+        label = parent.label
+        stack = parent.stack?.label
+        type = module.type
+    }
+}

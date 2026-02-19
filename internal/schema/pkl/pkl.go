@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	pklgo "github.com/apple/pkl-go/pkl"
-	formae "github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -402,8 +402,9 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.Sc
 		if errors.Is(cmd.Err, exec.ErrDot) {
 			cmd.Err = nil
 		}
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("project resolve failed: %v", err)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("project resolve failed: %w\nOutput: %s", err, string(output))
 		}
 	}
 

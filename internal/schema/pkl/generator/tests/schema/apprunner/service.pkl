@@ -1,0 +1,40 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Uses plain shared type (DeploymentConfig) to test import generation for non-SubResource values.
+module testprovider.apprunner.service
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+import "../shared/deploymentconfig.pkl" as deploymentconfig
+
+const type = "TestProvider::AppRunner::Service"
+
+@testprovider.ResourceHint {
+    type = module.type
+    identifier = "ServiceId"
+}
+open class Service extends formae.Resource {
+    @testprovider.FieldHint
+    serviceName: String
+
+    @testprovider.FieldHint
+    imageUri: String
+
+    @testprovider.FieldHint
+    deploymentConfig: deploymentconfig.DeploymentConfig?
+
+    @testprovider.FieldHint
+    tags: Listing<testprovider.Tag>?
+
+    local parent = this
+
+    hidden res = new formae.Resolvable {
+        label = parent.label
+        stack = parent.stack?.label
+        type = module.type
+    }
+}

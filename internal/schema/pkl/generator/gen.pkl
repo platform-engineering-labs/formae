@@ -458,12 +458,21 @@ local function parseValueEnhanced(value: Any): Any =
     let (defaultMap =
       if (typeName == "FakeResolvable")
         Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
-      else if (typeName == "Tag" && (getImportInfo(value.getClass()) == "types" || getImportInfo(value.getClass()) == "formae" || getImportInfo(value.getClass()) == importPlaceholder))
-        // Tag import: Tag is in types.pkl but exported via the namespace base module. Derive the import from the package name.
-        let (pkgName = getPackageName(value.getClass()))
-        Map("__type__", typeName, "__import__", importInfo, "__import_statement__", "@\(pkgName)/\(pkgName).pkl")
       else
-        Map("__type__", typeName, "__import__", importInfo))
+        let (moduleUri = reflect.Class(value.getClass()).enclosingDeclaration.uri)
+        if (moduleUri.startsWith("@") || (moduleUri.contains("://") && moduleUri.contains("#")))
+          let (pkgName = getPackageName(value.getClass()))
+          let (importStatement =
+            if (moduleUri.startsWith("@"))
+              moduleUri
+            else
+              let (fragment = moduleUri.split("#").last)
+              let (cleanPath = if (fragment.startsWith("/")) fragment.drop(1) else fragment)
+              "@\(pkgName)/\(cleanPath)"
+          )
+          Map("__type__", typeName, "__import__", importInfo, "__import_statement__", importStatement)
+        else
+          Map("__type__", typeName, "__import__", importInfo))
       m.fold(defaultMap, (acc: Map<String, Any>, k: String, v: Any) ->
         // Filter out internal/system properties
         if (shouldSkipPropertyName(k))
@@ -488,15 +497,8 @@ local function parseValueEnhanced(value: Any): Any =
 
 
 local function getImportInfoForType(clazz: Class, typeName: String, value: Any): String =
-  // Get the actual import info from the class
   let (actualImport = getImportInfo(clazz))
-  // Tag handling: Tag is defined in types.pkl but exported via the namespace base module.
-  // Redirect "types" or legacy fallbacks to the package name derived from the module URI.
-  if (typeName == "Tag" && (actualImport == "types" || actualImport == "formae" || actualImport == importPlaceholder))
-    getPackageName(clazz)
-  else if (typeName == "FakeValue")
-    "formae"
-  else if (typeName == "FakeResolvable")
+  if (typeName == "FakeResolvable")
     resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).importName
   else
     actualImport

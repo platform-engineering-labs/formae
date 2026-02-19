@@ -1,0 +1,77 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module testprovider.dns.zone
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+
+const type = "TestProvider::DNS::Zone"
+
+@testprovider.SubResourceHint
+open class ZoneConfig extends formae.SubResource {
+    comment: String?
+}
+
+@testprovider.SubResourceHint
+open class LoggingConfig extends formae.SubResource {
+    logGroupArn: String
+}
+
+@testprovider.SubResourceHint
+open class LinkedVPC extends formae.SubResource {
+    @testprovider.FieldHint {
+        outputField = "VPCId"
+    }
+    vpcId: String
+
+    @testprovider.FieldHint {
+        outputField = "VPCRegion"
+    }
+    vpcRegion: testprovider.Region
+}
+
+open class ZoneResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: ZoneResolvable = (this) {
+        property = "Id"
+    }
+}
+
+@testprovider.ResourceHint {
+    type = module.type
+    identifier = "Id"
+}
+open class Zone extends formae.Resource {
+    @testprovider.FieldHint
+    zoneConfig: ZoneConfig?
+
+    @testprovider.FieldHint {
+        createOnly = true
+    }
+    name: (String|formae.Value)?
+
+    @testprovider.FieldHint
+    loggingConfig: LoggingConfig?
+
+    @testprovider.FieldHint {
+        outputField = "ZoneTags"
+    }
+    tags: Listing<testprovider.Tag>?
+
+    @testprovider.FieldHint {
+        outputField = "LinkedVPCs"
+    }
+    vpcs: Listing<LinkedVPC>?
+
+    local parent = this
+
+    hidden res: ZoneResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

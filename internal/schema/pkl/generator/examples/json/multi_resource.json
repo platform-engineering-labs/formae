@@ -1,10 +1,10 @@
 {
   "Targets": [
     {
-      "Label": "fakeaws-target",
-      "Namespace": "FakeAWS",
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
       "Config": {
-        "Type": "FakeAWS",
+        "Type": "TestProvider",
         "Region": "us-east-1"
       }
     }
@@ -22,9 +22,9 @@
   "Resources": [
     {
       "Label": "main-vpc",
-      "Type": "FakeAWS::EC2::VPC",
+      "Type": "TestProvider::EC2::VPC",
       "Stack": "network-stack",
-      "Target": "fakeaws-target",
+      "Target": "testprovider-target",
       "Properties": {
         "CidrBlock": "10.0.0.0/16",
         "EnableDnsHostnames": true,
@@ -36,9 +36,9 @@
     },
     {
       "Label": "public-subnet",
-      "Type": "FakeAWS::EC2::Subnet",
+      "Type": "TestProvider::EC2::Subnet",
       "Stack": "network-stack",
-      "Target": "fakeaws-target",
+      "Target": "testprovider-target",
       "Properties": {
         "CidrBlock": "10.0.1.0/24",
         "AvailabilityZone": "us-east-1a",
@@ -47,7 +47,7 @@
           "$res": true,
           "$label": "main-vpc",
           "$stack": "network-stack",
-          "$type": "FakeAWS::EC2::VPC",
+          "$type": "TestProvider::EC2::VPC",
           "$property": "VpcId",
           "$value": "vpc-12345"
         },
@@ -58,9 +58,9 @@
     },
     {
       "Label": "app-sg",
-      "Type": "FakeAWS::EC2::SecurityGroup",
+      "Type": "TestProvider::EC2::SecurityGroup",
       "Stack": "network-stack",
-      "Target": "fakeaws-target",
+      "Target": "testprovider-target",
       "Properties": {
         "GroupDescription": "Application security group",
         "GroupName": "app-sg",
@@ -68,7 +68,7 @@
           "$res": true,
           "$label": "main-vpc",
           "$stack": "network-stack",
-          "$type": "FakeAWS::EC2::VPC",
+          "$type": "TestProvider::EC2::VPC",
           "$property": "VpcId",
           "$value": "vpc-12345"
         },
@@ -79,9 +79,9 @@
     },
     {
       "Label": "app-queue",
-      "Type": "FakeAWS::SQS::Queue",
+      "Type": "TestProvider::SQS::Queue",
       "Stack": "app-stack",
-      "Target": "fakeaws-target",
+      "Target": "testprovider-target",
       "Properties": {
         "QueueName": "app-events",
         "DelaySeconds": 0,
