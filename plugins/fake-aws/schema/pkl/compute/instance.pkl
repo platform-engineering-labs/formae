@@ -1,0 +1,43 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS Compute Instance - uses a shared SubResource from another module
+ * to test cross-module SubResource import generation.
+ */
+module fakeaws.compute.instance
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+import "../shared/networkconfig.pkl" as networkconfig
+
+const type = "FakeAWS::Compute::Instance"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "InstanceId"
+}
+open class Instance extends formae.Resource {
+    @fakeaws.FieldHint
+    instanceType: String
+
+    @fakeaws.FieldHint
+    imageId: String
+
+    @fakeaws.FieldHint
+    networkConfig: networkconfig.NetworkConfig?
+
+    @fakeaws.FieldHint
+    tags: Listing<fakeaws.Tag>?
+
+    local parent = this
+
+    hidden res = new formae.Resolvable {
+        label = parent.label
+        stack = parent.stack?.label
+        type = module.type
+    }
+}

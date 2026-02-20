@@ -1,0 +1,35 @@
+{
+  "Targets": [
+    {
+      "Label": "fakeaws-target",
+      "Namespace": "FakeAWS",
+      "Config": {
+        "Type": "FakeAWS",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "dns-stack",
+      "Description": "DNS infrastructure stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "my-zone",
+      "Type": "FakeAWS::Route53::HostedZone",
+      "Stack": "dns-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "HostedZoneConfig": {
+          "Comment": "Primary hosted zone"
+        },
+        "Name": "example.com",
+        "HostedZoneTags": [
+          { "Key": "Environment", "Value": "production" }
+        ]
+      }
+    }
+  ]
+}

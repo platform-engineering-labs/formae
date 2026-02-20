@@ -46,6 +46,8 @@ Using **formae** is straightforward and designed to fit various team roles, need
 
 The best way to start with **formae** is by following the **formae** 101 in the [documentation](https://docs.formae.io/en/latest/formae-101/fundamentals).
 
+For AI-assisted workflows, see [AI Assistants](https://docs.formae.io/en/latest/integrations/ai-assistants/) and the MCP plugin repo [platform-engineering-labs/formae-mcp](https://github.com/platform-engineering-labs/formae-mcp).
+
 If you are new to Pkl, try the [Pkl primer](https://pkl.platform.engineering/), our own hands-on tour of the language!
 
 If you don't feel like reading you can check out a series of video walkthroughs on our [YouTube channel](https://www.youtube.com/playlist?list=PLntTBHUL8qpTGIIYkxOv8cLp7Y5jtZpun).

@@ -1,0 +1,38 @@
+{
+  "Targets": [
+    {
+      "Label": "fakeaws-target",
+      "Namespace": "FakeAWS",
+      "Config": {
+        "Type": "FakeAWS",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "app-stack",
+      "Description": "Application services stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "my-service",
+      "Type": "FakeAWS::AppRunner::Service",
+      "Stack": "app-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "ServiceName": "my-api",
+        "ImageUri": "123456789.dkr.ecr.us-east-1.amazonaws.com/my-api:latest",
+        "DeploymentConfig": {
+          "environment": "production",
+          "version": "1.2.3",
+          "replicas": 3
+        },
+        "Tags": [
+          { "Key": "Team", "Value": "platform" }
+        ]
+      }
+    }
+  ]
+}
