@@ -57,7 +57,9 @@ func New(cfg *pkgmodel.Config, id string) *Agent {
 func (a *Agent) Start() error {
 	// Check if already running
 	if _, err := os.Stat(getPidFile()); err == nil {
-		return fmt.Errorf("agent appears to be already running (PID file exists)")
+		if err := removeStalePidFile(); err != nil {
+			return err
+		}
 	}
 
 	// Set up signal handling
@@ -230,10 +232,36 @@ func (a *Agent) Wait() {
 
 func (a *Agent) cleanup() {
 	slog.Info("Cleaning up")
-	// Remove PID file
+	removePidFile()
+}
+
+func removePidFile() {
 	if err := os.Remove(getPidFile()); err != nil && !os.IsNotExist(err) {
 		slog.Error("Failed to remove pid file", "error", err)
 	}
+}
+
+func removeStalePidFile() error {
+	pidBytes, err := os.ReadFile(getPidFile())
+	if err != nil {
+		return fmt.Errorf("agent appears to be already running (PID file exists but unreadable): %w", err)
+	}
+
+	var pid int
+	if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err != nil {
+		slog.Warn("Removing corrupt PID file", "error", err)
+		removePidFile()
+		return nil
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil || process.Signal(syscall.Signal(0)) != nil {
+		slog.Warn("Removing stale PID file", "pid", pid)
+		removePidFile()
+		return nil
+	}
+
+	return fmt.Errorf("agent is already running (PID %d)", pid)
 }
 
 func waitForPidFileRemoval(timeout time.Duration) bool {
