@@ -213,6 +213,13 @@ func extractPropertyChange(patch patchOperation, props map[string]any, previousP
 	// Format the actual value
 	if patch.Value != nil && patch.Value != "" {
 		change.Value = formatPatchValue(patch.Value, refLabels)
+	} else if patch.Op == "remove" && len(previousProperties) > 0 {
+		// Remove operations don't carry a value per RFC 6902, so look it up from previous state
+		if oldValue := extractPreviousValue(previousProperties, patch.Path); oldValue != "" {
+			change.Value = oldValue
+		} else {
+			change.Value = "\"(empty)\""
+		}
 	} else {
 		change.Value = "\"(empty)\""
 	}
