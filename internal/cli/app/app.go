@@ -471,15 +471,6 @@ func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.Forma
 	return forma, nil
 }
 
-func (a *App) Serialize(forma *pkgmodel.Resource, options *plugin.SerializeOptions) (string, error) {
-	schemaPlugin, err := a.PluginManager.SchemaPlugin(options.Schema)
-	if err != nil {
-		return "", err
-	}
-
-	return (*schemaPlugin).Serialize(forma, options)
-}
-
 func (a *App) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOptions) (string, error) {
 	schemaPlugin, err := a.PluginManager.SchemaPlugin(options.Schema)
 	if err != nil {

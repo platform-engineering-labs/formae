@@ -54,22 +54,6 @@ func (j YAML) Evaluate(path string, cmd model.Command, mode model.FormaApplyMode
 	return nil, errors.ErrUnsupported
 }
 
-func (j YAML) Serialize(resource *model.Resource, options *plugin.SerializeOptions) (string, error) {
-	yaml, err := encodeYAML(resource)
-	if err != nil {
-		return "", fmt.Errorf("error encoding YAML: %w", err)
-	}
-
-	if options.Colorize {
-		yaml, err = highlight(yaml)
-		if err != nil {
-			return "", fmt.Errorf("error colorizing YAML: %w", err)
-		}
-	}
-
-	return string(yaml), nil
-}
-
 func (j YAML) SerializeForma(forma *model.Forma, options *plugin.SerializeOptions) (string, error) {
 	var data any
 
