@@ -386,6 +386,33 @@ func TestFormatPatchDocument_WithReferences(t *testing.T) {
 	})
 }
 
+func TestFormatPatchDocument_RemoveArrayEntry_ShowsRemovedValue(t *testing.T) {
+	t.Run("displays value of removed array entry from previous properties", func(t *testing.T) {
+		node := gtree.NewRoot("")
+
+		patchDoc := []map[string]any{
+			{
+				"op":   "remove",
+				"path": "/networks/0",
+			},
+		}
+		serialized, err := json.Marshal(patchDoc)
+		assert.NoError(t, err)
+
+		properties := json.RawMessage(`{"networks": ["net-b", "net-c"]}`)
+		previousProperties := json.RawMessage(`{"networks": ["net-a", "net-b", "net-c"]}`)
+
+		FormatPatchDocument(node, serialized, properties, previousProperties, nil, "")
+
+		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
+		assert.NoError(t, err)
+
+		assert.Len(t, nodes, 2)
+		assert.Contains(t, nodes[1].Name(), "net-a")
+		assert.NotContains(t, nodes[1].Name(), "(empty)")
+	})
+}
+
 func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_ShowsManagementMessage(t *testing.T) {
 	t.Run("empty patch document with $unmanaged oldStackName shows management message", func(t *testing.T) {
 		node := gtree.NewRoot("")
