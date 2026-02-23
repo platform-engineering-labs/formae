@@ -102,3 +102,4 @@ docs/design/
 
 # fake-aws plugin binary
 plugins/fake-aws/fake-aws
+.worktrees/
