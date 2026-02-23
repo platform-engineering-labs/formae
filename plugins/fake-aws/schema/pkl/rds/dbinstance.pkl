@@ -31,7 +31,7 @@ open class DBInstance extends formae.Resource {
     dbInstanceIdentifier: String?
 
     @fakeaws.FieldHint
-    dbSubnetGroupName: String|formae.Resolvable?
+    dbSubnetGroupName: (String|formae.Resolvable)?
 
     @fakeaws.FieldHint
     deletionProtection: Boolean?
