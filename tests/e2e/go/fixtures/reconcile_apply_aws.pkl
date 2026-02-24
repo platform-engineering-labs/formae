@@ -1,0 +1,65 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+
+import "@aws/iam/role.pkl"
+import "@aws/iam/rolepolicy.pkl"
+
+local testRole = new role.Role {
+  label = "e2e-test-role"
+  roleName = "formae-e2e-reconcile-role"
+  assumeRolePolicyDocument = new Dynamic {
+    ["Version"] = "2012-10-17"
+    ["Statement"] = new Listing {
+      new Dynamic {
+        ["Effect"] = "Allow"
+        ["Principal"] = new Dynamic {
+          ["Service"] = "lambda.amazonaws.com"
+        }
+        ["Action"] = "sts:AssumeRole"
+      }
+    }
+  }
+}
+
+local testRolePolicy = new rolepolicy.RolePolicy {
+  label = "e2e-test-role-policy"
+  policyName = "formae-e2e-reconcile-policy"
+  roleName = testRole.res.roleName
+  policyDocument = new Dynamic {
+    ["Version"] = "2012-10-17"
+    ["Statement"] = new Listing {
+      new Dynamic {
+        ["Effect"] = "Allow"
+        ["Action"] = "logs:*"
+        ["Resource"] = "*"
+      }
+    }
+  }
+}
+
+local stackName = "e2e-reconcile-aws"
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "E2E reconcile test for AWS IAM"
+  }
+
+  new formae.Target {
+    label = "e2e-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  testRole
+  testRolePolicy
+}
