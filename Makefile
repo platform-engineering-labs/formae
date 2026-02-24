@@ -292,6 +292,12 @@ test-e2e: gen-pkl pkg-pkl build install-external-plugins
 	echo "Running full E2E test suite..."
 	bash ./tests/e2e/e2e.sh
 
+test-e2e-go: build install-external-plugins
+	echo "Setting up Go e2e PKL dependencies..."
+	bash ./tests/e2e/go/setup_pkl.sh
+	echo "Running Go e2e tests..."
+	E2E_FORMAE_BINARY=$(CURDIR)/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
+
 test-property:
 	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
 

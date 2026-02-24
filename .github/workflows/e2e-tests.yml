@@ -79,10 +79,15 @@ jobs:
       - name: Test AWS Access
         run: aws sts get-caller-identity
 
-      - name: Running e2e-tests
+      - name: Running e2e-tests (bash)
         env:
           AWS_PROFILE: e2e-test
         run: make test-e2e
+
+      - name: Running e2e-tests (Go, AWS only)
+        env:
+          AWS_PROFILE: e2e-test
+        run: make test-e2e-go E2E_RUN_FLAGS='-run "/AWS"'
 
       - name: Nuke Discovery
         if: ${{ always() }}
