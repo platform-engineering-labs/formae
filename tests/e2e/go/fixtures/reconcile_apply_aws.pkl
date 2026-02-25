@@ -15,6 +15,7 @@ import "@aws/iam/rolepolicy.pkl"
 local testRole = new role.Role {
   label = "e2e-test-role"
   roleName = "formae-e2e-reconcile-role"
+  description = "e2e reconcile test role"
   assumeRolePolicyDocument = new Dynamic {
     ["Version"] = "2012-10-17"
     ["Statement"] = new Listing {

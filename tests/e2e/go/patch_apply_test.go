@@ -40,11 +40,9 @@ func testPatchApplyAWS(t *testing.T, cli *FormaeCLI) {
 		t.Fatalf("expected 2 resources before patch, got %d", len(beforeResources))
 	}
 
-	// Step 3: Assert the Role has no Description and no Tags initially.
+	// Step 3: Assert the Role has the base Description and no Tags initially.
 	roleBefore := RequireResource(t, beforeResources, "e2e-test-role")
-	if _, hasDesc := roleBefore.Properties["Description"]; hasDesc {
-		t.Error("expected Role to have no Description before patch")
-	}
+	AssertStringProperty(t, roleBefore, "Description", "e2e reconcile test role")
 	if _, hasTags := roleBefore.Properties["Tags"]; hasTags {
 		t.Error("expected Role to have no Tags before patch")
 	}

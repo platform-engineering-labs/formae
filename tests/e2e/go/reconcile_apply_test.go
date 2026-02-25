@@ -66,6 +66,7 @@ func testReconcileApplyAWS(t *testing.T, cli *FormaeCLI) {
 		t.Errorf("role type: got %s, want AWS::IAM::Role", role.Type)
 	}
 	AssertStringProperty(t, role, "RoleName", "formae-e2e-reconcile-role")
+	AssertStringProperty(t, role, "Description", "e2e reconcile test role")
 	if _, ok := role.Properties["AssumeRolePolicyDocument"]; !ok {
 		t.Error("role missing property AssumeRolePolicyDocument")
 	}
