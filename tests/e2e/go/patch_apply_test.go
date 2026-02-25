@@ -16,7 +16,7 @@ import (
 func TestPatchApply(t *testing.T) {
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
+	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
 
 	t.Run("AWS", func(t *testing.T) { testPatchApplyAWS(t, cli) })
 	t.Run("Azure", func(t *testing.T) { testPatchApplyAzure(t, cli) })

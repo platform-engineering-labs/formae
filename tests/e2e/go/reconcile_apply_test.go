@@ -36,7 +36,7 @@ func fixturesDir(t *testing.T) string {
 func TestReconcileApply(t *testing.T) {
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
+	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
 
 	t.Run("AWS", func(t *testing.T) { testReconcileApplyAWS(t, cli) })
 	t.Run("Azure", func(t *testing.T) { testReconcileApplyAzure(t, cli) })

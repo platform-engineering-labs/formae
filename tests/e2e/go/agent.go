@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"net/http"
 	"os"
 	"os/exec"
@@ -40,15 +41,17 @@ type Agent struct {
 type AgentOption func(*agentOptions)
 
 type agentOptions struct {
-	discoveryEnabled  bool
-	discoveryInterval string // PKL duration, e.g. "30.s"
+	discoveryEnabled        bool
+	discoveryInterval       string   // PKL duration, e.g. "30.s"
+	discoveryResourceTypes  []string // resource types to discover (empty = all)
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
-func WithDiscovery(interval string) AgentOption {
+func WithDiscovery(interval string, resourceTypes ...string) AgentOption {
 	return func(o *agentOptions) {
 		o.discoveryEnabled = true
 		o.discoveryInterval = interval
+		o.discoveryResourceTypes = resourceTypes
 	}
 }
 
@@ -78,6 +81,16 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 		discoveryEnabled = "true"
 	}
 
+	// Build resourceTypesToDiscover listing if types are specified.
+	resourceTypesBlock := ""
+	if len(options.discoveryResourceTypes) > 0 {
+		var lines []string
+		for _, rt := range options.discoveryResourceTypes {
+			lines = append(lines, fmt.Sprintf("            %q", rt))
+		}
+		resourceTypesBlock = fmt.Sprintf("\n        resourceTypesToDiscover {\n%s\n        }", strings.Join(lines, "\n"))
+	}
+
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
  */
@@ -99,7 +112,7 @@ agent {
     }
     discovery {
         enabled = %s
-        interval = %s
+        interval = %s%s
     }
     logging {
         consoleLogLevel = "debug"
@@ -114,7 +127,7 @@ cli {
     }
     disableUsageReporting = true
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, logPath, port)
+`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, port)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)

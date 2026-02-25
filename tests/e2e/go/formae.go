@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
+	"net/http"
 	"os/exec"
 	"testing"
 	"time"
@@ -46,14 +46,16 @@ type ResourceUpdate struct {
 type FormaeCLI struct {
 	binaryPath string
 	configPath string
+	agentPort  int
 }
 
 // NewFormaeCLI creates a new FormaeCLI instance that will execute the formae
 // binary at binaryPath with the given config path.
-func NewFormaeCLI(binaryPath string, configPath string) *FormaeCLI {
+func NewFormaeCLI(binaryPath string, configPath string, agentPort int) *FormaeCLI {
 	return &FormaeCLI{
 		binaryPath: binaryPath,
 		configPath: configPath,
+		agentPort:  agentPort,
 	}
 }
 
@@ -273,27 +275,31 @@ func (f *FormaeCLI) StatusCommand(t *testing.T, commandID string) CommandResult 
 	}
 }
 
-// ForceDiscover triggers an immediate discovery cycle via `formae dev discover`.
+// ForceDiscover triggers an immediate discovery cycle via the admin API.
 func (f *FormaeCLI) ForceDiscover(t *testing.T) {
 	t.Helper()
-	args := []string{"dev", "discover", "--config", f.configPath}
-	cmd := exec.Command(f.binaryPath, args...)
-	cmd.Env = os.Environ()
-	output, err := cmd.CombinedOutput()
+	url := fmt.Sprintf("http://localhost:%d/api/v1/admin/discover", f.agentPort)
+	resp, err := http.Post(url, "application/json", nil)
 	if err != nil {
-		t.Fatalf("formae dev discover failed: %v\noutput: %s", err, output)
+		t.Fatalf("failed to trigger discovery: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("force discover returned status %d", resp.StatusCode)
 	}
 }
 
-// ForceSync triggers an immediate synchronization cycle via `formae dev sync`.
+// ForceSync triggers an immediate synchronization cycle via the admin API.
 func (f *FormaeCLI) ForceSync(t *testing.T) {
 	t.Helper()
-	args := []string{"dev", "sync", "--config", f.configPath}
-	cmd := exec.Command(f.binaryPath, args...)
-	cmd.Env = os.Environ()
-	output, err := cmd.CombinedOutput()
+	url := fmt.Sprintf("http://localhost:%d/api/v1/admin/synchronize", f.agentPort)
+	resp, err := http.Post(url, "application/json", nil)
 	if err != nil {
-		t.Fatalf("formae dev sync failed: %v\noutput: %s", err, output)
+		t.Fatalf("failed to trigger sync: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("force sync returned status %d", resp.StatusCode)
 	}
 }
 

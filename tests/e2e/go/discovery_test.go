@@ -29,8 +29,14 @@ func ptr(s string) *string {
 
 func TestDiscovery(t *testing.T) {
 	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin, WithDiscovery("30.s"))
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
+	agent := StartAgent(t, bin, WithDiscovery("30.s",
+		"AWS::IAM::Role",
+		"AWS::IAM::RolePolicy",
+		"Azure::Resources::ResourceGroup",
+		"Azure::Network::VirtualNetwork",
+		"Azure::Network::Subnet",
+	))
+	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
 
 	t.Run("AWS", func(t *testing.T) { testDiscoveryAWS(t, cli) })
 	t.Run("Azure", func(t *testing.T) { testDiscoveryAzure(t, cli) })

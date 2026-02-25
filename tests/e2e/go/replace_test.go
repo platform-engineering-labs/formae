@@ -15,7 +15,7 @@ import (
 func TestReplace(t *testing.T) {
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
+	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
 
 	t.Run("AWS", func(t *testing.T) { testReplaceAWS(t, cli) })
 }
