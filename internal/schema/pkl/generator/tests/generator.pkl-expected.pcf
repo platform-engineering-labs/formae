@@ -1,0 +1,17 @@
+examples {
+  ["Basic Class"] {
+    new {
+      x {
+        location {
+          line = 8
+          column = 5
+          displayUri = "file:///Users/stheno/git/pel/formae/plugins/pkl/generator/tests/generator.pkl, line 8"
+        }
+        docComment = null
+        annotations = List()
+        modifiers = Set()
+        name = "x"
+      }
+    }
+  }
+}

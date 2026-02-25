@@ -1,0 +1,539 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+package pkl
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+
+	pklgo "github.com/apple/pkl-go/pkl"
+	"github.com/platform-engineering-labs/formae/internal/schema"
+	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+)
+
+const ProjectFile = "PklProject"
+
+type PKL struct{}
+
+// Version is used for PKL package resolution. It was previously set via ldflags
+// for the .so plugin; now it's a regular package variable.
+var Version = "0.0.0"
+
+//go:embed assets
+var assets embed.FS
+
+//go:embed generator/*
+var generator embed.FS
+
+// Compile time check to satisfy protocol
+var _ schema.SchemaPlugin = PKL{}
+
+func init() {
+	schema.DefaultRegistry.Register(PKL{})
+}
+
+func (p PKL) Name() string {
+	return "pkl"
+}
+
+func (p PKL) FileExtension() string {
+	return ".pkl"
+}
+
+func (p PKL) SupportsExtract() bool {
+	return true
+}
+
+func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
+	formaeFs, err := fs.Sub(assets, "assets/formae")
+	if err != nil {
+		return nil, err
+	}
+
+	var configSource *pklgo.ModuleSource
+	if path == "" {
+		configSource = pklgo.TextSource(`amends "formae:/Config.pkl"`)
+	} else {
+		if FileExists(path) {
+			configSource = pklgo.FileSource(path)
+		} else {
+			return nil, fmt.Errorf("config file: %s does not exist", path)
+		}
+	}
+
+	var evaluator pklgo.Evaluator
+
+	// Check if there's a PklProject in the directory tree
+	var projectDir string
+	if path != "" {
+		projectDir = WalkForProjectFile(filepath.Dir(path))
+	}
+
+	var cleanup func()
+	if projectDir != "" {
+		evaluator, cleanup, err = newSafeProjectEvaluator(
+			context.Background(),
+			&url.URL{Scheme: "file", Path: projectDir},
+			pklgo.WithFs(formaeFs, "formae"),
+			pklgo.WithResourceReader(libExtension{}),
+			pklgo.PreconfiguredOptions,
+		)
+	} else {
+		evaluator, err = pklgo.NewEvaluator(
+			context.Background(),
+			pklgo.WithFs(formaeFs, "formae"),
+			pklgo.WithResourceReader(libExtension{}),
+			pklgo.PreconfiguredOptions,
+		)
+		cleanup = func() { _ = evaluator.Close() }
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer cleanup()
+
+	var config *pklmodel.Config
+	err = evaluator.EvaluateModule(context.Background(), configSource, &config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to evaluate PKL configuration file '%s': %w", path, err)
+	}
+
+	return translateConfig(config), nil
+}
+
+func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
+	translated := pkgmodel.Config{
+		Agent: pkgmodel.AgentConfig{
+			Server: pkgmodel.ServerConfig{
+				Nodename:      config.Agent.Server.Nodename,
+				Hostname:      config.Agent.Server.Hostname,
+				Port:          int(config.Agent.Server.Port),
+				ErgoPort:      int(config.Agent.Server.ErgoPort),
+				RegistrarPort: int(config.Agent.Server.RegistrarPort),
+				Secret:        config.Agent.Server.Secret,
+				ObserverPort:  int(config.Agent.Server.ObserverPort),
+				TLSCert:       config.Agent.Server.TLSCert,
+				TLSKey:        config.Agent.Server.TLSKey,
+			},
+			Datastore: pkgmodel.DatastoreConfig{
+				DatastoreType: config.Agent.Datastore.DatastoreType,
+				Sqlite: pkgmodel.SqliteConfig{
+					FilePath: config.Agent.Datastore.Sqlite.FilePath,
+				},
+				Postgres: pkgmodel.PostgresConfig{
+					Host:             config.Agent.Datastore.Postgres.Host,
+					Port:             int(config.Agent.Datastore.Postgres.Port),
+					User:             config.Agent.Datastore.Postgres.User,
+					Password:         config.Agent.Datastore.Postgres.Password,
+					Database:         config.Agent.Datastore.Postgres.Database,
+					Schema:           config.Agent.Datastore.Postgres.Schema,
+					ConnectionParams: config.Agent.Datastore.Postgres.ConnectionParams,
+				},
+				AuroraDataAPI: pkgmodel.AuroraDataAPIConfig{
+					ClusterARN: config.Agent.Datastore.AuroraDataAPI.ClusterArn,
+					SecretARN:  config.Agent.Datastore.AuroraDataAPI.SecretArn,
+					Database:   config.Agent.Datastore.AuroraDataAPI.Database,
+					Region:     config.Agent.Datastore.AuroraDataAPI.Region,
+				},
+			},
+			Retry: pkgmodel.RetryConfig{
+				StatusCheckInterval: config.Agent.Retry.StatusCheckInterval.GoDuration(),
+				MaxRetries:          int(config.Agent.Retry.MaxRetries),
+				RetryDelay:          config.Agent.Retry.RetryDelay.GoDuration(),
+			},
+			Synchronization: pkgmodel.SynchronizationConfig{
+				Enabled:  config.Agent.Synchronization.Enabled,
+				Interval: config.Agent.Synchronization.Interval.GoDuration(),
+			},
+			Discovery: pkgmodel.DiscoveryConfig{
+				Enabled:                 config.Agent.Discovery.Enabled,
+				Interval:                config.Agent.Discovery.Interval.GoDuration(),
+				LabelTagKeys:            config.Agent.Discovery.LabelTagKeys,
+				ResourceTypesToDiscover: config.Agent.Discovery.ResourceTypesToDiscover,
+			},
+			Logging: pkgmodel.LoggingConfig{
+				FilePath:        config.Agent.Logging.FilePath,
+				FileLogLevel:    parseLogLevel(config.Agent.Logging.FileLogLevel),
+				ConsoleLogLevel: parseLogLevel(config.Agent.Logging.ConsoleLogLevel),
+			},
+			OTel: pkgmodel.OTelConfig{
+				Enabled:     config.Agent.OTel.Enabled,
+				ServiceName: config.Agent.OTel.ServiceName,
+				OTLP: pkgmodel.OTLPConfig{
+					Enabled:     config.Agent.OTel.OTLP.Enabled,
+					Endpoint:    config.Agent.OTel.OTLP.Endpoint,
+					Protocol:    config.Agent.OTel.OTLP.Protocol,
+					Insecure:    config.Agent.OTel.OTLP.Insecure,
+					Temporality: config.Agent.OTel.OTLP.Temporality,
+				},
+				Prometheus: pkgmodel.PrometheusConfig{
+					Enabled: config.Agent.OTel.Prometheus.Enabled,
+				},
+			},
+		},
+		Artifacts: pkgmodel.ArtifactConfig{
+			URL:      config.Artifacts.URL,
+			Username: config.Artifacts.Username,
+			Password: config.Artifacts.Password,
+		},
+		Cli: pkgmodel.CliConfig{
+			API: pkgmodel.APIConfig{
+				URL:  config.Cli.API.URL,
+				Port: int(config.Cli.API.Port),
+			},
+			DisableUsageReporting: config.Cli.DisableUsageReporting,
+		},
+		Plugins: pkgmodel.PluginConfig{
+			PluginDir:      config.Plugins.PluginDir,
+			Network:        translateDynamic(config.Plugins.Network),
+			Authentication: translateDynamic(config.Plugins.Authentication),
+		},
+	}
+
+	return &translated
+}
+
+func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaApplyMode, props map[string]string) (*pkgmodel.Forma, error) {
+	var evaluator pklgo.Evaluator
+	var err error
+
+	addSchemaContextProperties(cmd, mode, props)
+
+	projectDir := WalkForProjectFile(filepath.Dir(path))
+
+	var cleanup func()
+	if projectDir != "" {
+		evaluator, cleanup, err = newSafeProjectEvaluator(
+			context.Background(),
+			&url.URL{Scheme: "file", Path: projectDir},
+			pklgo.PreconfiguredOptions,
+			pklgo.WithResourceReader(libExtension{}),
+			func(opts *pklgo.EvaluatorOptions) {
+				opts.Properties = props
+				opts.OutputFormat = "json"
+			})
+
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		evaluator, err = pklgo.NewEvaluator(
+			context.Background(),
+			pklgo.PreconfiguredOptions,
+			pklgo.WithResourceReader(libExtension{}),
+			func(opts *pklgo.EvaluatorOptions) {
+				opts.Properties = props
+				opts.OutputFormat = "json"
+			})
+		cleanup = func() { _ = evaluator.Close() }
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	defer cleanup()
+
+	// Render PKL
+	result, err := evaluator.EvaluateOutputText(context.Background(), pklgo.FileSource(path))
+	if err != nil {
+		return nil, err
+	}
+
+	// Marshal to struct
+	var forma *pkgmodel.Forma
+	err = json.Unmarshal([]byte(result), &forma)
+	if err != nil {
+		return nil, err
+	}
+
+	return forma, nil
+}
+
+func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+	res := schema.GenerateSourcesResult{}
+
+	code, err := p.SerializeForma(forma, &schema.SerializeOptions{Schema: "pkl", SchemaLocation: schemaLocation})
+	if err != nil {
+		slog.Error(err.Error())
+		return schema.GenerateSourcesResult{}, schema.ErrFailedToGenerateSources
+	}
+	res.ResourceCount = len(forma.Resources)
+
+	// add .pkl to path if not present
+	if !strings.HasSuffix(path, ".pkl") {
+		path = path + ".pkl"
+	}
+	res.TargetPath = path
+
+	// Ensure parent directory exists
+	parentDir := filepath.Dir(path)
+	if err = os.MkdirAll(parentDir, 0755); err != nil {
+		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to create parent directory: %v", err)
+	}
+
+	projectFile := filepath.Join(parentDir, "PklProject")
+	if _, err = os.Stat(projectFile); os.IsNotExist(err) {
+		// Build package dependencies using PackageResolver
+		resolver := NewPackageResolver()
+
+		// Configure local schema resolution if requested
+		if schemaLocation == schema.SchemaLocationLocal {
+			homeDir, err := os.UserHomeDir()
+			if err == nil {
+				pluginsDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
+				resolver.WithLocalSchemas(pluginsDir)
+			}
+		}
+
+		resolver.Add("formae", "pkl", Version)
+
+		// Extract namespaces from forma resources
+		for _, res := range forma.Resources {
+			ns := strings.ToLower(res.Namespace())
+			resolver.Add(ns, ns, Version)
+		}
+
+		// No PklProject exists, initialize it with resolved packages
+		err = p.ProjectInit(parentDir, resolver.GetPackageStrings(), schemaLocation)
+		if err != nil {
+			return schema.GenerateSourcesResult{}, fmt.Errorf("failed to initialize Pkl project: %v", err)
+		}
+		res.InitializedNewProject = true
+		res.ProjectPath = parentDir
+		fmt.Println("Initialized new Pkl project at", parentDir)
+	}
+
+	err = os.WriteFile(path, []byte(code), 0644)
+	if err != nil {
+		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to write Pkl file: %v", err)
+	}
+
+	// Check if PklProject.deps.json exists after writing the Pkl file
+	// Only warn for remote schema location since local schemas don't need resolution
+	depsFile := filepath.Join(parentDir, "PklProject.deps.json")
+	if _, err := os.Stat(depsFile); os.IsNotExist(err) && schemaLocation == schema.SchemaLocationRemote {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("Pkl dependencies not resolved. Run 'pkl project resolve' in '%s' to resolve Pkl dependencies.", parentDir))
+	}
+
+	return res, nil
+}
+
+func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.SchemaLocation) error {
+	var err error
+
+	if path == "" {
+		path, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	} else {
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+	}
+
+	if stat, err := os.Stat(path); os.IsNotExist(err) {
+		err = os.Mkdir(path, 0750)
+		if err != nil {
+			return err
+		}
+	} else {
+		if !stat.IsDir() {
+			return fmt.Errorf("%s is not a directory", path)
+		}
+	}
+
+	evaluator, err := pklgo.NewEvaluator(context.Background(), pklgo.PreconfiguredOptions, pklgo.WithFs(assets, "assets"), func(opts *pklgo.EvaluatorOptions) {
+		opts.Properties = map[string]string{
+			"packages": strings.Join(include, ","),
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	projectFile, err := evaluator.EvaluateOutputText(context.Background(), pklgo.UriSource("assets:/assets/PklProjectTemplate.pkl"))
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(filepath.Join(path, "PklProject"), []byte(projectFile), 0640)
+	if err != nil {
+		return err
+	}
+
+	entryFile, err := fs.ReadFile(assets, "assets/EntryPoint.pkl")
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(filepath.Join(path, "main.pkl"), entryFile, 0640)
+	if err != nil {
+		return err
+	}
+
+	// Run pkl project resolve if there are any remote packages
+	// Local packages use import() syntax and don't need resolution
+	hasRemotePackages := false
+	for _, pkg := range include {
+		if !strings.HasPrefix(pkg, "local:") {
+			hasRemotePackages = true
+			break
+		}
+	}
+
+	if hasRemotePackages {
+		cmd := exec.Command("pkl", "project", "resolve", path)
+		if errors.Is(cmd.Err, exec.ErrDot) {
+			cmd.Err = nil
+		}
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("project resolve failed: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func (p PKL) ProjectProperties(path string) (map[string]pkgmodel.Prop, error) {
+	forma, err := p.Evaluate(path, pkgmodel.CommandEval, pkgmodel.FormaApplyModeProperties, make(map[string]string))
+	if err != nil {
+		return nil, err
+	}
+
+	return forma.Properties, nil
+}
+
+func (p PKL) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOptions) (string, error) {
+	return p.serializeWithPKL(forma, options)
+}
+
+func sanitizeConfig(v any) any {
+	return sanitizeValue(reflect.ValueOf(v))
+}
+
+func sanitizeValue(rv reflect.Value) any {
+	if !rv.IsValid() {
+		return nil
+	}
+	switch rv.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if rv.IsNil() {
+			return nil
+		}
+		return sanitizeValue(rv.Elem())
+
+	case reflect.Map:
+		out := make(map[string]any, rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			out[fmt.Sprintf("%v", iter.Key().Interface())] = sanitizeValue(iter.Value())
+		}
+		return out
+
+	case reflect.Array, reflect.Slice:
+		n := rv.Len()
+		out := make([]any, n)
+		for i := range n {
+			out[i] = sanitizeValue(rv.Index(i))
+		}
+		return out
+
+	case reflect.Struct:
+		out := make(map[string]any, rv.NumField())
+		rt := rv.Type()
+		for i := 0; i < rv.NumField(); i++ {
+			f := rt.Field(i)
+			if f.PkgPath != "" {
+				continue
+			}
+			out[f.Name] = sanitizeValue(rv.Field(i))
+		}
+		return out
+
+	default:
+		return rv.Interface()
+	}
+}
+
+func translateDynamic(dyn *pklgo.Object) json.RawMessage {
+	if dyn == nil {
+		return nil
+	}
+	safe := sanitizeConfig(dyn.Properties)
+	configJson, err := json.Marshal(safe)
+	if err != nil {
+		slog.Error("Failed to marshal target config", "error", err)
+	}
+
+	return configJson
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// newSafeProjectEvaluator creates a project-aware PKL evaluator without the race
+// condition in pkl-go's NewProjectEvaluator. That function internally creates two
+// evaluators on the same manager and defer-closes the first one. If the pkl subprocess
+// sends a late message for the closed evaluator, the manager's listen loop exits
+// entirely (calls return instead of continue), killing all message processing.
+// See: https://github.com/apple/pkl-go/blob/v0.12.0/pkl/evaluator_exec.go#L57-L84
+//
+// This function keeps both evaluators alive until the returned cleanup function is
+// called, which closes the entire manager.
+func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pklgo.EvaluatorOptions)) (pklgo.Evaluator, func(), error) {
+	manager := pklgo.NewEvaluatorManager()
+
+	projectEvaluator, err := manager.NewEvaluator(ctx, opts...)
+	if err != nil {
+		_ = manager.Close()
+		return nil, nil, fmt.Errorf("failed to create project evaluator: %w", err)
+	}
+
+	projectPath := projectBaseURL.JoinPath("PklProject")
+	project, err := pklgo.LoadProjectFromEvaluator(ctx, projectEvaluator, &pklgo.ModuleSource{Uri: projectPath})
+	if err != nil {
+		_ = manager.Close()
+		return nil, nil, fmt.Errorf("failed to load project: %w", err)
+	}
+
+	newOpts := []func(*pklgo.EvaluatorOptions){pklgo.WithProject(project)}
+	newOpts = append(newOpts, opts...)
+	evaluator, err := manager.NewEvaluator(ctx, newOpts...)
+	if err != nil {
+		_ = manager.Close()
+		return nil, nil, fmt.Errorf("failed to create evaluator: %w", err)
+	}
+
+	return evaluator, func() { _ = manager.Close() }, nil
+}

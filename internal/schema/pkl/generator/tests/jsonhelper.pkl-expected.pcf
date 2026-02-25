@@ -1,0 +1,62 @@
+examples {
+  ["Parse valid JSON object"] {
+    new {
+      name = "test"
+      value = 42
+      active = true
+    }
+  }
+  ["Parse valid JSON array"] {
+    new {
+      "item1"
+      "item2"
+      "item3"
+    }
+  }
+  ["Parse valid nested JSON"] {
+    new {
+      user {
+        name = "John"
+        details {
+          age = 30
+          city = "NYC"
+        }
+      }
+    }
+  }
+  ["Parse valid complex JSON"] {
+    new {
+      items {
+        new {
+          id = 1
+          name = "first"
+        }
+        new {
+          id = 2
+          name = "second"
+        }
+      }
+      meta {
+        count = 2
+      }
+    }
+  }
+  ["Parse JSON with whitespace"] {
+    new {
+      key = "value"
+      num = 123
+    }
+  }
+  ["Parse JSON with newlines"] {
+    new {
+      name = "test"
+      value = 42
+    }
+  }
+  ["Handle plain string - returns original"] {
+    "just a regular string"
+  }
+  ["Handle empty string - returns original"] {
+    ""
+  }
+}

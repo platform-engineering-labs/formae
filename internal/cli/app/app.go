@@ -17,6 +17,8 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/api"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/schema"
+	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/usage"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -75,12 +77,12 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	if path != "" {
 		contentType := filepath.Ext(path)
 
-		schemaPlugin, err := a.PluginManager.SchemaPluginByFileExtension(contentType)
+		schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(contentType)
 		if err != nil {
 			return err
 		}
 
-		a.Config, err = (*schemaPlugin).FormaeConfig(path)
+		a.Config, err = schemaPlugin.FormaeConfig(path)
 		if err != nil {
 			return fmt.Errorf("failed to load configuration from '%s': %s", path, err.Error())
 		}
@@ -90,13 +92,13 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	}
 
 	// Check for supported types first wins
-	for _, fileExtension := range a.PluginManager.SupportedFileExtensions() {
-		schemaPlugin, err := a.PluginManager.SchemaPluginByFileExtension(fileExtension)
+	for _, fileExtension := range schema.DefaultRegistry.SupportedFileExtensions() {
+		schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(fileExtension)
 		if err != nil {
 			return err
 		}
 
-		a.Config, err = (*schemaPlugin).FormaeConfig(util.ExpandHomePath(configPathPrefix + fileExtension))
+		a.Config, err = schemaPlugin.FormaeConfig(util.ExpandHomePath(configPathPrefix + fileExtension))
 		if err != nil {
 			if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not supported") {
 				continue
@@ -121,12 +123,12 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	}
 
 	// No config file found get the default from pkl
-	schemaPlugin, err := a.PluginManager.SchemaPluginByFileExtension(".pkl")
+	schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(".pkl")
 	if err != nil {
 		return err
 	}
 
-	a.Config, err = (*schemaPlugin).FormaeConfig("")
+	a.Config, err = schemaPlugin.FormaeConfig("")
 	if err != nil {
 		return err
 	}
@@ -137,9 +139,9 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 func (a *App) SupportedOutputSchemas() []string {
 	supported := []string{}
 
-	for _, schemaName := range a.PluginManager.SupportedSchemas() {
-		schemaPlugin, err := a.PluginManager.SchemaPlugin(schemaName)
-		if err == nil && (*schemaPlugin).SupportsExtract() {
+	for _, schemaName := range schema.DefaultRegistry.SupportedSchemas() {
+		schemaPlugin, err := schema.DefaultRegistry.Get(schemaName)
+		if err == nil && schemaPlugin.SupportsExtract() {
 			supported = append(supported, schemaName)
 		}
 	}
@@ -148,12 +150,12 @@ func (a *App) SupportedOutputSchemas() []string {
 }
 
 func (a *App) IsSupportedOutputSchema(contentType string) bool {
-	schemaPlugin, err := a.PluginManager.SchemaPlugin(contentType)
+	schemaPlugin, err := schema.DefaultRegistry.Get(contentType)
 	if err != nil {
 		return false
 	}
 
-	return (*schemaPlugin).SupportsExtract()
+	return schemaPlugin.SupportsExtract()
 }
 
 func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApplyMode, simulate bool, force bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -168,11 +170,11 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 		return nil, nil, err
 	}
 	contentType := filepath.Ext(path)
-	schemaPlugin, err := a.PluginManager.SchemaPluginByFileExtension(contentType)
+	schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(contentType)
 	if err != nil {
 		return nil, nil, err
 	}
-	forma, err := (*schemaPlugin).Evaluate(path, pkgmodel.CommandApply, mode, props)
+	forma, err := schemaPlugin.Evaluate(path, pkgmodel.CommandApply, mode, props)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
@@ -212,12 +214,12 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 	var resp *apimodel.SubmitCommandResponse
 	if path != "" {
 		contentType := filepath.Ext(path)
-		schemaPlugin, err := a.PluginManager.SchemaPluginByFileExtension(contentType)
+		schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(contentType)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		forma, err := (*schemaPlugin).Evaluate(path, pkgmodel.CommandDestroy, pkgmodel.FormaApplyModeReconcile, props)
+		forma, err := schemaPlugin.Evaluate(path, pkgmodel.CommandDestroy, pkgmodel.FormaApplyModeReconcile, props)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 				err,
@@ -452,12 +454,12 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {
 	contentType := filepath.Ext(path)
 
-	schemaPlugin, err := a.PluginManager.SchemaPluginByFileExtension(contentType)
+	schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(contentType)
 	if err != nil {
 		return nil, err
 	}
 
-	forma, err := (*schemaPlugin).Evaluate(path, pkgmodel.CommandEval, mode, props)
+	forma, err := schemaPlugin.Evaluate(path, pkgmodel.CommandEval, mode, props)
 	if err != nil {
 		return nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
@@ -471,24 +473,24 @@ func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.Forma
 	return forma, nil
 }
 
-func (a *App) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOptions) (string, error) {
-	schemaPlugin, err := a.PluginManager.SchemaPlugin(options.Schema)
+func (a *App) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOptions) (string, error) {
+	schemaPlugin, err := schema.DefaultRegistry.Get(options.Schema)
 	if err != nil {
 		return "", err
 	}
 
-	return (*schemaPlugin).SerializeForma(forma, options)
+	return schemaPlugin.SerializeForma(forma, options)
 }
 
-func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (plugin.GenerateSourcesResult, error) {
-	schemaPlugin, err := a.PluginManager.SchemaPlugin(outputSchema)
+func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (schema.GenerateSourcesResult, error) {
+	schemaPlugin, err := schema.DefaultRegistry.Get(outputSchema)
 	if err != nil {
-		return plugin.GenerateSourcesResult{}, err
+		return schema.GenerateSourcesResult{}, err
 	}
 	// Extract always uses local schema resolution
 	includes, _ := a.Projects.formatIncludes(outputSchema, []string{"aws@local"})
 
-	return (*schemaPlugin).GenerateSourceCode(forma, targetPath, includes, plugin.SchemaLocationLocal)
+	return schemaPlugin.GenerateSourceCode(forma, targetPath, includes, schema.SchemaLocationLocal)
 }
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
@@ -570,7 +572,7 @@ func (p *Plugins) List() []*plugin.Plugin {
 }
 
 func (p *Plugins) SupportedSchemas() []string {
-	return p.pluginManager.SupportedSchemas()
+	return schema.DefaultRegistry.SupportedSchemas()
 }
 
 // Projects
@@ -587,7 +589,7 @@ func (p *Projects) Init(path string, format string, include []string) error {
 
 		// Determine schema location: if all packages are local, use local; otherwise remote
 		// The PKL plugin will run 'pkl project resolve' only for remote packages
-		location := plugin.SchemaLocationRemote
+		location := schema.SchemaLocationRemote
 		allLocal := true
 		for _, inc := range includes {
 			if !strings.HasPrefix(inc, "local:") {
@@ -596,15 +598,15 @@ func (p *Projects) Init(path string, format string, include []string) error {
 			}
 		}
 		if allLocal {
-			location = plugin.SchemaLocationLocal
+			location = schema.SchemaLocationLocal
 		}
 
-		schemaPlugin, err := p.pluginManager.SchemaPluginByFileExtension(".pkl")
+		schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(".pkl")
 		if err != nil {
 			return err
 		}
 
-		err = (*schemaPlugin).ProjectInit(path, includes, location)
+		err = schemaPlugin.ProjectInit(path, includes, location)
 		if err != nil {
 			return err
 		}
@@ -746,10 +748,10 @@ func (p *Projects) findInstalledPlugin(namespace string) (schemaPath string, ver
 func (p *Projects) Properties(path string) (map[string]pkgmodel.Prop, error) {
 	contentType := filepath.Ext(path)
 
-	schemaPlugin, err := p.pluginManager.SchemaPluginByFileExtension(contentType)
+	schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(contentType)
 	if err != nil {
 		return nil, err
 	}
 
-	return (*schemaPlugin).ProjectProperties(path)
+	return schemaPlugin.ProjectProperties(path)
 }

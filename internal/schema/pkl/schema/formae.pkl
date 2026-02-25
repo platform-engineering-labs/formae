@@ -1,0 +1,598 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module Formae
+
+import "pkl:reflect"
+
+open class Description {
+    hidden text: String
+
+    /// Prompt forces the CLI to wait for user to confirm they have read the description
+    hidden confirm: Boolean
+
+    // Output
+    fixed Text: String = text
+    fixed Confirm: Boolean = confirm
+}
+
+open class Resource {
+    label: String
+    group: String?
+    target: TargetResolvable?
+    stack: StackResolvable?
+    fixed managed: Boolean = true
+
+    local self = this
+    function fields(): Listing<String> = module.fq.fields(reflect.Class(this.getClass()))
+    function hints(): Mapping<String, FieldHint> = module.fq.hints(reflect.Class(this.getClass()))
+    function schema(): Schema = module.fq.schema(reflect.Class(this.getClass()))
+    function type(): String = module.fq.type(reflect.Class(this.getClass()))
+    function props(): Dynamic = module.fq.resourceProps(reflect.Class(this.getClass()), this)
+
+    function render(): Dynamic = new {
+        Label = self.label
+        Group = self.group
+        Target = self.target
+        Stack = self.stack
+        Managed = self.managed
+
+        Type = self.type()
+        Schema = self.schema()
+        Properties = self.props()
+    }
+}
+
+open class SubResource {
+    function props(): Dynamic = module.fq.subresourceProps(reflect.Class(this.getClass()), this)
+    function render(): Dynamic = this.props()
+}
+
+open class Stack {
+    hidden label: String(length > 0)
+    hidden description: String
+    hidden policies: Listing<Policy|PolicyResolvable>?
+
+    local parent = this
+    hidden res: StackResolvable = new {
+        label = parent.label
+    }
+
+    // Output
+    fixed Label: String = label
+    fixed Description: String = description
+    fixed Policies: Listing<Dynamic>? = policies?.toList()?.map((p) ->
+        if (p is PolicyResolvable)
+            new Dynamic { `$ref` = "policy://\(p.label)" }
+        else
+            p.render()
+    )?.toListing()
+}
+
+open class StackResolvable extends Resolvable {
+    hidden type = "Formae::Stack"
+}
+
+// Policy base class - all policies extend this
+abstract class Policy {
+    hidden label: String?
+
+    local self = this
+    hidden res: PolicyResolvable = new {
+        label = self.label
+    }
+
+    abstract function render(): Dynamic
+}
+
+// Reference type for policies (future: shared/standalone policies)
+open class PolicyResolvable extends Resolvable {
+    hidden type = "Formae::Policy"
+}
+
+// TTL Policy - destroys stack after duration
+open class TTLPolicy extends Policy {
+    hidden ttl: Duration
+    hidden onDependents: ("abort"|"cascade") = "abort"
+
+    local self = this
+    // Output
+    function render(): Dynamic = new {
+        Type = "ttl"
+        Label = self.label
+        TTLSeconds = self.ttl.toUnit("s").value.toInt()
+        OnDependents = self.onDependents
+    }
+}
+
+// Auto-Reconcile Policy - periodically reconciles stack to declared state
+open class AutoReconcilePolicy extends Policy {
+    hidden interval: Duration
+
+    local self = this
+    // Output
+    function render(): Dynamic = new {
+        Type = "auto-reconcile"
+        Label = self.label
+        IntervalSeconds = self.interval.toUnit("s").value.toInt()
+    }
+}
+
+/// DEPRECATED: Use aws#Tag instead.
+/// This class will be removed in a future version.
+/// AWS resources should use `aws.Tag` from `@aws/aws.pkl`.
+@Deprecated { message = "Use aws#Tag instead" }
+open class Tag {
+    hidden key: String
+    hidden value: Any
+
+    fixed Key: String = key
+    fixed Value: Any = value
+}
+
+open class ResourceHint extends Annotation {
+    /// Resource Type
+    type: String(matches(Regex(#"^.*::.*::.*$"#)))
+    /// Property to store as the NativeId following create
+    identifier: String
+    /// Type of parent resource
+    parent: String?
+    /// Parent Property required for list operations
+    listParam: (ListProperty|List<ListProperty>)?
+    /// Property that dictates whether a resource is blocked from discovery
+    discoverable: Boolean = true
+    /// Property that dictates whether a resource is extractable via the CLI
+    extractable: Boolean = true
+    /// DocComment
+    docComment: String?
+
+    hidden outputKeyTransformation: (String) -> String = (it) -> it
+}
+
+open class SubResourceHint extends Annotation {
+    hidden outputKeyTransformation: (String) -> String = (it) -> it
+}
+
+open class ListProperty {
+    // Name of the property in the parent resource
+    hidden parentProperty: String
+    // Name of the parameter the LIST API accepts to query nested resources
+    hidden listParameter: String
+
+    fixed ParentProperty: String = parentProperty
+    fixed ListParameter: String = listParameter
+}
+
+typealias FieldUpdateMethod = "Array"|"EntitySet"|"Set"
+
+open class FieldHint extends Annotation {
+    hidden createOnly: Boolean = false
+    hidden writeOnly: Boolean = false
+    hidden required: Boolean = false
+    hidden requiredOnCreate: Boolean = false
+    hidden hasProviderDefault: Boolean = false
+    hidden indexField: String?
+    hidden updateMethod: FieldUpdateMethod?
+
+    hidden outputField: String?
+    hidden outputTransformation: ((Any) -> Any)?
+    hidden outputCondition: ((Any) -> Boolean) = (_) -> true
+
+    // Output
+    fixed CreateOnly: Boolean = createOnly
+    fixed WriteOnly: Boolean = writeOnly
+    fixed Required: Boolean = required
+    fixed RequiredOnCreate: Boolean = requiredOnCreate
+    fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed UpdateMethod: String = updateMethod ?? ""
+    fixed IndexField: String = indexField ?? ""
+}
+
+// Schema output class
+open class Schema {
+    /// Property to store as the NativeId following create
+    Identifier: String
+    /// All the fields that can be set by user on the resource which are the Properties keys
+    Fields: Listing<String>
+    /// Hints fields and their annotations
+    Hints: Mapping<String, FieldHint>?
+    /// Property that dictates whether a resource is blocked from discovery
+    Discoverable: Boolean = true
+    /// Property that dictates whether a resource can be extracted to PKL
+    Extractable: Boolean = true
+
+    /// Query fields by FieldHint property
+    function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
+}
+
+open class Target {
+    hidden label: String
+    hidden namespace: String = config.type.toUpperCase()
+    hidden config: Any?
+    hidden discoverable: Boolean = true
+
+    local self = this
+    hidden res: TargetResolvable = new {
+        label = self.label
+    }
+
+    // Output
+    fixed Label: String = label
+    fixed Namespace: String = namespace
+    fixed Config: Any? = config
+    fixed Discoverable: Boolean = discoverable
+}
+
+open class TargetResolvable extends Resolvable {
+    hidden type = "Formae::Target"
+}
+
+open class Resolvable {
+    hidden label: String? // needs to be optional but is required for reflection initialisation to generate resolvable
+    hidden type: String(matches(Regex(#"^.*::.*$"#)))? // needs to be optional but is required for reflection initialisation to generate resolvable
+    hidden stack: String?
+    hidden property: String?
+    hidden visibility: "Clear"|"Opaque" = "Clear"
+
+    hidden opaque: Resolvable = (this) {
+        visibility = "Opaque"
+    }
+
+    $label: String? = label // see label
+    $property: String? = property
+    $stack: String? = stack
+    $type: String? = type // see type
+
+    $res: Boolean = true
+    $visibility: String = visibility
+}
+
+open class Value {
+    hidden value: String
+    hidden visibility: "Clear"|"Opaque" = "Clear"
+    hidden strategy: "Update"|"SetOnce" = "Update"
+
+    hidden opaque: Value = (this) {
+        visibility = "Opaque"
+    }
+
+    hidden setOnce: Value = (this) {
+        strategy = "SetOnce"
+    }
+
+    $value: String = value
+    $visibility: String = visibility
+    $strategy: String = strategy
+}
+
+open class Prop {
+    hidden flag: String?
+    hidden default: (String|Boolean|Int|Float)?
+    hidden type: Class = default?.getClass() ?? String
+    hidden value: (String|Boolean|Int|Float)? =
+        let (val = read?("prop:\(flag)"))
+        if (val == null && default != null)
+            default
+        else if (type == Int)
+            if (val == null)
+                0
+            else
+                val.toIntOrNull()
+        else if (type == Float)
+            if (val == null)
+                0.00
+            else
+                val.toFloatOrNull()
+        else if (type == Boolean)
+            if (val == null)
+                false
+            else
+                val.toBooleanOrNull()
+        else
+            val.toString()
+
+    // Output
+    fixed Flag: String? = flag
+    fixed Default: (String|Boolean|Int|Float)? = default
+    fixed Type: Class = type
+    fixed Value: (String|Boolean|Int|Float)? = value
+}
+
+/// FormaeRender is an ouput class notice the casing difference
+class FormaRender {
+    local self = this
+
+    Description: Description?
+    Properties: Dynamic?
+    Stacks: Listing<Stack>
+    Targets: Listing<Target>
+    Policies: Listing<Dynamic>?
+    Resources: Listing<Resource>(validate(this))
+    hidden Resolvables: Listing<Resolvable>
+
+    function getResource(label: String, type: String): Resource = Resources.toList().find((resource) -> resource.label == label && resource.type() == type)
+
+    function hasStack(res: Resource): Boolean =
+    (self.Stacks.any((stack) -> stack.label == res.stack.label)
+    || self.Resolvables.any((stack) -> stack.getClass() == StackResolvable && stack.label == res.stack.label))
+    || throw("stack: \(res.stack) not found for resource: \(res.label)")
+
+    function hasTarget(res: Resource): Boolean =
+    (self.Targets.any((target) -> target.label == res.target.label)
+    || self.Resolvables.any((target) -> target.getClass() == TargetResolvable && target.label == res.target.label))
+    || throw("target: \(res.target) not found for resource: \(res.label)")
+
+    function distinctRes(resources: Listing<Resource>): Boolean =
+    (resources.isDistinctBy((res) -> res.getClass().toString()+"#"+res.label)
+    || throw("duplicate resource labels: \(resources.toList().map((res) -> if (resources.toList().count((c) -> c.label == res.label && c.getClass() == res.getClass()) > 1 ) "type: " + res.getClass().toString() + " -> label: " + res.label else null).filter((res)-> res != null) )"))
+
+    function validateResolvableLabels(resources: Listing<Resource>): Boolean =
+        resources.every((res) -> validateResourceResolvables(res))
+        || throw("Resources contain resolvables without labels")
+
+    function validateResourceResolvables(resource: Resource): Boolean =
+        let (resourceClass = reflect.Class(resource.getClass()))
+        let (resolvableProperties = resourceClass.properties.filter((_, prop) ->
+            prop.type.toString().contains("Resolvable")
+        ))
+        resolvableProperties.every((propName, prop) ->
+            let (resolvableValue = resource.getPropertyOrNull(propName))
+            if (resolvableValue != null)
+                validateResolvable(resolvableValue, resource.label, propName)
+            else
+                true
+        )
+
+    function validateResolvable(resolvable: Any, resourceLabel: String, propertyName: String): Boolean =
+    if (resolvable is Listing || resolvable is List)
+        resolvable.every((item) ->
+            validateSingleResolvable(item, resourceLabel, propertyName)
+        )
+    else
+        validateSingleResolvable(resolvable, resourceLabel, propertyName)
+
+    function validateSingleResolvable(resolvable: Any, resourceLabel: String, propertyName: String): Boolean =
+    // First check if this is actually a Resolvable or its subtype
+    if (resolvable is Resolvable)
+        // Check label
+        if (resolvable.label == null)
+            throw("Resolvable in resource '\(resourceLabel)' property '\(propertyName)' is missing required label")
+        else
+            true
+    else
+        true
+
+    function validate(resources: Listing<Resource>): Boolean =
+    resources.every((res) -> hasStack(res))
+    && resources.every((res) -> hasTarget(res))
+    && distinctRes(resources)
+    && validateResolvableLabels(resources)
+
+}
+
+function flag(key: String): String? = read?("prop:\(key)")
+
+function cmd(): String = read?("prop:$cmd") ?? "eval"
+function mode(): String = read?("prop:$mode") ?? "replace"
+
+function value(val: String) = new Value {
+    value = val
+}
+
+// Fq Formae query functions can be used globally
+class Fq {
+    function fields(resourceClass: reflect.Class): Listing<String> = new Listing<String> {
+        for (k, _ in hints(resourceClass)) {
+            k
+        }
+    }
+
+    function findResourceHint(resourceClass: reflect.Class?): ResourceHint =
+      resourceClass.annotations.filterIsInstance(ResourceHint).firstOrNull ?? findResourceHint(resourceClass.superclass)
+
+    function findSubResourceHint(resourceClass: reflect.Class?): SubResourceHint? =
+      if (resourceClass == null)
+        null
+      else
+        resourceClass.annotations.filterIsInstance(SubResourceHint).firstOrNull ?? findSubResourceHint(resourceClass.superclass)
+
+    function hints(resourceClass: reflect.Class): Mapping<String, FieldHint> =
+        let(resourceHint = findResourceHint(resourceClass))
+        let(directHints = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(baseHint = (fieldHint) {
+                required = !(v.type is reflect.NullableType)
+            })
+            Pair(key, baseHint)
+        ))
+        let(nestedHints = resourceClass.properties.filter((_, v) ->
+            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(subResourceClass = getSubResourceClass(v.type))
+
+            let(subHintsMap = subHints(subResourceClass))
+            subHintsMap.toMap().map((subKey, subHint) ->
+                Pair(parentKey + "." + subKey, subHint)
+            )
+           ))
+
+        (directHints.toMap() + nestedHints.toMap()).toMapping()
+
+    function subHints(subResourceClass: reflect.Class): Mapping<String, FieldHint> =
+        let(subResourceHint = findSubResourceHint(subResourceClass))
+        let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
+        let(directHints = subResourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
+            let(baseHint = (fieldHint) {
+                required = !(v.type is reflect.NullableType)
+            })
+            Pair(key, baseHint)
+        ))
+        let(nestedHints = subResourceClass.properties.filter((_, v) ->
+            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
+            let(nestedSubResourceClass = getSubResourceClass(v.type))
+            let(nestedSubHints = subHints(nestedSubResourceClass))
+
+            nestedSubHints.toMap().map((subKey, subHint) ->
+                Pair(parentKey + "." + subKey, subHint)
+            )
+        ))
+
+        (directHints.toMap() + nestedHints.toMap()).toMapping()
+
+    function isSubResourceType(type: reflect.Type): Boolean =
+        if (type is reflect.DeclaredType)
+            let(referent = type.referent)
+            if (referent is reflect.Class)
+                isSubResourceClass(referent)
+            else if (referent is reflect.TypeAlias)
+                // Handle type alias by checking its aliased type
+                isSubResourceType(referent.referent)
+            else
+                false
+        else if (type is reflect.NullableType)
+            isSubResourceType(type.member)
+        else
+            false
+
+    function isSubResourceClass(cls: reflect.Class): Boolean =
+        cls.superclass != null &&
+        (cls.superclass.name == "SubResource" ||
+         isSubResourceClass(cls.superclass))
+
+    function getSubResourceClass(type: reflect.Type): reflect.Class =
+        if (type is reflect.DeclaredType)
+            let(referent = type.referent)
+            if (referent is reflect.Class)
+                referent
+            else if (referent is reflect.TypeAlias)
+                // Handle type alias by getting the class from the aliased type
+                getSubResourceClass(referent.referent)
+            else
+                throw("Expected Class or TypeAlias for SubResource, got: \(referent.getClass())")
+        else if (type is reflect.NullableType)
+            getSubResourceClass(type.member)
+        else
+            throw("Expected DeclaredType for SubResource")
+
+    function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
+        let(subResourceHint = findSubResourceHint(resourceClass))
+        resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            if (fieldHint != null && subResource.getPropertyOrNull(k) != null && fieldHint.outputCondition.apply(subResource.getPropertyOrNull(k)))
+                let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
+                if (fieldHint.outputTransformation != null)
+                    Pair(key, fieldHint.outputTransformation.apply(subResource.getPropertyOrNull(k)))
+                else
+                    Pair(key, subResource.getPropertyOrNull(k))
+            else
+                let(key = subResourceHint.outputKeyTransformation.apply(k))
+                Pair(key, subResource.getPropertyOrNull(k))
+        ).toDynamic()
+
+    function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
+        let(resourceHint = findResourceHint(resourceClass))
+        resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            if (fieldHint.outputTransformation != null && resource.getPropertyOrNull(k) != null && fieldHint.outputCondition.apply(resource.getPropertyOrNull(k)))
+                Pair(key, fieldHint.outputTransformation.apply(resource.getPropertyOrNull(k)))
+            else
+                Pair(key, resource.getPropertyOrNull(k))
+        ).toDynamic()
+
+    function schema(resourceClass: reflect.Class): Schema =
+        let (hint = findResourceHint(resourceClass))
+            new Schema {
+                Identifier = hint.identifier
+                Fields = fields(resourceClass)
+                Hints = hints(resourceClass)
+                Discoverable = hint.discoverable
+                Extractable = hint.extractable
+            }
+
+    function type(resourceClass: reflect.Class): String =
+      let (resourceHint = findResourceHint(resourceClass))
+      resourceHint.getProperty("type")
+
+    function reverseFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
+        let(resourceHint = findResourceHint(resourceClass))
+        let(directMapping = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(outputKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            Pair(outputKey, k)
+        ))
+        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(subResourceClass = getSubResourceClass(v.type))
+            let(subMapping = reverseSubResourceFieldMapping(subResourceClass))
+
+            subMapping.toMap().map((outputKey, pklKey) ->
+                Pair(parentKey + "." + outputKey, k + "." + pklKey)
+            )
+        ))
+
+        (directMapping.toMap() + nestedMapping.toMap()).toMapping()
+
+    function reverseSubResourceFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
+        let(subResourceHint = findSubResourceHint(resourceClass))
+        let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
+        // Include ALL properties, not just those with @FieldHint
+        let(directMapping = resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(outputKey =
+                if (fieldHint != null && fieldHint.outputField != null)
+                    fieldHint.outputField
+                else
+                    outputKeyTransformation.apply(k)
+            )
+            Pair(outputKey, k)
+        ))
+        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+            !v.modifiers.contains("hidden") &&
+            isSubResourceType(v.type)
+        ).flatMap((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+            let(parentKey =
+                if (fieldHint != null && fieldHint.outputField != null)
+                    fieldHint.outputField
+                else
+                    outputKeyTransformation.apply(k)
+            )
+            let(nestedSubResourceClass = getSubResourceClass(v.type))
+            let(nestedSubMapping = reverseSubResourceFieldMapping(nestedSubResourceClass))
+
+            nestedSubMapping.toMap().map((outputKey, pklKey) ->
+                Pair(parentKey + "." + outputKey, k + "." + pklKey)
+            )
+        ))
+
+        (directMapping.toMap() + nestedMapping.toMap()).toMapping()
+}
+
+const fq: Fq = new Fq{}
+
+class Transform {
+    capitalizeMemberKeys: (Any) -> Dynamic = (it) -> it.toList().map((tag) -> tag.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic())
+    capitalizeKeys: (Any) -> Dynamic = (it) -> it.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+    toString: (Any) -> String = (it) -> it.toString()
+}
+
+const transform: Transform = new Transform{}

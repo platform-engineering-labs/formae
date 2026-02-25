@@ -1,0 +1,51 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+import "pkl:reflect"
+
+
+open class DocResource {
+    Type: String
+    Discoverable: String = "❌"
+    Extractable: String = "❌"
+    Comment: String = ""
+    function convert() = """
+    | \(Type) | \(Discoverable) | \(Extractable) | \(Comment) |
+    """
+
+}
+
+
+function DocumentAllResources() = new Listing<String> {
+    for (moduleName, moduleValue in import*("@aws/*/*.pkl").toMap()) {
+        when(reflect.Module(moduleValue).classes.length > 0) {
+            for (className, v in reflect.Module(moduleValue).classes) {
+                when(v.annotations.length > 0 && v.annotations[0].getClass().simpleName == "ResourceHint") {
+                    new DocResource {
+                        //Type = v.properties["_MAGIC"].defaultValue.Schema.Type
+                        Type = v.annotations[0].getProperty("type")
+                        Discoverable = if (v.annotations[0].getProperty("discoverable")) "✅" else "❌"
+                        Extractable = if (v.annotations[0].getProperty("extractable")) "✅" else "❌"
+                        Comment = v.annotations[0].getProperty("docComment") ?? ""
+                    }.convert()
+                }
+            }
+        }
+    }
+}
+
+
+output {
+  text = """
+  # AWS infrastructure
+
+  Current supported resource types for AWS are listed here. The listed resources are available in PKL, extractable or discoverable. If a resource is listed here it's available in our AWS.
+
+  | Type | Discoverable | Extractable | Comment |
+  |------|--------------|-------------|---------|
+  \(DocumentAllResources().toList().join("\n"))
+  """
+}

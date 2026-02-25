@@ -1,0 +1,184 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Tests for PklProjectTemplate.pkl
+///
+/// This tests the template that generates PklProject files with support for:
+/// - Remote packages: plugin.name@version (e.g., pkl.formae@1.0.0)
+/// - Local packages: local:name:path (e.g., local:aws:/path/to/PklProject)
+module formae.plugin.test.PklProjectTemplateTest
+
+amends "pkl:test"
+
+import "pkl:semver"
+
+// Import the template module for testing
+import "../PklProjectTemplate.pkl"
+
+// Test version constant - use a stable test version that won't change
+local testVersion = "1.0.0"
+
+facts {
+  // ===== Remote Package Format Tests =====
+
+  ["remote package format: plugin.name@version is parsed correctly"] {
+    local p = "pkl.formae@\(testVersion)"
+    !p.startsWith("local:")
+    p.split(".")[0] == "pkl"
+    p.split(".")[1].split("@")[0] == "formae"
+    p.split("@")[1] == testVersion
+  }
+
+  ["remote package uri is constructed correctly"] {
+    local plugin = "pkl"
+    local name = "formae"
+    local uri = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(name)@\(testVersion)"
+    uri == "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@\(testVersion)"
+  }
+
+  ["aws remote package uri is constructed correctly"] {
+    local plugin = "aws"
+    local name = "aws"
+    local uri = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(name)@\(testVersion)"
+    uri == "package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@\(testVersion)"
+  }
+
+  // ===== Local Package Format Tests =====
+
+  ["local package format: local:name:path is detected correctly"] {
+    local p = "local:aws:/opt/pel/formae/packages/aws/schema/pkl/PklProject"
+    p.startsWith("local:")
+  }
+
+  ["local package name is extracted correctly"] {
+    local p = "local:aws:/opt/pel/formae/packages/aws/schema/pkl/PklProject"
+    p.split(":")[1] == "aws"
+  }
+
+  ["local package path is extracted correctly"] {
+    local p = "local:aws:/opt/pel/formae/packages/aws/schema/pkl/PklProject"
+    local name = p.split(":")[1]
+    local path = p.replaceFirst("local:" + name + ":", "")
+    path == "/opt/pel/formae/packages/aws/schema/pkl/PklProject"
+  }
+
+  ["local package with colons in path is extracted correctly"] {
+    // Windows-style paths or paths with colons
+    local p = "local:gcp:C:/Users/dev/gcp/PklProject"
+    local name = p.split(":")[1]
+    local path = p.replaceFirst("local:" + name + ":", "")
+    name == "gcp"
+    path == "C:/Users/dev/gcp/PklProject"
+  }
+
+  // ===== Package Classification Tests =====
+
+  ["package is correctly classified as remote when no local: prefix"] {
+    local packages = List("pkl.formae@\(testVersion)", "aws.aws@\(testVersion)")
+    local remotePkgs = packages.filter((p) -> !p.startsWith("local:"))
+    local localPkgs = packages.filter((p) -> p.startsWith("local:"))
+    remotePkgs.length == 2
+    localPkgs.length == 0
+  }
+
+  ["package is correctly classified as local when has local: prefix"] {
+    local packages = List("local:aws:/path/to/aws", "local:gcp:/path/to/gcp")
+    local remotePkgs = packages.filter((p) -> !p.startsWith("local:"))
+    local localPkgs = packages.filter((p) -> p.startsWith("local:"))
+    remotePkgs.length == 0
+    localPkgs.length == 2
+  }
+
+  ["mixed packages are classified correctly"] {
+    local packages = List("pkl.formae@\(testVersion)", "local:aws:/path/to/aws", "gcp.gcp@\(testVersion)")
+    local remotePkgs = packages.filter((p) -> !p.startsWith("local:"))
+    local localPkgs = packages.filter((p) -> p.startsWith("local:"))
+    remotePkgs.length == 2
+    localPkgs.length == 1
+  }
+
+  // ===== Output Format Tests =====
+
+  ["remote dependency output format is correct"] {
+    local plugin = "pkl"
+    local name = "formae"
+    local uri = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(name)@\(testVersion)"
+    local output = "  [\"\(name)\"] {\n    uri = \"\(uri)\"\n  }"
+    output.contains("[\"formae\"]")
+    output.contains("uri = \"package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@\(testVersion)\"")
+  }
+
+  ["local dependency output format uses import()"] {
+    local name = "aws"
+    local path = "/opt/pel/formae/packages/aws/schema/pkl/PklProject"
+    local output = "  [\"\(name)\"] = import(\"\(path)\")"
+    output == "  [\"aws\"] = import(\"/opt/pel/formae/packages/aws/schema/pkl/PklProject\")"
+  }
+
+  // ===== Semver Tests =====
+
+  ["semver parses valid version"] {
+    local v = semver.Version(testVersion)
+    v.major == 1
+    v.minor == 0
+    v.patch == 0
+  }
+
+  ["semver parses version with prerelease"] {
+    local v = semver.Version("1.0.0-beta.1")
+    v.major == 1
+    v.minor == 0
+    v.patch == 0
+  }
+
+  ["semver parses multi-digit version"] {
+    local v = semver.Version("10.20.30")
+    v.major == 10
+    v.minor == 20
+    v.patch == 30
+  }
+}
+
+examples {
+  ["parsing remote package"] {
+    local p = "pkl.formae@\(testVersion)"
+    new Mapping {
+      ["plugin"] = p.split(".")[0]
+      ["name"] = p.split(".")[1].split("@")[0]
+      ["version"] = p.split("@")[1]
+    }
+  }
+
+  ["parsing local package"] {
+    local p = "local:aws:/path/to/PklProject"
+    local name = p.split(":")[1]
+    new Mapping {
+      ["name"] = name
+      ["path"] = p.replaceFirst("local:" + name + ":", "")
+    }
+  }
+
+  ["generating remote dependency block"] {
+    local plugin = "pkl"
+    local name = "formae"
+    local uri = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(name)@\(testVersion)"
+    "  [\"\(name)\"] {\n    uri = \"\(uri)\"\n  }"
+  }
+
+  ["generating local dependency line"] {
+    local name = "aws"
+    local path = "/path/to/aws/PklProject"
+    "  [\"\(name)\"] = import(\"\(path)\")"
+  }
+
+  ["classifying mixed packages"] {
+    local packages = List("pkl.formae@\(testVersion)", "local:aws:/path/to/aws", "gcp.gcp@\(testVersion)")
+    new Mapping {
+      ["remote"] = packages.filter((p) -> !p.startsWith("local:"))
+      ["local"] = packages.filter((p) -> p.startsWith("local:"))
+    }
+  }
+}

@@ -1,0 +1,19 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module BCrypt
+
+import "pkl:json"
+import "URI.pkl"
+
+/// hashPassword: get a salted hash from a password
+function hashPassword(password: String): String =
+  let (uri = "libext:///bcrypt/hashPassword?password=\(URI.encodeComponent(password))")
+    let (result = new json.Parser{}.parse(read(uri)))
+      if (result.hasProperty("Error"))
+        throw("random.password error: \(result.getProperty("Error"))")
+      else
+        result.getProperty("Body").getProperty("hash")

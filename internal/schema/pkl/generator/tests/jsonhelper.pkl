@@ -1,0 +1,309 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module jsonhelpertest
+
+amends "pkl:test"
+import "../jsonhelper.pkl" as jsonhelper
+
+// Test data - Valid JSON strings (properly formatted)
+local validJsonObject =
+"""
+{"name": "test", "value": 42, "active": true}
+"""
+
+local validJsonArray =
+"""
+["item1", "item2", "item3"]
+"""
+
+local validNestedJson =
+"""
+{"user": {"name": "John", "details": {"age": 30, "city": "NYC"}}}
+"""
+
+local validComplexJson =
+"""
+{"items": [{"id": 1, "name": "first"}, {"id": 2, "name": "second"}], "meta": {"count": 2}}
+"""
+
+local validEmptyObject =
+"""
+{}
+"""
+
+local validEmptyArray =
+"""
+[]
+"""
+
+local validJsonWithNumbers =
+"""
+[1, 2.5, -3, 0.001]
+"""
+
+local validJsonWithBooleans =
+"""
+{"success": true, "error": false, "data": null}
+"""
+
+
+// Test data - Valid JSON with whitespace
+local jsonWithSpaces =
+"""
+{ "key" : "value" , "num" : 123 }
+"""
+
+local jsonWithNewlines =
+"""
+{
+  "name": "test",
+  "value": 42
+}
+"""
+
+// Test data - Invalid JSON strings
+local invalidMissingQuotes =
+"""
+{name: "test"}
+"""
+
+local invalidMissingComma =
+"""
+{"name": "test" "value": 42}
+"""
+
+local invalidTrailingComma =
+"""
+{"name": "test", "value": 42,}
+"""
+
+local invalidUnbalancedBraces =
+"""
+{"name": "test", "nested": {"key": "value"}
+"""
+
+local invalidUnbalancedBrackets =
+"""
+["item1", "item2", ["nested"]
+"""
+
+local invalidEmptyString = ""
+
+local invalidPlainString =
+"""
+just a regular string
+"""
+
+local invalidNumber =
+"""
+42
+"""
+
+local invalidBoolean =
+"""
+true
+"""
+
+local invalidJavaScript =
+"""
+{'key': 'value', func: function() {}}
+"""
+
+// Test data - Edge cases
+local stringStartingWithBrace =
+"""
+{ this is not JSON
+"""
+
+local stringEndingWithBrace =
+"""
+this is not JSON }
+"""
+
+
+examples {
+    ["Parse valid JSON object"] {
+        jsonhelper.parseJsonString(validJsonObject)
+    }
+
+    ["Parse valid JSON array"] {
+        jsonhelper.parseJsonString(validJsonArray)
+    }
+
+    ["Parse valid nested JSON"] {
+        jsonhelper.parseJsonString(validNestedJson)
+    }
+
+    ["Parse valid complex JSON"] {
+        jsonhelper.parseJsonString(validComplexJson)
+    }
+
+    ["Parse JSON with whitespace"] {
+        jsonhelper.parseJsonString(jsonWithSpaces)
+    }
+
+    ["Parse JSON with newlines"] {
+        jsonhelper.parseJsonString(jsonWithNewlines)
+    }
+
+    ["Handle plain string - returns original"] {
+        jsonhelper.parseJsonString(invalidPlainString)
+    }
+
+    ["Handle empty string - returns original"] {
+        jsonhelper.parseJsonString(invalidEmptyString)
+    }
+}
+
+facts {
+    // Valid JSON parsing tests
+    ["Valid JSON object parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validJsonObject))
+        result is Dynamic &&
+        result.name == "test" &&
+        result.value == 42 &&
+        result.active == true
+    }
+
+    ["Valid JSON array parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validJsonArray))
+        result is Listing &&
+        result.length == 3 &&
+        result[0] == "item1"
+    }
+
+    ["Valid nested JSON parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validNestedJson))
+        result is Dynamic &&
+        result.user.name == "John"
+    }
+
+    ["Valid empty object parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validEmptyObject))
+        result is String && result == "{}"
+    }
+
+    ["Valid empty array parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validEmptyArray))
+        let (i = trace(result.isEmpty))
+        result is Listing && result.isEmpty
+    }
+
+    ["JSON with numbers parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validJsonWithNumbers))
+        result is Listing &&
+        result.length == 4 &&
+        result[0] == 1 &&
+        result[1] == 2.5
+    }
+
+    ["JSON with booleans and null parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validJsonWithBooleans))
+        result is Dynamic &&
+        result.success == true &&
+        result.error == false &&
+        result.data == null
+    }
+
+    ["JSON with whitespace parses correctly"] {
+        let (result = jsonhelper.parseJsonString(jsonWithSpaces))
+        result is Dynamic &&
+        result.key == "value" &&
+        result.num == 123
+    }
+
+    ["JSON with newlines parses correctly"] {
+        let (result = jsonhelper.parseJsonString(jsonWithNewlines))
+        result is Dynamic &&
+        result.name == "test" &&
+        result.value == 42
+    }
+
+    // Invalid JSON handling tests
+    //["Invalid JSON returns original string"] {
+    //    jsonhelper.parseJsonString(invalidMissingQuotes) == invalidMissingQuotes
+    //}
+
+    //["Invalid JSON with missing comma returns original"] {
+    //    jsonhelper.parseJsonString(invalidMissingComma) == invalidMissingComma
+    //}
+
+    //["Invalid JSON with trailing comma returns original"] {
+    //    jsonhelper.parseJsonString(invalidTrailingComma) == invalidTrailingComma
+    //}
+
+    ["Invalid JSON with unbalanced braces returns original"] {
+        jsonhelper.parseJsonString(invalidUnbalancedBraces) == invalidUnbalancedBraces
+    }
+
+    ["Invalid JSON with unbalanced brackets returns original"] {
+        jsonhelper.parseJsonString(invalidUnbalancedBrackets) == invalidUnbalancedBrackets
+    }
+
+    ["Empty string returns original"] {
+        jsonhelper.parseJsonString(invalidEmptyString) == invalidEmptyString
+    }
+
+    ["Plain string returns original"] {
+        jsonhelper.parseJsonString(invalidPlainString) == invalidPlainString
+    }
+
+    ["Plain number returns original"] {
+        jsonhelper.parseJsonString(invalidNumber) == invalidNumber
+    }
+
+    ["Plain boolean returns original"] {
+        jsonhelper.parseJsonString(invalidBoolean) == invalidBoolean
+    }
+
+    ["JavaScript object notation returns original"] {
+        jsonhelper.parseJsonString(invalidJavaScript) == invalidJavaScript
+    }
+
+    // Edge case tests
+    ["String starting with brace but invalid returns original"] {
+        jsonhelper.parseJsonString(stringStartingWithBrace) == stringStartingWithBrace
+    }
+
+    ["String ending with brace but invalid returns original"] {
+        jsonhelper.parseJsonString(stringEndingWithBrace) == stringEndingWithBrace
+    }
+
+    // Type preservation tests
+    ["Parsed JSON object has correct type"] {
+        let (result = jsonhelper.parseJsonString(validJsonObject))
+        result is Dynamic
+    }
+
+    ["Parsed JSON array has correct type"] {
+        let (result = jsonhelper.parseJsonString(validJsonArray))
+        result is Listing
+    }
+
+    ["Invalid JSON preserves string type"] {
+        let (result = jsonhelper.parseJsonString(invalidPlainString))
+        result is String
+    }
+
+    // Complex structure tests
+    ["Complex nested structure parses correctly"] {
+        let (result = jsonhelper.parseJsonString(validComplexJson))
+        result is Dynamic
+    }
+
+    // Robustness tests
+    ["Function handles empty input gracefully"] {
+        jsonhelper.parseJsonString("") == ""
+    }
+
+    ["Function is idempotent for non-JSON strings"] {
+        let (nonJson = "regular string")
+        let (result1 = jsonhelper.parseJsonString(nonJson))
+        let (result2 = jsonhelper.parseJsonString(result1 as String))
+        result1 == result2
+    }
+}

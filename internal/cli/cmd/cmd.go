@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/schema"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -166,7 +167,7 @@ func IsDynamicCommand(app *app.App) (bool, string) {
 	}
 
 	for _, arg := range os.Args {
-		for _, fileExtension := range app.PluginManager.SupportedFileExtensions() {
+		for _, fileExtension := range schema.DefaultRegistry.SupportedFileExtensions() {
 			if strings.Contains(arg, fileExtension) {
 				return true, arg
 			}

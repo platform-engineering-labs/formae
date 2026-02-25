@@ -1,0 +1,35 @@
+{
+  "Targets": [
+    {
+      "Label": "fakeaws-target",
+      "Namespace": "FakeAWS",
+      "Config": {
+        "Type": "FakeAWS",
+        "Region": "us-west-2"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "vpc-stack",
+      "Description": "VPC test stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "my-vpc",
+      "Type": "FakeAWS::EC2::VPC",
+      "Stack": "vpc-stack",
+      "Target": "fakeaws-target",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true,
+        "Tags": [
+          { "Key": "Name", "Value": "my-vpc" },
+          { "Key": "Environment", "Value": "test" }
+        ]
+      }
+    }
+  ]
+}
