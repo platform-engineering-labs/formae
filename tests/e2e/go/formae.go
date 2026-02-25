@@ -285,6 +285,43 @@ func (f *FormaeCLI) ForceDiscover(t *testing.T) {
 	}
 }
 
+// ForceSync triggers an immediate synchronization cycle via `formae dev sync`.
+func (f *FormaeCLI) ForceSync(t *testing.T) {
+	t.Helper()
+	args := []string{"dev", "sync", "--config", f.configPath}
+	cmd := exec.Command(f.binaryPath, args...)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("formae dev sync failed: %v\noutput: %s", err, output)
+	}
+}
+
+// ApplyExpectRejected runs `formae apply` and expects it to fail with a
+// reconcile rejection (drift detected). Returns the stderr output for
+// optional inspection. Fails the test if the command succeeds.
+func (f *FormaeCLI) ApplyExpectRejected(t *testing.T, mode string, fixturePath string, extraArgs ...string) string {
+	t.Helper()
+
+	args := []string{
+		"apply",
+		fixturePath,
+		"--config", f.configPath,
+		"--mode", mode,
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	}
+	args = append(args, extraArgs...)
+
+	stdout, stderr, err := f.runAllowError(t, args...)
+	if err == nil {
+		t.Fatalf("expected apply to be rejected, but it succeeded\nstdout: %s", string(stdout))
+	}
+
+	t.Logf("apply rejected as expected: %s", stderr)
+	return stderr
+}
+
 // run executes the formae binary with the given arguments, capturing stdout
 // and stderr separately. It returns the raw stdout bytes. On command failure
 // it logs stderr and fails the test.
@@ -306,4 +343,18 @@ func (f *FormaeCLI) run(t *testing.T, args ...string) []byte {
 	}
 
 	return stdout.Bytes()
+}
+
+// runAllowError executes the formae binary, returning stdout, stderr, and any
+// error. Unlike run, it does not fail the test on non-zero exit.
+func (f *FormaeCLI) runAllowError(t *testing.T, args ...string) ([]byte, string, error) {
+	t.Helper()
+
+	cmd := exec.Command(f.binaryPath, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return stdout.Bytes(), stderr.String(), err
 }

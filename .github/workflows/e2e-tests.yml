@@ -83,6 +83,8 @@ jobs:
           - TestReconcileApply
           - TestPatchApply
           - TestDiscovery
+          - TestSoftReconcile
+          - TestHardReconcile
 
     steps:
       - uses: actions/checkout@v4
