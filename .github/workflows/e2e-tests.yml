@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  e2e-aws:
+  e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     if: >-
@@ -73,15 +73,23 @@ jobs:
       - name: Test AWS Access
         run: aws sts get-caller-identity
 
+      - name: Configure Azure Credentials
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Running e2e-tests (bash)
         env:
           AWS_PROFILE: e2e-test
         run: make test-e2e
 
-      - name: Running e2e-tests (Go, AWS)
+      - name: Running e2e-tests (Go)
         env:
           AWS_PROFILE: e2e-test
-        run: make test-e2e-go E2E_RUN_FLAGS='-run "/AWS"'
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: make test-e2e-go
 
       - name: Nuke Discovery
         if: ${{ always() }}
@@ -92,38 +100,3 @@ jobs:
         if: ${{ always() }}
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
-
-  e2e-azure:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' ||
-         github.event.workflow_run.conclusion == 'success' }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Install pkl
-        uses: pkl-community/setup-pkl@v0
-        with:
-          pkl-version: 0.30.0
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.25.1'
-
-      - name: Configure Azure Credentials
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Running e2e-tests (Go, Azure)
-        env:
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: make test-e2e-go E2E_RUN_FLAGS='-run "/Azure"'

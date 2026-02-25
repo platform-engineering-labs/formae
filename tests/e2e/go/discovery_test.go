@@ -28,8 +28,14 @@ func ptr(s string) *string {
 }
 
 func TestDiscovery(t *testing.T) {
-	t.Run("AWS", testDiscoveryAWS)
-	t.Run("Azure", testDiscoveryAzure)
+	t.Parallel()
+
+	bin := FormaeBinary(t)
+	agent := StartAgent(t, bin, WithDiscovery("30.s"))
+	cli := NewFormaeCLI(bin, agent.ConfigPath())
+
+	t.Run("AWS", func(t *testing.T) { testDiscoveryAWS(t, cli) })
+	t.Run("Azure", func(t *testing.T) { testDiscoveryAzure(t, cli) })
 }
 
 // testDiscoveryAWS verifies that the agent discovers unmanaged AWS IAM resources
@@ -41,11 +47,7 @@ func TestDiscovery(t *testing.T) {
 //   - 1 unmanaged Role "role-b" (out-of-band) + 2 unmanaged RolePolicies (out-of-band)
 //
 // Expected unmanaged: 2 Roles + 4 RolePolicies = 6 unmanaged resources.
-func testDiscoveryAWS(t *testing.T) {
-	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin, WithDiscovery("30.s"))
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
-
+func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 	fixture := filepath.Join(fixturesDir(t), "discovery_managed_aws.pkl")
 	commandTimeout := 2 * time.Minute
 	const nativeIDPrefix = "formae-e2e-discovery"
@@ -217,15 +219,11 @@ func testDiscoveryAWS(t *testing.T) {
 //   - 1 unmanaged RG "rg-b" (out-of-band) + 2 VNets -> each with 1 Subnet
 //
 // Expected unmanaged: 2 RGs + 4 VNets + 4 Subnets = 10 unmanaged resources.
-func testDiscoveryAzure(t *testing.T) {
+func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 	subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
 	if subscriptionID == "" {
 		t.Fatal("AZURE_SUBSCRIPTION_ID environment variable is required for Azure tests")
 	}
-
-	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin, WithDiscovery("30.s"))
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
 
 	fixture := filepath.Join(fixturesDir(t), "discovery_managed_azure.pkl")
 	commandTimeout := 5 * time.Minute

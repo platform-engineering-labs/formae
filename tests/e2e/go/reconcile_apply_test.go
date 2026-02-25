@@ -34,15 +34,17 @@ func fixturesDir(t *testing.T) string {
 }
 
 func TestReconcileApply(t *testing.T) {
-	t.Run("AWS", testReconcileApplyAWS)
-	t.Run("Azure", testReconcileApplyAzure)
-}
+	t.Parallel()
 
-func testReconcileApplyAWS(t *testing.T) {
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
 	cli := NewFormaeCLI(bin, agent.ConfigPath())
 
+	t.Run("AWS", func(t *testing.T) { testReconcileApplyAWS(t, cli) })
+	t.Run("Azure", func(t *testing.T) { testReconcileApplyAzure(t, cli) })
+}
+
+func testReconcileApplyAWS(t *testing.T, cli *FormaeCLI) {
 	fixture := filepath.Join(fixturesDir(t), "reconcile_apply_aws.pkl")
 	commandTimeout := 2 * time.Minute
 
@@ -129,15 +131,11 @@ func testReconcileApplyAWS(t *testing.T) {
 	verifyAWSRoleDeleted(t, "formae-e2e-reconcile-role")
 }
 
-func testReconcileApplyAzure(t *testing.T) {
+func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 	subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
 	if subscriptionID == "" {
 		t.Fatal("AZURE_SUBSCRIPTION_ID environment variable is required for Azure tests")
 	}
-
-	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin)
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
 
 	fixture := filepath.Join(fixturesDir(t), "reconcile_apply_azure.pkl")
 	commandTimeout := 5 * time.Minute

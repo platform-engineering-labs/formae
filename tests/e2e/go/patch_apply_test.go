@@ -13,15 +13,17 @@ import (
 )
 
 func TestPatchApply(t *testing.T) {
-	t.Run("AWS", testPatchApplyAWS)
-	t.Run("Azure", testPatchApplyAzure)
-}
+	t.Parallel()
 
-func testPatchApplyAWS(t *testing.T) {
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
 	cli := NewFormaeCLI(bin, agent.ConfigPath())
 
+	t.Run("AWS", func(t *testing.T) { testPatchApplyAWS(t, cli) })
+	t.Run("Azure", func(t *testing.T) { testPatchApplyAzure(t, cli) })
+}
+
+func testPatchApplyAWS(t *testing.T, cli *FormaeCLI) {
 	reconcileFixture := filepath.Join(fixturesDir(t), "reconcile_apply_aws.pkl")
 	patchFixture := filepath.Join(fixturesDir(t), "patch_apply_aws.pkl")
 	commandTimeout := 2 * time.Minute
@@ -94,11 +96,7 @@ func testPatchApplyAWS(t *testing.T) {
 	}
 }
 
-func testPatchApplyAzure(t *testing.T) {
-	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin)
-	cli := NewFormaeCLI(bin, agent.ConfigPath())
-
+func testPatchApplyAzure(t *testing.T, cli *FormaeCLI) {
 	reconcileFixture := filepath.Join(fixturesDir(t), "reconcile_apply_azure.pkl")
 	patchFixture := filepath.Join(fixturesDir(t), "patch_apply_azure.pkl")
 	commandTimeout := 5 * time.Minute
