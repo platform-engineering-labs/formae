@@ -31,17 +31,18 @@ import (
 )
 
 const (
-	BasePath               = "/api/v1"
-	CommandsRoute          = BasePath + "/commands"
-	CommandStatusRoute     = BasePath + "/commands/:id/status"
-	ListCommandStatusRoute = BasePath + "/commands/status"
-	CancelCommandsRoute    = BasePath + "/commands/cancel"
-	ListResourcesRoute     = BasePath + "/resources"
-	ListTargetsRoute       = BasePath + "/targets"
-	ListStacksRoute        = BasePath + "/stacks"
-	ListPoliciesRoute      = BasePath + "/policies"
-	StackDriftRoute        = BasePath + "/stacks/:stack/drift"
-	StatsRoute             = BasePath + "/stats"
+	BasePath                            = "/api/v1"
+	CommandsRoute                       = BasePath + "/commands"
+	CommandStatusRoute                  = BasePath + "/commands/:id/status"
+	ListCommandStatusRoute              = BasePath + "/commands/status"
+	CancelCommandsRoute                 = BasePath + "/commands/cancel"
+	ListResourcesRoute                  = BasePath + "/resources"
+	ListTargetsRoute                    = BasePath + "/targets"
+	ListStacksRoute                     = BasePath + "/stacks"
+	ListPoliciesRoute                   = BasePath + "/policies"
+	StackDriftRoute                     = BasePath + "/stacks/:stack/drift"
+	StackChangesSinceLastReconcileRoute = BasePath + "/stacks/:stack/changes-since-last-reconcile"
+	StatsRoute                          = BasePath + "/stats"
 
 	AdminBasePath = BasePath + "/admin"
 	SyncRoute     = AdminBasePath + "/synchronize"
@@ -194,6 +195,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.GET(ListStacksRoute, s.ListStacks)
 	e.GET(ListPoliciesRoute, s.ListPolicies)
 	e.GET(StackDriftRoute, s.ListDrift)
+	e.GET(StackChangesSinceLastReconcileRoute, s.ListDrift)
 
 	// Usage stats endpoint
 	e.GET(StatsRoute, s.Stats)
@@ -452,6 +454,7 @@ func (s *Server) ListPolicies(c echo.Context) error {
 // @Success 200 {object} apimodel.ModifiedStack "OK: Drift report for the stack."
 // @Failure 500 {string} string "Internal Server Error."
 // @Router /stacks/{stack}/drift [get]
+// @Router /stacks/{stack}/changes-since-last-reconcile [get]
 func (s *Server) ListDrift(c echo.Context) error {
 	stack := c.Param("stack")
 	drift, err := s.metastructure.ListDrift(stack)
