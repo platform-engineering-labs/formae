@@ -1,6 +1,0 @@
-amends "pkl:Project"
-
-dependencies {
-  ["formae"] = import("../schema/PklProject")
-  ["fakeaws"] = import("../../fake-aws/schema/pkl/PklProject")
-}

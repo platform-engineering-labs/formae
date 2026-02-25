@@ -35,9 +35,6 @@ clean-pel:
 
 build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
-	go build -C plugins/pkl -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl.so
-	go build -C plugins/json -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json.so
-	go build -C plugins/yaml -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml.so
 	go build -C plugins/fake-aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws.so
 	go build -C plugins/tailscale -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
@@ -87,9 +84,6 @@ install-external-plugins: build-external-plugins
 
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
-	go build -C plugins/pkl ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o pkl-debug.so
-	go build -C plugins/json ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o json-debug.so
-	go build -C plugins/yaml ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o yaml-debug.so
 	go build -C plugins/fake-aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws-debug.so
 	go build -C plugins/tailscale ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
@@ -130,14 +124,14 @@ publish-bin: pkg-bin
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
-	pkl project resolve plugins/pkl/schema
-	pkl project resolve plugins/pkl/generator
-	pkl project resolve plugins/pkl/testdata/forma
+	pkl project resolve internal/schema/pkl/schema
+	pkl project resolve internal/schema/pkl/generator
+	pkl project resolve internal/schema/pkl/testdata/forma
 	pkl project resolve pkg/plugin/descriptors/
 
 ## pkg-pkl: Package core formae schema only
 pkg-pkl:
-	pkl project package ./plugins/pkl/schema --skip-publish-check
+	pkl project package ./internal/schema/pkl/schema --skip-publish-check
 
 ## publish-pkl: Publish core formae schema to S3
 publish-pkl:
@@ -196,7 +190,6 @@ test-build:
 
 test-all: test-build test-pkl
 	go test -C ./plugins/auth-basic -tags="unit integration" -count=1 -failfast ./...
-	go test -C ./plugins/pkl -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./plugins/tailscale -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./
@@ -204,7 +197,6 @@ test-all: test-build test-pkl
 
 test-unit:
 	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...
-	go test -C ./plugins/pkl -tags=unit -failfast ./...
 	go test -C ./plugins/tailscale -tags=unit -failfast ./...
 	go test -C ./pkg/model -tags=unit -failfast ./
 	go test -C ./pkg/plugin -tags=unit -failfast ./
@@ -291,7 +283,6 @@ test-unit-summary:
 
 test-integration:
 	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
-	go test -C ./plugins/pkl -tags=integration -failfast ./...
 	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
@@ -307,21 +298,21 @@ test-property:
 	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
 
 test-schema-pkl:
-	cd plugins/pkl/schema && pkl test tests/formae.pkl
-	cd plugins/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
+	cd internal/schema/pkl/schema && pkl test tests/formae.pkl
+	cd internal/schema/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
 
 test-generator-pkl:
 	# Stage 1: Generate intermediate files from PklProject dependencies
-	cd plugins/pkl/generator && pkl eval ImportsGenerator.pkl -o imports.pkl
-	cd plugins/pkl/generator && pkl eval ResourcesGenerator.pkl -o resources.pkl
-	cd plugins/pkl/generator && pkl eval ResolvablesGenerator.pkl -o resolvables.pkl
+	cd internal/schema/pkl/generator && pkl eval ImportsGenerator.pkl -o imports.pkl
+	cd internal/schema/pkl/generator && pkl eval ResourcesGenerator.pkl -o resources.pkl
+	cd internal/schema/pkl/generator && pkl eval ResolvablesGenerator.pkl -o resolvables.pkl
 	# Stage 2: Unit tests
-	cd plugins/pkl/generator && pkl test tests/gen.pkl
-	cd plugins/pkl/generator && pkl test tests/jsonhelper.pkl
+	cd internal/schema/pkl/generator && pkl test tests/gen.pkl
+	cd internal/schema/pkl/generator && pkl test tests/jsonhelper.pkl
 	# Stage 3: Integration test - generate + validate
-	cd plugins/pkl/generator && pkl test tests/pklGenerator.pkl
+	cd internal/schema/pkl/generator && pkl test tests/pklGenerator.pkl
 	# Stage 4: Full pipeline validation - generate PKL and evaluate it
-	@cd plugins/pkl/generator && mkdir -p tmp && \
+	@cd internal/schema/pkl/generator && mkdir -p tmp && \
 	for f in examples/json/*.json; do \
 		name=$$(basename $$f .json); \
 		echo "Testing $$name..."; \
@@ -344,9 +335,6 @@ tidy-all:
 	go mod tidy
 	cd ./plugins/auth-basic && go mod tidy
 	cd ./plugins/fake-aws && go mod tidy
-	cd ./plugins/json && go mod tidy
-	cd ./plugins/yaml && go mod tidy
-	cd ./plugins/pkl && go mod tidy
 	cd ./plugins/tailscale && go mod tidy
 	cd ./tools/ppm && go mod tidy
 	cd ./pkg/model && go mod tidy

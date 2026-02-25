@@ -39,7 +39,7 @@ cat > "$PKLPROJECT_PATH" << EOF
 amends "pkl:Project"
 
 dependencies {
-  ["formae"] = import("../../../plugins/pkl/schema/PklProject")
+  ["formae"] = import("../../../internal/schema/pkl/schema/PklProject")
   ["aws"] = import("$AWS_SCHEMA_DIR/PklProject")
 }
 EOF

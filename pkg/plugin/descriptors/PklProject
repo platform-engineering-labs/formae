@@ -1,5 +1,5 @@
 amends "pkl:Project"
 
 dependencies {
-  ["formae"] = import("../../../plugins/pkl/schema/PklProject")
+  ["formae"] = import("../../../internal/schema/pkl/schema/PklProject")
 }

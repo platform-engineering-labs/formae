@@ -1670,7 +1670,7 @@ def generate_pkl_project(formae_path: str) -> str:
     return f'''amends "pkl:Project"
 
 dependencies {{
-  ["formae"] = import("{formae_path}/plugins/pkl/schema/PklProject")
+  ["formae"] = import("{formae_path}/internal/schema/pkl/schema/PklProject")
   ["aws"] = import("{formae_path}/plugins/aws/schema/pkl/PklProject")
 }}
 '''
