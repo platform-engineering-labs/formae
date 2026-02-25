@@ -222,7 +222,7 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 	subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
 	if subscriptionID == "" {
-		t.Fatal("AZURE_SUBSCRIPTION_ID environment variable is required for Azure tests")
+		t.Skip("AZURE_SUBSCRIPTION_ID not set, skipping Azure tests")
 	}
 
 	fixture := filepath.Join(fixturesDir(t), "discovery_managed_azure.pkl")

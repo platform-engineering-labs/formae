@@ -74,6 +74,7 @@ jobs:
         run: aws sts get-caller-identity
 
       - name: Configure Azure Credentials
+        if: ${{ secrets.AZURE_CLIENT_ID != '' }}
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}

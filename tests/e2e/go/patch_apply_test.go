@@ -7,6 +7,7 @@
 package e2e_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -97,6 +98,10 @@ func testPatchApplyAWS(t *testing.T, cli *FormaeCLI) {
 }
 
 func testPatchApplyAzure(t *testing.T, cli *FormaeCLI) {
+	if os.Getenv("AZURE_SUBSCRIPTION_ID") == "" {
+		t.Skip("AZURE_SUBSCRIPTION_ID not set, skipping Azure tests")
+	}
+
 	reconcileFixture := filepath.Join(fixturesDir(t), "reconcile_apply_azure.pkl")
 	patchFixture := filepath.Join(fixturesDir(t), "patch_apply_azure.pkl")
 	commandTimeout := 5 * time.Minute
