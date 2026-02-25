@@ -1,0 +1,5 @@
+name = "test-plugin"
+version = "0.0.1"
+namespace = "Test"
+license = "FSL-1.1-ALv2"
+minFormaeVersion = "0.1.0"
