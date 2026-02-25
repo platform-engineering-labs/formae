@@ -12,8 +12,8 @@ import "@azure/azure.pkl"
 import "@azure/resources/resourcegroup.pkl"
 
 local patchedRg = new resourcegroup.ResourceGroup {
-  label = "e2e-test-rg"
-  name = "formae-e2e-reconcile-rg"
+  label = "e2e-patch-rg"
+  name = "formae-e2e-patch-rg"
   location = "westeurope"
   tags = new Listing {
     new azure.Tag {
@@ -23,12 +23,12 @@ local patchedRg = new resourcegroup.ResourceGroup {
   }
 }
 
-local stackName = "e2e-reconcile-azure"
+local stackName = "e2e-patch-azure"
 
 forma {
   new formae.Stack {
     label = stackName
-    description = "E2E reconcile test for Azure networking"
+    description = "E2E patch test for Azure networking"
   }
 
   new formae.Target {

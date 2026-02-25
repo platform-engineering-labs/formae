@@ -10,10 +10,12 @@ import "@formae/formae.pkl"
 import "@aws/aws.pkl"
 
 import "@aws/iam/role.pkl"
+import "@aws/iam/rolepolicy.pkl"
 
-local patchedRole = new role.Role {
+local testRole = new role.Role {
   label = "e2e-patch-role"
   roleName = "formae-e2e-patch-role"
+  description = "e2e patch test role"
   assumeRolePolicyDocument = new Dynamic {
     ["Version"] = "2012-10-17"
     ["Statement"] = new Listing {
@@ -26,11 +28,20 @@ local patchedRole = new role.Role {
       }
     }
   }
-  description = "patched by e2e test"
-  tags = new Listing {
-    new aws.Tag {
-      key = "Environment"
-      value = "e2e-test"
+}
+
+local testRolePolicy = new rolepolicy.RolePolicy {
+  label = "e2e-patch-role-policy"
+  policyName = "formae-e2e-patch-policy"
+  roleName = testRole.res.roleName
+  policyDocument = new Dynamic {
+    ["Version"] = "2012-10-17"
+    ["Statement"] = new Listing {
+      new Dynamic {
+        ["Effect"] = "Allow"
+        ["Action"] = "logs:*"
+        ["Resource"] = "*"
+      }
     }
   }
 }
@@ -50,5 +61,6 @@ forma {
     }
   }
 
-  patchedRole
+  testRole
+  testRolePolicy
 }
