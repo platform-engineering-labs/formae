@@ -569,6 +569,26 @@ func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) 
 	assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loadedCommand.ResourceUpdates[1].State)
 }
 
+func TestIsResourceInFinalState_Success(t *testing.T) {
+	assert.True(t, isResourceInFinalState(resource_update.ResourceUpdateStateSuccess))
+}
+
+func TestIsResourceInFinalState_Failed(t *testing.T) {
+	assert.True(t, isResourceInFinalState(resource_update.ResourceUpdateStateFailed))
+}
+
+func TestIsResourceInFinalState_Rejected(t *testing.T) {
+	assert.True(t, isResourceInFinalState(resource_update.ResourceUpdateStateRejected))
+}
+
+func TestIsResourceInFinalState_Canceled(t *testing.T) {
+	assert.True(t, isResourceInFinalState(resource_update.ResourceUpdateStateCanceled))
+}
+
+func TestIsResourceInFinalState_NotStarted_ReturnsFalse(t *testing.T) {
+	assert.False(t, isResourceInFinalState(resource_update.ResourceUpdateStateNotStarted))
+}
+
 func newFormaCommandPersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, error) {
 	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
 		DatastoreType: pkgmodel.SqliteDatastore,
