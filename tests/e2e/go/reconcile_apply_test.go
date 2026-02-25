@@ -79,12 +79,39 @@ func testReconcileApplyAWS(t *testing.T) {
 		"formae-e2e-reconcile-role",
 	)
 
-	// Step 5: Destroy and verify cleanup.
+	// Step 5: Inventory query filters.
+	// Query by type within the stack.
+	roles := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws type:AWS::IAM::Role")
+	if len(roles) != 1 {
+		t.Errorf("expected 1 Role in stack, got %d", len(roles))
+	}
+	policies := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws type:AWS::IAM::RolePolicy")
+	if len(policies) != 1 {
+		t.Errorf("expected 1 RolePolicy in stack, got %d", len(policies))
+	}
+
+	// Query by label.
+	byLabel := cli.Inventory(t, "--query", "label:e2e-test-role")
+	if len(byLabel) != 1 {
+		t.Errorf("expected 1 resource with label e2e-test-role, got %d", len(byLabel))
+	}
+
+	// All resources should be managed.
+	managed := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws managed:true")
+	if len(managed) != 2 {
+		t.Errorf("expected 2 managed resources in stack, got %d", len(managed))
+	}
+	unmanaged := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws managed:false")
+	if len(unmanaged) != 0 {
+		t.Errorf("expected 0 unmanaged resources in stack, got %d", len(unmanaged))
+	}
+
+	// Step 6: Destroy and verify cleanup.
 	destroyID := cli.Destroy(t, fixture)
 	destroyResult := cli.WaitForCommand(t, destroyID, commandTimeout)
 	RequireCommandSuccess(t, destroyResult)
 
-	// Step 6: Verify the stack is empty.
+	// Step 7: Verify the stack is empty.
 	remaining := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws")
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 resources after destroy, got %d", len(remaining))
@@ -169,12 +196,43 @@ func testReconcileApplyAzure(t *testing.T) {
 		"formae-e2e-reconcile-vnet",
 	)
 
-	// Step 6: Destroy and verify cleanup.
+	// Step 6: Inventory query filters.
+	// Query by type within the stack.
+	rgs := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure type:Azure::Resources::ResourceGroup")
+	if len(rgs) != 1 {
+		t.Errorf("expected 1 ResourceGroup in stack, got %d", len(rgs))
+	}
+	vnets := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure type:Azure::Network::VirtualNetwork")
+	if len(vnets) != 1 {
+		t.Errorf("expected 1 VirtualNetwork in stack, got %d", len(vnets))
+	}
+	subnets := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure type:Azure::Network::Subnet")
+	if len(subnets) != 1 {
+		t.Errorf("expected 1 Subnet in stack, got %d", len(subnets))
+	}
+
+	// Query by label.
+	byLabel := cli.Inventory(t, "--query", "label:e2e-test-rg")
+	if len(byLabel) != 1 {
+		t.Errorf("expected 1 resource with label e2e-test-rg, got %d", len(byLabel))
+	}
+
+	// All resources should be managed.
+	managed := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure managed:true")
+	if len(managed) != 3 {
+		t.Errorf("expected 3 managed resources in stack, got %d", len(managed))
+	}
+	unmanagedAzure := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure managed:false")
+	if len(unmanagedAzure) != 0 {
+		t.Errorf("expected 0 unmanaged resources in stack, got %d", len(unmanagedAzure))
+	}
+
+	// Step 7: Destroy and verify cleanup.
 	destroyID := cli.Destroy(t, fixture)
 	destroyResult := cli.WaitForCommand(t, destroyID, commandTimeout)
 	RequireCommandSuccess(t, destroyResult)
 
-	// Step 7: Verify the stack is empty.
+	// Step 8: Verify the stack is empty.
 	remaining := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure")
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 resources after destroy, got %d", len(remaining))
