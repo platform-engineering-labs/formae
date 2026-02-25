@@ -589,6 +589,18 @@ func TestIsResourceInFinalState_NotStarted_ReturnsFalse(t *testing.T) {
 	assert.False(t, isResourceInFinalState(resource_update.ResourceUpdateStateNotStarted))
 }
 
+func TestIsResourceInFinalState_Unknown_ReturnsFalse(t *testing.T) {
+	assert.False(t, isResourceInFinalState(resource_update.ResourceUpdateStateUnknown))
+}
+
+func TestIsResourceInFinalState_Pending_ReturnsFalse(t *testing.T) {
+	assert.False(t, isResourceInFinalState(resource_update.ResourceUpdateStatePending))
+}
+
+func TestIsResourceInFinalState_InProgress_ReturnsFalse(t *testing.T) {
+	assert.False(t, isResourceInFinalState(resource_update.ResourceUpdateStateInProgress))
+}
+
 func newFormaCommandPersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, error) {
 	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
 		DatastoreType: pkgmodel.SqliteDatastore,
