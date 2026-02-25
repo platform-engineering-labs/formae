@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package pkl
 
 import (
 	"context"
@@ -19,18 +19,18 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/apple/pkl-go/pkl"
-	"github.com/masterminds/semver"
+	pklgo "github.com/apple/pkl-go/pkl"
+	"github.com/platform-engineering-labs/formae/internal/schema"
+	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
-	pklmodel "github.com/platform-engineering-labs/formae/plugins/pkl/model"
 )
 
 const ProjectFile = "PklProject"
 
 type PKL struct{}
 
-// Version set at compile time
+// Version is used for PKL package resolution. It was previously set via ldflags
+// for the .so plugin; now it's a regular package variable.
 var Version = "0.0.0"
 
 //go:embed assets
@@ -39,21 +39,15 @@ var assets embed.FS
 //go:embed generator/*
 var generator embed.FS
 
-// Compile time checks to satisfy protocol
-var _ plugin.Plugin = PKL{}
+// Compile time check to satisfy protocol
+var _ schema.SchemaPlugin = PKL{}
 
-var _ plugin.SchemaPlugin = PKL{}
+func init() {
+	schema.DefaultRegistry.Register(PKL{})
+}
 
 func (p PKL) Name() string {
 	return "pkl"
-}
-
-func (p PKL) Version() *semver.Version {
-	return semver.MustParse(Version)
-}
-
-func (p PKL) Type() plugin.Type {
-	return plugin.Schema
 }
 
 func (p PKL) FileExtension() string {
@@ -70,18 +64,18 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		return nil, err
 	}
 
-	var configSource *pkl.ModuleSource
+	var configSource *pklgo.ModuleSource
 	if path == "" {
-		configSource = pkl.TextSource(`amends "formae:/Config.pkl"`)
+		configSource = pklgo.TextSource(`amends "formae:/Config.pkl"`)
 	} else {
 		if FileExists(path) {
-			configSource = pkl.FileSource(path)
+			configSource = pklgo.FileSource(path)
 		} else {
 			return nil, fmt.Errorf("config file: %s does not exist", path)
 		}
 	}
 
-	var evaluator pkl.Evaluator
+	var evaluator pklgo.Evaluator
 
 	// Check if there's a PklProject in the directory tree
 	var projectDir string
@@ -94,16 +88,16 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		evaluator, cleanup, err = newSafeProjectEvaluator(
 			context.Background(),
 			&url.URL{Scheme: "file", Path: projectDir},
-			pkl.WithFs(formaeFs, "formae"),
-			pkl.WithResourceReader(libExtension{}),
-			pkl.PreconfiguredOptions,
+			pklgo.WithFs(formaeFs, "formae"),
+			pklgo.WithResourceReader(libExtension{}),
+			pklgo.PreconfiguredOptions,
 		)
 	} else {
-		evaluator, err = pkl.NewEvaluator(
+		evaluator, err = pklgo.NewEvaluator(
 			context.Background(),
-			pkl.WithFs(formaeFs, "formae"),
-			pkl.WithResourceReader(libExtension{}),
-			pkl.PreconfiguredOptions,
+			pklgo.WithFs(formaeFs, "formae"),
+			pklgo.WithResourceReader(libExtension{}),
+			pklgo.PreconfiguredOptions,
 		)
 		cleanup = func() { _ = evaluator.Close() }
 	}
@@ -216,7 +210,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 }
 
 func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaApplyMode, props map[string]string) (*pkgmodel.Forma, error) {
-	var evaluator pkl.Evaluator
+	var evaluator pklgo.Evaluator
 	var err error
 
 	addSchemaContextProperties(cmd, mode, props)
@@ -228,9 +222,9 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 		evaluator, cleanup, err = newSafeProjectEvaluator(
 			context.Background(),
 			&url.URL{Scheme: "file", Path: projectDir},
-			pkl.PreconfiguredOptions,
-			pkl.WithResourceReader(libExtension{}),
-			func(opts *pkl.EvaluatorOptions) {
+			pklgo.PreconfiguredOptions,
+			pklgo.WithResourceReader(libExtension{}),
+			func(opts *pklgo.EvaluatorOptions) {
 				opts.Properties = props
 				opts.OutputFormat = "json"
 			})
@@ -239,11 +233,11 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 			return nil, err
 		}
 	} else {
-		evaluator, err = pkl.NewEvaluator(
+		evaluator, err = pklgo.NewEvaluator(
 			context.Background(),
-			pkl.PreconfiguredOptions,
-			pkl.WithResourceReader(libExtension{}),
-			func(opts *pkl.EvaluatorOptions) {
+			pklgo.PreconfiguredOptions,
+			pklgo.WithResourceReader(libExtension{}),
+			func(opts *pklgo.EvaluatorOptions) {
 				opts.Properties = props
 				opts.OutputFormat = "json"
 			})
@@ -257,7 +251,7 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 	defer cleanup()
 
 	// Render PKL
-	result, err := evaluator.EvaluateOutputText(context.Background(), pkl.FileSource(path))
+	result, err := evaluator.EvaluateOutputText(context.Background(), pklgo.FileSource(path))
 	if err != nil {
 		return nil, err
 	}
@@ -272,13 +266,13 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 	return forma, nil
 }
 
-func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []string, schemaLocation plugin.SchemaLocation) (plugin.GenerateSourcesResult, error) {
-	res := plugin.GenerateSourcesResult{}
+func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+	res := schema.GenerateSourcesResult{}
 
-	code, err := p.SerializeForma(forma, &plugin.SerializeOptions{Schema: "pkl", SchemaLocation: schemaLocation})
+	code, err := p.SerializeForma(forma, &schema.SerializeOptions{Schema: "pkl", SchemaLocation: schemaLocation})
 	if err != nil {
 		slog.Error(err.Error())
-		return plugin.GenerateSourcesResult{}, plugin.ErrFailedToGenerateSources
+		return schema.GenerateSourcesResult{}, schema.ErrFailedToGenerateSources
 	}
 	res.ResourceCount = len(forma.Resources)
 
@@ -291,7 +285,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 	// Ensure parent directory exists
 	parentDir := filepath.Dir(path)
 	if err = os.MkdirAll(parentDir, 0755); err != nil {
-		return plugin.GenerateSourcesResult{}, fmt.Errorf("failed to create parent directory: %v", err)
+		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to create parent directory: %v", err)
 	}
 
 	projectFile := filepath.Join(parentDir, "PklProject")
@@ -300,7 +294,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		resolver := NewPackageResolver()
 
 		// Configure local schema resolution if requested
-		if schemaLocation == plugin.SchemaLocationLocal {
+		if schemaLocation == schema.SchemaLocationLocal {
 			homeDir, err := os.UserHomeDir()
 			if err == nil {
 				pluginsDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
@@ -319,7 +313,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// No PklProject exists, initialize it with resolved packages
 		err = p.ProjectInit(parentDir, resolver.GetPackageStrings(), schemaLocation)
 		if err != nil {
-			return plugin.GenerateSourcesResult{}, fmt.Errorf("failed to initialize Pkl project: %v", err)
+			return schema.GenerateSourcesResult{}, fmt.Errorf("failed to initialize Pkl project: %v", err)
 		}
 		res.InitializedNewProject = true
 		res.ProjectPath = parentDir
@@ -328,20 +322,20 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 
 	err = os.WriteFile(path, []byte(code), 0644)
 	if err != nil {
-		return plugin.GenerateSourcesResult{}, fmt.Errorf("failed to write Pkl file: %v", err)
+		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to write Pkl file: %v", err)
 	}
 
 	// Check if PklProject.deps.json exists after writing the Pkl file
 	// Only warn for remote schema location since local schemas don't need resolution
 	depsFile := filepath.Join(parentDir, "PklProject.deps.json")
-	if _, err := os.Stat(depsFile); os.IsNotExist(err) && schemaLocation == plugin.SchemaLocationRemote {
+	if _, err := os.Stat(depsFile); os.IsNotExist(err) && schemaLocation == schema.SchemaLocationRemote {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("Pkl dependencies not resolved. Run 'pkl project resolve' in '%s' to resolve Pkl dependencies.", parentDir))
 	}
 
 	return res, nil
 }
 
-func (p PKL) ProjectInit(path string, include []string, schemaLocation plugin.SchemaLocation) error {
+func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.SchemaLocation) error {
 	var err error
 
 	if path == "" {
@@ -367,7 +361,7 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation plugin.Sc
 		}
 	}
 
-	evaluator, err := pkl.NewEvaluator(context.Background(), pkl.PreconfiguredOptions, pkl.WithFs(assets, "assets"), func(opts *pkl.EvaluatorOptions) {
+	evaluator, err := pklgo.NewEvaluator(context.Background(), pklgo.PreconfiguredOptions, pklgo.WithFs(assets, "assets"), func(opts *pklgo.EvaluatorOptions) {
 		opts.Properties = map[string]string{
 			"packages": strings.Join(include, ","),
 		}
@@ -376,7 +370,7 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation plugin.Sc
 		return err
 	}
 
-	projectFile, err := evaluator.EvaluateOutputText(context.Background(), pkl.UriSource("assets:/assets/PklProjectTemplate.pkl"))
+	projectFile, err := evaluator.EvaluateOutputText(context.Background(), pklgo.UriSource("assets:/assets/PklProjectTemplate.pkl"))
 	if err != nil {
 		return err
 	}
@@ -428,7 +422,7 @@ func (p PKL) ProjectProperties(path string) (map[string]pkgmodel.Prop, error) {
 	return forma.Properties, nil
 }
 
-func (p PKL) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOptions) (string, error) {
+func (p PKL) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOptions) (string, error) {
 	return p.serializeWithPKL(forma, options)
 }
 
@@ -480,26 +474,7 @@ func sanitizeValue(rv reflect.Value) any {
 	}
 }
 
-func translateTargets(targets []pklmodel.Target) []pkgmodel.Target {
-	var translated []pkgmodel.Target
-	for _, target := range targets {
-		safe := sanitizeConfig(target.Config.Properties)
-		configJson, err := json.Marshal(safe)
-		if err != nil {
-			slog.Error("Failed to marshal target config", "error", err)
-			continue
-		}
-		translated = append(translated, pkgmodel.Target{
-			Label:        target.Label,
-			Namespace:    target.Namespace,
-			Config:       configJson,
-			Discoverable: target.Discoverable,
-		})
-	}
-	return translated
-}
-
-func translateDynamic(dyn *pkl.Object) json.RawMessage {
+func translateDynamic(dyn *pklgo.Object) json.RawMessage {
 	if dyn == nil {
 		return nil
 	}
@@ -536,31 +511,29 @@ func parseLogLevel(level string) slog.Level {
 //
 // This function keeps both evaluators alive until the returned cleanup function is
 // called, which closes the entire manager.
-func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pkl.EvaluatorOptions)) (pkl.Evaluator, func(), error) {
-	manager := pkl.NewEvaluatorManager()
+func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pklgo.EvaluatorOptions)) (pklgo.Evaluator, func(), error) {
+	manager := pklgo.NewEvaluatorManager()
 
 	projectEvaluator, err := manager.NewEvaluator(ctx, opts...)
 	if err != nil {
-		manager.Close()
+		_ = manager.Close()
 		return nil, nil, fmt.Errorf("failed to create project evaluator: %w", err)
 	}
 
 	projectPath := projectBaseURL.JoinPath("PklProject")
-	project, err := pkl.LoadProjectFromEvaluator(ctx, projectEvaluator, &pkl.ModuleSource{Uri: projectPath})
+	project, err := pklgo.LoadProjectFromEvaluator(ctx, projectEvaluator, &pklgo.ModuleSource{Uri: projectPath})
 	if err != nil {
-		manager.Close()
+		_ = manager.Close()
 		return nil, nil, fmt.Errorf("failed to load project: %w", err)
 	}
 
-	newOpts := []func(*pkl.EvaluatorOptions){pkl.WithProject(project)}
+	newOpts := []func(*pklgo.EvaluatorOptions){pklgo.WithProject(project)}
 	newOpts = append(newOpts, opts...)
 	evaluator, err := manager.NewEvaluator(ctx, newOpts...)
 	if err != nil {
-		manager.Close()
+		_ = manager.Close()
 		return nil, nil, fmt.Errorf("failed to create evaluator: %w", err)
 	}
 
-	return evaluator, func() { manager.Close() }, nil
+	return evaluator, func() { _ = manager.Close() }, nil
 }
-
-var Plugin = PKL{}

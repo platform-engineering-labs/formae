@@ -35,7 +35,6 @@ type Manager struct {
 	authenticationPlugins []*AuthenticationPlugin
 	networkPlugins        []*NetworkPlugin
 	resourcePlugins       []*FullResourcePlugin
-	schemaPlugins         []*SchemaPlugin
 
 	// External resource plugins that run as separate processes
 	externalResourcePlugins []ResourcePluginInfo
@@ -164,13 +163,6 @@ func (m *Manager) Load() {
 				continue
 			}
 			m.resourcePlugins = append(m.resourcePlugins, &cast)
-		case Schema:
-			cast, ok := lookup.(SchemaPlugin)
-			if !ok {
-				fmt.Fprintf(os.Stderr, "Warning: Could not cast schema plugin %s\n", p)
-				continue
-			}
-			m.schemaPlugins = append(m.schemaPlugins, &cast)
 		default:
 		}
 	}
@@ -341,46 +333,3 @@ func (m *Manager) ResourcePlugin(namespace string) (*FullResourcePlugin, error) 
 	return nil, fmt.Errorf("no plugin found for namespace: %s", namespace)
 }
 
-func (m *Manager) SchemaPluginByFileExtension(fileExtension string) (*SchemaPlugin, error) {
-	for _, plugin := range m.schemaPlugins {
-		if (*plugin).FileExtension() == fileExtension {
-			return plugin, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no plugin found for file extension: %s", fileExtension)
-}
-
-func (m *Manager) SchemaPlugin(name string) (*SchemaPlugin, error) {
-	for _, plugin := range m.schemaPlugins {
-		if (*plugin).Name() == name {
-			return plugin, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no plugin found for name: %s", name)
-}
-
-func (m *Manager) SupportedFileExtensions() []string {
-	var fileExtensions []string
-
-	for _, plugin := range m.schemaPlugins {
-		fileExtensions = append(fileExtensions, (*plugin).FileExtension())
-	}
-
-	sort.Strings(fileExtensions)
-
-	return fileExtensions
-}
-
-func (m *Manager) SupportedSchemas() []string {
-	var schemaNames []string
-
-	for _, plugin := range m.schemaPlugins {
-		schemaNames = append(schemaNames, (*plugin).Name())
-	}
-
-	sort.Strings(schemaNames)
-
-	return schemaNames
-}

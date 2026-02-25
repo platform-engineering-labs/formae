@@ -15,8 +15,8 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/logging"
+	"github.com/platform-engineering-labs/formae/internal/schema"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 type EvalOptions struct {
@@ -112,7 +112,7 @@ func runEvalForHumans(app *app.App, opts *EvalOptions) error {
 	if err != nil {
 		return fmt.Errorf("cannot evaluate forma: %v", err)
 	}
-	output, err := app.SerializeForma(result, &plugin.SerializeOptions{
+	output, err := app.SerializeForma(result, &schema.SerializeOptions{
 		Schema:   opts.OutputSchema,
 		Beautify: opts.Beautify,
 		Colorize: opts.Colorize,
@@ -131,7 +131,7 @@ func runEvalForMachines(app *app.App, opts *EvalOptions) error {
 	if err != nil {
 		return fmt.Errorf("cannot evaluate forma: %v", err)
 	}
-	output, err := app.SerializeForma(result, &plugin.SerializeOptions{
+	output, err := app.SerializeForma(result, &schema.SerializeOptions{
 		Schema:   opts.OutputSchema,
 		Beautify: false,
 		Colorize: false,

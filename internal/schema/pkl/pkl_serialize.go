@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package pkl
 
 import (
 	"context"
@@ -14,14 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/apple/pkl-go/pkl"
+	pklgo "github.com/apple/pkl-go/pkl"
+	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
-	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 // serializeWithPKL is a generic helper function that can serialize any data structure
-func (p PKL) serializeWithPKL(data *pkgmodel.Forma, options *plugin.SerializeOptions) (string, error) {
+func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOptions) (string, error) {
 	input, err := json.Marshal(data)
 	if err != nil {
 		return "", fmt.Errorf("error marshalling JSON: %w", err)
@@ -35,17 +34,17 @@ func (p PKL) serializeWithPKL(data *pkgmodel.Forma, options *plugin.SerializeOpt
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Build package dependencies using PackageResolver
 	resolver := NewPackageResolver()
 
 	// Configure local schema resolution if requested
-	schemaLocation := plugin.SchemaLocationRemote
+	schemaLocation := schema.SchemaLocationRemote
 	if options != nil && options.SchemaLocation != "" {
 		schemaLocation = options.SchemaLocation
 	}
-	if schemaLocation == plugin.SchemaLocationLocal {
+	if schemaLocation == schema.SchemaLocationLocal {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
 			pluginsDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
@@ -120,11 +119,11 @@ func (p PKL) serializeWithPKL(data *pkgmodel.Forma, options *plugin.SerializeOpt
 	evaluator, cleanup, err := newSafeProjectEvaluator(
 		context.Background(),
 		&url.URL{Scheme: "file", Path: tempDir + "/generator"},
-		pkl.PreconfiguredOptions,
-		pkl.WithResourceReader(libExtension{}),
-		func(opts *pkl.EvaluatorOptions) {
+		pklgo.PreconfiguredOptions,
+		pklgo.WithResourceReader(libExtension{}),
+		func(opts *pklgo.EvaluatorOptions) {
 			opts.Properties = properties
-			opts.Logger = pkl.NoopLogger
+			opts.Logger = pklgo.NoopLogger
 		},
 	)
 	if err != nil {
@@ -133,7 +132,7 @@ func (p PKL) serializeWithPKL(data *pkgmodel.Forma, options *plugin.SerializeOpt
 
 	defer cleanup()
 
-	textOutput, err := evaluator.EvaluateOutputText(context.Background(), pkl.FileSource(filepath.Join(tempDir, "generator/runPklGenerator.pkl")))
+	textOutput, err := evaluator.EvaluateOutputText(context.Background(), pklgo.FileSource(filepath.Join(tempDir, "generator/runPklGenerator.pkl")))
 	if err != nil {
 		return "", fmt.Errorf("error evaluating PKL: %w", err)
 	}
@@ -166,9 +165,9 @@ func (p PKL) generatePklFile(generatorDir, generatorName, outputName string) err
 	evaluator, cleanup, err := newSafeProjectEvaluator(
 		context.Background(),
 		&url.URL{Scheme: "file", Path: generatorDir},
-		pkl.PreconfiguredOptions,
-		func(opts *pkl.EvaluatorOptions) {
-			opts.Logger = pkl.NoopLogger
+		pklgo.PreconfiguredOptions,
+		func(opts *pklgo.EvaluatorOptions) {
+			opts.Logger = pklgo.NoopLogger
 		},
 	)
 	if err != nil {
@@ -178,7 +177,7 @@ func (p PKL) generatePklFile(generatorDir, generatorName, outputName string) err
 
 	result, err := evaluator.EvaluateOutputText(
 		context.Background(),
-		pkl.FileSource(filepath.Join(generatorDir, generatorName)),
+		pklgo.FileSource(filepath.Join(generatorDir, generatorName)),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to evaluate %s: %w", generatorName, err)

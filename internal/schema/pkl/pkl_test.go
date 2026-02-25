@@ -4,7 +4,7 @@
 
 //go:build integration
 
-package main
+package pkl
 
 import (
 	"log/slog"
@@ -19,7 +19,8 @@ import (
 func TestPkl_Evaluate(t *testing.T) {
 	props := map[string]string{"name": "bacon.platform.engineering"}
 
-	forma, err := Plugin.Evaluate("./testdata/forma/test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
 	assert.NoError(t, err)
 
 	jsonString := forma.ToJSON()
@@ -32,7 +33,8 @@ func TestPkl_Evaluate(t *testing.T) {
 func TestPkl_EvaluateCommandAndMode(t *testing.T) {
 	props := map[string]string{"name": "bacon.platform.engineering"}
 
-	forma, err := Plugin.Evaluate("./testdata/forma/test.pkl", model.CommandDestroy, model.FormaApplyModePatch, props)
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/test.pkl", model.CommandDestroy, model.FormaApplyModePatch, props)
 	assert.NoError(t, err)
 
 	jsonString := forma.ToJSON()
@@ -44,7 +46,8 @@ func TestPkl_EvaluateCommandAndMode(t *testing.T) {
 func TestPkl_DefaultStackAndTarget(t *testing.T) {
 	props := map[string]string{"Name": "bacon.platform.engineering"}
 
-	forma, err := Plugin.Evaluate("./testdata/forma/test.pkl", model.CommandDestroy, model.FormaApplyModePatch, props)
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/test.pkl", model.CommandDestroy, model.FormaApplyModePatch, props)
 	assert.NoError(t, err)
 
 	jsonString := forma.ToJSON()
@@ -55,7 +58,8 @@ func TestPkl_DefaultStackAndTarget(t *testing.T) {
 func TestPkl_DefaultStackAndTargetViaRes(t *testing.T) {
 	props := map[string]string{"Name": "bacon.platform.engineering"}
 
-	forma, err := Plugin.Evaluate("./testdata/forma/st_res_test.pkl", model.CommandDestroy, model.FormaApplyModePatch, props)
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/st_res_test.pkl", model.CommandDestroy, model.FormaApplyModePatch, props)
 	assert.NoError(t, err)
 
 	jsonString := forma.ToJSON()
@@ -64,13 +68,14 @@ func TestPkl_DefaultStackAndTargetViaRes(t *testing.T) {
 }
 
 func TestPkl_DefaultStackAndTargetViaResNotFound(t *testing.T) {
-	_, err := Plugin.Evaluate("./testdata/forma/st_res_no_stack_test.pkl", model.CommandDestroy, model.FormaApplyModePatch, nil)
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/st_res_no_stack_test.pkl", model.CommandDestroy, model.FormaApplyModePatch, nil)
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "no default stack found")
 	}
 
-	_, err = Plugin.Evaluate("./testdata/forma/st_res_no_target_test.pkl", model.CommandDestroy, model.FormaApplyModePatch, nil)
+	_, err = p.Evaluate("./testdata/forma/st_res_no_target_test.pkl", model.CommandDestroy, model.FormaApplyModePatch, nil)
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "no default target found")
@@ -84,7 +89,8 @@ func TestPkl_FormaeValue(t *testing.T) {
 		"description": "the test secret",
 	}
 
-	forma, err := Plugin.Evaluate("./testdata/forma/value_test.pkl", model.CommandEval, model.FormaApplyModePatch, props)
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/value_test.pkl", model.CommandEval, model.FormaApplyModePatch, props)
 	assert.NoError(t, err)
 
 	jsonString := forma.ToJSON()
@@ -94,7 +100,8 @@ func TestPkl_FormaeValue(t *testing.T) {
 }
 
 func TestPkl_FormaeConfig(t *testing.T) {
-	config, err := Plugin.FormaeConfig("./testdata/config/test_config.pkl")
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_config.pkl")
 	assert.NoError(t, err)
 	assert.Equal(t, "formae", config.Agent.Server.Nodename)
 	assert.Equal(t, "formae.example.com", config.Agent.Server.Hostname)

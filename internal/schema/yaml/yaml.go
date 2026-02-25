@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package yaml
 
 import (
 	"bytes"
@@ -11,31 +11,21 @@ import (
 	"fmt"
 
 	"github.com/alecthomas/chroma/v2/quick"
-	"github.com/masterminds/semver"
+	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
-	"gopkg.in/yaml.v3"
+	goyaml "gopkg.in/yaml.v3"
 )
+
+func init() {
+	schema.DefaultRegistry.Register(YAML{})
+}
+
+var _ schema.SchemaPlugin = YAML{}
 
 type YAML struct{}
 
-// Version set at compile time
-var Version = "0.0.0"
-
-// Compile time checks to satisfy protocol
-var _ plugin.Plugin = YAML{}
-var _ plugin.SchemaPlugin = YAML{}
-
 func (j YAML) Name() string {
 	return "yaml"
-}
-
-func (j YAML) Type() plugin.Type {
-	return plugin.Schema
-}
-
-func (j YAML) Version() *semver.Version {
-	return semver.MustParse(Version)
 }
 
 func (j YAML) FileExtension() string {
@@ -54,7 +44,7 @@ func (j YAML) Evaluate(path string, cmd model.Command, mode model.FormaApplyMode
 	return nil, errors.ErrUnsupported
 }
 
-func (j YAML) SerializeForma(forma *model.Forma, options *plugin.SerializeOptions) (string, error) {
+func (j YAML) SerializeForma(forma *model.Forma, options *schema.SerializeOptions) (string, error) {
 	var data any
 
 	if options.Simplified {
@@ -118,7 +108,7 @@ func encodeYAML(v any) ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
+	enc := goyaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(intermediate); err != nil {
 		return nil, fmt.Errorf("yaml encode: %w", err)
@@ -150,16 +140,14 @@ func highlight(code []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (j YAML) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation plugin.SchemaLocation) (plugin.GenerateSourcesResult, error) {
-	return plugin.GenerateSourcesResult{}, errors.ErrUnsupported
+func (j YAML) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+	return schema.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 
-func (j YAML) ProjectInit(path string, include []string, schemaLocation plugin.SchemaLocation) error {
+func (j YAML) ProjectInit(path string, include []string, schemaLocation schema.SchemaLocation) error {
 	return errors.ErrUnsupported
 }
 
 func (j YAML) ProjectProperties(path string) (map[string]model.Prop, error) {
 	return nil, errors.ErrUnsupported
 }
-
-var Plugin = YAML{}

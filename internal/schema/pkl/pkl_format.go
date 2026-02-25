@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package pkl
 
 import (
 	"bufio"
@@ -178,9 +178,7 @@ func splitLinesPreserve(s string) []string {
 	var lines []string
 	for sc.Scan() {
 		ln := sc.Text()
-		if strings.HasSuffix(ln, "\n") {
-			ln = strings.TrimSuffix(ln, "\n")
-		}
+		ln = strings.TrimSuffix(ln, "\n")
 		lines = append(lines, ln)
 	}
 	if err := sc.Err(); err != nil {

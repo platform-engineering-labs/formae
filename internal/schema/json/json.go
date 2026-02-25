@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package json
 
 import (
 	"bytes"
@@ -11,31 +11,21 @@ import (
 	"fmt"
 
 	"github.com/alecthomas/chroma/v2/quick"
-	"github.com/masterminds/semver"
+	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/tidwall/pretty"
 )
 
+func init() {
+	schema.DefaultRegistry.Register(JSON{})
+}
+
+var _ schema.SchemaPlugin = JSON{}
+
 type JSON struct{}
-
-// Version set at compile time
-var Version = "0.0.0"
-
-// Compile time checks to satisfy protocol
-var _ plugin.Plugin = JSON{}
-var _ plugin.SchemaPlugin = JSON{}
 
 func (j JSON) Name() string {
 	return "json"
-}
-
-func (j JSON) Type() plugin.Type {
-	return plugin.Schema
-}
-
-func (j JSON) Version() *semver.Version {
-	return semver.MustParse(Version)
 }
 
 func (j JSON) FileExtension() string {
@@ -54,7 +44,7 @@ func (j JSON) Evaluate(path string, cmd model.Command, mode model.FormaApplyMode
 	return nil, errors.ErrUnsupported
 }
 
-func (j JSON) SerializeForma(forma *model.Forma, options *plugin.SerializeOptions) (string, error) {
+func (j JSON) SerializeForma(forma *model.Forma, options *schema.SerializeOptions) (string, error) {
 	var data any
 
 	if options.Simplified {
@@ -86,10 +76,10 @@ func (j JSON) SerializeForma(forma *model.Forma, options *plugin.SerializeOption
 	} else {
 		// Full structure with Stacks, Targets, Resources, and Policies
 		data = struct {
-			Stacks    []model.Stack       `json:"Stacks,omitempty"`
-			Targets   []model.Target      `json:"Targets,omitempty"`
-			Policies  []json.RawMessage   `json:"Policies,omitempty"`
-			Resources []model.Resource    `json:"Resources,omitempty"`
+			Stacks    []model.Stack     `json:"Stacks,omitempty"`
+			Targets   []model.Target    `json:"Targets,omitempty"`
+			Policies  []json.RawMessage `json:"Policies,omitempty"`
+			Resources []model.Resource  `json:"Resources,omitempty"`
 		}{
 			Stacks:    forma.Stacks,
 			Targets:   forma.Targets,
@@ -137,16 +127,14 @@ func highlight(code []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation plugin.SchemaLocation) (plugin.GenerateSourcesResult, error) {
-	return plugin.GenerateSourcesResult{}, errors.ErrUnsupported
+func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+	return schema.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 
-func (j JSON) ProjectInit(path string, include []string, schemaLocation plugin.SchemaLocation) error {
+func (j JSON) ProjectInit(path string, include []string, schemaLocation schema.SchemaLocation) error {
 	return errors.ErrUnsupported
 }
 
 func (j JSON) ProjectProperties(path string) (map[string]model.Prop, error) {
 	return nil, errors.ErrUnsupported
 }
-
-var Plugin = JSON{}

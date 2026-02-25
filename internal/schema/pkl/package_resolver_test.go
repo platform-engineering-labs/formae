@@ -4,7 +4,7 @@
 
 //go:build unit
 
-package main
+package pkl
 
 import (
 	"os"

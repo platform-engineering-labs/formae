@@ -18,7 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/logging"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/spf13/cobra"
 )
 
@@ -109,7 +109,7 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 	}
 
 	res, err := app.GenerateSourceCode(forma, opts.TargetPath, opts.OutputSchema)
-	if errors.Is(err, plugin.ErrFailedToGenerateSources) {
+	if errors.Is(err, schema.ErrFailedToGenerateSources) {
 		logFilePath := fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory())
 		return fmt.Errorf("something went wrong during the extraction. This is our fault. Please contact us and send over the error logs from '%s'", logFilePath)
 	}

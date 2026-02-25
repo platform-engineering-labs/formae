@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package pkl
 
 import (
 	"net/url"
 
-	"github.com/apple/pkl-go/pkl"
+	pklgo "github.com/apple/pkl-go/pkl"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib"
 )
 
 type libExtension struct{}
 
-var _ pkl.ResourceReader = &libExtension{}
+var _ pklgo.ResourceReader = &libExtension{}
 
 func (l libExtension) Scheme() string {
 	return "libext"
@@ -27,7 +27,7 @@ func (l libExtension) IsGlobbable() bool {
 	return false
 }
 
-func (l libExtension) ListElements(_ url.URL) ([]pkl.PathElement, error) {
+func (l libExtension) ListElements(_ url.URL) ([]pklgo.PathElement, error) {
 	return nil, nil
 }
 
