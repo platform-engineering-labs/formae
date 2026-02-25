@@ -428,11 +428,6 @@ func (p PKL) ProjectProperties(path string) (map[string]pkgmodel.Prop, error) {
 	return forma.Properties, nil
 }
 
-func (p PKL) Serialize(resource *pkgmodel.Resource, options *plugin.SerializeOptions) (string, error) {
-	forma := pkgmodel.FormaFromResources([]*pkgmodel.Resource{resource})
-	return p.serializeWithPKL(forma, options)
-}
-
 func (p PKL) SerializeForma(forma *pkgmodel.Forma, options *plugin.SerializeOptions) (string, error) {
 	return p.serializeWithPKL(forma, options)
 }

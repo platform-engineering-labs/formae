@@ -40,7 +40,6 @@ type SchemaPlugin interface {
 	SupportsExtract() bool
 	FormaeConfig(path string) (*model.Config, error)
 	Evaluate(path string, cmd model.Command, mode model.FormaApplyMode, props map[string]string) (*model.Forma, error)
-	Serialize(resource *model.Resource, options *SerializeOptions) (string, error)
 	SerializeForma(resources *model.Forma, options *SerializeOptions) (string, error)
 	GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation SchemaLocation) (GenerateSourcesResult, error)
 	ProjectInit(path string, include []string, schemaLocation SchemaLocation) error

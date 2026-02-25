@@ -54,36 +54,6 @@ func (j JSON) Evaluate(path string, cmd model.Command, mode model.FormaApplyMode
 	return nil, errors.ErrUnsupported
 }
 
-func (j JSON) Serialize(resource *model.Resource, options *plugin.SerializeOptions) (string, error) {
-	input, err := json.Marshal(resource)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling JSON for resource: %w", err)
-	}
-
-	json := input
-	if options.Beautify {
-		json = pretty.PrettyOptions(input, &pretty.Options{
-			Width:    80,
-			Prefix:   "",
-			Indent:   "  ",
-			SortKeys: true,
-		})
-
-		if json == nil {
-			return "", fmt.Errorf("error beautifying JSON")
-		}
-	}
-
-	if options.Colorize {
-		json, err = highlight(json)
-		if err != nil {
-			return "", fmt.Errorf("error colorizing JSON: %w", err)
-		}
-	}
-
-	return string(json), nil
-}
-
 func (j JSON) SerializeForma(forma *model.Forma, options *plugin.SerializeOptions) (string, error) {
 	var data any
 
