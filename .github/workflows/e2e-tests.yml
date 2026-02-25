@@ -8,9 +8,9 @@ on:
       - completed
     branches: [ "main" ]
 
-# Ensure only one test runs at a time on AWS account (shared with plugin-sdk-tests)
+# Ensure only one test runs at a time on cloud accounts (shared with plugin-sdk-tests)
 concurrency:
-  group: aws-cloud-tests
+  group: cloud-e2e-tests
   cancel-in-progress: false
 
 permissions:
@@ -20,7 +20,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # 1 hour timeout
+    timeout-minutes: 60
     # Only run if the triggering workflow succeeded
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
@@ -55,11 +55,6 @@ jobs:
         with:
           go-version: '1.25.1'
 
-      - name: Install pkl
-        uses: pkl-community/setup-pkl@v0
-        with:
-          pkl-version: 0.30.0
-
       - name: Configure AWS Credentials
         id: creds
         uses: aws-actions/configure-aws-credentials@v4
@@ -79,15 +74,23 @@ jobs:
       - name: Test AWS Access
         run: aws sts get-caller-identity
 
+      - name: Configure Azure Credentials
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Running e2e-tests (bash)
         env:
           AWS_PROFILE: e2e-test
         run: make test-e2e
 
-      - name: Running e2e-tests (Go, AWS only)
+      - name: Running e2e-tests (Go)
         env:
           AWS_PROFILE: e2e-test
-        run: make test-e2e-go E2E_RUN_FLAGS='-run "/AWS"'
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: make test-e2e-go
 
       - name: Nuke Discovery
         if: ${{ always() }}
