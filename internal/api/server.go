@@ -25,6 +25,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -99,12 +100,12 @@ func (s *Server) configureAuth() error {
 // configureNetwork sets up the network listener by loading the appropriate network plugin based on the configuration.
 func (s *Server) configureNetwork() (string, error) {
 	if s.pluginConfig.Network != nil {
-		net, err := s.pluginManager.NetworkPlugin(s.pluginConfig.Network)
+		net, err := network.DefaultRegistry.GetByConfig(s.pluginConfig.Network)
 		if err != nil {
 			return "", err
 		}
 
-		s.echo.Listener, err = (*net).Listen(s.pluginConfig.Network, s.serverConfig.Port)
+		s.echo.Listener, err = net.Listen(s.pluginConfig.Network, s.serverConfig.Port)
 		if err != nil {
 			return "", err
 		}

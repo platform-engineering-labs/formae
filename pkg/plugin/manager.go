@@ -33,7 +33,6 @@ type Manager struct {
 	plugins           []*Plugin
 
 	authenticationPlugins []*AuthenticationPlugin
-	networkPlugins        []*NetworkPlugin
 	resourcePlugins       []*FullResourcePlugin
 
 	// External resource plugins that run as separate processes
@@ -146,13 +145,6 @@ func (m *Manager) Load() {
 				continue
 			}
 			m.authenticationPlugins = append(m.authenticationPlugins, &cast)
-		case Network:
-			cast, ok := lookup.(NetworkPlugin)
-			if !ok {
-				fmt.Fprintf(os.Stderr, "Warning: Could not cast network plugin %s\n", p)
-				continue
-			}
-			m.networkPlugins = append(m.networkPlugins, &cast)
 		case Resource:
 			// Load in-process resource plugins for local testing (e.g., FakeAWS)
 			// Production plugins run as external processes and are discovered separately
@@ -303,18 +295,6 @@ func (m *Manager) AuthPlugin(config json.RawMessage) (*AuthenticationPlugin, err
 	name := gjson.Get(string(config), "Type").String()
 
 	for _, plugin := range m.authenticationPlugins {
-		if strings.EqualFold((*plugin).(Plugin).Name(), name) {
-			return plugin, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no plugin found for name: %s", name)
-}
-
-func (m *Manager) NetworkPlugin(config json.RawMessage) (*NetworkPlugin, error) {
-	name := gjson.Get(string(config), "Type").String()
-
-	for _, plugin := range m.networkPlugins {
 		if strings.EqualFold((*plugin).(Plugin).Name(), name) {
 			return plugin, nil
 		}

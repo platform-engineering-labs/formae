@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package tailscale
 
 import (
 	"encoding/json"
@@ -10,33 +10,21 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/masterminds/semver"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/internal/network"
 	"tailscale.com/tsnet"
 )
 
+func init() {
+	network.DefaultRegistry.Register(Tailscale{})
+}
+
+var _ network.NetworkPlugin = Tailscale{}
+
+// Tailscale implements the NetworkPlugin interface using Tailscale's tsnet.
 type Tailscale struct{}
-
-// Version set at compile time
-var Version = "0.0.0"
-
-// Compile time checks to satisfy protocol
-var _ plugin.Plugin = Tailscale{}
-var _ plugin.NetworkPlugin = Tailscale{}
-
-// Plugin maintains the known symbol reference
-var Plugin = Tailscale{}
 
 func (t Tailscale) Name() string {
 	return "tailscale"
-}
-
-func (t Tailscale) Type() plugin.Type {
-	return plugin.Network
-}
-
-func (t Tailscale) Version() *semver.Version {
-	return semver.MustParse(Version)
 }
 
 func (t Tailscale) Client(config json.RawMessage) (*http.Client, error) {
@@ -51,7 +39,7 @@ func (t Tailscale) Client(config json.RawMessage) (*http.Client, error) {
 	}
 
 	srv := new(tsnet.Server)
-	srv.Hostname = ValueOrDefault(cfg.Hostname, "formae")
+	srv.Hostname = valueOrDefault(cfg.Hostname, "formae")
 	srv.AuthKey = cfg.AuthKey
 	srv.AdvertiseTags = cfg.AdvertiseTags
 
@@ -70,7 +58,7 @@ func (t Tailscale) Listen(config json.RawMessage, port int) (net.Listener, error
 	}
 
 	srv := new(tsnet.Server)
-	srv.Hostname = ValueOrDefault(cfg.Hostname, "formae")
+	srv.Hostname = valueOrDefault(cfg.Hostname, "formae")
 	srv.AuthKey = cfg.AuthKey
 	srv.AdvertiseTags = cfg.AdvertiseTags
 
