@@ -103,3 +103,6 @@ docs/design/
 # fake-aws plugin binary
 plugins/fake-aws/fake-aws
 .worktrees/
+docs/plans/mutation-report/*.json
+docs/plans/mutation-report/*.pkg
+docs/plans/mutation-report/coverage-*.out
