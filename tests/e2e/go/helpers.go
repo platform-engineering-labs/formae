@@ -177,6 +177,31 @@ func AssertIsResolvable(t *testing.T, propValue any, expectedType, expectedPrope
 	}
 }
 
+// AssertResolvableProperty asserts that a resource property is a resolvable
+// reference pointing at the expected resource type. Unlike AssertResolvable,
+// it does not check the resolved value (useful when the value is an
+// AWS-generated ID that can't be predicted).
+func AssertResolvableProperty(t *testing.T, resource Resource, key, expectedType string) {
+	t.Helper()
+	val, ok := resource.Properties[key]
+	if !ok {
+		t.Fatalf("resource %s missing property %s", resource.Label, key)
+	}
+	m, ok := val.(map[string]any)
+	if !ok {
+		t.Fatalf("resource %s property %s: expected resolvable (map), got %T: %v",
+			resource.Label, key, val, val)
+	}
+	if res, ok := m["$res"].(bool); !ok || !res {
+		t.Fatalf("resource %s property %s: expected $res=true, got %v",
+			resource.Label, key, m["$res"])
+	}
+	if m["$type"] != expectedType {
+		t.Errorf("resource %s property %s: $type got %v, want %s",
+			resource.Label, key, m["$type"], expectedType)
+	}
+}
+
 // FilterUnmanaged returns only unmanaged resources from the given slice.
 func FilterUnmanaged(resources []Resource) []Resource {
 	var unmanaged []Resource
