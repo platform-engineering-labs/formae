@@ -36,11 +36,35 @@ type Agent struct {
 	logFile *os.File
 }
 
+// AgentOption configures agent behavior.
+type AgentOption func(*agentOptions)
+
+type agentOptions struct {
+	discoveryEnabled  bool
+	discoveryInterval string // PKL duration, e.g. "30.s"
+}
+
+// WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
+func WithDiscovery(interval string) AgentOption {
+	return func(o *agentOptions) {
+		o.discoveryEnabled = true
+		o.discoveryInterval = interval
+	}
+}
+
 // StartAgent creates a temp directory, picks a free port, generates a minimal
 // formae config, and starts the agent as a subprocess. It registers a cleanup
 // function on the test so that the agent is stopped even if the test fails.
-func StartAgent(t *testing.T, binaryPath string) *Agent {
+func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 	t.Helper()
+
+	options := agentOptions{
+		discoveryEnabled:  false,
+		discoveryInterval: "10.min",
+	}
+	for _, opt := range opts {
+		opt(&options)
+	}
 
 	dataDir := t.TempDir()
 	port := pickFreePort(t)
@@ -48,6 +72,11 @@ func StartAgent(t *testing.T, binaryPath string) *Agent {
 	configPath := filepath.Join(dataDir, "formae.conf.pkl")
 	dbPath := filepath.Join(dataDir, "formae.db")
 	logPath := filepath.Join(dataDir, "formae.log")
+
+	discoveryEnabled := "false"
+	if options.discoveryEnabled {
+		discoveryEnabled = "true"
+	}
 
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
@@ -69,7 +98,8 @@ agent {
         enabled = false
     }
     discovery {
-        enabled = false
+        enabled = %s
+        interval = %s
     }
     logging {
         consoleLogLevel = "debug"
@@ -84,7 +114,7 @@ cli {
     }
     disableUsageReporting = true
 }
-`, port, dbPath, logPath, port)
+`, port, dbPath, discoveryEnabled, options.discoveryInterval, logPath, port)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)

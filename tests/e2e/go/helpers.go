@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // UniqueStackName generates a unique stack name by appending a random hex
@@ -149,5 +151,140 @@ func AssertResolvable(t *testing.T, propValue any, expectedLabel, expectedType, 
 	}
 	if m["$value"] != expectedValue {
 		t.Errorf("resolvable $value: got %v, want %s", m["$value"], expectedValue)
+	}
+}
+
+// AssertIsResolvable asserts that a property value is a resolvable reference
+// with the expected type, property, and resolved value. Unlike AssertResolvable,
+// it does not check the label (useful for discovered resources with auto-generated labels).
+func AssertIsResolvable(t *testing.T, propValue any, expectedType, expectedProperty, expectedValue string) {
+	t.Helper()
+	m, ok := propValue.(map[string]any)
+	if !ok {
+		t.Fatalf("expected resolvable (map), got %T: %v", propValue, propValue)
+	}
+	if res, ok := m["$res"].(bool); !ok || !res {
+		t.Fatalf("expected $res=true, got %v", m["$res"])
+	}
+	if m["$type"] != expectedType {
+		t.Errorf("resolvable $type: got %v, want %s", m["$type"], expectedType)
+	}
+	if m["$property"] != expectedProperty {
+		t.Errorf("resolvable $property: got %v, want %s", m["$property"], expectedProperty)
+	}
+	if m["$value"] != expectedValue {
+		t.Errorf("resolvable $value: got %v, want %s", m["$value"], expectedValue)
+	}
+}
+
+// FilterUnmanaged returns only unmanaged resources from the given slice.
+func FilterUnmanaged(resources []Resource) []Resource {
+	var unmanaged []Resource
+	for _, r := range resources {
+		if !r.Managed {
+			unmanaged = append(unmanaged, r)
+		}
+	}
+	return unmanaged
+}
+
+// FilterByNativeIDContains returns resources whose NativeID contains the given
+// substring. Useful for filtering test resources by naming convention prefix.
+func FilterByNativeIDContains(resources []Resource, substring string) []Resource {
+	var filtered []Resource
+	for _, r := range resources {
+		if strings.Contains(r.NativeID, substring) {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}
+
+// WaitForDiscovery polls inventory with retries, triggering discovery cycles,
+// until at least minCount unmanaged resources whose NativeID contains the given
+// substring are found, or the timeout is reached. The nativeIDContains filter
+// prevents false-positives in shared accounts where other unmanaged resources
+// may exist.
+func WaitForDiscovery(t *testing.T, cli *FormaeCLI, nativeIDContains string, minCount int, timeout time.Duration) []Resource {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var resources []Resource
+	for time.Now().Before(deadline) {
+		resources = cli.Inventory(t, "--query", "managed:false")
+		matching := FilterByNativeIDContains(resources, nativeIDContains)
+		if len(matching) >= minCount {
+			return resources
+		}
+		t.Logf("waiting for discovery: found %d resources matching %q (need %d), triggering another cycle",
+			len(matching), nativeIDContains, minCount)
+		cli.ForceDiscover(t)
+		time.Sleep(5 * time.Second)
+	}
+	matching := FilterByNativeIDContains(resources, nativeIDContains)
+	t.Fatalf("timeout waiting for %d unmanaged resources matching %q, got %d",
+		minCount, nativeIDContains, len(matching))
+	return nil
+}
+
+// AssertTagExists checks that the resource has a tag list under the given
+// property key containing a tag with the specified Key and Value.
+func AssertTagExists(t *testing.T, resource Resource, propertyKey, expectedKey, expectedValue string) {
+	t.Helper()
+
+	tagsRaw, ok := resource.Properties[propertyKey]
+	if !ok {
+		t.Fatalf("resource %s missing property %s", resource.Label, propertyKey)
+	}
+
+	tags, ok := tagsRaw.([]any)
+	if !ok {
+		t.Fatalf("resource %s property %s: expected []any, got %T: %v",
+			resource.Label, propertyKey, tagsRaw, tagsRaw)
+	}
+
+	for _, tagRaw := range tags {
+		tag, ok := tagRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, _ := tag["Key"].(string)
+		value, _ := tag["Value"].(string)
+		if key == expectedKey && value == expectedValue {
+			return
+		}
+	}
+
+	t.Errorf("resource %s: tag Key=%q Value=%q not found in %s",
+		resource.Label, expectedKey, expectedValue, propertyKey)
+}
+
+// SetExtractedStackLabel reads the extracted PKL file, replaces the
+// commented-out $unmanaged stack label with the given stackLabel, and writes
+// the file back. The extract command generates:
+//
+//	// Please provide a stack to bring the resources in this Forma under management
+//	// label = ""
+//
+// This function replaces those two lines with an uncommented label assignment.
+func SetExtractedStackLabel(t *testing.T, pklPath string, stackLabel string) {
+	t.Helper()
+
+	data, err := os.ReadFile(pklPath)
+	if err != nil {
+		t.Fatalf("failed to read extracted PKL file %s: %v", pklPath, err)
+	}
+
+	content := string(data)
+	old := "// Please provide a stack to bring the resources in this Forma under management\n    // label = \"\""
+	replacement := fmt.Sprintf("label = %q", stackLabel)
+
+	if !strings.Contains(content, old) {
+		t.Fatalf("extracted PKL does not contain expected $unmanaged stack comment:\n%s", content)
+	}
+
+	content = strings.Replace(content, old, replacement, 1)
+
+	if err := os.WriteFile(pklPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write modified PKL file %s: %v", pklPath, err)
 	}
 }

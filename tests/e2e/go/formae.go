@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -205,20 +206,21 @@ func (f *FormaeCLI) Inventory(t *testing.T, args ...string) []Resource {
 	return resources
 }
 
-// Extract runs `formae extract` with the given query and returns the raw output.
-func (f *FormaeCLI) Extract(t *testing.T, query string) string {
+// ExtractToFile runs `formae extract` with the given query and writes the
+// resulting PKL to targetPath. The --yes flag is set to overwrite without
+// prompting.
+func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string) {
 	t.Helper()
 
 	args := []string{
 		"extract",
 		"--config", f.configPath,
 		"--query", query,
-		"--output-consumer", "machine",
-		"--output-schema", "json",
+		"--yes",
+		targetPath,
 	}
 
-	stdout := f.run(t, args...)
-	return string(stdout)
+	f.run(t, args...)
 }
 
 // StatusCommand queries the status of a specific command by ID.
@@ -268,6 +270,18 @@ func (f *FormaeCLI) StatusCommand(t *testing.T, commandID string) CommandResult 
 	return CommandResult{
 		State:           cmd.State,
 		ResourceUpdates: updates,
+	}
+}
+
+// ForceDiscover triggers an immediate discovery cycle via `formae dev discover`.
+func (f *FormaeCLI) ForceDiscover(t *testing.T) {
+	t.Helper()
+	args := []string{"dev", "discover", "--config", f.configPath}
+	cmd := exec.Command(f.binaryPath, args...)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("formae dev discover failed: %v\noutput: %s", err, output)
 	}
 }
 
