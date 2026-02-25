@@ -18,10 +18,9 @@ permissions:
   contents: read
 
 jobs:
-  e2e:
+  e2e-aws:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Only run if the triggering workflow succeeded
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
          github.event.workflow_run.conclusion == 'success' }}
@@ -70,9 +69,52 @@ jobs:
           aws configure set aws_access_key_id ${{ steps.creds.outputs.aws-access-key-id }} --profile e2e-test
           aws configure set aws_secret_access_key ${{ steps.creds.outputs.aws-secret-access-key }} --profile e2e-test
           aws configure set region us-west-2 --profile e2e-test
-        # aws configure set aws_session_token ${{ steps.creds.outputs.aws-session-token }} --profile e2e-test
+
       - name: Test AWS Access
         run: aws sts get-caller-identity
+
+      - name: Running e2e-tests (bash)
+        env:
+          AWS_PROFILE: e2e-test
+        run: make test-e2e
+
+      - name: Running e2e-tests (Go, AWS)
+        env:
+          AWS_PROFILE: e2e-test
+        run: make test-e2e-go E2E_RUN_FLAGS='-run "/AWS"'
+
+      - name: Nuke Discovery
+        if: ${{ always() }}
+        run: |
+          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
+
+      - name: Nuke AWS
+        if: ${{ always() }}
+        run: |
+          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
+
+  e2e-azure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+         github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.1'
 
       - name: Configure Azure Credentials
         uses: azure/login@v2
@@ -81,27 +123,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Running e2e-tests (bash)
+      - name: Running e2e-tests (Go, Azure)
         env:
-          AWS_PROFILE: e2e-test
-        run: make test-e2e
-
-      - name: Running e2e-tests (Go)
-        env:
-          AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: make test-e2e-go
-
-      - name: Nuke Discovery
-        if: ${{ always() }}
-        #env:
-        #  AWS_PROFILE: e2e-test
-        run: |
-          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
-
-      - name: Nuke AWS
-        if: ${{ always() }}
-        #env:
-        #  AWS_PROFILE: e2e-test
-        run: |
-          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
+        run: make test-e2e-go E2E_RUN_FLAGS='-run "/Azure"'

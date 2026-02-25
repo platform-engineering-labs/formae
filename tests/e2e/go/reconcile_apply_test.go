@@ -7,10 +7,18 @@
 package e2e_test
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 )
 
 // fixturesDir returns the absolute path to the fixtures directory relative
@@ -116,9 +124,17 @@ func testReconcileApplyAWS(t *testing.T) {
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 resources after destroy, got %d", len(remaining))
 	}
+
+	// Step 8: Verify the IAM role is actually gone in AWS.
+	verifyAWSRoleDeleted(t, "formae-e2e-reconcile-role")
 }
 
 func testReconcileApplyAzure(t *testing.T) {
+	subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
+	if subscriptionID == "" {
+		t.Fatal("AZURE_SUBSCRIPTION_ID environment variable is required for Azure tests")
+	}
+
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
 	cli := NewFormaeCLI(bin, agent.ConfigPath())
@@ -236,5 +252,65 @@ func testReconcileApplyAzure(t *testing.T) {
 	remaining := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure")
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 resources after destroy, got %d", len(remaining))
+	}
+
+	// Step 9: Verify the resource group is actually gone in Azure.
+	verifyAzureResourceGroupDeleted(t, subscriptionID, "formae-e2e-reconcile-rg")
+}
+
+// verifyAWSRoleDeleted uses the AWS IAM SDK to confirm that the given role
+// no longer exists. It expects a NoSuchEntity error from GetRole.
+func verifyAWSRoleDeleted(t *testing.T, roleName string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-west-2"))
+	if err != nil {
+		t.Fatalf("failed to load AWS config: %v", err)
+	}
+
+	client := iam.NewFromConfig(cfg)
+	_, err = client.GetRole(ctx, &iam.GetRoleInput{
+		RoleName: &roleName,
+	})
+	if err == nil {
+		t.Errorf("expected IAM role %q to be deleted, but GetRole succeeded", roleName)
+		return
+	}
+
+	if !strings.Contains(err.Error(), "NoSuchEntity") {
+		t.Errorf("expected NoSuchEntity error for role %q, got: %v", roleName, err)
+	}
+}
+
+// verifyAzureResourceGroupDeleted uses the Azure SDK to confirm that the
+// given resource group no longer exists.
+func verifyAzureResourceGroupDeleted(t *testing.T, subscriptionID, rgName string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		t.Fatalf("failed to create Azure credential: %v", err)
+	}
+
+	client, err := armresources.NewResourceGroupsClient(subscriptionID, cred, nil)
+	if err != nil {
+		t.Fatalf("failed to create Azure resource groups client: %v", err)
+	}
+
+	_, err = client.Get(ctx, rgName, nil)
+	if err == nil {
+		t.Errorf("expected resource group %q to be deleted, but Get succeeded", rgName)
+		return
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "ResourceGroupNotFound") && !strings.Contains(errMsg, "ResourceNotFound") && !strings.Contains(errMsg, "404") {
+		t.Errorf("expected NotFound error for resource group %q, got: %v", rgName, err)
 	}
 }
