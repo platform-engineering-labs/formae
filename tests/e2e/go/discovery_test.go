@@ -28,8 +28,6 @@ func ptr(s string) *string {
 }
 
 func TestDiscovery(t *testing.T) {
-	t.Parallel()
-
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin, WithDiscovery("30.s"))
 	cli := NewFormaeCLI(bin, agent.ConfigPath())

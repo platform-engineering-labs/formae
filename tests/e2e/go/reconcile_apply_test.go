@@ -34,8 +34,6 @@ func fixturesDir(t *testing.T) string {
 }
 
 func TestReconcileApply(t *testing.T) {
-	t.Parallel()
-
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
 	cli := NewFormaeCLI(bin, agent.ConfigPath())

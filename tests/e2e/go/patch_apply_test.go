@@ -14,8 +14,6 @@ import (
 )
 
 func TestPatchApply(t *testing.T) {
-	t.Parallel()
-
 	bin := FormaeBinary(t)
 	agent := StartAgent(t, bin)
 	cli := NewFormaeCLI(bin, agent.ConfigPath())

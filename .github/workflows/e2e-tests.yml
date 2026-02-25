@@ -18,9 +18,9 @@ permissions:
   contents: read
 
 jobs:
-  e2e:
+  e2e-bash:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
          github.event.workflow_run.conclusion == 'success' }}
@@ -41,13 +41,64 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Install aws-nuke
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.1'
+
+      - name: Configure AWS Credentials
+        id: creds
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
+          role-session-name: PublishSession
+          output-credentials: true
+
+      - name: Add profile credentials to ~/.aws/credentials
         run: |
-          wget -O aws-nuke.tar.gz https://github.com/ekristen/aws-nuke/releases/download/v3.56.2/aws-nuke-v3.56.2-linux-amd64.tar.gz
-          tar -xzf aws-nuke.tar.gz
-          sudo mv aws-nuke /usr/local/bin/
-          sudo chmod +x /usr/local/bin/aws-nuke
-          aws-nuke version
+          mkdir -p ~/.aws
+          aws configure set aws_access_key_id ${{ steps.creds.outputs.aws-access-key-id }} --profile e2e-test
+          aws configure set aws_secret_access_key ${{ steps.creds.outputs.aws-secret-access-key }} --profile e2e-test
+          aws configure set region us-west-2 --profile e2e-test
+
+      - name: Test AWS Access
+        run: aws sts get-caller-identity
+
+      - name: Running e2e-tests (bash)
+        env:
+          AWS_PROFILE: e2e-test
+        run: make test-e2e
+
+  e2e-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+         github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - TestReconcileApply
+          - TestPatchApply
+          - TestDiscovery
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
 
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -83,23 +134,40 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Running e2e-tests (bash)
-        env:
-          AWS_PROFILE: e2e-test
-        run: make test-e2e
-
-      - name: Running e2e-tests (Go)
+      - name: Running ${{ matrix.test }}
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: make test-e2e-go
+        run: make test-e2e-go E2E_RUN_FLAGS="-run ${{ matrix.test }}"
+
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [e2e-bash, e2e-go]
+    if: ${{ always() }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install aws-nuke
+        run: |
+          wget -O aws-nuke.tar.gz https://github.com/ekristen/aws-nuke/releases/download/v3.56.2/aws-nuke-v3.56.2-linux-amd64.tar.gz
+          tar -xzf aws-nuke.tar.gz
+          sudo mv aws-nuke /usr/local/bin/
+          sudo chmod +x /usr/local/bin/aws-nuke
+          aws-nuke version
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
+          role-session-name: NukeSession
 
       - name: Nuke Discovery
-        if: ${{ always() }}
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
 
       - name: Nuke AWS
-        if: ${{ always() }}
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
