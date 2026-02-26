@@ -17,6 +17,8 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/api"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/network"
+	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/usage"
@@ -437,12 +439,12 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	}
 
 	if a.Config.Plugins.Network != nil {
-		netPlugin, err := a.PluginManager.NetworkPlugin(a.Config.Plugins.Network)
+		netPlugin, err := network.DefaultRegistry.GetByConfig(a.Config.Plugins.Network)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		net, err = (*netPlugin).Client(a.Config.Plugins.Network)
+		net, err = netPlugin.Client(a.Config.Plugins.Network)
 		if err != nil {
 			return nil, nil, err
 		}

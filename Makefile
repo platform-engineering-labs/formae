@@ -36,7 +36,6 @@ clean-pel:
 build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
 	go build -C plugins/fake-aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws.so
-	go build -C plugins/tailscale -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 
 build-tools:
@@ -85,7 +84,6 @@ install-external-plugins: build-external-plugins
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
 	go build -C plugins/fake-aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws-debug.so
-	go build -C plugins/tailscale ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o tailscale-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
 pkg-bin: clean build build-tools build-external-plugins
@@ -190,14 +188,12 @@ test-build:
 
 test-all: test-build test-pkl
 	go test -C ./plugins/auth-basic -tags="unit integration" -count=1 -failfast ./...
-	go test -C ./plugins/tailscale -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./
 	go test -tags="unit integration" -count=1 -failfast ./...
 
 test-unit:
 	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...
-	go test -C ./plugins/tailscale -tags=unit -failfast ./...
 	go test -C ./pkg/model -tags=unit -failfast ./
 	go test -C ./pkg/plugin -tags=unit -failfast ./
 	go test -tags=unit -failfast ./...
@@ -283,7 +279,6 @@ test-unit-summary:
 
 test-integration:
 	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
-	go test -C ./plugins/tailscale -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
 test-e2e: gen-pkl pkg-pkl build install-external-plugins
@@ -335,7 +330,6 @@ tidy-all:
 	go mod tidy
 	cd ./plugins/auth-basic && go mod tidy
 	cd ./plugins/fake-aws && go mod tidy
-	cd ./plugins/tailscale && go mod tidy
 	cd ./tools/ppm && go mod tidy
 	cd ./pkg/model && go mod tidy
 	cd ./pkg/plugin && go mod tidy

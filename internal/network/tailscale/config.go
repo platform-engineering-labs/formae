@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package tailscale
 
+// Config holds the Tailscale network plugin configuration.
 type Config struct {
 	Hostname      string
 	Tls           bool
@@ -11,7 +12,7 @@ type Config struct {
 	AdvertiseTags []string
 }
 
-func ValueOrDefault(value string, def string) string {
+func valueOrDefault(value string, def string) string {
 	if value == "" {
 		return def
 	}
