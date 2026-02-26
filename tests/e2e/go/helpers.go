@@ -7,6 +7,7 @@
 package e2e_test
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"os"
@@ -14,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 )
 
 // UniqueStackName generates a unique stack name by appending a random hex
@@ -311,5 +315,32 @@ func SetExtractedStackLabel(t *testing.T, pklPath string, stackLabel string) {
 
 	if err := os.WriteFile(pklPath, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write modified PKL file %s: %v", pklPath, err)
+	}
+}
+
+// verifyAWSRoleDeleted uses the AWS IAM SDK to confirm that the given role
+// no longer exists. It expects a NoSuchEntity error from GetRole.
+func verifyAWSRoleDeleted(t *testing.T, roleName string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-west-2"))
+	if err != nil {
+		t.Fatalf("failed to load AWS config: %v", err)
+	}
+
+	client := iam.NewFromConfig(cfg)
+	_, err = client.GetRole(ctx, &iam.GetRoleInput{
+		RoleName: &roleName,
+	})
+	if err == nil {
+		t.Errorf("expected IAM role %q to be deleted, but GetRole succeeded", roleName)
+		return
+	}
+
+	if !strings.Contains(err.Error(), "NoSuchEntity") {
+		t.Errorf("expected NoSuchEntity error for role %q, got: %v", roleName, err)
 	}
 }

@@ -284,18 +284,10 @@ test-integration:
 	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-e2e: gen-pkl pkg-pkl build install-external-plugins
+test-e2e: build install-external-plugins
 	echo "Setting up e2e PKL dependencies..."
-	bash ./tests/e2e/setup-pkl-deps.sh
-	echo "Resolving PKL project..."
-	pkl project resolve tests/e2e/pkl
-	echo "Running full E2E test suite..."
-	bash ./tests/e2e/e2e.sh
-
-test-e2e-go: build install-external-plugins
-	echo "Setting up Go e2e PKL dependencies..."
 	bash ./tests/e2e/go/setup_pkl.sh
-	echo "Running Go e2e tests..."
+	echo "Running e2e tests..."
 	E2E_FORMAE_BINARY=$(CURDIR)/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
 
 test-property:

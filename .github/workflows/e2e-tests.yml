@@ -18,59 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  e2e-bash:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' ||
-         github.event.workflow_run.conclusion == 'success' }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Install pkl
-        uses: pkl-community/setup-pkl@v0
-        with:
-          pkl-version: 0.30.0
-
-      - name: Install yq
-        run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.25.1'
-
-      - name: Configure AWS Credentials
-        id: creds
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: us-west-2
-          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
-          role-session-name: PublishSession
-          output-credentials: true
-
-      - name: Add profile credentials to ~/.aws/credentials
-        run: |
-          mkdir -p ~/.aws
-          aws configure set aws_access_key_id ${{ steps.creds.outputs.aws-access-key-id }} --profile e2e-test
-          aws configure set aws_secret_access_key ${{ steps.creds.outputs.aws-secret-access-key }} --profile e2e-test
-          aws configure set region us-west-2 --profile e2e-test
-
-      - name: Test AWS Access
-        run: aws sts get-caller-identity
-
-      - name: Running e2e-tests (bash)
-        env:
-          AWS_PROFILE: e2e-test
-        run: make test-e2e
-
-  e2e-go:
+  e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: >-
@@ -86,7 +34,6 @@ jobs:
           - TestSoftReconcile
           - TestHardReconcile
           - TestReplace
-          - TestDAG
 
     steps:
       - uses: actions/checkout@v4
@@ -142,12 +89,12 @@ jobs:
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: make test-e2e-go E2E_RUN_FLAGS="-run ${{ matrix.test }}"
+        run: make test-e2e E2E_RUN_FLAGS="-run ${{ matrix.test }}"
 
   cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [e2e-bash, e2e-go]
+    needs: [e2e]
     if: ${{ always() }}
 
     steps:
