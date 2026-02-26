@@ -19,6 +19,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
+	newds "github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
@@ -71,20 +72,12 @@ type Metastructure struct {
 }
 
 func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *plugin.Manager, agentID string) (*Metastructure, error) {
-	var (
-		ds  datastore.Datastore
-		err error
-	)
-
-	switch cfg.Agent.Datastore.DatastoreType {
-	case pkgmodel.PostgresDatastore:
-		ds, err = datastore.NewDatastorePostgres(ctx, &cfg.Agent.Datastore, agentID)
-	case pkgmodel.AuroraDataAPIDatastore:
-		ds, err = datastore.NewDatastoreAuroraDataAPI(ctx, &cfg.Agent.Datastore, agentID)
-	default:
-		ds, err = datastore.NewDatastoreSQLite(ctx, &cfg.Agent.Datastore, agentID)
+	datastoreType := cfg.Agent.Datastore.DatastoreType
+	if datastoreType == "" {
+		datastoreType = "sqlite"
 	}
 
+	ds, err := newds.DefaultRegistry.Create(datastoreType, ctx, &cfg.Agent.Datastore, agentID)
 	if err != nil {
 		return nil, err
 	}

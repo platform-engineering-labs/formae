@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/util"
