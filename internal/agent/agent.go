@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -255,7 +256,7 @@ func removeStalePidFile() error {
 	}
 
 	process, err := os.FindProcess(pid)
-	if err != nil || process.Signal(syscall.Signal(0)) != nil {
+	if err != nil || errors.Is(process.Signal(syscall.Signal(0)), os.ErrProcessDone) {
 		slog.Warn("Removing stale PID file", "pid", pid)
 		removePidFile()
 		return nil
