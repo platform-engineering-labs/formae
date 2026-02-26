@@ -231,7 +231,8 @@ func (s *Server) configureEcho() *echo.Echo {
 // @Param force formData boolean false "Only applies to the apply command in reconcile mode. If true, any changes made to the infrastructure since the last reconcile, either by patches or outside of Formae, will be overwritten."
 // @Param query formData string false "Only applies to destroy commands. A query string to select the resources to be destroyed."
 // @Param file formData file false "A valid Forma file."
-// @Success 202 {object} apimodel.SubmitCommandResponse "Accepted: The command is validated and stored and queued for execution."
+// @Success 200 {object} apimodel.SubmitCommandResponse "OK: No changes required, or simulation result returned."
+// @Success 202 {object} apimodel.SubmitCommandResponse "Accepted: The command is validated, stored, and queued for execution."
 // @Header 202 {string} string Location "The URL to poll for the command's execution status (e.g., /api/v1/commands/{command_id}/status)."
 // @Failure 500 {string} string "Internal Server Error."
 // @Router /commands [post]
@@ -293,10 +294,16 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 		return fmt.Errorf("unsupported command: %s", command)
 	}
 
-	location := strings.Replace(CommandStatusRoute, ":id", response.CommandID, 1)
-	c.Response().Header().Set("Location", location)
+	// Return 202 Accepted only when a command was actually queued for async
+	// execution. Return 200 OK for simulations and no-op commands where no
+	// work was started.
+	if response.Simulation.ChangesRequired && !simulate {
+		location := strings.Replace(CommandStatusRoute, ":id", response.CommandID, 1)
+		c.Response().Header().Set("Location", location)
+		return c.JSON(http.StatusAccepted, response)
+	}
 
-	return c.JSON(http.StatusAccepted, response)
+	return c.JSON(http.StatusOK, response)
 }
 
 // @Summary Get the status of a Forma command

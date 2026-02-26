@@ -463,7 +463,14 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		m.Node.Log().Debug("No resource updates, skipping ChangesetExecutor (target-only forma)", "commandID", fa.ID)
 	}
 
-	return &apimodel.SubmitCommandResponse{CommandID: fa.ID, Description: apimodel.Description(fa.Description)}, nil
+	return &apimodel.SubmitCommandResponse{
+		CommandID:   fa.ID,
+		Description: apimodel.Description(fa.Description),
+		Simulation: apimodel.Simulation{
+			ChangesRequired: fa.HasChanges(),
+			Command:         translateToAPICommand(fa),
+		},
+	}, nil
 }
 
 func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
