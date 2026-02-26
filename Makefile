@@ -302,7 +302,7 @@ mutation-test: build
 	./scripts/mutation-test.sh
 	./scripts/coverage-diff.sh
 	./scripts/generate-mutation-report.sh
-	@echo "Report: docs/plans/mutation-report/summary.md"
+	@echo "Report: .plans/mutation-report/summary.md"
 
 test-schema-pkl:
 	cd internal/schema/pkl/schema && pkl test tests/formae.pkl

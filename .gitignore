@@ -89,7 +89,6 @@ CLAUDE.md
 .handoffs/
 .research/
 docs/design/
-docs/plans/
 
 # Git worktrees
 .worktrees/

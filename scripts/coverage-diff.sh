@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
-REPORT_DIR="$REPO_ROOT/docs/plans/mutation-report"
+REPORT_DIR="$REPO_ROOT/.plans/mutation-report"
 mkdir -p "$REPORT_DIR"
 
 UNIT_PROFILE="$REPORT_DIR/coverage-unit.out"
