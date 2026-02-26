@@ -22,7 +22,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -259,7 +259,7 @@ func newDistributedMetastructure(t *testing.T, cfg *pkgmodel.Config, pluginsDir 
 	t.Helper()
 
 	// Create datastore
-	db, err := datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+	db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 	require.NoError(t, err, "Failed to create datastore")
 
 	// Create plugin manager with isolated plugins directory

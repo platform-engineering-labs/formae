@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package datastore
+package sqlite
 
 import (
 	"context"
@@ -22,9 +22,9 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 	"go.opentelemetry.io/otel/trace"
 
-	newds "github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stats"
@@ -53,7 +53,7 @@ func init() {
 	))
 
 	// Register SQLite factory with the datastore extension registry
-	newds.DefaultRegistry.Register("sqlite", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (newds.Datastore, error) {
+	datastore.DefaultRegistry.Register("sqlite", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
 		return NewDatastoreSQLite(ctx, cfg, agentID)
 	})
 }
@@ -68,7 +68,7 @@ type TestDatastoreSQLite interface {
 	ClearCommandsTable() error
 }
 
-func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (Datastore, error) {
+func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
 	// Skip directory creation for in-memory databases
 	isMemoryDb := cfg.Sqlite.FilePath == ":memory:" ||
 		strings.HasPrefix(cfg.Sqlite.FilePath, "file::memory:")
@@ -107,7 +107,7 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 
 	d := DatastoreSQLite{conn: conn, agentID: agentID, ctx: ctx}
 
-	if err = runMigrations(conn, "sqlite3"); err != nil {
+	if err = datastore.RunMigrations(conn, "sqlite3"); err != nil {
 		return nil, err
 	}
 
@@ -117,9 +117,9 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 }
 
 func (d DatastoreSQLite) ClearCommandsTable() error {
-	_, err := d.conn.Exec(fmt.Sprintf("DELETE FROM %s", CommandsTable))
+	_, err := d.conn.Exec(fmt.Sprintf("DELETE FROM %s", datastore.CommandsTable))
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to clear %s table", CommandsTable), "error", err)
+		slog.Error(fmt.Sprintf("Failed to clear %s table", datastore.CommandsTable), "error", err)
 		return err
 	}
 	return nil
@@ -178,7 +178,7 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		(command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		 description_text, description_confirm, config_mode, config_force, config_simulate,
 		 target_updates, stack_updates, policy_updates, modified_ts)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, CommandsTable)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, datastore.CommandsTable)
 
 	_, err = d.conn.Exec(query, commandID, startTsUTC, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, descriptionConfirm, fa.Config.Mode, configForce, configSimulate,
@@ -478,7 +478,7 @@ func (d DatastoreSQLite) DeleteFormaCommand(fa *forma_command.FormaCommand, comm
 		return fmt.Errorf("failed to delete resource_updates: %w", err)
 	}
 
-	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = ?", CommandsTable)
+	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = ?", datastore.CommandsTable)
 	_, err = d.conn.Exec(query, commandID)
 	return err
 }
@@ -547,7 +547,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 	return commands[0], nil
 }
 
-func (d DatastoreSQLite) GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error) {
+func (d DatastoreSQLite) GetResourceModificationsSinceLastReconcile(stack string) ([]datastore.ResourceModification, error) {
 	_, span := sqliteTracer.Start(context.Background(), "GetResourceModificationsSinceLastReconcile")
 	defer span.End()
 
@@ -588,14 +588,14 @@ WHERE
       fc.timestamp DESC
     LIMIT 1
   ) AND T2.stack = ?;
-		`, CommandsTable)
+		`, datastore.CommandsTable)
 	rows, err := d.conn.Query(query, stack, stack, stack)
 	if err != nil {
 		return nil, err
 	}
 	defer closeRows(rows)
 
-	modifications := make(map[ResourceModification]struct{})
+	modifications := make(map[datastore.ResourceModification]struct{})
 	for rows.Next() {
 		var resourceType string
 		var label string
@@ -603,7 +603,7 @@ WHERE
 		if err := rows.Scan(&resourceType, &label, &operation); err != nil {
 			return nil, err
 		}
-		modifications[ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
+		modifications[datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
 	}
 
 	return slices.Collect(maps.Keys(modifications)), nil
@@ -621,13 +621,13 @@ func closeRows(rows *sql.Rows) {
 	}
 }
 
-func extendSQLiteQueryString[T any](queryStr string, queryItem *QueryItem[T], sqlPart string, args *[]any) string {
+func extendSQLiteQueryString[T any](queryStr string, queryItem *datastore.QueryItem[T], sqlPart string, args *[]any) string {
 	if queryItem != nil {
 		var operator string
 
-		if queryItem.Constraint == Excluded {
+		if queryItem.Constraint == datastore.Excluded {
 			operator = "!="
-		} else if queryItem.Constraint == Required || queryItem.Constraint == Optional {
+		} else if queryItem.Constraint == datastore.Required || queryItem.Constraint == datastore.Optional {
 			operator = "="
 		}
 
@@ -652,7 +652,7 @@ func extendSQLiteQueryString[T any](queryStr string, queryItem *QueryItem[T], sq
 	return queryStr
 }
 
-func (d DatastoreSQLite) QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error) {
+func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
 	_, span := sqliteTracer.Start(context.Background(), "QueryFormaCommands")
 	defer span.End()
 
@@ -674,9 +674,9 @@ func (d DatastoreSQLite) QueryFormaCommands(query *StatusQuery) ([]*forma_comman
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {
 		subqueryStr += " LIMIT ?"
-		args = append(args, min(DefaultFormaCommandsQueryLimit, query.N))
+		args = append(args, min(datastore.DefaultFormaCommandsQueryLimit, query.N))
 	} else {
-		subqueryStr += fmt.Sprintf(" LIMIT %d", DefaultFormaCommandsQueryLimit)
+		subqueryStr += fmt.Sprintf(" LIMIT %d", datastore.DefaultFormaCommandsQueryLimit)
 	}
 
 	// Main query joins with resource_updates for commands matching the subquery
@@ -703,7 +703,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *StatusQuery) ([]*forma_comman
 	return loadFormaCommandsFromJoinedRows(rows)
 }
 
-func (d DatastoreSQLite) QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error) {
+func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
 	_, span := sqliteTracer.Start(context.Background(), "QueryResources")
 	defer span.End()
 
@@ -803,7 +803,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 			resource.Label,
 			resource.Target,
 			data,
-			boolToInt(resource.Managed),
+			datastore.BoolToInt(resource.Managed),
 			resource.Ksuid)
 		if err != nil {
 			slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -835,7 +835,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		return "", err
 	}
 
-	readWriteEqual, readOnlyEqual := resourcesAreEqual(resource, &existingResource)
+	readWriteEqual, readOnlyEqual := datastore.ResourcesAreEqual(resource, &existingResource)
 
 	if operation == string(resource_update.OperationDelete) {
 		// For delete operations, check if the latest version is already a delete
@@ -884,7 +884,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		resource.Label,
 		resource.Target,
 		data,
-		boolToInt(resource.Managed),
+		datastore.BoolToInt(resource.Managed),
 		resource.Ksuid)
 	if err != nil {
 		slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -2093,7 +2093,7 @@ func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmod
 	}
 }
 
-func (d DatastoreSQLite) GetExpiredStacks() ([]ExpiredStackInfo, error) {
+func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	slog.Debug("SQLite START", "method", "GetExpiredStacks")
 	start := time.Now()
 	defer func() { slog.Debug("SQLite END", "method", "GetExpiredStacks", "duration", time.Since(start)) }()
@@ -2165,9 +2165,9 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	var result []ExpiredStackInfo
+	var result []datastore.ExpiredStackInfo
 	for rows.Next() {
-		var info ExpiredStackInfo
+		var info datastore.ExpiredStackInfo
 		var onDependents sql.NullString
 		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents); err != nil {
 			return nil, err
@@ -2187,7 +2187,7 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 	return result, nil
 }
 
-func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {
+func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
 	_, span := sqliteTracer.Start(context.Background(), "GetStacksWithAutoReconcilePolicy")
 	defer span.End()
 
@@ -2255,9 +2255,9 @@ func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInf
 	}
 	defer func() { _ = rows.Close() }()
 
-	var result []StackReconcileInfo
+	var result []datastore.StackReconcileInfo
 	for rows.Next() {
-		var info StackReconcileInfo
+		var info datastore.StackReconcileInfo
 		var lastReconcileStr string
 		if err := rows.Scan(&info.StackLabel, &info.StackID, &info.IntervalSeconds, &lastReconcileStr); err != nil {
 			return nil, err
@@ -2273,7 +2273,7 @@ func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInf
 	return result, nil
 }
 
-func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error) {
+func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {
 	_, span := sqliteTracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()
 
@@ -2311,9 +2311,9 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]Resou
 	}
 	defer func() { _ = rows.Close() }()
 
-	var result []ResourceSnapshot
+	var result []datastore.ResourceSnapshot
 	for rows.Next() {
-		var snapshot ResourceSnapshot
+		var snapshot datastore.ResourceSnapshot
 		var propsData, schemaData, nativeID sql.NullString
 		if err := rows.Scan(&snapshot.KSUID, &snapshot.Type, &snapshot.Label, &snapshot.Target, &propsData, &schemaData, &nativeID); err != nil {
 			return nil, err
@@ -2371,7 +2371,7 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 	}
 
 	query := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES (?, 1, ?, ?, ?)`
-	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, boolToInt(target.Discoverable))
+	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, datastore.BoolToInt(target.Discoverable))
 	if err != nil {
 		slog.Error("Failed to create target", "error", err, "label", target.Label)
 		return "", err
@@ -2404,7 +2404,7 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	}
 
 	insertQuery := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES (?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, boolToInt(target.Discoverable))
+	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, datastore.BoolToInt(target.Discoverable))
 	if err != nil {
 		slog.Error("Failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -2641,7 +2641,7 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 	return targets, rows.Err()
 }
 
-func (d DatastoreSQLite) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error) {
+func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel.Target, error) {
 	_, span := sqliteTracer.Start(context.Background(), "QueryTargets")
 	defer span.End()
 
@@ -2722,7 +2722,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 
 	res := stats.Stats{}
 
-	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", CommandsTable)
+	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", datastore.CommandsTable)
 	row := d.conn.QueryRow(clientsQuery)
 
 	var clientCount int
@@ -2732,7 +2732,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 
 	res.Clients = clientCount
 
-	commandsQuery := fmt.Sprintf("SELECT command, COUNT(*) FROM %s WHERE command != ? GROUP BY command", CommandsTable)
+	commandsQuery := fmt.Sprintf("SELECT command, COUNT(*) FROM %s WHERE command != ? GROUP BY command", datastore.CommandsTable)
 	rows, err := d.conn.Query(commandsQuery, pkgmodel.CommandSync)
 	if err != nil {
 		return nil, err
@@ -2756,7 +2756,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		return nil, err
 	}
 
-	statusQuery := fmt.Sprintf("SELECT state, COUNT(*) FROM %s WHERE command != ? GROUP BY state", CommandsTable)
+	statusQuery := fmt.Sprintf("SELECT state, COUNT(*) FROM %s WHERE command != ? GROUP BY state", datastore.CommandsTable)
 	rows, err = d.conn.Query(statusQuery, pkgmodel.CommandSync)
 	if err != nil {
 		return nil, err
@@ -3597,7 +3597,7 @@ func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid st
 
 // BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 // Used for bulk operations like marking dependent resources as failed
-func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs []datastore.ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
 	slog.Debug("SQLite START", "method", "BatchUpdateResourceUpdateState", "commandID", commandID, "count", len(refs), "state", state)
 	start := time.Now()
 	defer func() {

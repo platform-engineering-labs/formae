@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package datastore
+package postgres
 
 import (
 	"context"
@@ -22,9 +22,9 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
-	newds "github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stats"
@@ -41,7 +41,7 @@ func init() {
 	tracer = otel.Tracer("formae/datastore")
 
 	// Register Postgres factory with the datastore extension registry
-	newds.DefaultRegistry.Register("postgres", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (newds.Datastore, error) {
+	datastore.DefaultRegistry.Register("postgres", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
 		return NewDatastorePostgres(ctx, cfg, agentID)
 	})
 }
@@ -87,7 +87,7 @@ func ensureDatabaseExists(ctx context.Context, cfg *pkgmodel.DatastoreConfig) er
 }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
-func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (Datastore, error) {
+func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
 	err := ensureDatabaseExists(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -96,7 +96,7 @@ func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.Datas
 	return NewDatastorePostgres(ctx, cfg, agentID)
 }
 
-func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (Datastore, error) {
+func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
 		cfg.Postgres.User, cfg.Postgres.Password, cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.Database)
 
@@ -125,7 +125,7 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		}
 	}()
 
-	if err = runMigrations(migrationDB, "postgres"); err != nil {
+	if err = datastore.RunMigrations(migrationDB, "postgres"); err != nil {
 		return nil, err
 	}
 
@@ -206,7 +206,7 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	stack_updates = EXCLUDED.stack_updates,
 	policy_updates = EXCLUDED.policy_updates,
 	modified_ts = EXCLUDED.modified_ts
-	`, CommandsTable)
+	`, datastore.CommandsTable)
 
 	_, err = d.pool.Exec(ctx, query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
@@ -475,7 +475,7 @@ func (d DatastorePostgres) DeleteFormaCommand(fa *forma_command.FormaCommand, co
 		return fmt.Errorf("failed to delete resource_updates: %w", err)
 	}
 
-	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = $1", CommandsTable)
+	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = $1", datastore.CommandsTable)
 	_, err = d.pool.Exec(ctx, query, commandID)
 	return err
 }
@@ -528,13 +528,13 @@ func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) 
 	return commands[0], nil
 }
 
-func extendPostgresQueryString[T any](queryStr string, queryItem *QueryItem[T], sqlPart string, args *[]any) string {
+func extendPostgresQueryString[T any](queryStr string, queryItem *datastore.QueryItem[T], sqlPart string, args *[]any) string {
 	if queryItem != nil {
 		var operator string
 
-		if queryItem.Constraint == Excluded {
+		if queryItem.Constraint == datastore.Excluded {
 			operator = "!="
-		} else if queryItem.Constraint == Required || queryItem.Constraint == Optional {
+		} else if queryItem.Constraint == datastore.Required || queryItem.Constraint == datastore.Optional {
 			operator = "="
 		}
 
@@ -559,7 +559,7 @@ func extendPostgresQueryString[T any](queryStr string, queryItem *QueryItem[T], 
 	return queryStr
 }
 
-func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error) {
+func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
 	ctx, span := tracer.Start(context.Background(), "QueryFormaCommands")
 	defer span.End()
 
@@ -581,9 +581,9 @@ func (d DatastorePostgres) QueryFormaCommands(query *StatusQuery) ([]*forma_comm
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {
 		subqueryStr += fmt.Sprintf(" LIMIT $%d", len(args)+1)
-		args = append(args, min(DefaultFormaCommandsQueryLimit, query.N))
+		args = append(args, min(datastore.DefaultFormaCommandsQueryLimit, query.N))
 	} else {
-		subqueryStr += fmt.Sprintf(" LIMIT %d", DefaultFormaCommandsQueryLimit)
+		subqueryStr += fmt.Sprintf(" LIMIT %d", datastore.DefaultFormaCommandsQueryLimit)
 	}
 
 	// Main query joins with resource_updates for commands matching the subquery
@@ -691,7 +691,7 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 	return result, nil
 }
 
-func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error) {
+func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack string) ([]datastore.ResourceModification, error) {
 	ctx, span := tracer.Start(context.Background(), "GetResourceModificationsSinceLastReconcile")
 	defer span.End()
 
@@ -737,16 +737,16 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	}
 	defer rows.Close()
 
-	modifications := make(map[ResourceModification]struct{})
+	modifications := make(map[datastore.ResourceModification]struct{})
 	for rows.Next() {
 		var resourceType, label, operation string
 		if err := rows.Scan(&resourceType, &label, &operation); err != nil {
 			return nil, err
 		}
-		modifications[ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
+		modifications[datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
 	}
 
-	result := make([]ResourceModification, 0, len(modifications))
+	result := make([]datastore.ResourceModification, 0, len(modifications))
 	for mod := range modifications {
 		result = append(result, mod)
 	}
@@ -2137,7 +2137,7 @@ func deserializePolicyPostgres(label, policyType, policyDataStr, stackID string)
 	}
 }
 
-func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {
+func (d DatastorePostgres) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	ctx, span := tracer.Start(context.Background(), "GetExpiredStacks")
 	defer span.End()
 
@@ -2206,9 +2206,9 @@ func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 	}
 	defer rows.Close()
 
-	var result []ExpiredStackInfo
+	var result []datastore.ExpiredStackInfo
 	for rows.Next() {
-		var info ExpiredStackInfo
+		var info datastore.ExpiredStackInfo
 		var onDependents *string
 		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents); err != nil {
 			return nil, err
@@ -2228,7 +2228,7 @@ func (d DatastorePostgres) GetExpiredStacks() ([]ExpiredStackInfo, error) {
 	return result, nil
 }
 
-func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {
+func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
 	ctx, span := tracer.Start(context.Background(), "GetStacksWithAutoReconcilePolicy")
 	defer span.End()
 
@@ -2288,9 +2288,9 @@ func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]StackReconcileI
 	}
 	defer rows.Close()
 
-	var result []StackReconcileInfo
+	var result []datastore.StackReconcileInfo
 	for rows.Next() {
-		var info StackReconcileInfo
+		var info datastore.StackReconcileInfo
 		if err := rows.Scan(&info.StackLabel, &info.StackID, &info.IntervalSeconds, &info.LastReconcileAt); err != nil {
 			return nil, err
 		}
@@ -2304,7 +2304,7 @@ func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]StackReconcileI
 	return result, nil
 }
 
-func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error) {
+func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {
 	ctx, span := tracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()
 
@@ -2342,9 +2342,9 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]Res
 	}
 	defer rows.Close()
 
-	var result []ResourceSnapshot
+	var result []datastore.ResourceSnapshot
 	for rows.Next() {
-		var snapshot ResourceSnapshot
+		var snapshot datastore.ResourceSnapshot
 		var propsData, schemaData []byte
 		var nativeID *string
 		if err := rows.Scan(&snapshot.KSUID, &snapshot.Type, &snapshot.Label, &snapshot.Target, &propsData, &schemaData, &nativeID); err != nil {
@@ -2531,7 +2531,7 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	return targets, rows.Err()
 }
 
-func (d DatastorePostgres) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target, error) {
+func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel.Target, error) {
 	ctx, span := tracer.Start(context.Background(), "QueryTargets")
 	defer span.End()
 
@@ -2579,7 +2579,7 @@ func (d DatastorePostgres) QueryTargets(query *TargetQuery) ([]*pkgmodel.Target,
 	return targets, rows.Err()
 }
 
-func (d DatastorePostgres) QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error) {
+func (d DatastorePostgres) QueryResources(query *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "QueryResources")
 	defer span.End()
 
@@ -2637,7 +2637,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	res := stats.Stats{}
 
 	// Count distinct clients
-	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", CommandsTable)
+	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", datastore.CommandsTable)
 	row := d.pool.QueryRow(ctx, clientsQuery)
 	if err := row.Scan(&res.Clients); err != nil {
 		return nil, err
@@ -2649,7 +2649,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	FROM %s
 	WHERE command != $1
 	GROUP BY command
-	`, CommandsTable)
+	`, datastore.CommandsTable)
 	rows, err := d.pool.Query(ctx, commandsQuery, pkgmodel.CommandSync)
 	if err != nil {
 		return nil, err
@@ -2672,7 +2672,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	FROM %s
 	WHERE command != $1
 	GROUP BY state
-	`, CommandsTable)
+	`, datastore.CommandsTable)
 	rows, err = d.pool.Query(ctx, statusQuery, pkgmodel.CommandSync)
 	if err != nil {
 		return nil, err
@@ -2935,7 +2935,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 		return "", fmt.Errorf("failed to unmarshal existing resource: %w", err)
 	}
 
-	readWriteEqual, readOnlyEqual := resourcesAreEqual(resource, &existingResource)
+	readWriteEqual, readOnlyEqual := datastore.ResourcesAreEqual(resource, &existingResource)
 
 	if operation == string(resource_update.OperationDelete) {
 		// For delete operations, check if the latest version is already a delete
@@ -3444,7 +3444,7 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 
 // BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 // Used for bulk operations like marking dependent resources as failed
-func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs []datastore.ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
 	ctx, span := tracer.Start(context.Background(), "BatchUpdateResourceUpdateState")
 	defer span.End()
 

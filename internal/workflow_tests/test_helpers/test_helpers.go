@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -107,7 +108,7 @@ func NewTestMetastructureConfig() *pkgmodel.Config {
 }
 
 func NewTestMetastructureWithConfig(t *testing.T, pluginOverrides *plugin.ResourcePluginOverrides, cfg *pkgmodel.Config) (*metastructure.Metastructure, func(), error) {
-	db, err := datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+	db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 	if err != nil {
 		t.Error(err)
 	}
@@ -117,7 +118,7 @@ func NewTestMetastructureWithConfig(t *testing.T, pluginOverrides *plugin.Resour
 
 func NewTestMetastructure(t *testing.T, pluginOverrides *plugin.ResourcePluginOverrides) (*metastructure.Metastructure, func(), error) {
 	cfg := NewTestMetastructureConfig()
-	db, err := datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+	db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 	if err != nil {
 		t.Error(err)
 	}

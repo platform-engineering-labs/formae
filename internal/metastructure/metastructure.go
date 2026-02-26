@@ -19,12 +19,11 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
-	newds "github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
@@ -77,7 +76,7 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *
 		datastoreType = "sqlite"
 	}
 
-	ds, err := newds.DefaultRegistry.Create(datastoreType, ctx, &cfg.Agent.Datastore, agentID)
+	ds, err := datastore.DefaultRegistry.Create(datastoreType, ctx, &cfg.Agent.Datastore, agentID)
 	if err != nil {
 		return nil, err
 	}

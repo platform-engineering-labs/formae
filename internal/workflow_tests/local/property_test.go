@@ -34,7 +34,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -108,7 +108,7 @@ func SetupTestEnvironment(t *testing.T) (*metastructure.Metastructure, *FakePlug
 		FilePath: t.TempDir() + "/formae.db",
 	}
 
-	db, err := datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+	db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 	require.NoError(t, err)
 
 	m, def, err := test_helpers.NewTestMetastructureWithEverything(t, overrides, db, cfg)

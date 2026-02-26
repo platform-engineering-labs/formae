@@ -7,7 +7,7 @@ package translator
 import (
 	"fmt"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
