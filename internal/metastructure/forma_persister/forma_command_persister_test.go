@@ -569,6 +569,118 @@ func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) 
 	assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loadedCommand.ResourceUpdates[1].State)
 }
 
+func TestFormaCommandPersister_ProgressUpdate_PreservesPropertiesAndVersion(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
+	updatedProperties := json.RawMessage(`{"updated":"true","key":"new-value"}`)
+	updatedReadOnlyProperties := json.RawMessage(`{"arn":"arn:aws:iam::123:role/test"}`)
+
+	// Send progress with non-nil properties and a version
+	updateProgress := messages.UpdateResourceProgress{
+		CommandID:                  formaCommand.ID,
+		ResourceURI:                resourceURI,
+		Operation:                  resource_update.OperationCreate,
+		ResourceStartTs:            util.TimeNow(),
+		ResourceModifiedTs:         util.TimeNow().Add(10 * time.Second),
+		ResourceState:              resource_update.ResourceUpdateStateInProgress,
+		ResourceProperties:         updatedProperties,
+		ResourceReadOnlyProperties: updatedReadOnlyProperties,
+		Version:                    "v-abc123",
+		Progress: plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:       resource.OperationCreate,
+				OperationStatus: resource.OperationStatusInProgress,
+			},
+		},
+	}
+	res := formaPersister.Call(sender, updateProgress)
+	assert.NoError(t, res.Error)
+
+	// Load and assert fields were updated
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded := loadResult.Response.(*forma_command.FormaCommand)
+
+	assert.JSONEq(t, string(updatedProperties), string(loaded.ResourceUpdates[0].DesiredState.Properties))
+	assert.JSONEq(t, string(updatedReadOnlyProperties), string(loaded.ResourceUpdates[0].DesiredState.ReadOnlyProperties))
+	assert.Equal(t, "v-abc123", loaded.ResourceUpdates[0].Version)
+}
+
+func TestFormaCommandPersister_Completion_PreservesProperties(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
+	finalProperties := json.RawMessage(`{"final":"state","count":42}`)
+	finalReadOnlyProperties := json.RawMessage(`{"arn":"arn:aws:iam::999:role/final"}`)
+
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:                  formaCommand.ID,
+		ResourceURI:                resourceURI,
+		Operation:                  formaCommand.ResourceUpdates[0].Operation,
+		FinalState:                 resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:            util.TimeNow(),
+		ResourceModifiedTs:         util.TimeNow().Add(30 * time.Second),
+		ResourceProperties:         finalProperties,
+		ResourceReadOnlyProperties: finalReadOnlyProperties,
+		Version:                    "final-version-hash",
+	}
+	res := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, res.Error)
+	assert.True(t, res.Response.(bool))
+
+	// Command is now in final state and persisted; load it back
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded := loadResult.Response.(*forma_command.FormaCommand)
+
+	assert.JSONEq(t, string(finalProperties), string(loaded.ResourceUpdates[0].DesiredState.Properties))
+	assert.JSONEq(t, string(finalReadOnlyProperties), string(loaded.ResourceUpdates[0].DesiredState.ReadOnlyProperties))
+	assert.Equal(t, "final-version-hash", loaded.ResourceUpdates[0].Version)
+}
+
+func TestFormaCommandPersister_DuplicateCompletion_ReturnsError(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Store command with 1 resource update
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        resourceURI,
+		Operation:          formaCommand.ResourceUpdates[0].Operation,
+		FinalState:         resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:    util.TimeNow(),
+		ResourceModifiedTs: util.TimeNow().Add(10 * time.Second),
+		Version:            "v1",
+	}
+
+	// First completion: valid, should succeed
+	res1 := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, res1.Error)
+
+	// Second completion for the same resource: unexpected duplicate.
+	// After the first completion the command reaches final state and is evicted from cache.
+	// On reload, pendingCompletions = countNonFinalResources = 0 (already final).
+	// Unconditional decrement would make it -1, which must return an error.
+	res2 := formaPersister.Call(sender, markComplete)
+	assert.Error(t, res2.Error, "duplicate completion should return an error")
+}
+
 func TestIsResourceInFinalState_Success(t *testing.T) {
 	assert.True(t, isResourceInFinalState(resource_update.ResourceUpdateStateSuccess))
 }

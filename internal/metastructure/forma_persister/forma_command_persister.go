@@ -505,8 +505,9 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		// Always decrement pending completions counter when we receive a completion message.
 		// This counter tracks the number of expected MarkResourceUpdateAsComplete messages,
 		// NOT the number of resources in non-final state (which can be set by UpdateResourceProgress).
-		if cached.pendingCompletions > 0 {
-			cached.pendingCompletions--
+		cached.pendingCompletions--
+		if cached.pendingCompletions < 0 {
+			return false, fmt.Errorf("unexpected completion for command %s resource %s: pendingCompletions went below zero, this indicates a programming error", msg.CommandID, msg.ResourceURI.KSUID())
 		}
 
 		cmd.ModifiedTs = msg.ResourceModifiedTs
@@ -562,8 +563,9 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 
 			// If transitioning to final state, decrement counter
 			if !isResourceInFinalState(res.State) && isResourceInFinalState(state) {
-				if cached.pendingCompletions > 0 {
-					cached.pendingCompletions--
+				cached.pendingCompletions--
+				if cached.pendingCompletions < 0 {
+					return false, fmt.Errorf("unexpected state transition for command %s: pendingCompletions went below zero, this indicates a programming error", commandID)
 				}
 			}
 
