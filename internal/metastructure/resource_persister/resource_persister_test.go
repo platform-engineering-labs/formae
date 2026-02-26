@@ -16,7 +16,8 @@ import (
 	"ergo.services/ergo/testing/unit"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -1194,7 +1195,7 @@ func newTestDatastore() (datastore.Datastore, error) {
 		},
 	}
 
-	ds, err := datastore.NewDatastoreSQLite(context.Background(), cfg, "test")
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
 	if err != nil {
 		return nil, err
 	}

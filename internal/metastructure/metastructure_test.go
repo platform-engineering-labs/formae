@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"ergo.services/ergo/gen"
+	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"

@@ -4,7 +4,7 @@
 
 //go:build unit || integration
 
-package datastore
+package datastore_test
 
 import (
 	"context"
@@ -17,6 +17,10 @@ import (
 	"time"
 
 	"github.com/demula/mksuid/v2"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore/aurora"
+	"github.com/platform-engineering-labs/formae/internal/datastore/postgres"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -45,7 +49,7 @@ func init() {
 	flag.StringVar(&auroraEndpoint, "endpoint", "", "Custom endpoint URL (for local testing)")
 }
 
-func prepareDatastore() (Datastore, error) {
+func prepareDatastore() (datastore.Datastore, error) {
 	switch dbType {
 	case pkgmodel.PostgresDatastore:
 		cfg := &pkgmodel.DatastoreConfig{
@@ -59,12 +63,12 @@ func prepareDatastore() (Datastore, error) {
 			},
 		}
 
-		datastore, err := NewDatastorePostgresEnsureDatabase(context.Background(), cfg, "test")
+		ds, err := postgres.NewDatastorePostgresEnsureDatabase(context.Background(), cfg, "test")
 		if err != nil {
 			return nil, fmt.Errorf("failed to setup Postgres datastore: %w", err)
 		}
 
-		return datastore, nil
+		return ds, nil
 
 	case pkgmodel.AuroraDataAPIDatastore:
 		if clusterArn == "" || secretArn == "" {
@@ -81,19 +85,19 @@ func prepareDatastore() (Datastore, error) {
 			},
 		}
 
-		datastore, err := NewDatastoreAuroraDataAPI(context.Background(), cfg, "test")
+		ds, err := aurora.NewDatastoreAuroraDataAPI(context.Background(), cfg, "test")
 		if err != nil {
 			return nil, fmt.Errorf("failed to setup Aurora Data API datastore: %w", err)
 		}
 
 		// Clean up any stale data from previous test runs
-		if d, ok := datastore.(*DatastoreAuroraDataAPI); ok {
+		if d, ok := ds.(*aurora.DatastoreAuroraDataAPI); ok {
 			if err := d.CleanUp(); err != nil {
 				slog.Warn("Failed to clean up datastore", "error", err)
 			}
 		}
 
-		return datastore, nil
+		return ds, nil
 
 	default:
 		cfg := &pkgmodel.DatastoreConfig{
@@ -103,24 +107,24 @@ func prepareDatastore() (Datastore, error) {
 			},
 		}
 
-		datastore, err := NewDatastoreSQLite(context.Background(), cfg, "test")
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
 		if err != nil {
 			return nil, fmt.Errorf("failed to setup SQLite datastore: %w", err)
 		}
 
-		return datastore, nil
+		return ds, nil
 	}
 }
 
 // cleanupDatastore cleans up test databases after tests complete.
 // For Postgres, this drops the test database. For SQLite in-memory, this is a no-op.
-func cleanupDatastore(ds Datastore) {
+func cleanupDatastore(ds datastore.Datastore) {
 	switch d := ds.(type) {
-	case DatastorePostgres:
+	case postgres.DatastorePostgres:
 		_ = d.CleanUp()
-	case DatastoreSQLite:
+	case dssqlite.DatastoreSQLite:
 		_ = d.CleanUp()
-	case *DatastoreAuroraDataAPI:
+	case *aurora.DatastoreAuroraDataAPI:
 		_ = d.CleanUp()
 	}
 }
@@ -150,8 +154,8 @@ type IAMRole struct {
 }
 
 func TestDatastore_FormaApplyTest(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		app1 := &forma_command.FormaCommand{
 			ID:          util.NewID(),
@@ -209,20 +213,20 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 			Command: pkgmodel.CommandApply,
 			State:   forma_command.CommandStateInProgress,
 		}
-		err := datastore.StoreFormaCommand(app1, app1.ID)
+		err := ds.StoreFormaCommand(app1, app1.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(app2, app2.ID)
+		err = ds.StoreFormaCommand(app2, app2.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(app3, app3.ID)
+		err = ds.StoreFormaCommand(app3, app3.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(app4, app4.ID)
+		err = ds.StoreFormaCommand(app4, app4.ID)
 		assert.NoError(t, err)
 
-		commands, err := datastore.LoadFormaCommands()
+		commands, err := ds.LoadFormaCommands()
 		assert.NoError(t, err)
 		assert.Len(t, commands, 4)
 
-		incomplete, err := datastore.LoadIncompleteFormaCommands()
+		incomplete, err := ds.LoadIncompleteFormaCommands()
 		assert.NoError(t, err)
 		assert.Len(t, incomplete, 1)
 
@@ -236,8 +240,8 @@ func TestDatastore_FormaApplyTest(t *testing.T) {
 }
 
 func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		cmd1 := &forma_command.FormaCommand{
 			ID:          util.NewID(),
@@ -263,12 +267,12 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 			State:   forma_command.CommandStateInProgress,
 		}
 
-		err := datastore.StoreFormaCommand(cmd1, cmd1.ID)
+		err := ds.StoreFormaCommand(cmd1, cmd1.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(cmd2, cmd2.ID)
+		err = ds.StoreFormaCommand(cmd2, cmd2.ID)
 		assert.NoError(t, err)
 
-		incomplete, err := datastore.LoadIncompleteFormaCommands()
+		incomplete, err := ds.LoadIncompleteFormaCommands()
 		assert.NoError(t, err)
 		assert.Len(t, incomplete, 1)
 	} else {
@@ -277,8 +281,8 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 }
 
 func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		app1 := &forma_command.FormaCommand{
 			ID:          util.NewID(),
@@ -296,10 +300,10 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 			},
 		}
 
-		err := datastore.StoreFormaCommand(app1, app1.ID)
+		err := ds.StoreFormaCommand(app1, app1.ID)
 		assert.NoError(t, err)
 
-		retrieved, err := datastore.GetFormaCommandByCommandID(app1.ID)
+		retrieved, err := ds.GetFormaCommandByCommandID(app1.ID)
 		assert.NoError(t, err)
 		assert.Equal(t, app1, retrieved)
 	} else {
@@ -308,8 +312,8 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 }
 
 func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		clientID := "test"
 		olderTime, _ := time.Parse(time.RFC3339, "2023-01-01T10:00:00Z")
@@ -329,21 +333,21 @@ func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 		}
 
 		// Store both commands
-		err := datastore.StoreFormaCommand(olderCommand, olderCommand.ID)
+		err := ds.StoreFormaCommand(olderCommand, olderCommand.ID)
 		assert.NoError(t, err)
 
-		err = datastore.StoreFormaCommand(newerCommand, newerCommand.ID)
+		err = ds.StoreFormaCommand(newerCommand, newerCommand.ID)
 		assert.NoError(t, err)
 
 		// Retrieve the most recent command
-		retrieved, err := datastore.GetMostRecentFormaCommandByClientID(clientID)
+		retrieved, err := ds.GetMostRecentFormaCommandByClientID(clientID)
 		assert.NoError(t, err)
 
 		// The most recent command should be the newer one
 		assert.Equal(t, newerCommand.StartTs, retrieved.StartTs)
 
 		// Test with non-existent client ID
-		_, err = datastore.GetMostRecentFormaCommandByClientID("non-existent-client")
+		_, err = ds.GetMostRecentFormaCommandByClientID("non-existent-client")
 		assert.Error(t, err)
 	} else {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
@@ -351,15 +355,15 @@ func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 }
 
 func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		target := &pkgmodel.Target{
 			Label:     "default-target",
 			Namespace: "default",
 			Config:    json.RawMessage(`{}`),
 		}
-		_, err := datastore.CreateTarget(target)
+		_, err := ds.CreateTarget(target)
 		assert.NoError(t, err)
 
 		reconcileStack1 := &forma_command.FormaCommand{
@@ -429,7 +433,7 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			},
 		}
 
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "resource-1",
 			Stack:    "stack-1",
 			Type:     "AWS::S3::Bucket",
@@ -437,10 +441,10 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			Target:   "default-target",
 		}, reconcileStack1.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(reconcileStack1, reconcileStack1.ID)
+		err = ds.StoreFormaCommand(reconcileStack1, reconcileStack1.ID)
 		assert.NoError(t, err)
 
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "resource-2",
 			Stack:    "stack-1",
 			Type:     "AWS::S3::Bucket",
@@ -448,10 +452,10 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			Target:   "default-target",
 		}, syncStack1.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(syncStack1, syncStack1.ID)
+		err = ds.StoreFormaCommand(syncStack1, syncStack1.ID)
 		assert.NoError(t, err)
 
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "resource-3",
 			Stack:    "stack-2",
 			Type:     "AWS::S3::Bucket",
@@ -459,10 +463,10 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			Target:   "default-target",
 		}, reconcileStack2.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(reconcileStack2, reconcileStack2.ID)
+		err = ds.StoreFormaCommand(reconcileStack2, reconcileStack2.ID)
 		assert.NoError(t, err)
 
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "resource-4",
 			Stack:    "stack-2",
 			Type:     "AWS::S3::Bucket",
@@ -470,10 +474,10 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			Target:   "default-target",
 		}, syncStack2.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(syncStack2, syncStack2.ID)
+		err = ds.StoreFormaCommand(syncStack2, syncStack2.ID)
 		assert.NoError(t, err)
 
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "resource-5",
 			Stack:    "stack-2",
 			Type:     "AWS::S3::Bucket",
@@ -481,10 +485,10 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 			Target:   "default-target",
 		}, patchStack2.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(patchStack2, patchStack2.ID)
+		err = ds.StoreFormaCommand(patchStack2, patchStack2.ID)
 		assert.NoError(t, err)
 
-		modifications, err := datastore.GetResourceModificationsSinceLastReconcile("stack-2")
+		modifications, err := ds.GetResourceModificationsSinceLastReconcile("stack-2")
 		assert.NoError(t, err)
 
 		assert.Len(t, modifications, 2)
@@ -495,8 +499,8 @@ func TestDatastore_GetMostRecentNonReconcileFormaCommandsByStack(t *testing.T) {
 }
 
 func TestDatastore_QueryFormaCommands(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		for i := range 20 {
 			command := &forma_command.FormaCommand{
@@ -530,54 +534,54 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 				},
 			}
 			command.ID = fmt.Sprintf("command-%d", i)
-			err := datastore.StoreFormaCommand(command, command.ID)
+			err := ds.StoreFormaCommand(command, command.ID)
 			assert.NoError(t, err)
 		}
 
-		query := &StatusQuery{
-			ClientID: &QueryItem[string]{
+		query := &datastore.StatusQuery{
+			ClientID: &datastore.QueryItem[string]{
 				Item:       "client-1",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err := datastore.QueryFormaCommands(query)
+		results, err := ds.QueryFormaCommands(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		for _, result := range results {
 			assert.Equal(t, "client-1", result.ClientID)
 		}
 
-		query = &StatusQuery{
-			CommandID: &QueryItem[string]{
+		query = &datastore.StatusQuery{
+			CommandID: &datastore.QueryItem[string]{
 				Item:       results[0].ID,
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryFormaCommands(query)
+		results, err = ds.QueryFormaCommands(query)
 		assert.NoError(t, err)
 		assert.Len(t, results, 1)
 		assert.Equal(t, query.CommandID.Item, results[0].ID)
 
-		query = &StatusQuery{
-			Command: &QueryItem[string]{
+		query = &datastore.StatusQuery{
+			Command: &datastore.QueryItem[string]{
 				Item:       string(pkgmodel.CommandApply),
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryFormaCommands(query)
+		results, err = ds.QueryFormaCommands(query)
 		assert.NoError(t, err)
 		assert.Len(t, results, 10)
 		for _, result := range results {
 			assert.Equal(t, pkgmodel.CommandApply, result.Command)
 		}
 
-		query = &StatusQuery{
-			Status: &QueryItem[string]{
+		query = &datastore.StatusQuery{
+			Status: &datastore.QueryItem[string]{
 				Item:       string(forma_command.CommandStateSuccess),
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryFormaCommands(query)
+		results, err = ds.QueryFormaCommands(query)
 		assert.NoError(t, err)
 		assert.Empty(t, results)
 		for _, result := range results {
@@ -591,21 +595,21 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 			assert.True(t, found)
 		}
 
-		query = &StatusQuery{
-			ClientID: &QueryItem[string]{
+		query = &datastore.StatusQuery{
+			ClientID: &datastore.QueryItem[string]{
 				Item:       "client-2",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
-			Command: &QueryItem[string]{
+			Command: &datastore.QueryItem[string]{
 				Item:       string(pkgmodel.CommandApply),
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
-			Status: &QueryItem[string]{
+			Status: &datastore.QueryItem[string]{
 				Item:       "inprogress",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryFormaCommands(query)
+		results, err = ds.QueryFormaCommands(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		for _, result := range results {
@@ -621,13 +625,13 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 			assert.True(t, found)
 		}
 
-		query = &StatusQuery{
-			Stack: &QueryItem[string]{
+		query = &datastore.StatusQuery{
+			Stack: &datastore.QueryItem[string]{
 				Item:       "stack-1",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryFormaCommands(query)
+		results, err = ds.QueryFormaCommands(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 
@@ -642,13 +646,13 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 			assert.True(t, found)
 		}
 
-		query = &StatusQuery{
-			Stack: &QueryItem[string]{
+		query = &datastore.StatusQuery{
+			Stack: &datastore.QueryItem[string]{
 				Item:       "stack-1",
-				Constraint: Excluded,
+				Constraint: datastore.Excluded,
 			},
 		}
-		results, err = datastore.QueryFormaCommands(query)
+		results, err = ds.QueryFormaCommands(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		for _, result := range results {
@@ -667,15 +671,15 @@ func TestDatastore_QueryFormaCommands(t *testing.T) {
 }
 
 func TestDatastore_StoreResource(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		target := &pkgmodel.Target{
 			Label:     "target-1",
 			Namespace: "default",
 			Config:    json.RawMessage(`{}`),
 		}
-		_, err := datastore.CreateTarget(target)
+		_, err := ds.CreateTarget(target)
 		assert.NoError(t, err)
 
 		resource := &pkgmodel.Resource{
@@ -690,16 +694,16 @@ func TestDatastore_StoreResource(t *testing.T) {
 			Managed: false,
 		}
 
-		_, err = datastore.StoreResource(resource, "test-command")
+		_, err = ds.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
-		query := &ResourceQuery{
-			NativeID: &QueryItem[string]{
+		query := &datastore.ResourceQuery{
+			NativeID: &datastore.QueryItem[string]{
 				Item:       "native-1",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err := datastore.QueryResources(query)
+		results, err := ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.Len(t, results, 1)
 
@@ -719,8 +723,8 @@ func TestDatastore_StoreResource(t *testing.T) {
 
 func TestDatastore_UpdateResource(t *testing.T) {
 	t.Run("Should create a new version if the resource properties changed", func(t *testing.T) {
-		if datastore, err := prepareDatastore(); err == nil {
-			defer cleanupDatastore(datastore)
+		if ds, err := prepareDatastore(); err == nil {
+			defer cleanupDatastore(ds)
 			originalResource := &pkgmodel.Resource{
 				Ksuid:    util.NewID(),
 				NativeID: "native-1",
@@ -731,10 +735,10 @@ func TestDatastore_UpdateResource(t *testing.T) {
 				"key": "value"
 				}`),
 			}
-			originalVersion, err := datastore.StoreResource(originalResource, "test-command-1")
+			originalVersion, err := ds.StoreResource(originalResource, "test-command-1")
 			assert.NoError(t, err)
 
-			newVersion, err := datastore.StoreResource(&pkgmodel.Resource{
+			newVersion, err := ds.StoreResource(&pkgmodel.Resource{
 				Ksuid:    originalResource.Ksuid,
 				NativeID: "native-1",
 				Stack:    "stack-1",
@@ -746,7 +750,7 @@ func TestDatastore_UpdateResource(t *testing.T) {
 			}, "test-command-2")
 			assert.NoError(t, err)
 
-			newFromDb, err := datastore.LoadResourceById(originalResource.Ksuid)
+			newFromDb, err := ds.LoadResourceById(originalResource.Ksuid)
 			assert.NoError(t, err)
 
 			assert.NotEqual(t, originalVersion, newVersion)
@@ -757,8 +761,8 @@ func TestDatastore_UpdateResource(t *testing.T) {
 	})
 
 	t.Run("Should not create a new version if the read-only properties changed", func(t *testing.T) {
-		if datastore, err := prepareDatastore(); err == nil {
-			defer cleanupDatastore(datastore)
+		if ds, err := prepareDatastore(); err == nil {
+			defer cleanupDatastore(ds)
 			originalResource := &pkgmodel.Resource{
 				Ksuid:    util.NewID(),
 				NativeID: "native-1",
@@ -772,10 +776,10 @@ func TestDatastore_UpdateResource(t *testing.T) {
 				"ro-key": "ro-value"
 				}`),
 			}
-			originalVersion, err := datastore.StoreResource(originalResource, "test-command-1")
+			originalVersion, err := ds.StoreResource(originalResource, "test-command-1")
 			assert.NoError(t, err)
 
-			newVersion, err := datastore.StoreResource(&pkgmodel.Resource{
+			newVersion, err := ds.StoreResource(&pkgmodel.Resource{
 				Ksuid:    originalResource.Ksuid,
 				NativeID: "native-1",
 				Stack:    "stack-1",
@@ -790,7 +794,7 @@ func TestDatastore_UpdateResource(t *testing.T) {
 			}, "test-command-2")
 			assert.NoError(t, err)
 
-			newFromDb, err := datastore.LoadResourceById(originalResource.Ksuid)
+			newFromDb, err := ds.LoadResourceById(originalResource.Ksuid)
 			assert.NoError(t, err)
 
 			assert.Equal(t, originalVersion, newVersion)
@@ -802,8 +806,8 @@ func TestDatastore_UpdateResource(t *testing.T) {
 }
 
 func TestDatastore_DeleteResource(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		resource := &pkgmodel.Resource{
 			NativeID: "native-1",
@@ -815,19 +819,19 @@ func TestDatastore_DeleteResource(t *testing.T) {
 			}`),
 		}
 
-		_, err := datastore.StoreResource(resource, "test-command")
+		_, err := ds.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
-		_, err = datastore.DeleteResource(resource, "test-command")
+		_, err = ds.DeleteResource(resource, "test-command")
 		assert.NoError(t, err)
 
-		query := &ResourceQuery{
-			NativeID: &QueryItem[string]{
+		query := &datastore.ResourceQuery{
+			NativeID: &datastore.QueryItem[string]{
 				Item:       "native-1",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err := datastore.QueryResources(query)
+		results, err := ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.Empty(t, results)
 	} else {
@@ -836,8 +840,8 @@ func TestDatastore_DeleteResource(t *testing.T) {
 }
 
 func TestDatastore_QueryResources(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		for i := range 7 {
 			target := &pkgmodel.Target{
@@ -845,7 +849,7 @@ func TestDatastore_QueryResources(t *testing.T) {
 				Namespace: "default",
 				Config:    json.RawMessage(`{}`),
 			}
-			_, err := datastore.CreateTarget(target)
+			_, err := ds.CreateTarget(target)
 			assert.NoError(t, err)
 		}
 
@@ -861,98 +865,98 @@ func TestDatastore_QueryResources(t *testing.T) {
 				"key": "value-%d"
 				}`, i)),
 			}
-			_, err := datastore.StoreResource(resource, "test-command")
+			_, err := ds.StoreResource(resource, "test-command")
 			assert.NoError(t, err)
 		}
 
-		query := &ResourceQuery{
-			NativeID: &QueryItem[string]{
+		query := &datastore.ResourceQuery{
+			NativeID: &datastore.QueryItem[string]{
 				Item:       "native-1",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err := datastore.QueryResources(query)
+		results, err := ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.Len(t, results, 1)
 		for _, result := range results {
 			assert.Equal(t, "native-1", result.NativeID)
 		}
 
-		query = &ResourceQuery{
-			Stack: &QueryItem[string]{
+		query = &datastore.ResourceQuery{
+			Stack: &datastore.QueryItem[string]{
 				Item:       "stack-2",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryResources(query)
+		results, err = ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		for _, result := range results {
 			assert.Equal(t, "stack-2", result.Stack)
 		}
 
-		query = &ResourceQuery{
-			Type: &QueryItem[string]{
+		query = &datastore.ResourceQuery{
+			Type: &datastore.QueryItem[string]{
 				Item:       "type-3",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryResources(query)
+		results, err = ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		for _, result := range results {
 			assert.Equal(t, "type-3", result.Type)
 		}
 
-		query = &ResourceQuery{
-			Label: &QueryItem[string]{
+		query = &datastore.ResourceQuery{
+			Label: &datastore.QueryItem[string]{
 				Item:       "label-4",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryResources(query)
+		results, err = ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		for _, result := range results {
 			assert.Equal(t, "label-4", result.Label)
 		}
 
-		query = &ResourceQuery{
-			Target: &QueryItem[string]{
+		query = &datastore.ResourceQuery{
+			Target: &datastore.QueryItem[string]{
 				Item:       "target-4",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryResources(query)
+		results, err = ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		for _, result := range results {
 			assert.Equal(t, "target-4", result.Target)
 		}
 
-		query = &ResourceQuery{}
-		results, err = datastore.QueryResources(query)
+		query = &datastore.ResourceQuery{}
+		results, err = ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		assert.Len(t, results, 10)
 
-		query = &ResourceQuery{
-			Managed: &QueryItem[bool]{
+		query = &datastore.ResourceQuery{
+			Managed: &datastore.QueryItem[bool]{
 				Item:       true,
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryResources(query)
+		results, err = ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.Len(t, results, 5)
 
-		query = &ResourceQuery{
-			Managed: &QueryItem[bool]{
+		query = &datastore.ResourceQuery{
+			Managed: &datastore.QueryItem[bool]{
 				Item:       false,
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err = datastore.QueryResources(query)
+		results, err = ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		assert.Len(t, results, 5)
@@ -963,15 +967,15 @@ func TestDatastore_QueryResources(t *testing.T) {
 
 // Storing the same resource twice should not create duplicates and should return the same version ID
 func TestDatastore_StoreResource_SameResourceTwiceReturnsSameVersionId(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		target := &pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "default",
 			Config:    json.RawMessage(`{}`),
 		}
-		_, err := datastore.CreateTarget(target)
+		_, err := ds.CreateTarget(target)
 		assert.NoError(t, err)
 
 		resource := &pkgmodel.Resource{
@@ -986,21 +990,21 @@ func TestDatastore_StoreResource_SameResourceTwiceReturnsSameVersionId(t *testin
 			}`),
 		}
 
-		firstVersionId, err := datastore.StoreResource(resource, "test-command")
+		firstVersionId, err := ds.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
-		secondVersionId, err := datastore.StoreResource(resource, "test-command")
+		secondVersionId, err := ds.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
 		assert.Equal(t, firstVersionId, secondVersionId)
 
-		query := &ResourceQuery{
-			NativeID: &QueryItem[string]{
+		query := &datastore.ResourceQuery{
+			NativeID: &datastore.QueryItem[string]{
 				Item:       "native-1",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err := datastore.QueryResources(query)
+		results, err := ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.Len(t, results, 1)
 		assert.Equal(t, resource.URI(), results[0].URI())
@@ -1010,8 +1014,8 @@ func TestDatastore_StoreResource_SameResourceTwiceReturnsSameVersionId(t *testin
 }
 
 func TestDatastore_LoadResourceByNativeID(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		resource := &pkgmodel.Resource{
 			NativeID: "native-123",
@@ -1024,10 +1028,10 @@ func TestDatastore_LoadResourceByNativeID(t *testing.T) {
 			Managed: false,
 		}
 
-		_, err := datastore.StoreResource(resource, "test-command")
+		_, err := ds.StoreResource(resource, "test-command")
 		assert.NoError(t, err)
 
-		loadedResource, err := datastore.LoadResourceByNativeID("native-123", "type-1")
+		loadedResource, err := ds.LoadResourceByNativeID("native-123", "type-1")
 		assert.NoError(t, err)
 		assert.NotNil(t, loadedResource)
 		assert.Equal(t, resource.NativeID, loadedResource.NativeID)
@@ -1035,19 +1039,19 @@ func TestDatastore_LoadResourceByNativeID(t *testing.T) {
 		assert.Equal(t, resource.Type, loadedResource.Type)
 
 		// Negative test - wrong type
-		nonExistentResource, err := datastore.LoadResourceByNativeID("native-123", "wrong-type")
+		nonExistentResource, err := ds.LoadResourceByNativeID("native-123", "wrong-type")
 		assert.NoError(t, err)
 		assert.Nil(t, nonExistentResource)
 
 		// Negative test - non-existent native ID
-		nonExistentResource2, err := datastore.LoadResourceByNativeID("non-existent", "type-1")
+		nonExistentResource2, err := ds.LoadResourceByNativeID("non-existent", "type-1")
 		assert.NoError(t, err)
 		assert.Nil(t, nonExistentResource2)
 
-		_, err = datastore.DeleteResource(resource, "test-delete-command")
+		_, err = ds.DeleteResource(resource, "test-delete-command")
 		assert.NoError(t, err)
 
-		deletedResource, err := datastore.LoadResourceByNativeID("native-123", "type-1")
+		deletedResource, err := ds.LoadResourceByNativeID("native-123", "type-1")
 		assert.NoError(t, err)
 		assert.Nil(t, deletedResource, "Deleted resource should not be found")
 	} else {
@@ -1058,8 +1062,8 @@ func TestDatastore_LoadResourceByNativeID(t *testing.T) {
 // TestDatastore_LoadResourceByNativeID_DifferentTypes verifies that resources
 // with the same native ID but different types are properly distinguished
 func TestDatastore_LoadResourceByNativeID_DifferentTypes(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		// Store two resources with same native ID but different types
 		resource1 := &pkgmodel.Resource{
@@ -1083,27 +1087,27 @@ func TestDatastore_LoadResourceByNativeID_DifferentTypes(t *testing.T) {
 			Managed: false,
 		}
 
-		_, err := datastore.StoreResource(resource1, "cmd-1")
+		_, err := ds.StoreResource(resource1, "cmd-1")
 		assert.NoError(t, err)
-		_, err = datastore.StoreResource(resource2, "cmd-2")
+		_, err = ds.StoreResource(resource2, "cmd-2")
 		assert.NoError(t, err)
 
 		// Should return bucket when querying for bucket type
-		loaded1, err := datastore.LoadResourceByNativeID("shared-id-123", "AWS::S3::Bucket")
+		loaded1, err := ds.LoadResourceByNativeID("shared-id-123", "AWS::S3::Bucket")
 		assert.NoError(t, err)
 		assert.NotNil(t, loaded1, "Bucket should be found")
 		assert.Equal(t, "AWS::S3::Bucket", loaded1.Type)
 		assert.Equal(t, "bucket-1", loaded1.Label)
 
 		// Should return role when querying for role type
-		loaded2, err := datastore.LoadResourceByNativeID("shared-id-123", "AWS::IAM::Role")
+		loaded2, err := ds.LoadResourceByNativeID("shared-id-123", "AWS::IAM::Role")
 		assert.NoError(t, err)
 		assert.NotNil(t, loaded2, "Role should be found")
 		assert.Equal(t, "AWS::IAM::Role", loaded2.Type)
 		assert.Equal(t, "role-1", loaded2.Label)
 
 		// Should return nil for wrong type
-		loaded3, err := datastore.LoadResourceByNativeID("shared-id-123", "AWS::EC2::Instance")
+		loaded3, err := ds.LoadResourceByNativeID("shared-id-123", "AWS::EC2::Instance")
 		assert.NoError(t, err)
 		assert.Nil(t, loaded3, "Non-existent type should return nil")
 	} else {
@@ -1113,8 +1117,8 @@ func TestDatastore_LoadResourceByNativeID_DifferentTypes(t *testing.T) {
 
 // Store some test resources with known triplets
 func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		resource1 := &pkgmodel.Resource{
 			Stack:      "test-stack",
@@ -1144,23 +1148,23 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 		}
 
 		// Store the resources
-		_, err := datastore.StoreResource(resource1, "test-command-1")
+		_, err := ds.StoreResource(resource1, "test-command-1")
 		assert.NoError(t, err)
-		_, err = datastore.StoreResource(resource2, "test-command-2")
+		_, err = ds.StoreResource(resource2, "test-command-2")
 		assert.NoError(t, err)
-		_, err = datastore.StoreResource(resource3, "test-command-3")
+		_, err = ds.StoreResource(resource3, "test-command-3")
 		assert.NoError(t, err)
 
 		// Get the actual KSUIDs from the stored resources by querying them back
-		storedResource1, err := datastore.LoadResourceByNativeID("bucket-1", "AWS::S3::Bucket")
+		storedResource1, err := ds.LoadResourceByNativeID("bucket-1", "AWS::S3::Bucket")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource1)
 
-		storedResource2, err := datastore.LoadResourceByNativeID("vpc-1", "AWS::EC2::VPC")
+		storedResource2, err := ds.LoadResourceByNativeID("vpc-1", "AWS::EC2::VPC")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource2)
 
-		storedResource3, err := datastore.LoadResourceByNativeID("role-1", "AWS::IAM::Role")
+		storedResource3, err := ds.LoadResourceByNativeID("role-1", "AWS::IAM::Role")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource3)
 
@@ -1171,7 +1175,7 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 			{Stack: "other-stack", Label: "resource-3", Type: "AWS::IAM::Role"},
 		}
 
-		results, err := datastore.BatchGetKSUIDsByTriplets(triplets)
+		results, err := ds.BatchGetKSUIDsByTriplets(triplets)
 		assert.NoError(t, err)
 		assert.Len(t, results, 3)
 
@@ -1187,7 +1191,7 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 			{Stack: "other-stack", Label: "resource-3", Type: "AWS::IAM::Role"},         // exists
 		}
 
-		mixedResults, err := datastore.BatchGetKSUIDsByTriplets(mixedTriplets)
+		mixedResults, err := ds.BatchGetKSUIDsByTriplets(mixedTriplets)
 		assert.NoError(t, err)
 		assert.Len(t, mixedResults, 2) // Only 2 should be found
 
@@ -1200,15 +1204,15 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 		assert.False(t, exists, "Non-existent triplet should not be in results")
 
 		// Test with empty input
-		emptyResults, err := datastore.BatchGetKSUIDsByTriplets([]pkgmodel.TripletKey{})
+		emptyResults, err := ds.BatchGetKSUIDsByTriplets([]pkgmodel.TripletKey{})
 		assert.NoError(t, err)
 		assert.Empty(t, emptyResults)
 
 		// Test that deleted resources are NOT returned (they should be filtered out)
-		_, err = datastore.DeleteResource(storedResource1, "delete-command")
+		_, err = ds.DeleteResource(storedResource1, "delete-command")
 		assert.NoError(t, err)
 
-		afterDeleteResults, err := datastore.BatchGetKSUIDsByTriplets(triplets)
+		afterDeleteResults, err := ds.BatchGetKSUIDsByTriplets(triplets)
 		assert.NoError(t, err)
 		assert.Len(t, afterDeleteResults, 2, "Deleted resources should not be returned")
 
@@ -1226,8 +1230,8 @@ func TestDatastore_BatchGetKSUIDsByTriplets(t *testing.T) {
 
 // Create and store initial resource (simulating initial create)
 func TestDatastore_BatchGetKSUIDsByTriplets_PatchScenario(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		initialResource := &pkgmodel.Resource{
 			Stack:      "test-stack",
@@ -1239,11 +1243,11 @@ func TestDatastore_BatchGetKSUIDsByTriplets_PatchScenario(t *testing.T) {
 		}
 
 		// Store the initial resource
-		_, err := datastore.StoreResource(initialResource, "initial-command")
+		_, err := ds.StoreResource(initialResource, "initial-command")
 		assert.NoError(t, err)
 
 		// Get the stored resource to see what KSUID it got
-		storedResource, err := datastore.LoadResourceByNativeID("bucket-123", "FakeAWS::S3::Bucket")
+		storedResource, err := ds.LoadResourceByNativeID("bucket-123", "FakeAWS::S3::Bucket")
 		assert.NoError(t, err)
 		assert.NotNil(t, storedResource)
 		assert.NotEmpty(t, storedResource.Ksuid)
@@ -1259,7 +1263,7 @@ func TestDatastore_BatchGetKSUIDsByTriplets_PatchScenario(t *testing.T) {
 
 		t.Logf("Looking up triplet: %+v", triplet)
 
-		results, err := datastore.BatchGetKSUIDsByTriplets([]pkgmodel.TripletKey{triplet})
+		results, err := ds.BatchGetKSUIDsByTriplets([]pkgmodel.TripletKey{triplet})
 		assert.NoError(t, err)
 
 		t.Logf("Batch lookup results: %+v", results)
@@ -1274,8 +1278,8 @@ func TestDatastore_BatchGetKSUIDsByTriplets_PatchScenario(t *testing.T) {
 }
 
 func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		bucket := &pkgmodel.Resource{
 			Stack:    "static-website-stack",
@@ -1303,25 +1307,25 @@ func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
 			Managed: true,
 		}
 
-		_, err := datastore.StoreResource(bucket, "test-command-1")
+		_, err := ds.StoreResource(bucket, "test-command-1")
 		assert.NoError(t, err)
 		assert.NotEmpty(t, bucket.Ksuid, "Bucket should have a KSUID assigned")
 
-		_, err = datastore.StoreResource(bucketPolicy, "test-command-1")
+		_, err = ds.StoreResource(bucketPolicy, "test-command-1")
 		assert.NoError(t, err)
 		assert.NotEmpty(t, bucketPolicy.Ksuid, "BucketPolicy should have a KSUID assigned")
 
 		assert.NotEqual(t, bucket.Ksuid, bucketPolicy.Ksuid,
 			"Bucket and BucketPolicy should have different KSUIDs even though they share the same NativeId")
 
-		loadedBucket, err := datastore.LoadResource(bucket.URI())
+		loadedBucket, err := ds.LoadResource(bucket.URI())
 		assert.NoError(t, err)
 		assert.NotNil(t, loadedBucket)
 		assert.Equal(t, "AWS::S3::Bucket", loadedBucket.Type)
 		assert.Equal(t, "WebsiteBucket", loadedBucket.Label)
 		assert.Equal(t, bucket.Ksuid, loadedBucket.Ksuid)
 
-		loadedBucketPolicy, err := datastore.LoadResource(bucketPolicy.URI())
+		loadedBucketPolicy, err := ds.LoadResource(bucketPolicy.URI())
 		assert.NoError(t, err)
 		assert.NotNil(t, loadedBucketPolicy)
 		assert.Equal(t, "AWS::S3::BucketPolicy", loadedBucketPolicy.Type)
@@ -1332,25 +1336,25 @@ func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
 			"BucketName": "my-unique-bucket-name",
 			"WebsiteConfiguration": {"IndexDocument": "index.html", "ErrorDocument": "error.html"}
 		}`)
-		_, err = datastore.StoreResource(bucket, "test-command-2")
+		_, err = ds.StoreResource(bucket, "test-command-2")
 		assert.NoError(t, err)
 
-		reloadedBucketPolicy, err := datastore.LoadResource(bucketPolicy.URI())
+		reloadedBucketPolicy, err := ds.LoadResource(bucketPolicy.URI())
 		assert.NoError(t, err)
 		assert.NotNil(t, reloadedBucketPolicy)
 		assert.JSONEq(t, string(bucketPolicy.Properties), string(reloadedBucketPolicy.Properties),
 			"BucketPolicy should remain unchanged after Bucket update")
 
-		_, err = datastore.DeleteResource(bucketPolicy, "test-delete-command")
+		_, err = ds.DeleteResource(bucketPolicy, "test-delete-command")
 		assert.NoError(t, err)
 
-		query := &ResourceQuery{
-			NativeID: &QueryItem[string]{
+		query := &datastore.ResourceQuery{
+			NativeID: &datastore.QueryItem[string]{
 				Item:       "my-unique-bucket-name",
-				Constraint: Required,
+				Constraint: datastore.Required,
 			},
 		}
-		results, err := datastore.QueryResources(query)
+		results, err := ds.QueryResources(query)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(results), "Should find only the Bucket after BucketPolicy deletion")
 		assert.Equal(t, "AWS::S3::Bucket", results[0].Type, "Remaining resource should be the Bucket")
@@ -1364,8 +1368,8 @@ func TestDatastore_DifferentResourceTypesSameNativeId(t *testing.T) {
 // that an intermediate reconcile command (for a different stack or target) doesn't affect
 // modification tracking for the original stack.
 func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCommand(t *testing.T) {
-	if datastore, err := prepareDatastore(); err == nil {
-		defer cleanupDatastore(datastore)
+	if ds, err := prepareDatastore(); err == nil {
+		defer cleanupDatastore(ds)
 
 		stackReconcile := &forma_command.FormaCommand{
 			ID:              "stack-reconcile-id",
@@ -1374,7 +1378,7 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 			StartTs:         util.TimeNow().Add(-10 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "bucket-1",
 			Stack:    "test-stack",
 			Type:     "AWS::S3::Bucket",
@@ -1382,7 +1386,7 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 			Target:   "default-target",
 		}, stackReconcile.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(stackReconcile, stackReconcile.ID)
+		err = ds.StoreFormaCommand(stackReconcile, stackReconcile.ID)
 		assert.NoError(t, err)
 
 		stackPatchA := &forma_command.FormaCommand{
@@ -1392,7 +1396,7 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 			StartTs:         util.TimeNow().Add(-8 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "bucket-2",
 			Stack:    "test-stack",
 			Type:     "AWS::S3::Bucket",
@@ -1400,7 +1404,7 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 			Target:   "default-target",
 		}, stackPatchA.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(stackPatchA, stackPatchA.ID)
+		err = ds.StoreFormaCommand(stackPatchA, stackPatchA.ID)
 		assert.NoError(t, err)
 
 		intermediateReconcile := &forma_command.FormaCommand{
@@ -1410,7 +1414,7 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 			StartTs:         util.TimeNow().Add(-6 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{},
 		}
-		err = datastore.StoreFormaCommand(intermediateReconcile, intermediateReconcile.ID)
+		err = ds.StoreFormaCommand(intermediateReconcile, intermediateReconcile.ID)
 		assert.NoError(t, err)
 
 		stackPatchB := &forma_command.FormaCommand{
@@ -1420,7 +1424,7 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 			StartTs:         util.TimeNow().Add(-4 * time.Minute),
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
-		_, err = datastore.StoreResource(&pkgmodel.Resource{
+		_, err = ds.StoreResource(&pkgmodel.Resource{
 			NativeID: "bucket-3",
 			Stack:    "test-stack",
 			Type:     "AWS::S3::Bucket",
@@ -1428,10 +1432,10 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 			Target:   "default-target",
 		}, stackPatchB.ID)
 		assert.NoError(t, err)
-		err = datastore.StoreFormaCommand(stackPatchB, stackPatchB.ID)
+		err = ds.StoreFormaCommand(stackPatchB, stackPatchB.ID)
 		assert.NoError(t, err)
 
-		modifications, err := datastore.GetResourceModificationsSinceLastReconcile("test-stack")
+		modifications, err := ds.GetResourceModificationsSinceLastReconcile("test-stack")
 		assert.NoError(t, err)
 
 		assert.Len(t, modifications, 2, "Should include both patches despite intermediate reconcile")
@@ -1447,7 +1451,7 @@ func TestGetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCom
 	}
 }
 
-func setupQueryTargetsTestData(ds Datastore, t *testing.T) {
+func setupQueryTargetsTestData(ds datastore.Datastore, t *testing.T) {
 	targets := []*pkgmodel.Target{
 		{
 			Label:        "prod-us-east-1",
@@ -1490,7 +1494,7 @@ func TestDatastore_QueryTargets_All(t *testing.T) {
 
 	setupQueryTargetsTestData(ds, t)
 
-	got, err := ds.QueryTargets(&TargetQuery{})
+	got, err := ds.QueryTargets(&datastore.TargetQuery{})
 	assert.NoError(t, err)
 	assert.Len(t, got, 4)
 }
@@ -1504,10 +1508,10 @@ func TestDatastore_QueryTargets_ByNamespace(t *testing.T) {
 
 	setupQueryTargetsTestData(ds, t)
 
-	got, err := ds.QueryTargets(&TargetQuery{
-		Namespace: &QueryItem[string]{
+	got, err := ds.QueryTargets(&datastore.TargetQuery{
+		Namespace: &datastore.QueryItem[string]{
 			Item:       "AWS",
-			Constraint: Required,
+			Constraint: datastore.Required,
 		},
 	})
 	assert.NoError(t, err)
@@ -1526,10 +1530,10 @@ func TestDatastore_QueryTargets_ByDiscoverable(t *testing.T) {
 
 	setupQueryTargetsTestData(ds, t)
 
-	got, err := ds.QueryTargets(&TargetQuery{
-		Discoverable: &QueryItem[bool]{
+	got, err := ds.QueryTargets(&datastore.TargetQuery{
+		Discoverable: &datastore.QueryItem[bool]{
 			Item:       true,
-			Constraint: Required,
+			Constraint: datastore.Required,
 		},
 	})
 	assert.NoError(t, err)
@@ -1548,10 +1552,10 @@ func TestDatastore_QueryTargets_ByLabel(t *testing.T) {
 
 	setupQueryTargetsTestData(ds, t)
 
-	got, err := ds.QueryTargets(&TargetQuery{
-		Label: &QueryItem[string]{
+	got, err := ds.QueryTargets(&datastore.TargetQuery{
+		Label: &datastore.QueryItem[string]{
 			Item:       "prod-us-east-1",
-			Constraint: Required,
+			Constraint: datastore.Required,
 		},
 	})
 	assert.NoError(t, err)
@@ -1568,14 +1572,14 @@ func TestDatastore_QueryTargets_DiscoverableAWS(t *testing.T) {
 
 	setupQueryTargetsTestData(ds, t)
 
-	got, err := ds.QueryTargets(&TargetQuery{
-		Namespace: &QueryItem[string]{
+	got, err := ds.QueryTargets(&datastore.TargetQuery{
+		Namespace: &datastore.QueryItem[string]{
 			Item:       "AWS",
-			Constraint: Required,
+			Constraint: datastore.Required,
 		},
-		Discoverable: &QueryItem[bool]{
+		Discoverable: &datastore.QueryItem[bool]{
 			Item:       true,
-			Constraint: Required,
+			Constraint: datastore.Required,
 		},
 	})
 	assert.NoError(t, err)
@@ -1595,10 +1599,10 @@ func TestDatastore_QueryTargets_NonDiscoverable(t *testing.T) {
 
 	setupQueryTargetsTestData(ds, t)
 
-	got, err := ds.QueryTargets(&TargetQuery{
-		Discoverable: &QueryItem[bool]{
+	got, err := ds.QueryTargets(&datastore.TargetQuery{
+		Discoverable: &datastore.QueryItem[bool]{
 			Item:       false,
-			Constraint: Required,
+			Constraint: datastore.Required,
 		},
 	})
 	assert.NoError(t, err)
@@ -1629,10 +1633,10 @@ func TestDatastore_QueryTargets_Versioning(t *testing.T) {
 	_, err = ds.UpdateTarget(target)
 	assert.NoError(t, err)
 
-	results, err := ds.QueryTargets(&TargetQuery{
-		Label: &QueryItem[string]{
+	results, err := ds.QueryTargets(&datastore.TargetQuery{
+		Label: &datastore.QueryItem[string]{
 			Item:       "version-test",
-			Constraint: Required,
+			Constraint: datastore.Required,
 		},
 	})
 	assert.NoError(t, err)

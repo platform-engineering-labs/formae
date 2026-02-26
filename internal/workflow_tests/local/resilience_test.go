@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -51,7 +51,7 @@ func TestMetastructure_FinishIncompleteFormaCommands(t *testing.T) {
 		cfg.Agent.Datastore.Sqlite = pkgmodel.SqliteConfig{
 			FilePath: db_path,
 		}
-		db, err := datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+		db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 		if err != nil {
 			t.Error(err)
 		}
@@ -100,7 +100,7 @@ func TestMetastructure_FinishIncompleteFormaCommands(t *testing.T) {
 		stop()
 
 		cfg.Agent.Datastore.Sqlite.FilePath = db_path
-		db, err = datastore.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+		db, err = dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 		if err != nil {
 			t.Error(err)
 		}

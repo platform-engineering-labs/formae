@@ -9,7 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -209,7 +210,7 @@ func TestLabelForUnmanagedResource_JSONPathQueryTakesPrecedenceOverLegacyTagKeys
 func newResourceLabelerForTest(t *testing.T, setup ...func(datastore.Datastore)) *resource_update.ResourceLabeler {
 	t.Helper()
 
-	ds, err := datastore.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
 		DatastoreType: pkgmodel.SqliteDatastore,
 		Sqlite: pkgmodel.SqliteConfig{
 			FilePath: ":memory:",

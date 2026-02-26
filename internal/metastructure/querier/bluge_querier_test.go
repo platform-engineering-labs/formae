@@ -9,7 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -251,7 +252,7 @@ func newTestCfg() *pkgmodel.DatastoreConfig {
 }
 
 func newTestDatastoreSQLite() datastore.Datastore {
-	ds, _ := datastore.NewDatastoreSQLite(context.Background(), newTestCfg(), "test")
+	ds, _ := dssqlite.NewDatastoreSQLite(context.Background(), newTestCfg(), "test")
 	return ds
 }
 

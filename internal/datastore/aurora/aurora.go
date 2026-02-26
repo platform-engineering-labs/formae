@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package datastore
+package aurora
 
 import (
 	"context"
@@ -23,6 +23,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	metaConfig "github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
@@ -36,6 +37,13 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
+func init() {
+	// Register Aurora Data API factory with the datastore extension registry
+	datastore.DefaultRegistry.Register("auroradataapi", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
+		return NewDatastoreAuroraDataAPI(ctx, cfg, agentID)
+	})
+}
+
 type DatastoreAuroraDataAPI struct {
 	client     *rdsdata.Client
 	clusterARN string
@@ -45,7 +53,7 @@ type DatastoreAuroraDataAPI struct {
 	ctx        context.Context
 }
 
-func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (Datastore, error) {
+func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
 	var opts []func(*config.LoadOptions) error
 
 	// When using a custom endpoint (e.g. local-data-api for testing),
@@ -214,7 +222,7 @@ func (d *DatastoreAuroraDataAPI) recordVersion(ctx context.Context, version int6
 
 // collectMigrations reads and parses the embedded postgres migrations.
 func (d *DatastoreAuroraDataAPI) collectMigrations() ([]migration, error) {
-	entries, err := embedMigrationsPostgres.ReadDir("migrations_postgres")
+	entries, err := datastore.EmbedMigrationsPostgres.ReadDir("migrations_postgres")
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +243,7 @@ func (d *DatastoreAuroraDataAPI) collectMigrations() ([]migration, error) {
 			continue
 		}
 
-		content, err := embedMigrationsPostgres.ReadFile("migrations_postgres/" + entry.Name())
+		content, err := datastore.EmbedMigrationsPostgres.ReadFile("migrations_postgres/" + entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
@@ -501,7 +509,7 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	stack_updates = EXCLUDED.stack_updates,
 	policy_updates = EXCLUDED.policy_updates,
 	modified_ts = EXCLUDED.modified_ts
-	`, CommandsTable)
+	`, datastore.CommandsTable)
 
 	params := []types.SqlParameter{
 		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
@@ -688,7 +696,7 @@ func (d *DatastoreAuroraDataAPI) DeleteFormaCommand(fa *forma_command.FormaComma
 	}
 
 	// Delete the command
-	deleteCommandQuery := fmt.Sprintf("DELETE FROM %s WHERE command_id = :command_id", CommandsTable)
+	deleteCommandQuery := fmt.Sprintf("DELETE FROM %s WHERE command_id = :command_id", datastore.CommandsTable)
 	_, err = d.executeStatement(ctx, deleteCommandQuery, deleteUpdatesParams)
 	return err
 }
@@ -771,7 +779,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	return cmd, nil
 }
 
-func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error) {
+func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stack string) ([]datastore.ResourceModification, error) {
 	ctx := context.Background()
 
 	query := `
@@ -819,7 +827,7 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 		return nil, err
 	}
 
-	modifications := make(map[ResourceModification]struct{})
+	modifications := make(map[datastore.ResourceModification]struct{})
 	for _, record := range output.Records {
 		if len(record) < 3 {
 			continue
@@ -827,10 +835,10 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 		resourceType, _ := getStringField(record[0])
 		label, _ := getStringField(record[1])
 		operation, _ := getStringField(record[2])
-		modifications[ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
+		modifications[datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
 	}
 
-	result := make([]ResourceModification, 0, len(modifications))
+	result := make([]datastore.ResourceModification, 0, len(modifications))
 	for mod := range modifications {
 		result = append(result, mod)
 	}
@@ -838,7 +846,7 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 	return result, nil
 }
 
-func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([]*forma_command.FormaCommand, error) {
+func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
 	ctx := context.Background()
 
 	// Build query with dynamic filters
@@ -855,7 +863,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	if statusQuery.CommandID != nil {
 		paramName := fmt.Sprintf("command_id_%d", paramIdx)
 		op := "="
-		if statusQuery.CommandID.Constraint == Excluded {
+		if statusQuery.CommandID.Constraint == datastore.Excluded {
 			op = "!="
 		}
 		queryStr += fmt.Sprintf(" AND command_id %s :%s", op, paramName)
@@ -868,7 +876,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	if statusQuery.ClientID != nil {
 		paramName := fmt.Sprintf("client_id_%d", paramIdx)
 		op := "="
-		if statusQuery.ClientID.Constraint == Excluded {
+		if statusQuery.ClientID.Constraint == datastore.Excluded {
 			op = "!="
 		}
 		queryStr += fmt.Sprintf(" AND client_id %s :%s", op, paramName)
@@ -881,7 +889,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	if statusQuery.Command != nil {
 		paramName := fmt.Sprintf("command_%d", paramIdx)
 		op := "="
-		if statusQuery.Command.Constraint == Excluded {
+		if statusQuery.Command.Constraint == datastore.Excluded {
 			op = "!="
 		}
 		queryStr += fmt.Sprintf(" AND LOWER(command) %s LOWER(:%s)", op, paramName)
@@ -896,7 +904,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	if statusQuery.Stack != nil {
 		paramName := fmt.Sprintf("stack_%d", paramIdx)
 		op := "="
-		if statusQuery.Stack.Constraint == Excluded {
+		if statusQuery.Stack.Constraint == datastore.Excluded {
 			op = "!="
 		}
 		queryStr += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s :%s)", op, paramName)
@@ -909,7 +917,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	if statusQuery.Status != nil {
 		paramName := fmt.Sprintf("status_%d", paramIdx)
 		op := "="
-		if statusQuery.Status.Constraint == Excluded {
+		if statusQuery.Status.Constraint == datastore.Excluded {
 			op = "!="
 		}
 		queryStr += fmt.Sprintf(" AND LOWER(state) %s LOWER(:%s)", op, paramName)
@@ -920,7 +928,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 
 	queryStr += " ORDER BY timestamp DESC"
 
-	limit := DefaultFormaCommandsQueryLimit
+	limit := datastore.DefaultFormaCommandsQueryLimit
 	if statusQuery.N > 0 && statusQuery.N < limit {
 		limit = statusQuery.N
 	}
@@ -951,7 +959,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *StatusQuery) ([
 	return commands, nil
 }
 
-func (d *DatastoreAuroraDataAPI) QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error) {
+func (d *DatastoreAuroraDataAPI) QueryResources(query *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
 	ctx := context.Background()
 
 	queryStr := `
@@ -971,9 +979,9 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *ResourceQuery) ([]*pkgmod
 
 	// Build dynamic query with named parameters
 	paramIdx := 1
-	if query.NativeID != nil && query.NativeID.Constraint != Excluded {
+	if query.NativeID != nil && query.NativeID.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("native_id_%d", paramIdx)
-		if query.NativeID.Constraint == Required {
+		if query.NativeID.Constraint == datastore.Required {
 			queryStr += fmt.Sprintf(" AND native_id = :%s", paramName)
 		} else {
 			queryStr += fmt.Sprintf(" AND (native_id = :%s OR native_id IS NULL)", paramName)
@@ -984,9 +992,9 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *ResourceQuery) ([]*pkgmod
 		paramIdx++
 	}
 
-	if query.Stack != nil && query.Stack.Constraint != Excluded {
+	if query.Stack != nil && query.Stack.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("stack_%d", paramIdx)
-		if query.Stack.Constraint == Required {
+		if query.Stack.Constraint == datastore.Required {
 			queryStr += fmt.Sprintf(" AND stack = :%s", paramName)
 		} else {
 			queryStr += fmt.Sprintf(" AND (stack = :%s OR stack IS NULL)", paramName)
@@ -997,9 +1005,9 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *ResourceQuery) ([]*pkgmod
 		paramIdx++
 	}
 
-	if query.Type != nil && query.Type.Constraint != Excluded {
+	if query.Type != nil && query.Type.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("type_%d", paramIdx)
-		if query.Type.Constraint == Required {
+		if query.Type.Constraint == datastore.Required {
 			queryStr += fmt.Sprintf(" AND LOWER(type) = LOWER(:%s)", paramName)
 		} else {
 			queryStr += fmt.Sprintf(" AND (LOWER(type) = LOWER(:%s) OR type IS NULL)", paramName)
@@ -1010,9 +1018,9 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *ResourceQuery) ([]*pkgmod
 		paramIdx++
 	}
 
-	if query.Label != nil && query.Label.Constraint != Excluded {
+	if query.Label != nil && query.Label.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("label_%d", paramIdx)
-		if query.Label.Constraint == Required {
+		if query.Label.Constraint == datastore.Required {
 			queryStr += fmt.Sprintf(" AND label = :%s", paramName)
 		} else {
 			queryStr += fmt.Sprintf(" AND (label = :%s OR label IS NULL)", paramName)
@@ -1023,9 +1031,9 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *ResourceQuery) ([]*pkgmod
 		paramIdx++
 	}
 
-	if query.Target != nil && query.Target.Constraint != Excluded {
+	if query.Target != nil && query.Target.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("target_%d", paramIdx)
-		if query.Target.Constraint == Required {
+		if query.Target.Constraint == datastore.Required {
 			queryStr += fmt.Sprintf(" AND target = :%s", paramName)
 		} else {
 			queryStr += fmt.Sprintf(" AND (target = :%s OR target IS NULL)", paramName)
@@ -1036,9 +1044,9 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *ResourceQuery) ([]*pkgmod
 		paramIdx++
 	}
 
-	if query.Managed != nil && query.Managed.Constraint != Excluded {
+	if query.Managed != nil && query.Managed.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("managed_%d", paramIdx)
-		if query.Managed.Constraint == Required {
+		if query.Managed.Constraint == datastore.Required {
 			queryStr += fmt.Sprintf(" AND managed = :%s", paramName)
 		}
 		params = append(params, types.SqlParameter{
@@ -1378,7 +1386,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 		return "", fmt.Errorf("failed to unmarshal existing resource: %w", err)
 	}
 
-	readWriteEqual, readOnlyEqual := resourcesAreEqual(resource, &existingResource)
+	readWriteEqual, readOnlyEqual := datastore.ResourcesAreEqual(resource, &existingResource)
 
 	if operation == string(resource_update.OperationDelete) {
 		// For delete operations, check if the latest version is already a delete
@@ -2256,7 +2264,7 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 	return targets, nil
 }
 
-func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *TargetQuery) ([]*pkgmodel.Target, error) {
+func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery) ([]*pkgmodel.Target, error) {
 	ctx := context.Background()
 
 	queryStr := `
@@ -2272,7 +2280,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *TargetQuery) ([]*pkgm
 	params := []types.SqlParameter{}
 	paramIdx := 1
 
-	if targetQuery.Label != nil && targetQuery.Label.Constraint != Excluded {
+	if targetQuery.Label != nil && targetQuery.Label.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("label_%d", paramIdx)
 		queryStr += fmt.Sprintf(" AND label = :%s", paramName)
 		params = append(params, types.SqlParameter{
@@ -2281,7 +2289,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *TargetQuery) ([]*pkgm
 		paramIdx++
 	}
 
-	if targetQuery.Namespace != nil && targetQuery.Namespace.Constraint != Excluded {
+	if targetQuery.Namespace != nil && targetQuery.Namespace.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("namespace_%d", paramIdx)
 		queryStr += fmt.Sprintf(" AND namespace = :%s", paramName)
 		params = append(params, types.SqlParameter{
@@ -2290,7 +2298,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *TargetQuery) ([]*pkgm
 		paramIdx++
 	}
 
-	if targetQuery.Discoverable != nil && targetQuery.Discoverable.Constraint != Excluded {
+	if targetQuery.Discoverable != nil && targetQuery.Discoverable.Constraint != datastore.Excluded {
 		paramName := fmt.Sprintf("discoverable_%d", paramIdx)
 		queryStr += fmt.Sprintf(" AND discoverable = :%s", paramName)
 		params = append(params, types.SqlParameter{
@@ -2334,7 +2342,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	res := stats.Stats{}
 
 	// Count distinct clients
-	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", CommandsTable)
+	clientsQuery := fmt.Sprintf("SELECT COUNT(DISTINCT client_id) FROM %s", datastore.CommandsTable)
 	output, err := d.executeStatement(ctx, clientsQuery, nil)
 	if err != nil {
 		return nil, err
@@ -2349,7 +2357,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	FROM %s
 	WHERE command != :sync_command
 	GROUP BY command
-	`, CommandsTable)
+	`, datastore.CommandsTable)
 	commandsParams := []types.SqlParameter{
 		{Name: aws.String("sync_command"), Value: &types.FieldMemberStringValue{Value: string(pkgmodel.CommandSync)}},
 	}
@@ -2373,7 +2381,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	FROM %s
 	WHERE command != :sync_command
 	GROUP BY state
-	`, CommandsTable)
+	`, datastore.CommandsTable)
 	output, err = d.executeStatement(ctx, statusQuery, commandsParams)
 	if err != nil {
 		return nil, err
@@ -2966,7 +2974,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, 
 	return nil
 }
 
-func (d *DatastoreAuroraDataAPI) BatchUpdateResourceUpdateState(commandID string, refs []ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
+func (d *DatastoreAuroraDataAPI) BatchUpdateResourceUpdateState(commandID string, refs []datastore.ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -4081,7 +4089,7 @@ func deserializePolicyAurora(label, policyType, policyDataStr, stackID string) (
 	}
 }
 
-func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) {
+func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	ctx := context.Background()
 
 	// Get stacks with TTL policies that have expired:
@@ -4148,7 +4156,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) 
 		return nil, err
 	}
 
-	var result []ExpiredStackInfo
+	var result []datastore.ExpiredStackInfo
 	for _, record := range output.Records {
 		if len(record) < 3 {
 			continue
@@ -4167,7 +4175,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) 
 			onDependents = "abort" // default
 		}
 
-		result = append(result, ExpiredStackInfo{
+		result = append(result, datastore.ExpiredStackInfo{
 			StackLabel:   stackLabel,
 			StackID:      stackID,
 			OnDependents: onDependents,
@@ -4177,7 +4185,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]ExpiredStackInfo, error) 
 	return result, nil
 }
 
-func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {
+func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
 	ctx := context.Background()
 
 	query := `
@@ -4235,7 +4243,7 @@ func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]StackReco
 		return nil, err
 	}
 
-	var result []StackReconcileInfo
+	var result []datastore.StackReconcileInfo
 	for _, record := range output.Records {
 		if len(record) < 4 {
 			continue
@@ -4255,7 +4263,7 @@ func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]StackReco
 		}
 		lastReconcileAt, _ := getTimestampField(record[3])
 
-		result = append(result, StackReconcileInfo{
+		result = append(result, datastore.StackReconcileInfo{
 			StackLabel:      stackLabel,
 			StackID:         stackID,
 			IntervalSeconds: int64(intervalSeconds),
@@ -4266,7 +4274,7 @@ func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]StackReco
 	return result, nil
 }
 
-func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) ([]ResourceSnapshot, error) {
+func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {
 	ctx := context.Background()
 
 	// Get resources from the last USER reconcile command for this stack.
@@ -4306,7 +4314,7 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 		return nil, err
 	}
 
-	var result []ResourceSnapshot
+	var result []datastore.ResourceSnapshot
 	for _, record := range output.Records {
 		if len(record) < 7 {
 			continue
@@ -4320,7 +4328,7 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 		schemaData, _ := getRawJSONField(record[5])
 		nativeID, _ := getStringField(record[6])
 
-		snapshot := ResourceSnapshot{
+		snapshot := datastore.ResourceSnapshot{
 			KSUID:      ksuid,
 			Type:       resourceType,
 			Label:      label,

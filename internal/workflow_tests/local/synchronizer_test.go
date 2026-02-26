@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
@@ -375,7 +375,7 @@ func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
 		defer def()
 		require.NoError(t, err)
 
-		db, ok := m.Datastore.(datastore.TestDatastoreSQLite)
+		db, ok := m.Datastore.(dssqlite.TestDatastoreSQLite)
 		require.True(t, ok)
 
 		db.ClearCommandsTable()

@@ -15,21 +15,22 @@ import (
 )
 
 //go:embed migrations_sqlite/*.sql
-var embedMigrationsSQLite embed.FS
+var EmbedMigrationsSQLite embed.FS
 
 //go:embed migrations_postgres/*.sql
-var embedMigrationsPostgres embed.FS
+var EmbedMigrationsPostgres embed.FS
 
-func runMigrations(db *sql.DB, dialect string) error {
+// RunMigrations runs database migrations using goose for the given dialect.
+func RunMigrations(db *sql.DB, dialect string) error {
 	var migrationsFS embed.FS
 	var migrationsDir string
 
 	switch dialect {
 	case "sqlite3":
-		migrationsFS = embedMigrationsSQLite
+		migrationsFS = EmbedMigrationsSQLite
 		migrationsDir = "migrations_sqlite"
 	case "postgres":
-		migrationsFS = embedMigrationsPostgres
+		migrationsFS = EmbedMigrationsPostgres
 		migrationsDir = "migrations_postgres"
 	default:
 		return fmt.Errorf("unsupported dialect: %s", dialect)

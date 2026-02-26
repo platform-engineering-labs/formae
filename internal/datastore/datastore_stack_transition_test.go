@@ -4,7 +4,7 @@
 
 //go:build unit || integration
 
-package datastore
+package datastore_test
 
 import (
 	"encoding/json"

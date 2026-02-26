@@ -15,7 +15,7 @@ import (
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -570,7 +570,7 @@ func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) 
 }
 
 func newFormaCommandPersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, error) {
-	ds, err := datastore.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
 		DatastoreType: pkgmodel.SqliteDatastore,
 		Sqlite: pkgmodel.SqliteConfig{
 			FilePath: ":memory:",

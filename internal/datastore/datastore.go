@@ -12,7 +12,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stats"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -75,21 +74,21 @@ type ResourceModification struct {
 	Operation string
 }
 
-// ResourceUpdateRef identifies a specific ResourceUpdate by its key components
-// Used for batch operations on ResourceUpdates
+// ResourceUpdateRef identifies a specific ResourceUpdate by its key components.
+// Used for batch operations on ResourceUpdates.
 type ResourceUpdateRef struct {
 	KSUID     string
 	Operation types.OperationType
 }
 
-// ExpiredStackInfo contains information about a stack whose TTL policy has expired
+// ExpiredStackInfo contains information about a stack whose TTL policy has expired.
 type ExpiredStackInfo struct {
 	StackLabel   string
 	StackID      string
 	OnDependents string // "abort" or "cascade"
 }
 
-// StackReconcileInfo contains information about a stack with an auto-reconcile policy
+// StackReconcileInfo contains information about a stack with an auto-reconcile policy.
 type StackReconcileInfo struct {
 	StackLabel      string
 	StackID         string
@@ -97,7 +96,7 @@ type StackReconcileInfo struct {
 	LastReconcileAt time.Time
 }
 
-// ResourceSnapshot contains resource state at a point in time
+// ResourceSnapshot contains resource state at a point in time.
 type ResourceSnapshot struct {
 	KSUID      string
 	Type       string
@@ -281,36 +280,4 @@ type Datastore interface {
 	// without re-writing all ResourceUpdates. This is a performance optimization for
 	// progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
 	UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error
-}
-
-// resourcesAreEqual compares two resources and returns two booleans: the first one indicating whether the
-// non-readonly properties of the resources are equal, and the second one indicating whether the readonly i
-// properties are equal.
-func resourcesAreEqual(resource1, resource2 *pkgmodel.Resource) (bool, bool) {
-	readWriteEqual, readOnlyEqual := true, true
-
-	// Compare table fields
-	if resource1.NativeID != resource2.NativeID ||
-		resource1.Stack != resource2.Stack ||
-		resource1.Type != resource2.Type ||
-		resource1.Label != resource2.Label {
-		readWriteEqual = false
-	}
-
-	if !util.JsonEqualRaw(resource1.Properties, resource2.Properties) {
-		readWriteEqual = false
-	}
-
-	if !util.JsonEqualRaw(resource1.ReadOnlyProperties, resource2.ReadOnlyProperties) {
-		readOnlyEqual = false
-	}
-
-	return readWriteEqual, readOnlyEqual
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
