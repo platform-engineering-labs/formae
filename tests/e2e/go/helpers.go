@@ -287,6 +287,72 @@ func AssertTagExists(t *testing.T, resource Resource, propertyKey, expectedKey, 
 		resource.Label, expectedKey, expectedValue, propertyKey)
 }
 
+// HasTag checks if the resource has a tag with the given key and value.
+func HasTag(resource Resource, propertyKey, expectedKey, expectedValue string) bool {
+	tagsRaw, ok := resource.Properties[propertyKey]
+	if !ok {
+		return false
+	}
+	tags, ok := tagsRaw.([]any)
+	if !ok {
+		return false
+	}
+	for _, tagRaw := range tags {
+		tag, ok := tagRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, _ := tag["Key"].(string)
+		value, _ := tag["Value"].(string)
+		if key == expectedKey && value == expectedValue {
+			return true
+		}
+	}
+	return false
+}
+
+// WaitForOOBChange polls inventory with sync triggers until the given tag
+// appears on the resource, confirming the agent has detected an out-of-band
+// change. This replaces naive time.Sleep-based waits.
+func WaitForOOBChange(t *testing.T, cli *FormaeCLI, query, resourceLabel, tagProperty, tagKey, tagValue string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resources := cli.Inventory(t, "--query", query)
+		r := FindResource(resources, resourceLabel)
+		if r != nil && HasTag(*r, tagProperty, tagKey, tagValue) {
+			t.Logf("OOB change detected: tag %s=%s on %s", tagKey, tagValue, resourceLabel)
+			return
+		}
+		t.Logf("waiting for OOB change detection on %s, triggering sync", resourceLabel)
+		cli.ForceSync(t)
+		time.Sleep(3 * time.Second)
+	}
+	t.Fatalf("timeout waiting for OOB tag %s=%s on resource %s", tagKey, tagValue, resourceLabel)
+}
+
+// WaitForOOBChangeGone polls inventory with sync triggers until the given
+// property key is no longer present on the resource. Used to confirm that a
+// force reconcile has successfully overwritten OOB changes.
+func WaitForOOBChangeGone(t *testing.T, cli *FormaeCLI, query, resourceLabel, propertyKey string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resources := cli.Inventory(t, "--query", query)
+		r := FindResource(resources, resourceLabel)
+		if r != nil {
+			if _, has := r.Properties[propertyKey]; !has {
+				t.Logf("OOB property %s removed from %s", propertyKey, resourceLabel)
+				return
+			}
+		}
+		t.Logf("waiting for property %s to be removed from %s, triggering sync", propertyKey, resourceLabel)
+		cli.ForceSync(t)
+		time.Sleep(3 * time.Second)
+	}
+	t.Fatalf("timeout waiting for property %s to be removed from resource %s", propertyKey, resourceLabel)
+}
+
 // SetExtractedStackLabel reads the extracted PKL file, replaces the
 // commented-out $unmanaged stack label with the given stackLabel, and writes
 // the file back. The extract command generates:

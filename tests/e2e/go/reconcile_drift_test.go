@@ -46,10 +46,9 @@ func testSoftReconcileAWS(t *testing.T, cli *FormaeCLI) {
 	// Step 3: Make an OOB change via AWS SDK — add a tag to the role.
 	tagAWSRole(t, "formae-e2e-soft-reconcile-role", "OOBTag", "oob-value")
 
-	// Step 4: Trigger sync so the agent detects the OOB change.
-	cli.ForceSync(t)
-	// Give the sync command time to complete and update the datastore.
-	time.Sleep(10 * time.Second)
+	// Step 4: Poll inventory with sync triggers until the OOB change is detected.
+	WaitForOOBChange(t, cli, "stack:e2e-soft-reconcile-aws", "e2e-soft-reconcile-role",
+		"Tags", "OOBTag", "oob-value", 60*time.Second)
 
 	// Step 5: Attempt a soft reconcile (no --force) — should be rejected.
 	cli.ApplyExpectRejected(t, "reconcile", fixture)
@@ -114,18 +113,18 @@ func testHardReconcileAWS(t *testing.T, cli *FormaeCLI) {
 	// Step 3: Make an OOB change via AWS SDK — add a tag to the role.
 	tagAWSRole(t, "formae-e2e-hard-reconcile-role", "OOBTag", "oob-value")
 
-	// Step 4: Trigger sync so the agent detects the OOB change.
-	cli.ForceSync(t)
-	time.Sleep(10 * time.Second)
+	// Step 4: Poll inventory with sync triggers until the OOB change is detected.
+	WaitForOOBChange(t, cli, "stack:e2e-hard-reconcile-aws", "e2e-hard-reconcile-role",
+		"Tags", "OOBTag", "oob-value", 60*time.Second)
 
 	// Step 5: Force reconcile — should succeed and overwrite the OOB change.
 	forceCmdID := cli.Apply(t, "reconcile", fixture, "--force")
 	forceResult := cli.WaitForCommand(t, forceCmdID, commandTimeout)
 	RequireCommandSuccess(t, forceResult)
 
-	// Step 6: Trigger another sync to pick up the current cloud state.
-	cli.ForceSync(t)
-	time.Sleep(10 * time.Second)
+	// Step 6: Poll inventory with sync triggers until the OOB tag is removed.
+	WaitForOOBChangeGone(t, cli, "stack:e2e-hard-reconcile-aws", "e2e-hard-reconcile-role",
+		"Tags", 60*time.Second)
 
 	// Step 7: Verify the OOB tag has been removed by the force reconcile.
 	afterResources := cli.Inventory(t, "--query", "stack:e2e-hard-reconcile-aws")
