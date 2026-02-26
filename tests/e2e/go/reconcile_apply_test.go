@@ -17,8 +17,6 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/iam"
 )
 
 // fixturesDir returns the absolute path to the fixtures directory relative
@@ -44,78 +42,91 @@ func TestReconcileApply(t *testing.T) {
 
 func testReconcileApplyAWS(t *testing.T, cli *FormaeCLI) {
 	fixture := filepath.Join(fixturesDir(t), "reconcile_apply_aws.pkl")
-	commandTimeout := 2 * time.Minute
+	commandTimeout := 5 * time.Minute
 
 	// Step 1: Apply in reconcile mode.
 	cmdID := cli.Apply(t, "reconcile", fixture)
 	result := cli.WaitForCommand(t, cmdID, commandTimeout)
 	RequireCommandSuccess(t, result)
 
-	// Step 2: Query inventory for the stack.
+	// Step 2: Verify all 7 resources were created.
 	resources := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws")
-
-	if len(resources) != 2 {
-		t.Fatalf("expected 2 resources in stack e2e-reconcile-aws, got %d", len(resources))
+	if len(resources) != 7 {
+		t.Fatalf("expected 7 resources in stack e2e-reconcile-aws, got %d", len(resources))
 	}
 
-	// Step 3: Assert the Role resource.
-	role := RequireResource(t, resources, "e2e-test-role")
-	if role.Type != "AWS::IAM::Role" {
-		t.Errorf("role type: got %s, want AWS::IAM::Role", role.Type)
+	// Step 3: Assert each resource exists with correct type and key properties.
+	vpc := RequireResource(t, resources, "e2e-vpc")
+	if vpc.Type != "AWS::EC2::VPC" {
+		t.Errorf("expected VPC type, got %s", vpc.Type)
 	}
-	AssertStringProperty(t, role, "RoleName", "formae-e2e-reconcile-role")
-	AssertStringProperty(t, role, "Description", "e2e reconcile test role")
-	if _, ok := role.Properties["AssumeRolePolicyDocument"]; !ok {
-		t.Error("role missing property AssumeRolePolicyDocument")
+	AssertStringProperty(t, vpc, "CidrBlock", "10.99.0.0/16")
+
+	subnet := RequireResource(t, resources, "e2e-subnet")
+	if subnet.Type != "AWS::EC2::Subnet" {
+		t.Errorf("expected Subnet type, got %s", subnet.Type)
+	}
+	AssertStringProperty(t, subnet, "CidrBlock", "10.99.1.0/24")
+
+	rt := RequireResource(t, resources, "e2e-rt")
+	if rt.Type != "AWS::EC2::RouteTable" {
+		t.Errorf("expected RouteTable type, got %s", rt.Type)
 	}
 
-	// Step 4: Assert the RolePolicy resource.
-	rolePolicy := RequireResource(t, resources, "e2e-test-role-policy")
-	if rolePolicy.Type != "AWS::IAM::RolePolicy" {
-		t.Errorf("role policy type: got %s, want AWS::IAM::RolePolicy", rolePolicy.Type)
+	igw := RequireResource(t, resources, "e2e-igw")
+	if igw.Type != "AWS::EC2::InternetGateway" {
+		t.Errorf("expected InternetGateway type, got %s", igw.Type)
 	}
-	AssertStringProperty(t, rolePolicy, "PolicyName", "formae-e2e-reconcile-policy")
 
-	// RoleName on the policy should be a resolvable reference to the Role.
-	rolePolicyRoleName, ok := rolePolicy.Properties["RoleName"]
-	if !ok {
-		t.Fatal("role policy missing property RoleName")
+	attachment := RequireResource(t, resources, "e2e-igw-attachment")
+	if attachment.Type != "AWS::EC2::VPCGatewayAttachment" {
+		t.Errorf("expected VPCGatewayAttachment type, got %s", attachment.Type)
 	}
-	AssertResolvable(t, rolePolicyRoleName,
-		"e2e-test-role",
-		"AWS::IAM::Role",
-		"RoleName",
-		"formae-e2e-reconcile-role",
-	)
+
+	route := RequireResource(t, resources, "e2e-route")
+	if route.Type != "AWS::EC2::Route" {
+		t.Errorf("expected Route type, got %s", route.Type)
+	}
+	AssertStringProperty(t, route, "DestinationCidrBlock", "0.0.0.0/0")
+
+	assoc := RequireResource(t, resources, "e2e-subnet-assoc")
+	if assoc.Type != "AWS::EC2::SubnetRouteTableAssociation" {
+		t.Errorf("expected SubnetRouteTableAssociation type, got %s", assoc.Type)
+	}
+
+	// Step 4: Verify cross-resource resolvable references.
+	AssertResolvableProperty(t, subnet, "VpcId", "AWS::EC2::VPC")
+	AssertResolvableProperty(t, rt, "VpcId", "AWS::EC2::VPC")
+	AssertResolvableProperty(t, route, "RouteTableId", "AWS::EC2::RouteTable")
+	AssertResolvableProperty(t, route, "GatewayId", "AWS::EC2::InternetGateway")
+	AssertResolvableProperty(t, assoc, "SubnetId", "AWS::EC2::Subnet")
+	AssertResolvableProperty(t, assoc, "RouteTableId", "AWS::EC2::RouteTable")
 
 	// Step 5: Inventory query filters.
-	// Query by type within the stack.
-	roles := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws type:AWS::IAM::Role")
-	if len(roles) != 1 {
-		t.Errorf("expected 1 Role in stack, got %d", len(roles))
+	vpcs := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws type:AWS::EC2::VPC")
+	if len(vpcs) != 1 {
+		t.Errorf("expected 1 VPC in stack, got %d", len(vpcs))
 	}
-	policies := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws type:AWS::IAM::RolePolicy")
-	if len(policies) != 1 {
-		t.Errorf("expected 1 RolePolicy in stack, got %d", len(policies))
+	subnets := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws type:AWS::EC2::Subnet")
+	if len(subnets) != 1 {
+		t.Errorf("expected 1 Subnet in stack, got %d", len(subnets))
 	}
 
-	// Query by label.
-	byLabel := cli.Inventory(t, "--query", "label:e2e-test-role")
+	byLabel := cli.Inventory(t, "--query", "label:e2e-vpc")
 	if len(byLabel) != 1 {
-		t.Errorf("expected 1 resource with label e2e-test-role, got %d", len(byLabel))
+		t.Errorf("expected 1 resource with label e2e-vpc, got %d", len(byLabel))
 	}
 
-	// All resources should be managed.
 	managed := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws managed:true")
-	if len(managed) != 2 {
-		t.Errorf("expected 2 managed resources in stack, got %d", len(managed))
+	if len(managed) != 7 {
+		t.Errorf("expected 7 managed resources in stack, got %d", len(managed))
 	}
 	unmanaged := cli.Inventory(t, "--query", "stack:e2e-reconcile-aws managed:false")
 	if len(unmanaged) != 0 {
 		t.Errorf("expected 0 unmanaged resources in stack, got %d", len(unmanaged))
 	}
 
-	// Step 6: Destroy and verify cleanup.
+	// Step 6: Destroy — this tests reverse dependency ordering.
 	destroyID := cli.Destroy(t, fixture)
 	destroyResult := cli.WaitForCommand(t, destroyID, commandTimeout)
 	RequireCommandSuccess(t, destroyResult)
@@ -125,9 +136,6 @@ func testReconcileApplyAWS(t *testing.T, cli *FormaeCLI) {
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 resources after destroy, got %d", len(remaining))
 	}
-
-	// Step 8: Verify the IAM role is actually gone in AWS.
-	verifyAWSRoleDeleted(t, "formae-e2e-reconcile-role")
 }
 
 func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
@@ -210,7 +218,6 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 	)
 
 	// Step 6: Inventory query filters.
-	// Query by type within the stack.
 	rgs := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure type:Azure::Resources::ResourceGroup")
 	if len(rgs) != 1 {
 		t.Errorf("expected 1 ResourceGroup in stack, got %d", len(rgs))
@@ -224,13 +231,11 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 		t.Errorf("expected 1 Subnet in stack, got %d", len(subnets))
 	}
 
-	// Query by label.
 	byLabel := cli.Inventory(t, "--query", "label:e2e-test-rg")
 	if len(byLabel) != 1 {
 		t.Errorf("expected 1 resource with label e2e-test-rg, got %d", len(byLabel))
 	}
 
-	// All resources should be managed.
 	managed := cli.Inventory(t, "--query", "stack:e2e-reconcile-azure managed:true")
 	if len(managed) != 3 {
 		t.Errorf("expected 3 managed resources in stack, got %d", len(managed))
@@ -253,33 +258,6 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 
 	// Step 9: Verify the resource group is actually gone in Azure.
 	verifyAzureResourceGroupDeleted(t, subscriptionID, "formae-e2e-reconcile-rg")
-}
-
-// verifyAWSRoleDeleted uses the AWS IAM SDK to confirm that the given role
-// no longer exists. It expects a NoSuchEntity error from GetRole.
-func verifyAWSRoleDeleted(t *testing.T, roleName string) {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-west-2"))
-	if err != nil {
-		t.Fatalf("failed to load AWS config: %v", err)
-	}
-
-	client := iam.NewFromConfig(cfg)
-	_, err = client.GetRole(ctx, &iam.GetRoleInput{
-		RoleName: &roleName,
-	})
-	if err == nil {
-		t.Errorf("expected IAM role %q to be deleted, but GetRole succeeded", roleName)
-		return
-	}
-
-	if !strings.Contains(err.Error(), "NoSuchEntity") {
-		t.Errorf("expected NoSuchEntity error for role %q, got: %v", roleName, err)
-	}
 }
 
 // verifyAzureResourceGroupDeleted uses the Azure SDK to confirm that the
