@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	newds "github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -38,6 +39,11 @@ var tracer trace.Tracer
 
 func init() {
 	tracer = otel.Tracer("formae/datastore")
+
+	// Register Postgres factory with the datastore extension registry
+	newds.DefaultRegistry.Register("postgres", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (newds.Datastore, error) {
+		return NewDatastorePostgres(ctx, cfg, agentID)
+	})
 }
 
 type DatastorePostgres struct {

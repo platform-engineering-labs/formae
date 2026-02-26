@@ -22,6 +22,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 	"go.opentelemetry.io/otel/trace"
 
+	newds "github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -50,6 +51,11 @@ func init() {
 			DisableErrSkip: true,
 		}),
 	))
+
+	// Register SQLite factory with the datastore extension registry
+	newds.DefaultRegistry.Register("sqlite", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (newds.Datastore, error) {
+		return NewDatastoreSQLite(ctx, cfg, agentID)
+	})
 }
 
 type DatastoreSQLite struct {

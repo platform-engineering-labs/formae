@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata/types"
 	"github.com/demula/mksuid/v2"
 
+	newds "github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	metaConfig "github.com/platform-engineering-labs/formae/internal/metastructure/config"
@@ -35,6 +36,13 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
+
+func init() {
+	// Register Aurora Data API factory with the datastore extension registry
+	newds.DefaultRegistry.Register("auroradataapi", func(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (newds.Datastore, error) {
+		return NewDatastoreAuroraDataAPI(ctx, cfg, agentID)
+	})
+}
 
 type DatastoreAuroraDataAPI struct {
 	client     *rdsdata.Client
