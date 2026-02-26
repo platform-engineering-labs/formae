@@ -173,12 +173,12 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 	}
 
 	// Evict from cache if command is complete.
-	// For sync commands, we must wait for all completions before evicting because
-	// sync commands don't store ResourceUpdates in DB (they rely on in-memory cache).
-	// If we evict early, late completions will load from DB and find 0 resources.
+	// We must wait for all completion messages before evicting because
+	// evicting early causes getOrLoadCommand to reload from DB where
+	// countNonFinalResources returns 0 (resources already in final state
+	// from UpdateResourceProgress), leading to pendingCompletions underflow.
 	if cmd.IsInFinalState() {
-		if cmd.Command == pkgmodel.CommandSync && cached.pendingCompletions > 0 {
-			// Don't evict yet - sync command still waiting for completions
+		if cached.pendingCompletions > 0 {
 			return nil
 		}
 		delete(f.activeCommands, cmd.ID)
