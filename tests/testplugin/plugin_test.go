@@ -1,3 +1,7 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
 package main
 
 import (
@@ -130,6 +134,95 @@ func TestPlugin_Delete_RemovesFromCloudState(t *testing.T) {
 	_, ok = cs.Get(nativeID)
 	if ok {
 		t.Fatalf("expected resource %q to be gone after Delete", nativeID)
+	}
+}
+
+func TestPlugin_Create_WithInjectedError(t *testing.T) {
+	cs := NewCloudState()
+	inj := NewInjectionState()
+	inj.AddErrorRule(ErrorRule{
+		Operation: "Create",
+		Error:     "simulated cloud failure",
+		Count:     1,
+	})
+	p := &TestPlugin{cloudState: cs, injections: inj}
+
+	_, err := p.Create(context.Background(), &resource.CreateRequest{
+		ResourceType: "Test::Generic::Resource",
+		Properties:   []byte(`{"Name":"bucket-1"}`),
+	})
+	if err == nil {
+		t.Fatal("expected error from injected failure, got nil")
+	}
+	if err.Error() != "simulated cloud failure" {
+		t.Errorf("error message: got %q, want %q", err.Error(), "simulated cloud failure")
+	}
+
+	// Second call should succeed (count=1 was exhausted)
+	result, err := p.Create(context.Background(), &resource.CreateRequest{
+		ResourceType: "Test::Generic::Resource",
+		Properties:   []byte(`{"Name":"bucket-2"}`),
+	})
+	if err != nil {
+		t.Fatalf("expected success after exhaustion, got %v", err)
+	}
+	if result.ProgressResult.OperationStatus != resource.OperationStatusSuccess {
+		t.Errorf("OperationStatus: got %q, want %q", result.ProgressResult.OperationStatus, resource.OperationStatusSuccess)
+	}
+}
+
+func TestPlugin_Read_WithInjectedError(t *testing.T) {
+	cs := NewCloudState()
+	cs.Put("native-1", "Test::Generic::Resource", `{"Name":"a"}`)
+	inj := NewInjectionState()
+	inj.AddErrorRule(ErrorRule{
+		Operation: "Read",
+		Error:     "read failure",
+		Count:     1,
+	})
+	p := &TestPlugin{cloudState: cs, injections: inj}
+
+	_, err := p.Read(context.Background(), &resource.ReadRequest{
+		NativeID:     "native-1",
+		ResourceType: "Test::Generic::Resource",
+	})
+	if err == nil {
+		t.Fatal("expected error from injected failure, got nil")
+	}
+}
+
+func TestPlugin_OperationLog_RecordsOps(t *testing.T) {
+	cs := NewCloudState()
+	ol := NewOperationLog()
+	p := &TestPlugin{cloudState: cs, opLog: ol}
+
+	// Create
+	result, err := p.Create(context.Background(), &resource.CreateRequest{
+		ResourceType: "Test::Generic::Resource",
+		Properties:   []byte(`{"Name":"logged"}`),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Read
+	_, err = p.Read(context.Background(), &resource.ReadRequest{
+		NativeID:     result.ProgressResult.NativeID,
+		ResourceType: "Test::Generic::Resource",
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	snap := ol.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 log entries, got %d", len(snap))
+	}
+	if snap[0].Operation != "Create" {
+		t.Errorf("entry 0: got %q, want Create", snap[0].Operation)
+	}
+	if snap[1].Operation != "Read" {
+		t.Errorf("entry 1: got %q, want Read", snap[1].Operation)
 	}
 }
 
