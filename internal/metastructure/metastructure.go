@@ -275,12 +275,18 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 				return nil, fmt.Errorf("failed to load most recent forma commands for stack %s: %w", stackLabel, loadErr)
 			}
 			if len(modifications) > 0 {
-				modifiedResources := make([]apimodel.ResourceModification, 0, len(modifications))
-				for _, modification := range modifications {
-					modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
-				}
-				modifiedStacks[stackLabel] = apimodel.ModifiedStack{
-					ModifiedResources: modifiedResources,
+				// Filter out modifications that have been absorbed into the forma.
+				// A modification is absorbed when the forma contains the resource
+				// and no resource update was generated for it (properties match current state).
+				unabsorbed := filterUnabsorbedModifications(modifications, forma, fa)
+				if len(unabsorbed) > 0 {
+					modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
+					for _, modification := range unabsorbed {
+						modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
+					}
+					modifiedStacks[stackLabel] = apimodel.ModifiedStack{
+						ModifiedResources: modifiedResources,
+					}
 				}
 			}
 		}
@@ -1252,6 +1258,64 @@ func (m *Metastructure) checkForConflictingCommands(command *forma_command.Forma
 	}
 
 	return nil
+}
+
+// filterUnabsorbedModifications returns only those modifications that have NOT been
+// absorbed into the provided forma. A modification is considered absorbed when:
+//   - The forma contains a resource with matching stack, type, and label
+//   - No resource update was generated for that resource (i.e. its properties already
+//     match the current state in the datastore)
+//
+// This prevents false drift rejection when the user has already incorporated
+// out-of-band changes into their forma (e.g. via extract) before applying.
+func filterUnabsorbedModifications(
+	modifications []datastore.ResourceModification,
+	forma *pkgmodel.Forma,
+	fa *forma_command.FormaCommand,
+) []datastore.ResourceModification {
+	// Build a set of resources that have pending updates in the FormaCommand
+	type resourceKey struct {
+		stack    string
+		typeName string
+		label    string
+	}
+	resourcesWithUpdates := make(map[resourceKey]struct{})
+	for _, ru := range fa.ResourceUpdates {
+		resourcesWithUpdates[resourceKey{
+			stack:    ru.StackLabel,
+			typeName: ru.DesiredState.Type,
+			label:    ru.DesiredState.Label,
+		}] = struct{}{}
+	}
+
+	// Build a set of resources present in the forma
+	formaResources := make(map[resourceKey]struct{})
+	for _, r := range forma.Resources {
+		formaResources[resourceKey{
+			stack:    r.Stack,
+			typeName: r.Type,
+			label:    r.Label,
+		}] = struct{}{}
+	}
+
+	var unabsorbed []datastore.ResourceModification
+	for _, mod := range modifications {
+		key := resourceKey{
+			stack:    mod.Stack,
+			typeName: mod.Type,
+			label:    mod.Label,
+		}
+		// A modification is absorbed if:
+		// 1. The resource is present in the forma, AND
+		// 2. No resource update was generated for it (properties match current state)
+		_, inForma := formaResources[key]
+		_, hasUpdate := resourcesWithUpdates[key]
+		if inForma && !hasUpdate {
+			continue // absorbed
+		}
+		unabsorbed = append(unabsorbed, mod)
+	}
+	return unabsorbed
 }
 
 func formaTouchesStacks(forma *forma_command.FormaCommand, stackLabels []string) bool {
