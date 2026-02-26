@@ -264,10 +264,10 @@ local-data-api-ci:
 	exit 1
 
 test-unit-postgres:
-	go test -v -tags=unit -failfast ./internal/metastructure/datastore -args -dbType=postgres
+	go test -v -tags=unit -failfast ./internal/datastore -args -dbType=postgres
 
 test-unit-auroradataapi:
-	go test -v -tags=unit -count=1 -failfast ./internal/metastructure/datastore -args \
+	go test -v -tags=unit -count=1 -failfast ./internal/datastore -args \
 		-dbType=auroradataapi \
 		-clusterArn=arn:aws:rds:us-east-1:123456789012:cluster:local \
 		-secretArn=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
