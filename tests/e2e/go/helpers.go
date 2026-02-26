@@ -78,17 +78,6 @@ func FindResource(resources []Resource, label string) *Resource {
 	return nil
 }
 
-// FindResourceByType returns all resources matching the given resource type.
-func FindResourceByType(resources []Resource, resourceType string) []Resource {
-	var matched []Resource
-	for i := range resources {
-		if resources[i].Type == resourceType {
-			matched = append(matched, resources[i])
-		}
-	}
-	return matched
-}
-
 // RequireResource searches the resource slice for the first resource matching
 // the given label and fails the test if not found.
 func RequireResource(t *testing.T, resources []Resource, label string) Resource {
@@ -206,6 +195,28 @@ func AssertResolvableProperty(t *testing.T, resource Resource, key, expectedType
 	}
 }
 
+// FindResourceByNativeIDContains returns the first resource whose NativeID
+// contains the given substring. Returns nil if not found.
+func FindResourceByNativeIDContains(resources []Resource, substring string) *Resource {
+	for i := range resources {
+		if strings.Contains(resources[i].NativeID, substring) {
+			return &resources[i]
+		}
+	}
+	return nil
+}
+
+// RequireResourceByNativeID finds a resource by NativeID substring and fails
+// the test if not found.
+func RequireResourceByNativeID(t *testing.T, resources []Resource, nativeIDSubstring string) Resource {
+	t.Helper()
+	r := FindResourceByNativeIDContains(resources, nativeIDSubstring)
+	if r == nil {
+		t.Fatalf("resource with NativeID containing %q not found in %d resources", nativeIDSubstring, len(resources))
+	}
+	return *r
+}
+
 // FilterUnmanaged returns only unmanaged resources from the given slice.
 func FilterUnmanaged(resources []Resource) []Resource {
 	var unmanaged []Resource
@@ -229,30 +240,49 @@ func FilterByNativeIDContains(resources []Resource, substring string) []Resource
 	return filtered
 }
 
-// WaitForDiscovery polls inventory with retries, triggering discovery cycles,
-// until at least minCount unmanaged resources whose NativeID contains the given
-// substring are found, or the timeout is reached. The nativeIDContains filter
-// prevents false-positives in shared accounts where other unmanaged resources
-// may exist.
-func WaitForDiscovery(t *testing.T, cli *FormaeCLI, nativeIDContains string, minCount int, timeout time.Duration) []Resource {
+// WaitForDiscoveryByNames polls inventory with retries, triggering discovery
+// cycles, until all expectedNames are found as substrings in unmanaged resource
+// NativeIDs. Returns all unmanaged resources once all expected names are found.
+// This is more precise than count-based waiting and avoids false positives from
+// parallel tests or leftover resources.
+func WaitForDiscoveryByNames(t *testing.T, cli *FormaeCLI, expectedNames []string, timeout time.Duration) []Resource {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	var resources []Resource
 	for time.Now().Before(deadline) {
 		resources = cli.Inventory(t, "--query", "managed:false")
-		matching := FilterByNativeIDContains(resources, nativeIDContains)
-		if len(matching) >= minCount {
+		missing := missingNames(resources, expectedNames)
+		if len(missing) == 0 {
 			return resources
 		}
-		t.Logf("waiting for discovery: found %d resources matching %q (need %d), triggering another cycle",
-			len(matching), nativeIDContains, minCount)
+		t.Logf("waiting for discovery: %d/%d found, missing: %v — triggering another cycle",
+			len(expectedNames)-len(missing), len(expectedNames), missing)
 		cli.ForceDiscover(t)
 		time.Sleep(5 * time.Second)
 	}
-	matching := FilterByNativeIDContains(resources, nativeIDContains)
-	t.Fatalf("timeout waiting for %d unmanaged resources matching %q, got %d",
-		minCount, nativeIDContains, len(matching))
+	missing := missingNames(resources, expectedNames)
+	t.Fatalf("timeout waiting for discovery of %d resources, still missing: %v",
+		len(expectedNames), missing)
 	return nil
+}
+
+// missingNames returns the subset of expectedNames that are not found as
+// substrings of any unmanaged resource's NativeID.
+func missingNames(resources []Resource, expectedNames []string) []string {
+	var missing []string
+	for _, name := range expectedNames {
+		found := false
+		for _, r := range resources {
+			if strings.Contains(r.NativeID, name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // AssertTagExists checks that the resource has a tag list under the given

@@ -107,12 +107,18 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 		deleteAWSRole(t, cleanupCtx, iamClient, "formae-e2e-discovery-role-b")
 	})
 
-	// Step 4: Force discovery and wait for unmanaged resources.
-	// We expect 6 unmanaged with our prefix: 2 Roles + 4 RolePolicies.
-	discoveryTimeout := 5 * time.Minute
-	allResources := WaitForDiscovery(t, cli, nativeIDPrefix, 6, discoveryTimeout)
-	unmanaged := FilterByNativeIDContains(FilterUnmanaged(allResources), nativeIDPrefix)
-	t.Logf("discovered %d unmanaged test resources", len(unmanaged))
+	// Step 4: Force discovery and wait for all 6 specific unmanaged resources.
+	expectedNames := []string{
+		"formae-e2e-discovery-role-a",
+		"formae-e2e-discovery-role-b",
+		"formae-e2e-discovery-policy-managed",
+		"formae-e2e-discovery-policy-a1",
+		"formae-e2e-discovery-policy-b1",
+		"formae-e2e-discovery-policy-b2",
+	}
+	discoveryTimeout := 2 * time.Minute
+	unmanaged := FilterUnmanaged(WaitForDiscoveryByNames(t, cli, expectedNames, discoveryTimeout))
+	t.Logf("discovered %d unmanaged resources", len(unmanaged))
 
 	// Step 5: Verify the managed Role is still managed.
 	managedResources := cli.Inventory(t, "--query", "stack:e2e-discovery-aws managed:true")
@@ -127,27 +133,24 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 		t.Error("managed role 'e2e-discovery-managed-role' was not found or lost its managed status")
 	}
 
-	// Step 6: Count unmanaged resources by type (filtered by prefix).
-	unmanagedRoles := FindResourceByType(unmanaged, "AWS::IAM::Role")
-	unmanagedPolicies := FindResourceByType(unmanaged, "AWS::IAM::RolePolicy")
-
-	if len(unmanagedRoles) != 2 {
-		t.Errorf("expected 2 unmanaged Roles, got %d", len(unmanagedRoles))
-		for _, r := range unmanagedRoles {
-			t.Logf("  unmanaged role: label=%s nativeID=%s", r.Label, r.NativeID)
-		}
+	// Step 6: Verify each specific unmanaged resource exists.
+	roleA := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-role-a")
+	roleB := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-role-b")
+	if roleA.Type != "AWS::IAM::Role" {
+		t.Errorf("role-a: expected type AWS::IAM::Role, got %s", roleA.Type)
+	}
+	if roleB.Type != "AWS::IAM::Role" {
+		t.Errorf("role-b: expected type AWS::IAM::Role, got %s", roleB.Type)
 	}
 
-	if len(unmanagedPolicies) != 4 {
-		t.Errorf("expected 4 unmanaged RolePolicies, got %d", len(unmanagedPolicies))
-		for _, r := range unmanagedPolicies {
-			t.Logf("  unmanaged policy: label=%s nativeID=%s", r.Label, r.NativeID)
-		}
-	}
+	policyManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-managed")
+	policyA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-a1")
+	policyB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-b1")
+	policyB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-b2")
 
 	// Step 7: Verify RolePolicies have parent resolvable references.
 	knownRoleNames := []string{"formae-e2e-discovery-managed", "formae-e2e-discovery-role-a", "formae-e2e-discovery-role-b"}
-	for _, policy := range unmanagedPolicies {
+	for _, policy := range []Resource{policyManaged, policyA1, policyB1, policyB2} {
 		roleName, ok := policy.Properties["RoleName"]
 		if !ok {
 			t.Errorf("unmanaged RolePolicy %s missing RoleName property", policy.Label)
@@ -310,12 +313,22 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 		deleteAzureResourceGroup(t, cleanupCtx, rgClient, "formae-e2e-discovery-rg-b")
 	})
 
-	// Step 4: Force discovery and wait for unmanaged resources.
-	// We expect 10 unmanaged: 2 RGs + 4 VNets + 4 Subnets.
-	discoveryTimeout := 10 * time.Minute
-	allResources := WaitForDiscovery(t, cli, nativeIDPrefix, 10, discoveryTimeout)
-	unmanaged := FilterByNativeIDContains(FilterUnmanaged(allResources), nativeIDPrefix)
-	t.Logf("discovered %d unmanaged test resources", len(unmanaged))
+	// Step 4: Force discovery and wait for all 10 specific unmanaged resources.
+	expectedNames := []string{
+		"formae-e2e-discovery-rg-a",
+		"formae-e2e-discovery-rg-b",
+		"formae-e2e-discovery-vnet-managed",
+		"formae-e2e-discovery-vnet-a1",
+		"formae-e2e-discovery-vnet-b1",
+		"formae-e2e-discovery-vnet-b2",
+		"formae-e2e-discovery-subnet-managed",
+		"formae-e2e-discovery-subnet-a1",
+		"formae-e2e-discovery-subnet-b1",
+		"formae-e2e-discovery-subnet-b2",
+	}
+	discoveryTimeout := 5 * time.Minute
+	unmanaged := FilterUnmanaged(WaitForDiscoveryByNames(t, cli, expectedNames, discoveryTimeout))
+	t.Logf("discovered %d unmanaged resources", len(unmanaged))
 
 	// Step 5: Verify the managed RG is still managed.
 	managedResources := cli.Inventory(t, "--query", "stack:e2e-discovery-azure managed:true")
@@ -330,35 +343,29 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 		t.Error("managed RG 'e2e-discovery-managed-rg' was not found or lost its managed status")
 	}
 
-	// Step 6: Count unmanaged resources by type (filtered by prefix).
-	unmanagedRGs := FindResourceByType(unmanaged, "Azure::Resources::ResourceGroup")
-	unmanagedVNets := FindResourceByType(unmanaged, "Azure::Network::VirtualNetwork")
-	unmanagedSubnets := FindResourceByType(unmanaged, "Azure::Network::Subnet")
-
-	if len(unmanagedRGs) != 2 {
-		t.Errorf("expected 2 unmanaged ResourceGroups, got %d", len(unmanagedRGs))
-		for _, r := range unmanagedRGs {
-			t.Logf("  unmanaged RG: label=%s nativeID=%s", r.Label, r.NativeID)
-		}
+	// Step 6: Verify each specific unmanaged resource exists with correct type.
+	rgA := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-a")
+	rgB := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-b")
+	if rgA.Type != "Azure::Resources::ResourceGroup" {
+		t.Errorf("rg-a: expected type Azure::Resources::ResourceGroup, got %s", rgA.Type)
+	}
+	if rgB.Type != "Azure::Resources::ResourceGroup" {
+		t.Errorf("rg-b: expected type Azure::Resources::ResourceGroup, got %s", rgB.Type)
 	}
 
-	if len(unmanagedVNets) != 4 {
-		t.Errorf("expected 4 unmanaged VirtualNetworks, got %d", len(unmanagedVNets))
-		for _, r := range unmanagedVNets {
-			t.Logf("  unmanaged VNet: label=%s nativeID=%s", r.Label, r.NativeID)
-		}
-	}
+	vnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-managed")
+	vnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-a1")
+	vnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b1")
+	vnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b2")
 
-	if len(unmanagedSubnets) != 4 {
-		t.Errorf("expected 4 unmanaged Subnets, got %d", len(unmanagedSubnets))
-		for _, r := range unmanagedSubnets {
-			t.Logf("  unmanaged Subnet: label=%s nativeID=%s", r.Label, r.NativeID)
-		}
-	}
+	subnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-managed")
+	subnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-a1")
+	subnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b1")
+	subnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b2")
 
 	// Step 7: Verify VNets have resolvable reference to parent RG.
 	knownRGNames := []string{"formae-e2e-discovery-managed-rg", "formae-e2e-discovery-rg-a", "formae-e2e-discovery-rg-b"}
-	for _, vnet := range unmanagedVNets {
+	for _, vnet := range []Resource{vnetManaged, vnetA1, vnetB1, vnetB2} {
 		rgNameProp, ok := vnet.Properties["resourceGroupName"]
 		if !ok {
 			t.Errorf("unmanaged VNet %s missing resourceGroupName property", vnet.Label)
@@ -375,7 +382,7 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 		"formae-e2e-discovery-vnet-b1",
 		"formae-e2e-discovery-vnet-b2",
 	}
-	for _, subnet := range unmanagedSubnets {
+	for _, subnet := range []Resource{subnetManaged, subnetA1, subnetB1, subnetB2} {
 		// virtualNetworkName should reference parent VNet.
 		vnetNameProp, ok := subnet.Properties["virtualNetworkName"]
 		if !ok {
