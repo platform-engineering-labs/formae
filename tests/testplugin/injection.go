@@ -1,6 +1,12 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
 package main
 
 import (
+	"fmt"
+	"sync"
 	"time"
 )
 
@@ -26,7 +32,11 @@ type LatencyRule struct {
 // InjectionState holds error and latency rules for fault injection.
 // It is thread-safe and shared between the TestController actor (which writes rules)
 // and the plugin CRUD methods (which read rules).
-type InjectionState struct{}
+type InjectionState struct {
+	mu           sync.Mutex
+	errorRules   []ErrorRule
+	latencyRules []LatencyRule
+}
 
 // NewInjectionState creates a new, empty InjectionState.
 func NewInjectionState() *InjectionState {
@@ -34,23 +44,68 @@ func NewInjectionState() *InjectionState {
 }
 
 // AddErrorRule adds a new error injection rule.
-func (is *InjectionState) AddErrorRule(rule ErrorRule) {}
+func (is *InjectionState) AddErrorRule(rule ErrorRule) {
+	is.mu.Lock()
+	defer is.mu.Unlock()
+	is.errorRules = append(is.errorRules, rule)
+}
 
 // AddLatencyRule adds a new latency injection rule.
-func (is *InjectionState) AddLatencyRule(rule LatencyRule) {}
+func (is *InjectionState) AddLatencyRule(rule LatencyRule) {
+	is.mu.Lock()
+	defer is.mu.Unlock()
+	is.latencyRules = append(is.latencyRules, rule)
+}
 
 // CheckError checks if any error rule matches the given operation and resource type.
 // Returns an error if a rule matches, or nil if no rule matches.
 // For rules with Count > 0, decrements the count and removes the rule when exhausted.
 func (is *InjectionState) CheckError(operation, resourceType string) error {
+	is.mu.Lock()
+	defer is.mu.Unlock()
+
+	for i := range is.errorRules {
+		r := &is.errorRules[i]
+		if r.Operation != operation {
+			continue
+		}
+		if r.ResourceType != "" && r.ResourceType != resourceType {
+			continue
+		}
+		err := fmt.Errorf("%s", r.Error)
+		if r.Count > 0 {
+			r.Count--
+			if r.Count == 0 {
+				is.errorRules = append(is.errorRules[:i], is.errorRules[i+1:]...)
+			}
+		}
+		return err
+	}
 	return nil
 }
 
 // CheckLatency checks if any latency rule matches the given operation and resource type.
 // Returns the duration to sleep, or 0 if no rule matches.
 func (is *InjectionState) CheckLatency(operation, resourceType string) time.Duration {
+	is.mu.Lock()
+	defer is.mu.Unlock()
+
+	for _, r := range is.latencyRules {
+		if r.Operation != operation {
+			continue
+		}
+		if r.ResourceType != "" && r.ResourceType != resourceType {
+			continue
+		}
+		return r.Duration
+	}
 	return 0
 }
 
 // Clear removes all error and latency rules.
-func (is *InjectionState) Clear() {}
+func (is *InjectionState) Clear() {
+	is.mu.Lock()
+	defer is.mu.Unlock()
+	is.errorRules = nil
+	is.latencyRules = nil
+}
