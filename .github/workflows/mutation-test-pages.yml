@@ -1,0 +1,169 @@
+name: mutation-test-pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mutation-test-pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  mutation-test:
+    runs-on: ubuntu-latest-m
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.1'
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Install gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+
+      - name: Build
+        run: make build
+
+      - name: Run full mutation test suite
+        run: ./scripts/mutation-test.sh
+
+      - name: Generate coverage diff
+        run: ./scripts/coverage-diff.sh
+
+      - name: Generate mutation report
+        run: ./scripts/generate-mutation-report.sh
+
+      - name: Convert report to HTML
+        run: |
+          mkdir -p _site
+          python3 - docs/plans/mutation-report/summary.md _site/index.html <<'PYEOF'
+          import sys
+          from pathlib import Path
+
+          src = Path(sys.argv[1])
+          dst = Path(sys.argv[2])
+
+          if not src.exists():
+              print(f"ERROR: {src} not found", file=sys.stderr)
+              sys.exit(1)
+
+          md = src.read_text()
+
+          # Simple markdown table to HTML conversion
+          html_rows = []
+          in_table = False
+          for line in md.splitlines():
+              stripped = line.strip()
+
+              # Headings
+              if stripped.startswith("# "):
+                  html_rows.append(f"<h1>{stripped[2:]}</h1>")
+                  continue
+              if stripped.startswith("## "):
+                  html_rows.append(f"<h2>{stripped[3:]}</h2>")
+                  continue
+
+              # Table rows
+              if stripped.startswith("|"):
+                  cells = [c.strip() for c in stripped.strip("|").split("|")]
+                  # Skip separator rows like |---|---|
+                  if all(set(c) <= {"-", ":", " "} for c in cells):
+                      continue
+                  if not in_table:
+                      html_rows.append("<table>")
+                      tag = "th"
+                      in_table = True
+                  else:
+                      tag = "td"
+                  row_html = "".join(f"<{tag}>{c}</{tag}>" for c in cells)
+                  html_rows.append(f"<tr>{row_html}</tr>")
+                  continue
+
+              # Close table if we left it
+              if in_table:
+                  html_rows.append("</table>")
+                  in_table = False
+
+              # Code blocks
+              if stripped == "```":
+                  html_rows.append("</pre>" if any("</pre>" not in r and "<pre>" in r for r in html_rows) else "<pre>")
+                  continue
+
+              # List items
+              if stripped.startswith("- "):
+                  html_rows.append(f"<li>{stripped[2:]}</li>")
+                  continue
+
+              # Italic
+              if stripped.startswith("_") and stripped.endswith("_"):
+                  html_rows.append(f"<em>{stripped[1:-1]}</em>")
+                  continue
+
+              # Paragraphs
+              if stripped:
+                  html_rows.append(f"<p>{stripped}</p>")
+
+          if in_table:
+              html_rows.append("</table>")
+
+          body = "\n".join(html_rows)
+
+          html = f"""<!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Mutation Testing Report</title>
+          <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                   max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #24292f; }}
+            table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
+            th, td {{ border: 1px solid #d0d7de; padding: 6px 13px; text-align: left; }}
+            th {{ background: #f6f8fa; }}
+            tr:nth-child(even) {{ background: #f6f8fa; }}
+            code, pre {{ background: #f6f8fa; padding: 0.2em 0.4em; border-radius: 3px;
+                        font-size: 0.9em; }}
+            pre {{ padding: 1em; overflow-x: auto; }}
+            li {{ margin: 0.25rem 0; }}
+          </style>
+          </head>
+          <body>
+          {body}
+          </body>
+          </html>"""
+
+          dst.write_text(html)
+          print(f"HTML report written to {dst}")
+          PYEOF
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: mutation-test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
