@@ -155,7 +155,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 		},
 	}
 
-	for _, tc := range testCases[1:2] {
+	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
