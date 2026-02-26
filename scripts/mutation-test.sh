@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
-REPORT_DIR="$REPO_ROOT/.plans/mutation-report"
+REPORT_DIR="$REPO_ROOT/.mutation-report"
 mkdir -p "$REPORT_DIR"
 
 # Run gremlins on a single package and save JSON output

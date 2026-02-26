@@ -52,7 +52,7 @@ jobs:
       - name: Convert report to HTML
         run: |
           mkdir -p _site
-          python3 - docs/plans/mutation-report/summary.md _site/index.html <<'PYEOF'
+          python3 - .mutation-report/summary.md _site/index.html <<'PYEOF'
           import sys
           from pathlib import Path
 

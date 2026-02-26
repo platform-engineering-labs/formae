@@ -90,6 +90,9 @@ CLAUDE.md
 .research/
 docs/design/
 
+# Generated mutation testing report
+.mutation-report/
+
 # Git worktrees
 .worktrees/
 
