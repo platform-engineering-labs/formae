@@ -18,12 +18,69 @@ permissions:
   contents: read
 
 jobs:
-  e2e:
+  pre-cleanup:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
          github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install aws-nuke
+        run: |
+          wget -O aws-nuke.tar.gz https://github.com/ekristen/aws-nuke/releases/download/v3.56.2/aws-nuke-v3.56.2-linux-amd64.tar.gz
+          tar -xzf aws-nuke.tar.gz
+          sudo mv aws-nuke /usr/local/bin/
+          sudo chmod +x /usr/local/bin/aws-nuke
+          aws-nuke version
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
+          role-session-name: PreCleanupSession
+
+      - name: Nuke Discovery
+        run: |
+          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
+
+      - name: Nuke AWS
+        run: |
+          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
+
+      - name: Configure Azure Credentials
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Cleanup Azure Resource Groups
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          echo "Cleaning up leftover Azure resource groups matching formae-e2e-*"
+          for rg in $(az group list --query "[?starts_with(name, 'formae-e2e-')].name" -o tsv); do
+            echo "Deleting resource group: $rg"
+            az group delete --name "$rg" --yes --no-wait
+          done
+          # Wait for all deletions to complete
+          for rg in $(az group list --query "[?starts_with(name, 'formae-e2e-')].name" -o tsv); do
+            echo "Waiting for deletion of: $rg"
+            az group wait --name "$rg" --deleted --timeout 300 2>/dev/null || true
+          done
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [pre-cleanup]
     strategy:
       fail-fast: false
       matrix:
@@ -122,3 +179,24 @@ jobs:
       - name: Nuke AWS
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
+
+      - name: Configure Azure Credentials
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Cleanup Azure Resource Groups
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          echo "Cleaning up leftover Azure resource groups matching formae-e2e-*"
+          for rg in $(az group list --query "[?starts_with(name, 'formae-e2e-')].name" -o tsv); do
+            echo "Deleting resource group: $rg"
+            az group delete --name "$rg" --yes --no-wait
+          done
