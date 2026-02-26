@@ -20,7 +20,7 @@ SPDX-License-Identifier = "FSL-1.1-ALv2"
 
 # Binary and generated test files
 [[annotations]]
-path = ["**/*.zip", "**/*.pcf", "**/*.log"]
+path = ["**/*.zip", "**/*.pcf", "**/*.log", "**/*.txt"]
 SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
 SPDX-License-Identifier = "FSL-1.1-ALv2"
 

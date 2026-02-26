@@ -79,30 +79,20 @@ tests/e2e/test-logs
 # Generated e2e test PklProject (contains absolute paths)
 tests/e2e/pkl/PklProject
 
-# Claude Code files
+# Claude Code and MCP tooling
 .claude/
 CLAUDE.md
+.serena/
 
+# Local notes, investigation docs, and handoffs (live in engineering-notes)
+.plans/
 .handoffs/
 .research/
-.plans/
-
-# Design docs (local investigation notes)
 docs/design/
-
-# MCP
-.serena/
-.handoffs/
+docs/plans/
 
 # Git worktrees
 .worktrees/
 
 # External plugin cache (cloned plugin repos during build)
 .plugins/
-
-# fake-aws plugin binary
-plugins/fake-aws/fake-aws
-.worktrees/
-docs/plans/mutation-report/*.json
-docs/plans/mutation-report/*.pkg
-docs/plans/mutation-report/coverage-*.out
