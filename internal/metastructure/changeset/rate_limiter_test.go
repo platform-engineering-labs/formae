@@ -10,8 +10,6 @@ import (
 
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -208,21 +206,14 @@ func TestExtractRequesterName_AllKnownActors(t *testing.T) {
 func newRateLimiterForTest(t *testing.T) (*unit.TestActor, gen.PID, error) {
 	sender := gen.PID{Node: "test", ID: 100}
 
-	projectRoot, err := testutil.FindProjectRoot()
-	assert.NoError(t, err, "Failed to get project root")
-	pluginPath := projectRoot + "/plugins"
-
-	pluginManager := plugin.NewManager("", pluginPath)
-	pluginManager.Load()
-
-	env := map[gen.Env]any{
-		"PluginManager": pluginManager,
-	}
-
-	listener, err := unit.Spawn(t, NewRateLimiter, unit.WithLogLevel(gen.LogLevelDebug), unit.WithEnv(env))
+	listener, err := unit.Spawn(t, NewRateLimiter, unit.WithLogLevel(gen.LogLevelDebug))
 	if err != nil {
 		return nil, gen.PID{}, err
 	}
+
+	// Register FakeAWS namespace directly instead of loading via PluginManager.
+	// FakeAWS has a rate limit of 5 requests per second.
+	listener.SendMessage(sender, RegisterNamespace{Namespace: "FakeAWS", MaxRequestsPerSecond: 5})
 
 	return listener, sender, nil
 }
