@@ -21,34 +21,24 @@ import (
 // EnforceSetOnceAndCompareResourceForUpdate prepares resources for update by applying transformations,
 // normalization, and SetOnce filtering, then compares them to detect meaningful changes
 func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource) (bool, json.RawMessage, error) {
-	normalizedExisting, err := normalizeEmptyFields(existing.Properties)
-	if err != nil {
-		return false, nil, err
-	}
-
-	filteredRawProps, err := filterSetOnceProps(normalizedExisting, new.Properties, new.Label)
-	if err != nil {
-		return false, nil, err
-	}
-
-	normalizedFilteredRaw, err := normalizeEmptyFields(filteredRawProps)
+	filteredRawProps, err := filterSetOnceProps(existing.Properties, new.Properties, new.Label)
 	if err != nil {
 		return false, nil, err
 	}
 
 	// Hash the filtered properties ONLY for comparison (like verses like)
 	transformer := transformations.NewPersistValueTransformer()
-	tempResource := &pkgmodel.Resource{Properties: normalizedFilteredRaw}
+	tempResource := &pkgmodel.Resource{Properties: filteredRawProps}
 	hashedForComparison, err := transformer.ApplyToResource(tempResource)
 	if err != nil {
 		return false, nil, err
 	}
 
-	equal, err := util.JsonEqualIgnoreArrayOrder(normalizedExisting, hashedForComparison.Properties)
+	equal, err := util.JsonEqualIgnoreArrayOrder(existing.Properties, hashedForComparison.Properties)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to compare properties: %w", err)
 	}
-	return !equal, normalizedFilteredRaw, nil
+	return !equal, filteredRawProps, nil
 }
 
 // filterSetOnceProps recursively removes SetOnce properties with existing values
@@ -234,62 +224,3 @@ func buildPath(base, key string) string {
 	return base + "." + key
 }
 
-// normalizeEmptyFields removes empty arrays and null values for consistent comparison
-func normalizeEmptyFields(properties json.RawMessage) (json.RawMessage, error) {
-	if len(properties) == 0 {
-		return properties, nil
-	}
-
-	var props map[string]any
-	if err := json.Unmarshal(properties, &props); err != nil {
-		return properties, err
-	}
-
-	normalized := normalizeObject(props)
-
-	result, err := json.Marshal(normalized)
-	if err != nil {
-		return properties, err
-	}
-
-	return result, nil
-}
-
-// normalizeObject recursively removes empty arrays and null values
-func normalizeObject(obj map[string]any) map[string]any {
-	normalized := make(map[string]any)
-
-	for key, value := range obj {
-		switch v := value.(type) {
-		case []any:
-			// skip empty arrays
-			if len(v) > 0 {
-				normalizedArray := make([]any, 0, len(v))
-				for _, item := range v {
-					if itemMap, ok := item.(map[string]any); ok {
-						normalizedItem := normalizeObject(itemMap)
-						if len(normalizedItem) > 0 {
-							normalizedArray = append(normalizedArray, normalizedItem)
-						}
-					} else {
-						normalizedArray = append(normalizedArray, item)
-					}
-				}
-				if len(normalizedArray) > 0 {
-					normalized[key] = normalizedArray
-				}
-			}
-		case map[string]any:
-			normalizedNested := normalizeObject(v)
-			if len(normalizedNested) > 0 {
-				normalized[key] = normalizedNested
-			}
-		case nil:
-			// skip null values
-		default:
-			normalized[key] = value
-		}
-	}
-
-	return normalized
-}

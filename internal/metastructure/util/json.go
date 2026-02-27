@@ -50,36 +50,49 @@ func JsonEqualRaw(a, b json.RawMessage) bool {
 	return JsonEqual(string(a), string(b))
 }
 
-// JsonEqualIgnoreArrayOrder compares two JSON objects treating all arrays as sets (order aagnostic)
+// JsonEqualIgnoreArrayOrder compares two JSON objects treating all arrays as sets (order agnostic).
+// Null, empty arrays, empty maps, and absent keys are treated as semantically equivalent.
 func JsonEqualIgnoreArrayOrder(a, b json.RawMessage) (bool, error) {
-	if a == nil && b == nil {
+	aEmpty := len(a) == 0
+	bEmpty := len(b) == 0
+	if aEmpty && bEmpty {
 		return true, nil
-	}
-	if a == nil || b == nil {
-		return false, nil
-	}
-
-	if len(a) == 0 && len(b) == 0 {
-		return true, nil
-	}
-	if len(a) == 0 || len(b) == 0 {
-		return false, nil
 	}
 
 	var objA, objB any
-	if err := json.Unmarshal(a, &objA); err != nil {
-		return false, err
+	if !aEmpty {
+		if err := json.Unmarshal(a, &objA); err != nil {
+			return false, err
+		}
 	}
-	if err := json.Unmarshal(b, &objB); err != nil {
-		return false, err
+	if !bEmpty {
+		if err := json.Unmarshal(b, &objB); err != nil {
+			return false, err
+		}
 	}
 
 	return deepEqualIgnoreArrayOrder(objA, objB), nil
 }
 
+// isEmptyValue returns true for values that are semantically empty:
+// nil, empty []any, empty map[string]any.
+func isEmptyValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch val := v.(type) {
+	case []any:
+		return len(val) == 0
+	case map[string]any:
+		return len(val) == 0
+	}
+	return false
+}
+
 func deepEqualIgnoreArrayOrder(a, b any) bool {
-	if a == nil || b == nil {
-		return a == b
+	// Treat nil, empty array, and empty map as equivalent
+	if isEmptyValue(a) && isEmptyValue(b) {
+		return true
 	}
 
 	switch valA := a.(type) {
@@ -89,14 +102,32 @@ func deepEqualIgnoreArrayOrder(a, b any) bool {
 			return false
 		}
 
-		if len(valA) != len(valB) {
-			return false
+		// Iterate the union of keys from both maps
+		seen := make(map[string]struct{})
+		for k := range valA {
+			seen[k] = struct{}{}
+		}
+		for k := range valB {
+			seen[k] = struct{}{}
 		}
 
-		for k, v := range valA {
-			vb, ok := valB[k]
-			if !ok || !deepEqualIgnoreArrayOrder(v, vb) {
-				return false
+		for k := range seen {
+			va, aHas := valA[k]
+			vb, bHas := valB[k]
+
+			switch {
+			case aHas && bHas:
+				if !deepEqualIgnoreArrayOrder(va, vb) {
+					return false
+				}
+			case aHas && !bHas:
+				if !isEmptyValue(va) {
+					return false
+				}
+			case !aHas && bHas:
+				if !isEmptyValue(vb) {
+					return false
+				}
 			}
 		}
 		return true
