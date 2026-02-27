@@ -12,6 +12,8 @@ replace github.com/platform-engineering-labs/formae/pkg/api/model => ./pkg/api/m
 
 replace github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests => ./pkg/plugin-conformance-tests
 
+replace github.com/platform-engineering-labs/formae/tests/testcontrol => ./tests/testcontrol
+
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
@@ -43,6 +45,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.2
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
+	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260319010158-0bb81e14e83f
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0

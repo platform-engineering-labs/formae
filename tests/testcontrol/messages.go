@@ -2,11 +2,37 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+// Package testcontrol defines the shared message types and data structures
+// used for Ergo-based communication between the blackbox test harness and the
+// TestController actor running in the test plugin.
+package testcontrol
 
 import (
 	"time"
+
+	"ergo.services/ergo/gen"
 )
+
+// TestControllerName is the registered name of the TestController actor
+// on the test plugin's Ergo node.
+const TestControllerName = gen.Atom("TestController")
+
+// --- Data types ---
+
+// CloudStateEntry represents a single resource as it exists in the simulated cloud.
+type CloudStateEntry struct {
+	NativeID     string
+	ResourceType string
+	Properties   string // JSON
+}
+
+// OperationLogEntry records a single plugin CRUD operation.
+type OperationLogEntry struct {
+	Operation    string    // "Create", "Read", "Update", "Delete", "List"
+	ResourceType string    // the resource type acted upon
+	NativeID     string    // the native ID (may be empty for Create/List)
+	Timestamp    time.Time // when the operation occurred
+}
 
 // --- Error Injection Messages ---
 

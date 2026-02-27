@@ -7,27 +7,22 @@ package main
 import (
 	"maps"
 	"sync"
-)
 
-// CloudStateEntry represents a single resource as it exists in the simulated cloud.
-type CloudStateEntry struct {
-	NativeID     string
-	ResourceType string
-	Properties   string // JSON
-}
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
+)
 
 // CloudState is a thread-safe in-memory store representing what "exists in the cloud."
 // All CRUD operations in the test plugin read from and write to this store.
 // The test harness manipulates it directly to simulate out-of-band changes.
 type CloudState struct {
 	mu      sync.RWMutex
-	entries map[string]CloudStateEntry
+	entries map[string]testcontrol.CloudStateEntry
 }
 
 // NewCloudState creates a new, empty CloudState.
 func NewCloudState() *CloudState {
 	return &CloudState{
-		entries: make(map[string]CloudStateEntry),
+		entries: make(map[string]testcontrol.CloudStateEntry),
 	}
 }
 
@@ -36,7 +31,7 @@ func (cs *CloudState) Put(nativeID, resourceType, properties string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	cs.entries[nativeID] = CloudStateEntry{
+	cs.entries[nativeID] = testcontrol.CloudStateEntry{
 		NativeID:     nativeID,
 		ResourceType: resourceType,
 		Properties:   properties,
@@ -45,7 +40,7 @@ func (cs *CloudState) Put(nativeID, resourceType, properties string) {
 
 // Get retrieves an entry by its NativeID. Returns the entry and true if found,
 // or a zero-value entry and false if not.
-func (cs *CloudState) Get(nativeID string) (CloudStateEntry, bool) {
+func (cs *CloudState) Get(nativeID string) (testcontrol.CloudStateEntry, bool) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -77,11 +72,11 @@ func (cs *CloudState) ListNativeIDs(resourceType string) []string {
 
 // Snapshot returns a deep copy of all entries. Mutating the returned map
 // does not affect the CloudState.
-func (cs *CloudState) Snapshot() map[string]CloudStateEntry {
+func (cs *CloudState) Snapshot() map[string]testcontrol.CloudStateEntry {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	snap := make(map[string]CloudStateEntry, len(cs.entries))
+	snap := make(map[string]testcontrol.CloudStateEntry, len(cs.entries))
 	maps.Copy(snap, cs.entries)
 	return snap
 }

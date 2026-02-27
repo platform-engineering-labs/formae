@@ -14,6 +14,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
 
 // TestPlugin is a minimal resource plugin for blackbox property-based testing.
@@ -196,7 +197,7 @@ func (p *TestPlugin) LabelConfig() plugin.LabelConfig {
 // recordOp records an operation in the operation log, if one is configured.
 func (p *TestPlugin) recordOp(operation, resourceType, nativeID string) {
 	if p.opLog != nil {
-		p.opLog.Record(OperationLogEntry{
+		p.opLog.Record(testcontrol.OperationLogEntry{
 			Operation:    operation,
 			ResourceType: resourceType,
 			NativeID:     nativeID,

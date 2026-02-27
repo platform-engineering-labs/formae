@@ -6,11 +6,14 @@ replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plug
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
+replace github.com/platform-engineering-labs/formae/tests/testcontrol => ../testcontrol
+
 require (
 	ergo.services/ergo v1.999.310
 	github.com/masterminds/semver v1.5.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.4
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.5
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0
+	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 )
 
 require (

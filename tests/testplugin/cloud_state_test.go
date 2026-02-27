@@ -7,6 +7,8 @@ package main
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
 
 func TestCloudState_CreateAndGet(t *testing.T) {
@@ -126,12 +128,12 @@ func TestCloudState_Snapshot(t *testing.T) {
 	}
 
 	// Mutate the snapshot and verify the original is not affected
-	snap["native-1"] = CloudStateEntry{
+	snap["native-1"] = testcontrol.CloudStateEntry{
 		NativeID:     "native-1",
 		ResourceType: "Test::Generic::Resource",
 		Properties:   `{"Name":"MUTATED"}`,
 	}
-	snap["native-3"] = CloudStateEntry{
+	snap["native-3"] = testcontrol.CloudStateEntry{
 		NativeID:     "native-3",
 		ResourceType: "Test::Generic::Resource",
 		Properties:   `{"Name":"injected"}`,
