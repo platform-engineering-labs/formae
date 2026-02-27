@@ -7,6 +7,7 @@
 package pkl
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -260,6 +261,92 @@ func TestPackageResolver_DefaultRemote(t *testing.T) {
 	packages := resolver.GetPackages()
 	assert.Len(t, packages, 1)
 	assert.False(t, packages[0].IsLocal) // Should be remote when local schemas not enabled
+}
+
+func TestReadVersionFromManifest(t *testing.T) {
+	resolver := NewPackageResolver()
+
+	t.Run("reads version from valid manifest", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		manifestPath := filepath.Join(tmpDir, "formae-plugin.pkl")
+		content := `namespace = "AWS"
+version = "0.1.2"
+name = "aws"
+`
+		require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0644))
+
+		version := resolver.readVersionFromManifest(manifestPath)
+		assert.Equal(t, "0.1.2", version)
+	})
+
+	t.Run("returns empty for missing file", func(t *testing.T) {
+		version := resolver.readVersionFromManifest("/nonexistent/formae-plugin.pkl")
+		assert.Equal(t, "", version)
+	})
+
+	t.Run("returns empty when version field absent", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		manifestPath := filepath.Join(tmpDir, "formae-plugin.pkl")
+		content := `namespace = "AWS"
+name = "aws"
+`
+		require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0644))
+
+		version := resolver.readVersionFromManifest(manifestPath)
+		assert.Equal(t, "", version)
+	})
+}
+
+func TestInstalledVersion(t *testing.T) {
+	t.Run("returns version for installed plugin", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		versionDir := filepath.Join(tmpDir, "aws-plugin", "v0.1.2")
+		require.NoError(t, os.MkdirAll(versionDir, 0755))
+
+		manifest := `namespace = "AWS"
+version = "0.1.2"
+`
+		require.NoError(t, os.WriteFile(filepath.Join(versionDir, "formae-plugin.pkl"), []byte(manifest), 0644))
+
+		resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+		version := resolver.InstalledVersion("aws")
+		assert.Equal(t, "0.1.2", version)
+	})
+
+	t.Run("returns empty for unknown namespace", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+		version := resolver.InstalledVersion("nonexistent")
+		assert.Equal(t, "", version)
+	})
+
+	t.Run("returns empty when local schemas not enabled", func(t *testing.T) {
+		resolver := NewPackageResolver()
+
+		version := resolver.InstalledVersion("aws")
+		assert.Equal(t, "", version)
+	})
+
+	t.Run("selects highest version manifest", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		manifest := `namespace = "OVH"
+version = "%s"
+`
+		// Create v0.1.0
+		v010Dir := filepath.Join(tmpDir, "ovh", "v0.1.0")
+		require.NoError(t, os.MkdirAll(v010Dir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(v010Dir, "formae-plugin.pkl"), []byte(fmt.Sprintf(manifest, "0.1.0")), 0644))
+
+		// Create v0.2.0
+		v020Dir := filepath.Join(tmpDir, "ovh", "v0.2.0")
+		require.NoError(t, os.MkdirAll(v020Dir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(v020Dir, "formae-plugin.pkl"), []byte(fmt.Sprintf(manifest, "0.2.0")), 0644))
+
+		resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+		version := resolver.InstalledVersion("ovh")
+		assert.Equal(t, "0.2.0", version)
+	})
 }
 
 func TestPackageResolver_WithLocalSchemas_MissingPklProject(t *testing.T) {
