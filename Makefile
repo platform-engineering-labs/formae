@@ -35,7 +35,6 @@ clean-pel:
 
 build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
-	go build -C plugins/fake-aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 
 build-tools:
@@ -83,7 +82,6 @@ install-external-plugins: build-external-plugins
 
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
-	go build -C plugins/fake-aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
 pkg-bin: clean build build-tools build-external-plugins
@@ -321,15 +319,11 @@ test-descriptors-pkl:
 	pkl test pkg/plugin/descriptors/test/PklProjectGenerator_test.pkl
 	pkl test pkg/plugin/descriptors/test/ImportsGenerator_test.pkl
 
-verify-schema-fakeaws:
-	cd ./pkg/plugin && go run ./testutil/cmd/verify-schema --namespace fakeaws ../../plugins/fake-aws/schema/pkl
-
 test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 
 tidy-all:
 	go mod tidy
 	cd ./plugins/auth-basic && go mod tidy
-	cd ./plugins/fake-aws && go mod tidy
 	cd ./tools/ppm && go mod tidy
 	cd ./pkg/model && go mod tidy
 	cd ./pkg/plugin && go mod tidy

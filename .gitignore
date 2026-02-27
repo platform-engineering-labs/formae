@@ -12,9 +12,6 @@
 plugins/aws/aws
 plugins/aws/aws-debug
 
-# fake-aws plugin binary
-plugins/fake-aws/fake-aws
-
 # Test binary, built with `go test -c`
 *.test
 
@@ -100,6 +97,4 @@ docs/design/
 # External plugin cache (cloned plugin repos during build)
 .plugins/
 
-# fake-aws plugin binary
-plugins/fake-aws/fake-aws
 .worktrees/
