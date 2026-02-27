@@ -9,6 +9,8 @@ import (
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
+
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
 
 // TestController is an Ergo actor that handles control messages from the test
@@ -53,44 +55,44 @@ func (tc *TestController) Init(args ...any) error {
 func (tc *TestController) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch msg := request.(type) {
 	// --- Injection ---
-	case InjectErrorRequest:
+	case testcontrol.InjectErrorRequest:
 		tc.injections.AddErrorRule(ErrorRule{
 			Operation:    msg.Operation,
 			ResourceType: msg.ResourceType,
 			Error:        msg.Error,
 			Count:        msg.Count,
 		})
-		return InjectErrorResponse{}, nil
+		return testcontrol.InjectErrorResponse{}, nil
 
-	case InjectLatencyRequest:
+	case testcontrol.InjectLatencyRequest:
 		tc.injections.AddLatencyRule(LatencyRule{
 			Operation:    msg.Operation,
 			ResourceType: msg.ResourceType,
 			Duration:     msg.Duration,
 		})
-		return InjectLatencyResponse{}, nil
+		return testcontrol.InjectLatencyResponse{}, nil
 
-	case ClearInjectionsRequest:
+	case testcontrol.ClearInjectionsRequest:
 		tc.injections.Clear()
-		return ClearInjectionsResponse{}, nil
+		return testcontrol.ClearInjectionsResponse{}, nil
 
 	// --- Cloud State ---
-	case PutCloudStateRequest:
+	case testcontrol.PutCloudStateRequest:
 		tc.cloudState.Put(msg.NativeID, msg.ResourceType, msg.Properties)
-		return PutCloudStateResponse{}, nil
+		return testcontrol.PutCloudStateResponse{}, nil
 
-	case DeleteCloudStateRequest:
+	case testcontrol.DeleteCloudStateRequest:
 		tc.cloudState.Delete(msg.NativeID)
-		return DeleteCloudStateResponse{}, nil
+		return testcontrol.DeleteCloudStateResponse{}, nil
 
-	case GetCloudStateSnapshotRequest:
-		return GetCloudStateSnapshotResponse{
+	case testcontrol.GetCloudStateSnapshotRequest:
+		return testcontrol.GetCloudStateSnapshotResponse{
 			Entries: tc.cloudState.Snapshot(),
 		}, nil
 
 	// --- Operation Log ---
-	case GetOperationLogRequest:
-		return GetOperationLogResponse{
+	case testcontrol.GetOperationLogRequest:
+		return testcontrol.GetOperationLogResponse{
 			Entries: tc.opLog.Snapshot(),
 		}, nil
 

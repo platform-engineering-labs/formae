@@ -7,18 +7,20 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
 
 func TestOperationLog_RecordAndSnapshot(t *testing.T) {
 	ol := NewOperationLog()
 
-	ol.Record(OperationLogEntry{
+	ol.Record(testcontrol.OperationLogEntry{
 		Operation:    "Create",
 		ResourceType: "Test::Generic::Resource",
 		NativeID:     "test-1",
 		Timestamp:    time.Now(),
 	})
-	ol.Record(OperationLogEntry{
+	ol.Record(testcontrol.OperationLogEntry{
 		Operation:    "Read",
 		ResourceType: "Test::Generic::Resource",
 		NativeID:     "test-1",
@@ -43,7 +45,7 @@ func TestOperationLog_RecordAndSnapshot(t *testing.T) {
 func TestOperationLog_SnapshotIsIsolated(t *testing.T) {
 	ol := NewOperationLog()
 
-	ol.Record(OperationLogEntry{
+	ol.Record(testcontrol.OperationLogEntry{
 		Operation:    "Create",
 		ResourceType: "Test::Generic::Resource",
 		NativeID:     "test-1",
@@ -57,7 +59,7 @@ func TestOperationLog_SnapshotIsIsolated(t *testing.T) {
 
 	// Mutate the snapshot
 	snap[0].Operation = "MUTATED"
-	snap = append(snap, OperationLogEntry{
+	snap = append(snap, testcontrol.OperationLogEntry{
 		Operation:    "Injected",
 		ResourceType: "Fake",
 		NativeID:     "fake-1",

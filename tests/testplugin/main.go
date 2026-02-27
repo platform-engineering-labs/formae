@@ -20,9 +20,8 @@ import (
 
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
-
-const TestControllerName = gen.Atom("TestController")
 
 func main() {
 	cs := NewCloudState()
@@ -38,6 +37,9 @@ func main() {
 	// Register message types for network serialization
 	if err := plugin.RegisterSharedEDFTypes(); err != nil {
 		log.Printf("Warning: failed to register shared EDF types: %v", err)
+	}
+	if err := testcontrol.RegisterEDFTypes(); err != nil {
+		log.Printf("Warning: failed to register testcontrol EDF types: %v", err)
 	}
 
 	// Read configuration from environment (set by the agent when spawning the plugin)
@@ -103,7 +105,7 @@ func main() {
 	}
 
 	// Spawn TestController actor on this node
-	if _, err := node.SpawnRegister(TestControllerName, NewTestController, gen.ProcessOptions{}); err != nil {
+	if _, err := node.SpawnRegister(testcontrol.TestControllerName, NewTestController, gen.ProcessOptions{}); err != nil {
 		log.Fatalf("Failed to spawn TestController: %v", err)
 	}
 
