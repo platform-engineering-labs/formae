@@ -311,6 +311,111 @@ func TestDatastore_GetFormaApplyByFormaHash(t *testing.T) {
 	}
 }
 
+func TestDatastore_StoreAndLoad_FormaCommand_OptionalFields(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	cmd := &forma_command.FormaCommand{
+		ID:          util.NewID(),
+		ClientID:    "synchronizer",
+		Command:     pkgmodel.CommandApply,
+		State:       forma_command.CommandStatePending,
+		Description: pkgmodel.Description{Text: "deploy production stack"},
+		Config:      config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState:   pkgmodel.Resource{Properties: json.RawMessage("{}")},
+				ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+				State:          resource_update.ResourceUpdateStateNotStarted,
+			},
+		},
+	}
+
+	err = ds.StoreFormaCommand(cmd, cmd.ID)
+	assert.NoError(t, err)
+
+	loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, "synchronizer", loaded.ClientID)
+	assert.Equal(t, "deploy production stack", loaded.Description.Text)
+	assert.Equal(t, pkgmodel.FormaApplyModePatch, loaded.Config.Mode)
+}
+
+func TestDatastore_StoreFormaCommand_SyncSkipsResourceUpdates(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	resourceKsuid := util.NewID()
+
+	// Non-sync command: resource updates should be stored
+	applyCmd := &forma_command.FormaCommand{
+		ID:          util.NewID(),
+		Command:     pkgmodel.CommandApply,
+		State:       forma_command.CommandStatePending,
+		Description: pkgmodel.Description{},
+		Config:      config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{
+					Ksuid:      resourceKsuid,
+					Label:      "test-resource",
+					Type:       "AWS::S3::Bucket",
+					Stack:      "default",
+					Properties: json.RawMessage(`{"BucketName":"test"}`),
+				},
+				ResourceTarget: pkgmodel.Target{Label: "aws-target", Namespace: "AWS", Config: json.RawMessage(`{}`)},
+				Operation:      resource_update.OperationCreate,
+				State:          resource_update.ResourceUpdateStateNotStarted,
+			},
+		},
+	}
+
+	err = ds.StoreFormaCommand(applyCmd, applyCmd.ID)
+	assert.NoError(t, err)
+
+	loadedApply, err := ds.GetFormaCommandByCommandID(applyCmd.ID)
+	assert.NoError(t, err)
+	assert.Len(t, loadedApply.ResourceUpdates, 1, "non-sync command should have resource updates stored")
+	assert.Equal(t, resourceKsuid, loadedApply.ResourceUpdates[0].DesiredState.Ksuid)
+
+	// Sync command: resource updates should NOT be stored
+	syncKsuid := util.NewID()
+	syncCmd := &forma_command.FormaCommand{
+		ID:          util.NewID(),
+		Command:     pkgmodel.CommandSync,
+		State:       forma_command.CommandStatePending,
+		Description: pkgmodel.Description{},
+		Config:      config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{
+					Ksuid:      syncKsuid,
+					Label:      "sync-resource",
+					Type:       "AWS::S3::Bucket",
+					Stack:      "default",
+					Properties: json.RawMessage(`{"BucketName":"sync"}`),
+				},
+				ResourceTarget: pkgmodel.Target{Label: "aws-target", Namespace: "AWS", Config: json.RawMessage(`{}`)},
+				Operation:      resource_update.OperationRead,
+				State:          resource_update.ResourceUpdateStateNotStarted,
+			},
+		},
+	}
+
+	err = ds.StoreFormaCommand(syncCmd, syncCmd.ID)
+	assert.NoError(t, err)
+
+	loadedSync, err := ds.GetFormaCommandByCommandID(syncCmd.ID)
+	assert.NoError(t, err)
+	assert.Empty(t, loadedSync.ResourceUpdates, "sync command resource updates should not be stored upfront")
+}
+
 func TestDatastore_GetMostRecentFormaCommandByClientID(t *testing.T) {
 	if ds, err := prepareDatastore(); err == nil {
 		defer cleanupDatastore(ds)
@@ -1715,6 +1820,22 @@ func TestDatastore_DeleteTarget_Success(t *testing.T) {
 	loaded, err = ds.LoadTarget("delete-target-test")
 	assert.NoError(t, err)
 	assert.Nil(t, loaded)
+}
+
+func TestDatastore_UpdateTarget_NotFound_ReturnsError(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	_, err = ds.UpdateTarget(&pkgmodel.Target{
+		Label:     "non-existent-target",
+		Namespace: "default",
+		Config:    json.RawMessage(`{}`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
 }
 
 func TestDatastore_DeleteTarget_NotFound(t *testing.T) {
