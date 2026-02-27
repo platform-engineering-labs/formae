@@ -155,7 +155,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 		},
 	}
 
-	for _, tc := range testCases[1:2] {
+	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
@@ -943,4 +943,84 @@ func TestRemoveProviderDefaultFields_EmptyList(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, string(document), string(result))
+}
+
+func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsEmptyArray(t *testing.T) {
+	// Existing state: resource has an OOB tag added outside of formae
+	document := []byte(`{
+		"Name": "test-resource",
+		"Tags": [{"Key": "OOBTag", "Value": "oob-value"}]
+	}`)
+
+	// Desired state: user's PKL has no tags, which should produce an empty array
+	// (once PKL nullability is fixed; for now we test with explicit empty array)
+	patch := []byte(`{
+		"Name": "test-resource",
+		"Tags": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {UpdateMethod: "EntitySet", IndexField: "Key"},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	// The patch must not be nil — there IS a difference (OOB tag needs removal)
+	require.NotNil(t, patchDoc, "expected a patch to remove the OOB tag, got nil")
+
+	var patches []jsonpatch.JsonPatchOperation
+	err = json.Unmarshal(patchDoc, &patches)
+	require.NoError(t, err)
+
+	require.NotEmpty(t, patches, "expected at least one patch operation to remove the OOB tag")
+
+	// We expect a remove operation for the OOB tag
+	assert.Equal(t, "remove", patches[0].Operation)
+}
+
+func TestHasValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		val      any
+		expected bool
+	}{
+		{name: "nil", val: nil, expected: false},
+		{name: "empty string", val: "", expected: false},
+		{name: "non-empty string", val: "hello", expected: true},
+		{name: "empty array", val: []any{}, expected: true},
+		{name: "non-empty array", val: []any{"a"}, expected: true},
+		{name: "empty map", val: map[string]any{}, expected: true},
+		{name: "non-empty map", val: map[string]any{"k": "v"}, expected: true},
+		{name: "integer", val: 42, expected: true},
+		{name: "boolean false", val: false, expected: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, hasValue(tc.val))
+		})
+	}
+}
+
+func TestRemoveNonSchemaFields_PreservesEmptyArraysAndMaps(t *testing.T) {
+	document := []byte(`{"Name": "test", "Tags": [], "Metadata": {}}`)
+	schemaFields := []string{"Name", "Tags", "Metadata"}
+
+	result, err := removeNonSchemaFields(document, schemaFields)
+	require.NoError(t, err)
+
+	var deserialized map[string]any
+	err = json.Unmarshal(result, &deserialized)
+	require.NoError(t, err)
+
+	assert.Len(t, deserialized, 3)
+	assert.Equal(t, "test", deserialized["Name"])
+	assert.Equal(t, []any{}, deserialized["Tags"])
+	assert.Equal(t, map[string]any{}, deserialized["Metadata"])
 }

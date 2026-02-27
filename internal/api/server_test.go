@@ -149,7 +149,12 @@ func (m *FakeMetastructure) Stats() (*apimodel.Stats, error) {
 
 func TestServer_ApplyFormaSuccessResponse(t *testing.T) {
 	meta := &FakeMetastructure{}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{CommandID: "1234"}, nil}}
+	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
+		CommandID: "1234",
+		Simulation: apimodel.Simulation{
+			ChangesRequired: true,
+		},
+	}, nil}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -190,6 +195,57 @@ func TestServer_ApplyFormaSuccessResponse(t *testing.T) {
 		err = json.Unmarshal(responseBody, &commandResult)
 		assert.NoError(t, err)
 		assert.Equal(t, "1234", commandResult.CommandID)
+	}
+}
+
+func TestServer_ApplyFormaNoChangesResponse(t *testing.T) {
+	meta := &FakeMetastructure{}
+	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
+		CommandID: "1234",
+		Simulation: apimodel.Simulation{
+			ChangesRequired: false,
+		},
+	}, nil}}
+
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	_ = writer.WriteField("command", "apply")
+	_ = writer.WriteField("mode", "reconcile")
+	_ = writer.WriteField("simulate", "false")
+
+	part, err := writer.CreateFormFile("file", "forma.json")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	jsonData, err := json.Marshal(&pkgmodel.Forma{})
+	if err != nil {
+		t.Fatalf("failed to marshal JSON: %v", err)
+	}
+	_, err = part.Write(jsonData)
+	if err != nil {
+		t.Fatalf("failed to write JSON data to form file: %v", err)
+	}
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/commands", body)
+	req.Header.Set("Client-ID", "test-client-id")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.SubmitFormaCommand(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		responseBody := rec.Body.Bytes()
+		var commandResult apimodel.SubmitCommandResponse
+		err = json.Unmarshal(responseBody, &commandResult)
+		assert.NoError(t, err)
+		assert.False(t, commandResult.Simulation.ChangesRequired)
 	}
 }
 
@@ -565,7 +621,12 @@ func TestServer_ApplyFormaUnexpectedError(t *testing.T) {
 
 func TestServer_DestroyFormaSuccessResponse(t *testing.T) {
 	meta := &FakeMetastructure{}
-	meta.destroyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{CommandID: "1234"}, nil}}
+	meta.destroyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
+		CommandID: "1234",
+		Simulation: apimodel.Simulation{
+			ChangesRequired: true,
+		},
+	}, nil}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 

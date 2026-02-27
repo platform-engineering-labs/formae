@@ -243,16 +243,8 @@ func hasValue(val any) bool {
 	if val == nil {
 		return false
 	}
-	switch v := val.(type) {
-	case string:
-		return len(v) > 0
-	case []any:
-		return len(v) > 0
-	case map[string]any:
-		return len(v) > 0
-	default:
-		return true
-	}
+	v, ok := val.(string)
+	return !ok || len(v) > 0
 }
 
 func cleanPath(path string) string {

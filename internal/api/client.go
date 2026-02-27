@@ -110,7 +110,7 @@ func (c *Client) ApplyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode,
 	defer resp.Body.Close()
 
 	switch resp.StatusCode() {
-	case http.StatusAccepted:
+	case http.StatusOK, http.StatusAccepted:
 		return &status, nil
 	case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
@@ -149,7 +149,7 @@ func (c *Client) DestroyForma(forma *pkgmodel.Forma, simulate bool, clientID str
 	defer resp.Body.Close()
 
 	switch resp.StatusCode() {
-	case http.StatusAccepted:
+	case http.StatusOK, http.StatusAccepted:
 		return &status, nil
 	case http.StatusBadRequest, http.StatusConflict:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
@@ -178,7 +178,7 @@ func (c *Client) DestroyByQuery(query string, simulate bool, clientID string) (*
 	defer resp.Body.Close()
 
 	switch resp.StatusCode() {
-	case http.StatusAccepted:
+	case http.StatusOK, http.StatusAccepted:
 		return &status, nil
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("no resources found to destroy")

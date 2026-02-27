@@ -40,6 +40,10 @@ build:
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
 
+## install-gremlins: Install the gremlins mutation testing tool
+install-gremlins:
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+
 ## fetch-external-plugins: Clone/update external plugin repositories
 fetch-external-plugins:
 	@mkdir -p $(PLUGINS_CACHE)
@@ -290,6 +294,14 @@ test-e2e: gen-pkl pkg-pkl build install-external-plugins
 test-property:
 	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
 
+## mutation-test: Run mutation testing across all unit-tested packages and generate report
+mutation-test: build
+	@echo "Running mutation testing (this will take a while)..."
+	./scripts/mutation-test.sh
+	./scripts/coverage-diff.sh
+	./scripts/generate-mutation-report.sh
+	@echo "Report: .mutation-report/summary.md"
+
 test-schema-pkl:
 	cd internal/schema/pkl/schema && pkl test tests/formae.pkl
 	cd internal/schema/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
@@ -350,4 +362,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build build-tools install-gremlins build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all

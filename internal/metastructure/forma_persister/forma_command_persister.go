@@ -173,12 +173,12 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 	}
 
 	// Evict from cache if command is complete.
-	// For sync commands, we must wait for all completions before evicting because
-	// sync commands don't store ResourceUpdates in DB (they rely on in-memory cache).
-	// If we evict early, late completions will load from DB and find 0 resources.
+	// We must wait for all completion messages before evicting because
+	// evicting early causes getOrLoadCommand to reload from DB where
+	// countNonFinalResources returns 0 (resources already in final state
+	// from UpdateResourceProgress), leading to pendingCompletions underflow.
 	if cmd.IsInFinalState() {
-		if cmd.Command == pkgmodel.CommandSync && cached.pendingCompletions > 0 {
-			// Don't evict yet - sync command still waiting for completions
+		if cached.pendingCompletions > 0 {
 			return nil
 		}
 		delete(f.activeCommands, cmd.ID)
@@ -505,8 +505,9 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		// Always decrement pending completions counter when we receive a completion message.
 		// This counter tracks the number of expected MarkResourceUpdateAsComplete messages,
 		// NOT the number of resources in non-final state (which can be set by UpdateResourceProgress).
-		if cached.pendingCompletions > 0 {
-			cached.pendingCompletions--
+		cached.pendingCompletions--
+		if cached.pendingCompletions < 0 {
+			return false, fmt.Errorf("unexpected completion for command %s resource %s: pendingCompletions went below zero, this indicates a programming error", msg.CommandID, msg.ResourceURI.KSUID())
 		}
 
 		cmd.ModifiedTs = msg.ResourceModifiedTs
@@ -562,8 +563,9 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 
 			// If transitioning to final state, decrement counter
 			if !isResourceInFinalState(res.State) && isResourceInFinalState(state) {
-				if cached.pendingCompletions > 0 {
-					cached.pendingCompletions--
+				cached.pendingCompletions--
+				if cached.pendingCompletions < 0 {
+					return false, fmt.Errorf("unexpected state transition for command %s: pendingCompletions went below zero, this indicates a programming error", commandID)
 				}
 			}
 
