@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package main
+package fakeaws
 
 import (
 	"context"
@@ -16,14 +16,15 @@ import (
 type FakeAWS struct{}
 
 // Compile time checks to satisfy protocol
-var _ plugin.Plugin = FakeAWS{}
-var _ plugin.ResourcePlugin = FakeAWS{}
-
-// Maintain known symbol reference
-var Plugin = FakeAWS{}
+var _ plugin.FullResourcePlugin = FakeAWS{}
 
 // RateLimitMaxRPS allows tests to control the rate limit
 var RateLimitMaxRPS int = 5
+
+// NewFakeAWS creates a new FakeAWS test plugin instance.
+func NewFakeAWS() FakeAWS {
+	return FakeAWS{}
+}
 
 func (s FakeAWS) Name() string {
 	return "fake-aws"

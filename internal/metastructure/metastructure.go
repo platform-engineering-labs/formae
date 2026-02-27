@@ -68,6 +68,10 @@ type Metastructure struct {
 	PluginManager *plugin.Manager
 	Cfg           *pkgmodel.Config
 	AgentID       string
+
+	// TestResourcePlugin is a test-only field for injecting a resource plugin (e.g. FakeAWS)
+	// directly into the actor system, bypassing PluginManager. Must be nil in production.
+	TestResourcePlugin plugin.FullResourcePlugin
 }
 
 func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *plugin.Manager, agentID string) (*Metastructure, error) {
@@ -176,6 +180,13 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 
 func (m *Metastructure) Start() error {
 	slog.Info("Starting actor node", "node", m.nodeName)
+
+	// Test-only: inject test resource plugin into actor environment.
+	// This must happen in Start() (not the constructor) because TestResourcePlugin
+	// is set after construction but before Start() is called.
+	if m.TestResourcePlugin != nil {
+		m.options.Env[gen.Env("TestResourcePlugin")] = m.TestResourcePlugin
+	}
 
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
 	if err != nil {

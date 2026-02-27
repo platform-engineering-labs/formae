@@ -150,7 +150,7 @@ func TestVerifyResult_FormatReport_WithErrors(t *testing.T) {
 
 func TestVerifySchemaWithNamespace_FakeAWS(t *testing.T) {
 	// Skip if running in CI without the full repo
-	fakeAWSSchema := "../../../plugins/fake-aws/schema/pkl"
+	fakeAWSSchema := "../../../internal/testplugin/fakeaws/schema/pkl"
 	if _, err := os.Stat(fakeAWSSchema); os.IsNotExist(err) {
 		t.Skip("fake-aws schema not found, skipping integration test")
 	}

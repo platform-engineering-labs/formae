@@ -11,32 +11,23 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMetastructure_ResourcePluginsForNamespace(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		d, def, err := test_helpers.NewTestMetastructure(t, nil)
 		defer def()
-		if err == nil {
-			// Test with a valid namespace (FakeAWS - local .so plugin, not external process)
-			p, err := d.PluginManager.ResourcePlugin("FakeAWS")
-			if err != nil {
-				t.Errorf("Couldn't get resource plugin for 'FakeAWS' namespace: %v", err)
-			}
+		require.NoError(t, err)
 
-			if p == nil {
-				t.Errorf("Resource plugin is nil")
-			}
+		// FakeAWS is now injected directly via TestResourcePlugin (no longer a .so plugin)
+		p := d.TestResourcePlugin
+		require.NotNil(t, p, "TestResourcePlugin should be set by test helpers")
+		assert.Equal(t, "FakeAWS", p.Namespace())
 
-			// Try with a wrong/nonexistent namespace
-			p, err = d.PluginManager.ResourcePlugin("foobar")
-			if err == nil {
-				t.Errorf("Expected error for nonexistent 'foobar' namespace but got nil")
-			}
-
-			if p != nil {
-				t.Errorf("Resource plugin is not nil")
-			}
-		}
+		// PluginManager should not find FakeAWS (it's no longer a .so plugin)
+		_, err = d.PluginManager.ResourcePlugin("foobar")
+		assert.Error(t, err, "Expected error for nonexistent 'foobar' namespace")
 	})
 }

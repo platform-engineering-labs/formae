@@ -8,5 +8,5 @@ package {
 }
 
 dependencies {
-    ["formae"] = import("../../../../internal/schema/pkl/schema/PklProject")
+    ["formae"] = import("../../../../schema/pkl/schema/PklProject")
 }

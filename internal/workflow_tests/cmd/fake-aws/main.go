@@ -5,9 +5,10 @@
 package main
 
 import (
+	"github.com/platform-engineering-labs/formae/internal/testplugin/fakeaws"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 func main() {
-	plugin.Run(Plugin)
+	plugin.Run(fakeaws.NewFakeAWS())
 }
