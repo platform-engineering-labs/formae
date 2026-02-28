@@ -154,13 +154,14 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 			"AWS::IAM::Role", "RoleName", knownRoleNames)
 	}
 
-	// Step 8: Extract unmanaged resources by type (Bluge queries are AND-only,
-	// so we extract Roles and RolePolicies separately).
+	// Step 8: Extract unmanaged resources by type. We scope to
+	// stack:$unmanaged to avoid picking up managed resources that
+	// discovery may have also indexed as unmanaged duplicates.
 	extractDir := t.TempDir()
 	rolesFile := filepath.Join(extractDir, "roles.pkl")
 	policiesFile := filepath.Join(extractDir, "policies.pkl")
-	cli.ExtractToFile(t, "type:AWS::IAM::Role managed:false", rolesFile)
-	cli.ExtractToFile(t, "type:AWS::IAM::RolePolicy managed:false", policiesFile)
+	cli.ExtractToFile(t, "type:AWS::IAM::Role managed:false stack:$unmanaged", rolesFile)
+	cli.ExtractToFile(t, "type:AWS::IAM::RolePolicy managed:false stack:$unmanaged", policiesFile)
 
 	// Step 9: Filter extracted files to keep only test resources.
 	// The roles extract includes pre-existing AWS service-linked roles
@@ -405,16 +406,16 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 		}
 	}
 
-	// Step 9: Extract unmanaged resources by type (separate files for each
-	// Azure type to control import/destroy ordering and avoid pulling in
-	// unrelated resources from other namespaces).
+	// Step 9: Extract unmanaged resources by type. We scope to
+	// stack:$unmanaged to avoid picking up managed resources that
+	// discovery may have also indexed as unmanaged duplicates.
 	extractDir := t.TempDir()
 	rgFile := filepath.Join(extractDir, "resource-groups.pkl")
 	vnetFile := filepath.Join(extractDir, "vnets.pkl")
 	subnetFile := filepath.Join(extractDir, "subnets.pkl")
-	cli.ExtractToFile(t, "type:Azure::Resources::ResourceGroup managed:false", rgFile)
-	cli.ExtractToFile(t, "type:Azure::Network::VirtualNetwork managed:false", vnetFile)
-	cli.ExtractToFile(t, "type:Azure::Network::Subnet managed:false", subnetFile)
+	cli.ExtractToFile(t, "type:Azure::Resources::ResourceGroup managed:false stack:$unmanaged", rgFile)
+	cli.ExtractToFile(t, "type:Azure::Network::VirtualNetwork managed:false stack:$unmanaged", vnetFile)
+	cli.ExtractToFile(t, "type:Azure::Network::Subnet managed:false stack:$unmanaged", subnetFile)
 
 	// Step 10: Filter extracted files to keep only test resources.
 	FilterExtractedPKLByLabelSubstring(t, rgFile, nativeIDPrefix)
