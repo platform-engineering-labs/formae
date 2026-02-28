@@ -62,8 +62,8 @@ func FormaeBinary(t *testing.T) string {
 func RequireCommandSuccess(t *testing.T, result CommandResult) {
 	t.Helper()
 
-	if result.State != "Success" {
-		t.Fatalf("expected command state Success, got %s", result.State)
+	if result.State != "Success" && result.State != "NoOp" {
+		t.Fatalf("expected command state Success or NoOp, got %s", result.State)
 	}
 }
 

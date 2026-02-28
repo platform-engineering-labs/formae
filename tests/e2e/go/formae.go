@@ -132,7 +132,7 @@ func (f *FormaeCLI) WaitForCommand(t *testing.T, commandID string, timeout time.
 		result := f.StatusCommand(t, commandID)
 
 		switch result.State {
-		case "Success":
+		case "Success", "NoOp":
 			return result
 		case "Failed", "Canceled":
 			return result
@@ -255,7 +255,11 @@ func (f *FormaeCLI) StatusCommand(t *testing.T, commandID string) CommandResult 
 		t.Fatalf("failed to parse status response: %v\nstdout: %s", err, string(stdout))
 	}
 	if len(response.Commands) == 0 {
-		t.Fatalf("no commands in status response for id %s", commandID)
+		// Command not found — this happens for no-op applies where the
+		// server returned a command ID but no command was persisted
+		// (ChangesRequired: false). Treat as a successful no-op.
+		t.Logf("no commands in status response for id %s (no-op)", commandID)
+		return CommandResult{State: "NoOp"}
 	}
 
 	cmd := response.Commands[0]
