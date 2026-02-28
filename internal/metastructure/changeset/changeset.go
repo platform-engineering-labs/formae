@@ -467,7 +467,12 @@ func (c *Changeset) UpdatePipeline(update *resource_update.ResourceUpdate) ([]*r
 		return failedUpdates, nil
 	}
 
-	return nil, nil
+	// Any other state reaching here is unexpected — treat as failure to
+	// prevent the changeset from getting permanently stuck.
+	slog.Warn("Unexpected resource update state in UpdatePipeline, treating as failure",
+		"uri", update.URI(), "state", update.State)
+	update.State = resource_update.ResourceUpdateStateFailed
+	return c.UpdatePipeline(update)
 }
 
 func (c *Changeset) failResourceUpdate(update *resource_update.ResourceUpdate) []*resource_update.ResourceUpdate {
