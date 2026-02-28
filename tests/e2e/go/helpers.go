@@ -195,30 +195,28 @@ func AssertResolvableProperty(t *testing.T, resource Resource, key, expectedType
 	}
 }
 
-// FindResourceByNativeIDSuffix returns the first resource whose NativeID ends
-// with the given name. The name must appear as the final path segment, preceded
-// by a separator (/, |) or matching the entire NativeID. This avoids false
-// matches on hierarchical IDs (e.g. Azure NativeIDs where a subnet's path
-// contains its parent resource group name).
-func FindResourceByNativeIDSuffix(resources []Resource, name string) *Resource {
+// FindResourceByNativeID returns the first resource whose NativeID contains the
+// given name and whose type matches (if provided). The type filter is needed for
+// Azure resources where hierarchical NativeIDs embed parent names as path
+// segments, making substring matching ambiguous without type disambiguation.
+func FindResourceByNativeID(resources []Resource, name, resourceType string) *Resource {
 	for i := range resources {
-		nid := resources[i].NativeID
-		if nid == name ||
-			strings.HasSuffix(nid, "/"+name) ||
-			strings.HasSuffix(nid, "|"+name) {
-			return &resources[i]
+		if strings.Contains(resources[i].NativeID, name) {
+			if resourceType == "" || resources[i].Type == resourceType {
+				return &resources[i]
+			}
 		}
 	}
 	return nil
 }
 
-// RequireResourceByNativeID finds a resource by NativeID suffix and fails the
-// test if not found.
-func RequireResourceByNativeID(t *testing.T, resources []Resource, name string) Resource {
+// RequireResourceByNativeID finds a resource by NativeID substring and type,
+// failing the test if not found.
+func RequireResourceByNativeID(t *testing.T, resources []Resource, name, resourceType string) Resource {
 	t.Helper()
-	r := FindResourceByNativeIDSuffix(resources, name)
+	r := FindResourceByNativeID(resources, name, resourceType)
 	if r == nil {
-		t.Fatalf("resource with NativeID ending in %q not found in %d resources", name, len(resources))
+		t.Fatalf("resource with NativeID containing %q (type %s) not found in %d resources", name, resourceType, len(resources))
 	}
 	return *r
 }

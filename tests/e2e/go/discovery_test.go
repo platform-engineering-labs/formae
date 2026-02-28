@@ -133,20 +133,14 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 		t.Error("managed role 'e2e-discovery-managed-role' was not found or lost its managed status")
 	}
 
-	// Step 6: Verify each specific unmanaged resource exists.
-	roleA := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-role-a")
-	roleB := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-role-b")
-	if roleA.Type != "AWS::IAM::Role" {
-		t.Errorf("role-a: expected type AWS::IAM::Role, got %s", roleA.Type)
-	}
-	if roleB.Type != "AWS::IAM::Role" {
-		t.Errorf("role-b: expected type AWS::IAM::Role, got %s", roleB.Type)
-	}
+	// Step 6: Verify each specific unmanaged resource exists with correct type.
+	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-role-a", "AWS::IAM::Role")
+	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-role-b", "AWS::IAM::Role")
 
-	policyManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-managed")
-	policyA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-a1")
-	policyB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-b1")
-	policyB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-b2")
+	policyManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-managed", "AWS::IAM::RolePolicy")
+	policyA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-a1", "AWS::IAM::RolePolicy")
+	policyB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-b1", "AWS::IAM::RolePolicy")
+	policyB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-policy-b2", "AWS::IAM::RolePolicy")
 
 	// Step 7: Verify RolePolicies have parent resolvable references.
 	knownRoleNames := []string{"formae-e2e-discovery-managed", "formae-e2e-discovery-role-a", "formae-e2e-discovery-role-b"}
@@ -344,24 +338,18 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 	}
 
 	// Step 6: Verify each specific unmanaged resource exists with correct type.
-	rgA := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-a")
-	rgB := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-b")
-	if rgA.Type != "Azure::Resources::ResourceGroup" {
-		t.Errorf("rg-a: expected type Azure::Resources::ResourceGroup, got %s", rgA.Type)
-	}
-	if rgB.Type != "Azure::Resources::ResourceGroup" {
-		t.Errorf("rg-b: expected type Azure::Resources::ResourceGroup, got %s", rgB.Type)
-	}
+	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-a", "Azure::Resources::ResourceGroup")
+	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-b", "Azure::Resources::ResourceGroup")
 
-	vnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-managed")
-	vnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-a1")
-	vnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b1")
-	vnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b2")
+	vnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-managed", "Azure::Network::VirtualNetwork")
+	vnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-a1", "Azure::Network::VirtualNetwork")
+	vnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b1", "Azure::Network::VirtualNetwork")
+	vnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b2", "Azure::Network::VirtualNetwork")
 
-	subnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-managed")
-	subnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-a1")
-	subnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b1")
-	subnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b2")
+	subnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-managed", "Azure::Network::Subnet")
+	subnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-a1", "Azure::Network::Subnet")
+	subnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b1", "Azure::Network::Subnet")
+	subnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b2", "Azure::Network::Subnet")
 
 	// Step 7: Verify VNets have resolvable reference to parent RG.
 	knownRGNames := []string{"formae-e2e-discovery-managed-rg", "formae-e2e-discovery-rg-a", "formae-e2e-discovery-rg-b"}
