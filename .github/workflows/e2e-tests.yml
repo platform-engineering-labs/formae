@@ -2,6 +2,15 @@ name: formae-e2e-tests
 
 on:
   workflow_dispatch:
+    inputs:
+      azure_plugin_ref:
+        description: 'Azure plugin branch/tag/SHA to test against (leave empty for main)'
+        required: false
+        default: ''
+      aws_plugin_ref:
+        description: 'AWS plugin branch/tag/SHA to test against (leave empty for main)'
+        required: false
+        default: ''
   workflow_run:
     workflows: ["formae-go"]  # e2e runs only after formae-go workflow completes
     types:
@@ -146,7 +155,11 @@ jobs:
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: make test-e2e E2E_RUN_FLAGS="-run ${{ matrix.test }}"
+        run: >-
+          make test-e2e
+          E2E_RUN_FLAGS="-run ${{ matrix.test }}"
+          AZURE_PLUGIN_REF="${{ github.event.inputs.azure_plugin_ref }}"
+          AWS_PLUGIN_REF="${{ github.event.inputs.aws_plugin_ref }}"
 
   cleanup:
     runs-on: ubuntu-latest

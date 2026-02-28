@@ -21,6 +21,10 @@ EXTERNAL_PLUGIN_REPOS ?= \
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins
 
+# Optional: override plugin branches for testing (e.g., AZURE_PLUGIN_REF=fix/remove-nativeid-encoding)
+AZURE_PLUGIN_REF ?=
+AWS_PLUGIN_REF ?=
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
@@ -57,6 +61,16 @@ fetch-external-plugins:
 			git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
 		fi \
 	done
+	@if [ -n "$(AZURE_PLUGIN_REF)" ]; then \
+		echo "Checking out Azure plugin ref: $(AZURE_PLUGIN_REF)"; \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" fetch origin $(AZURE_PLUGIN_REF); \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" checkout FETCH_HEAD; \
+	fi
+	@if [ -n "$(AWS_PLUGIN_REF)" ]; then \
+		echo "Checking out AWS plugin ref: $(AWS_PLUGIN_REF)"; \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" fetch origin $(AWS_PLUGIN_REF); \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" checkout FETCH_HEAD; \
+	fi
 
 ## build-external-plugins: Build all external plugins
 build-external-plugins: fetch-external-plugins
