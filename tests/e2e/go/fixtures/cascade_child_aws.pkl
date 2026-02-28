@@ -8,19 +8,20 @@ amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
 
 import "@aws/aws.pkl"
-import "@aws/ec2/vpc.pkl"
 import "@aws/ec2/subnet.pkl"
 
 local stackName = "e2e-cascade-child-aws"
 
-local parentVpc = new vpc.VPCResolvable {
+local parentVpcId = new formae.Resolvable {
     label = "e2e-cascade-vpc"
+    type = "AWS::EC2::VPC"
     stack = "e2e-cascade-parent-aws"
+    property = "VpcId"
 }
 
 local nsubnet = new subnet.Subnet {
     label = "e2e-cascade-subnet"
-    vpcId = parentVpc.id
+    vpcId = parentVpcId
     cidrBlock = "10.98.1.0/24"
     availabilityZone = "us-west-2a"
     mapPublicIpOnLaunch = false

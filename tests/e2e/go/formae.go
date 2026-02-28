@@ -355,28 +355,42 @@ func (f *FormaeCLI) run(t *testing.T, args ...string) []byte {
 	return stdout.Bytes()
 }
 
-// Cancel runs `formae cancel` and returns the canceled command IDs.
-// If no query is provided, cancels the most recent in-progress command.
+// Cancel cancels in-progress commands via the admin API. If no query is
+// provided, cancels the most recent in-progress command. Returns the
+// canceled command IDs.
 func (f *FormaeCLI) Cancel(t *testing.T, query string) []string {
 	t.Helper()
 
-	args := []string{
-		"cancel",
-		"--config", f.configPath,
-		"--output-consumer", "machine",
-		"--output-schema", "json",
-	}
+	url := fmt.Sprintf("http://localhost:%d/api/v1/commands/cancel", f.agentPort)
 	if query != "" {
-		args = append(args, "--query", query)
+		url += "?query=" + query
 	}
 
-	stdout := f.run(t, args...)
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		t.Fatalf("failed to create cancel request: %v", err)
+	}
+	req.Header.Set("Client-ID", "e2e-test")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to cancel commands: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		t.Log("no in-progress commands found to cancel")
+		return nil
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("cancel returned status %d", resp.StatusCode)
+	}
 
 	var response struct {
 		CommandIDs []string `json:"CommandIds"`
 	}
-	if err := json.Unmarshal(stdout, &response); err != nil {
-		t.Fatalf("failed to parse cancel response: %v\nstdout: %s", err, string(stdout))
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to parse cancel response: %v", err)
 	}
 
 	t.Logf("cancel submitted, CommandIds: %v", response.CommandIDs)
