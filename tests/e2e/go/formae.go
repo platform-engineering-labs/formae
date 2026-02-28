@@ -355,6 +355,89 @@ func (f *FormaeCLI) run(t *testing.T, args ...string) []byte {
 	return stdout.Bytes()
 }
 
+// Cancel runs `formae cancel` and returns the canceled command IDs.
+// If no query is provided, cancels the most recent in-progress command.
+func (f *FormaeCLI) Cancel(t *testing.T, query string) []string {
+	t.Helper()
+
+	args := []string{
+		"cancel",
+		"--config", f.configPath,
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	}
+	if query != "" {
+		args = append(args, "--query", query)
+	}
+
+	stdout := f.run(t, args...)
+
+	var response struct {
+		CommandIDs []string `json:"CommandIds"`
+	}
+	if err := json.Unmarshal(stdout, &response); err != nil {
+		t.Fatalf("failed to parse cancel response: %v\nstdout: %s", err, string(stdout))
+	}
+
+	t.Logf("cancel submitted, CommandIds: %v", response.CommandIDs)
+	return response.CommandIDs
+}
+
+// DestroyExpectError runs `formae destroy` and expects it to fail (non-zero
+// exit code). Returns stderr for assertion. Fails the test if the command
+// succeeds.
+func (f *FormaeCLI) DestroyExpectError(t *testing.T, fixturePath string, extraArgs ...string) string {
+	t.Helper()
+
+	args := []string{
+		"destroy",
+		fixturePath,
+		"--config", f.configPath,
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	}
+	args = append(args, extraArgs...)
+
+	stdout, stderr, err := f.runAllowError(t, args...)
+	if err == nil {
+		t.Fatalf("expected destroy to fail, but it succeeded\nstdout: %s", string(stdout))
+	}
+
+	t.Logf("destroy failed as expected: %s", stderr)
+	return stderr
+}
+
+// ProjectInit runs `formae project init` to generate a new project in the
+// given directory. This is a CLI-only command that does not require an agent.
+func (f *FormaeCLI) ProjectInit(t *testing.T, dir string, includes ...string) {
+	t.Helper()
+
+	args := []string{
+		"project", "init", dir,
+		"--schema", "pkl",
+		"--yes",
+	}
+	for _, inc := range includes {
+		args = append(args, "--include", inc)
+	}
+
+	// ProjectInit does not need --config (no agent), so use exec.Command
+	// directly instead of f.run() which always adds --config.
+	cmd := exec.Command(f.binaryPath, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("formae project init failed: %v\nargs: %v\nstderr: %s\nstdout: %s",
+			err, args, stderr.String(), stdout.String())
+	}
+
+	if stderr.Len() > 0 {
+		t.Logf("project init stderr (ignored): %s", stderr.String())
+	}
+}
+
 // runAllowError executes the formae binary, returning stdout, stderr, and any
 // error. Unlike run, it does not fail the test on non-zero exit.
 func (f *FormaeCLI) runAllowError(t *testing.T, args ...string) ([]byte, string, error) {

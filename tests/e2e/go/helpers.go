@@ -347,6 +347,24 @@ func HasTag(resource Resource, propertyKey, expectedKey, expectedValue string) b
 	return false
 }
 
+// WaitForStackEmpty polls inventory until the given stack has 0 resources or
+// the timeout is reached. Used for TTL and auto-reconcile tests where a
+// background actor destroys resources asynchronously.
+func WaitForStackEmpty(t *testing.T, cli *FormaeCLI, stackQuery string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resources := cli.Inventory(t, "--query", stackQuery)
+		if len(resources) == 0 {
+			t.Logf("stack %s is empty", stackQuery)
+			return
+		}
+		t.Logf("waiting for stack %s to be empty, currently %d resources", stackQuery, len(resources))
+		time.Sleep(5 * time.Second)
+	}
+	t.Fatalf("timeout waiting for stack %s to become empty after %v", stackQuery, timeout)
+}
+
 // WaitForOOBChange polls inventory with sync triggers until the given tag
 // appears on the resource, confirming the agent has detected an out-of-band
 // change. This replaces naive time.Sleep-based waits.

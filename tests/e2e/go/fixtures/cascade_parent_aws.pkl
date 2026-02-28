@@ -1,0 +1,37 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+import "@aws/ec2/vpc.pkl"
+
+local stackName = "e2e-cascade-parent-aws"
+
+local nvpc = new vpc.VPC {
+    label = "e2e-cascade-vpc"
+    cidrBlock = "10.98.0.0/16"
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    tags { new { key = "Name"; value = "formae-e2e-cascade-vpc" } }
+}
+
+forma {
+    new formae.Stack {
+        label = stackName
+        description = "E2E cascade delete test: parent stack with VPC"
+    }
+
+    new formae.Target {
+        label = "e2e-aws-target"
+        config = new aws.Config {
+            region = "us-west-2"
+        }
+    }
+
+    nvpc
+}

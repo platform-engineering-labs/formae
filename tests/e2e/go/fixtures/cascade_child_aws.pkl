@@ -1,0 +1,44 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+
+local stackName = "e2e-cascade-child-aws"
+
+local parentVpc = new vpc.VPCResolvable {
+    label = "e2e-cascade-vpc"
+    stack = "e2e-cascade-parent-aws"
+}
+
+local nsubnet = new subnet.Subnet {
+    label = "e2e-cascade-subnet"
+    vpcId = parentVpc.id
+    cidrBlock = "10.98.1.0/24"
+    availabilityZone = "us-west-2a"
+    mapPublicIpOnLaunch = false
+    tags { new { key = "Name"; value = "formae-e2e-cascade-subnet" } }
+}
+
+forma {
+    new formae.Stack {
+        label = stackName
+        description = "E2E cascade delete test: child stack with subnet referencing parent VPC"
+    }
+
+    new formae.Target {
+        label = "e2e-aws-target"
+        config = new aws.Config {
+            region = "us-west-2"
+        }
+    }
+
+    nsubnet
+}
