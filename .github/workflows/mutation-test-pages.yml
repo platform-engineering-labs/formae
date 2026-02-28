@@ -17,7 +17,7 @@ permissions:
 jobs:
   mutation-test:
     runs-on: ubuntu-latest-m
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
