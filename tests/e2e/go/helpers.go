@@ -464,9 +464,10 @@ func FilterExtractedPKLByLabelSubstring(t *testing.T, pklPath, substring string)
 
 // isResourceBlockWithNonMatchingLabel checks if a PKL section is a resource
 // definition block (not a Stack or Target) whose label does not contain the
-// given substring.
+// given substring. Extracted PKL uses "new TypeName {" syntax (no assignment),
+// so we check for "new " rather than "= new ".
 func isResourceBlockWithNonMatchingLabel(section, substring string) bool {
-	if !strings.Contains(section, "= new ") {
+	if !strings.Contains(section, "new ") {
 		return false
 	}
 	if strings.Contains(section, "formae.Stack") || strings.Contains(section, "formae.Target") {
