@@ -401,41 +401,65 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 		}
 	}
 
-	// Step 9: Extract unmanaged resources to a temp PKL file.
+	// Step 9: Extract unmanaged resources by type (separate files for each
+	// Azure type to control import/destroy ordering and avoid pulling in
+	// unrelated resources from other namespaces).
 	extractDir := t.TempDir()
-	extractFile := filepath.Join(extractDir, "extracted.pkl")
-	cli.ExtractToFile(t, "managed:false", extractFile)
+	rgFile := filepath.Join(extractDir, "resource-groups.pkl")
+	vnetFile := filepath.Join(extractDir, "vnets.pkl")
+	subnetFile := filepath.Join(extractDir, "subnets.pkl")
+	cli.ExtractToFile(t, "type:Azure::Resources::ResourceGroup managed:false", rgFile)
+	cli.ExtractToFile(t, "type:Azure::Network::VirtualNetwork managed:false", vnetFile)
+	cli.ExtractToFile(t, "type:Azure::Network::Subnet managed:false", subnetFile)
 
-	// Step 10: Set the stack label in the extracted PKL.
+	// Step 10: Filter extracted files to keep only test resources.
+	FilterExtractedPKLByLabelSubstring(t, rgFile, nativeIDPrefix)
+	FilterExtractedPKLByLabelSubstring(t, vnetFile, nativeIDPrefix)
+	FilterExtractedPKLByLabelSubstring(t, subnetFile, nativeIDPrefix)
+
+	// Step 11: Set stack labels in all extracted files.
 	const importedStack = "e2e-discovery-azure-imported"
-	SetExtractedStackLabel(t, extractFile, importedStack)
+	SetExtractedStackLabel(t, rgFile, importedStack)
+	SetExtractedStackLabel(t, vnetFile, importedStack)
+	SetExtractedStackLabel(t, subnetFile, importedStack)
 
-	// Step 11: Apply the extracted PKL to bring resources under management.
-	importCmdID := cli.Apply(t, "reconcile", extractFile)
-	importResult := cli.WaitForCommand(t, importCmdID, commandTimeout)
-	RequireCommandSuccess(t, importResult)
+	// Step 12: Apply extracted files in dependency order (RGs first, then
+	// VNets, then Subnets) to bring resources under management.
+	rgCmdID := cli.Apply(t, "reconcile", rgFile)
+	rgResult := cli.WaitForCommand(t, rgCmdID, commandTimeout)
+	RequireCommandSuccess(t, rgResult)
 
-	// Step 12: Verify no unmanaged test resources remain.
-	postImportResources := cli.Inventory(t, "--query", "managed:false")
-	unmanagedAfterImport := FilterByNativeIDContains(postImportResources, nativeIDPrefix)
-	if len(unmanagedAfterImport) != 0 {
-		t.Errorf("expected 0 unmanaged test resources after import, got %d", len(unmanagedAfterImport))
-		for _, r := range unmanagedAfterImport {
-			t.Logf("  still unmanaged: label=%s type=%s nativeID=%s", r.Label, r.Type, r.NativeID)
-		}
-	}
+	vnetCmdID := cli.Apply(t, "reconcile", vnetFile)
+	vnetResult := cli.WaitForCommand(t, vnetCmdID, commandTimeout)
+	RequireCommandSuccess(t, vnetResult)
 
-	// Step 13: Verify imported resources are on the correct stack.
+	subnetCmdID := cli.Apply(t, "reconcile", subnetFile)
+	subnetResult := cli.WaitForCommand(t, subnetCmdID, commandTimeout)
+	RequireCommandSuccess(t, subnetResult)
+
+	// Step 13: Verify imported test resources are on the correct stack.
 	importedResources := cli.Inventory(t, "--query", "stack:"+importedStack)
 	importedTestResources := FilterByNativeIDContains(importedResources, nativeIDPrefix)
 	if len(importedTestResources) != 10 {
-		t.Errorf("expected 10 managed resources on stack %s, got %d", importedStack, len(importedTestResources))
+		t.Errorf("expected 10 test resources on stack %s, got %d", importedStack, len(importedTestResources))
+		for _, r := range importedTestResources {
+			t.Logf("  imported: label=%s type=%s nativeID=%s", r.Label, r.Type, r.NativeID)
+		}
 	}
 
-	// Step 14: Destroy the extracted resources (formerly-unmanaged, now managed).
-	extractDestroyID := cli.Destroy(t, extractFile)
-	extractDestroyResult := cli.WaitForCommand(t, extractDestroyID, commandTimeout)
-	RequireCommandSuccess(t, extractDestroyResult)
+	// Step 14: Destroy imported resources in reverse dependency order
+	// (subnets first, then vnets, then RGs).
+	subnetDestroyID := cli.Destroy(t, subnetFile)
+	subnetDestroyResult := cli.WaitForCommand(t, subnetDestroyID, commandTimeout)
+	RequireCommandSuccess(t, subnetDestroyResult)
+
+	vnetDestroyID := cli.Destroy(t, vnetFile)
+	vnetDestroyResult := cli.WaitForCommand(t, vnetDestroyID, commandTimeout)
+	RequireCommandSuccess(t, vnetDestroyResult)
+
+	rgDestroyID := cli.Destroy(t, rgFile)
+	rgDestroyResult := cli.WaitForCommand(t, rgDestroyID, commandTimeout)
+	RequireCommandSuccess(t, rgDestroyResult)
 
 	// Step 15: Destroy the original managed resources.
 	destroyID := cli.Destroy(t, fixture)
@@ -448,8 +472,9 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 		t.Errorf("expected 0 resources in stack e2e-discovery-azure after destroy, got %d", len(remaining))
 	}
 	remainingImported := cli.Inventory(t, "--query", "stack:"+importedStack)
-	if len(remainingImported) != 0 {
-		t.Errorf("expected 0 resources in stack %s after destroy, got %d", importedStack, len(remainingImported))
+	remainingTest := FilterByNativeIDContains(remainingImported, nativeIDPrefix)
+	if len(remainingTest) != 0 {
+		t.Errorf("expected 0 test resources in stack %s after destroy, got %d", importedStack, len(remainingTest))
 	}
 }
 
