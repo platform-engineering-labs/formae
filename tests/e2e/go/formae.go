@@ -399,7 +399,8 @@ func (f *FormaeCLI) Cancel(t *testing.T, query string) []string {
 
 // DestroyExpectError runs `formae destroy` and expects it to fail (non-zero
 // exit code). Returns stderr for assertion. Fails the test if the command
-// succeeds.
+// succeeds. Uses human-readable output because cascade abort logic is only
+// implemented in the human-readable path.
 func (f *FormaeCLI) DestroyExpectError(t *testing.T, fixturePath string, extraArgs ...string) string {
 	t.Helper()
 
@@ -407,8 +408,6 @@ func (f *FormaeCLI) DestroyExpectError(t *testing.T, fixturePath string, extraAr
 		"destroy",
 		fixturePath,
 		"--config", f.configPath,
-		"--output-consumer", "machine",
-		"--output-schema", "json",
 	}
 	args = append(args, extraArgs...)
 

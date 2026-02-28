@@ -23,8 +23,10 @@ func TestCancelCommand(t *testing.T) {
 	// Step 1: Apply reconcile fixture (7 resources with dependency DAG).
 	cmdID := cli.Apply(t, "reconcile", fixture)
 
-	// Step 2: Immediately cancel the most recent command.
-	canceledIDs := cli.Cancel(t, "")
+	// Step 2: Wait briefly for the command to begin processing, then cancel.
+	// The agent needs a moment to transition the command to InProgress state.
+	time.Sleep(2 * time.Second)
+	canceledIDs := cli.Cancel(t, "id:"+cmdID)
 	t.Logf("canceled command IDs: %v", canceledIDs)
 
 	// Step 3: Wait for the command to reach a terminal state.
