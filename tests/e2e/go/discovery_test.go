@@ -170,35 +170,38 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 	FilterExtractedPKLByLabelSubstring(t, rolesFile, nativeIDPrefix)
 	FilterExtractedPKLByLabelSubstring(t, policiesFile, nativeIDPrefix)
 
-	// Step 10: Set stack labels in both extracted files.
-	const importedStack = "e2e-discovery-aws-imported"
-	SetExtractedStackLabel(t, rolesFile, importedStack)
-	SetExtractedStackLabel(t, policiesFile, importedStack)
+	// Step 10: Set stack labels in extracted files. Each type gets its own
+	// stack so that reconcile mode doesn't try to delete cross-file resources.
+	const rolesStack = "e2e-discovery-aws-imported-roles"
+	const policiesStack = "e2e-discovery-aws-imported-policies"
+	SetExtractedStackLabel(t, rolesFile, rolesStack)
+	SetExtractedStackLabel(t, policiesFile, policiesStack)
 
 	// Step 11: Apply both extracted files to bring resources under management.
-	// Use patch mode so that applying policies doesn't reconcile-delete the
-	// roles that were imported in the previous step (reconcile mode assumes
-	// the file is the complete desired state for the stack).
-	rolesCmdID := cli.Apply(t, "patch", rolesFile)
+	rolesCmdID := cli.Apply(t, "reconcile", rolesFile)
 	rolesResult := cli.WaitForCommand(t, rolesCmdID, commandTimeout)
 	RequireCommandSuccess(t, rolesResult)
 
-	policiesCmdID := cli.Apply(t, "patch", policiesFile)
+	policiesCmdID := cli.Apply(t, "reconcile", policiesFile)
 	policiesResult := cli.WaitForCommand(t, policiesCmdID, commandTimeout)
 	RequireCommandSuccess(t, policiesResult)
 
-	// Step 12: Verify imported test resources are on the correct stack.
-	importedResources := cli.Inventory(t, "--query", "stack:"+importedStack)
-	importedTestResources := FilterByNativeIDContains(importedResources, nativeIDPrefix)
+	// Step 12: Verify imported test resources across both stacks.
+	importedRoles := cli.Inventory(t, "--query", "stack:"+rolesStack)
+	importedPolicies := cli.Inventory(t, "--query", "stack:"+policiesStack)
+	var allImported []Resource
+	allImported = append(allImported, importedRoles...)
+	allImported = append(allImported, importedPolicies...)
+	importedTestResources := FilterByNativeIDContains(allImported, nativeIDPrefix)
 	if len(importedTestResources) != 6 {
-		t.Errorf("expected 6 test resources on stack %s, got %d", importedStack, len(importedTestResources))
+		t.Errorf("expected 6 test resources across import stacks, got %d", len(importedTestResources))
 		for _, r := range importedTestResources {
 			t.Logf("  imported: label=%s type=%s nativeID=%s", r.Label, r.Type, r.NativeID)
 		}
 	}
 
-	// Step 13: Destroy imported resources (policies first via their file,
-	// then roles, to respect parent-child ordering).
+	// Step 13: Destroy imported resources (policies first, then roles,
+	// to respect parent-child ordering).
 	policiesDestroyID := cli.Destroy(t, policiesFile)
 	policiesDestroyResult := cli.WaitForCommand(t, policiesDestroyID, commandTimeout)
 	RequireCommandSuccess(t, policiesDestroyResult)
@@ -212,15 +215,13 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 	destroyResult := cli.WaitForCommand(t, destroyID, commandTimeout)
 	RequireCommandSuccess(t, destroyResult)
 
-	// Step 15: Verify no test resources remain.
-	remaining := cli.Inventory(t, "--query", "stack:e2e-discovery-aws")
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 resources in stack e2e-discovery-aws after destroy, got %d", len(remaining))
-	}
-	remainingImported := cli.Inventory(t, "--query", "stack:"+importedStack)
-	remainingTest := FilterByNativeIDContains(remainingImported, nativeIDPrefix)
-	if len(remainingTest) != 0 {
-		t.Errorf("expected 0 test resources in stack %s after destroy, got %d", importedStack, len(remainingTest))
+	// Step 15: Verify no test resources remain in any stack.
+	for _, stack := range []string{"e2e-discovery-aws", rolesStack, policiesStack} {
+		stackRemaining := cli.Inventory(t, "--query", "stack:"+stack)
+		stackRemainingTest := FilterByNativeIDContains(stackRemaining, nativeIDPrefix)
+		if len(stackRemainingTest) != 0 {
+			t.Errorf("expected 0 test resources in stack %s after destroy, got %d", stack, len(stackRemainingTest))
+		}
 	}
 }
 
@@ -420,33 +421,40 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 	FilterExtractedPKLByLabelSubstring(t, vnetFile, nativeIDPrefix)
 	FilterExtractedPKLByLabelSubstring(t, subnetFile, nativeIDPrefix)
 
-	// Step 11: Set stack labels in all extracted files.
-	const importedStack = "e2e-discovery-azure-imported"
-	SetExtractedStackLabel(t, rgFile, importedStack)
-	SetExtractedStackLabel(t, vnetFile, importedStack)
-	SetExtractedStackLabel(t, subnetFile, importedStack)
+	// Step 11: Set stack labels in extracted files. Each type gets its own
+	// stack so that reconcile mode doesn't try to delete cross-file resources.
+	const rgStack = "e2e-discovery-azure-imported-rgs"
+	const vnetStack = "e2e-discovery-azure-imported-vnets"
+	const subnetStack = "e2e-discovery-azure-imported-subnets"
+	SetExtractedStackLabel(t, rgFile, rgStack)
+	SetExtractedStackLabel(t, vnetFile, vnetStack)
+	SetExtractedStackLabel(t, subnetFile, subnetStack)
 
 	// Step 12: Apply extracted files in dependency order (RGs first, then
 	// VNets, then Subnets) to bring resources under management.
-	// Use patch mode so that each file only imports its resources without
-	// reconcile-deleting resources from previously applied files.
-	rgCmdID := cli.Apply(t, "patch", rgFile)
+	rgCmdID := cli.Apply(t, "reconcile", rgFile)
 	rgResult := cli.WaitForCommand(t, rgCmdID, commandTimeout)
 	RequireCommandSuccess(t, rgResult)
 
-	vnetCmdID := cli.Apply(t, "patch", vnetFile)
+	vnetCmdID := cli.Apply(t, "reconcile", vnetFile)
 	vnetResult := cli.WaitForCommand(t, vnetCmdID, commandTimeout)
 	RequireCommandSuccess(t, vnetResult)
 
-	subnetCmdID := cli.Apply(t, "patch", subnetFile)
+	subnetCmdID := cli.Apply(t, "reconcile", subnetFile)
 	subnetResult := cli.WaitForCommand(t, subnetCmdID, commandTimeout)
 	RequireCommandSuccess(t, subnetResult)
 
-	// Step 13: Verify imported test resources are on the correct stack.
-	importedResources := cli.Inventory(t, "--query", "stack:"+importedStack)
-	importedTestResources := FilterByNativeIDContains(importedResources, nativeIDPrefix)
+	// Step 13: Verify imported test resources across all import stacks.
+	importedRGs := cli.Inventory(t, "--query", "stack:"+rgStack)
+	importedVNets := cli.Inventory(t, "--query", "stack:"+vnetStack)
+	importedSubnets := cli.Inventory(t, "--query", "stack:"+subnetStack)
+	var allImported []Resource
+	allImported = append(allImported, importedRGs...)
+	allImported = append(allImported, importedVNets...)
+	allImported = append(allImported, importedSubnets...)
+	importedTestResources := FilterByNativeIDContains(allImported, nativeIDPrefix)
 	if len(importedTestResources) != 10 {
-		t.Errorf("expected 10 test resources on stack %s, got %d", importedStack, len(importedTestResources))
+		t.Errorf("expected 10 test resources across import stacks, got %d", len(importedTestResources))
 		for _, r := range importedTestResources {
 			t.Logf("  imported: label=%s type=%s nativeID=%s", r.Label, r.Type, r.NativeID)
 		}
@@ -471,15 +479,17 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 	destroyResult := cli.WaitForCommand(t, destroyID, commandTimeout)
 	RequireCommandSuccess(t, destroyResult)
 
-	// Step 16: Verify no test resources remain in either stack.
+	// Step 16: Verify no test resources remain in any stack.
 	remaining := cli.Inventory(t, "--query", "stack:e2e-discovery-azure")
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 resources in stack e2e-discovery-azure after destroy, got %d", len(remaining))
 	}
-	remainingImported := cli.Inventory(t, "--query", "stack:"+importedStack)
-	remainingTest := FilterByNativeIDContains(remainingImported, nativeIDPrefix)
-	if len(remainingTest) != 0 {
-		t.Errorf("expected 0 test resources in stack %s after destroy, got %d", importedStack, len(remainingTest))
+	for _, stack := range []string{rgStack, vnetStack, subnetStack} {
+		stackRemaining := cli.Inventory(t, "--query", "stack:"+stack)
+		stackRemainingTest := FilterByNativeIDContains(stackRemaining, nativeIDPrefix)
+		if len(stackRemainingTest) != 0 {
+			t.Errorf("expected 0 test resources in stack %s after destroy, got %d", stack, len(stackRemainingTest))
+		}
 	}
 }
 
