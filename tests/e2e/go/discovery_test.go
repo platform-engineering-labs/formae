@@ -176,11 +176,14 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 	SetExtractedStackLabel(t, policiesFile, importedStack)
 
 	// Step 11: Apply both extracted files to bring resources under management.
-	rolesCmdID := cli.Apply(t, "reconcile", rolesFile)
+	// Use patch mode so that applying policies doesn't reconcile-delete the
+	// roles that were imported in the previous step (reconcile mode assumes
+	// the file is the complete desired state for the stack).
+	rolesCmdID := cli.Apply(t, "patch", rolesFile)
 	rolesResult := cli.WaitForCommand(t, rolesCmdID, commandTimeout)
 	RequireCommandSuccess(t, rolesResult)
 
-	policiesCmdID := cli.Apply(t, "reconcile", policiesFile)
+	policiesCmdID := cli.Apply(t, "patch", policiesFile)
 	policiesResult := cli.WaitForCommand(t, policiesCmdID, commandTimeout)
 	RequireCommandSuccess(t, policiesResult)
 
@@ -425,15 +428,17 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 
 	// Step 12: Apply extracted files in dependency order (RGs first, then
 	// VNets, then Subnets) to bring resources under management.
-	rgCmdID := cli.Apply(t, "reconcile", rgFile)
+	// Use patch mode so that each file only imports its resources without
+	// reconcile-deleting resources from previously applied files.
+	rgCmdID := cli.Apply(t, "patch", rgFile)
 	rgResult := cli.WaitForCommand(t, rgCmdID, commandTimeout)
 	RequireCommandSuccess(t, rgResult)
 
-	vnetCmdID := cli.Apply(t, "reconcile", vnetFile)
+	vnetCmdID := cli.Apply(t, "patch", vnetFile)
 	vnetResult := cli.WaitForCommand(t, vnetCmdID, commandTimeout)
 	RequireCommandSuccess(t, vnetResult)
 
-	subnetCmdID := cli.Apply(t, "reconcile", subnetFile)
+	subnetCmdID := cli.Apply(t, "patch", subnetFile)
 	subnetResult := cli.WaitForCommand(t, subnetCmdID, commandTimeout)
 	RequireCommandSuccess(t, subnetResult)
 
