@@ -195,24 +195,30 @@ func AssertResolvableProperty(t *testing.T, resource Resource, key, expectedType
 	}
 }
 
-// FindResourceByNativeIDContains returns the first resource whose NativeID
-// contains the given substring. Returns nil if not found.
-func FindResourceByNativeIDContains(resources []Resource, substring string) *Resource {
+// FindResourceByNativeIDSuffix returns the first resource whose NativeID ends
+// with the given name. The name must appear as the final path segment, preceded
+// by a separator (/, |) or matching the entire NativeID. This avoids false
+// matches on hierarchical IDs (e.g. Azure NativeIDs where a subnet's path
+// contains its parent resource group name).
+func FindResourceByNativeIDSuffix(resources []Resource, name string) *Resource {
 	for i := range resources {
-		if strings.Contains(resources[i].NativeID, substring) {
+		nid := resources[i].NativeID
+		if nid == name ||
+			strings.HasSuffix(nid, "/"+name) ||
+			strings.HasSuffix(nid, "|"+name) {
 			return &resources[i]
 		}
 	}
 	return nil
 }
 
-// RequireResourceByNativeID finds a resource by NativeID substring and fails
-// the test if not found.
-func RequireResourceByNativeID(t *testing.T, resources []Resource, nativeIDSubstring string) Resource {
+// RequireResourceByNativeID finds a resource by NativeID suffix and fails the
+// test if not found.
+func RequireResourceByNativeID(t *testing.T, resources []Resource, name string) Resource {
 	t.Helper()
-	r := FindResourceByNativeIDContains(resources, nativeIDSubstring)
+	r := FindResourceByNativeIDSuffix(resources, name)
 	if r == nil {
-		t.Fatalf("resource with NativeID containing %q not found in %d resources", nativeIDSubstring, len(resources))
+		t.Fatalf("resource with NativeID ending in %q not found in %d resources", name, len(resources))
 	}
 	return *r
 }
