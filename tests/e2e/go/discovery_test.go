@@ -154,59 +154,70 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 			"AWS::IAM::Role", "RoleName", knownRoleNames)
 	}
 
-	// Step 8: Extract unmanaged resources to a temp PKL file.
+	// Step 8: Extract unmanaged resources by type (Bluge queries are AND-only,
+	// so we extract Roles and RolePolicies separately).
 	extractDir := t.TempDir()
-	extractFile := filepath.Join(extractDir, "extracted.pkl")
-	cli.ExtractToFile(t, "managed:false", extractFile)
+	rolesFile := filepath.Join(extractDir, "roles.pkl")
+	policiesFile := filepath.Join(extractDir, "policies.pkl")
+	cli.ExtractToFile(t, "type:AWS::IAM::Role managed:false", rolesFile)
+	cli.ExtractToFile(t, "type:AWS::IAM::RolePolicy managed:false", policiesFile)
 
-	// Step 9: Set the stack label in the extracted PKL. The extract command
-	// comments out the label for $unmanaged resources; we replace it with a
-	// real stack to bring them under management.
+	// Step 9: Filter extracted files to keep only test resources.
+	// The roles extract includes pre-existing AWS service-linked roles
+	// that we must not import or destroy. Labels for IAM Roles are derived
+	// from RoleName (via plugin LabelConfig), so our test resources all
+	// have labels starting with the nativeIDPrefix.
+	FilterExtractedPKLByLabelSubstring(t, rolesFile, nativeIDPrefix)
+	FilterExtractedPKLByLabelSubstring(t, policiesFile, nativeIDPrefix)
+
+	// Step 10: Set stack labels in both extracted files.
 	const importedStack = "e2e-discovery-aws-imported"
-	SetExtractedStackLabel(t, extractFile, importedStack)
+	SetExtractedStackLabel(t, rolesFile, importedStack)
+	SetExtractedStackLabel(t, policiesFile, importedStack)
 
-	// Step 10: Apply the extracted PKL to bring resources under management.
-	importCmdID := cli.Apply(t, "reconcile", extractFile)
-	importResult := cli.WaitForCommand(t, importCmdID, commandTimeout)
-	RequireCommandSuccess(t, importResult)
+	// Step 11: Apply both extracted files to bring resources under management.
+	rolesCmdID := cli.Apply(t, "reconcile", rolesFile)
+	rolesResult := cli.WaitForCommand(t, rolesCmdID, commandTimeout)
+	RequireCommandSuccess(t, rolesResult)
 
-	// Step 11: Verify no unmanaged test resources remain.
-	postImportResources := cli.Inventory(t, "--query", "managed:false")
-	unmanagedAfterImport := FilterByNativeIDContains(postImportResources, nativeIDPrefix)
-	if len(unmanagedAfterImport) != 0 {
-		t.Errorf("expected 0 unmanaged test resources after import, got %d", len(unmanagedAfterImport))
-		for _, r := range unmanagedAfterImport {
-			t.Logf("  still unmanaged: label=%s type=%s nativeID=%s", r.Label, r.Type, r.NativeID)
-		}
-	}
+	policiesCmdID := cli.Apply(t, "reconcile", policiesFile)
+	policiesResult := cli.WaitForCommand(t, policiesCmdID, commandTimeout)
+	RequireCommandSuccess(t, policiesResult)
 
-	// Step 12: Verify imported resources are on the correct stack.
+	// Step 12: Verify imported test resources are on the correct stack.
 	importedResources := cli.Inventory(t, "--query", "stack:"+importedStack)
 	importedTestResources := FilterByNativeIDContains(importedResources, nativeIDPrefix)
 	if len(importedTestResources) != 6 {
-		t.Errorf("expected 6 managed resources on stack %s, got %d", importedStack, len(importedTestResources))
+		t.Errorf("expected 6 test resources on stack %s, got %d", importedStack, len(importedTestResources))
+		for _, r := range importedTestResources {
+			t.Logf("  imported: label=%s type=%s nativeID=%s", r.Label, r.Type, r.NativeID)
+		}
 	}
 
-	// Step 13: Destroy the extracted resources (formerly-unmanaged, now managed).
-	// This removes the OOB policies first, enabling the managed Role to be
-	// destroyed cleanly in the next step.
-	extractDestroyID := cli.Destroy(t, extractFile)
-	extractDestroyResult := cli.WaitForCommand(t, extractDestroyID, commandTimeout)
-	RequireCommandSuccess(t, extractDestroyResult)
+	// Step 13: Destroy imported resources (policies first via their file,
+	// then roles, to respect parent-child ordering).
+	policiesDestroyID := cli.Destroy(t, policiesFile)
+	policiesDestroyResult := cli.WaitForCommand(t, policiesDestroyID, commandTimeout)
+	RequireCommandSuccess(t, policiesDestroyResult)
+
+	rolesDestroyID := cli.Destroy(t, rolesFile)
+	rolesDestroyResult := cli.WaitForCommand(t, rolesDestroyID, commandTimeout)
+	RequireCommandSuccess(t, rolesDestroyResult)
 
 	// Step 14: Destroy the original managed resources.
 	destroyID := cli.Destroy(t, fixture)
 	destroyResult := cli.WaitForCommand(t, destroyID, commandTimeout)
 	RequireCommandSuccess(t, destroyResult)
 
-	// Step 15: Verify no test resources remain in either stack.
+	// Step 15: Verify no test resources remain.
 	remaining := cli.Inventory(t, "--query", "stack:e2e-discovery-aws")
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 resources in stack e2e-discovery-aws after destroy, got %d", len(remaining))
 	}
 	remainingImported := cli.Inventory(t, "--query", "stack:"+importedStack)
-	if len(remainingImported) != 0 {
-		t.Errorf("expected 0 resources in stack %s after destroy, got %d", importedStack, len(remainingImported))
+	remainingTest := FilterByNativeIDContains(remainingImported, nativeIDPrefix)
+	if len(remainingTest) != 0 {
+		t.Errorf("expected 0 test resources in stack %s after destroy, got %d", importedStack, len(remainingTest))
 	}
 }
 

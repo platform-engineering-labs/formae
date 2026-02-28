@@ -418,6 +418,75 @@ func SetExtractedStackLabel(t *testing.T, pklPath string, stackLabel string) {
 	}
 }
 
+// FilterExtractedPKLByLabelSubstring removes resource blocks from an extracted
+// PKL file whose labels do not contain the given substring. Stack and target
+// definitions are always kept. This filters out pre-existing resources
+// (e.g., AWS service-linked roles) that are included in a type-scoped extract.
+//
+// The extracted PKL has resources separated by blank lines inside a forma block.
+// Each resource block contains a `label = "..."` property. This function splits
+// the content by double-newline and removes sections that are resource blocks
+// with non-matching labels.
+//
+// Substring matching (rather than prefix) is used because labels may be derived
+// from NativeIDs that embed the resource name within a longer path (e.g., Azure
+// resource IDs like /subscriptions/.../resourceGroups/formae-e2e-discovery-rg-a).
+func FilterExtractedPKLByLabelSubstring(t *testing.T, pklPath, substring string) {
+	t.Helper()
+
+	data, err := os.ReadFile(pklPath)
+	if err != nil {
+		t.Fatalf("failed to read PKL file %s: %v", pklPath, err)
+	}
+
+	content := string(data)
+	sections := strings.Split(content, "\n\n")
+	var kept []string
+
+	for i, section := range sections {
+		isLast := i == len(sections)-1
+
+		if isResourceBlockWithNonMatchingLabel(section, substring) {
+			if isLast {
+				// Preserve the forma closing brace from the last section.
+				kept = append(kept, "}")
+			}
+			continue
+		}
+		kept = append(kept, section)
+	}
+
+	filtered := strings.Join(kept, "\n\n")
+	if err := os.WriteFile(pklPath, []byte(filtered), 0644); err != nil {
+		t.Fatalf("failed to write filtered PKL file %s: %v", pklPath, err)
+	}
+}
+
+// isResourceBlockWithNonMatchingLabel checks if a PKL section is a resource
+// definition block (not a Stack or Target) whose label does not contain the
+// given substring.
+func isResourceBlockWithNonMatchingLabel(section, substring string) bool {
+	if !strings.Contains(section, "= new ") {
+		return false
+	}
+	if strings.Contains(section, "formae.Stack") || strings.Contains(section, "formae.Target") {
+		return false
+	}
+	const marker = `label = "`
+	idx := strings.Index(section, marker)
+	if idx < 0 {
+		return false
+	}
+	start := idx + len(marker)
+	rest := section[start:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return false
+	}
+	label := rest[:end]
+	return !strings.Contains(label, substring)
+}
+
 // verifyAWSRoleDeleted uses the AWS IAM SDK to confirm that the given role
 // no longer exists. It expects a NoSuchEntity error from GetRole.
 func verifyAWSRoleDeleted(t *testing.T, roleName string) {
