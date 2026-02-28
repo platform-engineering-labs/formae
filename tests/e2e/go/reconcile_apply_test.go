@@ -7,16 +7,11 @@
 package e2e_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 )
 
 // fixturesDir returns the absolute path to the fixtures directory relative
@@ -260,32 +255,3 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 	verifyAzureResourceGroupDeleted(t, subscriptionID, "formae-e2e-reconcile-rg")
 }
 
-// verifyAzureResourceGroupDeleted uses the Azure SDK to confirm that the
-// given resource group no longer exists.
-func verifyAzureResourceGroupDeleted(t *testing.T, subscriptionID, rgName string) {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		t.Fatalf("failed to create Azure credential: %v", err)
-	}
-
-	client, err := armresources.NewResourceGroupsClient(subscriptionID, cred, nil)
-	if err != nil {
-		t.Fatalf("failed to create Azure resource groups client: %v", err)
-	}
-
-	_, err = client.Get(ctx, rgName, nil)
-	if err == nil {
-		t.Errorf("expected resource group %q to be deleted, but Get succeeded", rgName)
-		return
-	}
-
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "ResourceGroupNotFound") && !strings.Contains(errMsg, "ResourceNotFound") && !strings.Contains(errMsg, "404") {
-		t.Errorf("expected NotFound error for resource group %q, got: %v", rgName, err)
-	}
-}
