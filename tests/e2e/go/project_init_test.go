@@ -41,10 +41,8 @@ func TestProjectInit(t *testing.T) {
 	if !strings.Contains(content, "dependencies") {
 		t.Error("PklProject does not contain dependencies block")
 	}
-	// The formae core dependency is included when formae.Version != "0.0.0"
-	// (i.e. in CI builds). In dev builds the version is unset, so we warn.
-	if !strings.Contains(content, "formae") {
-		t.Log("note: PklProject does not reference formae (dev build with version 0.0.0)")
+	if !strings.Contains(content, `["formae"]`) {
+		t.Error("PklProject does not contain formae core dependency")
 	}
 	if !strings.Contains(content, `["aws"]`) {
 		t.Error("PklProject does not contain aws dependency")
