@@ -22,6 +22,12 @@ type CommandResult struct {
 	ResourceUpdates []ResourceUpdate
 }
 
+// SimulationResult holds the parsed result of a formae simulate command.
+type SimulationResult struct {
+	ChangesRequired bool
+	ResourceUpdates []ResourceUpdate
+}
+
 // Resource represents a resource as returned by formae inventory.
 type Resource struct {
 	Ksuid              string
@@ -88,6 +94,57 @@ func (f *FormaeCLI) Apply(t *testing.T, mode string, fixturePath string, extraAr
 
 	t.Logf("apply submitted, CommandId: %s", response.CommandID)
 	return response.CommandID
+}
+
+// Simulate runs `formae apply --simulate` with the given mode and fixture file
+// path. Returns the parsed simulation result (synchronous — no command is
+// actually queued).
+func (f *FormaeCLI) Simulate(t *testing.T, mode string, fixturePath string, extraArgs ...string) SimulationResult {
+	t.Helper()
+
+	args := []string{
+		"apply",
+		fixturePath,
+		"--config", f.configPath,
+		"--mode", mode,
+		"--simulate",
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	}
+	args = append(args, extraArgs...)
+
+	stdout := f.run(t, args...)
+
+	var response struct {
+		ChangesRequired bool `json:"ChangesRequired"`
+		Command         struct {
+			ResourceUpdates []struct {
+				ResourceLabel string `json:"ResourceLabel"`
+				ResourceType  string `json:"ResourceType"`
+				Operation     string `json:"Operation"`
+				State         string `json:"State"`
+			} `json:"ResourceUpdates"`
+		} `json:"Command"`
+	}
+	if err := json.Unmarshal(stdout, &response); err != nil {
+		t.Fatalf("failed to parse simulate response: %v\nstdout: %s", err, string(stdout))
+	}
+
+	updates := make([]ResourceUpdate, len(response.Command.ResourceUpdates))
+	for i, ru := range response.Command.ResourceUpdates {
+		updates[i] = ResourceUpdate{
+			Label:     ru.ResourceLabel,
+			Type:      ru.ResourceType,
+			Operation: ru.Operation,
+			State:     ru.State,
+		}
+	}
+
+	t.Logf("simulate: ChangesRequired=%v, %d resource updates", response.ChangesRequired, len(updates))
+	return SimulationResult{
+		ChangesRequired: response.ChangesRequired,
+		ResourceUpdates: updates,
+	}
 }
 
 // Destroy runs `formae destroy` with the given fixture file path.

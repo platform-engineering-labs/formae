@@ -1,0 +1,67 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build e2e
+
+package e2e_test
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// TestExtractAndReapply verifies the round-trip: apply → extract → reapply
+// (no-op) → destroy via extracted PKL. This ensures that the extract command
+// produces valid PKL that exactly represents the managed state.
+func TestExtractAndReapply(t *testing.T) {
+	bin := FormaeBinary(t)
+	agent := StartAgent(t, bin)
+	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
+
+	fixture := filepath.Join(fixturesDir(t), "extract_reapply_aws.pkl")
+	commandTimeout := 2 * time.Minute
+
+	// Step 1: Apply the original fixture to create resources.
+	cmdID := cli.Apply(t, "reconcile", fixture)
+	result := cli.WaitForCommand(t, cmdID, commandTimeout)
+	RequireCommandSuccess(t, result)
+
+	// Step 2: Verify resource was created.
+	resources := cli.Inventory(t, "--query", "stack:e2e-extract-reapply-aws")
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource after apply, got %d", len(resources))
+	}
+	role := RequireResource(t, resources, "e2e-extract-reapply-role")
+	AssertStringProperty(t, role, "Description", "e2e extract reapply test role")
+
+	// Step 3: Extract the stack to a PKL file.
+	extractedPath := filepath.Join(t.TempDir(), "extracted.pkl")
+	cli.ExtractToFile(t, "stack:e2e-extract-reapply-aws", extractedPath)
+
+	// Step 4: Reapply the extracted PKL — should be a no-op since the
+	// extracted state matches the current cloud state.
+	reapplyID := cli.Apply(t, "reconcile", extractedPath)
+	reapplyResult := cli.WaitForCommand(t, reapplyID, commandTimeout)
+	RequireCommandSuccess(t, reapplyResult)
+
+	// Step 5: Verify resource is unchanged.
+	afterResources := cli.Inventory(t, "--query", "stack:e2e-extract-reapply-aws")
+	if len(afterResources) != 1 {
+		t.Fatalf("expected 1 resource after reapply, got %d", len(afterResources))
+	}
+	roleAfter := RequireResource(t, afterResources, "e2e-extract-reapply-role")
+	AssertStringProperty(t, roleAfter, "Description", "e2e extract reapply test role")
+
+	// Step 6: Destroy using the extracted PKL.
+	destroyID := cli.Destroy(t, extractedPath)
+	destroyResult := cli.WaitForCommand(t, destroyID, commandTimeout)
+	RequireCommandSuccess(t, destroyResult)
+
+	// Step 7: Verify the stack is empty.
+	remaining := cli.Inventory(t, "--query", "stack:e2e-extract-reapply-aws")
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 resources after destroy, got %d", len(remaining))
+	}
+}

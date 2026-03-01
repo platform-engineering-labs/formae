@@ -105,6 +105,8 @@ jobs:
           - TestCancelCommand
           - TestCascadeDelete
           - TestProjectInit
+          - TestSimulateApply
+          - TestExtractAndReapply
 
     steps:
       - uses: actions/checkout@v4
