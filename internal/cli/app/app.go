@@ -624,9 +624,9 @@ func (p *Projects) formatIncludes(format string, include []string) ([]string, er
 	var includes []string
 	switch format {
 	case "pkl":
-		// Formae always comes from the hub (remote)
-		if pklVersion := p.pluginManager.PluginVersion("pkl"); pklVersion != nil {
-			includes = append(includes, "pkl.formae@"+pklVersion.String())
+		// Formae core PKL package version matches the formae binary version.
+		if formae.Version != "0.0.0" {
+			includes = append(includes, "pkl.formae@"+formae.Version)
 		}
 
 		// Add included packages
