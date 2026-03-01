@@ -22,7 +22,6 @@ class ResourceDoc {
     type: String
     discoverable: Boolean
     extractable: Boolean
-    nonprovisionable: Boolean
     identifier: String
     docComment: String?
     moduleName: String
@@ -39,7 +38,6 @@ function getAllResourceDocs(): Listing<ResourceDoc> = new Listing {
                         type = v.annotations[0].getProperty("type")
                         discoverable = v.annotations[0].getProperty("discoverable")
                         extractable = v.annotations[0].getProperty("extractable")
-                        nonprovisionable = v.annotations[0].getProperty("nonprovisionable")
                         identifier = v.annotations[0].getProperty("identifier")
                         docComment = v.annotations[0].getPropertyOrNull("docComment")
                         moduleName = name
@@ -60,7 +58,6 @@ function generateDocs(): Map<String, Any> =
             ["type"] = r.type
             ["discoverable"] = r.discoverable
             ["extractable"] = r.extractable
-            ["nonprovisionable"] = r.nonprovisionable
             ["identifier"] = r.identifier
             ["docComment"] = r.docComment
             ["moduleName"] = r.moduleName

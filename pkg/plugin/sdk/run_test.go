@@ -63,11 +63,6 @@ func (m *mockPlugin) List(ctx context.Context, req *resource.ListRequest) (*reso
 
 // getTestPaths returns paths to the test plugin directories relative to this file.
 // This allows the test to work regardless of the working directory.
-//
-// Note: Uses AWS plugin for testing because PKL's import*() glob pattern has limitations
-// with local packages that prevent the minimal test-plugin fixture from working.
-// The AWS plugin will be externalized eventually, at which point this test should be
-// updated to use a self-contained test fixture.
 func getTestPaths() (pluginDir, formaeSchemaPath string) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -76,10 +71,8 @@ func getTestPaths() (pluginDir, formaeSchemaPath string) {
 	sdkDir := filepath.Dir(thisFile)
 	repoRoot := filepath.Join(sdkDir, "..", "..", "..")
 
-	// Use AWS plugin for now (has working schema extraction)
-	// TODO: Replace with self-contained test plugin once PKL import* glob issue is resolved
-	pluginDir = filepath.Join(repoRoot, "plugins", "aws")
-	formaeSchemaPath = filepath.Join(repoRoot, "plugins", "pkl", "schema", "PklProject")
+	pluginDir = filepath.Join(repoRoot, "internal", "testplugin", "fakeaws")
+	formaeSchemaPath = filepath.Join(repoRoot, "internal", "schema", "pkl", "schema", "PklProject")
 
 	return pluginDir, formaeSchemaPath
 }
@@ -93,17 +86,16 @@ func TestSetupPluginFromDir_CreatesFullResourcePlugin(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify identity methods come from manifest
-	assert.Equal(t, "aws", wrapped.Name())
+	assert.Equal(t, "fake-aws", wrapped.Name())
 	assert.NotNil(t, wrapped.Version())
-	assert.Equal(t, "AWS", wrapped.Namespace())
+	assert.Equal(t, "FakeAWS", wrapped.Namespace())
 
 	// Verify schema methods return data
 	resources := wrapped.SupportedResources()
 	assert.NotEmpty(t, resources, "SupportedResources should return at least some resources")
-	assert.Greater(t, len(resources), 100, "AWS plugin should have 100+ resources")
 
 	// Verify we can get schema for a known resource type
-	schema, err := wrapped.SchemaForResourceType("AWS::EC2::VPC")
+	schema, err := wrapped.SchemaForResourceType("FakeAWS::EC2::VPC")
 	require.NoError(t, err)
 	assert.NotEmpty(t, schema.Identifier, "Schema should have an identifier")
 	assert.NotEmpty(t, schema.Fields, "Schema should have fields")
