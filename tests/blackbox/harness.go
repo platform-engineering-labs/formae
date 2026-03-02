@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build integration
+//go:build integration || property
 
 package blackbox
 
@@ -425,7 +425,8 @@ func SimpleForma(n int) *pkgmodel.Forma {
 			Type:       "Test::Generic::Resource",
 			Stack:      "default",
 			Target:     "test-target",
-			Properties: json.RawMessage(`{"Name":"` + name + `","Value":"v1"}`),
+			Properties: json.RawMessage(fmt.Sprintf(`{"Name":"%s","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`, name)),
+			Schema:     testResourceSchema,
 			Managed:    true,
 		}
 	}

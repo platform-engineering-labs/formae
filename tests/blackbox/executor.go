@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build integration
+//go:build integration || property
 
 package blackbox
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,37 +23,158 @@ import (
 
 const defaultCommandTimeout = 10 * time.Second
 
-// ResetAgentState destroys all managed resources in the default stack, ensuring
-// each rapid iteration starts from a clean slate.
+// testResourceSchema is the schema for Test::Generic::Resource, matching the
+// test plugin's SchemaForResourceType. Resources in test formas must include
+// this schema so that the agent's property splitting (regular vs read-only)
+// works correctly — without it, all fields are classified as read-only and
+// array-typed fields are lost during the merge step.
+var testResourceSchema = pkgmodel.Schema{
+	Identifier: "Name",
+	Fields:     []string{"Name", "Value", "SetTags", "EntityTags", "OrderedItems"},
+	Hints: map[string]pkgmodel.FieldHint{
+		"EntityTags": {
+			UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet,
+			IndexField:   "Key",
+		},
+		"OrderedItems": {
+			UpdateMethod: pkgmodel.FieldUpdateMethodArray,
+		},
+	},
+}
+
+// resetTimeout is the timeout for each phase of ResetAgentState.
+const resetTimeout = 30 * time.Second
+
+// maxCleanupAttempts limits how many destroy cycles ResetAgentState will try.
+// Multiple attempts are needed because the ResourcePersister processes messages
+// asynchronously: a completed Apply command may have outstanding "create"
+// messages that arrive AFTER the Destroy command's "delete" messages, causing
+// resources to reappear. A second destroy round catches these stragglers.
+const maxCleanupAttempts = 3
+
+// ResetAgentState destroys all managed resources across all known stacks,
+// ensuring each rapid iteration starts from a clean slate. It first waits
+// for any in-flight commands to complete, then destroys resources in a
+// retry loop until inventory is empty.
 func (h *TestHarness) ResetAgentState(t *testing.T) {
 	t.Helper()
 
-	// Check if there are any resources to destroy
-	forma, err := h.client.ExtractResources("stack:default managed:true")
-	if err != nil || forma == nil || len(forma.Resources) == 0 {
-		t.Logf("ResetAgentState: no resources to clean up")
-		return
+	// Phase 1: Wait for all in-flight commands to settle.
+	h.waitForAllCommandsTerminal(t, resetTimeout)
+
+	// Phase 2: Destroy all managed resources in a retry loop.
+	// Due to async ResourcePersister message ordering, a single destroy
+	// may not clear all resources — late "create" messages from a prior
+	// command can re-create resources after they're deleted.
+	for attempt := range maxCleanupAttempts {
+		forma, err := h.client.ExtractResources("managed:true")
+		if err != nil || forma == nil || len(forma.Resources) == 0 {
+			t.Logf("ResetAgentState: inventory clean (attempt %d)", attempt+1)
+			return
+		}
+
+		// Diagnostic: check for duplicate resources in extracted forma
+		seen := make(map[string]int)
+		for _, res := range forma.Resources {
+			key := fmt.Sprintf("%s/%s/%s", res.Stack, res.Type, res.Label)
+			seen[key]++
+		}
+		hasDuplicates := false
+		for key, count := range seen {
+			if count > 1 {
+				t.Logf("ResetAgentState: DUPLICATE resource in ExtractResources: %s (count=%d)", key, count)
+				hasDuplicates = true
+			}
+		}
+		if hasDuplicates {
+			h.dumpRawResourceRows(t, forma.Resources, seen)
+		}
+
+		resp, err := h.client.DestroyForma(forma, false, clientID)
+		if err != nil {
+			t.Logf("ResetAgentState: destroy returned: %v (attempt %d)", err, attempt+1)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		if !resp.Simulation.ChangesRequired {
+			t.Logf("ResetAgentState: no changes required (attempt %d)", attempt+1)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		cmd, ok := h.TryWaitForCommandDone(resp.CommandID, resetTimeout)
+		if !ok {
+			t.Logf("ResetAgentState: cleanup command %s timed out (attempt %d)", resp.CommandID, attempt+1)
+			continue
+		}
+		t.Logf("ResetAgentState: cleanup command %s: %s (destroyed %d, attempt %d)",
+			resp.CommandID, cmd.State, len(forma.Resources), attempt+1)
+
+		// Brief pause to let the ResourcePersister drain any outstanding
+		// messages from prior commands before we re-check inventory.
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Destroy all existing resources via a forma destroy
-	resp, err := h.client.DestroyForma(forma, false, clientID)
-	if err != nil {
-		t.Logf("ResetAgentState: destroy returned: %v", err)
-		return
+	// Final check — if resources remain after all attempts, fail.
+	forma, err := h.client.ExtractResources("managed:true")
+	if err == nil && forma != nil && len(forma.Resources) > 0 {
+		for _, res := range forma.Resources {
+			t.Logf("  remaining resource: %s (nativeID=%s, stack=%s)", res.Label, res.NativeID, res.Stack)
+		}
+		require.Fail(t, "ResetAgentState: inventory not empty after %d cleanup attempts", maxCleanupAttempts)
+	}
+}
+
+// waitForAllCommandsTerminal polls until no commands from this client are
+// in a non-terminal state (InProgress, Pending). This prevents the next
+// rapid iteration from racing with leftover commands from a prior iteration.
+func (h *TestHarness) waitForAllCommandsTerminal(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	sawCommands := false
+	for time.Now().Before(deadline) {
+		statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+		if err != nil {
+			if !sawCommands {
+				// The API returns a 500 when no commands exist for the client.
+				// On the first query, treat this as "no commands" (vacuously terminal).
+				return
+			}
+			// Once we've seen commands, errors are transient — keep retrying.
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		if len(statusResp.Commands) > 0 {
+			sawCommands = true
+		}
+
+		allTerminal := true
+		for _, cmd := range statusResp.Commands {
+			if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
+				allTerminal = false
+				break
+			}
+		}
+
+		if allTerminal {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
-	if !resp.Simulation.ChangesRequired {
-		t.Logf("ResetAgentState: no changes required")
-		return
+	// Log which commands are still running for diagnostics.
+	statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+	if err == nil {
+		for _, cmd := range statusResp.Commands {
+			if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
+				t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s", cmd.CommandID, cmd.State, cmd.Command)
+			}
+		}
 	}
-
-	cmd, ok := h.TryWaitForCommandDone(resp.CommandID, defaultCommandTimeout)
-	if ok && cmd != nil {
-		t.Logf("ResetAgentState: cleanup command %s completed: %s (destroyed %d resources)",
-			resp.CommandID, cmd.State, len(forma.Resources))
-	} else {
-		t.Logf("ResetAgentState: cleanup command %s timed out", resp.CommandID)
-	}
+	require.Fail(t, "ResetAgentState: timed out waiting for all commands to reach terminal state")
 }
 
 // ExecuteOperation dispatches a single operation via the appropriate channel
@@ -69,7 +192,13 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 	case OpTriggerDiscovery:
 		h.executeTriggerDiscovery(t)
 	case OpVerifyState:
-		h.AssertAllInvariants(t)
+		// Skip invariant check when commands are in flight — cloud state
+		// and inventory are transiently inconsistent during execution.
+		if h.hasAnyPendingCommands(model) {
+			t.Logf("[op %d] VerifyState skipped (pending commands in flight)", op.SequenceNum)
+		} else {
+			h.AssertAllInvariants(t)
+		}
 	case OpInjectError:
 		h.executeInjectError(t, op)
 	case OpInjectLatency:
@@ -91,12 +220,12 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 }
 
 // AssertAllInvariants queries the agent inventory and cloud state, then checks
-// all correctness invariants.
+// all correctness invariants across all managed resources.
 func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 	t.Helper()
 
-	// Query inventory via REST API
-	forma, err := h.client.ExtractResources("stack:default")
+	// Query inventory via REST API — get all managed resources across all stacks
+	forma, err := h.client.ExtractResources("managed:true")
 	require.NoError(t, err, "ExtractResources should not error")
 
 	var inventory []pkgmodel.Resource
@@ -107,8 +236,67 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 	// Query cloud state via TestController
 	cloudState := h.GetCloudStateSnapshot(t)
 
-	// Check invariants
-	violations := CheckInvariants(inventory, cloudState)
+	// Check invariants (ignore out-of-band "cloud-*" entries from OpCloudCreate)
+	violations := CheckInvariants(inventory, cloudState, "cloud-")
+
+	// Check that all commands have reached a terminal state.
+	// If any commands are still InProgress, wait briefly and re-check to
+	// distinguish timing issues from genuinely stuck commands.
+	statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+	if err == nil && statusResp != nil {
+		var commands []CommandState
+		for _, cmd := range statusResp.Commands {
+			commands = append(commands, CommandState{
+				ID:    cmd.CommandID,
+				State: cmd.State,
+			})
+		}
+		cmdViolations := CheckCommandCompleteness(commands)
+		if len(cmdViolations) > 0 {
+			// Commands still running — wait up to 15s and re-check
+			for _, v := range cmdViolations {
+				t.Logf("AssertAllInvariants: %s (will retry)", v.Message)
+			}
+			deadline := time.Now().Add(15 * time.Second)
+			for time.Now().Before(deadline) {
+				time.Sleep(500 * time.Millisecond)
+				statusResp, err = h.client.GetFormaCommandsStatus("", clientID, 100)
+				if err != nil {
+					continue
+				}
+				commands = nil
+				for _, cmd := range statusResp.Commands {
+					commands = append(commands, CommandState{
+						ID:    cmd.CommandID,
+						State: cmd.State,
+					})
+				}
+				cmdViolations = CheckCommandCompleteness(commands)
+				if len(cmdViolations) == 0 {
+					t.Logf("AssertAllInvariants: all commands reached terminal state after retry")
+					break
+				}
+			}
+			if len(cmdViolations) > 0 {
+				// Dump full details of stuck commands for diagnosis
+				for _, cmd := range statusResp.Commands {
+					if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
+						t.Logf("STUCK COMMAND DETAILS: id=%s command=%s state=%s", cmd.CommandID, cmd.Command, cmd.State)
+						for _, ru := range cmd.ResourceUpdates {
+							t.Logf("  resource_update: label=%s op=%s state=%s stack=%s err=%s",
+								ru.ResourceLabel, ru.Operation, ru.State, ru.StackName, ru.ErrorMessage)
+						}
+						for _, su := range cmd.StackUpdates {
+							t.Logf("  stack_update: label=%s op=%s state=%s err=%s",
+								su.StackLabel, su.Operation, su.State, su.ErrorMessage)
+						}
+					}
+				}
+			}
+		}
+		violations = append(violations, cmdViolations...)
+	}
+
 	for _, v := range violations {
 		t.Errorf("invariant violation: %s", v.Message)
 	}
@@ -123,12 +311,13 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		mode = pkgmodel.FormaApplyModeReconcile
 	}
 
-	forma := FormaFromResourceIDs(op.ResourceIDs)
+	stackLabel := model.Stack(op.StackIndex).Label
+	forma := FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
 	resp, err := h.client.ApplyForma(forma, mode, false, clientID, false)
 	if err != nil {
 		// Patch may be rejected if resources don't exist, conflicts, etc.
 		// This is valid agent behavior, not a test failure.
-		t.Logf("[op %d] Apply (%s) resources %v → rejected: %v", op.SequenceNum, op.ApplyMode, op.ResourceIDs, err)
+		t.Logf("[op %d] Apply (%s) stack=%s resources %v → rejected: %v", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, err)
 		return
 	}
 
@@ -138,12 +327,12 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	// Polling for such a command would time out, so we treat it as a
 	// successful no-op.
 	if !resp.Simulation.ChangesRequired {
-		t.Logf("[op %d] Apply (%s) resources %v → no changes required", op.SequenceNum, op.ApplyMode, op.ResourceIDs)
+		t.Logf("[op %d] Apply (%s) stack=%s resources %v → no changes required", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs)
 		return
 	}
 
 	commandID := resp.CommandID
-	t.Logf("[op %d] Apply (%s) resources %v → command %s", op.SequenceNum, op.ApplyMode, op.ResourceIDs, commandID)
+	t.Logf("[op %d] Apply (%s) stack=%s resources %v → command %s", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, commandID)
 
 	if op.Blocking {
 		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
@@ -152,7 +341,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 			// when failure injection is active (e.g. Create errors cause
 			// retries). The final invariant check validates consistency.
 			for _, id := range op.ResourceIDs {
-				model.MarkUncertain(id)
+				model.MarkUncertain(op.StackIndex, id)
 			}
 			t.Logf("[op %d] Apply (%s) command %s timed out (resources marked uncertain)", op.SequenceNum, op.ApplyMode, commandID)
 			return
@@ -160,27 +349,42 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 
 		if cmd.State == "Success" {
 			// Update model: applied resources now exist
-			props := resourceProperties(op.ResourceIDs)
-			model.ApplyCreated(op.ResourceIDs, props)
+			props := resourceProperties(stackLabel, op.ResourceIDs, op.Properties)
+			model.ApplyCreated(op.StackIndex, op.ResourceIDs, props)
 
 			// For reconcile mode, resources NOT in the forma are destroyed
 			if mode == pkgmodel.FormaApplyModeReconcile {
-				for idx := range model.resources {
+				for idx := range model.Stack(op.StackIndex).Resources {
 					if !containsInt(op.ResourceIDs, idx) {
-						model.ApplyDestroyed([]int{idx})
+						model.ApplyDestroyed(op.StackIndex, []int{idx})
 					}
 				}
 			}
+
+			// Post-apply property verification
+			h.verifyPostApplyProperties(t, op, mode, stackLabel)
 		} else {
 			// Command failed — resources may have been partially created.
 			// Mark them as uncertain since we don't know which succeeded.
 			for _, id := range op.ResourceIDs {
-				model.MarkUncertain(id)
+				model.MarkUncertain(op.StackIndex, id)
 			}
 		}
 		t.Logf("[op %d] Apply completed: %s", op.SequenceNum, cmd.State)
 	} else {
-		model.AddPendingCommand(commandID)
+		// Fire-and-forget: mark resources uncertain since we don't know
+		// when the command will complete.
+		for _, id := range op.ResourceIDs {
+			model.MarkUncertain(op.StackIndex, id)
+		}
+		model.AddPendingCommand(op.StackIndex, &PendingCommand{
+			CommandID:   commandID,
+			Kind:        CommandKindApply,
+			StackLabel:  stackLabel,
+			ResourceIDs: op.ResourceIDs,
+			Properties:  op.Properties,
+		})
+		t.Logf("[op %d] Apply (%s) stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, commandID)
 	}
 }
 
@@ -189,59 +393,71 @@ func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateMo
 
 	// Only attempt to destroy resources that exist according to the model.
 	// Destroying nonexistent resources can cause the agent to hang.
-	existingIDs := filterExistingResources(op.ResourceIDs, model)
+	existingIDs := filterExistingResources(op.ResourceIDs, op.StackIndex, model)
 	if len(existingIDs) == 0 {
-		t.Logf("[op %d] Destroy resources %v → skipped (none exist)", op.SequenceNum, op.ResourceIDs)
+		t.Logf("[op %d] Destroy stack=%s resources %v → skipped (none exist)", op.SequenceNum, model.Stack(op.StackIndex).Label, op.ResourceIDs)
 		return
 	}
 
-	forma := FormaFromResourceIDs(existingIDs)
+	stackLabel := model.Stack(op.StackIndex).Label
+	forma := FormaFromStackResources(stackLabel, existingIDs)
 	resp, err := h.client.DestroyForma(forma, false, clientID)
 	if err != nil {
-		t.Logf("[op %d] Destroy resources %v → error: %v", op.SequenceNum, existingIDs, err)
+		t.Logf("[op %d] Destroy stack=%s resources %v → error: %v", op.SequenceNum, stackLabel, existingIDs, err)
 		return
 	}
 
 	if !resp.Simulation.ChangesRequired {
-		t.Logf("[op %d] Destroy resources %v → no changes required", op.SequenceNum, existingIDs)
+		t.Logf("[op %d] Destroy stack=%s resources %v → no changes required", op.SequenceNum, stackLabel, existingIDs)
 		return
 	}
 
 	commandID := resp.CommandID
-	t.Logf("[op %d] Destroy resources %v → command %s", op.SequenceNum, existingIDs, commandID)
+	t.Logf("[op %d] Destroy stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
 	if op.Blocking {
 		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
 		if !ok {
 			// Timed out — all resources become uncertain
 			for _, id := range existingIDs {
-				model.MarkUncertain(id)
+				model.MarkUncertain(op.StackIndex, id)
 			}
 			t.Logf("[op %d] Destroy command %s timed out (resources marked uncertain)", op.SequenceNum, commandID)
 			return
 		}
 
 		if cmd.State == "Success" {
-			model.ApplyDestroyed(existingIDs)
+			model.ApplyDestroyed(op.StackIndex, existingIDs)
 		} else {
 			// Command failed — resources may have been partially destroyed.
 			// Mark them as uncertain since we don't know which succeeded.
 			for _, id := range existingIDs {
-				model.MarkUncertain(id)
+				model.MarkUncertain(op.StackIndex, id)
 			}
 		}
 		t.Logf("[op %d] Destroy completed: %s", op.SequenceNum, cmd.State)
 	} else {
-		model.AddPendingCommand(commandID)
+		// Fire-and-forget: mark resources uncertain since we don't know
+		// when the command will complete.
+		for _, id := range existingIDs {
+			model.MarkUncertain(op.StackIndex, id)
+		}
+		model.AddPendingCommand(op.StackIndex, &PendingCommand{
+			CommandID:   commandID,
+			Kind:        CommandKindDestroy,
+			StackLabel:  stackLabel,
+			ResourceIDs: existingIDs,
+		})
+		t.Logf("[op %d] Destroy stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 	}
 }
 
 // filterExistingResources returns only the resource IDs whose model state
-// includes StateExists.
-func filterExistingResources(ids []int, model *StateModel) []int {
+// includes StateExists on the given stack.
+func filterExistingResources(ids []int, stackIndex int, model *StateModel) []int {
 	var existing []int
 	for _, id := range ids {
-		res := model.Resource(id)
+		res := model.Resource(stackIndex, id)
 		if res == nil {
 			continue
 		}
@@ -301,27 +517,339 @@ func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation) {
 	t.Logf("[op %d] CloudCreate: %s (%s)", op.SequenceNum, op.NativeID, op.ResourceType)
 }
 
+// verifyPostApplyProperties checks resource properties after a successful
+// blocking apply. For reconcile: exact match. For patch: superset.
+//
+// The inventory may not reflect the latest command's changes immediately
+// because the ResourcePersister processes updates asynchronously after the
+// command reaches "Success". We poll briefly to account for this lag.
+func (h *TestHarness) verifyPostApplyProperties(t *testing.T, op *Operation, mode pkgmodel.FormaApplyMode, stackLabel string) {
+	t.Helper()
+
+	// Build the expected properties per resource label
+	desiredProps := make(map[string]string)
+	labels := make([]string, len(op.ResourceIDs))
+	for i, id := range op.ResourceIDs {
+		label := resourceLabelForStack(stackLabel, id)
+		labels[i] = label
+		desiredProps[label] = strings.Replace(op.Properties, `"NAME"`, `"`+label+`"`, 1)
+	}
+
+	// Poll inventory until properties match or timeout.
+	deadline := time.Now().Add(5 * time.Second)
+	var lastViolations []Violation
+	for time.Now().Before(deadline) {
+		forma, err := h.client.ExtractResources("managed:true")
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		var inventory []pkgmodel.Resource
+		if forma != nil {
+			inventory = forma.Resources
+		}
+
+		if mode == pkgmodel.FormaApplyModeReconcile {
+			lastViolations = CheckReconcileProperties(inventory, labels, desiredProps)
+		} else {
+			lastViolations = CheckPatchProperties(inventory, labels, desiredProps)
+		}
+
+		if len(lastViolations) == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	for _, v := range lastViolations {
+		t.Errorf("post-apply property violation: %s", v.Message)
+	}
+}
+
+// hasAnyPendingCommands returns true if any stack has pending fire-and-forget commands.
+func (h *TestHarness) hasAnyPendingCommands(model *StateModel) bool {
+	for stackIdx := range model.Stacks {
+		if len(model.PendingCommandsForStack(stackIdx)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// DrainPendingCommands polls all pending commands across all stacks until they
+// complete, updating the state model accordingly. Used before final invariant
+// checks when fire-and-forget commands may still be in flight.
+func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, timeout time.Duration) {
+	t.Helper()
+
+	for stackIdx := range model.Stacks {
+		pending := model.PendingCommandsForStack(stackIdx)
+		for cmdID, cmd := range pending {
+			result, ok := h.TryWaitForCommandDone(cmdID, timeout)
+			if !ok {
+				// Timed out — mark all resources uncertain
+				for _, id := range cmd.ResourceIDs {
+					model.MarkUncertain(stackIdx, id)
+				}
+				t.Logf("DrainPendingCommands: command %s timed out (resources marked uncertain)", cmdID)
+				model.RemovePendingCommand(stackIdx, cmdID)
+				continue
+			}
+
+			if result.State == "Success" {
+				switch cmd.Kind {
+				case CommandKindApply:
+					props := resourceProperties(cmd.StackLabel, cmd.ResourceIDs, cmd.Properties)
+					model.ApplyCreated(stackIdx, cmd.ResourceIDs, props)
+				case CommandKindDestroy:
+					model.ApplyDestroyed(stackIdx, cmd.ResourceIDs)
+				}
+			} else {
+				for _, id := range cmd.ResourceIDs {
+					model.MarkUncertain(stackIdx, id)
+				}
+			}
+			t.Logf("DrainPendingCommands: command %s completed: %s", cmdID, result.State)
+			model.RemovePendingCommand(stackIdx, cmdID)
+		}
+	}
+}
+
+// --- Stack setup and policy helpers ---
+
+// SetupStacks creates initial resources on each stack and attaches policies
+// as configured. This ensures stacks exist in the agent before chaos begins.
+func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config PropertyTestConfig) {
+	t.Helper()
+
+	// Create a single resource on each stack to ensure the stack exists.
+	for stackIdx := range model.Stacks {
+		stackLabel := model.Stack(stackIdx).Label
+		ids := []int{0} // just the first resource
+
+		var policies []json.RawMessage
+		if config.EnableAutoReconcile && stackIdx == 0 {
+			// Attach auto-reconcile to the first stack
+			policies = append(policies, json.RawMessage(`{"Type":"auto-reconcile","IntervalSeconds":3600}`))
+			model.Stacks[stackIdx].AutoReconcile = true
+		}
+		if config.EnableTTL && stackIdx == config.StackCount-1 {
+			// Attach TTL to the last stack (very long TTL so it doesn't expire mid-test)
+			policies = append(policies, json.RawMessage(`{"Type":"ttl","TTLSeconds":86400,"OnDependents":"cascade"}`))
+			model.Stacks[stackIdx].TTL = true
+		}
+
+		forma := FormaFromStackResourcesWithPolicies(stackLabel, ids, policies)
+		resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
+		if err != nil {
+			t.Logf("SetupStacks: stack %s apply rejected: %v", stackLabel, err)
+			continue
+		}
+		if !resp.Simulation.ChangesRequired {
+			t.Logf("SetupStacks: stack %s no changes required", stackLabel)
+			continue
+		}
+		cmd := h.WaitForCommandDone(resp.CommandID, defaultCommandTimeout)
+		if cmd.State == "Success" {
+			props := resourceProperties(stackLabel, ids)
+			model.ApplyCreated(stackIdx, ids, props)
+			t.Logf("SetupStacks: stack %s created with %d resources", stackLabel, len(ids))
+		} else {
+			t.Logf("SetupStacks: stack %s command failed: %s", stackLabel, cmd.State)
+		}
+	}
+}
+
+// ForceReconcileAndWait triggers a force-reconcile on the given stack and waits
+// for the resulting command to complete. Reconcile reverts out-of-band changes.
+func (h *TestHarness) ForceReconcileAndWait(t *testing.T, stackLabel string, model *StateModel, stackIdx int) {
+	t.Helper()
+
+	resp, err := h.client.ForceReconcile(stackLabel)
+	if err != nil {
+		// Conflict (active commands) or other error — not a test failure
+		t.Logf("ForceReconcileAndWait: stack %s rejected: %v", stackLabel, err)
+		return
+	}
+
+	if resp.CommandID == "" {
+		t.Logf("ForceReconcileAndWait: stack %s no drift detected", stackLabel)
+		return
+	}
+
+	cmd, ok := h.TryWaitForCommandDone(resp.CommandID, defaultCommandTimeout)
+	if !ok {
+		t.Logf("ForceReconcileAndWait: stack %s command %s timed out", stackLabel, resp.CommandID)
+		// Mark all resources uncertain since reconcile outcome is unknown
+		for idx := range model.Stack(stackIdx).Resources {
+			model.MarkUncertain(stackIdx, idx)
+		}
+		return
+	}
+
+	t.Logf("ForceReconcileAndWait: stack %s command %s completed: %s", stackLabel, resp.CommandID, cmd.State)
+	if cmd.State == "Success" {
+		// After successful reconcile, all managed resources match their declared state.
+		// Mark all resources uncertain since we don't know what reconcile changed.
+		for idx := range model.Stack(stackIdx).Resources {
+			model.MarkUncertain(stackIdx, idx)
+		}
+	}
+}
+
+// CleanupOutOfBandCloudResources removes all cloud state entries that were
+// created directly via OpCloudCreate (native IDs starting with "cloud-").
+// This must be called before AssertAllInvariants when EnableCloudChanges is
+// active, since out-of-band entries are not tracked in inventory.
+func (h *TestHarness) CleanupOutOfBandCloudResources(t *testing.T) {
+	t.Helper()
+
+	snapshot := h.GetCloudStateSnapshot(t)
+	removed := 0
+	for nativeID := range snapshot {
+		if len(nativeID) >= 6 && nativeID[:6] == "cloud-" {
+			h.DeleteCloudState(t, nativeID)
+			removed++
+		}
+	}
+	t.Logf("CleanupOutOfBandCloudResources: removed %d out-of-band entries", removed)
+}
+
+// ForceCheckTTLAndWait triggers a TTL check. If stacks have expired, the agent
+// destroys them. We mark affected stacks' resources as uncertain.
+func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
+	t.Helper()
+
+	resp, err := h.client.ForceCheckTTL()
+	if err != nil {
+		t.Logf("ForceCheckTTLAndWait: error: %v", err)
+		return
+	}
+
+	if len(resp.ExpiredStacks) == 0 {
+		t.Logf("ForceCheckTTLAndWait: no expired stacks")
+		return
+	}
+
+	t.Logf("ForceCheckTTLAndWait: expired stacks: %v", resp.ExpiredStacks)
+	// Mark all resources on expired stacks as uncertain
+	for _, expiredLabel := range resp.ExpiredStacks {
+		for stackIdx, stack := range model.Stacks {
+			if stack.Label == expiredLabel {
+				for idx := range stack.Resources {
+					model.MarkUncertain(stackIdx, idx)
+				}
+			}
+		}
+	}
+}
+
+// dumpRawResourceRows queries the raw SQLite database to show all rows for
+// duplicate resources. This reveals whether duplicates have different KSUIDs
+// (pointing to a TOCTOU race in conflict detection) or different versions
+// (pointing to a version deduplication issue).
+func (h *TestHarness) dumpRawResourceRows(t *testing.T, resources []pkgmodel.Resource, seen map[string]int) {
+	t.Helper()
+
+	dbPath := h.cfg.Agent.Datastore.Sqlite.FilePath
+	if dbPath == "" || dbPath == ":memory:" {
+		t.Logf("dumpRawResourceRows: cannot query in-memory DB directly")
+		return
+	}
+
+	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	if err != nil {
+		t.Logf("dumpRawResourceRows: failed to open DB: %v", err)
+		return
+	}
+	defer db.Close()
+
+	// Collect the duplicate keys
+	for key, count := range seen {
+		if count <= 1 {
+			continue
+		}
+		parts := strings.SplitN(key, "/", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		stack, resType, label := parts[0], parts[1], parts[2]
+
+		rows, err := db.Query(`
+			SELECT uri, ksuid, version, native_id, operation, command_id, managed
+			FROM resources
+			WHERE stack = ? AND type = ? AND label = ?
+			ORDER BY version DESC`,
+			stack, resType, label)
+		if err != nil {
+			t.Logf("dumpRawResourceRows: query failed for %s: %v", key, err)
+			continue
+		}
+
+		t.Logf("--- RAW DB ROWS for %s (ExtractResources returned %d) ---", key, count)
+		rowCount := 0
+		for rows.Next() {
+			var uri, ksuid, version, nativeID, operation, commandID string
+			var managed int
+			if err := rows.Scan(&uri, &ksuid, &version, &nativeID, &operation, &commandID, &managed); err != nil {
+				t.Logf("  scan error: %v", err)
+				continue
+			}
+			t.Logf("  row: uri=%s ksuid=%s version=%s native_id=%s op=%s cmd=%s managed=%d",
+				uri, ksuid, version, nativeID, operation, commandID, managed)
+			rowCount++
+		}
+		rows.Close()
+		t.Logf("--- END (%d rows) ---", rowCount)
+	}
+}
+
 // --- Forma builders ---
 
 // FormaFromResourceIDs builds a forma containing the resources at the given
-// pool indices. Resources use the same naming convention as SimpleForma.
+// pool indices on the default stack. Used by smoke tests and ResetAgentState.
 func FormaFromResourceIDs(ids []int) *pkgmodel.Forma {
+	return FormaFromStackResources("default", ids)
+}
+
+// FormaFromStackResourcesWithPolicies builds a forma with resources and optional
+// stack policies (auto-reconcile, TTL, etc.).
+func FormaFromStackResourcesWithPolicies(stackLabel string, ids []int, policies []json.RawMessage, propsTemplate ...string) *pkgmodel.Forma {
+	forma := FormaFromStackResources(stackLabel, ids, propsTemplate...)
+	if len(policies) > 0 {
+		forma.Stacks[0].Policies = policies
+	}
+	return forma
+}
+
+// FormaFromStackResources builds a forma containing the resources at the given
+// pool indices on the specified stack, using the given properties template.
+// The "NAME" placeholder in propsTemplate is replaced with each resource's label.
+func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...string) *pkgmodel.Forma {
+	template := `{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`
+	if len(propsTemplate) > 0 && propsTemplate[0] != "" {
+		template = propsTemplate[0]
+	}
+
 	resources := make([]pkgmodel.Resource, len(ids))
 	for i, id := range ids {
-		name := resourceLabel(id)
+		name := resourceLabelForStack(stackLabel, id)
+		props := strings.Replace(template, `"NAME"`, `"`+name+`"`, 1)
 		resources[i] = pkgmodel.Resource{
 			Label:      name,
 			Type:       "Test::Generic::Resource",
-			Stack:      "default",
+			Stack:      stackLabel,
 			Target:     "test-target",
-			Properties: json.RawMessage(`{"Name":"` + name + `","Value":"v1"}`),
+			Properties: json.RawMessage(props),
+			Schema:     testResourceSchema,
 			Managed:    true,
 		}
 	}
 
 	return &pkgmodel.Forma{
 		Stacks: []pkgmodel.Stack{
-			{Label: "default"},
+			{Label: stackLabel},
 		},
 		Resources: resources,
 		Targets: []pkgmodel.Target{
@@ -333,19 +861,23 @@ func FormaFromResourceIDs(ids []int) *pkgmodel.Forma {
 	}
 }
 
-// resourceLabel returns the label for a resource at the given pool index.
-func resourceLabel(idx int) string {
-	return "res-" + string(rune('a'+idx))
+// resourceLabelForStack returns the label for a resource on a specific stack.
+func resourceLabelForStack(stackLabel string, idx int) string {
+	return fmt.Sprintf("res-%s-%s", stackLabel, string(rune('a'+idx)))
 }
 
-// resourceProperties returns the default properties JSON for the given resource IDs.
-func resourceProperties(ids []int) string {
+// resourceProperties returns the properties JSON for the given resource IDs on a stack,
+// based on a properties template. If no template is provided, uses a default.
+func resourceProperties(stackLabel string, ids []int, propsTemplate ...string) string {
 	if len(ids) == 0 {
 		return ""
 	}
-	// All resources in a single apply get the same properties format
-	name := resourceLabel(ids[0])
-	return fmt.Sprintf(`{"Name":"%s","Value":"v1"}`, name)
+	template := `{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`
+	if len(propsTemplate) > 0 && propsTemplate[0] != "" {
+		template = propsTemplate[0]
+	}
+	name := resourceLabelForStack(stackLabel, ids[0])
+	return strings.Replace(template, `"NAME"`, `"`+name+`"`, 1)
 }
 
 func containsInt(slice []int, val int) bool {

@@ -2,14 +2,16 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build integration
+//go:build integration || property
 
 package blackbox
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 )
 
@@ -145,6 +147,45 @@ func TestGenerator_WithCloudChangesEnabled(t *testing.T) {
 	})
 }
 
+func TestGenerator_StackIndexWithinBounds(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		config := PropertyTestConfig{
+			ResourceCount:  3,
+			StackCount:     3,
+			OperationCount: Range{Min: 20, Max: 50},
+		}
+		ops := OperationSequenceGen(config).Draw(rt, "ops")
+
+		for _, op := range ops {
+			if op.Kind == OpApply || op.Kind == OpDestroy {
+				assert.GreaterOrEqual(t, op.StackIndex, 0, "StackIndex should be >= 0")
+				assert.Less(t, op.StackIndex, config.StackCount, "StackIndex should be < StackCount")
+			}
+		}
+	})
+}
+
+func TestGenerator_ConcurrencyProducesNonBlocking(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		config := PropertyTestConfig{
+			ResourceCount:     3,
+			StackCount:        2,
+			OperationCount:    Range{Min: 50, Max: 100},
+			EnableConcurrency: true,
+		}
+		ops := OperationSequenceGen(config).Draw(rt, "ops")
+
+		hasNonBlocking := false
+		for _, op := range ops {
+			if (op.Kind == OpApply || op.Kind == OpDestroy) && !op.Blocking {
+				hasNonBlocking = true
+				break
+			}
+		}
+		assert.True(t, hasNonBlocking, "with EnableConcurrency, should produce at least one non-blocking operation in 50+ ops")
+	})
+}
+
 func TestGenerator_ApplyModeIsValid(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		config := PropertyTestConfig{
@@ -159,6 +200,71 @@ func TestGenerator_ApplyModeIsValid(t *testing.T) {
 					"ApplyMode should be 'patch' or 'reconcile'")
 				assert.NotEmpty(t, op.ResourceIDs, "OpApply should have at least one resource")
 			}
+		}
+	})
+}
+
+func TestGenerator_PropertiesAreValidJSON(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		props := resourcePropsGen(rt)
+
+		// Must be valid JSON
+		var parsed map[string]any
+		err := json.Unmarshal([]byte(props), &parsed)
+		require.NoError(t, err, "properties must be valid JSON: %s", props)
+
+		// Must have all required fields
+		assert.Contains(t, parsed, "Name", "must have Name field")
+		assert.Contains(t, parsed, "Value", "must have Value field")
+		assert.Contains(t, parsed, "SetTags", "must have SetTags field")
+		assert.Contains(t, parsed, "EntityTags", "must have EntityTags field")
+		assert.Contains(t, parsed, "OrderedItems", "must have OrderedItems field")
+
+		// SetTags must be a string array
+		setTags, ok := parsed["SetTags"].([]any)
+		assert.True(t, ok, "SetTags must be an array")
+		for _, tag := range setTags {
+			_, isString := tag.(string)
+			assert.True(t, isString, "SetTags elements must be strings")
+		}
+
+		// EntityTags must be array of objects with Key and Value
+		entityTags, ok := parsed["EntityTags"].([]any)
+		assert.True(t, ok, "EntityTags must be an array")
+		for _, tag := range entityTags {
+			obj, isObj := tag.(map[string]any)
+			assert.True(t, isObj, "EntityTags elements must be objects")
+			if isObj {
+				assert.Contains(t, obj, "Key")
+				assert.Contains(t, obj, "Value")
+			}
+		}
+
+		// OrderedItems must be a string array
+		orderedItems, ok := parsed["OrderedItems"].([]any)
+		assert.True(t, ok, "OrderedItems must be an array")
+		for _, item := range orderedItems {
+			_, isString := item.(string)
+			assert.True(t, isString, "OrderedItems elements must be strings")
+		}
+	})
+}
+
+func TestGenerator_PropertiesEntityTagsHaveUniqueKeys(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		props := resourcePropsGen(rt)
+
+		var parsed map[string]any
+		err := json.Unmarshal([]byte(props), &parsed)
+		require.NoError(t, err)
+
+		entityTags := parsed["EntityTags"].([]any)
+		keys := make(map[string]bool)
+		for _, tag := range entityTags {
+			obj := tag.(map[string]any)
+			key := obj["Key"].(string)
+			assert.False(t, keys[key], "EntityTags keys must be unique, duplicate: %s", key)
+			keys[key] = true
 		}
 	})
 }
