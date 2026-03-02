@@ -9,7 +9,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPlugin_Create_StoresInCloudState(t *testing.T) {
@@ -75,7 +78,7 @@ func TestPlugin_Read_ReturnsFromCloudState(t *testing.T) {
 	}
 }
 
-func TestPlugin_Read_NotFound_ReturnsNil(t *testing.T) {
+func TestPlugin_Read_NotFound_ReturnsNotFoundErrorCode(t *testing.T) {
 	cs := NewCloudState()
 	p := &TestPlugin{cloudState: cs}
 
@@ -86,8 +89,11 @@ func TestPlugin_Read_NotFound_ReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read returned error: %v", err)
 	}
-	if result != nil {
-		t.Errorf("expected nil ReadResult for non-existent resource, got %+v", result)
+	if result == nil {
+		t.Fatal("expected non-nil ReadResult with NotFound error code")
+	}
+	if result.ErrorCode != resource.OperationErrorCodeNotFound {
+		t.Errorf("expected ErrorCode NotFound, got %q", result.ErrorCode)
 	}
 }
 
@@ -256,4 +262,28 @@ func TestPlugin_List_ReturnsNativeIDs(t *testing.T) {
 	if !found["res-1"] || !found["res-2"] {
 		t.Errorf("expected res-1 and res-2 in results, got %v", result.NativeIDs)
 	}
+}
+
+func TestSchemaForResourceType_HasCollectionHints(t *testing.T) {
+	p := &TestPlugin{}
+	schema, err := p.SchemaForResourceType("Test::Generic::Resource")
+	require.NoError(t, err)
+
+	assert.Equal(t, "Name", schema.Identifier)
+	assert.ElementsMatch(t, []string{"Name", "Value", "SetTags", "EntityTags", "OrderedItems"}, schema.Fields)
+
+	// SetTags: no hint (defaults to Set semantics)
+	_, hasSetTags := schema.Hints["SetTags"]
+	assert.False(t, hasSetTags, "SetTags should have no hint (defaults to Set)")
+
+	// EntityTags: EntitySet with Key index
+	entityHint, hasEntityTags := schema.Hints["EntityTags"]
+	assert.True(t, hasEntityTags)
+	assert.Equal(t, model.FieldUpdateMethodEntitySet, entityHint.UpdateMethod)
+	assert.Equal(t, "Key", entityHint.IndexField)
+
+	// OrderedItems: Array
+	arrayHint, hasOrderedItems := schema.Hints["OrderedItems"]
+	assert.True(t, hasOrderedItems)
+	assert.Equal(t, model.FieldUpdateMethodArray, arrayHint.UpdateMethod)
 }

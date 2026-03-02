@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build integration
+//go:build integration || property
 
 package blackbox
 
@@ -56,6 +56,9 @@ type Operation struct {
 	// For OpApply/OpDestroy: whether to wait for command completion.
 	Blocking bool
 
+	// For OpApply/OpDestroy: which stack to target (index into StateModel.Stacks).
+	StackIndex int
+
 	// For OpCancel: the command ID to cancel (set during execution).
 	CommandID string
 
@@ -80,6 +83,23 @@ type Operation struct {
 
 	// Set during execution to track ordering.
 	SequenceNum int
+}
+
+// CommandKind classifies whether a pending command is an apply or destroy.
+type CommandKind int
+
+const (
+	CommandKindApply CommandKind = iota
+	CommandKindDestroy
+)
+
+// PendingCommand tracks a fire-and-forget command that hasn't completed yet.
+type PendingCommand struct {
+	CommandID   string
+	Kind        CommandKind
+	StackLabel  string
+	ResourceIDs []int
+	Properties  string
 }
 
 // Range represents a min/max integer range for generators.
@@ -108,6 +128,12 @@ type PropertyTestConfig struct {
 	// EnableCancel allows cancel operations.
 	EnableCancel bool
 
-	// OnlyReconcile forces all apply operations to use reconcile mode.
-	OnlyReconcile bool
+	// EnableAutoReconcile enables auto-reconcile policy on one stack.
+	EnableAutoReconcile bool
+
+	// EnableTTL enables TTL policy on one stack.
+	EnableTTL bool
+
+	// StackCount is the number of independent stacks (1 for sequential tests, 2-3 for concurrent).
+	StackCount int
 }
