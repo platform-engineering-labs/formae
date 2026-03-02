@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -657,7 +658,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 		assert.Len(t, updates[0].ReferenceLabels, 1)
 	})
 
-	t.Run("handles unresolvable external references gracefully", func(t *testing.T) {
+	t.Run("rejects resolvable referencing nonexistent resource", func(t *testing.T) {
 		command := pkgmodel.CommandApply
 		mode := pkgmodel.FormaApplyModeReconcile
 		forma := &pkgmodel.Forma{
@@ -685,19 +686,91 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
-		require.NoError(t, err)
-		require.Len(t, updates, 1)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+		require.Error(t, err)
 
-		assert.NotNil(t, updates[0].ReferenceLabels)
-		assert.Equal(t, "subnet-with-bad-ref", updates[0].ReferenceLabels[updates[0].DesiredState.Ksuid])
+		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
+		require.ErrorAs(t, err, &notFoundErr)
+		require.Len(t, notFoundErr.MissingResources, 1)
+		assert.Equal(t, "nonexistent-vpc", notFoundErr.MissingResources[0].Label)
+		assert.Equal(t, "AWS::EC2::VPC", notFoundErr.MissingResources[0].Type)
+		assert.Equal(t, "nonexistent-stack", notFoundErr.MissingResources[0].Stack)
+	})
 
-		var subnetProps map[string]any
-		err = json.Unmarshal(updates[0].DesiredState.Properties, &subnetProps)
-		require.NoError(t, err)
-		vpcId := subnetProps["VpcId"].(map[string]any)
-		assert.Equal(t, true, vpcId["$res"])
-		assert.Equal(t, "nonexistent-vpc", vpcId["$label"])
+	t.Run("rejects resolvable with missing required fields", func(t *testing.T) {
+		command := pkgmodel.CommandApply
+		mode := pkgmodel.FormaApplyModeReconcile
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Targets: []pkgmodel.Target{
+				{Label: "aws-target", Config: json.RawMessage(`{}`), Namespace: "aws"},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:  "subnet-with-incomplete-ref",
+					Type:   "AWS::EC2::Subnet",
+					Stack:  "test-stack",
+					Target: "aws-target",
+					Properties: json.RawMessage(`{
+						"VpcId": {
+							"$res": true,
+							"$label": "some-vpc",
+							"$property": "VpcId"
+						},
+						"CidrBlock": "10.0.1.0/24"
+					}`),
+				},
+			},
+		}
+
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+		require.Error(t, err)
+
+		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
+		require.ErrorAs(t, err, &notFoundErr)
+		require.Len(t, notFoundErr.MissingResources, 1)
+	})
+
+	t.Run("collects multiple missing resolvable references", func(t *testing.T) {
+		command := pkgmodel.CommandApply
+		mode := pkgmodel.FormaApplyModeReconcile
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Targets: []pkgmodel.Target{
+				{Label: "aws-target", Config: json.RawMessage(`{}`), Namespace: "aws"},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:  "instance-with-bad-refs",
+					Type:   "AWS::EC2::Instance",
+					Stack:  "test-stack",
+					Target: "aws-target",
+					Properties: json.RawMessage(`{
+						"SubnetId": {
+							"$res": true,
+							"$label": "missing-subnet",
+							"$type": "AWS::EC2::Subnet",
+							"$stack": "missing-stack",
+							"$property": "SubnetId"
+						},
+						"SecurityGroupId": {
+							"$res": true,
+							"$label": "missing-sg",
+							"$type": "AWS::EC2::SecurityGroup",
+							"$stack": "missing-stack",
+							"$property": "GroupId"
+						}
+					}`),
+				},
+			},
+		}
+
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+		require.Error(t, err)
+
+		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
+		require.ErrorAs(t, err, &notFoundErr)
+		assert.Len(t, notFoundErr.MissingResources, 2)
 	})
 }
 
