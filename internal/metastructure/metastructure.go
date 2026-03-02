@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"ergo.services/application/observer"
@@ -72,6 +73,11 @@ type Metastructure struct {
 	// TestResourcePlugin is a test-only field for injecting a resource plugin (e.g. FakeAWS)
 	// directly into the actor system, bypassing PluginManager. Must be nil in production.
 	TestResourcePlugin plugin.FullResourcePlugin
+
+	// commandMu serializes Apply/Destroy/ForceAutoReconcile to prevent TOCTOU
+	// races between the conflict check and command storage. This will be
+	// removed once the Metastructure itself becomes an actor.
+	commandMu sync.Mutex
 }
 
 func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *plugin.Manager, agentID string) (*Metastructure, error) {
@@ -245,6 +251,21 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 }
 
 func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
+	// Check for conflicting commands BEFORE generating resource updates. This ordering is
+	// critical: the resource queries in FormaCommandFromForma must run after any concurrent
+	// commands have finished, otherwise we may see stale resource state (e.g. an empty stack)
+	// while the conflict check passes (the command already completed). By checking conflicts
+	// first, we guarantee that if no incomplete commands exist, all their resources are already
+	// persisted and visible to subsequent queries.
+	if !config.Simulate {
+		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
+			return nil, err
+		}
+	}
+
 	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
@@ -303,13 +324,6 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 		if len(modifiedStacks) > 0 {
 			return nil, apimodel.FormaReconcileRejectedError{ModifiedStacks: modifiedStacks}
-		}
-	}
-
-	if !config.Simulate {
-		err = m.checkForConflictingCommands(fa)
-		if err != nil {
-			return nil, err
 		}
 	}
 
@@ -601,6 +615,16 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 }
 
 func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
+	// Check for conflicting commands before generating resource updates (same reasoning as ApplyForma).
+	if !config.Simulate {
+		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
+			return nil, err
+		}
+	}
+
 	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
 	if err != nil {
 		slog.Error("Failed to create destroy from forma", "error", err)
@@ -628,13 +652,6 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 				Command:         translateToAPICommand(fa),
 			},
 		}, nil
-	}
-
-	if !config.Simulate {
-		err = m.checkForConflictingCommands(fa)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	m.Node.Log().Debug("Storing forma command", "commandID", fa.ID)
@@ -1241,7 +1258,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 	return nil
 }
 
-func (m *Metastructure) checkForConflictingCommands(command *forma_command.FormaCommand) error {
+func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string) error {
 	incompleteFormaCommands, err := m.Datastore.LoadIncompleteFormaCommands()
 	if err != nil {
 		slog.Error("Failed to load incomplete forma commands", "error", err)
@@ -1250,7 +1267,6 @@ func (m *Metastructure) checkForConflictingCommands(command *forma_command.Forma
 
 	// Group incomplete resource commands by forma command ID
 	incompleteResourceUpdates := make(map[string][]resource_update.ResourceUpdate)
-	commandStackLabels := command.GetStackLabels()
 	for _, incompleteFormaCommand := range incompleteFormaCommands {
 		if formaTouchesStacks(incompleteFormaCommand, commandStackLabels) {
 			for _, incompleteResourceUpdate := range incompleteFormaCommand.ResourceUpdates {
@@ -1276,6 +1292,19 @@ func (m *Metastructure) checkForConflictingCommands(command *forma_command.Forma
 	}
 
 	return nil
+}
+
+// stackLabelsFromForma extracts unique stack labels from a forma's resources.
+func stackLabelsFromForma(forma *pkgmodel.Forma) []string {
+	seen := make(map[string]bool)
+	var labels []string
+	for _, r := range forma.Resources {
+		if !seen[r.Stack] {
+			seen[r.Stack] = true
+			labels = append(labels, r.Stack)
+		}
+	}
+	return labels
 }
 
 // filterUnabsorbedModifications returns only those modifications that have NOT been

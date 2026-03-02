@@ -591,12 +591,13 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 		description_text, description_confirm, config_mode, config_force, config_simulate,
 		target_updates, stack_updates, policy_updates, modified_ts
 	FROM forma_commands
-	WHERE command != :sync_command AND state = :state
+	WHERE command != :sync_command AND state IN (:state_not_started, :state_in_progress)
 	ORDER BY timestamp DESC
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("sync_command"), Value: &types.FieldMemberStringValue{Value: string(pkgmodel.CommandSync)}},
-		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(forma_command.CommandStateInProgress)}},
+		{Name: aws.String("state_not_started"), Value: &types.FieldMemberStringValue{Value: string(forma_command.CommandStateNotStarted)}},
+		{Name: aws.String("state_in_progress"), Value: &types.FieldMemberStringValue{Value: string(forma_command.CommandStateInProgress)}},
 	}
 
 	output, err := d.executeStatement(ctx, query, params)
