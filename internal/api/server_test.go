@@ -53,14 +53,26 @@ type WrappedDriftResponse struct {
 	Error error
 }
 
+type WrappedReconcileResponse struct {
+	Response *apimodel.ForceReconcileResponse
+	Error    error
+}
+
+type WrappedCheckTTLResponse struct {
+	Response *apimodel.ForceCheckTTLResponse
+	Error    error
+}
+
 type FakeMetastructure struct {
-	applyResponses   []WrappedCommandResponse
-	destroyResponses []WrappedCommandResponse
-	extractResponses []WrappedExtractResponse
-	targetResponses  []WrappedTargetResponse
-	listResponses    []WrappedListResponse
-	cancelResponses  []WrappedCancelResponse
-	driftResponses   []WrappedDriftResponse
+	applyResponses      []WrappedCommandResponse
+	destroyResponses    []WrappedCommandResponse
+	extractResponses    []WrappedExtractResponse
+	targetResponses     []WrappedTargetResponse
+	listResponses       []WrappedListResponse
+	cancelResponses     []WrappedCancelResponse
+	driftResponses      []WrappedDriftResponse
+	reconcileResponses  []WrappedReconcileResponse
+	checkTTLResponses   []WrappedCheckTTLResponse
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
@@ -132,6 +144,20 @@ func (m *FakeMetastructure) ForceSync() error {
 
 func (m *FakeMetastructure) ForceDiscovery() error {
 	return nil
+}
+
+func (m *FakeMetastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+	nextResponse := m.reconcileResponses[0]
+	m.reconcileResponses = m.reconcileResponses[1:]
+
+	return nextResponse.Response, nextResponse.Error
+}
+
+func (m *FakeMetastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	nextResponse := m.checkTTLResponses[0]
+	m.checkTTLResponses = m.checkTTLResponses[1:]
+
+	return nextResponse.Response, nextResponse.Error
 }
 
 func (m *FakeMetastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
@@ -1100,5 +1126,173 @@ func TestServer_ListDrift_NoDrift(t *testing.T) {
 		err := json.Unmarshal(rec.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Empty(t, response.ModifiedResources)
+	}
+}
+
+func TestServer_ForceReconcile_Started(t *testing.T) {
+	meta := &FakeMetastructure{
+		reconcileResponses: []WrappedReconcileResponse{
+			{
+				Response: &apimodel.ForceReconcileResponse{
+					CommandID: "cmd-abc123",
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/production/reconcile", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("stack")
+	c.SetParamValues("production")
+
+	if assert.NoError(t, server.ForceReconcile(c)) {
+		assert.Equal(t, http.StatusAccepted, rec.Code)
+
+		var response apimodel.ForceReconcileResponse
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "cmd-abc123", response.CommandID)
+	}
+}
+
+func TestServer_ForceReconcile_NoDrift(t *testing.T) {
+	meta := &FakeMetastructure{
+		reconcileResponses: []WrappedReconcileResponse{
+			{
+				Response: &apimodel.ForceReconcileResponse{
+					Message: "no drift detected",
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/production/reconcile", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("stack")
+	c.SetParamValues("production")
+
+	if assert.NoError(t, server.ForceReconcile(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response apimodel.ForceReconcileResponse
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "no drift detected", response.Message)
+		assert.Empty(t, response.CommandID)
+	}
+}
+
+func TestServer_ForceReconcile_Conflict(t *testing.T) {
+	conflict := apimodel.FormaConflictingCommandsError{
+		ConflictingCommands: []apimodel.Command{
+			{
+				CommandID: "forma_cmd1",
+				Command:   "apply",
+				State:     "InProgress",
+				ResourceUpdates: []apimodel.ResourceUpdate{
+					{
+						ResourceLabel: "bucket-1",
+						ResourceType:  "AWS::S3::Bucket",
+						StackName:     "production",
+					},
+				},
+			},
+		},
+	}
+
+	meta := &FakeMetastructure{
+		reconcileResponses: []WrappedReconcileResponse{
+			{
+				Response: nil,
+				Error:    conflict,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/production/reconcile", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("stack")
+	c.SetParamValues("production")
+
+	if assert.NoError(t, server.ForceReconcile(c)) {
+		assert.Equal(t, http.StatusConflict, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.FormaConflictingCommandsError]
+		err := json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.ConflictingCommands, errorResponse.ErrorType)
+		assert.Equal(t, 1, len(errorResponse.Data.ConflictingCommands))
+	}
+}
+
+func TestServer_ForceCheckTTL_StacksExpired(t *testing.T) {
+	meta := &FakeMetastructure{
+		checkTTLResponses: []WrappedCheckTTLResponse{
+			{
+				Response: &apimodel.ForceCheckTTLResponse{
+					ExpiredStacks: []string{"stack-a", "stack-b"},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/check-ttl", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ForceCheckTTL(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response apimodel.ForceCheckTTLResponse
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"stack-a", "stack-b"}, response.ExpiredStacks)
+	}
+}
+
+func TestServer_ForceCheckTTL_NothingExpired(t *testing.T) {
+	meta := &FakeMetastructure{
+		checkTTLResponses: []WrappedCheckTTLResponse{
+			{
+				Response: &apimodel.ForceCheckTTLResponse{
+					ExpiredStacks: []string{},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/check-ttl", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ForceCheckTTL(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response apimodel.ForceCheckTTLResponse
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Empty(t, response.ExpiredStacks)
 	}
 }
