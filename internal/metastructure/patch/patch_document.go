@@ -266,10 +266,11 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 				property := uri.PropertyPath()
 
 				val, found := resolvableProperties.Get(ksuid, property)
-				if !found {
-					return fmt.Errorf("failed to resolve reference '%s': resource with KSUID '%s' and property '%s' not found", ref, ksuid, property)
+				if found {
+					modVal["$value"] = val
 				}
-				modVal["$value"] = val
+				// If not found, keep the $ref as-is for late-binding resolution
+				// at execution time (forward references to new resources).
 			}
 			var currNested map[string]any
 			if c, ok := current[k].(map[string]any); ok {
