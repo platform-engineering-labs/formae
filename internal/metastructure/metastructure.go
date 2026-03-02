@@ -57,6 +57,8 @@ type MetastructureAPI interface {
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
+	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
+	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
 }
@@ -1167,6 +1169,129 @@ func (m *Metastructure) ForceDiscovery() error {
 	}
 
 	return nil
+}
+
+func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
+	// Check if stack has active commands
+	hasActive, err := m.Datastore.StackHasActiveCommands(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check active commands: %w", err)
+	}
+	if hasActive {
+		// Build a conflicting commands error so mapError maps it to 409
+		incompleteCommands, listErr := m.Datastore.LoadIncompleteFormaCommands()
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to load incomplete commands: %w", listErr)
+		}
+		conflicting := make([]apimodel.Command, 0)
+		targetStacks := []string{stackLabel}
+		for _, cmd := range incompleteCommands {
+			if formaTouchesStacks(cmd, targetStacks) {
+				conflicting = append(conflicting, translateToAPICommand(cmd))
+			}
+		}
+		return nil, apimodel.FormaConflictingCommandsError{
+			ConflictingCommands: conflicting,
+		}
+	}
+
+	// Prepare the reconcile command and changeset
+	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile")
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return &apimodel.ForceReconcileResponse{Message: "no drift detected"}, nil
+	}
+
+	// Store the forma command via the FormaCommandPersister actor
+	_, err = m.callActor(
+		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+		forma_persister.StoreNewFormaCommand{Command: *result.command},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store reconcile command: %w", err)
+	}
+
+	// Ensure ChangesetExecutor exists
+	_, err = m.callActor(
+		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
+		changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure changeset executor: %w", err)
+	}
+
+	// Start the changeset execution (no notification needed for force reconcile)
+	err = m.Node.Send(
+		gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: m.Node.Name()},
+		changeset.Start{Changeset: result.changeset},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start changeset executor: %w", err)
+	}
+
+	return &apimodel.ForceReconcileResponse{CommandID: result.command.ID}, nil
+}
+
+func (m *Metastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	expiredStacks, err := m.Datastore.GetExpiredStacks()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query expired stacks: %w", err)
+	}
+
+	expiredLabels := make([]string, 0)
+
+	for _, stackInfo := range expiredStacks {
+		slog.Info("Force TTL check: expiring stack", "stack", stackInfo.StackLabel, "onDependents", stackInfo.OnDependents)
+
+		result, err := prepareDestroyExpiredStack(m.Datastore, stackInfo, "force-check-ttl", "force-check-ttl-cleanup")
+		if err != nil {
+			slog.Error("Force TTL check: failed to prepare destroy for expired stack", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+		if result == nil {
+			// Stack was empty (and cleaned up), aborted due to dependents, or no updates needed
+			continue
+		}
+
+		// Store the forma command via the FormaCommandPersister actor
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			forma_persister.StoreNewFormaCommand{Command: *result.command},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to store destroy command", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		// Ensure ChangesetExecutor exists
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
+			changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to ensure changeset executor", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		// Start the changeset execution
+		err = m.Node.Send(
+			gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: m.Node.Name()},
+			changeset.Start{Changeset: result.changeset},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to start changeset executor", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		expiredLabels = append(expiredLabels, stackInfo.StackLabel)
+	}
+
+	return &apimodel.ForceCheckTTLResponse{ExpiredStacks: expiredLabels}, nil
 }
 
 func (m *Metastructure) ReRunIncompleteCommands() error {

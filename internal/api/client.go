@@ -534,3 +534,47 @@ func (c *Client) ForceDiscover() error {
 	}
 	return nil
 }
+
+func (c *Client) ForceReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+	resp, err := c.resty.R().
+		Post(c.endpoint + "/api/v1/stacks/" + stackLabel + "/reconcile")
+	if err != nil {
+		return nil, fmt.Errorf("failed to force reconcile: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	switch resp.StatusCode() {
+	case http.StatusOK, http.StatusAccepted:
+		var result apimodel.ForceReconcileResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &result, nil
+	case http.StatusConflict:
+		return nil, fmt.Errorf("stack has active commands, reconcile skipped")
+	default:
+		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
+func (c *Client) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	resp, err := c.resty.R().
+		Post(c.endpoint + "/api/v1/admin/check-ttl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to force TTL check: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var result apimodel.ForceCheckTTLResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &result, nil
+	default:
+		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}

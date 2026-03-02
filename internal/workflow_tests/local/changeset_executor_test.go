@@ -458,6 +458,138 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 	})
 }
 
+// TestChangesetExecutor_StuckOnReadFailureDuringUpdate proves that the changeset
+// executor gets permanently stuck in 'processing' when a Read operation fails
+// during the synchronize phase of an Update workflow.
+//
+// Root cause: handleProgressUpdate() returns StateFinishedWithError without
+// calling MarkAsFailed() when message.Failed() is true. This leaves
+// ResourceUpdate.State as InProgress (set by UpdateState() which short-circuits
+// when fewer progress results than required operations exist). The changeset's
+// UpdatePipeline treats InProgress as a no-op, stranding the update.
+func TestChangesetExecutor_StuckOnReadFailureDuringUpdate(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		readCallCount := 0
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				readCallCount++
+				// Fail the Read for one specific resource, succeed for the other
+				if request.NativeID == "native-will-fail" {
+					return nil, fmt.Errorf("simulated read failure")
+				}
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"name":"existing"}`,
+				}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationUpdate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           request.NativeID,
+						ResourceProperties: json.RawMessage(`{"name":"updated"}`),
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		assert.NoError(t, err)
+
+		messages := make(chan any, 10)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		commandID := "test-stuck-changeset"
+
+		// Create two Update resource updates:
+		// - res-ok: Read will succeed, Update will succeed
+		// - res-fail: Read will fail (triggering the bug)
+		resOK := newTestUpdateResourceUpdate("res-ok", "native-ok", "FakeAWS::EC2::VPC")
+		resFail := newTestUpdateResourceUpdate("res-fail", "native-will-fail", "FakeAWS::EC2::VPC")
+
+		// Store the forma command
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:    commandID,
+				State: forma_command.CommandStateNotStarted,
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					resOK,
+					resFail,
+				},
+			},
+		})
+
+		// Create changeset from the updates
+		cs, err := changeset.NewChangesetFromResourceUpdates(
+			[]resource_update.ResourceUpdate{resOK, resFail}, commandID, pkgmodel.CommandApply)
+		assert.NoError(t, err)
+
+		// Ensure the changeset executor exists
+		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
+			CommandID: commandID,
+		})
+		assert.NoError(t, err)
+
+		// Start the changeset
+		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
+			Changeset:        cs,
+			NotifyOnComplete: true,
+		})
+
+		// The changeset MUST reach a terminal state.
+		// If the bug exists, it gets permanently stuck in 'processing' and
+		// this will time out — proving the bug.
+		testutil.ExpectMessageWithPredicate(t, messages, 15*time.Second, func(msg changeset.ChangesetCompleted) bool {
+			return msg.CommandID == commandID
+		})
+	})
+}
+
+// newTestUpdateResourceUpdate creates a resource update for an Update operation
+// with pre-populated prior state. The nativeID determines the cloud identity
+// for the Read phase of the synchronize step.
+func newTestUpdateResourceUpdate(label, nativeID, resourceType string) resource_update.ResourceUpdate {
+	ksuid := util.NewID()
+	properties := json.RawMessage(fmt.Sprintf(`{"name":"%s"}`, label))
+
+	return resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:      label,
+			Type:       resourceType,
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      ksuid,
+			NativeID:   nativeID,
+			Properties: properties,
+		},
+		PriorState: pkgmodel.Resource{
+			Label:      label,
+			Type:       resourceType,
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      ksuid,
+			NativeID:   nativeID,
+			Properties: properties,
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:        "test-target",
+			Namespace:    "FakeAWS",
+			Config:       json.RawMessage(`{}`),
+			Discoverable: false,
+			Version:      1,
+		},
+		Operation:            resource_update.OperationUpdate,
+		State:                resource_update.ResourceUpdateStateNotStarted,
+		StartTs:              util.TimeNow(),
+		RemainingResolvables: []pkgmodel.FormaeURI{},
+		StackLabel:           "test-stack",
+	}
+}
+
 // Helper function to create a test resource update
 func newTestResourceUpdate(label string, dependencies []pkgmodel.FormaeURI, resourceType string) resource_update.ResourceUpdate {
 	ksuid := util.NewID()
