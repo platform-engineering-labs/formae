@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build integration
+//go:build integration || property
 
 package blackbox
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"pgregory.net/rapid"
@@ -58,15 +60,27 @@ func allowedKinds(config PropertyTestConfig) []OperationKind {
 	return kinds
 }
 
+// stackIndexGen generates a stack index in [0, stackCount).
+// When stackCount <= 1, always returns 0.
+func stackIndexGen(t *rapid.T, config PropertyTestConfig) int {
+	if config.StackCount <= 1 {
+		return 0
+	}
+	return rapid.IntRange(0, config.StackCount-1).Draw(t, "stackIdx")
+}
+
 // fillOperationFields populates the kind-specific fields on the operation.
 func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 	switch op.Kind {
 	case OpApply:
+		op.StackIndex = stackIndexGen(t, config)
 		op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
 		op.ApplyMode = applyModeGen(t, config)
 		op.Blocking = blockingGen(t, config)
+		op.Properties = resourcePropsGen(t)
 
 	case OpDestroy:
+		op.StackIndex = stackIndexGen(t, config)
 		op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
 		op.Blocking = blockingGen(t, config)
 
@@ -120,9 +134,6 @@ func resourceIDsGen(t *rapid.T, poolSize int, minCount int) []int {
 }
 
 func applyModeGen(t *rapid.T, config PropertyTestConfig) string {
-	if config.OnlyReconcile {
-		return "reconcile"
-	}
 	modes := []string{"patch", "reconcile"}
 	return modes[rapid.IntRange(0, len(modes)-1).Draw(t, "mode")]
 }
@@ -156,6 +167,99 @@ func cloudNativeIDGen(t *rapid.T) string {
 
 func cloudPropertiesGen(t *rapid.T) string {
 	name := fmt.Sprintf("cloud-res-%d", rapid.IntRange(1, 100).Draw(t, "propName"))
-	value := fmt.Sprintf("v%d", rapid.IntRange(1, 10).Draw(t, "propValue"))
-	return fmt.Sprintf(`{"Name":"%s","Value":"%s"}`, name, value)
+	return strings.Replace(resourcePropsGen(t), `"NAME"`, `"`+name+`"`, 1)
+}
+
+// --- Property generators ---
+
+// Vocabularies -- small sets for effective rapid shrinking.
+var (
+	scalarValues    = []string{"v1", "v2", "v3", "v4"}
+	setTagValues    = []string{"alpha", "beta", "gamma", "delta", "epsilon"}
+	entityKeyValues = []string{"env", "team", "cost-center", "owner"}
+	entityValValues = []string{"a", "b", "c"}
+	orderedValues   = []string{"first", "second", "third", "fourth"}
+)
+
+// resourcePropsGen generates a JSON properties string with all field types.
+// The Name field is left as a placeholder "NAME" to be replaced by the caller.
+func resourcePropsGen(t *rapid.T) string {
+	value := scalarValues[rapid.IntRange(0, len(scalarValues)-1).Draw(t, "value")]
+	setTags := subsetGen(t, setTagValues, "setTag")
+	entityTags := entityTagsGen(t)
+	orderedItems := subsequenceGen(t, orderedValues, "orderedItem")
+
+	props := map[string]any{
+		"Name":         "NAME",
+		"Value":        value,
+		"SetTags":      setTags,
+		"EntityTags":   entityTags,
+		"OrderedItems": orderedItems,
+	}
+
+	b, _ := json.Marshal(props)
+	return string(b)
+}
+
+// subsetGen draws a random subset (possibly empty) from the given values.
+func subsetGen(t *rapid.T, values []string, label string) []string {
+	count := rapid.IntRange(0, len(values)).Draw(t, label+"Count")
+	if count == 0 {
+		return []string{}
+	}
+	// Shuffle and take first N
+	indices := make([]int, len(values))
+	for i := range indices {
+		indices[i] = i
+	}
+	for i := len(indices) - 1; i > 0; i-- {
+		j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("%sShuffle-%d", label, i))
+		indices[i], indices[j] = indices[j], indices[i]
+	}
+	result := make([]string, count)
+	for i := range count {
+		result[i] = values[indices[i]]
+	}
+	return result
+}
+
+// entityTagsGen generates a slice of {"Key":..., "Value":...} objects
+// with unique keys drawn from the entity key vocabulary.
+func entityTagsGen(t *rapid.T) []map[string]string {
+	count := rapid.IntRange(0, len(entityKeyValues)).Draw(t, "entityTagCount")
+	if count == 0 {
+		return []map[string]string{}
+	}
+	// Shuffle keys and take first N for uniqueness
+	indices := make([]int, len(entityKeyValues))
+	for i := range indices {
+		indices[i] = i
+	}
+	for i := len(indices) - 1; i > 0; i-- {
+		j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("entityKeyShuffle-%d", i))
+		indices[i], indices[j] = indices[j], indices[i]
+	}
+	result := make([]map[string]string, count)
+	for i := range count {
+		key := entityKeyValues[indices[i]]
+		val := entityValValues[rapid.IntRange(0, len(entityValValues)-1).Draw(t, fmt.Sprintf("entityVal-%d", i))]
+		result[i] = map[string]string{"Key": key, "Value": val}
+	}
+	return result
+}
+
+// subsequenceGen draws an ordered subsequence (possibly empty) from the given
+// values, preserving the original order.
+func subsequenceGen(t *rapid.T, values []string, label string) []string {
+	// Each element is independently included or not
+	var result []string
+	for i, v := range values {
+		if rapid.Bool().Draw(t, fmt.Sprintf("%s-%d", label, i)) {
+			result = append(result, v)
+		}
+	}
+	if result == nil {
+		return []string{}
+	}
+	return result
 }

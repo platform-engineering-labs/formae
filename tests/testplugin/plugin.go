@@ -64,7 +64,16 @@ func (p *TestPlugin) RateLimit() plugin.RateLimitConfig {
 func (p *TestPlugin) SchemaForResourceType(resourceType string) (model.Schema, error) {
 	return model.Schema{
 		Identifier: "Name",
-		Fields:     []string{"Name", "Value", "Tags"},
+		Fields:     []string{"Name", "Value", "SetTags", "EntityTags", "OrderedItems"},
+		Hints: map[string]model.FieldHint{
+			"EntityTags": {
+				UpdateMethod: model.FieldUpdateMethodEntitySet,
+				IndexField:   "Key",
+			},
+			"OrderedItems": {
+				UpdateMethod: model.FieldUpdateMethodArray,
+			},
+		},
 	}, nil
 }
 
@@ -107,7 +116,9 @@ func (p *TestPlugin) Read(_ context.Context, request *resource.ReadRequest) (*re
 	entry, ok := p.cloudState.Get(request.NativeID)
 	if !ok {
 		p.recordOp("Read", request.ResourceType, request.NativeID)
-		return nil, nil
+		return &resource.ReadResult{
+			ErrorCode: resource.OperationErrorCodeNotFound,
+		}, nil
 	}
 
 	p.recordOp("Read", entry.ResourceType, request.NativeID)
@@ -131,7 +142,14 @@ func (p *TestPlugin) Update(_ context.Context, request *resource.UpdateRequest) 
 	p.cloudState.Put(request.NativeID, request.ResourceType, string(request.DesiredProperties))
 	p.recordOp("Update", request.ResourceType, request.NativeID)
 
-	return nil, nil
+	return &resource.UpdateResult{
+		ProgressResult: &resource.ProgressResult{
+			Operation:          resource.OperationUpdate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			NativeID:           request.NativeID,
+			ResourceProperties: request.DesiredProperties,
+		},
+	}, nil
 }
 
 func (p *TestPlugin) Delete(_ context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
