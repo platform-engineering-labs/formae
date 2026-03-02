@@ -43,11 +43,13 @@ const (
 	ListPoliciesRoute                   = BasePath + "/policies"
 	StackDriftRoute                     = BasePath + "/stacks/:stack/drift"
 	StackChangesSinceLastReconcileRoute = BasePath + "/stacks/:stack/changes-since-last-reconcile"
+	StackReconcileRoute                 = BasePath + "/stacks/:stack/reconcile"
 	StatsRoute                          = BasePath + "/stats"
 
 	AdminBasePath = BasePath + "/admin"
 	SyncRoute     = AdminBasePath + "/synchronize"
 	DiscoverRoute = AdminBasePath + "/discover"
+	CheckTTLRoute = AdminBasePath + "/check-ttl"
 
 	HealthRoute  = BasePath + "/health"
 	MetricsRoute = "/metrics"
@@ -197,6 +199,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.GET(ListPoliciesRoute, s.ListPolicies)
 	e.GET(StackDriftRoute, s.ListDrift)
 	e.GET(StackChangesSinceLastReconcileRoute, s.ListDrift)
+	e.POST(StackReconcileRoute, s.ForceReconcile)
 
 	// Usage stats endpoint
 	e.GET(StatsRoute, s.Stats)
@@ -207,6 +210,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	// Admin endpoints
 	e.POST(SyncRoute, s.ForceSync)
 	e.POST(DiscoverRoute, s.ForceDiscover)
+	e.POST(CheckTTLRoute, s.ForceCheckTTL)
 
 	// Prometheus metrics endpoint (if enabled)
 	if s.metricsHandler != nil {
@@ -473,6 +477,36 @@ func (s *Server) ListDrift(c echo.Context) error {
 	return c.JSON(http.StatusOK, drift)
 }
 
+// @Summary Force stack reconcile
+// @Description Triggers a one-shot reconcile for a specific stack. This creates and executes a
+// @Description reconcile command that reverts any out-of-band changes to managed resources on the
+// @Description stack back to their last-known desired state. The reconcile is equivalent to
+// @Description re-applying the last reconcile snapshot. The command executes asynchronously —
+// @Description use the returned command_id to poll for completion via GET /commands/:id/status.
+// @Description
+// @Description Side effects: This endpoint creates real infrastructure changes. Any resources that
+// @Description have been modified outside of formae since the last reconcile will be reverted to
+// @Description their managed state. This is a destructive operation for out-of-band changes.
+// @Tags stacks
+// @Produce json
+// @Param stack path string true "The stack label to reconcile."
+// @Success 202 {object} apimodel.ForceReconcileResponse "Accepted: Reconcile command created and executing."
+// @Success 200 {object} apimodel.ForceReconcileResponse "OK: No drift detected, nothing to reconcile."
+// @Failure 409 {object} apimodel.ForceReconcileResponse "Conflict: Stack has active commands, reconcile skipped."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /stacks/{stack}/reconcile [post]
+func (s *Server) ForceReconcile(c echo.Context) error {
+	stackLabel := c.Param("stack")
+	result, err := s.metastructure.ForceAutoReconcile(stackLabel)
+	if err != nil {
+		return mapError(c, err)
+	}
+	if result.CommandID != "" {
+		return c.JSON(http.StatusAccepted, result)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
 // @Summary Get usage statistics
 // @Description Retrieves usage statistics of the Formae agent.
 // @Tags stats
@@ -524,6 +558,25 @@ func (s *Server) ForceDiscover(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError)
 	}
 	return c.JSON(http.StatusOK, "")
+}
+
+// @Summary Force TTL expiry check
+// @Description Triggers a one-shot TTL expiry check. Identifies stacks with expired TTL policies
+// @Description and initiates their destruction. Stacks with active commands are skipped.
+// @Description
+// @Description Side effects: This endpoint destroys infrastructure. Any stack whose TTL has expired
+// @Description will have all its resources destroyed. This is irreversible.
+// @Tags admin
+// @Produce json
+// @Success 200 {object} apimodel.ForceCheckTTLResponse "OK: TTL check complete."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /admin/check-ttl [post]
+func (s *Server) ForceCheckTTL(c echo.Context) error {
+	result, err := s.metastructure.ForceCheckTTL()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, result)
 }
 
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic

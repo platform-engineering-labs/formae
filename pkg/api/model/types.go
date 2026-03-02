@@ -159,3 +159,12 @@ type PluginInfo struct {
 	MaxRequestsPerSecond int    `json:"MaxRequestsPerSecond"`
 	ResourceCount        int    `json:"ResourceCount"`
 }
+
+type ForceReconcileResponse struct {
+	CommandID string `json:"command_id,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+type ForceCheckTTLResponse struct {
+	ExpiredStacks []string `json:"expired_stacks"`
+}
