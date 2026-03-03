@@ -891,7 +891,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		return "", err
 	}
 
-	return fmt.Sprintf("%s_%s", ksuid, newVersion), nil
+	return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
 }
 
 func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
