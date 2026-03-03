@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -2288,4 +2289,83 @@ func TestDatastore_FindResourcesDependingOn_DeletedResourcesExcluded(t *testing.
 	dependents, err := ds.FindResourcesDependingOn(parentKsuid)
 	assert.NoError(t, err)
 	assert.Empty(t, dependents, "Should not find deleted resources as dependents")
+}
+
+// TestDatastore_StoreResource_AfterDeleteWithSameNativeID verifies that when a resource is deleted
+// and then recreated with the same NativeID but a different KSUID (as happens during destroy → re-apply),
+// the new resource is stored under the new KSUID, not the old one.
+//
+// This is a regression test for a bug where storeResource's NativeID lookup did not filter out deleted
+// resources, causing the new resource to inherit the old (deleted) resource's KSUID. The system would
+// then fail with "resource not found" when trying to load by the new KSUID.
+func TestDatastore_StoreResource_AfterDeleteWithSameNativeID(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v\n", err)
+	}
+	defer cleanupDatastore(ds)
+
+	nativeID := "/subscriptions/test-sub/resourceGroups/test-rg"
+	resourceType := "Azure::Resources::ResourceGroup"
+
+	target := &pkgmodel.Target{
+		Label:     "target-1",
+		Namespace: "AZURE",
+		Config:    json.RawMessage(`{}`),
+	}
+	_, err = ds.CreateTarget(target)
+	assert.NoError(t, err)
+
+	// Step 1: Create the resource with KSUID-A
+	ksuidA := util.NewID()
+	resourceA := &pkgmodel.Resource{
+		Ksuid:      ksuidA,
+		NativeID:   nativeID,
+		Stack:      "test-stack",
+		Type:       resourceType,
+		Label:      "rg",
+		Target:     "target-1",
+		Managed:    true,
+		Properties: json.RawMessage(`{"name": "test-rg", "location": "eastus"}`),
+	}
+	_, err = ds.StoreResource(resourceA, "cmd-create-1")
+	assert.NoError(t, err)
+
+	// Verify the resource is stored under KSUID-A
+	loaded, err := ds.LoadResourceById(ksuidA)
+	assert.NoError(t, err)
+	assert.NotNil(t, loaded, "resource should exist under KSUID-A after create")
+
+	// Step 2: Delete the resource (simulating destroy)
+	_, err = ds.DeleteResource(resourceA, "cmd-delete")
+	assert.NoError(t, err)
+
+	// Step 3: Recreate with the SAME NativeID but a NEW KSUID-B (simulating re-apply)
+	time.Sleep(1100 * time.Millisecond) // KSUID has 1-second precision
+	ksuidB := util.NewID()
+	resourceB := &pkgmodel.Resource{
+		Ksuid:      ksuidB,
+		NativeID:   nativeID,
+		Stack:      "test-stack",
+		Type:       resourceType,
+		Label:      "rg",
+		Target:     "target-1",
+		Managed:    true,
+		Properties: json.RawMessage(`{"name": "test-rg", "location": "eastus"}`),
+	}
+	versionB, err := ds.StoreResource(resourceB, "cmd-create-2")
+	assert.NoError(t, err)
+
+	// Step 4: Verify the return value of StoreResource contains the NEW KSUID-B, not the old KSUID-A.
+	assert.True(t, strings.HasPrefix(versionB, ksuidB+"_"),
+		"StoreResource version should start with KSUID-B (%s), got: %s", ksuidB, versionB)
+	assert.False(t, strings.HasPrefix(versionB, ksuidA+"_"),
+		"StoreResource version must NOT start with old KSUID-A (%s), got: %s", ksuidA, versionB)
+
+	// Step 5: Verify the new resource is stored under KSUID-B, not the old KSUID-A.
+	loaded, err = ds.LoadResourceById(ksuidB)
+	assert.NoError(t, err)
+	assert.NotNil(t, loaded, "resource should be loadable under KSUID-B after recreate")
+	assert.Equal(t, ksuidB, loaded.Ksuid, "resource should have KSUID-B, not the old KSUID-A")
+	assert.Equal(t, nativeID, loaded.NativeID)
 }
