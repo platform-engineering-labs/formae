@@ -171,7 +171,37 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
-		assert.JSONEq(t, `{"prop": "value"}`, string(filteredProps))
+		assert.JSONEq(t, `{"prop": "value", "emptyArray": []}`, string(filteredProps))
+	})
+
+	t.Run("null field vs absent - no changes", func(t *testing.T) {
+		existing := &pkgmodel.Resource{
+			Properties: json.RawMessage(`{"prop": "value"}`),
+		}
+		new := &pkgmodel.Resource{
+			Properties: json.RawMessage(`{"prop": "value", "Tags": null}`),
+		}
+
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+
+		require.NoError(t, err)
+		assert.False(t, hasChanges)
+		assert.JSONEq(t, `{"prop": "value", "Tags": null}`, string(filteredProps))
+	})
+
+	t.Run("null field vs non-empty array - changes detected", func(t *testing.T) {
+		existing := &pkgmodel.Resource{
+			Properties: json.RawMessage(`{"Tags": [{"Key":"k","Value":"v"}]}`),
+		}
+		new := &pkgmodel.Resource{
+			Properties: json.RawMessage(`{"Tags": null}`),
+		}
+
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+
+		require.NoError(t, err)
+		assert.True(t, hasChanges)
+		assert.JSONEq(t, `{"Tags": null}`, string(filteredProps))
 	})
 
 	t.Run("SetOnce with references", func(t *testing.T) {
