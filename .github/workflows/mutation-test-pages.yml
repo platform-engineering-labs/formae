@@ -17,6 +17,19 @@ permissions:
 jobs:
   mutation-test:
     runs-on: ubuntu-latest-m
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +51,9 @@ jobs:
 
       - name: Build
         run: make build
+
+      - name: Setup local-data-api
+        run: make local-data-api-ci
 
       - name: Run full mutation test suite
         run: ./scripts/mutation-test.sh

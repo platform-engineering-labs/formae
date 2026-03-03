@@ -266,15 +266,16 @@ local-data-api-ci:
 	exit 1
 
 test-unit-postgres:
-	go test -v -tags=unit -failfast ./internal/datastore -args -dbType=postgres
+	FORMAE_TEST_DATASTORE_TYPE=postgres \
+		go test -v -tags=unit -failfast ./internal/datastore
 
 test-unit-auroradataapi:
-	go test -v -tags=unit -count=1 -failfast ./internal/datastore -args \
-		-dbType=auroradataapi \
-		-clusterArn=arn:aws:rds:us-east-1:123456789012:cluster:local \
-		-secretArn=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
-		-database=postgres \
-		-endpoint=http://localhost:80
+	FORMAE_TEST_DATASTORE_TYPE=auroradataapi \
+	FORMAE_TEST_AURORA_CLUSTER_ARN=arn:aws:rds:us-east-1:123456789012:cluster:local \
+	FORMAE_TEST_AURORA_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
+	FORMAE_TEST_AURORA_DATABASE=postgres \
+	FORMAE_TEST_AURORA_ENDPOINT=http://localhost:80 \
+		go test -v -tags=unit -count=1 -failfast ./internal/datastore
 
 test-unit-summary:
 	go test -tags=unit -count=1 -json  ./... | jq 'select(.Action == "fail")'
