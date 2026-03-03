@@ -50,18 +50,29 @@ function appendProperties(parsed: json.Value): json.Value =
         label = parsed.Label
     }
 
-/// Extracts a valid PKL identifier alias from a module path
+/// Derive a unique Pkl identifier alias from a module path.
+/// When the simple filename would collide with another import in the set,
+/// prepend the parent directory segment.
 /// e.g., "@cloudflare-dns/cloudflare-dns.pkl" -> "cloudflare_dns"
 /// e.g., "@aws/ec2/ec2.pkl" -> "ec2"
-function modulePathToAlias(modulePath: String): String =
-    modulePath.replaceAll(".pkl", "").split("/").last.replaceAll("-", "_")
+/// e.g., "@aws/ecs/service.pkl" + "@gcp/cloudrun/service.pkl" -> "ecs_service" / "cloudrun_service"
+function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
+    let (segments = modulePath.replaceAll(".pkl", "").split("/"))
+    let (baseName = segments.last.replaceAll("-", "_"))
+    let (hasCollision = allPaths.filter((p) ->
+        p != modulePath && p.replaceAll(".pkl", "").split("/").last.replaceAll("-", "_") == baseName
+    ).length > 0)
+    if (hasCollision && segments.length >= 2)
+        let (parent = segments[segments.length - 2].replaceAll("-", "_").replaceFirst("@", ""))
+        "\(parent)_\(baseName)"
+    else
+        baseName
 
-function importFormatting(imports: List<String>): String =
-    let (importsString = imports.map((i) ->
-        let (alias = modulePathToAlias(i))
+function importFormatting(imports: List<String>, allImports: List<String>): String =
+    imports.map((i) ->
+        let (alias = modulePathToAlias(i, allImports))
         "import \"\(i)\" as \(alias)"
-    ))
-    importsString.join("\n")
+    ).join("\n")
 
 function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<String, String>): String =
     let (stacksString = stacksData.map((stackData) ->
@@ -222,35 +233,34 @@ function parseResources(resources: List<String>, targetMap: Map<String, String>,
 function generateFormaFile(parsed: json.Value): String =
     let (parsedList = parsed.Resources.toList())
 
-
-    let (resourceData = parsedList.map((resource) ->
-        let (stack = resource.Stack)
-        let (target = resource.Target)
+    // Phase 1: Pre-compute pklMaps for all resources
+    let (pklMaps = parsedList.map((resource) ->
         let (resourceType = resource.Type)
-        let (resourceLabel = resource.Label)
-        let (className = typeMap[resourceType].className)
-        let (importName = typeMap[resourceType].importName)
         let (properties = appendProperties(resource))
-        let (pklMap = gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties).toDynamic()).put("target", target).put("stack", stack))
-        let (dependencyImports = gen.generateImportStatements(pklMap))
-        let (resourceImport = typeMap[resourceType].moduleName)
-        // Extract package name from resourceImport (e.g., "@aws/ec2/ec2.pkl" -> "aws", "@cloudflare-dns/cloudflare-dns.pkl" -> "cloudflare-dns")
-        // The package name is the dependency alias and determines the base module import path
+        gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties).toDynamic()).put("target", resource.Target).put("stack", resource.Stack)
+    ))
+
+    // Phase 2: Collect all imports for collision-aware alias computation
+    let (resourceImports = parsedList.map((resource) -> typeMap[resource.Type].moduleName).distinct)
+    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl)
+    let (namespaceBaseImports = parsedList.map((resource) ->
+        let (resourceImport = typeMap[resource.Type].moduleName)
         let (packageName = resourceImport.split("/").first.replaceFirst("@", ""))
+        "@" + packageName + "/" + packageName + ".pkl"
+    ).distinct)
+    // Combine and deduplicate - for flat package structures, resourceImport and namespaceImport may be the same
+    let (imports = (resourceImports + namespaceBaseImports).distinct)
+    let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e)))
+    let (allImports = (imports + dependencyImports).distinct)
 
-        let (rawPklResourceString = gen.genMapToPklStringWithTypes(className, pklMap, importName))
-
-        let (pklResourceString = rawPklResourceString)
-
-        Map(
-            "stack", stack,
-            "target", target,
-            "resourceImport", resourceImport,
-            "resourceType", resourceType,
-            "namespaceImport", "@" + packageName + "/" + packageName + ".pkl",
-            "dependencyImports", dependencyImports,
-            "pklResourceString", pklResourceString
-        )
+    // Phase 3: Render resources with collision-aware aliases
+    let (resources = parsedList.foldIndexed(List(), (index: Int, acc: List, resource) ->
+        let (resourceType = resource.Type)
+        let (className = typeMap[resourceType].className)
+        let (resourceImport = typeMap[resourceType].moduleName)
+        let (alias = modulePathToAlias(resourceImport, allImports))
+        let (pklMap = pklMaps[index])
+        acc.add(gen.genMapToPklStringWithTypes(className, pklMap, alias))
     ))
 
     // Extract target data from the parsed JSON
@@ -271,7 +281,6 @@ function generateFormaFile(parsed: json.Value): String =
             )
         )
     )
-
 
     // Extract standalone policies from the parsed JSON
     let (policiesFromJson = if (parsed.getPropertyOrNull("Policies") != null)
@@ -307,19 +316,11 @@ function generateFormaFile(parsed: json.Value): String =
         acc.put(originalLabel, camelCaseLabel)
     ))
 
-    let (resourceImports = resourceData.map((r) -> r["resourceImport"] as String).distinct)
-    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl)
-    let (namespaceBaseImports = resourceData.map((r) -> r["namespaceImport"] as String).distinct)
-    // Combine and deduplicate - for flat package structures, resourceImport and namespaceImport may be the same
-    let (imports = (resourceImports + namespaceBaseImports).distinct)
-    let (dependencyImports = resourceData.map((r) -> r["dependencyImports"]).flatten().distinct.filter((e) -> !imports.contains(e)))
-    let (resources = resourceData.map((r) -> r["pklResourceString"]))
-
     let (dependencyImportsSection = if (dependencyImports.length > 0)
         """
 
         // Dependency imports
-        \(importFormatting(dependencyImports))
+        \(importFormatting(dependencyImports, allImports))
         """
     else
         ""
@@ -336,7 +337,7 @@ function generateFormaFile(parsed: json.Value): String =
     \(headerImports())
 
     // Resource imports
-    \(importFormatting(imports))\(dependencyImportsSection)
+    \(importFormatting(imports, allImports))\(dependencyImportsSection)
 
     forma {\(policiesSection)
         \(parseStacks(stacksFromJson, policyLabelMap))

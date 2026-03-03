@@ -1,0 +1,35 @@
+{
+  "Targets": [
+    {
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
+      "Config": {
+        "Type": "TestProvider",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "dns-stack",
+      "Description": "DNS infrastructure stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "my-zone",
+      "Type": "TestProvider::DNS::Zone",
+      "Stack": "dns-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "ZoneConfig": {
+          "Comment": "Primary hosted zone"
+        },
+        "Name": "example.com",
+        "ZoneTags": [
+          { "Key": "Environment", "Value": "production" }
+        ]
+      }
+    }
+  ]
+}

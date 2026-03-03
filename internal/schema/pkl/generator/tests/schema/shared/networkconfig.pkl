@@ -1,0 +1,17 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// SubResource in a separate module — consumed by compute/server.pkl to test cross-module imports.
+module testprovider.shared.networkconfig
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+
+@testprovider.SubResourceHint
+open class NetworkConfig extends formae.SubResource {
+    subnetId: String?
+    securityGroupIds: Listing<String>?
+}
