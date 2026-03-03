@@ -455,8 +455,8 @@ func (d DatastoreSQLite) LoadIncompleteFormaCommands() ([]*forma_command.FormaCo
 	_, span := sqliteTracer.Start(context.Background(), "LoadIncompleteFormaCommands")
 	defer span.End()
 
-	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.command != 'sync' AND fc.state = ?" + resourceUpdateOrderBy
-	rows, err := d.conn.Query(query, forma_command.CommandStateInProgress)
+	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.command != 'sync' AND fc.state IN (?, ?)" + resourceUpdateOrderBy
+	rows, err := d.conn.Query(query, forma_command.CommandStateNotStarted, forma_command.CommandStateInProgress)
 	if err != nil {
 		return nil, err
 	}

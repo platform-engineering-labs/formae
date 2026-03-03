@@ -256,14 +256,28 @@ func TestDatastore_LoadIncompleteFormaCommandsTest(t *testing.T) {
 			State:   forma_command.CommandStateInProgress,
 		}
 
+		cmd3 := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{DesiredState: pkgmodel.Resource{Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "cmd3-target", Namespace: "default", Config: json.RawMessage("{}")},
+					State:          resource_update.ResourceUpdateStateNotStarted},
+			},
+			Command: pkgmodel.CommandApply,
+			State:   forma_command.CommandStateNotStarted,
+		}
+
 		err := ds.StoreFormaCommand(cmd1, cmd1.ID)
 		assert.NoError(t, err)
 		err = ds.StoreFormaCommand(cmd2, cmd2.ID)
 		assert.NoError(t, err)
+		err = ds.StoreFormaCommand(cmd3, cmd3.ID)
+		assert.NoError(t, err)
 
 		incomplete, err := ds.LoadIncompleteFormaCommands()
 		assert.NoError(t, err)
-		assert.Len(t, incomplete, 1)
+		assert.Len(t, incomplete, 2)
 	} else {
 		t.Fatalf("Failed to prepare datastore: %v\n", err)
 	}
