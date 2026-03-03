@@ -3,4 +3,5 @@ amends "pkl:Project"
 dependencies {
   ["formae"] = import("../schema/PklProject")
   ["fakeaws"] = import("../../../testplugin/fakeaws/schema/pkl/PklProject")
+  ["testprovider"] = import("tests/schema/PklProject")
 }
