@@ -5,7 +5,8 @@ ARG VERSION=latest
 RUN useradd -m -s /bin/bash pel
 RUN apt-get update &&  \
     apt-get install -y jq curl file && \
-    /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/setup/formae.sh)" -- -y -v ${VERSION} && \
+    HOME=/home/pel /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/setup/formae.sh)" -- -y -v ${VERSION} && \
+    chown -R pel:pel /home/pel/.pel && \
     apt-get remove -y jq curl file && \
     apt-get autoremove -y --purge && \
     apt-get clean

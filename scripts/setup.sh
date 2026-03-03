@@ -176,8 +176,11 @@ if [ -d "$RESOURCE_PLUGINS_SRC" ]; then
     if [ -d "$namespace_dir" ]; then
       namespace=$(basename "$namespace_dir")
       # Remove existing namespace directory before installing new versions
-      # Use sudo to handle root-owned leftovers from previous installs
-      sudo rm -rf "${PLUGINDIR}/${namespace}"
+      if [ "$needs_sudo" = 'true' ]; then
+        sudo rm -rf "${PLUGINDIR}/${namespace}"
+      else
+        rm -rf "${PLUGINDIR}/${namespace}"
+      fi
       for version_dir in "$namespace_dir"/*; do
         if [ -d "$version_dir" ]; then
           ver=$(basename "$version_dir")
