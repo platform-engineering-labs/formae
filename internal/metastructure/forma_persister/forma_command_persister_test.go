@@ -107,14 +107,37 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 	assert.NoError(t, secondRes.Error)
 	assert.True(t, secondRes.Response.(bool))
 
+	// After a terminal progress update, the command should still be InProgress.
+	// The command only transitions to a terminal state via MarkResourceUpdateAsComplete,
+	// which in production runs after the ResourcePersister has stored the resource.
 	secondLoadCommandResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, secondLoadCommandResult.Error)
 	secondLoadedCommand, ok := secondLoadCommandResult.Response.(*forma_command.FormaCommand)
 	assert.True(t, ok)
 
-	assert.Equal(t, forma_command.CommandStateSuccess, secondLoadedCommand.State)
+	assert.Equal(t, forma_command.CommandStateInProgress, secondLoadedCommand.State)
 	assert.Len(t, secondLoadedCommand.ResourceUpdates[0].ProgressResult, 1)
 	assert.Equal(t, resource.OperationStatusSuccess, secondLoadedCommand.ResourceUpdates[0].ProgressResult[0].OperationStatus)
+
+	// Now send MarkResourceUpdateAsComplete to transition the command to its terminal state
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        resourceURI,
+		Operation:          resource_update.OperationCreate,
+		FinalState:         resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:    secondProgressUpdate.ResourceStartTs,
+		ResourceModifiedTs: secondProgressUpdate.ResourceModifiedTs,
+	}
+	markRes := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, markRes.Error)
+	assert.True(t, markRes.Response.(bool))
+
+	finalLoadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, finalLoadResult.Error)
+	finalCommand, ok := finalLoadResult.Response.(*forma_command.FormaCommand)
+	assert.True(t, ok)
+
+	assert.Equal(t, forma_command.CommandStateSuccess, finalCommand.State)
 }
 
 func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
@@ -317,6 +340,7 @@ func newSyncFormaCommand() *forma_command.FormaCommand {
 
 	return &forma_command.FormaCommand{
 		ID:          "test-sync-command-id",
+		State:       forma_command.CommandStateNotStarted,
 		Command:     pkgmodel.CommandSync,
 		Description: pkgmodel.Description{},
 		Config: config.FormaCommandConfig{
@@ -351,6 +375,7 @@ func newFormaCommandWithCreateResourceUpdate() *forma_command.FormaCommand {
 
 	return &forma_command.FormaCommand{
 		ID:          "test-forma-id",
+		State:       forma_command.CommandStateNotStarted,
 		Description: pkgmodel.Description{},
 		Config: config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,

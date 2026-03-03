@@ -359,7 +359,15 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 	}
 	command.ModifiedTs = progress.ResourceModifiedTs
 
-	command.State = overallCommandState(command)
+	// Only transition NotStarted → InProgress here. Do NOT compute overallCommandState:
+	// the command must not reach a terminal state (Success/Failed) until markResourceUpdateAsComplete
+	// runs, which happens AFTER the ResourcePersister has stored the resource. Computing
+	// overallCommandState here would race with concurrent ResourceUpdaters — the last one's
+	// progress update could mark the command as Success before its resource is persisted,
+	// causing subsequent commands to miss the resource during KSUID assignment.
+	if command.State == forma_command.CommandStateNotStarted {
+		command.State = forma_command.CommandStateInProgress
+	}
 
 	// Only update command-level metadata (state, modified_ts)
 	// ResourceUpdates are already persisted via UpdateResourceUpdateProgress above
