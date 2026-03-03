@@ -259,17 +259,26 @@ func (ru *ResourceUpdate) UpdateState() {
 		ru.State = ResourceUpdateStateNotStarted
 		return
 	}
+
+	// Check for failures first, regardless of how many operations are recorded.
+	// A failed intermediate step (e.g. Read during an Update) must be detected
+	// even when not all required operations have been attempted yet.
+	for _, progress := range ru.ProgressResult {
+		if progress.Failed() {
+			ru.State = ResourceUpdateStateFailed
+			return
+		}
+	}
+
 	ops := ru.requiredOperations()
 	if len(ru.ProgressResult) < len(ops) {
 		ru.State = ResourceUpdateStateInProgress
 		return
 	}
+
 	finalState := ResourceUpdateStateSuccess
 	for _, progress := range ru.ProgressResult {
-		if progress.Failed() {
-			finalState = ResourceUpdateStateFailed
-			break
-		} else if progress.OperationStatus != resource.OperationStatusSuccess {
+		if progress.OperationStatus != resource.OperationStatusSuccess {
 			finalState = ResourceUpdateStateInProgress
 		}
 	}
