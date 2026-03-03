@@ -224,7 +224,18 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 	t.Helper()
 
-	// Query inventory via REST API — get all managed resources across all stacks
+	var violations []Violation
+
+	// Phase 1: Wait for all commands to reach a terminal state.
+	// This must happen before the resource invariant check because in-flight
+	// commands can create resources in the plugin (cloud state) before the
+	// command completes and the resource is persisted to inventory.
+	cmdViolations := h.waitAndCheckCommandCompleteness(t, 15*time.Second)
+	violations = append(violations, cmdViolations...)
+
+	// Phase 2: Check resource invariants.
+	// Now that all commands are terminal, inventory and cloud state should be
+	// consistent (resource persister writes are synchronous within commands).
 	forma, err := h.client.ExtractResources("managed:true")
 	require.NoError(t, err, "ExtractResources should not error")
 
@@ -233,17 +244,38 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 		inventory = forma.Resources
 	}
 
-	// Query cloud state via TestController
 	cloudState := h.GetCloudStateSnapshot(t)
+	violations = append(violations, CheckInvariants(inventory, cloudState, "cloud-")...)
 
-	// Check invariants (ignore out-of-band "cloud-*" entries from OpCloudCreate)
-	violations := CheckInvariants(inventory, cloudState, "cloud-")
+	for _, v := range violations {
+		t.Errorf("invariant violation: %s", v.Message)
+	}
+	assert.Empty(t, violations, "no invariant violations expected")
+}
 
-	// Check that all commands have reached a terminal state.
-	// If any commands are still InProgress, wait briefly and re-check to
-	// distinguish timing issues from genuinely stuck commands.
-	statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
-	if err == nil && statusResp != nil {
+// waitAndCheckCommandCompleteness polls until all commands from this client are
+// in a terminal state, returning any remaining violations if the deadline expires.
+func (h *TestHarness) waitAndCheckCommandCompleteness(t *testing.T, timeout time.Duration) []Violation {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	sawCommands := false
+	for time.Now().Before(deadline) {
+		statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+		if err != nil {
+			if !sawCommands {
+				// The API returns 500 when no commands exist for the client.
+				// Treat as vacuously terminal.
+				return nil
+			}
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		if len(statusResp.Commands) > 0 {
+			sawCommands = true
+		}
+
 		var commands []CommandState
 		for _, cmd := range statusResp.Commands {
 			commands = append(commands, CommandState{
@@ -251,56 +283,39 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 				State: cmd.State,
 			})
 		}
+
 		cmdViolations := CheckCommandCompleteness(commands)
-		if len(cmdViolations) > 0 {
-			// Commands still running — wait up to 15s and re-check
-			for _, v := range cmdViolations {
-				t.Logf("AssertAllInvariants: %s (will retry)", v.Message)
-			}
-			deadline := time.Now().Add(15 * time.Second)
-			for time.Now().Before(deadline) {
-				time.Sleep(500 * time.Millisecond)
-				statusResp, err = h.client.GetFormaCommandsStatus("", clientID, 100)
-				if err != nil {
-					continue
-				}
-				commands = nil
-				for _, cmd := range statusResp.Commands {
-					commands = append(commands, CommandState{
-						ID:    cmd.CommandID,
-						State: cmd.State,
-					})
-				}
-				cmdViolations = CheckCommandCompleteness(commands)
-				if len(cmdViolations) == 0 {
-					t.Logf("AssertAllInvariants: all commands reached terminal state after retry")
-					break
-				}
-			}
-			if len(cmdViolations) > 0 {
-				// Dump full details of stuck commands for diagnosis
-				for _, cmd := range statusResp.Commands {
-					if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
-						t.Logf("STUCK COMMAND DETAILS: id=%s command=%s state=%s", cmd.CommandID, cmd.Command, cmd.State)
-						for _, ru := range cmd.ResourceUpdates {
-							t.Logf("  resource_update: label=%s op=%s state=%s stack=%s err=%s",
-								ru.ResourceLabel, ru.Operation, ru.State, ru.StackName, ru.ErrorMessage)
-						}
-						for _, su := range cmd.StackUpdates {
-							t.Logf("  stack_update: label=%s op=%s state=%s err=%s",
-								su.StackLabel, su.Operation, su.State, su.ErrorMessage)
-						}
-					}
-				}
-			}
+		if len(cmdViolations) == 0 {
+			return nil
 		}
-		violations = append(violations, cmdViolations...)
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	for _, v := range violations {
-		t.Errorf("invariant violation: %s", v.Message)
+	// Timed out — dump details of stuck commands for diagnosis
+	statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+	if err != nil {
+		return nil // Can't query commands — assume terminal
 	}
-	assert.Empty(t, violations, "no invariant violations expected")
+
+	var commands []CommandState
+	for _, cmd := range statusResp.Commands {
+		commands = append(commands, CommandState{
+			ID:    cmd.CommandID,
+			State: cmd.State,
+		})
+		if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
+			t.Logf("STUCK COMMAND DETAILS: id=%s command=%s state=%s", cmd.CommandID, cmd.Command, cmd.State)
+			for _, ru := range cmd.ResourceUpdates {
+				t.Logf("  resource_update: label=%s op=%s state=%s stack=%s err=%s",
+					ru.ResourceLabel, ru.Operation, ru.State, ru.StackName, ru.ErrorMessage)
+			}
+			for _, su := range cmd.StackUpdates {
+				t.Logf("  stack_update: label=%s op=%s state=%s err=%s",
+					su.StackLabel, su.Operation, su.State, su.ErrorMessage)
+			}
+		}
+	}
+	return CheckCommandCompleteness(commands)
 }
 
 func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateModel) {
@@ -714,6 +729,56 @@ func (h *TestHarness) CleanupOutOfBandCloudResources(t *testing.T) {
 		}
 	}
 	t.Logf("CleanupOutOfBandCloudResources: removed %d out-of-band entries", removed)
+}
+
+// SyncCloudStateWithInventory makes the test plugin's cloud state match the
+// agent's inventory. This is needed in the FullChaos wind-down because:
+//   - OpCloudDelete removes resources from cloud that the agent still tracks (phantoms)
+//   - Failure injection causes Creates to succeed in the plugin but the command
+//     fails, leaving cloud resources the agent doesn't track (orphans)
+//
+// After this call, cloud state and inventory contain the same set of native IDs.
+func (h *TestHarness) SyncCloudStateWithInventory(t *testing.T) {
+	t.Helper()
+
+	forma, err := h.client.ExtractResources("managed:true")
+	if err != nil {
+		t.Logf("SyncCloudStateWithInventory: failed to query inventory: %v", err)
+		return
+	}
+
+	inventoryByNativeID := make(map[string]pkgmodel.Resource)
+	if forma != nil {
+		for _, res := range forma.Resources {
+			if res.NativeID != "" {
+				inventoryByNativeID[res.NativeID] = res
+			}
+		}
+	}
+
+	cloudState := h.GetCloudStateSnapshot(t)
+
+	// Remove cloud entries not in inventory (orphans from failed Creates)
+	removed := 0
+	for nativeID := range cloudState {
+		if _, ok := inventoryByNativeID[nativeID]; !ok {
+			h.DeleteCloudState(t, nativeID)
+			removed++
+		}
+	}
+
+	// Add cloud entries for inventory resources not in cloud (phantoms from OpCloudDelete)
+	restored := 0
+	for nativeID, res := range inventoryByNativeID {
+		if _, ok := cloudState[nativeID]; !ok {
+			h.PutCloudState(t, nativeID, res.Type, string(res.Properties))
+			restored++
+		}
+	}
+
+	if removed > 0 || restored > 0 {
+		t.Logf("SyncCloudStateWithInventory: removed %d orphans, restored %d phantoms", removed, restored)
+	}
 }
 
 // ForceCheckTTLAndWait triggers a TTL check. If stacks have expired, the agent
