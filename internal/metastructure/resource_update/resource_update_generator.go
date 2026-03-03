@@ -414,6 +414,10 @@ func generateResourceUpdatesForReconcile(
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
 	}
 
+	// Build a separate map that includes forma resources for resolvable lookups.
+	// This allows forward references to new resources in the same command.
+	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
+
 	for _, stack := range forma.SplitByStack() {
 		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -425,7 +429,7 @@ func generateResourceUpdatesForReconcile(
 		if len(existingResources) == 0 {
 			for _, newResource := range stack.Resources {
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -481,7 +485,7 @@ func generateResourceUpdatesForReconcile(
 
 					found = true
 
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
 
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
@@ -559,7 +563,7 @@ func generateResourceUpdatesForReconcile(
 			if !found {
 				// Check if this resource exists as an unmanaged resource
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -658,6 +662,10 @@ func generateResourceUpdatesForPatch(
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
 	}
 
+	// Build a separate map that includes forma resources for resolvable lookups.
+	// This allows forward references to new resources in the same command.
+	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
+
 	for _, stack := range forma.SplitByStack() {
 		stackResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -697,7 +705,7 @@ func generateResourceUpdatesForPatch(
 					resourceExists = true
 
 					// Use NewResourceUpdateForExisting to handle all the logic
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, allResourcesByStack)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -963,6 +971,33 @@ func convertDependencyDeletesToReplacements(allResourceUpdates []ResourceUpdate,
 	}
 
 	return append(finalResourceUpdates, remainingDependencyDeletes...)
+}
+
+// resourcesForResolvables creates a copy of allResourcesByStack and merges
+// forma resources into it. This allows resolvable lookups to find new resources
+// being created in the same command (forward references), without affecting
+// other uses of allResourcesByStack like dependency tracking.
+func resourcesForResolvables(forma *pkgmodel.Forma, allResourcesByStack map[string][]*pkgmodel.Resource) map[string][]*pkgmodel.Resource {
+	result := make(map[string][]*pkgmodel.Resource, len(allResourcesByStack))
+	for k, v := range allResourcesByStack {
+		result[k] = v
+	}
+	for i := range forma.Resources {
+		r := &forma.Resources[i]
+		found := false
+		if stackResources, ok := result[r.Stack]; ok {
+			for _, existing := range stackResources {
+				if existing.Ksuid == r.Ksuid {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			result[r.Stack] = append(result[r.Stack], r)
+		}
+	}
+	return result
 }
 
 // assignKSUIDs looks for existing KSUIDs and if not found, generates new KSUIDs

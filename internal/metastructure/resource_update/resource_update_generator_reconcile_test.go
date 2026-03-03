@@ -1292,3 +1292,197 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 	assert.NotEmpty(t, deleteUpdate.GroupID)
 	assert.Equal(t, deleteUpdate.GroupID, createUpdate.GroupID)
 }
+
+func TestGenerateResourceUpdatesForReconcile_ForwardReferenceToNewResource(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	existingSecretKsuid := util.NewID()
+	existingPolicyKsuid := util.NewID()
+
+	// Store existing stack with a Secret and a ResourcePolicy that references it
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:              "my-secret",
+				Type:               "AWS::SecretsManager::Secret",
+				Stack:              "test-stack",
+				Target:             "aws-target",
+				Ksuid:              existingSecretKsuid,
+				Properties:         json.RawMessage(`{"Name": "my-secret"}`),
+				ReadOnlyProperties: json.RawMessage(fmt.Sprintf(`{"Id": "arn:aws:secretsmanager:us-east-1:123456789:secret:my-secret-%s"}`, existingSecretKsuid[:6])),
+			},
+			{
+				Label:  "my-policy",
+				Type:   "AWS::SecretsManager::ResourcePolicy",
+				Stack:  "test-stack",
+				Target: "aws-target",
+				Ksuid:  existingPolicyKsuid,
+				Properties: json.RawMessage(fmt.Sprintf(`{
+					"SecretId": {
+						"$ref": "formae://%s#/Id"
+					},
+					"ResourcePolicy": {"Version": "2012-10-17"}
+				}`, existingSecretKsuid)),
+			},
+		},
+	}
+
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// New forma: replaces my-secret with my-secret-2 (new resource),
+	// and updates ResourcePolicy to reference the new secret.
+	// Uses GenerateResourceUpdates (not the lower-level function) so that
+	// translateFormaeReferencesToKsuid runs first — this assigns a new KSUID
+	// to my-secret-2 and translates the $res to $ref with that KSUID.
+	// The bug: LoadResolvablePropertiesFromStacks looks up the new KSUID in
+	// allResourcesByStack (DB-only), fails because my-secret-2 isn't in the DB.
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{
+			{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
+		},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "my-secret-2",
+				Type:       "AWS::SecretsManager::Secret",
+				Stack:      "test-stack",
+				Target:     "aws-target",
+				Properties: json.RawMessage(`{"Name": "my-secret-2"}`),
+			},
+			{
+				Label:  "my-policy",
+				Type:   "AWS::SecretsManager::ResourcePolicy",
+				Stack:  "test-stack",
+				Target: "aws-target",
+				Properties: json.RawMessage(`{
+					"SecretId": {
+						"$res": true,
+						"$label": "my-secret-2",
+						"$type": "AWS::SecretsManager::Secret",
+						"$stack": "test-stack",
+						"$property": "Id"
+					},
+					"ResourcePolicy": {"Version": "2012-10-17"}
+				}`),
+			},
+		},
+	}
+
+	existingTargets := []*pkgmodel.Target{
+		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
+	}
+
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds)
+
+	assert.NoError(t, err, "forward reference to new resource should not cause an error")
+	assert.NotEmpty(t, updates, "should produce resource updates")
+}
+
+func TestGenerateResourceUpdatesForReconcile_AddNewResourceWithForwardReference(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	existingQueueKsuid := util.NewID()
+
+	// Store existing stack with a Queue
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:              "my-queue",
+				Type:               "AWS::SQS::Queue",
+				Stack:              "test-stack",
+				Target:             "aws-target",
+				Ksuid:              existingQueueKsuid,
+				Properties:         json.RawMessage(`{"QueueName": "my-queue"}`),
+				ReadOnlyProperties: json.RawMessage(fmt.Sprintf(`{"QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/%s"}`, existingQueueKsuid[:8])),
+			},
+		},
+	}
+
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// New forma: adds a QueueInlinePolicy that references the existing Queue.
+	// Also adds a SECOND Queue (my-queue-2) and a SECOND QueueInlinePolicy
+	// that references it via $res. The second queue is new — not in the DB.
+	// This triggers the bug: LoadResolvablePropertiesFromStacks can't find
+	// my-queue-2's KSUID in allResourcesByStack (DB-only).
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{
+			{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
+		},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "my-queue",
+				Type:       "AWS::SQS::Queue",
+				Stack:      "test-stack",
+				Target:     "aws-target",
+				Properties: json.RawMessage(`{"QueueName": "my-queue"}`),
+			},
+			{
+				Label:  "my-queue-policy",
+				Type:   "AWS::SQS::QueueInlinePolicy",
+				Stack:  "test-stack",
+				Target: "aws-target",
+				Properties: json.RawMessage(fmt.Sprintf(`{
+					"Queue": {
+						"$res": true,
+						"$label": "my-queue",
+						"$type": "AWS::SQS::Queue",
+						"$stack": "test-stack",
+						"$property": "QueueUrl"
+					},
+					"PolicyDocument": {"Version": "2012-10-17"}
+				}`)),
+			},
+			{
+				Label:      "my-queue-2",
+				Type:       "AWS::SQS::Queue",
+				Stack:      "test-stack",
+				Target:     "aws-target",
+				Properties: json.RawMessage(`{"QueueName": "my-queue-2"}`),
+			},
+			{
+				Label:  "my-queue-policy-2",
+				Type:   "AWS::SQS::QueueInlinePolicy",
+				Stack:  "test-stack",
+				Target: "aws-target",
+				Properties: json.RawMessage(`{
+					"Queue": {
+						"$res": true,
+						"$label": "my-queue-2",
+						"$type": "AWS::SQS::Queue",
+						"$stack": "test-stack",
+						"$property": "QueueUrl"
+					},
+					"PolicyDocument": {"Version": "2012-10-17"}
+				}`),
+			},
+		},
+	}
+
+	existingTargets := []*pkgmodel.Target{
+		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
+	}
+
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds)
+
+	assert.NoError(t, err, "adding new resource with forward reference should not cause an error")
+	assert.NotEmpty(t, updates, "should produce resource updates")
+
+	// Verify we get creates for the new resources
+	var createCount int
+	for _, u := range updates {
+		if u.Operation == OperationCreate {
+			createCount++
+		}
+	}
+	assert.GreaterOrEqual(t, createCount, 2, "should create at least my-queue-2 and my-queue-policy-2")
+}

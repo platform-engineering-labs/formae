@@ -6,6 +6,7 @@ package resolver
 
 import (
 	"fmt"
+	"log/slog"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/tidwall/gjson"
@@ -78,7 +79,14 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 			}
 		}
 
-		return res, fmt.Errorf("property %s not found in resource %s (KSUID: %s)", propertyPath, targetResource.Label, ksuid)
+		// Property not available yet — this happens for forward references to
+		// new resources whose read-only properties are assigned at creation time.
+		// The value will be resolved at execution time via RemainingResolvables.
+		slog.Debug("Skipping unresolvable property (will resolve at execution time)",
+			"property", propertyPath,
+			"resource", targetResource.Label,
+			"ksuid", ksuid)
+		continue
 	}
 
 	return res, nil
