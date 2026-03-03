@@ -183,6 +183,12 @@ func TestProperty_FullChaos(t *testing.T) {
 			// Force TTL check for stacks with TTL policy
 			h.ForceCheckTTLAndWait(t, model)
 
+			// Synchronize cloud state with inventory before the final invariant
+			// check. Chaos operations create expected inconsistencies:
+			//   - OpCloudDelete removes cloud entries the agent still tracks
+			//   - Failure injection can leave cloud entries from partial Creates
+			h.SyncCloudStateWithInventory(t)
+
 			h.AssertAllInvariants(t)
 		})
 	})
