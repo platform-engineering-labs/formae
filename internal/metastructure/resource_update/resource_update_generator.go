@@ -1093,8 +1093,9 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup) (json.RawMessage, map[string]string, error) {
 	result, externalLabels, resolvables := string(properties), make(map[string]string), pkgmodel.FindResolvablesFromProperties(string(properties))
 	var (
-		err       error
-		formaeURI pkgmodel.FormaeURI
+		err              error
+		formaeURI        pkgmodel.FormaeURI
+		missingResources []*pkgmodel.Resource
 	)
 
 	for _, resolvable := range resolvables {
@@ -1104,11 +1105,11 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 		} else {
 			// Look up the KSUID directly from the datastore
 			if resolvable.Label == "" || resolvable.Type == "" || resolvable.Stack == "" {
-				slog.Warn("Resolvable object missing required fields",
-					"path", resolvable.Path,
-					"label", resolvable.Label,
-					"type", resolvable.Type,
-					"stack", resolvable.Stack)
+				missingResources = append(missingResources, &pkgmodel.Resource{
+					Label: resolvable.Label,
+					Type:  resolvable.Type,
+					Stack: resolvable.Stack,
+				})
 				continue
 			}
 
@@ -1117,21 +1118,12 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 				// Fallback: This handles the case where we're bringing unmanaged resources under management
 				// and the resolvable points to the target stack but the resource still exists in $unmanaged
 				ksuid, err = ds.GetKSUIDByTriplet(constants.UnmanagedStack, resolvable.Label, resolvable.Type)
-				if err != nil {
-					slog.Warn("Failed to get KSUID for triplet (including $unmanaged fallback)",
-						"path", resolvable.Path,
-						"stack", resolvable.Stack,
-						"label", resolvable.Label,
-						"type", resolvable.Type,
-						"error", err)
-					continue
-				}
-				if ksuid == "" {
-					slog.Warn("Resource not found for triplet (including $unmanaged fallback)",
-						"path", resolvable.Path,
-						"stack", resolvable.Stack,
-						"label", resolvable.Label,
-						"type", resolvable.Type)
+				if err != nil || ksuid == "" {
+					missingResources = append(missingResources, &pkgmodel.Resource{
+						Label: resolvable.Label,
+						Type:  resolvable.Type,
+						Stack: resolvable.Stack,
+					})
 					continue
 				}
 			}
@@ -1148,6 +1140,12 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 
 		if resolvable.Label != "" {
 			externalLabels[formaeURI.KSUID()] = resolvable.Label
+		}
+	}
+
+	if len(missingResources) > 0 {
+		return nil, nil, apimodel.FormaReferencedResourcesNotFoundError{
+			MissingResources: missingResources,
 		}
 	}
 
