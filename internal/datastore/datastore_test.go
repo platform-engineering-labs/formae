@@ -9,7 +9,6 @@ package datastore_test
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,26 +30,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var dbType string
-
-// Aurora Data API test flags
-var clusterArn string
-var secretArn string
-var auroraDatabase string
-var auroraRegion string
-var auroraEndpoint string
-
-func init() {
-	flag.StringVar(&dbType, "dbType", pkgmodel.SqliteDatastore, fmt.Sprintf("Specify the database type (e.g., %s, %s, %s)", pkgmodel.SqliteDatastore, pkgmodel.PostgresDatastore, pkgmodel.AuroraDataAPIDatastore))
-	flag.StringVar(&clusterArn, "clusterArn", "", "Aurora cluster ARN (required for auroradataapi)")
-	flag.StringVar(&secretArn, "secretArn", "", "Secrets Manager secret ARN (required for auroradataapi)")
-	flag.StringVar(&auroraDatabase, "database", "formae", "Aurora database name")
-	flag.StringVar(&auroraRegion, "region", "", "AWS region (optional, uses default if not set)")
-	flag.StringVar(&auroraEndpoint, "endpoint", "", "Custom endpoint URL (for local testing)")
-}
-
+// prepareDatastore creates a datastore for testing. The backend is selected via
+// the FORMAE_TEST_DATASTORE_TYPE environment variable (defaults to sqlite).
+// Aurora connections also require FORMAE_TEST_AURORA_* variables.
 func prepareDatastore() (datastore.Datastore, error) {
-	switch dbType {
+	switch os.Getenv("FORMAE_TEST_DATASTORE_TYPE") {
 	case pkgmodel.PostgresDatastore:
 		cfg := &pkgmodel.DatastoreConfig{
 			DatastoreType: pkgmodel.PostgresDatastore,
@@ -71,8 +55,14 @@ func prepareDatastore() (datastore.Datastore, error) {
 		return ds, nil
 
 	case pkgmodel.AuroraDataAPIDatastore:
+		clusterArn := os.Getenv("FORMAE_TEST_AURORA_CLUSTER_ARN")
+		secretArn := os.Getenv("FORMAE_TEST_AURORA_SECRET_ARN")
 		if clusterArn == "" || secretArn == "" {
-			return nil, fmt.Errorf("Aurora Data API requires -clusterArn and -secretArn flags")
+			return nil, fmt.Errorf("Aurora Data API requires FORMAE_TEST_AURORA_CLUSTER_ARN and FORMAE_TEST_AURORA_SECRET_ARN")
+		}
+		auroraDatabase := os.Getenv("FORMAE_TEST_AURORA_DATABASE")
+		if auroraDatabase == "" {
+			auroraDatabase = "formae"
 		}
 		cfg := &pkgmodel.DatastoreConfig{
 			DatastoreType: pkgmodel.AuroraDataAPIDatastore,
@@ -80,8 +70,8 @@ func prepareDatastore() (datastore.Datastore, error) {
 				ClusterARN: clusterArn,
 				SecretARN:  secretArn,
 				Database:   auroraDatabase,
-				Region:     auroraRegion,
-				Endpoint:   auroraEndpoint,
+				Region:     os.Getenv("FORMAE_TEST_AURORA_REGION"),
+				Endpoint:   os.Getenv("FORMAE_TEST_AURORA_ENDPOINT"),
 			},
 		}
 
@@ -130,7 +120,6 @@ func cleanupDatastore(ds datastore.Datastore) {
 }
 
 func TestMain(m *testing.M) {
-	flag.Parse()
 	m.Run()
 	os.Exit(0)
 }
