@@ -225,7 +225,11 @@ function parseResources(resources: List<String>, targetMap: Map<String, String>,
         ))
         // Replace stack references in the resource string with camelCase versions
         stackMap.fold(withTargets, (acc: String, originalLabel: String, camelCaseLabel: String) ->
-            acc.replaceAll("stack = \"\(originalLabel)\"", "stack = \(camelCaseLabel).res").replaceAll("stack = \"\(originalLabel).Label\"", "stack = \(camelCaseLabel).res.Label")
+            // First: replace resolvable stack references (Resolvable.stack is String?)
+            acc.replaceAll("stack = \"\(originalLabel)\" //resolvable", "stack = \(camelCaseLabel).res.label")
+            // Then: replace resource stack references (Resource.stack is StackResolvable?)
+            .replaceAll("stack = \"\(originalLabel)\"", "stack = \(camelCaseLabel).res")
+            .replaceAll("stack = \"\(originalLabel).Label\"", "stack = \(camelCaseLabel).res.Label")
         )
     ))
     resourcesString.join("\n\n")

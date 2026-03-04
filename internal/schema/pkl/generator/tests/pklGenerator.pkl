@@ -17,6 +17,7 @@ local multiJson = new json.Parser {}.parse(read("../examples/json/multi_resource
 local zoneJson = new json.Parser {}.parse(read("../examples/json/dns_zone.json"))
 local computeServerJson = new json.Parser {}.parse(read("../examples/json/compute_server.json"))
 local appRunnerServiceJson = new json.Parser {}.parse(read("../examples/json/apprunner_service.json"))
+local crossStackRefJson = new json.Parser {}.parse(read("../examples/json/cross_stack_ref.json"))
 
 facts {
     ["SQS Queue - generates correct imports"] {
@@ -224,5 +225,28 @@ facts {
         result.contains("label = \"app-stack\"") &&
         result.contains("label = \"testprovider-target\"") &&
         result.contains("namespace = \"TestProvider\"")
+    }
+
+    // --- Cross-stack resolvable reference tests ---
+    // When a resolvable references a resource in a different stack, the stack
+    // property inside the Resolvable block must be a String (Resolvable.stack
+    // is String?). The generated code should use .res.label to convert the
+    // StackResolvable into a String, not just .res which would leave a
+    // StackResolvable where a String is expected.
+
+    ["Cross-stack ref - resolvable stack uses .res.label not .res"] {
+        let (result = generator.generateFormaFile(crossStackRefJson))
+        result.contains("infraStack.res.label")
+    }
+
+    ["Cross-stack ref - generates resolvable with VPCResolvable type"] {
+        let (result = generator.generateFormaFile(crossStackRefJson))
+        result.contains("vpc.VPCResolvable")
+    }
+
+    ["Cross-stack ref - generates both stacks"] {
+        let (result = generator.generateFormaFile(crossStackRefJson))
+        result.contains("label = \"infra-stack\"") &&
+        result.contains("label = \"app-stack\"")
     }
 }
