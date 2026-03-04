@@ -135,7 +135,10 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 		"currentVersion", currentVersion,
 		"targetVersion", targetVersion)
 
-	// Run pending migrations
+	// Run pending migrations.
+	// Each migration runs inside a transaction so that TEMP tables and other
+	// session-scoped objects survive across the individual SQL statements
+	// (Aurora Data API creates a new session per ExecuteStatement call).
 	for _, m := range migrations {
 		if m.version <= currentVersion {
 			continue
@@ -143,17 +146,28 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 
 		slog.Info("Running migration", "version", m.version, "name", m.name)
 
-		// Execute migration statements
+		txID, err := d.beginTransaction(ctx)
+		if err != nil {
+			return fmt.Errorf("migration %d: failed to begin transaction: %w", m.version, err)
+		}
+
+		// Execute migration statements within the transaction
 		for _, stmt := range m.upStatements {
 			stmt = strings.TrimSpace(stmt)
 			if stmt == "" {
 				continue
 			}
 
-			_, err := d.executeStatement(ctx, stmt, nil)
+			_, err := d.executeStatementInTransaction(ctx, txID, stmt, nil)
 			if err != nil {
+				_ = d.rollbackTransaction(ctx, txID)
 				return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
 			}
+		}
+
+		if err := d.commitTransaction(ctx, txID); err != nil {
+			_ = d.rollbackTransaction(ctx, txID)
+			return fmt.Errorf("migration %d: failed to commit transaction: %w", m.version, err)
 		}
 
 		// Record migration version
