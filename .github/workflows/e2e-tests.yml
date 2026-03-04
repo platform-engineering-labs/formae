@@ -1,5 +1,5 @@
 name: formae-e2e-tests
-
+# Runs on every PR to main and on manual dispatch
 on:
   workflow_dispatch:
     inputs:
