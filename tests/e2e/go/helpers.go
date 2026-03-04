@@ -8,7 +8,6 @@ package e2e_test
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,15 +20,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 )
-
-// UniqueStackName generates a unique stack name by appending a random hex
-// suffix to the given prefix. This allows parallel test execution without
-// stack name collisions.
-func UniqueStackName(prefix string) string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("%s-%x", prefix, b)
-}
 
 // FormaeBinary returns the path to the formae binary. It checks the
 // E2E_FORMAE_BINARY environment variable first and falls back to the
