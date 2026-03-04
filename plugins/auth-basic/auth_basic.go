@@ -5,79 +5,100 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
+	"strings"
+	"time"
 
-	"github.com/masterminds/semver"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/platform-engineering-labs/formae/pkg/auth"
 )
 
-type AuthBasic struct{}
+const defaultCacheTTL = 60 * time.Second
 
-// Version set at compile time
-var Version = "0.0.0"
-
-// Compile time checks to satisfy protocol
-var _ plugin.Plugin = AuthBasic{}
-var _ plugin.AuthenticationPlugin = AuthBasic{}
-
-// Plugin maintains the known symbol reference
-var Plugin = AuthBasic{}
-
-func (a AuthBasic) Name() string {
-	return "basic"
+// AuthBasic implements auth.AuthPlugin for HTTP Basic Authentication.
+type AuthBasic struct {
+	config *Config
 }
 
-func (a AuthBasic) Type() plugin.Type {
-	return plugin.Authentication
-}
+// Compile-time check that AuthBasic implements AuthPlugin.
+var _ auth.AuthPlugin = (*AuthBasic)(nil)
 
-func (a AuthBasic) Version() *semver.Version {
-	return semver.MustParse(Version)
-}
-
-func (a AuthBasic) Handler(config json.RawMessage) (func(handler http.Handler) http.Handler, error) {
+func (a *AuthBasic) Init(req *auth.InitRequest, resp *auth.InitResponse) error {
 	cfg := &Config{}
-	err := json.Unmarshal(config, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("auth-basic: error parsing config: %v", err)
+	if err := json.Unmarshal(req.Config, cfg); err != nil {
+		resp.Error = fmt.Sprintf("auth-basic: error parsing config: %v", err)
+		return nil
+	}
+	a.config = cfg
+	return nil
+}
+
+func (a *AuthBasic) Validate(req *auth.ValidateRequest, resp *auth.ValidateResponse) error {
+	authHeaders := req.Headers["Authorization"]
+	if len(authHeaders) == 0 {
+		resp.Valid = false
+		resp.Error = "missing Authorization header"
+		return nil
 	}
 
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			username, password, ok := r.BasicAuth()
-
-			if ok {
-				if user := cfg.GetUser(username); user != nil {
-					if subtle.ConstantTimeCompare([]byte(user.Username), []byte(username)) == 1 &&
-						bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) == nil {
-
-						next.ServeHTTP(w, r)
-						return
-					}
-				}
-			}
-
-			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		})
-	}, nil
-}
-
-func (a AuthBasic) Authorization(config json.RawMessage) (http.Header, error) {
-	cfg := &Config{}
-	err := json.Unmarshal(config, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("auth-basic: error parsing config: %v", err)
+	username, password, ok := parseBasicAuth(authHeaders[0])
+	if !ok {
+		resp.Valid = false
+		resp.Error = "invalid Basic auth format"
+		return nil
 	}
 
-	header := http.Header{}
-	concatenated := fmt.Sprintf("%s:%s", cfg.Username, cfg.Password)
-	header.Add("Authorization", fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(concatenated))))
+	user := a.config.GetUser(username)
+	if user == nil {
+		resp.Valid = false
+		resp.Error = "unknown user"
+		return nil
+	}
 
-	return header, nil
+	if subtle.ConstantTimeCompare([]byte(user.Username), []byte(username)) != 1 ||
+		bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
+		resp.Valid = false
+		resp.Error = "invalid credentials"
+		return nil
+	}
+
+	resp.Valid = true
+	// Cache key is a hash of the Authorization header value
+	h := sha256.Sum256([]byte(authHeaders[0]))
+	resp.CacheKey = fmt.Sprintf("basic:%x", h[:8])
+	resp.CacheTTL = defaultCacheTTL
+	return nil
+}
+
+func (a *AuthBasic) GetAuthHeader(req *auth.GetAuthHeaderRequest, resp *auth.GetAuthHeaderResponse) error {
+	concatenated := fmt.Sprintf("%s:%s", a.config.Username, a.config.Password)
+	resp.Headers = map[string][]string{
+		"Authorization": {fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(concatenated)))},
+	}
+	return nil
+}
+
+// parseBasicAuth parses an HTTP Basic Authentication header value.
+func parseBasicAuth(header string) (username, password string, ok bool) {
+	const prefix = "Basic "
+	if !strings.HasPrefix(header, prefix) {
+		return "", "", false
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(header[len(prefix):])
+	if err != nil {
+		return "", "", false
+	}
+
+	parts := strings.SplitN(string(decoded), ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+
+	return parts[0], parts[1], true
 }
