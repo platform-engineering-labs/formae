@@ -7,7 +7,9 @@
 package e2e_test
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,6 +43,18 @@ func TestExtractAndReapply(t *testing.T) {
 	// Step 3: Extract the stack to a PKL file.
 	extractedPath := filepath.Join(t.TempDir(), "extracted.pkl")
 	cli.ExtractToFile(t, "stack:e2e-extract-reapply-aws", extractedPath)
+
+	// Step 3b: Verify the extracted PKL contains a Resolvable reference for
+	// the RolePolicy's roleName, not a plain string. This is the exact pattern
+	// that triggered the regression in #288.
+	extractedContent, err := os.ReadFile(extractedPath)
+	if err != nil {
+		t.Fatalf("failed to read extracted PKL: %v", err)
+	}
+	if !strings.Contains(string(extractedContent), "RoleResolvable") {
+		t.Fatalf("extracted PKL should contain a RoleResolvable reference for roleName, got:\n%s", string(extractedContent))
+	}
+	t.Logf("extracted PKL contains RoleResolvable (Resolvable preserved)")
 
 	// Step 4: Reapply the extracted PKL — should be a no-op since the
 	// extracted state matches the current cloud state.
