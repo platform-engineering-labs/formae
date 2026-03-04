@@ -19,10 +19,11 @@ import (
 type ViolationKind int
 
 const (
-	ViolationPhantomResource    ViolationKind = iota // in inventory but not in cloud
-	ViolationOrphanedResource                        // in cloud but not in inventory
-	ViolationPropertyMismatch                        // inventory and cloud properties differ
-	ViolationCommandNotTerminal                      // command not in terminal state
+	ViolationPhantomResource       ViolationKind = iota // in inventory but not in cloud
+	ViolationOrphanedResource                           // in cloud but not in inventory
+	ViolationPropertyMismatch                           // inventory and cloud properties differ
+	ViolationCommandNotTerminal                         // command not in terminal state
+	ViolationResolvableNotResolved                      // resolvable $ref not properly resolved
 )
 
 // Violation describes a single invariant violation.
@@ -184,8 +185,10 @@ func CheckPatchProperties(inventory []pkgmodel.Resource, resourceLabels []string
 }
 
 // jsonEqual compares two JSON strings for semantic equality (ignoring key order,
-// whitespace, and empty arrays). Empty arrays are treated as equivalent to
-// missing fields since the agent may strip them during property processing.
+// whitespace, empty arrays, and resolvable reference wrappers). Empty arrays are
+// treated as equivalent to missing fields since the agent may strip them during
+// property processing. Resolvable references {"$ref":"...","$value":"..."} are
+// flattened to just their $value before comparison.
 func jsonEqual(a, b string) bool {
 	var aVal, bVal map[string]any
 	if err := json.Unmarshal([]byte(a), &aVal); err != nil {
@@ -194,6 +197,8 @@ func jsonEqual(a, b string) bool {
 	if err := json.Unmarshal([]byte(b), &bVal); err != nil {
 		return false
 	}
+	flattenResolvables(aVal)
+	flattenResolvables(bVal)
 	stripEmptyArrays(aVal)
 	stripEmptyArrays(bVal)
 	aBytes, _ := json.Marshal(aVal)
@@ -210,6 +215,58 @@ func stripEmptyArrays(m map[string]any) {
 	}
 }
 
+// flattenResolvables recursively converts resolvable wrapper objects to just
+// their $value. Two wrapper formats exist:
+//   - {"$ref":"formae://...","$value":"..."} — legacy/output format
+//   - {"$res":true,"$label":"...","$type":"...","$stack":"...","$property":"...","$value":"..."} — input format
+//
+// This normalizes inventory properties (which retain the wrapper structure)
+// for comparison with expected plain values.
+func flattenResolvables(m map[string]any) {
+	for k, v := range m {
+		switch vv := v.(type) {
+		case map[string]any:
+			if isResolvableWrapper(vv) {
+				if val, hasVal := vv["$value"]; hasVal {
+					m[k] = val
+					continue
+				}
+				m[k] = ""
+				continue
+			}
+			flattenResolvables(vv)
+		case []any:
+			for i, elem := range vv {
+				if elemMap, ok := elem.(map[string]any); ok {
+					if isResolvableWrapper(elemMap) {
+						if val, hasVal := elemMap["$value"]; hasVal {
+							vv[i] = val
+							continue
+						}
+						vv[i] = ""
+						continue
+					}
+					flattenResolvables(elemMap)
+				}
+			}
+		}
+	}
+}
+
+// isResolvableWrapper returns true if the map is a resolvable reference wrapper
+// (either {"$ref":...} or {"$res":true,...}).
+func isResolvableWrapper(m map[string]any) bool {
+	if _, hasRef := m["$ref"]; hasRef {
+		return true
+	}
+	if res, hasRes := m["$res"]; hasRes {
+		if b, ok := res.(bool); ok && b {
+			return true
+		}
+	}
+	return false
+}
+
 // checkSuperset verifies that actualJSON is a superset of submittedJSON:
 // - Scalar fields in submitted must match actual
 // - Array fields: every element in submitted must appear in actual
@@ -222,6 +279,8 @@ func checkSuperset(actualJSON, submittedJSON string) []string {
 	if err := json.Unmarshal([]byte(submittedJSON), &submitted); err != nil {
 		return []string{fmt.Sprintf("failed to parse submitted: %v", err)}
 	}
+	flattenResolvables(actual)
+	flattenResolvables(submitted)
 
 	var errs []string
 	for key, subVal := range submitted {
@@ -285,4 +344,80 @@ func CheckCommandCompleteness(commands []CommandState) []Violation {
 		}
 	}
 	return violations
+}
+
+// CheckResolvableProperties verifies that child/grandchild resources in
+// inventory have their ParentId correctly resolved to the parent's Name.
+func CheckResolvableProperties(inventory []pkgmodel.Resource, pool *ResourcePool,
+	stackLabel string, appliedIDs []int) []Violation {
+	var violations []Violation
+
+	// Build inventory lookup by label
+	invByLabel := make(map[string]pkgmodel.Resource)
+	for _, res := range inventory {
+		invByLabel[res.Label] = res
+	}
+
+	for _, idx := range appliedIDs {
+		// Only check child/grandchild resources (those with a parent)
+		if pool.IsParent(idx) {
+			continue
+		}
+
+		label := pool.LabelForStack(stackLabel, idx)
+		res, ok := invByLabel[label]
+		if !ok {
+			continue // Resource not in inventory yet, skip
+		}
+
+		// Parse properties
+		var props map[string]any
+		if err := json.Unmarshal(res.Properties, &props); err != nil {
+			violations = append(violations, Violation{
+				Kind:    ViolationResolvableNotResolved,
+				Message: fmt.Sprintf("failed to parse properties for %s: %v", label, err),
+			})
+			continue
+		}
+
+		// Check ParentId field
+		parentID, ok := props["ParentId"]
+		if !ok {
+			violations = append(violations, Violation{
+				Kind:    ViolationResolvableNotResolved,
+				Message: fmt.Sprintf("resource %s missing ParentId field", label),
+			})
+			continue
+		}
+
+		// Extract the resolved value and compare to expected parent name
+		expectedParentName := pool.LabelForStack(stackLabel, pool.Slots[idx].ParentIndex)
+		resolvedValue := extractResolvedValue(parentID)
+
+		if resolvedValue != expectedParentName {
+			violations = append(violations, Violation{
+				Kind: ViolationResolvableNotResolved,
+				Message: fmt.Sprintf("resource %s: ParentId resolved to %q, expected %q",
+					label, resolvedValue, expectedParentName),
+			})
+		}
+	}
+	return violations
+}
+
+// extractResolvedValue extracts the resolved value from a property value.
+// If it's a resolvable wrapper object (with $value key), returns the $value as string.
+// If it's a plain string, returns it as-is.
+func extractResolvedValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case map[string]any:
+		if resolved, ok := val["$value"]; ok {
+			if s, ok := resolved.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }

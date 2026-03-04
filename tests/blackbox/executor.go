@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -22,6 +21,12 @@ import (
 )
 
 const defaultCommandTimeout = 10 * time.Second
+
+// Default property templates for destroy formas (values don't matter, only identifiers).
+const (
+	defaultDestroyParentProps = `{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`
+	defaultDestroyChildProps  = `{"Name":"NAME","ParentId":"PARENT_ID","Value":"v1"}`
+)
 
 // testResourceSchema is the schema for Test::Generic::Resource, matching the
 // test plugin's SchemaForResourceType. Resources in test formas must include
@@ -40,6 +45,12 @@ var testResourceSchema = pkgmodel.Schema{
 			UpdateMethod: pkgmodel.FieldUpdateMethodArray,
 		},
 	},
+}
+
+// testChildResourceSchema is the schema for child/grandchild resources.
+var testChildResourceSchema = pkgmodel.Schema{
+	Identifier: "Name",
+	Fields:     []string{"Name", "ParentId", "Value"},
 }
 
 // resetTimeout is the timeout for each phase of ResetAgentState.
@@ -111,9 +122,10 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 		t.Logf("ResetAgentState: cleanup command %s: %s (destroyed %d, attempt %d)",
 			resp.CommandID, cmd.State, len(forma.Resources), attempt+1)
 
-		// Brief pause to let the ResourcePersister drain any outstanding
-		// messages from prior commands before we re-check inventory.
-		time.Sleep(500 * time.Millisecond)
+		// Pause to let the ResourcePersister drain outstanding messages.
+		// With hierarchical resources the persist queue can be deep, so
+		// we allow generous time for the sequential actor to catch up.
+		time.Sleep(2 * time.Second)
 	}
 
 	// Final check — if resources remain after all attempts, fail.
@@ -126,51 +138,43 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 	}
 }
 
-// waitForAllCommandsTerminal polls until no commands from this client are
+// waitForAllCommandsTerminal polls until no commands (from any client) are
 // in a non-terminal state (InProgress, Pending). This prevents the next
-// rapid iteration from racing with leftover commands from a prior iteration.
+// rapid iteration from racing with leftover commands from a prior iteration
+// or background commands (auto-reconcile, sync).
 func (h *TestHarness) waitForAllCommandsTerminal(t *testing.T, timeout time.Duration) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
-	sawCommands := false
 	for time.Now().Before(deadline) {
-		statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
-		if err != nil {
-			if !sawCommands {
-				// The API returns a 500 when no commands exist for the client.
-				// On the first query, treat this as "no commands" (vacuously terminal).
-				return
+		// Check for ANY non-terminal commands, including background
+		// auto-reconcile and sync commands that can conflict with cleanup.
+		allDone := true
+		for _, status := range []string{"InProgress", "Pending"} {
+			resp, err := h.client.GetFormaCommandsStatus("status:"+status, clientID, 100)
+			if err != nil {
+				// API error — transient, retry.
+				allDone = false
+				break
 			}
-			// Once we've seen commands, errors are transient — keep retrying.
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-
-		if len(statusResp.Commands) > 0 {
-			sawCommands = true
-		}
-
-		allTerminal := true
-		for _, cmd := range statusResp.Commands {
-			if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
-				allTerminal = false
+			if resp != nil && len(resp.Commands) > 0 {
+				allDone = false
 				break
 			}
 		}
-
-		if allTerminal {
+		if allDone {
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Log which commands are still running for diagnostics.
-	statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
-	if err == nil {
-		for _, cmd := range statusResp.Commands {
-			if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
-				t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s", cmd.CommandID, cmd.State, cmd.Command)
+	for _, status := range []string{"InProgress", "Pending"} {
+		resp, _ := h.client.GetFormaCommandsStatus("status:"+status, clientID, 100)
+		if resp != nil {
+			for _, cmd := range resp.Commands {
+				t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s",
+					cmd.CommandID, cmd.State, cmd.Command)
 			}
 		}
 	}
@@ -248,9 +252,9 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 	violations = append(violations, CheckInvariants(inventory, cloudState, "cloud-")...)
 
 	for _, v := range violations {
-		t.Errorf("invariant violation: %s", v.Message)
+		t.Logf("invariant violation: %s", v.Message)
 	}
-	assert.Empty(t, violations, "no invariant violations expected")
+	require.Empty(t, violations, "no invariant violations expected")
 }
 
 // waitAndCheckCommandCompleteness polls until all commands from this client are
@@ -327,7 +331,12 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	}
 
 	stackLabel := model.Stack(op.StackIndex).Label
-	forma := FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
+	var forma *pkgmodel.Forma
+	if model.Pool != nil {
+		forma = FormaFromPoolResources(model.Pool, stackLabel, op.ResourceIDs, op.Properties, op.ChildProperties)
+	} else {
+		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
+	}
 	resp, err := h.client.ApplyForma(forma, mode, false, clientID, false)
 	if err != nil {
 		// Patch may be rejected if resources don't exist, conflicts, etc.
@@ -377,7 +386,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 			}
 
 			// Post-apply property verification
-			h.verifyPostApplyProperties(t, op, mode, stackLabel)
+			h.verifyPostApplyProperties(t, op, mode, stackLabel, model)
 		} else {
 			// Command failed — resources may have been partially created.
 			// Mark them as uncertain since we don't know which succeeded.
@@ -415,6 +424,27 @@ func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateMo
 	}
 
 	stackLabel := model.Stack(op.StackIndex).Label
+
+	// When OnDependents is set, we're operating with a resource pool hierarchy.
+	// "abort" = skip if cascades would be required; "cascade" = destroy dependents too.
+	// When empty (flat resources / no pool), keep existing behavior.
+	if op.OnDependents == "abort" {
+		h.executeDestroyAbort(t, op, model, stackLabel, existingIDs)
+		return
+	}
+	if op.OnDependents == "cascade" {
+		h.executeDestroyCascade(t, op, model, stackLabel, existingIDs)
+		return
+	}
+
+	// Default path: no on-dependents behavior (flat resources).
+	h.executeDestroyDefault(t, op, model, stackLabel, existingIDs)
+}
+
+// executeDestroyDefault is the original destroy logic for flat resources (no pool hierarchy).
+func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
+	t.Helper()
+
 	forma := FormaFromStackResources(stackLabel, existingIDs)
 	resp, err := h.client.DestroyForma(forma, false, clientID)
 	if err != nil {
@@ -464,6 +494,164 @@ func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateMo
 			ResourceIDs: existingIDs,
 		})
 		t.Logf("[op %d] Destroy stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+	}
+}
+
+// executeDestroyAbort handles destroy with on-dependents="abort". If any resource
+// in the drawn set has existing descendants, we simulate first and check for
+// cascade resource updates. If cascades are found, we abort the destroy entirely.
+// If no cascades (leaf resources or descendants already gone), we proceed normally.
+func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
+	t.Helper()
+
+	// Check whether any drawn resource has existing descendants in the model.
+	hasDependents := false
+	for _, idx := range existingIDs {
+		if model.HasExistingDescendants(op.StackIndex, idx) {
+			hasDependents = true
+			break
+		}
+	}
+
+	forma := FormaFromPoolResources(model.Pool, stackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+
+	if hasDependents {
+		// Simulate to check whether the agent would create cascade deletes.
+		simResp, err := h.client.DestroyForma(forma, true, clientID)
+		if err != nil {
+			t.Logf("[op %d] Destroy (abort) stack=%s resources %v → simulate error: %v", op.SequenceNum, stackLabel, existingIDs, err)
+			return
+		}
+
+		// Check the simulation for cascade resource updates.
+		for _, ru := range simResp.Simulation.Command.ResourceUpdates {
+			if ru.IsCascade {
+				t.Logf("[op %d] Destroy (abort) stack=%s resources %v → skipped (cascade dependents detected in simulation)", op.SequenceNum, stackLabel, existingIDs)
+				return
+			}
+		}
+
+		// No cascades found — model's view was stale or descendants were
+		// already removed. Fall through to actually execute the destroy.
+	}
+
+	// No dependents (or simulation confirmed no cascades) — proceed with real destroy.
+	resp, err := h.client.DestroyForma(forma, false, clientID)
+	if err != nil {
+		t.Logf("[op %d] Destroy (abort) stack=%s resources %v → error: %v", op.SequenceNum, stackLabel, existingIDs, err)
+		return
+	}
+
+	if !resp.Simulation.ChangesRequired {
+		t.Logf("[op %d] Destroy (abort) stack=%s resources %v → no changes required", op.SequenceNum, stackLabel, existingIDs)
+		return
+	}
+
+	commandID := resp.CommandID
+	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+
+	// Since the abort path only proceeds when simulation confirmed no cascades,
+	// only the explicitly drawn resources can be affected — descendants are safe.
+	if op.Blocking {
+		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
+		if !ok {
+			for _, id := range existingIDs {
+				model.MarkUncertain(op.StackIndex, id)
+			}
+			t.Logf("[op %d] Destroy (abort) command %s timed out (resources marked uncertain)", op.SequenceNum, commandID)
+			return
+		}
+
+		if cmd.State == "Success" {
+			model.ApplyDestroyed(op.StackIndex, existingIDs)
+		} else {
+			for _, id := range existingIDs {
+				model.MarkUncertain(op.StackIndex, id)
+			}
+		}
+		t.Logf("[op %d] Destroy (abort) completed: %s", op.SequenceNum, cmd.State)
+	} else {
+		for _, id := range existingIDs {
+			model.MarkUncertain(op.StackIndex, id)
+		}
+		model.AddPendingCommand(op.StackIndex, &PendingCommand{
+			CommandID:   commandID,
+			Kind:        CommandKindDestroy,
+			StackLabel:  stackLabel,
+			ResourceIDs: existingIDs,
+		})
+		t.Logf("[op %d] Destroy (abort) stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+	}
+}
+
+// executeDestroyCascade handles destroy with on-dependents="cascade". The agent
+// will automatically cascade-delete dependents. On success, we mark the drawn
+// resources and all their descendants as destroyed in the state model.
+func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
+	t.Helper()
+
+	forma := FormaFromPoolResources(model.Pool, stackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+
+	resp, err := h.client.DestroyForma(forma, false, clientID)
+	if err != nil {
+		t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → error: %v", op.SequenceNum, stackLabel, existingIDs, err)
+		return
+	}
+
+	if !resp.Simulation.ChangesRequired {
+		t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → no changes required", op.SequenceNum, stackLabel, existingIDs)
+		return
+	}
+
+	commandID := resp.CommandID
+	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+
+	if op.Blocking {
+		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
+		if !ok {
+			// Timed out — mark drawn resources and all descendants uncertain.
+			h.markWithDescendantsUncertain(model, op.StackIndex, existingIDs)
+			t.Logf("[op %d] Destroy (cascade) command %s timed out (resources marked uncertain)", op.SequenceNum, commandID)
+			return
+		}
+
+		if cmd.State == "Success" {
+			// Mark each drawn resource and all its descendants as destroyed.
+			for _, idx := range existingIDs {
+				if model.Pool.HasDescendants(idx) {
+					model.ApplyCascadeDestroyed(op.StackIndex, idx)
+				} else {
+					model.ApplyDestroyed(op.StackIndex, []int{idx})
+				}
+			}
+		} else {
+			h.markWithDescendantsUncertain(model, op.StackIndex, existingIDs)
+		}
+		t.Logf("[op %d] Destroy (cascade) completed: %s", op.SequenceNum, cmd.State)
+	} else {
+		// Fire-and-forget: mark drawn resources and descendants uncertain.
+		h.markWithDescendantsUncertain(model, op.StackIndex, existingIDs)
+		model.AddPendingCommand(op.StackIndex, &PendingCommand{
+			CommandID:    commandID,
+			Kind:         CommandKindDestroy,
+			StackLabel:   stackLabel,
+			ResourceIDs:  existingIDs,
+			OnDependents: "cascade",
+		})
+		t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+	}
+}
+
+// markWithDescendantsUncertain marks each resource in ids plus all its pool
+// descendants as uncertain in the state model.
+func (h *TestHarness) markWithDescendantsUncertain(model *StateModel, stackIndex int, ids []int) {
+	for _, idx := range ids {
+		model.MarkUncertain(stackIndex, idx)
+		if model.Pool != nil {
+			for _, descIdx := range model.Pool.AllDescendants(idx) {
+				model.MarkUncertain(stackIndex, descIdx)
+			}
+		}
 	}
 }
 
@@ -530,6 +718,11 @@ func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation) {
 	t.Helper()
 	h.PutCloudState(t, op.NativeID, op.ResourceType, op.Properties)
 	t.Logf("[op %d] CloudCreate: %s (%s)", op.SequenceNum, op.NativeID, op.ResourceType)
+
+	for _, child := range op.CloudChildren {
+		h.PutCloudState(t, child.NativeID, child.ResourceType, child.Properties)
+		t.Logf("[op %d] CloudCreate child: %s (%s)", op.SequenceNum, child.NativeID, child.ResourceType)
+	}
 }
 
 // verifyPostApplyProperties checks resource properties after a successful
@@ -538,20 +731,39 @@ func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation) {
 // The inventory may not reflect the latest command's changes immediately
 // because the ResourcePersister processes updates asynchronously after the
 // command reaches "Success". We poll briefly to account for this lag.
-func (h *TestHarness) verifyPostApplyProperties(t *testing.T, op *Operation, mode pkgmodel.FormaApplyMode, stackLabel string) {
+func (h *TestHarness) verifyPostApplyProperties(t *testing.T, op *Operation, mode pkgmodel.FormaApplyMode, stackLabel string, model *StateModel) {
 	t.Helper()
 
 	// Build the expected properties per resource label
 	desiredProps := make(map[string]string)
 	labels := make([]string, len(op.ResourceIDs))
-	for i, id := range op.ResourceIDs {
-		label := resourceLabelForStack(stackLabel, id)
-		labels[i] = label
-		desiredProps[label] = strings.Replace(op.Properties, `"NAME"`, `"`+label+`"`, 1)
+	if model != nil && model.Pool != nil {
+		pool := model.Pool
+		for i, id := range op.ResourceIDs {
+			label := pool.LabelForStack(stackLabel, id)
+			labels[i] = label
+			if pool.IsParent(id) {
+				desiredProps[label] = strings.Replace(op.Properties, `"NAME"`, `"`+label+`"`, 1)
+			} else {
+				parentLabel := pool.ParentLabelForStack(stackLabel, id)
+				props := strings.Replace(op.ChildProperties, `"NAME"`, `"`+label+`"`, 1)
+				props = strings.Replace(props, `"PARENT_ID"`, `"`+parentLabel+`"`, 1)
+				desiredProps[label] = props
+			}
+		}
+	} else {
+		for i, id := range op.ResourceIDs {
+			label := resourceLabelForStack(stackLabel, id)
+			labels[i] = label
+			desiredProps[label] = strings.Replace(op.Properties, `"NAME"`, `"`+label+`"`, 1)
+		}
 	}
 
 	// Poll inventory until properties match or timeout.
-	deadline := time.Now().Add(5 * time.Second)
+	// The ResourcePersister processes updates asynchronously after the changeset
+	// completes. With resolvable references ($res), the resolution step adds
+	// extra processing time, so we allow a generous timeout.
+	deadline := time.Now().Add(10 * time.Second)
 	var lastViolations []Violation
 	for time.Now().Before(deadline) {
 		forma, err := h.client.ExtractResources("managed:true")
@@ -571,6 +783,11 @@ func (h *TestHarness) verifyPostApplyProperties(t *testing.T, op *Operation, mod
 			lastViolations = CheckPatchProperties(inventory, labels, desiredProps)
 		}
 
+		// Add resolvable reference checks for hierarchical resources
+		if len(lastViolations) == 0 && model != nil && model.Pool != nil {
+			lastViolations = CheckResolvableProperties(inventory, model.Pool, stackLabel, op.ResourceIDs)
+		}
+
 		if len(lastViolations) == 0 {
 			return
 		}
@@ -578,8 +795,9 @@ func (h *TestHarness) verifyPostApplyProperties(t *testing.T, op *Operation, mod
 	}
 
 	for _, v := range lastViolations {
-		t.Errorf("post-apply property violation: %s", v.Message)
+		t.Logf("post-apply property violation: %s", v.Message)
 	}
+	require.Empty(t, lastViolations, "post-apply property violations")
 }
 
 // hasAnyPendingCommands returns true if any stack has pending fire-and-forget commands.
@@ -604,8 +822,12 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 			result, ok := h.TryWaitForCommandDone(cmdID, timeout)
 			if !ok {
 				// Timed out — mark all resources uncertain
-				for _, id := range cmd.ResourceIDs {
-					model.MarkUncertain(stackIdx, id)
+				if cmd.OnDependents == "cascade" && model.Pool != nil {
+					h.markWithDescendantsUncertain(model, stackIdx, cmd.ResourceIDs)
+				} else {
+					for _, id := range cmd.ResourceIDs {
+						model.MarkUncertain(stackIdx, id)
+					}
 				}
 				t.Logf("DrainPendingCommands: command %s timed out (resources marked uncertain)", cmdID)
 				model.RemovePendingCommand(stackIdx, cmdID)
@@ -618,11 +840,25 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 					props := resourceProperties(cmd.StackLabel, cmd.ResourceIDs, cmd.Properties)
 					model.ApplyCreated(stackIdx, cmd.ResourceIDs, props)
 				case CommandKindDestroy:
-					model.ApplyDestroyed(stackIdx, cmd.ResourceIDs)
+					if cmd.OnDependents == "cascade" && model.Pool != nil {
+						for _, idx := range cmd.ResourceIDs {
+							if model.Pool.HasDescendants(idx) {
+								model.ApplyCascadeDestroyed(stackIdx, idx)
+							} else {
+								model.ApplyDestroyed(stackIdx, []int{idx})
+							}
+						}
+					} else {
+						model.ApplyDestroyed(stackIdx, cmd.ResourceIDs)
+					}
 				}
 			} else {
-				for _, id := range cmd.ResourceIDs {
-					model.MarkUncertain(stackIdx, id)
+				if cmd.OnDependents == "cascade" && model.Pool != nil {
+					h.markWithDescendantsUncertain(model, stackIdx, cmd.ResourceIDs)
+				} else {
+					for _, id := range cmd.ResourceIDs {
+						model.MarkUncertain(stackIdx, id)
+					}
 				}
 			}
 			t.Logf("DrainPendingCommands: command %s completed: %s", cmdID, result.State)
@@ -909,6 +1145,77 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 			Properties: json.RawMessage(props),
 			Schema:     testResourceSchema,
 			Managed:    true,
+		}
+	}
+
+	return &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{
+			{Label: stackLabel},
+		},
+		Resources: resources,
+		Targets: []pkgmodel.Target{
+			{
+				Label:     "test-target",
+				Namespace: "Test",
+			},
+		},
+	}
+}
+
+// FormaFromPoolResources builds a forma using the resource pool, with correct
+// types, schemas, and resolvable ParentId references for child/grandchild slots.
+// parentProps is the properties template for Test::Generic::Resource (with "NAME" placeholder).
+// childProps is the properties template for child/grandchild types (with "NAME" and "PARENT_ID" placeholders).
+func FormaFromPoolResources(pool *ResourcePool, stackLabel string, ids []int,
+	parentProps string, childProps string) *pkgmodel.Forma {
+
+	resources := make([]pkgmodel.Resource, 0, len(ids))
+
+	for _, idx := range ids {
+		slot := pool.Slots[idx]
+		label := pool.LabelForStack(stackLabel, idx)
+
+		switch {
+		case pool.IsParent(idx):
+			// Parent resource — use parent properties template
+			props := strings.Replace(parentProps, `"NAME"`, `"`+label+`"`, 1)
+			resources = append(resources, pkgmodel.Resource{
+				Label:      label,
+				Type:       slot.Type,
+				Stack:      stackLabel,
+				Target:     "test-target",
+				Properties: json.RawMessage(props),
+				Schema:     testResourceSchema,
+				Managed:    true,
+			})
+
+		default:
+			// Child or grandchild — use child properties template with resolvable ParentId
+			props := strings.Replace(childProps, `"NAME"`, `"`+label+`"`, 1)
+
+			// Build the resolvable $res object for ParentId.
+			// The metastructure expects {"$res":true, "$label":"...", "$type":"...",
+			// "$stack":"...", "$property":"..."} — NOT raw {"$ref":"formae://..."}.
+			parentLabel := pool.ParentLabelForStack(stackLabel, idx)
+			parentType := pool.ParentType(idx)
+			resObj, _ := json.Marshal(map[string]any{
+				"$res":      true,
+				"$label":    parentLabel,
+				"$type":     parentType,
+				"$stack":    stackLabel,
+				"$property": "Name",
+			})
+			props = strings.Replace(props, `"PARENT_ID"`, string(resObj), 1)
+
+			resources = append(resources, pkgmodel.Resource{
+				Label:      label,
+				Type:       slot.Type,
+				Stack:      stackLabel,
+				Target:     "test-target",
+				Properties: json.RawMessage(props),
+				Schema:     testChildResourceSchema,
+				Managed:    true,
+			})
 		}
 	}
 

@@ -51,6 +51,24 @@ func (p *TestPlugin) SupportedResources() []plugin.ResourceDescriptor {
 			Type:         "Test::Generic::Resource",
 			Discoverable: true,
 		},
+		{
+			Type:         "Test::Generic::ChildResource",
+			Discoverable: true,
+			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
+				"Test::Generic::Resource": {
+					{ParentProperty: "Name", ListProperty: "ParentId", QueryPath: "$.Name"},
+				},
+			},
+		},
+		{
+			Type:         "Test::Generic::GrandchildResource",
+			Discoverable: true,
+			ParentResourceTypesWithMappingProperties: map[string][]plugin.ListParameter{
+				"Test::Generic::ChildResource": {
+					{ParentProperty: "Name", ListProperty: "ParentId", QueryPath: "$.Name"},
+				},
+			},
+		},
 	}
 }
 
@@ -62,19 +80,29 @@ func (p *TestPlugin) RateLimit() plugin.RateLimitConfig {
 }
 
 func (p *TestPlugin) SchemaForResourceType(resourceType string) (model.Schema, error) {
-	return model.Schema{
-		Identifier: "Name",
-		Fields:     []string{"Name", "Value", "SetTags", "EntityTags", "OrderedItems"},
-		Hints: map[string]model.FieldHint{
-			"EntityTags": {
-				UpdateMethod: model.FieldUpdateMethodEntitySet,
-				IndexField:   "Key",
+	switch resourceType {
+	case "Test::Generic::Resource":
+		return model.Schema{
+			Identifier: "Name",
+			Fields:     []string{"Name", "Value", "SetTags", "EntityTags", "OrderedItems"},
+			Hints: map[string]model.FieldHint{
+				"EntityTags": {
+					UpdateMethod: model.FieldUpdateMethodEntitySet,
+					IndexField:   "Key",
+				},
+				"OrderedItems": {
+					UpdateMethod: model.FieldUpdateMethodArray,
+				},
 			},
-			"OrderedItems": {
-				UpdateMethod: model.FieldUpdateMethodArray,
-			},
-		},
-	}, nil
+		}, nil
+	case "Test::Generic::ChildResource", "Test::Generic::GrandchildResource":
+		return model.Schema{
+			Identifier: "Name",
+			Fields:     []string{"Name", "ParentId", "Value"},
+		}, nil
+	default:
+		return model.Schema{}, fmt.Errorf("unknown resource type: %s", resourceType)
+	}
 }
 
 func (p *TestPlugin) Create(_ context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
@@ -190,7 +218,15 @@ func (p *TestPlugin) List(_ context.Context, request *resource.ListRequest) (*re
 		}
 	}
 
-	ids := p.cloudState.ListNativeIDs(request.ResourceType)
+	var ids []string
+	if len(request.AdditionalProperties) > 0 {
+		for field, value := range request.AdditionalProperties {
+			ids = p.cloudState.ListNativeIDsFiltered(request.ResourceType, field, value)
+			break
+		}
+	} else {
+		ids = p.cloudState.ListNativeIDs(request.ResourceType)
+	}
 	if ids == nil {
 		ids = []string{}
 	}

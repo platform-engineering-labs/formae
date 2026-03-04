@@ -287,3 +287,20 @@ func TestSchemaForResourceType_HasCollectionHints(t *testing.T) {
 	assert.True(t, hasOrderedItems)
 	assert.Equal(t, model.FieldUpdateMethodArray, arrayHint.UpdateMethod)
 }
+
+func TestPlugin_List_FiltersByParentId(t *testing.T) {
+	cs := NewCloudState()
+	cs.Put("child-1", "Test::Generic::ChildResource", `{"Name":"child-a-0","ParentId":"parent-a","Value":"v1"}`)
+	cs.Put("child-2", "Test::Generic::ChildResource", `{"Name":"child-b-0","ParentId":"parent-b","Value":"v2"}`)
+
+	p := &TestPlugin{cloudState: cs}
+
+	result, err := p.List(context.Background(), &resource.ListRequest{
+		ResourceType: "Test::Generic::ChildResource",
+		AdditionalProperties: map[string]string{
+			"ParentId": "parent-a",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"child-1"}, result.NativeIDs)
+}
