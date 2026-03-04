@@ -56,6 +56,11 @@ jobs:
         run: make local-data-api-ci
 
       - name: Run full mutation test suite
+        env:
+          FORMAE_TEST_AURORA_CLUSTER_ARN: arn:aws:rds:us-east-1:123456789012:cluster:local
+          FORMAE_TEST_AURORA_SECRET_ARN: arn:aws:secretsmanager:us-east-1:123456789012:secret:local
+          FORMAE_TEST_AURORA_DATABASE: postgres
+          FORMAE_TEST_AURORA_ENDPOINT: http://localhost:80
         run: ./scripts/mutation-test.sh
 
       - name: Generate coverage diff
