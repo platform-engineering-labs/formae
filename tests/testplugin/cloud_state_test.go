@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/platform-engineering-labs/formae/tests/testcontrol"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCloudState_CreateAndGet(t *testing.T) {
@@ -152,4 +153,19 @@ func TestCloudState_Snapshot(t *testing.T) {
 	if ok {
 		t.Fatal("native-3 should not exist in original after adding to snapshot")
 	}
+}
+
+func TestCloudState_ListNativeIDsFiltered(t *testing.T) {
+	cs := NewCloudState()
+	cs.Put("parent-1", "Test::Generic::Resource", `{"Name":"parent-a","Value":"v1"}`)
+	cs.Put("child-1", "Test::Generic::ChildResource", `{"Name":"child-a-0","ParentId":"parent-a","Value":"v2"}`)
+	cs.Put("child-2", "Test::Generic::ChildResource", `{"Name":"child-b-0","ParentId":"parent-b","Value":"v3"}`)
+
+	// Filter children by ParentId=parent-a
+	ids := cs.ListNativeIDsFiltered("Test::Generic::ChildResource", "ParentId", "parent-a")
+	assert.Equal(t, []string{"child-1"}, ids)
+
+	// Filter with non-matching value
+	ids = cs.ListNativeIDsFiltered("Test::Generic::ChildResource", "ParentId", "nonexistent")
+	assert.Empty(t, ids)
 }

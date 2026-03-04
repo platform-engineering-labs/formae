@@ -72,6 +72,12 @@ type Operation struct {
 	// For OpInjectLatency: how long to delay.
 	Latency time.Duration
 
+	// For OpDestroy: "abort" or "cascade" (how to handle dependent resources).
+	OnDependents string
+
+	// For OpApply: properties template for child/grandchild resources.
+	ChildProperties string
+
 	// For OpCloudModify/OpCloudCreate: the properties JSON to set.
 	Properties string
 
@@ -81,8 +87,18 @@ type Operation struct {
 	// For OpCloudModify/OpCloudDelete/OpCloudCreate: the native ID.
 	NativeID string
 
+	// For OpCloudCreate: child resources to create alongside the parent (OOB tuples).
+	CloudChildren []CloudChildResource
+
 	// Set during execution to track ordering.
 	SequenceNum int
+}
+
+// CloudChildResource represents a child resource in an out-of-band cloud create tuple.
+type CloudChildResource struct {
+	NativeID     string
+	ResourceType string
+	Properties   string
 }
 
 // CommandKind classifies whether a pending command is an apply or destroy.
@@ -95,11 +111,12 @@ const (
 
 // PendingCommand tracks a fire-and-forget command that hasn't completed yet.
 type PendingCommand struct {
-	CommandID   string
-	Kind        CommandKind
-	StackLabel  string
-	ResourceIDs []int
-	Properties  string
+	CommandID    string
+	Kind         CommandKind
+	StackLabel   string
+	ResourceIDs  []int
+	Properties   string
+	OnDependents string // "cascade" when destroy should mark descendants destroyed too
 }
 
 // Range represents a min/max integer range for generators.

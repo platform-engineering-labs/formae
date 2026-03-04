@@ -21,7 +21,7 @@ func TestProperty_SequentialHappyPath(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:  5,
+				ResourceCount:  10,
 				OperationCount: Range{Min: 3, Max: 10},
 				StackCount:     1,
 			}
@@ -50,7 +50,7 @@ func TestProperty_SequentialWithFailures(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:  5,
+				ResourceCount:  10,
 				OperationCount: Range{Min: 3, Max: 10},
 				StackCount:     1,
 				EnableFailures: true,
@@ -85,7 +85,7 @@ func TestProperty_ConcurrentMultiStack(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:     3,
+				ResourceCount:     10,
 				OperationCount:    Range{Min: 5, Max: 15},
 				StackCount:        3,
 				EnableConcurrency: true,
@@ -115,7 +115,7 @@ func TestProperty_ConcurrentWithFailures(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:     3,
+				ResourceCount:     10,
 				OperationCount:    Range{Min: 5, Max: 15},
 				StackCount:        3,
 				EnableConcurrency: true,
@@ -147,7 +147,7 @@ func TestProperty_FullChaos(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:      3,
+				ResourceCount:      10,
 				OperationCount:     Range{Min: 5, Max: 15},
 				StackCount:         3,
 				EnableConcurrency:  true,

@@ -9,6 +9,7 @@ package blackbox
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,17 +72,33 @@ func stackIndexGen(t *rapid.T, config PropertyTestConfig) int {
 
 // fillOperationFields populates the kind-specific fields on the operation.
 func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
+	// Create pool once for tree-aware resource generation.
+	var pool *ResourcePool
+	if config.ResourceCount%SlotsPerTree == 0 {
+		pool = NewResourcePool(config.ResourceCount)
+	}
+
 	switch op.Kind {
 	case OpApply:
 		op.StackIndex = stackIndexGen(t, config)
-		op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
+		if pool != nil {
+			op.ResourceIDs = resourceIDsGenWithPool(t, pool, 1)
+			op.ChildProperties = childPropsGen(t)
+		} else {
+			op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
+		}
 		op.ApplyMode = applyModeGen(t, config)
 		op.Blocking = blockingGen(t, config)
 		op.Properties = resourcePropsGen(t)
 
 	case OpDestroy:
 		op.StackIndex = stackIndexGen(t, config)
-		op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
+		if pool != nil {
+			op.ResourceIDs = resourceIDsGenWithPool(t, pool, 1)
+			op.OnDependents = onDependentsGen(t)
+		} else {
+			op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
+		}
 		op.Blocking = blockingGen(t, config)
 
 	case OpCancel:
@@ -111,8 +128,31 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 
 	case OpCloudCreate:
 		op.NativeID = cloudNativeIDGen(t)
-		op.ResourceType = "Test::Generic::Resource"
 		op.Properties = cloudPropertiesGen(t)
+		op.ResourceType = "Test::Generic::Resource"
+		if pool != nil {
+			tupleSize := rapid.IntRange(1, 3).Draw(t, "tupleSize")
+			if tupleSize >= 2 {
+				parentName := extractNameFromProps(op.Properties)
+				childNativeID := op.NativeID + "-child-0"
+				childProps := cloudChildPropsGen(t, parentName)
+				op.CloudChildren = append(op.CloudChildren, CloudChildResource{
+					NativeID:     childNativeID,
+					ResourceType: "Test::Generic::ChildResource",
+					Properties:   childProps,
+				})
+				if tupleSize >= 3 {
+					childName := extractNameFromProps(childProps)
+					gcNativeID := op.NativeID + "-gc-0"
+					gcProps := cloudChildPropsGen(t, childName)
+					op.CloudChildren = append(op.CloudChildren, CloudChildResource{
+						NativeID:     gcNativeID,
+						ResourceType: "Test::Generic::GrandchildResource",
+						Properties:   gcProps,
+					})
+				}
+			}
+		}
 	}
 }
 
@@ -131,6 +171,57 @@ func resourceIDsGen(t *rapid.T, poolSize int, minCount int) []int {
 		all[i], all[j] = all[j], all[i]
 	}
 	return all[:count]
+}
+
+// resourceIDsGenWithPool generates resource indices from the tree pool,
+// ensuring full ancestry is included for any drawn child/grandchild.
+func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, minCount int) []int {
+	count := rapid.IntRange(minCount, len(pool.Slots)).Draw(t, "resCount")
+
+	// Draw from shuffled pool
+	all := make([]int, len(pool.Slots))
+	for i := range all {
+		all[i] = i
+	}
+	for i := len(all) - 1; i > 0; i-- {
+		j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("shuffle-%d", i))
+		all[i], all[j] = all[j], all[i]
+	}
+	drawn := all[:count]
+
+	// Expand to include full ancestry
+	selected := make(map[int]bool)
+	for _, idx := range drawn {
+		for _, ancestor := range pool.AncestryChain(idx) {
+			selected[ancestor] = true
+		}
+	}
+
+	result := make([]int, 0, len(selected))
+	for idx := range selected {
+		result = append(result, idx)
+	}
+	sort.Ints(result)
+	return result
+}
+
+// childPropsGen generates a JSON properties string for child/grandchild resources.
+// Name and ParentId are placeholders replaced during forma building.
+func childPropsGen(t *rapid.T) string {
+	value := scalarValues[rapid.IntRange(0, len(scalarValues)-1).Draw(t, "childValue")]
+	props := map[string]any{
+		"Name":     "NAME",
+		"ParentId": "PARENT_ID",
+		"Value":    value,
+	}
+	b, _ := json.Marshal(props)
+	return string(b)
+}
+
+// onDependentsGen generates the on-dependents mode for destroy operations.
+func onDependentsGen(t *rapid.T) string {
+	modes := []string{"abort", "cascade"}
+	return modes[rapid.IntRange(0, len(modes)-1).Draw(t, "onDependents")]
 }
 
 func applyModeGen(t *rapid.T, config PropertyTestConfig) string {
@@ -168,6 +259,33 @@ func cloudNativeIDGen(t *rapid.T) string {
 func cloudPropertiesGen(t *rapid.T) string {
 	name := fmt.Sprintf("cloud-res-%d", rapid.IntRange(1, 100).Draw(t, "propName"))
 	return strings.Replace(resourcePropsGen(t), `"NAME"`, `"`+name+`"`, 1)
+}
+
+// extractNameFromProps parses a properties JSON string and returns the "Name" field value.
+func extractNameFromProps(propsJSON string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(propsJSON), &m); err != nil {
+		panic(fmt.Sprintf("extractNameFromProps: invalid JSON: %v", err))
+	}
+	name, ok := m["Name"].(string)
+	if !ok {
+		panic(fmt.Sprintf("extractNameFromProps: missing or non-string Name in %s", propsJSON))
+	}
+	return name
+}
+
+// cloudChildPropsGen generates cloud state properties for a child/grandchild resource.
+// The ParentId is set to a plain string (not a resolvable) matching the parent's Name.
+func cloudChildPropsGen(t *rapid.T, parentName string) string {
+	value := scalarValues[rapid.IntRange(0, len(scalarValues)-1).Draw(t, "cloudChildValue")]
+	name := fmt.Sprintf("cloud-child-%d", rapid.IntRange(1, 100).Draw(t, "cloudChildName"))
+	props := map[string]any{
+		"Name":     name,
+		"ParentId": parentName,
+		"Value":    value,
+	}
+	b, _ := json.Marshal(props)
+	return string(b)
 }
 
 // --- Property generators ---
