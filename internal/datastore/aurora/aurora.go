@@ -1719,7 +1719,7 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgm
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
-	WHERE data LIKE :pattern
+	WHERE data::text LIKE :pattern
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -1778,7 +1778,7 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 	for i, ksuid := range ksuids {
 		pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
 		paramName := fmt.Sprintf("pattern%d", i)
-		conditions = append(conditions, fmt.Sprintf("data LIKE :%s", paramName))
+		conditions = append(conditions, fmt.Sprintf("data::text LIKE :%s", paramName))
 		params = append(params, types.SqlParameter{
 			Name:  aws.String(paramName),
 			Value: &types.FieldMemberStringValue{Value: pattern},
