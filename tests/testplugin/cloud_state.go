@@ -6,9 +6,11 @@ package main
 
 import (
 	"maps"
+	"sort"
 	"sync"
 
 	"github.com/platform-engineering-labs/formae/tests/testcontrol"
+	"github.com/tidwall/gjson"
 )
 
 // CloudState is a thread-safe in-memory store representing what "exists in the cloud."
@@ -67,6 +69,25 @@ func (cs *CloudState) ListNativeIDs(resourceType string) []string {
 			ids = append(ids, entry.NativeID)
 		}
 	}
+	return ids
+}
+
+// ListNativeIDsFiltered returns the NativeIDs of all entries matching the given
+// resource type where the JSON property identified by field equals value.
+func (cs *CloudState) ListNativeIDsFiltered(resourceType, field, value string) []string {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	var ids []string
+	for nativeID, entry := range cs.entries {
+		if entry.ResourceType != resourceType {
+			continue
+		}
+		if gjson.Get(entry.Properties, field).String() == value {
+			ids = append(ids, nativeID)
+		}
+	}
+	sort.Strings(ids)
 	return ids
 }
 

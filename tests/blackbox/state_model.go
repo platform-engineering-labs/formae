@@ -38,12 +38,22 @@ type StackState struct {
 type StateModel struct {
 	Stacks            []StackState
 	ResourcesPerStack int
+	Pool              *ResourcePool
 }
 
 // NewStateModel creates a state model with the given number of stacks,
 // each containing resourcesPerStack resources. All resources start as
 // not existing. Stacks are labeled "stack-0", "stack-1", etc.
+//
+// If resourcesPerStack is a multiple of SlotsPerTree, a ResourcePool is
+// created to track parent-child relationships. Otherwise the pool is nil
+// (backward compatible with flat resource tests).
 func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
+	var pool *ResourcePool
+	if resourcesPerStack%SlotsPerTree == 0 {
+		pool = NewResourcePool(resourcesPerStack)
+	}
+
 	stacks := make([]StackState, stackCount)
 	for s := range stacks {
 		resources := make(map[int]*ExpectedResource, resourcesPerStack)
@@ -62,6 +72,7 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 	return &StateModel{
 		Stacks:            stacks,
 		ResourcesPerStack: resourcesPerStack,
+		Pool:              pool,
 	}
 }
 
@@ -97,6 +108,39 @@ func (m *StateModel) ApplyDestroyed(stackIndex int, resourceIDs []int) {
 			res.Properties = ""
 		}
 	}
+}
+
+// ApplyCascadeDestroyed marks the given resource and all its descendants
+// as not existing on the given stack. This models the "on-dependents: cascade"
+// destroy behavior where deleting a parent also destroys all children and
+// grandchildren. Requires a non-nil Pool on the model; panics otherwise.
+func (m *StateModel) ApplyCascadeDestroyed(stackIndex int, rootIdx int) {
+	if m.Pool == nil {
+		panic("ApplyCascadeDestroyed requires a ResourcePool on the StateModel")
+	}
+	ids := append([]int{rootIdx}, m.Pool.AllDescendants(rootIdx)...)
+	m.ApplyDestroyed(stackIndex, ids)
+}
+
+// HasExistingDescendants returns true if any descendant of the resource at idx
+// currently has StateExists in its accept states on the given stack.
+// Requires a non-nil Pool on the model; panics otherwise.
+func (m *StateModel) HasExistingDescendants(stackIndex int, idx int) bool {
+	if m.Pool == nil {
+		panic("HasExistingDescendants requires a ResourcePool on the StateModel")
+	}
+	for _, descIdx := range m.Pool.AllDescendants(idx) {
+		res := m.Resource(stackIndex, descIdx)
+		if res == nil {
+			continue
+		}
+		for _, s := range res.AcceptStates {
+			if s == StateExists {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // MarkUncertain widens the acceptable states for a resource on the given stack
