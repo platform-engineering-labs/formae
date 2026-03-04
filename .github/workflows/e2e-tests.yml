@@ -11,10 +11,7 @@ on:
         description: 'AWS plugin branch/tag/SHA to test against (leave empty for main)'
         required: false
         default: ''
-  workflow_run:
-    workflows: ["formae-go"]  # e2e runs only after formae-go workflow completes
-    types:
-      - completed
+  pull_request:
     branches: [ "main" ]
 
 # Ensure only one test runs at a time on cloud accounts (shared with plugin-sdk-tests)
@@ -30,9 +27,6 @@ jobs:
   pre-cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' ||
-         github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - uses: actions/checkout@v4
