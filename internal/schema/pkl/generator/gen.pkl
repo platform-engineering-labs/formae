@@ -597,7 +597,7 @@ local function formatValueWithTypes(value: Any, indent: String): String =
             let (comment = if (realValue != null) "\n" + indent + "  // RealValue: \(realValue)" else "")
               typeDeclaration + " {" +
               comment + "\n" +
-              (if (stack != null) indent + "  stack = \"\(stack)\"\n" else "") +
+              (if (stack != null) indent + "  stack = \"\(stack)\" //resolvable\n" else "") +
               (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
               indent + "}.\(property)"
         else if (typeName == "FakeValue")

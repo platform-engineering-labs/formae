@@ -1,0 +1,53 @@
+{
+  "Targets": [
+    {
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
+      "Config": {
+        "Type": "TestProvider",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "infra-stack",
+      "Description": "Infrastructure stack with shared networking"
+    },
+    {
+      "Label": "app-stack",
+      "Description": "Application stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "shared-vpc",
+      "Type": "TestProvider::EC2::VPC",
+      "Stack": "infra-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true
+      }
+    },
+    {
+      "Label": "app-subnet",
+      "Type": "TestProvider::EC2::Subnet",
+      "Stack": "app-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "CidrBlock": "10.0.1.0/24",
+        "AvailabilityZone": "us-east-1a",
+        "VpcId": {
+          "$res": true,
+          "$label": "shared-vpc",
+          "$stack": "infra-stack",
+          "$type": "TestProvider::EC2::VPC",
+          "$property": "VpcId",
+          "$value": "vpc-054de33c2a2dc2f0f"
+        }
+      }
+    }
+  ]
+}

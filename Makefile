@@ -337,7 +337,7 @@ test-generator-pkl:
 		pkl eval runPklGenerator.pkl \
 			-p Json="$$(cat $$f)" > tmp/$$name.pkl && \
 		pkl eval tmp/$$name.pkl > /dev/null && \
-		echo "  OK" || echo "  FAILED"; \
+		echo "  OK" || { echo "  FAILED"; exit 1; }; \
 	done
 
 test-descriptors-pkl:
