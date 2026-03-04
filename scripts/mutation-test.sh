@@ -5,6 +5,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 REPORT_DIR="$REPO_ROOT/.mutation-report"
 mkdir -p "$REPORT_DIR"
 
+# Track packages where tests fail (gremlins can't gather coverage)
+FAILED_PACKAGES=()
+
 # Run gremlins on a single package and save JSON output.
 run_package() {
   local pkg="$1"
@@ -12,6 +15,15 @@ run_package() {
   local output_file="$REPORT_DIR/${safe_name}.json"
 
   echo "Running: $pkg"
+
+  # First verify tests pass before running mutation testing.
+  # This catches real test failures early instead of burying them
+  # in gremlins' "failed to gather coverage" output.
+  if ! go test -tags unit -count=1 -failfast "./$pkg" > /dev/null 2>&1; then
+    echo "  -> TESTS FAILED (skipping mutation testing)"
+    FAILED_PACKAGES+=("$pkg")
+    return
+  fi
 
   gremlins unleash \
     --tags unit \
@@ -46,6 +58,10 @@ find_untested_packages() {
 # Usage: ./scripts/mutation-test.sh [package-path]
 if [[ $# -eq 1 ]]; then
   run_package "$1"
+  if [[ ${#FAILED_PACKAGES[@]} -gt 0 ]]; then
+    echo "ERROR: tests failed for $1"
+    exit 1
+  fi
   echo "Done. Result in $REPORT_DIR"
   exit 0
 fi
@@ -74,4 +90,17 @@ while IFS= read -r pkg; do
 done <<< "$packages"
 
 echo ""
+
+# Report and fail on test failures
+if [[ ${#FAILED_PACKAGES[@]} -gt 0 ]]; then
+  echo "=== FAILED PACKAGES ==="
+  for pkg in "${FAILED_PACKAGES[@]}"; do
+    echo "  - $pkg"
+  done
+  echo ""
+  echo "ERROR: ${#FAILED_PACKAGES[@]} package(s) had failing tests."
+  echo "Fix the test failures above before mutation testing can cover these packages."
+  exit 1
+fi
+
 echo "Done. Results in $REPORT_DIR"
