@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@azure/azure.pkl"
+
+import "@azure/resources/resourcegroup.pkl"
+
+local testRg = new resourcegroup.ResourceGroup {
+  label = "e2e-replace-rg"
+  name = "formae-e2e-replace-rg-v2"
+  location = "westeurope"
+}
+
+local stackName = "e2e-replace-azure"
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "E2E replace test for Azure"
+  }
+
+  new formae.Target {
+    label = "e2e-azure-target"
+    config = new azure.Config {
+      subscriptionId = read("env:AZURE_SUBSCRIPTION_ID")
+    }
+  }
+
+  testRg
+}

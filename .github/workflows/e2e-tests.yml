@@ -2,15 +2,21 @@ name: formae-e2e-tests
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["formae-go"]  # e2e runs only after formae-go workflow completes
-    types:
-      - completed
+    inputs:
+      azure_plugin_ref:
+        description: 'Azure plugin branch/tag/SHA to test against (leave empty for main)'
+        required: false
+        default: ''
+      aws_plugin_ref:
+        description: 'AWS plugin branch/tag/SHA to test against (leave empty for main)'
+        required: false
+        default: ''
+  pull_request:
     branches: [ "main" ]
 
-# Ensure only one test runs at a time on AWS account (shared with plugin-sdk-tests)
+# Ensure only one test runs at a time on cloud accounts (shared with plugin-sdk-tests)
 concurrency:
-  group: aws-cloud-tests
+  group: cloud-e2e-tests
   cancel-in-progress: false
 
 permissions:
@@ -18,13 +24,83 @@ permissions:
   contents: read
 
 jobs:
+  pre-cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install aws-nuke
+        run: |
+          wget -O aws-nuke.tar.gz https://github.com/ekristen/aws-nuke/releases/download/v3.56.2/aws-nuke-v3.56.2-linux-amd64.tar.gz
+          tar -xzf aws-nuke.tar.gz
+          sudo mv aws-nuke /usr/local/bin/
+          sudo chmod +x /usr/local/bin/aws-nuke
+          aws-nuke version
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
+          role-session-name: PreCleanupSession
+
+      - name: Nuke Discovery
+        run: |
+          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
+
+      - name: Nuke AWS
+        run: |
+          aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
+
+      - name: Configure Azure Credentials
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Cleanup Azure Resource Groups
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          echo "Cleaning up leftover Azure resource groups matching formae-e2e-*"
+          for rg in $(az group list --query "[?starts_with(name, 'formae-e2e-')].name" -o tsv); do
+            echo "Deleting resource group: $rg"
+            az group delete --name "$rg" --yes --no-wait
+          done
+          # Wait for all deletions to complete
+          for rg in $(az group list --query "[?starts_with(name, 'formae-e2e-')].name" -o tsv); do
+            echo "Waiting for deletion of: $rg"
+            az group wait --name "$rg" --deleted --timeout 300 2>/dev/null || true
+          done
+
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # 1 hour timeout
-    # Only run if the triggering workflow succeeded
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' ||
-         github.event.workflow_run.conclusion == 'success' }}
+    timeout-minutes: 30
+    needs: [pre-cleanup]
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - TestReconcileApply
+          - TestPatchApply
+          - TestDiscovery
+          - TestSoftReconcile
+          - TestHardReconcile
+          - TestReplace
+          - TestAutoReconcile
+          - TestTTL
+          - TestCancelCommand
+          - TestCascadeDelete
+          - TestProjectInit
+          - TestSimulateApply
+          - TestExtractAndReapply
 
     steps:
       - uses: actions/checkout@v4
@@ -42,23 +118,10 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Install aws-nuke
-        run: |
-          wget -O aws-nuke.tar.gz https://github.com/ekristen/aws-nuke/releases/download/v3.56.2/aws-nuke-v3.56.2-linux-amd64.tar.gz
-          tar -xzf aws-nuke.tar.gz
-          sudo mv aws-nuke /usr/local/bin/
-          sudo chmod +x /usr/local/bin/aws-nuke
-          aws-nuke version
-
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.25.1'
-
-      - name: Install pkl
-        uses: pkl-community/setup-pkl@v0
-        with:
-          pkl-version: 0.30.0
 
       - name: Configure AWS Credentials
         id: creds
@@ -75,25 +138,79 @@ jobs:
           aws configure set aws_access_key_id ${{ steps.creds.outputs.aws-access-key-id }} --profile e2e-test
           aws configure set aws_secret_access_key ${{ steps.creds.outputs.aws-secret-access-key }} --profile e2e-test
           aws configure set region us-west-2 --profile e2e-test
-        # aws configure set aws_session_token ${{ steps.creds.outputs.aws-session-token }} --profile e2e-test
+
       - name: Test AWS Access
         run: aws sts get-caller-identity
 
-      - name: Running e2e-tests
+      - name: Configure Azure Credentials
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Running ${{ matrix.test }}
         env:
           AWS_PROFILE: e2e-test
-        run: make test-e2e
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: >-
+          make test-e2e
+          E2E_RUN_FLAGS="-run ${{ matrix.test }}"
+          AZURE_PLUGIN_REF="${{ github.event.inputs.azure_plugin_ref }}"
+          AWS_PLUGIN_REF="${{ github.event.inputs.aws_plugin_ref }}"
+
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [e2e]
+    if: ${{ always() }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install aws-nuke
+        run: |
+          wget -O aws-nuke.tar.gz https://github.com/ekristen/aws-nuke/releases/download/v3.56.2/aws-nuke-v3.56.2-linux-amd64.tar.gz
+          tar -xzf aws-nuke.tar.gz
+          sudo mv aws-nuke /usr/local/bin/
+          sudo chmod +x /usr/local/bin/aws-nuke
+          aws-nuke version
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::942849037363:role/admin-test-pel
+          role-session-name: NukeSession
 
       - name: Nuke Discovery
-        if: ${{ always() }}
-        #env:
-        #  AWS_PROFILE: e2e-test
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
 
       - name: Nuke AWS
-        if: ${{ always() }}
-        #env:
-        #  AWS_PROFILE: e2e-test
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --no-dry-run
+
+      - name: Configure Azure Credentials
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Cleanup Azure Resource Groups
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          echo "Cleaning up leftover Azure resource groups matching formae-e2e-*"
+          for rg in $(az group list --query "[?starts_with(name, 'formae-e2e-')].name" -o tsv); do
+            echo "Deleting resource group: $rg"
+            az group delete --name "$rg" --yes --no-wait
+          done

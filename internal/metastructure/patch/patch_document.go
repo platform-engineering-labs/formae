@@ -240,9 +240,6 @@ func containsCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnl
 }
 
 func hasValue(val any) bool {
-	if val == nil {
-		return false
-	}
 	v, ok := val.(string)
 	return !ok || len(v) > 0
 }

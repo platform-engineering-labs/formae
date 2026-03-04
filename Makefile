@@ -21,6 +21,10 @@ EXTERNAL_PLUGIN_REPOS ?= \
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins
 
+# Optional: override plugin branches for testing (e.g., AZURE_PLUGIN_REF=fix/remove-nativeid-encoding)
+AZURE_PLUGIN_REF ?=
+AWS_PLUGIN_REF ?=
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
@@ -57,6 +61,16 @@ fetch-external-plugins:
 			git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
 		fi \
 	done
+	@if [ -n "$(AZURE_PLUGIN_REF)" ]; then \
+		echo "Checking out Azure plugin ref: $(AZURE_PLUGIN_REF)"; \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" fetch origin $(AZURE_PLUGIN_REF); \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" checkout FETCH_HEAD; \
+	fi
+	@if [ -n "$(AWS_PLUGIN_REF)" ]; then \
+		echo "Checking out AWS plugin ref: $(AWS_PLUGIN_REF)"; \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" fetch origin $(AWS_PLUGIN_REF); \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" checkout FETCH_HEAD; \
+	fi
 
 ## build-external-plugins: Build all external plugins
 build-external-plugins: fetch-external-plugins
@@ -284,13 +298,11 @@ test-integration:
 	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-e2e: gen-pkl pkg-pkl build install-external-plugins
+test-e2e: build install-external-plugins
 	echo "Setting up e2e PKL dependencies..."
-	bash ./tests/e2e/setup-pkl-deps.sh
-	echo "Resolving PKL project..."
-	pkl project resolve tests/e2e/pkl
-	echo "Running full E2E test suite..."
-	bash ./tests/e2e/e2e.sh
+	bash ./tests/e2e/go/setup_pkl.sh
+	echo "Running e2e tests..."
+	E2E_FORMAE_BINARY=$(CURDIR)/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
 
 test-property:
 	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
