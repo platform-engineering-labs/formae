@@ -12,6 +12,8 @@ replace github.com/platform-engineering-labs/formae/pkg/api/model => ./pkg/api/m
 
 replace github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests => ./pkg/plugin-conformance-tests
 
+replace github.com/platform-engineering-labs/formae/pkg/auth => ./pkg/auth
+
 require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
@@ -41,6 +43,7 @@ require (
 	github.com/olekukonko/tablewriter v1.0.7
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.5
+	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.2
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260120160109-3221bac3fb58
