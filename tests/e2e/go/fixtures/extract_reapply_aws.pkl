@@ -10,8 +10,9 @@ import "@formae/formae.pkl"
 import "@aws/aws.pkl"
 
 import "@aws/iam/role.pkl"
+import "@aws/iam/rolepolicy.pkl"
 
-local testRole = new role.Role {
+local parentRole = new role.Role {
   label = "e2e-extract-reapply-role"
   roleName = "formae-e2e-extract-reapply-role"
   description = "e2e extract reapply test role"
@@ -24,6 +25,22 @@ local testRole = new role.Role {
           ["Service"] = "lambda.amazonaws.com"
         }
         ["Action"] = "sts:AssumeRole"
+      }
+    }
+  }
+}
+
+local testPolicy = new rolepolicy.RolePolicy {
+  label = "e2e-extract-reapply-policy"
+  roleName = parentRole.res.roleName
+  policyName = "formae-e2e-extract-reapply-policy"
+  policyDocument = new Dynamic {
+    ["Version"] = "2012-10-17"
+    ["Statement"] = new Listing {
+      new Dynamic {
+        ["Effect"] = "Allow"
+        ["Action"] = "logs:DescribeLogGroups"
+        ["Resource"] = "*"
       }
     }
   }
@@ -44,5 +61,7 @@ forma {
     }
   }
 
-  testRole
+  parentRole
+
+  testPolicy
 }
