@@ -8,6 +8,22 @@ mkdir -p "$REPORT_DIR"
 # Track packages where tests fail (gremlins can't gather coverage)
 FAILED_PACKAGES=()
 
+# Check whether a package belongs to the root Go module.
+# Packages with their own go.mod (like pkg/plugin) are separate modules
+# and cannot be tested with `go test ./<path>` from the root.
+is_root_module_package() {
+  local pkg="$1"
+  local dir="$pkg"
+  # Walk up from the package dir looking for a go.mod that isn't the root one
+  while [[ "$dir" != "." ]]; do
+    if [[ -f "$REPO_ROOT/$dir/go.mod" && "$dir" != "." ]]; then
+      return 1  # has its own go.mod, not a root module package
+    fi
+    dir=$(dirname "$dir")
+  done
+  return 0
+}
+
 # Run gremlins on a single package and save JSON output.
 run_package() {
   local pkg="$1"
@@ -16,13 +32,20 @@ run_package() {
 
   echo "Running: $pkg"
 
-  # First verify tests pass before running mutation testing.
+  # Pre-flight: verify tests pass before running mutation testing.
   # This catches real test failures early instead of burying them
   # in gremlins' "failed to gather coverage" output.
-  if ! go test -tags unit -count=1 -failfast "./$pkg" > /dev/null 2>&1; then
-    echo "  -> TESTS FAILED (skipping mutation testing)"
-    FAILED_PACKAGES+=("$pkg")
-    return
+  # Only run pre-flight for root module packages — packages with their own
+  # go.mod (like pkg/plugin) can't be tested from the root and gremlins
+  # handles them correctly on its own.
+  if is_root_module_package "$pkg"; then
+    local preflight_log="$REPORT_DIR/${safe_name}.preflight.log"
+    if ! go test -tags unit -count=1 -failfast "./$pkg" > "$preflight_log" 2>&1; then
+      echo "  -> TESTS FAILED (skipping mutation testing)"
+      cat "$preflight_log"
+      FAILED_PACKAGES+=("$pkg")
+      return
+    fi
   fi
 
   gremlins unleash \
