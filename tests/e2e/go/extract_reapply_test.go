@@ -45,8 +45,7 @@ func TestExtractAndReapply(t *testing.T) {
 	cli.ExtractToFile(t, "stack:e2e-extract-reapply-aws", extractedPath)
 
 	// Step 3b: Verify the extracted PKL contains a Resolvable reference for
-	// the RolePolicy's roleName, not a plain string. This is the exact pattern
-	// that triggered the regression in #288.
+	// the RolePolicy's roleName, not a plain string.
 	extractedContent, err := os.ReadFile(extractedPath)
 	if err != nil {
 		t.Fatalf("failed to read extracted PKL: %v", err)
