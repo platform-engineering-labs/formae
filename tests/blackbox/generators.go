@@ -173,12 +173,11 @@ func resourceIDsGen(t *rapid.T, poolSize int, minCount int) []int {
 	return all[:count]
 }
 
-// resourceIDsGenWithPool generates resource indices from the tree pool,
-// ensuring full ancestry is included for any drawn child/grandchild.
+// resourceIDsGenWithPool generates resource indices from the tree pool.
+// The drawn set is returned as-is, without expanding to include ancestors.
 func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, minCount int) []int {
 	count := rapid.IntRange(minCount, len(pool.Slots)).Draw(t, "resCount")
 
-	// Draw from shuffled pool
 	all := make([]int, len(pool.Slots))
 	for i := range all {
 		all[i] = i
@@ -187,20 +186,9 @@ func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, minCount int) []int 
 		j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("shuffle-%d", i))
 		all[i], all[j] = all[j], all[i]
 	}
-	drawn := all[:count]
 
-	// Expand to include full ancestry
-	selected := make(map[int]bool)
-	for _, idx := range drawn {
-		for _, ancestor := range pool.AncestryChain(idx) {
-			selected[ancestor] = true
-		}
-	}
-
-	result := make([]int, 0, len(selected))
-	for idx := range selected {
-		result = append(result, idx)
-	}
+	result := make([]int, count)
+	copy(result, all[:count])
 	sort.Ints(result)
 	return result
 }
