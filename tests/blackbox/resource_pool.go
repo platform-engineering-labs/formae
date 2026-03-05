@@ -204,6 +204,16 @@ func (p *ResourcePool) CrossStackParentLabelForStack(providerStackLabel string, 
 	return p.LabelForStack(providerStackLabel, parentSlotIdx)
 }
 
+// CrossStackParentType returns the resource type of the cross-stack parent slot.
+// Panics if the slot is not a cross-stack slot.
+func (p *ResourcePool) CrossStackParentType(idx int) string {
+	parentSlotIdx := p.Slots[idx].CrossStackParentSlot
+	if parentSlotIdx == -1 {
+		panic(fmt.Sprintf("slot %d is not a cross-stack slot", idx))
+	}
+	return p.Slots[parentSlotIdx].Type
+}
+
 // ParentType returns the resource type of the parent.
 func (p *ResourcePool) ParentType(idx int) string {
 	parentIdx := p.Slots[idx].ParentIndex
