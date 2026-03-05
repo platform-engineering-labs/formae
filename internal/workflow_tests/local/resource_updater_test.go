@@ -1143,6 +1143,91 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 	})
 }
 
+func TestResourceUpdater_DeleteTransitionsToFailedWhenPluginOperationErrors(t *testing.T) {
+	t.Skip("Known bug: delete handler stays in StateDeleting when doPluginOperation returns an error (unlike create/update/synchronize which correctly call MarkAsFailed)")
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: "FakeAWS::S3::Bucket",
+					Properties:   `{"foo":"bar","baz":"qux","a":[3,4,2]}`,
+				}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				// Panic to simulate a plugin crash. This causes the PluginOperator
+				// process to die, which makes doPluginOperation return an error.
+				// This exercises the error path in the delete handler.
+				panic("simulated plugin crash during delete")
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		if err != nil {
+			t.Fatalf("Failed to create metastructure: %v", err)
+			return
+		}
+
+		// start test helper actor to interact with the actors in the metastructure
+		messages := make(chan any, 1)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		// store the forma command in the database
+		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:      "test-forma-command-delete-fail",
+				State:   forma_command.CommandStateNotStarted,
+				StartTs: util.TimeNow(),
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					{
+						Operation: resource_update.OperationDelete,
+						DesiredState: pkgmodel.Resource{
+							Label: "test-resource",
+							Type:  "FakeAWS::S3::Bucket",
+							Stack: "test-stack",
+							Ksuid: initialResource.DesiredState.Ksuid,
+						},
+					},
+				},
+			},
+		})
+
+		// store an S3 bucket resource
+		hash, err := testutil.Call(m.Node, "ResourcePersister", resource_update.PersistResourceUpdate{
+			PluginOperation: resource.OperationCreate,
+			ResourceUpdate:  *initialResource,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, hash)
+
+		// start the resource updater
+		updateResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
+		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
+			ResourceURI: initialResource.DesiredState.URI(),
+			CommandID:   "test-forma-command-delete-fail",
+			Operation:   string(updateResource.Operation),
+		})
+		assert.NoError(t, err)
+
+		// send the delete operation to the resource updater
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-delete-fail"), resource_update.StartResourceUpdate{
+			ResourceUpdate: *updateResource,
+			CommandID:      "test-forma-command-delete-fail",
+		})
+
+		// The resource updater should transition to a failed state and send ResourceUpdateFinished.
+		// BUG: With the current code, the delete handler stays in StateDeleting when doPluginOperation
+		// returns an error (unlike create/update/synchronize which correctly call MarkAsFailed).
+		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
+			return msg.Uri == initialResource.DesiredState.URI() &&
+				msg.State == resource_update.ResourceUpdateStateFailed
+		})
+	})
+}
+
 func successfullyFinishedResourceUpdateCreatingS3Bucket() *resource_update.ResourceUpdate {
 	return &resource_update.ResourceUpdate{
 		DesiredState: pkgmodel.Resource{

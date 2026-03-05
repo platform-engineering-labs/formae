@@ -104,43 +104,86 @@ func (s *StackExpirer) checkExpiredStacks() {
 
 // destroyExpiredStack creates and executes a destroy command for an expired stack.
 func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo) error {
-	// Load all resources in the stack
-	resources, err := s.datastore.LoadResourcesByStack(stackInfo.StackLabel)
+	result, err := prepareDestroyExpiredStack(s.datastore, stackInfo, "stack-expirer", "stack-expirer-cleanup")
 	if err != nil {
-		return fmt.Errorf("failed to load stack %s: %w", stackInfo.StackLabel, err)
+		return err
+	}
+	if result == nil {
+		return nil
+	}
+
+	// Store the forma command
+	_, err = s.Call(
+		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: s.Node().Name()},
+		forma_persister.StoreNewFormaCommand{Command: *result.command},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to store destroy command: %w", err)
+	}
+
+	// Ensure ChangesetExecutor exists
+	_, err = s.Call(
+		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: s.Node().Name()},
+		changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to ensure changeset executor: %w", err)
+	}
+
+	// Start the changeset execution
+	err = s.Send(
+		gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: s.Node().Name()},
+		changeset.Start{Changeset: result.changeset},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start changeset executor: %w", err)
+	}
+
+	return nil
+}
+
+type destroyExpiredResult struct {
+	command   *forma_command.FormaCommand
+	changeset changeset.Changeset
+}
+
+// prepareDestroyExpiredStack builds a destroy FormaCommand and Changeset for an expired stack.
+// Returns nil (with no error) when the stack has no resources (cleaned up directly),
+// when expiration is aborted due to external dependents, or when no updates are needed.
+// The caller is responsible for persisting the command and starting the changeset execution.
+func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.ExpiredStackInfo, clientID string, cleanupClientID string) (*destroyExpiredResult, error) {
+	// Load all resources in the stack
+	resources, err := ds.LoadResourcesByStack(stackInfo.StackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load stack %s: %w", stackInfo.StackLabel, err)
 	}
 	if len(resources) == 0 {
 		// Stack is expired but has no resources - delete the empty stack directly
-		_, err := s.datastore.DeleteStack(stackInfo.StackLabel, "stack-expirer-cleanup")
+		_, err := ds.DeleteStack(stackInfo.StackLabel, cleanupClientID)
 		if err != nil {
-			return fmt.Errorf("failed to delete empty expired stack %s: %w", stackInfo.StackLabel, err)
+			return nil, fmt.Errorf("failed to delete empty expired stack %s: %w", stackInfo.StackLabel, err)
 		}
-		s.Log().Info("Deleted empty expired stack label=%s", stackInfo.StackLabel)
-		return nil
+		return nil, nil
 	}
 
 	// Check for dependents if onDependents is "abort"
 	if stackInfo.OnDependents == "abort" {
 		// Collect all KSUIDs for a single batched query
 		ksuids := make([]string, len(resources))
-		ksuidToLabel := make(map[string]string, len(resources))
 		for i, res := range resources {
 			ksuids[i] = res.Ksuid
-			ksuidToLabel[res.Ksuid] = res.Label
 		}
 
-		dependentsMap, err := s.datastore.FindResourcesDependingOnMany(ksuids)
+		dependentsMap, err := ds.FindResourcesDependingOnMany(ksuids)
 		if err != nil {
-			return fmt.Errorf("failed to check dependents for stack %s: %w", stackInfo.StackLabel, err)
+			return nil, fmt.Errorf("failed to check dependents for stack %s: %w", stackInfo.StackLabel, err)
 		}
 
 		// Filter out dependents that are in the same stack (those will be deleted together)
-		for sourceKSUID, dependents := range dependentsMap {
+		for _, dependents := range dependentsMap {
 			for _, dep := range dependents {
 				if dep.Stack != stackInfo.StackLabel {
-					s.Log().Warning("Stack expiration aborted: external resource depends on stack resources, stack=%s resource=%s dependent=%s dependentStack=%s",
-						stackInfo.StackLabel, ksuidToLabel[sourceKSUID], dep.Label, dep.Stack)
-					return nil // Skip this stack, try again next interval
+					return nil, nil // Skip this stack, try again next interval
 				}
 			}
 		}
@@ -156,9 +199,9 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 	}
 
 	// Load existing targets for resource update generation
-	existingTargets, err := s.datastore.LoadAllTargets()
+	existingTargets, err := ds.LoadAllTargets()
 	if err != nil {
-		return fmt.Errorf("failed to load targets: %w", err)
+		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
 	// Generate resource updates for destruction
@@ -168,14 +211,14 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 		pkgmodel.FormaApplyModeReconcile,
 		resource_update.FormaCommandSourceUser, // Treat expiration as user-initiated
 		existingTargets,
-		s.datastore,
+		ds,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to generate resource updates: %w", err)
+		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
 	}
 
 	if len(resourceUpdates) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Create the destroy command
@@ -190,43 +233,19 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 		nil,                          // No target updates on destroy
 		[]stack_update.StackUpdate{}, // No stack updates on destroy
 		nil,                          // No policy updates on destroy
-		"stack-expirer",
+		clientID,
 	)
-
-	// Store the forma command
-	_, err = s.Call(
-		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: s.Node().Name()},
-		forma_persister.StoreNewFormaCommand{Command: *destroyCommand},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to store destroy command: %w", err)
-	}
 
 	// Create changeset
 	cs, err := changeset.NewChangesetFromResourceUpdates(resourceUpdates, destroyCommand.ID, pkgmodel.CommandDestroy)
 	if err != nil {
-		return fmt.Errorf("failed to create changeset: %w", err)
+		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
 
-	// Ensure ChangesetExecutor exists
-	_, err = s.Call(
-		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: s.Node().Name()},
-		changeset.EnsureChangesetExecutor{CommandID: destroyCommand.ID},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to ensure changeset executor: %w", err)
-	}
-
-	// Start the changeset execution
-	err = s.Send(
-		gen.ProcessID{Name: actornames.ChangesetExecutor(destroyCommand.ID), Node: s.Node().Name()},
-		changeset.Start{Changeset: cs},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to start changeset executor: %w", err)
-	}
-
-	return nil
+	return &destroyExpiredResult{
+		command:   destroyCommand,
+		changeset: cs,
+	}, nil
 }
 
 func (s *StackExpirer) scheduleNextExpirationCheck() {
