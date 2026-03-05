@@ -785,7 +785,17 @@ func (h *TestHarness) verifyPostApplyProperties(t *testing.T, op *Operation, mod
 
 		// Add resolvable reference checks for hierarchical resources
 		if len(lastViolations) == 0 && model != nil && model.Pool != nil {
-			lastViolations = CheckResolvableProperties(inventory, model.Pool, stackLabel, op.ResourceIDs)
+			// Build provider inventory by filtering resources on the provider stack.
+			var providerInventory []pkgmodel.Resource
+			if model.ProviderStackLabel != "" {
+				for _, res := range inventory {
+					if res.Stack == model.ProviderStackLabel {
+						providerInventory = append(providerInventory, res)
+					}
+				}
+			}
+			lastViolations = CheckResolvableProperties(inventory, model.Pool, stackLabel, op.ResourceIDs,
+				providerInventory, model.ProviderStackLabel)
 		}
 
 		if len(lastViolations) == 0 {
