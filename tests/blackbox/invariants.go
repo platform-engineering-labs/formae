@@ -346,10 +346,60 @@ func CheckCommandCompleteness(commands []CommandState) []Violation {
 	return violations
 }
 
+// findByLabel returns a pointer to the first resource in inventory with the
+// given label, or nil if not found.
+func findByLabel(inventory []pkgmodel.Resource, label string) *pkgmodel.Resource {
+	for i, res := range inventory {
+		if res.Label == label {
+			return &inventory[i]
+		}
+	}
+	return nil
+}
+
+// checkParentIdValue verifies that res.Properties["ParentId"] resolves to the
+// Name of parentRes. Returns a Violation if the check fails, or nil on success.
+func checkParentIdValue(res pkgmodel.Resource, parentRes pkgmodel.Resource) *Violation {
+	var props map[string]any
+	if err := json.Unmarshal(res.Properties, &props); err != nil {
+		v := Violation{
+			Kind:    ViolationResolvableNotResolved,
+			Message: fmt.Sprintf("failed to parse properties for %s: %v", res.Label, err),
+		}
+		return &v
+	}
+
+	parentID, ok := props["ParentId"]
+	if !ok {
+		v := Violation{
+			Kind:    ViolationResolvableNotResolved,
+			Message: fmt.Sprintf("resource %s missing ParentId field", res.Label),
+		}
+		return &v
+	}
+
+	resolvedValue := extractResolvedValue(parentID)
+	if resolvedValue != parentRes.Label {
+		v := Violation{
+			Kind: ViolationResolvableNotResolved,
+			Message: fmt.Sprintf("resource %s: ParentId resolved to %q, expected %q",
+				res.Label, resolvedValue, parentRes.Label),
+		}
+		return &v
+	}
+	return nil
+}
+
 // CheckResolvableProperties verifies that child/grandchild resources in
 // inventory have their ParentId correctly resolved to the parent's Name.
+//
+// For within-stack children/grandchildren the parent is looked up in inventory.
+// For cross-stack children (pool.IsCrossStack(idx) == true) the parent is
+// looked up in providerInventory using the provider stack label. If
+// providerInventory is nil, cross-stack checks are skipped.
 func CheckResolvableProperties(inventory []pkgmodel.Resource, pool *ResourcePool,
-	stackLabel string, appliedIDs []int) []Violation {
+	stackLabel string, appliedIDs []int,
+	providerInventory []pkgmodel.Resource, providerStackLabel string) []Violation {
 	var violations []Violation
 
 	// Build inventory lookup by label
@@ -364,42 +414,42 @@ func CheckResolvableProperties(inventory []pkgmodel.Resource, pool *ResourcePool
 			continue
 		}
 
+		if pool.IsCrossStack(idx) {
+			// Cross-stack: parent lives in the provider stack's inventory.
+			if providerInventory == nil {
+				continue
+			}
+			label := pool.LabelForStack(stackLabel, idx)
+			res, ok := invByLabel[label]
+			if !ok {
+				continue // Resource not in inventory yet, skip
+			}
+			parentLabel := pool.LabelForStack(providerStackLabel, pool.Slots[idx].CrossStackParentSlot)
+			parentRes := findByLabel(providerInventory, parentLabel)
+			if parentRes == nil {
+				continue // Parent not in provider inventory (may have failed), skip
+			}
+			if v := checkParentIdValue(res, *parentRes); v != nil {
+				violations = append(violations, *v)
+			}
+			continue
+		}
+
+		// Within-stack: parent lives in the same inventory.
 		label := pool.LabelForStack(stackLabel, idx)
 		res, ok := invByLabel[label]
 		if !ok {
 			continue // Resource not in inventory yet, skip
 		}
 
-		// Parse properties
-		var props map[string]any
-		if err := json.Unmarshal(res.Properties, &props); err != nil {
-			violations = append(violations, Violation{
-				Kind:    ViolationResolvableNotResolved,
-				Message: fmt.Sprintf("failed to parse properties for %s: %v", label, err),
-			})
-			continue
-		}
-
-		// Check ParentId field
-		parentID, ok := props["ParentId"]
+		parentLabel := pool.LabelForStack(stackLabel, pool.Slots[idx].ParentIndex)
+		parentRes, ok := invByLabel[parentLabel]
 		if !ok {
-			violations = append(violations, Violation{
-				Kind:    ViolationResolvableNotResolved,
-				Message: fmt.Sprintf("resource %s missing ParentId field", label),
-			})
-			continue
+			continue // Parent not in inventory yet, skip
 		}
 
-		// Extract the resolved value and compare to expected parent name
-		expectedParentName := pool.LabelForStack(stackLabel, pool.Slots[idx].ParentIndex)
-		resolvedValue := extractResolvedValue(parentID)
-
-		if resolvedValue != expectedParentName {
-			violations = append(violations, Violation{
-				Kind: ViolationResolvableNotResolved,
-				Message: fmt.Sprintf("resource %s: ParentId resolved to %q, expected %q",
-					label, resolvedValue, expectedParentName),
-			})
+		if v := checkParentIdValue(res, parentRes); v != nil {
+			violations = append(violations, *v)
 		}
 	}
 	return violations
