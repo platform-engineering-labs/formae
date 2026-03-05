@@ -13,11 +13,12 @@ import (
 
 // ResourceSlot represents a single resource in the tree pool.
 type ResourceSlot struct {
-	Index        int
-	Type         string
-	Label        string // suffix only (e.g. "a", "a-0"); LabelForStack composes the full label
-	ParentIndex  int    // -1 if no parent
-	ChildIndices []int
+	Index                int
+	Type                 string
+	Label                string // suffix only (e.g. "a", "a-0"); LabelForStack composes the full label
+	ParentIndex          int    // -1 if no within-stack parent
+	CrossStackParentSlot int    // -1 if not a cross-stack child; otherwise index of parent slot in provider stack
+	ChildIndices         []int
 }
 
 // TreeConfig defines the fan-out of the resource tree.
@@ -50,10 +51,11 @@ func NewResourcePool(totalSize int) *ResourcePool {
 
 		// Parent
 		slots[parentIdx] = ResourceSlot{
-			Index:       parentIdx,
-			Type:        "Test::Generic::Resource",
-			Label:       parentSuffix,
-			ParentIndex: -1,
+			Index:                parentIdx,
+			Type:                 "Test::Generic::Resource",
+			Label:                parentSuffix,
+			ParentIndex:          -1,
+			CrossStackParentSlot: -1,
 		}
 
 		for c := 0; c < ChildrenPerParent; c++ {
@@ -61,10 +63,11 @@ func NewResourcePool(totalSize int) *ResourcePool {
 			childSuffix := fmt.Sprintf("%s-%d", parentSuffix, c)
 
 			slots[childIdx] = ResourceSlot{
-				Index:       childIdx,
-				Type:        "Test::Generic::ChildResource",
-				Label:       childSuffix,
-				ParentIndex: parentIdx,
+				Index:                childIdx,
+				Type:                 "Test::Generic::ChildResource",
+				Label:                childSuffix,
+				ParentIndex:          parentIdx,
+				CrossStackParentSlot: -1,
 			}
 			slots[parentIdx].ChildIndices = append(slots[parentIdx].ChildIndices, childIdx)
 
@@ -73,10 +76,11 @@ func NewResourcePool(totalSize int) *ResourcePool {
 				gcSuffix := fmt.Sprintf("%s-%d", childSuffix, g)
 
 				slots[gcIdx] = ResourceSlot{
-					Index:       gcIdx,
-					Type:        "Test::Generic::GrandchildResource",
-					Label:       gcSuffix,
-					ParentIndex: childIdx,
+					Index:                gcIdx,
+					Type:                 "Test::Generic::GrandchildResource",
+					Label:                gcSuffix,
+					ParentIndex:          childIdx,
+					CrossStackParentSlot: -1,
 				}
 				slots[childIdx].ChildIndices = append(slots[childIdx].ChildIndices, gcIdx)
 			}
@@ -86,9 +90,40 @@ func NewResourcePool(totalSize int) *ResourcePool {
 	return &ResourcePool{Slots: slots, TreeCount: treeCount}
 }
 
+// CrossStackSlotCount is the number of additional cross-stack child slots
+// appended to the pool by NewResourcePoolWithCrossStack.
+const CrossStackSlotCount = 2
+
+// NewResourcePoolWithCrossStack creates a resource pool identical to
+// NewResourcePool(baseSize) but with CrossStackSlotCount additional slots
+// appended. These slots are of type Test::Generic::ChildResource and their
+// CrossStackParentSlot points to slot 0 (the first parent in the base pool).
+// They are only valid on consumer stacks (stacks 1+); stack 0 (the provider)
+// skips them when building a forma.
+func NewResourcePoolWithCrossStack(baseSize int) *ResourcePool {
+	base := NewResourcePool(baseSize)
+	for i := range CrossStackSlotCount {
+		idx := baseSize + i
+		base.Slots = append(base.Slots, ResourceSlot{
+			Index:                idx,
+			Type:                 "Test::Generic::ChildResource",
+			Label:                fmt.Sprintf("xstack-%d", i),
+			ParentIndex:          -1,
+			CrossStackParentSlot: 0, // references slot 0 (parent "a") in provider stack
+			ChildIndices:         nil,
+		})
+	}
+	return base
+}
+
 // IsParent returns true if the slot is a top-level parent resource.
 func (p *ResourcePool) IsParent(idx int) bool {
-	return p.Slots[idx].ParentIndex == -1
+	return p.Slots[idx].ParentIndex == -1 && p.Slots[idx].CrossStackParentSlot == -1
+}
+
+// IsCrossStack returns true if the slot references a parent in a different stack.
+func (p *ResourcePool) IsCrossStack(idx int) bool {
+	return p.Slots[idx].CrossStackParentSlot != -1
 }
 
 // IsChild returns true if the slot is a child resource.
@@ -156,6 +191,17 @@ func (p *ResourcePool) ParentLabelForStack(stackLabel string, idx int) string {
 		panic(fmt.Sprintf("slot %d has no parent", idx))
 	}
 	return p.LabelForStack(stackLabel, parentIdx)
+}
+
+// CrossStackParentLabelForStack returns the label of the cross-stack parent
+// resource on the given (provider) stack. Panics if the slot is not a
+// cross-stack slot.
+func (p *ResourcePool) CrossStackParentLabelForStack(providerStackLabel string, idx int) string {
+	parentSlotIdx := p.Slots[idx].CrossStackParentSlot
+	if parentSlotIdx == -1 {
+		panic(fmt.Sprintf("slot %d is not a cross-stack slot", idx))
+	}
+	return p.LabelForStack(providerStackLabel, parentSlotIdx)
 }
 
 // ParentType returns the resource type of the parent.
