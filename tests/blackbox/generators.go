@@ -81,13 +81,23 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 	switch op.Kind {
 	case OpApply:
 		op.StackIndex = stackIndexGen(t, config)
+		op.ApplyMode = applyModeGen(t, config)
 		if pool != nil {
-			op.ResourceIDs = resourceIDsGenWithPool(t, pool, 1)
+			// Reconcile mode declares complete desired state: always include full
+			// ancestry so we don't generate impossible formas (children without
+			// their parent in a reconcile would force a cascade-delete of the
+			// parent while also keeping the children — a contradictory changeset).
+			// Patch mode only applies what's specified, so a child-without-parent
+			// is valid and exercises the clean-fail path.
+			if op.ApplyMode == "reconcile" {
+				op.ResourceIDs = resourceIDsGenWithPoolAncestry(t, pool, 1)
+			} else {
+				op.ResourceIDs = resourceIDsGenWithPool(t, pool, 1)
+			}
 			op.ChildProperties = childPropsGen(t)
 		} else {
 			op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
 		}
-		op.ApplyMode = applyModeGen(t, config)
 		op.Blocking = blockingGen(t, config)
 		op.Properties = resourcePropsGen(t)
 
@@ -175,6 +185,7 @@ func resourceIDsGen(t *rapid.T, poolSize int, minCount int) []int {
 
 // resourceIDsGenWithPool generates resource indices from the tree pool.
 // The drawn set is returned as-is, without expanding to include ancestors.
+// Use this for patch-mode applies where a child-without-parent is valid input.
 func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, minCount int) []int {
 	count := rapid.IntRange(minCount, len(pool.Slots)).Draw(t, "resCount")
 
@@ -189,6 +200,39 @@ func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, minCount int) []int 
 
 	result := make([]int, count)
 	copy(result, all[:count])
+	sort.Ints(result)
+	return result
+}
+
+// resourceIDsGenWithPoolAncestry generates resource indices from the tree pool,
+// expanding the drawn set to include the full ancestry chain for every slot.
+// Use this for reconcile-mode applies: reconcile declares complete desired state,
+// so including a child without its parent would force a cascade-delete of the
+// parent while simultaneously keeping the child — a contradictory changeset.
+func resourceIDsGenWithPoolAncestry(t *rapid.T, pool *ResourcePool, minCount int) []int {
+	count := rapid.IntRange(minCount, len(pool.Slots)).Draw(t, "resCount")
+
+	all := make([]int, len(pool.Slots))
+	for i := range all {
+		all[i] = i
+	}
+	for i := len(all) - 1; i > 0; i-- {
+		j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("shuffle-%d", i))
+		all[i], all[j] = all[j], all[i]
+	}
+	drawn := all[:count]
+
+	selected := make(map[int]bool)
+	for _, idx := range drawn {
+		for _, ancestor := range pool.AncestryChain(idx) {
+			selected[ancestor] = true
+		}
+	}
+
+	result := make([]int, 0, len(selected))
+	for idx := range selected {
+		result = append(result, idx)
+	}
 	sort.Ints(result)
 	return result
 }
