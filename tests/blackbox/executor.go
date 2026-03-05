@@ -333,7 +333,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	stackLabel := model.Stack(op.StackIndex).Label
 	var forma *pkgmodel.Forma
 	if model.Pool != nil {
-		forma = FormaFromPoolResources(model.Pool, stackLabel, model.Stack(0).Label, op.ResourceIDs, op.Properties, op.ChildProperties)
+		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, op.ResourceIDs, op.Properties, op.ChildProperties)
 	} else {
 		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
 	}
@@ -513,7 +513,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 		}
 	}
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.Stack(0).Label, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
 
 	if hasDependents {
 		// Simulate to check whether the agent would create cascade deletes.
@@ -590,7 +590,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.Stack(0).Label, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
 
 	resp, err := h.client.DestroyForma(forma, false, clientID)
 	if err != nil {
