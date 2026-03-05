@@ -1712,14 +1712,14 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
 	ctx := context.Background()
 
-	// Search for resources that contain a $ref to this KSUID in their properties
-	// The format is: "formae://KSUID#/..." (JSON without spaces after colons)
-	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+	// Search for resources that contain a $ref to this KSUID in their properties.
+	// Use a regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
+	pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
 
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
-	WHERE data::text LIKE :pattern
+	WHERE data::text ~ :pattern
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -1772,13 +1772,14 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 		return make(map[string][]*pkgmodel.Resource), nil
 	}
 
-	// Build OR conditions for each KSUID pattern with named parameters
+	// Build OR conditions for each KSUID pattern with named parameters.
+	// Use regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
 	var conditions []string
 	var params []types.SqlParameter
 	for i, ksuid := range ksuids {
-		pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
 		paramName := fmt.Sprintf("pattern%d", i)
-		conditions = append(conditions, fmt.Sprintf("data::text LIKE :%s", paramName))
+		conditions = append(conditions, fmt.Sprintf("data::text ~ :%s", paramName))
 		params = append(params, types.SqlParameter{
 			Name:  aws.String(paramName),
 			Value: &types.FieldMemberStringValue{Value: pattern},
@@ -1830,10 +1831,12 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 		}
 		resource.Ksuid = ksuidResult
 
-		// Find which of the input KSUIDs this resource depends on
+		// Find which of the input KSUIDs this resource depends on.
+		// jsonb::text output has spaces after colons, so check both forms.
 		for _, ksuid := range ksuids {
-			pattern := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
-			if strings.Contains(jsonData, pattern) {
+			withSpace := fmt.Sprintf("\"$ref\": \"formae://%s#", ksuid)
+			withoutSpace := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(jsonData, withSpace) || strings.Contains(jsonData, withoutSpace) {
 				result[ksuid] = append(result[ksuid], &resource)
 			}
 		}
