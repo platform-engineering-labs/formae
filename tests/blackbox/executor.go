@@ -333,7 +333,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	stackLabel := model.Stack(op.StackIndex).Label
 	var forma *pkgmodel.Forma
 	if model.Pool != nil {
-		forma = FormaFromPoolResources(model.Pool, stackLabel, op.ResourceIDs, op.Properties, op.ChildProperties)
+		forma = FormaFromPoolResources(model.Pool, stackLabel, model.Stack(0).Label, op.ResourceIDs, op.Properties, op.ChildProperties)
 	} else {
 		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
 	}
@@ -513,7 +513,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 		}
 	}
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.Stack(0).Label, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
 
 	if hasDependents {
 		// Simulate to check whether the agent would create cascade deletes.
@@ -590,7 +590,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.Stack(0).Label, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
 
 	resp, err := h.client.DestroyForma(forma, false, clientID)
 	if err != nil {
@@ -1166,7 +1166,7 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 // types, schemas, and resolvable ParentId references for child/grandchild slots.
 // parentProps is the properties template for Test::Generic::Resource (with "NAME" placeholder).
 // childProps is the properties template for child/grandchild types (with "NAME" and "PARENT_ID" placeholders).
-func FormaFromPoolResources(pool *ResourcePool, stackLabel string, ids []int,
+func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStackLabel string, ids []int,
 	parentProps string, childProps string) *pkgmodel.Forma {
 
 	resources := make([]pkgmodel.Resource, 0, len(ids))
@@ -1186,6 +1186,33 @@ func FormaFromPoolResources(pool *ResourcePool, stackLabel string, ids []int,
 				Target:     "test-target",
 				Properties: json.RawMessage(props),
 				Schema:     testResourceSchema,
+				Managed:    true,
+			})
+
+		case pool.IsCrossStack(idx):
+			// Cross-stack slots only exist on consumer stacks (stacks 1+).
+			// Provider stack (stack 0) skips them.
+			if stackLabel == providerStackLabel {
+				continue
+			}
+			props := strings.Replace(childProps, `"NAME"`, `"`+label+`"`, 1)
+			parentLabel := pool.CrossStackParentLabelForStack(providerStackLabel, idx)
+			parentType := pool.CrossStackParentType(idx)
+			resObj, _ := json.Marshal(map[string]any{
+				"$res":      true,
+				"$label":    parentLabel,
+				"$type":     parentType,
+				"$stack":    providerStackLabel,
+				"$property": "Name",
+			})
+			props = strings.Replace(props, `"PARENT_ID"`, string(resObj), 1)
+			resources = append(resources, pkgmodel.Resource{
+				Label:      label,
+				Type:       slot.Type,
+				Stack:      stackLabel,
+				Target:     "test-target",
+				Properties: json.RawMessage(props),
+				Schema:     testChildResourceSchema,
 				Managed:    true,
 			})
 
