@@ -37,6 +37,8 @@ type StackState struct {
 // and pending command tracking.
 type StateModel struct {
 	Stacks             []StackState
+	// ResourcesPerStack is the base count passed to NewStateModel; does not
+	// include cross-stack slots appended by NewResourcePoolWithCrossStack.
 	ResourcesPerStack  int
 	Pool               *ResourcePool
 	ProviderStackLabel string // label of stack 0; empty if stackCount < 2
@@ -67,6 +69,11 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		}
 		resources := make(map[int]*ExpectedResource, slotCount)
 		for i := range slotCount {
+			if pool != nil && s == 0 && pool.IsCrossStack(i) {
+				// Provider stack (stack 0) does not own cross-stack slots;
+				// skip them so the map accurately reflects what can exist here.
+				continue
+			}
 			resources[i] = &ExpectedResource{
 				Index:        i,
 				AcceptStates: []ResourceState{StateNotExist},
@@ -81,7 +88,7 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 
 	var providerLabel string
 	if stackCount > 1 {
-		providerLabel = "stack-0"
+		providerLabel = stacks[0].Label
 	}
 	return &StateModel{
 		Stacks:             stacks,
