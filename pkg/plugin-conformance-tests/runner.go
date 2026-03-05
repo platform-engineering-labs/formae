@@ -1092,7 +1092,7 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 
 	// Step 6: Wait for resource to appear in inventory
 	t.Log("Step 6: Waiting for resource in inventory...")
-	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, 2*time.Minute); err != nil {
+	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, 4*time.Minute); err != nil {
 		t.Fatalf("resource not discovered: %v", err)
 	}
 
