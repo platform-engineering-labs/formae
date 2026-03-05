@@ -36,9 +36,10 @@ type StackState struct {
 // It supports multiple independent stacks, each with their own resource pool
 // and pending command tracking.
 type StateModel struct {
-	Stacks            []StackState
-	ResourcesPerStack int
-	Pool              *ResourcePool
+	Stacks             []StackState
+	ResourcesPerStack  int
+	Pool               *ResourcePool
+	ProviderStackLabel string // label of stack 0; empty if stackCount < 2
 }
 
 // NewStateModel creates a state model with the given number of stacks,
@@ -51,13 +52,21 @@ type StateModel struct {
 func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 	var pool *ResourcePool
 	if resourcesPerStack%SlotsPerTree == 0 {
-		pool = NewResourcePool(resourcesPerStack)
+		if stackCount > 1 {
+			pool = NewResourcePoolWithCrossStack(resourcesPerStack)
+		} else {
+			pool = NewResourcePool(resourcesPerStack)
+		}
 	}
 
 	stacks := make([]StackState, stackCount)
 	for s := range stacks {
-		resources := make(map[int]*ExpectedResource, resourcesPerStack)
-		for i := range resourcesPerStack {
+		slotCount := resourcesPerStack
+		if pool != nil {
+			slotCount = len(pool.Slots)
+		}
+		resources := make(map[int]*ExpectedResource, slotCount)
+		for i := range slotCount {
 			resources[i] = &ExpectedResource{
 				Index:        i,
 				AcceptStates: []ResourceState{StateNotExist},
@@ -69,10 +78,16 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 			PendingCommands: make(map[string]*PendingCommand),
 		}
 	}
+
+	var providerLabel string
+	if stackCount > 1 {
+		providerLabel = "stack-0"
+	}
 	return &StateModel{
-		Stacks:            stacks,
-		ResourcesPerStack: resourcesPerStack,
-		Pool:              pool,
+		Stacks:             stacks,
+		ResourcesPerStack:  resourcesPerStack,
+		Pool:               pool,
+		ProviderStackLabel: providerLabel,
 	}
 }
 
