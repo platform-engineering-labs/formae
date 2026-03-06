@@ -272,25 +272,21 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	// Update the resource state and check if all in-progress resources are done
 	if state == StateCanceling {
 		// Find and update the finished resource
-		for _, group := range data.changeset.DAG.Nodes {
-			for _, update := range group.Updates {
-				if update.URI() == message.Uri && update.State == resource_update.ResourceUpdateStateInProgress {
-					update.State = message.State
-					proc.Log().Debug("In-progress resource finished during cancellation",
-						"uri", message.Uri,
-						"finalState", message.State)
-					break
-				}
+		for _, node := range data.changeset.DAG.Nodes {
+			if node.Update.URI() == message.Uri && node.Update.State == resource_update.ResourceUpdateStateInProgress {
+				node.Update.State = message.State
+				proc.Log().Debug("In-progress resource finished during cancellation",
+					"uri", message.Uri,
+					"finalState", message.State)
+				break
 			}
 		}
 
 		// Check if any resources are still in progress
 		inProgressCount := 0
-		for _, group := range data.changeset.DAG.Nodes {
-			for _, update := range group.Updates {
-				if update.State == resource_update.ResourceUpdateStateInProgress {
-					inProgressCount++
-				}
+		for _, node := range data.changeset.DAG.Nodes {
+			if node.IsRunning() {
+				inProgressCount++
 			}
 		}
 
@@ -311,30 +307,20 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	// Find the resource update that finished
 	var finishedUpdate *resource_update.ResourceUpdate
 
-	// Look through all groups to find the update with matching URI and state
-	for _, group := range data.changeset.DAG.Nodes {
-		for _, update := range group.Updates {
-			if update.URI() == message.Uri && update.State == resource_update.ResourceUpdateStateInProgress {
-				finishedUpdate = update
-				break
-			}
-		}
-		if finishedUpdate != nil {
+	// Look through all nodes to find the update with matching URI and state
+	for _, node := range data.changeset.DAG.Nodes {
+		if node.Update.URI() == message.Uri && node.Update.State == resource_update.ResourceUpdateStateInProgress {
+			finishedUpdate = node.Update
 			break
 		}
 	}
 
 	if finishedUpdate == nil {
-		// Warn only if the URI is still tracked anywhere else it's likely been popped
+		// Warn only if the URI is still tracked anywhere else it's likely been completed
 		stillTracked := false
-		for _, group := range data.changeset.DAG.Nodes {
-			for _, u := range group.Updates {
-				if u.URI() == message.Uri {
-					stillTracked = true
-					break
-				}
-			}
-			if stillTracked {
+		for _, node := range data.changeset.DAG.Nodes {
+			if node.Update.URI() == message.Uri {
+				stillTracked = true
 				break
 			}
 		}
@@ -473,19 +459,14 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 	var resourcesToCancel []forma_persister.ResourceUpdateRef
 	var inProgressCount int
 
-	for _, group := range data.changeset.DAG.Nodes {
-		for _, update := range group.Updates {
-			// Only cancel resources that haven't started yet (NotStarted state)
-			// Do NOT cancel InProgress resources to avoid orphaned cloud resources
-			if update.State == resource_update.ResourceUpdateStateNotStarted {
-				resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
-					URI:       update.URI(),
-					Operation: update.Operation,
-				})
-			} else if update.State == resource_update.ResourceUpdateStateInProgress {
-				// Count in-progress resources - we need to wait for these to complete
-				inProgressCount++
-			}
+	for _, node := range data.changeset.DAG.Nodes {
+		if node.Update.State == resource_update.ResourceUpdateStateNotStarted {
+			resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
+				URI:       node.Update.URI(),
+				Operation: node.Update.Operation,
+			})
+		} else if node.Update.State == resource_update.ResourceUpdateStateInProgress {
+			inProgressCount++
 		}
 	}
 
@@ -532,11 +513,9 @@ func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdow
 // changesetHasUserUpdates checks if the changeset contains any updates from user operations.
 // Returns true if at least one update has Source == FormaCommandSourceUser.
 func changesetHasUserUpdates(changeset Changeset) bool {
-	for _, group := range changeset.DAG.Nodes {
-		for _, update := range group.Updates {
-			if update.Source == resource_update.FormaCommandSourceUser {
-				return true
-			}
+	for _, node := range changeset.DAG.Nodes {
+		if node.Update.Source == resource_update.FormaCommandSourceUser {
+			return true
 		}
 	}
 	return false
@@ -546,13 +525,11 @@ func changesetHasUserUpdates(changeset Changeset) bool {
 // in the DAG, excluding the unmanaged stack.
 func collectStacksWithDeletes(dag *ExecutionDAG) []string {
 	stackSet := make(map[string]struct{})
-	for _, group := range dag.Nodes {
-		for _, update := range group.Updates {
-			if update.Operation == resource_update.OperationDelete || update.Operation == resource_update.OperationReplace {
-				stackLabel := update.StackLabel
-				if stackLabel != "" && stackLabel != constants.UnmanagedStack {
-					stackSet[stackLabel] = struct{}{}
-				}
+	for _, node := range dag.Nodes {
+		if node.Update.Operation == resource_update.OperationDelete || node.Update.Operation == resource_update.OperationReplace {
+			stackLabel := node.Update.StackLabel
+			if stackLabel != "" && stackLabel != constants.UnmanagedStack {
+				stackSet[stackLabel] = struct{}{}
 			}
 		}
 	}

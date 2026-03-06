@@ -28,10 +28,10 @@ type ExecutionDAG struct {
 }
 
 type DAGNode struct {
-	URI        pkgmodel.FormaeURI
-	Updates    []*resource_update.ResourceUpdate
-	Downstream []*DAGNode
-	Upstream   []*DAGNode
+	URI          pkgmodel.FormaeURI
+	Update       *resource_update.ResourceUpdate
+	Dependents   []*DAGNode
+	Dependencies []*DAGNode
 }
 
 func NewChangesetFromResourceUpdates(
@@ -199,10 +199,10 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate) er
 		operationURI := createOperationURI(update.URI(), update.Operation)
 
 		p.Nodes[operationURI] = &DAGNode{
-			URI:        operationURI,
-			Updates:    []*resource_update.ResourceUpdate{update},
-			Downstream: []*DAGNode{},
-			Upstream:   []*DAGNode{},
+			URI:          operationURI,
+			Update:       update,
+			Dependents:   []*DAGNode{},
+			Dependencies: []*DAGNode{},
 		}
 	}
 
@@ -234,11 +234,11 @@ func dfs(group *DAGNode, visited map[pkgmodel.FormaeURI]struct{}) bool {
 	}
 	visited[group.URI] = struct{}{}
 
-	if len(group.Downstream) == 0 {
+	if len(group.Dependents) == 0 {
 		return false
 	}
 
-	for _, g := range group.Downstream {
+	for _, g := range group.Dependents {
 		visitedCopied := maps.Clone(visited)
 		if dfs(g, visitedCopied) {
 			return true
@@ -249,112 +249,57 @@ func dfs(group *DAGNode, visited map[pkgmodel.FormaeURI]struct{}) bool {
 }
 
 func (n *DAGNode) LinkWith(upstream *DAGNode) {
-	// Avoid duplicate links
-	for _, existing := range n.Upstream {
+	for _, existing := range n.Dependencies {
 		if existing.URI == upstream.URI {
 			return
 		}
 	}
 
-	n.Upstream = append(n.Upstream, upstream)
-	upstream.Downstream = append(upstream.Downstream, n)
+	n.Dependencies = append(n.Dependencies, upstream)
+	upstream.Dependents = append(upstream.Dependents, n)
 }
 
-func (n *DAGNode) UnlinkWith(upstream *DAGNode) {
-	// Remove from upstream groups
-	for i, group := range n.Upstream {
-		if group.URI == upstream.URI {
-			n.Upstream = append(n.Upstream[:i], n.Upstream[i+1:]...)
+func (n *DAGNode) Unlink(upstream *DAGNode) {
+	for i, node := range n.Dependencies {
+		if node.URI == upstream.URI {
+			n.Dependencies = append(n.Dependencies[:i], n.Dependencies[i+1:]...)
 			break
 		}
 	}
-
-	// Remove from downstream groups of upstream
-	for i, group := range upstream.Downstream {
-		if group.URI == n.URI {
-			upstream.Downstream = append(upstream.Downstream[:i], upstream.Downstream[i+1:]...)
-			break
-		}
-	}
-}
-
-func (n *DAGNode) RemoveUpstreamGroup(upstream *DAGNode) {
-	for i, group := range n.Upstream {
-		if group.URI == upstream.URI {
-			n.Upstream = append(n.Upstream[:i], n.Upstream[i+1:]...)
+	for i, node := range upstream.Dependents {
+		if node.URI == n.URI {
+			upstream.Dependents = append(upstream.Dependents[:i], upstream.Dependents[i+1:]...)
 			break
 		}
 	}
 }
 
-func (n *DAGNode) HasRunningUpdate() bool {
-	for _, update := range n.Updates {
-		if update.State == resource_update.ResourceUpdateStateInProgress {
-			return true
-		}
-	}
-	return false
+func (n *DAGNode) IsRunning() bool {
+	return n.Update.State == resource_update.ResourceUpdateStateInProgress
 }
 
-func (n *DAGNode) GetRunningUpdate() *resource_update.ResourceUpdate {
-	for _, update := range n.Updates {
-		if update.State == resource_update.ResourceUpdateStateInProgress {
-			return update
-		}
-	}
-	return nil
-}
-
-func (n *DAGNode) NextUpdate() (*resource_update.ResourceUpdate, string) {
-	for _, update := range n.Updates {
-		if update.State == resource_update.ResourceUpdateStateNotStarted {
-			key := getResourceUpdateIdentifier(update)
-			return update, key
-		}
-	}
-	return nil, ""
-}
-
-func (n *DAGNode) Pop(update *resource_update.ResourceUpdate) {
-	for i, u := range n.Updates {
-		if u.URI() == update.URI() && u.Operation == update.Operation {
-			n.Updates = append(n.Updates[:i], n.Updates[i+1:]...)
-			break
-		}
-	}
-}
-
-func (n *DAGNode) Done() bool {
-	return len(n.Updates) == 0
+func (n *DAGNode) IsReady() bool {
+	return n.Update.State == resource_update.ResourceUpdateStateNotStarted
 }
 
 func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_update.ResourceUpdate {
 	var executable []*resource_update.ResourceUpdate
 	total := 0
 
-	for _, group := range c.DAG.Nodes {
-		// Skip if group has running updates (blocking)
-		if group.HasRunningUpdate() {
+	for _, node := range c.DAG.Nodes {
+		if !node.IsReady() || len(node.Dependencies) > 0 {
 			continue
 		}
 
-		// Check if all upstream dependencies are satisfied
-		if len(group.Upstream) == 0 && !group.Done() && len(group.Updates) > 0 {
-			nextUpdate, updateKey := group.NextUpdate()
-			if total < max && nextUpdate != nil && nextUpdate.DesiredState.Namespace() == namespace &&
-				nextUpdate.State == resource_update.ResourceUpdateStateNotStarted {
-				// Check if we haven't already tracked this update
-				if !c.trackedUpdates[updateKey] {
-					executable = append(executable, nextUpdate)
-					c.trackedUpdates[updateKey] = true
-					nextUpdate.State = resource_update.ResourceUpdateStateInProgress
-					total++
-				}
-			}
+		updateKey := getResourceUpdateIdentifier(node.Update)
+		if total < max && node.Update.DesiredState.Namespace() == namespace && !c.trackedUpdates[updateKey] {
+			executable = append(executable, node.Update)
+			c.trackedUpdates[updateKey] = true
+			node.Update.State = resource_update.ResourceUpdateStateInProgress
+			total++
 		}
 	}
 
-	// Sort by URI for consistent ordering
 	sort.Slice(executable, func(i, j int) bool {
 		return string(executable[i].URI()) < string(executable[j].URI())
 	})
@@ -364,26 +309,15 @@ func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_
 
 func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 	result := make(map[string]int)
-	for _, group := range c.DAG.Nodes {
-		// Skip if group has running updates (blocking)
-		if group.HasRunningUpdate() {
+	for _, node := range c.DAG.Nodes {
+		if !node.IsReady() || len(node.Dependencies) > 0 {
 			continue
 		}
 
-		// Check if all upstream dependencies are satisfied
-		if len(group.Upstream) == 0 && !group.Done() && len(group.Updates) > 0 {
-			nextUpdate, updateKey := group.NextUpdate()
-			if nextUpdate != nil && nextUpdate.State == resource_update.ResourceUpdateStateNotStarted {
-				// Check if we haven't already tracked this update
-				if !c.trackedUpdates[updateKey] {
-					ns := string(nextUpdate.DesiredState.Namespace())
-					if _, ok := result[ns]; !ok {
-						result[ns] = 1
-					} else {
-						result[ns]++
-					}
-				}
-			}
+		updateKey := getResourceUpdateIdentifier(node.Update)
+		if !c.trackedUpdates[updateKey] {
+			ns := string(node.Update.DesiredState.Namespace())
+			result[ns]++
 		}
 	}
 
@@ -392,45 +326,17 @@ func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 
 func (c *Changeset) UpdateDAG(update *resource_update.ResourceUpdate) ([]*resource_update.ResourceUpdate, error) {
 	uri := createOperationURI(update.URI(), update.Operation)
-	upstream, exists := c.DAG.Nodes[uri]
+	node, exists := c.DAG.Nodes[uri]
 	if !exists {
-		return nil, fmt.Errorf("resource group not found for URI: %s", uri)
+		return nil, fmt.Errorf("DAG node not found for URI: %s", uri)
 	}
 
 	if update.State == resource_update.ResourceUpdateStateSuccess {
-		upstream.Pop(update)
-
-		// Unblock downstream dependencies for create/update operations
-		if update.Operation == resource_update.OperationCreate || update.Operation == resource_update.OperationUpdate {
-			for _, downstream := range upstream.Downstream {
-				// Check if this downstream was waiting on this specific resource
-				for _, downstreamUpdate := range downstream.Updates {
-					for _, resolvableURI := range downstreamUpdate.RemainingResolvables {
-						if resolvableURI.Stripped() == update.URI() {
-							downstream.UnlinkWith(upstream)
-							break
-						}
-					}
-				}
-			}
-		}
-
-		// Remove completed groups
-		if upstream.Done() {
-			// Unlink all downstream relationships
-			for _, downstream := range upstream.Downstream {
-				downstream.RemoveUpstreamGroup(upstream)
-			}
-			delete(c.DAG.Nodes, uri)
-		}
-
+		c.removeNode(node, uri)
 		return nil, nil
 	}
 
 	if update.State == resource_update.ResourceUpdateStateFailed || update.State == resource_update.ResourceUpdateStateRejected {
-		upstream.Pop(update)
-
-		// Cascade the failure to all downstream dependencies
 		failedUpdates := c.failResourceUpdate(update)
 
 		if len(failedUpdates) > 1 {
@@ -439,30 +345,16 @@ func (c *Changeset) UpdateDAG(update *resource_update.ResourceUpdate) ([]*resour
 				"cascadingCount", len(failedUpdates)-1)
 		}
 
-		// Pop each cascading failed resource from its group
+		// Remove each cascading failed node from the DAG
 		for _, failedUpdate := range failedUpdates {
 			failedURI := createOperationURI(failedUpdate.URI(), failedUpdate.Operation)
-			if failedGroup, exists := c.DAG.Nodes[failedURI]; exists {
-				failedGroup.Pop(failedUpdate)
-
-				if failedGroup.Done() {
-					// Unlink all downstream relationships
-					for _, downstream := range failedGroup.Downstream {
-						downstream.RemoveUpstreamGroup(failedGroup)
-					}
-					delete(c.DAG.Nodes, failedURI)
-				}
+			if failedNode, exists := c.DAG.Nodes[failedURI]; exists {
+				c.removeNode(failedNode, failedURI)
 			}
 		}
 
-		// Remove the original failed resource's group if it's now empty
-		if upstream.Done() {
-			// Unlink all downstream relationships
-			for _, downstream := range upstream.Downstream {
-				downstream.RemoveUpstreamGroup(upstream)
-			}
-			delete(c.DAG.Nodes, uri)
-		}
+		// Remove the original failed node
+		c.removeNode(node, uri)
 
 		return failedUpdates, nil
 	}
@@ -473,6 +365,13 @@ func (c *Changeset) UpdateDAG(update *resource_update.ResourceUpdate) ([]*resour
 		"uri", update.URI(), "state", update.State)
 	update.State = resource_update.ResourceUpdateStateFailed
 	return c.UpdateDAG(update)
+}
+
+func (c *Changeset) removeNode(node *DAGNode, uri pkgmodel.FormaeURI) {
+	for _, dependent := range node.Dependents {
+		dependent.Unlink(node)
+	}
+	delete(c.DAG.Nodes, uri)
 }
 
 func (c *Changeset) failResourceUpdate(update *resource_update.ResourceUpdate) []*resource_update.ResourceUpdate {
@@ -494,43 +393,37 @@ func (c *Changeset) recursivelyFailDependencies(failedUpdate *resource_update.Re
 	}
 	visited[uri] = true
 
-	upstream, exists := c.DAG.Nodes[uri]
+	node, exists := c.DAG.Nodes[uri]
 	if !exists {
 		return
 	}
 
-	for _, downstreamGroup := range upstream.Downstream {
-		for _, downstreamUpdate := range downstreamGroup.Updates {
-			if downstreamUpdate.State == resource_update.ResourceUpdateStateNotStarted {
-				downstreamUpdate.State = resource_update.ResourceUpdateStateFailed
-				*failedUpdates = append(*failedUpdates, downstreamUpdate)
+	for _, downstream := range node.Dependents {
+		if downstream.Update.State == resource_update.ResourceUpdateStateNotStarted {
+			downstream.Update.State = resource_update.ResourceUpdateStateFailed
+			*failedUpdates = append(*failedUpdates, downstream.Update)
 
-				c.recursivelyFailDependencies(downstreamUpdate, failedUpdates, visited)
-			}
+			c.recursivelyFailDependencies(downstream.Update, failedUpdates, visited)
 		}
 	}
 }
 
 func (c *Changeset) PrintDAG() string {
-
 	var result strings.Builder
 	fmt.Fprintf(&result, "Changeset DAG: %s\n", c.CommandID)
 	result.WriteString("========================\n")
 
-	for uri, group := range c.DAG.Nodes {
-		fmt.Fprintf(&result, "Group: %s\n", uri)
-		result.WriteString("  Updates:\n")
-		for _, update := range group.Updates {
-			fmt.Fprintf(&result, "    - %s (%s)\n", update.Operation, update.State)
-		}
+	for uri, node := range c.DAG.Nodes {
+		fmt.Fprintf(&result, "Node: %s\n", uri)
+		fmt.Fprintf(&result, "  Update: %s (%s)\n", node.Update.Operation, node.Update.State)
 
-		result.WriteString("  Upstream Dependencies:\n")
-		for _, dep := range group.Upstream {
+		result.WriteString("  Dependencies:\n")
+		for _, dep := range node.Dependencies {
 			fmt.Fprintf(&result, "    - %s\n", dep.URI)
 		}
 
-		result.WriteString("  Downstream Dependents:\n")
-		for _, dep := range group.Downstream {
+		result.WriteString("  Dependents:\n")
+		for _, dep := range node.Dependents {
 			fmt.Fprintf(&result, "    - %s\n", dep.URI)
 		}
 
@@ -541,26 +434,18 @@ func (c *Changeset) PrintDAG() string {
 }
 
 func (c *Changeset) IsComplete() bool {
-	// If no groups remain, changeset is complete
 	if len(c.DAG.Nodes) == 0 {
 		return true
 	}
 
-	// Check if all remaining updates are in failed state
-	allFailed := true
-	for _, group := range c.DAG.Nodes {
-		for _, update := range group.Updates {
-			if update.State != resource_update.ResourceUpdateStateFailed && update.State != resource_update.ResourceUpdateStateRejected {
-				allFailed = false
-				break
-			}
-		}
-		if !allFailed {
-			break
+	for _, node := range c.DAG.Nodes {
+		if node.Update.State != resource_update.ResourceUpdateStateFailed &&
+			node.Update.State != resource_update.ResourceUpdateStateRejected {
+			return false
 		}
 	}
 
-	return allFailed
+	return true
 }
 
 func getResourceUpdateIdentifier(update *resource_update.ResourceUpdate) string {
