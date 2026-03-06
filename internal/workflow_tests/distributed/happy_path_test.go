@@ -190,11 +190,10 @@ func buildFakeAWSPluginToDir(t *testing.T, baseDir string) string {
 
 	pluginPath := filepath.Join(pluginDir, "fake-aws")
 
-	// Build the plugin binary from its own module directory
+	// Build the plugin binary from the internal test command
 	cmd := exec.Command("go", "build",
-		"-C", "./plugins/fake-aws",
 		"-o", pluginPath,
-		".",
+		"./internal/workflow_tests/cmd/fake-aws",
 	)
 
 	output, err := cmd.CombinedOutput()

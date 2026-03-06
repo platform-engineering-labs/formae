@@ -1,0 +1,58 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@azure/azure.pkl"
+
+import "@azure/resources/resourcegroup.pkl"
+import "@azure/resources/virtualnetwork.pkl"
+import "@azure/resources/subnet.pkl"
+
+local testRg = new resourcegroup.ResourceGroup {
+  label = "e2e-test-rg"
+  name = "formae-e2e-reconcile-rg"
+  location = "westeurope"
+}
+
+local testVnet = new virtualnetwork.VirtualNetwork {
+  label = "e2e-test-vnet"
+  name = "formae-e2e-reconcile-vnet"
+  location = "westeurope"
+  resourceGroupName = testRg.res.name
+  addressSpace = new virtualnetwork.AddressSpace {
+    addressPrefixes = new Listing { "10.0.0.0/16" }
+  }
+}
+
+local testSubnet = new subnet.Subnet {
+  label = "e2e-test-subnet"
+  name = "formae-e2e-reconcile-subnet"
+  resourceGroupName = testRg.res.name
+  virtualNetworkName = testVnet.res.name
+  addressPrefix = "10.0.1.0/24"
+}
+
+local stackName = "e2e-reconcile-azure"
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "E2E reconcile test for Azure networking"
+  }
+
+  new formae.Target {
+    label = "e2e-azure-target"
+    config = new azure.Config {
+      subscriptionId = read("env:AZURE_SUBSCRIPTION_ID")
+    }
+  }
+
+  testRg
+  testVnet
+  testSubnet
+}

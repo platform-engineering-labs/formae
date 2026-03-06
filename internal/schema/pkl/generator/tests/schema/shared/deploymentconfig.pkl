@@ -1,0 +1,14 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Plain Typed class (not SubResource) — tests import generation for non-SubResource shared types.
+module testprovider.shared.deploymentconfig
+
+open class DeploymentConfig {
+    environment: String?
+    version: String?
+    replicas: Int?
+}

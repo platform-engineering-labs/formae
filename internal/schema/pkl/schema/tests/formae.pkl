@@ -90,6 +90,13 @@ local testBucket = new TestBucket {
     tags = new Listing { testTag }
 }
 
+local testBucketNoTags = new TestBucket {
+    label = "test-bucket-no-tags"
+    stack = stackResolvable
+    target = targetResolvable
+    bucketName = "my-bucket-no-tags"
+}
+
 
 @formae.SubResourceHint
 local class NestedSetting extends formae.SubResource {
@@ -202,6 +209,10 @@ examples {
         testBucket.render()
     }
 
+    ["Test Resource without tags - render()"] {
+        testBucketNoTags.render()
+    }
+
     ["Nested Test Resource - render()"] {
         nestedResource.render()
     }
@@ -304,6 +315,14 @@ facts {
         rendered.Type == "AWS::S3::Bucket" &&
         rendered.Schema != null &&
         rendered.Label == "test-bucket"
+    }
+
+    ["Nullable Listing renders as empty list when null"] {
+        let (rendered = testBucketNoTags.render())
+        let (props = rendered.Properties)
+        // Tags should be an empty Listing, not null
+        props.Tags != null &&
+        props.Tags.length == 0
     }
 
     ["Fq functions work at module level"] {

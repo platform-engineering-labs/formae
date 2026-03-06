@@ -1,0 +1,37 @@
+{
+  "Targets": [
+    {
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
+      "Config": {
+        "Type": "TestProvider",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "compute-stack",
+      "Description": "Compute infrastructure stack"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "web-server",
+      "Type": "TestProvider::Compute::Server",
+      "Stack": "compute-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "ServerType": "t3.medium",
+        "ImageId": "ami-12345678",
+        "NetworkConfig": {
+          "SubnetId": "subnet-abc123",
+          "SecurityGroupIds": ["sg-xyz789"]
+        },
+        "Tags": [
+          { "Key": "Name", "Value": "web-server" }
+        ]
+      }
+    }
+  ]
+}

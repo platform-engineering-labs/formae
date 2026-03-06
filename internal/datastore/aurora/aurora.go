@@ -135,7 +135,10 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 		"currentVersion", currentVersion,
 		"targetVersion", targetVersion)
 
-	// Run pending migrations
+	// Run pending migrations.
+	// Each migration runs inside a transaction so that TEMP tables and other
+	// session-scoped objects survive across the individual SQL statements
+	// (Aurora Data API creates a new session per ExecuteStatement call).
 	for _, m := range migrations {
 		if m.version <= currentVersion {
 			continue
@@ -143,17 +146,28 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 
 		slog.Info("Running migration", "version", m.version, "name", m.name)
 
-		// Execute migration statements
+		txID, err := d.beginTransaction(ctx)
+		if err != nil {
+			return fmt.Errorf("migration %d: failed to begin transaction: %w", m.version, err)
+		}
+
+		// Execute migration statements within the transaction
 		for _, stmt := range m.upStatements {
 			stmt = strings.TrimSpace(stmt)
 			if stmt == "" {
 				continue
 			}
 
-			_, err := d.executeStatement(ctx, stmt, nil)
+			_, err := d.executeStatementInTransaction(ctx, txID, stmt, nil)
 			if err != nil {
+				_ = d.rollbackTransaction(ctx, txID)
 				return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
 			}
+		}
+
+		if err := d.commitTransaction(ctx, txID); err != nil {
+			_ = d.rollbackTransaction(ctx, txID)
+			return fmt.Errorf("migration %d: failed to commit transaction: %w", m.version, err)
 		}
 
 		// Record migration version
@@ -591,12 +605,13 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 		description_text, description_confirm, config_mode, config_force, config_simulate,
 		target_updates, stack_updates, policy_updates, modified_ts
 	FROM forma_commands
-	WHERE command != :sync_command AND state = :state
+	WHERE command != :sync_command AND state IN (:state_not_started, :state_in_progress)
 	ORDER BY timestamp DESC
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("sync_command"), Value: &types.FieldMemberStringValue{Value: string(pkgmodel.CommandSync)}},
-		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(forma_command.CommandStateInProgress)}},
+		{Name: aws.String("state_not_started"), Value: &types.FieldMemberStringValue{Value: string(forma_command.CommandStateNotStarted)}},
+		{Name: aws.String("state_in_progress"), Value: &types.FieldMemberStringValue{Value: string(forma_command.CommandStateInProgress)}},
 	}
 
 	output, err := d.executeStatement(ctx, query, params)
@@ -1697,14 +1712,14 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
 	ctx := context.Background()
 
-	// Search for resources that contain a $ref to this KSUID in their properties
-	// The format is: "formae://KSUID#/..." (JSON without spaces after colons)
-	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+	// Search for resources that contain a $ref to this KSUID in their properties.
+	// Use a regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
+	pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
 
 	query := `
 	SELECT data, ksuid
 	FROM resources r1
-	WHERE data LIKE :pattern
+	WHERE data::text ~ :pattern
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -1757,13 +1772,14 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 		return make(map[string][]*pkgmodel.Resource), nil
 	}
 
-	// Build OR conditions for each KSUID pattern with named parameters
+	// Build OR conditions for each KSUID pattern with named parameters.
+	// Use regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
 	var conditions []string
 	var params []types.SqlParameter
 	for i, ksuid := range ksuids {
-		pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
 		paramName := fmt.Sprintf("pattern%d", i)
-		conditions = append(conditions, fmt.Sprintf("data LIKE :%s", paramName))
+		conditions = append(conditions, fmt.Sprintf("data::text ~ :%s", paramName))
 		params = append(params, types.SqlParameter{
 			Name:  aws.String(paramName),
 			Value: &types.FieldMemberStringValue{Value: pattern},
@@ -1815,10 +1831,12 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 		}
 		resource.Ksuid = ksuidResult
 
-		// Find which of the input KSUIDs this resource depends on
+		// Find which of the input KSUIDs this resource depends on.
+		// jsonb::text output has spaces after colons, so check both forms.
 		for _, ksuid := range ksuids {
-			pattern := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
-			if strings.Contains(jsonData, pattern) {
+			withSpace := fmt.Sprintf("\"$ref\": \"formae://%s#", ksuid)
+			withoutSpace := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(jsonData, withSpace) || strings.Contains(jsonData, withoutSpace) {
 				result[ksuid] = append(result[ksuid], &resource)
 			}
 		}

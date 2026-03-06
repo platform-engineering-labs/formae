@@ -984,13 +984,37 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsEmptyArray(t *testing
 	assert.Equal(t, "remove", patches[0].Operation)
 }
 
+func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsNull(t *testing.T) {
+	document := []byte(`{"Name": "test-resource", "Tags": [{"Key": "OOBTag", "Value": "oob-value"}]}`)
+	patch := []byte(`{"Name": "test-resource", "Tags": null}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints:  map[string]pkgmodel.FieldHint{"Tags": {UpdateMethod: "EntitySet", IndexField: "Key"}},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+	require.NotNil(t, patchDoc, "expected a patch to handle the OOB tag, got nil")
+
+	var patches []jsonpatch.JsonPatchOperation
+	err = json.Unmarshal(patchDoc, &patches)
+	require.NoError(t, err)
+	require.NotEmpty(t, patches)
+	// jsonpatch generates "replace" (null replaces the array) rather than "remove",
+	// both achieve the same result via CloudControl.
+	assert.Equal(t, "replace", patches[0].Operation)
+	assert.Equal(t, "/Tags", patches[0].Path)
+}
+
 func TestHasValue(t *testing.T) {
 	tests := []struct {
 		name     string
 		val      any
 		expected bool
 	}{
-		{name: "nil", val: nil, expected: false},
+		{name: "nil", val: nil, expected: true},
 		{name: "empty string", val: "", expected: false},
 		{name: "non-empty string", val: "hello", expected: true},
 		{name: "empty array", val: []any{}, expected: true},

@@ -21,6 +21,10 @@ EXTERNAL_PLUGIN_REPOS ?= \
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins
 
+# Optional: override plugin branches for testing (e.g., AZURE_PLUGIN_REF=fix/remove-nativeid-encoding)
+AZURE_PLUGIN_REF ?=
+AWS_PLUGIN_REF ?=
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
@@ -35,11 +39,14 @@ clean-pel:
 
 build:
 	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
-	go build -C plugins/fake-aws -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 
 build-tools:
 	go build -C ./tools/ppm/cmd -o ../../../ppm
+
+## install-gremlins: Install the gremlins mutation testing tool
+install-gremlins:
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
 
 ## fetch-external-plugins: Clone/update external plugin repositories
 fetch-external-plugins:
@@ -54,6 +61,16 @@ fetch-external-plugins:
 			git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
 		fi \
 	done
+	@if [ -n "$(AZURE_PLUGIN_REF)" ]; then \
+		echo "Checking out Azure plugin ref: $(AZURE_PLUGIN_REF)"; \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" fetch origin $(AZURE_PLUGIN_REF); \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" checkout FETCH_HEAD; \
+	fi
+	@if [ -n "$(AWS_PLUGIN_REF)" ]; then \
+		echo "Checking out AWS plugin ref: $(AWS_PLUGIN_REF)"; \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" fetch origin $(AWS_PLUGIN_REF); \
+		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" checkout FETCH_HEAD; \
+	fi
 
 ## build-external-plugins: Build all external plugins
 build-external-plugins: fetch-external-plugins
@@ -83,7 +100,6 @@ install-external-plugins: build-external-plugins
 
 build-debug:
 	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
-	go build -C plugins/fake-aws ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o fake-aws-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
 pkg-bin: clean build build-tools build-external-plugins
@@ -188,14 +204,14 @@ test-build:
 
 test-all: test-build test-pkl
 	go test -C ./plugins/auth-basic -tags="unit integration" -count=1 -failfast ./...
-	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./
-	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./
+	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./...
+	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./...
 	go test -tags="unit integration" -count=1 -failfast ./...
 
 test-unit:
 	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...
-	go test -C ./pkg/model -tags=unit -failfast ./
-	go test -C ./pkg/plugin -tags=unit -failfast ./
+	go test -C ./pkg/model -tags=unit -failfast ./...
+	go test -C ./pkg/plugin -tags=unit -failfast ./...
 	go test -tags=unit -failfast ./...
 
 postgres-up:
@@ -264,15 +280,14 @@ local-data-api-ci:
 	exit 1
 
 test-unit-postgres:
-	go test -v -tags=unit -failfast ./internal/datastore -args -dbType=postgres
+	go test -v -tags=unit -failfast ./internal/datastore/postgres
 
 test-unit-auroradataapi:
-	go test -v -tags=unit -count=1 -failfast ./internal/datastore -args \
-		-dbType=auroradataapi \
-		-clusterArn=arn:aws:rds:us-east-1:123456789012:cluster:local \
-		-secretArn=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
-		-database=postgres \
-		-endpoint=http://localhost:80
+	FORMAE_TEST_AURORA_CLUSTER_ARN=arn:aws:rds:us-east-1:123456789012:cluster:local \
+	FORMAE_TEST_AURORA_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
+	FORMAE_TEST_AURORA_DATABASE=postgres \
+	FORMAE_TEST_AURORA_ENDPOINT=http://localhost:80 \
+		go test -v -tags=unit -count=1 -failfast ./internal/datastore/aurora
 
 test-unit-summary:
 	go test -tags=unit -count=1 -json  ./... | jq 'select(.Action == "fail")'
@@ -281,16 +296,22 @@ test-integration:
 	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-e2e: gen-pkl pkg-pkl build install-external-plugins
+test-e2e: build install-external-plugins
 	echo "Setting up e2e PKL dependencies..."
-	bash ./tests/e2e/setup-pkl-deps.sh
-	echo "Resolving PKL project..."
-	pkl project resolve tests/e2e/pkl
-	echo "Running full E2E test suite..."
-	bash ./tests/e2e/e2e.sh
+	bash ./tests/e2e/go/setup_pkl.sh
+	echo "Running e2e tests..."
+	E2E_FORMAE_BINARY=$(CURDIR)/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
 
 test-property:
 	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
+
+## mutation-test: Run mutation testing across all unit-tested packages and generate report
+mutation-test: build
+	@echo "Running mutation testing (this will take a while)..."
+	./scripts/mutation-test.sh
+	./scripts/coverage-diff.sh
+	./scripts/generate-mutation-report.sh
+	@echo "Report: .mutation-report/summary.md"
 
 test-schema-pkl:
 	cd internal/schema/pkl/schema && pkl test tests/formae.pkl
@@ -314,22 +335,18 @@ test-generator-pkl:
 		pkl eval runPklGenerator.pkl \
 			-p Json="$$(cat $$f)" > tmp/$$name.pkl && \
 		pkl eval tmp/$$name.pkl > /dev/null && \
-		echo "  OK" || echo "  FAILED"; \
+		echo "  OK" || { echo "  FAILED"; exit 1; }; \
 	done
 
 test-descriptors-pkl:
 	pkl test pkg/plugin/descriptors/test/PklProjectGenerator_test.pkl
 	pkl test pkg/plugin/descriptors/test/ImportsGenerator_test.pkl
 
-verify-schema-fakeaws:
-	cd ./pkg/plugin && go run ./testutil/cmd/verify-schema --namespace fakeaws ../../plugins/fake-aws/schema/pkl
-
 test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 
 tidy-all:
 	go mod tidy
 	cd ./plugins/auth-basic && go mod tidy
-	cd ./plugins/fake-aws && go mod tidy
 	cd ./tools/ppm && go mod tidy
 	cd ./pkg/model && go mod tidy
 	cd ./pkg/plugin && go mod tidy
@@ -356,4 +373,4 @@ add-license:
 
 all: clean build build-tools gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build build-tools install-gremlins build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all

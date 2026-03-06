@@ -1,0 +1,48 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+
+import "@aws/iam/role.pkl"
+
+local testRole = new role.Role {
+  label = "e2e-replace-role"
+  roleName = "formae-e2e-replace-role-v1"
+  description = "e2e replace test role v1"
+  assumeRolePolicyDocument = new Dynamic {
+    ["Version"] = "2012-10-17"
+    ["Statement"] = new Listing {
+      new Dynamic {
+        ["Effect"] = "Allow"
+        ["Principal"] = new Dynamic {
+          ["Service"] = "lambda.amazonaws.com"
+        }
+        ["Action"] = "sts:AssumeRole"
+      }
+    }
+  }
+}
+
+local stackName = "e2e-replace-aws"
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "E2E replace test for AWS IAM"
+  }
+
+  new formae.Target {
+    label = "e2e-aws-target"
+    config = new aws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  testRole
+}

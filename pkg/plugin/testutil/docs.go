@@ -25,11 +25,10 @@ type DocsResult struct {
 
 // ResourceDoc contains documentation for a single resource type.
 type ResourceDoc struct {
-	Type             string  `json:"type"`
-	Discoverable     bool    `json:"discoverable"`
-	Extractable      bool    `json:"extractable"`
-	Nonprovisionable bool    `json:"nonprovisionable"`
-	Identifier       string  `json:"identifier"`
+	Type         string  `json:"type"`
+	Discoverable bool    `json:"discoverable"`
+	Extractable  bool    `json:"extractable"`
+	Identifier   string  `json:"identifier"`
 	DocComment       *string `json:"docComment"`
 	ModuleName       string  `json:"moduleName"`
 	ClassName        string  `json:"className"`

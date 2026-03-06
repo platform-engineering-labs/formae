@@ -135,6 +135,11 @@ func validateExtractOptions(opts *ExtractOptions) error {
 		return cmd.FlagErrorf("target file is required")
 	}
 
+	info, err := os.Stat(opts.TargetPath)
+	if err == nil && info.IsDir() {
+		return cmd.FlagErrorf("target path '%s' is a directory, not a file", opts.TargetPath)
+	}
+
 	if strings.TrimSpace(opts.Query) == "" {
 		return cmd.FlagErrorf("query is required")
 	}

@@ -1,0 +1,58 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module testprovider.sqs.queue
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+
+const type = "TestProvider::SQS::Queue"
+
+open class QueueResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden queueUrl: QueueResolvable = (this) {
+        property = "QueueUrl"
+    }
+
+    hidden arn: QueueResolvable = (this) {
+        property = "Arn"
+    }
+}
+
+@testprovider.ResourceHint {
+    type = module.type
+    identifier = "QueueUrl"
+}
+open class Queue extends formae.Resource {
+    @testprovider.FieldHint
+    queueName: String?
+
+    @testprovider.FieldHint
+    delaySeconds: Int?
+
+    @testprovider.FieldHint
+    maximumMessageSize: Int?
+
+    @testprovider.FieldHint
+    messageRetentionPeriod: Int?
+
+    @testprovider.FieldHint
+    receiveMessageWaitTimeSeconds: Int?
+
+    @testprovider.FieldHint
+    visibilityTimeout: Int?
+
+    @testprovider.FieldHint
+    tags: Listing<testprovider.Tag>?
+
+    local parent = this
+
+    hidden res: QueueResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

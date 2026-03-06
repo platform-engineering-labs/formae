@@ -1,0 +1,47 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module testprovider.ec2.vpc
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+
+const type = "TestProvider::EC2::VPC"
+
+open class VPCResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden id: VPCResolvable = (this) {
+        property = "VpcId"
+    }
+}
+
+@testprovider.ResourceHint {
+    type = module.type
+    identifier = "VpcId"
+}
+open class VPC extends formae.Resource {
+    @testprovider.FieldHint {
+        createOnly = true
+    }
+    cidrBlock: String
+
+    @testprovider.FieldHint
+    enableDnsHostnames: Boolean?
+
+    @testprovider.FieldHint
+    enableDnsSupport: Boolean?
+
+    @testprovider.FieldHint
+    tags: Listing<testprovider.Tag>?
+
+    local parent = this
+
+    hidden res: VPCResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

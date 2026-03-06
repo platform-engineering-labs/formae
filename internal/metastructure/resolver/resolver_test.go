@@ -1136,7 +1136,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 		assert.Contains(t, err.Error(), "not found")
 	})
 
-	t.Run("returns error for missing property", func(t *testing.T) {
+	t.Run("skips missing property for late-binding resolution", func(t *testing.T) {
 		vpcKsuid := util.NewID()
 		subnetKsuid := util.NewID()
 
@@ -1160,10 +1160,12 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		assert.NoError(t, err)
+		// Property not resolved — will be resolved at execution time
+		_, found := props.Get(vpcKsuid, "NonExistentProperty")
+		assert.False(t, found)
 	})
 }
 

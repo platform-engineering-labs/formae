@@ -2,6 +2,7 @@ regions:
   - global
   - us-east-1
   - us-east-2
+  - us-west-2
 
 blocklist:
 - "021891619792"
@@ -50,9 +51,7 @@ resource-types:
     - IAMAccountSummary
     - IAMGroup
     - IAMGroupPolicyAttachment
-    - IAMRole
     - IAMOpenIDConnectProvider
-    - IAMRolePolicyAttachment
     - IAMUser
     - IAMUserAccessKey
     - IAMUserGroupAttachment

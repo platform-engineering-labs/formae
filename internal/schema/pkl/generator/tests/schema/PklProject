@@ -1,0 +1,12 @@
+amends "pkl:Project"
+
+package {
+  name = "testprovider"
+  baseUri = "package://test.local/testprovider"
+  version = "1.0.0"
+  packageZipUrl = "https://test.local/testprovider@1.0.0.zip"
+}
+
+dependencies {
+    ["formae"] = import("../../../schema/PklProject")
+}

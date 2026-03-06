@@ -294,7 +294,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		nil, // No target updates on sync
 		nil, // No stack updates on sync
 		nil, // No policy updates on sync
-		"",
+		"synchronizer",
 	)
 	data.commandID = syncCommand.ID
 	proc.Log().Debug("Synchronizer: created sync command", "commandID", syncCommand.ID, "resourceUpdateCount", len(allResourceUpdates))

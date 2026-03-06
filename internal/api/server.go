@@ -321,7 +321,7 @@ func (s *Server) CommandStatus(c echo.Context) error {
 	if clientID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Client-ID header is required")
 	}
-	id := c.QueryParam("id")
+	id := c.Param("id")
 	if id == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "id is required")
 	}

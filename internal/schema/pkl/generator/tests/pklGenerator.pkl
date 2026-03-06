@@ -14,12 +14,16 @@ import "../pklGenerator.pkl" as generator
 local sqsJson = new json.Parser {}.parse(read("../examples/json/sqs_queue.json"))
 local vpcJson = new json.Parser {}.parse(read("../examples/json/ec2_vpc.json"))
 local multiJson = new json.Parser {}.parse(read("../examples/json/multi_resource.json"))
+local zoneJson = new json.Parser {}.parse(read("../examples/json/dns_zone.json"))
+local computeServerJson = new json.Parser {}.parse(read("../examples/json/compute_server.json"))
+local appRunnerServiceJson = new json.Parser {}.parse(read("../examples/json/apprunner_service.json"))
+local crossStackRefJson = new json.Parser {}.parse(read("../examples/json/cross_stack_ref.json"))
 
 facts {
     ["SQS Queue - generates correct imports"] {
         let (result = generator.generateFormaFile(sqsJson))
-        result.contains("@fakeaws/sqs/queue.pkl") &&
-        result.contains("@fakeaws/fakeaws.pkl")
+        result.contains("@testprovider/sqs/queue.pkl") &&
+        result.contains("@testprovider/testprovider.pkl")
     }
 
     ["SQS Queue - generates forma block with stacks and targets"] {
@@ -29,8 +33,8 @@ facts {
         result.contains("formae.Stack") &&
         result.contains("label = \"queue-stack\"") &&
         result.contains("formae.Target") &&
-        result.contains("label = \"fakeaws-target\"") &&
-        result.contains("namespace = \"FakeAWS\"")
+        result.contains("label = \"testprovider-target\"") &&
+        result.contains("namespace = \"TestProvider\"")
     }
 
     ["SQS Queue - generates resource declarations"] {
@@ -52,8 +56,8 @@ facts {
 
     ["EC2 VPC - generates correct imports"] {
         let (result = generator.generateFormaFile(vpcJson))
-        result.contains("@fakeaws/ec2/vpc.pkl") &&
-        result.contains("@fakeaws/fakeaws.pkl")
+        result.contains("@testprovider/ec2/vpc.pkl") &&
+        result.contains("@testprovider/testprovider.pkl")
     }
 
     ["EC2 VPC - generates resource with correct properties"] {
@@ -66,11 +70,11 @@ facts {
 
     ["Multi resource - generates imports for all resource types"] {
         let (result = generator.generateFormaFile(multiJson))
-        result.contains("@fakeaws/ec2/vpc.pkl") &&
-        result.contains("@fakeaws/ec2/subnet.pkl") &&
-        result.contains("@fakeaws/ec2/securitygroup.pkl") &&
-        result.contains("@fakeaws/sqs/queue.pkl") &&
-        result.contains("@fakeaws/fakeaws.pkl")
+        result.contains("@testprovider/ec2/vpc.pkl") &&
+        result.contains("@testprovider/ec2/subnet.pkl") &&
+        result.contains("@testprovider/ec2/securitygroup.pkl") &&
+        result.contains("@testprovider/sqs/queue.pkl") &&
+        result.contains("@testprovider/testprovider.pkl")
     }
 
     ["Multi resource - generates multiple stacks"] {
@@ -91,5 +95,158 @@ facts {
         result.contains("subnet.Subnet") &&
         result.contains("securitygroup.SecurityGroup") &&
         result.contains("queue.Queue")
+    }
+
+    // --- modulePathToAlias unit tests ---
+
+    ["modulePathToAlias - no collision returns simple name"] {
+        generator.modulePathToAlias("@aws/ec2/ec2.pkl", List("@aws/ec2/ec2.pkl", "@aws/sqs/queue.pkl")) == "ec2" &&
+        generator.modulePathToAlias("@aws/sqs/queue.pkl", List("@aws/ec2/ec2.pkl", "@aws/sqs/queue.pkl")) == "queue"
+    }
+
+    ["modulePathToAlias - collision disambiguates with parent segment"] {
+        let (allPaths = List("@aws/ecs/service.pkl", "@gcp/cloudrun/service.pkl"))
+        generator.modulePathToAlias("@aws/ecs/service.pkl", allPaths) == "ecs_service" &&
+        generator.modulePathToAlias("@gcp/cloudrun/service.pkl", allPaths) == "cloudrun_service"
+    }
+
+    ["modulePathToAlias - collision with @-prefixed parent strips @"] {
+        let (allPaths = List("@aws/types.pkl", "@gcp/types.pkl"))
+        generator.modulePathToAlias("@aws/types.pkl", allPaths) == "aws_types" &&
+        generator.modulePathToAlias("@gcp/types.pkl", allPaths) == "gcp_types"
+    }
+
+    ["modulePathToAlias - dashes converted to underscores"] {
+        generator.modulePathToAlias("@cloudflare-dns/cloudflare-dns.pkl", List("@cloudflare-dns/cloudflare-dns.pkl")) == "cloudflare_dns"
+    }
+
+    ["modulePathToAlias - single path never collides"] {
+        generator.modulePathToAlias("@aws/ec2/ec2.pkl", List("@aws/ec2/ec2.pkl")) == "ec2"
+    }
+
+    // --- importFormatting unit tests ---
+
+    ["importFormatting - generates collision-aware aliases"] {
+        let (imports = List("@aws/ecs/service.pkl", "@gcp/cloudrun/service.pkl"))
+        let (result = generator.importFormatting(imports, imports))
+        result.contains("import \"@aws/ecs/service.pkl\" as ecs_service") &&
+        result.contains("import \"@gcp/cloudrun/service.pkl\" as cloudrun_service")
+    }
+
+    ["importFormatting - no collision uses simple alias"] {
+        let (imports = List("@aws/ec2/ec2.pkl", "@aws/sqs/queue.pkl"))
+        let (result = generator.importFormatting(imports, imports))
+        result.contains("import \"@aws/ec2/ec2.pkl\" as ec2") &&
+        result.contains("import \"@aws/sqs/queue.pkl\" as queue")
+    }
+
+    ["importFormatting - cross-group collision detected via allImports"] {
+        // dependencyImports rendered separately but allImports includes both groups
+        let (mainImports = List("@aws/ecs/service.pkl"))
+        let (depImports = List("@gcp/cloudrun/service.pkl"))
+        let (allImports = mainImports + depImports)
+        let (mainResult = generator.importFormatting(mainImports, allImports))
+        let (depResult = generator.importFormatting(depImports, allImports))
+        mainResult.contains("as ecs_service") &&
+        depResult.contains("as cloudrun_service")
+    }
+
+    // --- Zone SubResource integration tests ---
+
+    ["Zone - generates correct imports"] {
+        let (result = generator.generateFormaFile(zoneJson))
+        result.contains("@testprovider/dns/zone.pkl") &&
+        result.contains("@testprovider/testprovider.pkl")
+    }
+
+    ["Zone - generates resource with SubResource property"] {
+        let (result = generator.generateFormaFile(zoneJson))
+        // The ZoneConfig SubResource should be rendered inline
+        result.contains("zone.Zone") &&
+        result.contains("ZoneConfig") &&
+        result.contains("comment = \"Primary hosted zone\"")
+    }
+
+    ["Zone - generates forma block with stack and target"] {
+        let (result = generator.generateFormaFile(zoneJson))
+        result.contains("label = \"dns-stack\"") &&
+        result.contains("label = \"testprovider-target\"") &&
+        result.contains("namespace = \"TestProvider\"")
+    }
+
+    // --- Cross-module SubResource import tests ---
+    // Server uses NetworkConfig from @testprovider/shared/networkconfig.pkl (a different module).
+    // Without the SubResource import fix, this import would be missing and pkl eval would fail.
+
+    ["Compute Server - generates cross-module SubResource dependency import"] {
+        let (result = generator.generateFormaFile(computeServerJson))
+        // The resource import is @testprovider/compute/server.pkl
+        result.contains("@testprovider/compute/server.pkl") &&
+        // The SubResource import must also appear (from a DIFFERENT module)
+        result.contains("@testprovider/shared/networkconfig.pkl")
+    }
+
+    ["Compute Server - generates resource with cross-module SubResource"] {
+        let (result = generator.generateFormaFile(computeServerJson))
+        result.contains("server.Server") &&
+        result.contains("networkconfig.NetworkConfig") &&
+        result.contains("subnetId = \"subnet-abc123\"")
+    }
+
+    // --- Plain shared type (not SubResource) import tests ---
+    // Service uses DeploymentConfig from @testprovider/shared/deploymentconfig.pkl.
+    // DeploymentConfig is a plain class, not a SubResource. The generalized
+    // import logic should emit the correct import without any special-case branch.
+
+    ["AppRunner Service - generates plain shared type dependency import"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        result.contains("@testprovider/apprunner/service.pkl") &&
+        result.contains("@testprovider/shared/deploymentconfig.pkl")
+    }
+
+    ["AppRunner Service - generates resource with plain shared type"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        result.contains("service.Service") &&
+        result.contains("deploymentconfig.DeploymentConfig") &&
+        result.contains("environment = \"production\"") &&
+        result.contains("version = \"1.2.3\"") &&
+        result.contains("replicas = 3")
+    }
+
+    ["AppRunner Service - generates Tag import via generalized path"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        // Tag is now imported directly from types.pkl (where it's defined)
+        // rather than re-exported via testprovider.pkl
+        result.contains("@testprovider/types.pkl")
+    }
+
+    ["AppRunner Service - generates forma block"] {
+        let (result = generator.generateFormaFile(appRunnerServiceJson))
+        result.contains("label = \"app-stack\"") &&
+        result.contains("label = \"testprovider-target\"") &&
+        result.contains("namespace = \"TestProvider\"")
+    }
+
+    // --- Cross-stack resolvable reference tests ---
+    // When a resolvable references a resource in a different stack, the stack
+    // property inside the Resolvable block must be a String (Resolvable.stack
+    // is String?). The generated code should use .res.label to convert the
+    // StackResolvable into a String, not just .res which would leave a
+    // StackResolvable where a String is expected.
+
+    ["Cross-stack ref - resolvable stack uses .res.label not .res"] {
+        let (result = generator.generateFormaFile(crossStackRefJson))
+        result.contains("infraStack.res.label")
+    }
+
+    ["Cross-stack ref - generates resolvable with VPCResolvable type"] {
+        let (result = generator.generateFormaFile(crossStackRefJson))
+        result.contains("vpc.VPCResolvable")
+    }
+
+    ["Cross-stack ref - generates both stacks"] {
+        let (result = generator.generateFormaFile(crossStackRefJson))
+        result.contains("label = \"infra-stack\"") &&
+        result.contains("label = \"app-stack\"")
     }
 }

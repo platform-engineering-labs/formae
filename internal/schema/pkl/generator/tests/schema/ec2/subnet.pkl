@@ -1,0 +1,54 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module testprovider.ec2.subnet
+
+import "@formae/formae.pkl"
+import "../testprovider.pkl"
+
+const type = "TestProvider::EC2::Subnet"
+
+open class SubnetResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden subnetId: SubnetResolvable = (this) {
+        property = "SubnetId"
+    }
+}
+
+@testprovider.ResourceHint {
+    type = module.type
+    identifier = "SubnetId"
+}
+open class Subnet extends formae.Resource {
+    @testprovider.FieldHint {
+        createOnly = true
+    }
+    vpcId: String|formae.Resolvable
+
+    @testprovider.FieldHint {
+        createOnly = true
+    }
+    cidrBlock: String
+
+    @testprovider.FieldHint {
+        createOnly = true
+    }
+    availabilityZone: String?
+
+    @testprovider.FieldHint
+    mapPublicIpOnLaunch: Boolean?
+
+    @testprovider.FieldHint
+    tags: Listing<testprovider.Tag>?
+
+    local parent = this
+
+    hidden res: SubnetResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
+}

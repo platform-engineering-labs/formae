@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	pklgo "github.com/apple/pkl-go/pkl"
+	formae "github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -52,13 +53,13 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 		}
 	}
 
-	resolver.Add("formae", "pkl", Version)
+	resolver.Add("formae", "pkl", formae.Version)
 
 	// Extract namespaces from the data and add them as dependencies
 	namespaces := extractNamespaces(data)
 	for ns := range namespaces {
 		// Each namespace uses itself as the plugin name (e.g., aws uses aws plugin)
-		resolver.Add(ns, ns, Version)
+		resolver.Add(ns, ns, resolver.InstalledVersion(ns))
 	}
 
 	includes := resolver.GetPackageStrings()

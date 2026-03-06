@@ -200,6 +200,64 @@ func (r *PackageResolver) readNamespaceFromManifest(manifestPath string) string 
 	return ""
 }
 
+// readVersionFromManifest reads the version field from a formae-plugin.pkl manifest.
+// Returns empty string if the file cannot be read or version is not found.
+func (r *PackageResolver) readVersionFromManifest(manifestPath string) string {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return ""
+	}
+
+	content := string(data)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "version") {
+			start := strings.Index(line, "\"")
+			end := strings.LastIndex(line, "\"")
+			if start != -1 && end > start {
+				return line[start+1 : end]
+			}
+		}
+	}
+
+	return ""
+}
+
+// InstalledVersion looks up the installed plugin for a namespace and returns its
+// version from formae-plugin.pkl. Returns "" if not found or local schemas are not enabled.
+func (r *PackageResolver) InstalledVersion(namespace string) string {
+	if !r.useLocalSchemas || r.localSchemaBasePath == "" {
+		return ""
+	}
+
+	pluginDirs, err := os.ReadDir(r.localSchemaBasePath)
+	if err != nil {
+		return ""
+	}
+
+	targetNamespace := strings.ToUpper(namespace)
+
+	for _, pluginEntry := range pluginDirs {
+		if !pluginEntry.IsDir() {
+			continue
+		}
+
+		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
+		versionPath, _ := r.findHighestVersion(pluginDir)
+		if versionPath == "" {
+			continue
+		}
+
+		manifestPath := filepath.Join(versionPath, "formae-plugin.pkl")
+		pluginNamespace := r.readNamespaceFromManifest(manifestPath)
+		if strings.ToUpper(pluginNamespace) == targetNamespace {
+			return r.readVersionFromManifest(manifestPath)
+		}
+	}
+
+	return ""
+}
+
 // readPackageNameFromPklProject reads the package name from a PklProject file.
 // Returns empty string if the file cannot be read or name is not found.
 func (r *PackageResolver) readPackageNameFromPklProject(pklProjectPath string) string {

@@ -974,10 +974,10 @@ func (d DatastorePostgres) LoadIncompleteFormaCommands() ([]*forma_command.Forma
 	defer span.End()
 
 	query := formaCommandWithResourceUpdatesQueryBasePostgres +
-		" WHERE fc.command != 'sync' AND fc.state = $1" +
+		" WHERE fc.command != 'sync' AND fc.state IN ($1, $2)" +
 		resourceUpdateOrderByPostgres
 
-	rows, err := d.pool.Query(ctx, query, forma_command.CommandStateInProgress)
+	rows, err := d.pool.Query(ctx, query, forma_command.CommandStateNotStarted, forma_command.CommandStateInProgress)
 	if err != nil {
 		return nil, err
 	}

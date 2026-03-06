@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	pklgo "github.com/apple/pkl-go/pkl"
+	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -28,10 +29,6 @@ import (
 const ProjectFile = "PklProject"
 
 type PKL struct{}
-
-// Version is used for PKL package resolution. It was previously set via ldflags
-// for the .so plugin; now it's a regular package variable.
-var Version = "0.0.0"
 
 //go:embed assets
 var assets embed.FS
@@ -302,12 +299,12 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 			}
 		}
 
-		resolver.Add("formae", "pkl", Version)
+		resolver.Add("formae", "pkl", formae.Version)
 
 		// Extract namespaces from forma resources
 		for _, res := range forma.Resources {
 			ns := strings.ToLower(res.Namespace())
-			resolver.Add(ns, ns, Version)
+			resolver.Add(ns, ns, resolver.InstalledVersion(ns))
 		}
 
 		// No PklProject exists, initialize it with resolved packages
@@ -405,8 +402,9 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.Sc
 		if errors.Is(cmd.Err, exec.ErrDot) {
 			cmd.Err = nil
 		}
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("project resolve failed: %v", err)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("project resolve failed: %w\nOutput: %s", err, string(output))
 		}
 	}
 

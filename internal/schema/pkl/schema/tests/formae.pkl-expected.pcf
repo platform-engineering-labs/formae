@@ -229,6 +229,74 @@ examples {
       }
     }
   }
+  ["Test Resource without tags - render()"] {
+    new {
+      Label = "test-bucket-no-tags"
+      Group = null
+      Target {
+        $label = "aws-target"
+        $property = null
+        $stack = null
+        $type = "Formae::Target"
+        $res = true
+        $visibility = "Clear"
+      }
+      Stack {
+        $label = "test-stack"
+        $property = null
+        $stack = null
+        $type = "Formae::Stack"
+        $res = true
+        $visibility = "Clear"
+      }
+      Managed = true
+      Type = "AWS::S3::Bucket"
+      Schema {
+        Identifier = "BucketName"
+        Fields {
+          "bucketName"
+          "Region"
+          "Tags"
+        }
+        Hints {
+          ["bucketName"] {
+            CreateOnly = false
+            WriteOnly = false
+            Required = true
+            RequiredOnCreate = false
+            HasProviderDefault = false
+            UpdateMethod = ""
+            IndexField = ""
+          }
+          ["Region"] {
+            CreateOnly = true
+            WriteOnly = false
+            Required = false
+            RequiredOnCreate = false
+            HasProviderDefault = false
+            UpdateMethod = ""
+            IndexField = ""
+          }
+          ["Tags"] {
+            CreateOnly = false
+            WriteOnly = false
+            Required = false
+            RequiredOnCreate = false
+            HasProviderDefault = false
+            UpdateMethod = ""
+            IndexField = ""
+          }
+        }
+        Discoverable = true
+        Extractable = true
+      }
+      Properties {
+        bucketName = "my-bucket-no-tags"
+        Region = null
+        Tags {}
+      }
+    }
+  }
   ["Nested Test Resource - render()"] {
     new {
       Label = "nested-resource"

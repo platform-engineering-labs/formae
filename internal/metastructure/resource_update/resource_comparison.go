@@ -223,4 +223,3 @@ func buildPath(base, key string) string {
 	}
 	return base + "." + key
 }
-

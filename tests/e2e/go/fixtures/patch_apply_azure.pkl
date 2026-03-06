@@ -1,0 +1,42 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@azure/azure.pkl"
+
+import "@azure/resources/resourcegroup.pkl"
+
+local patchedRg = new resourcegroup.ResourceGroup {
+  label = "e2e-patch-rg"
+  name = "formae-e2e-patch-rg"
+  location = "westeurope"
+  tags = new Listing {
+    new azure.Tag {
+      key = "Environment"
+      value = "e2e-test"
+    }
+  }
+}
+
+local stackName = "e2e-patch-azure"
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "E2E patch test for Azure networking"
+  }
+
+  new formae.Target {
+    label = "e2e-azure-target"
+    config = new azure.Config {
+      subscriptionId = read("env:AZURE_SUBSCRIPTION_ID")
+    }
+  }
+
+  patchedRg
+}

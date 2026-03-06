@@ -488,19 +488,31 @@ class Fq {
         else
             throw("Expected DeclaredType for SubResource")
 
+    /// Checks if a property type is a nullable Listing (Listing<T>?).
+    /// Used to render empty lists instead of null for nullable Listing fields,
+    /// ensuring they appear as [] in JSON output rather than being omitted.
+    function isNullableListingType(type: reflect.Type): Boolean =
+        if (type is reflect.NullableType)
+            let(inner = type.member)
+            inner is reflect.DeclaredType && inner.referent.name == "Listing"
+        else
+            false
+
     function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
         let(subResourceHint = findSubResourceHint(resourceClass))
         resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            if (fieldHint != null && subResource.getPropertyOrNull(k) != null && fieldHint.outputCondition.apply(subResource.getPropertyOrNull(k)))
+            let(rawValue = subResource.getPropertyOrNull(k))
+            if (fieldHint != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
                 let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
                 if (fieldHint.outputTransformation != null)
-                    Pair(key, fieldHint.outputTransformation.apply(subResource.getPropertyOrNull(k)))
+                    Pair(key, fieldHint.outputTransformation.apply(rawValue))
                 else
-                    Pair(key, subResource.getPropertyOrNull(k))
+                    Pair(key, rawValue)
             else
                 let(key = subResourceHint.outputKeyTransformation.apply(k))
-                Pair(key, subResource.getPropertyOrNull(k))
+                let(value = if (rawValue == null && isNullableListingType(v.type)) new Listing {} else rawValue)
+                Pair(key, value)
         ).toDynamic()
 
     function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
@@ -508,10 +520,12 @@ class Fq {
         resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
-            if (fieldHint.outputTransformation != null && resource.getPropertyOrNull(k) != null && fieldHint.outputCondition.apply(resource.getPropertyOrNull(k)))
-                Pair(key, fieldHint.outputTransformation.apply(resource.getPropertyOrNull(k)))
+            let(rawValue = resource.getPropertyOrNull(k))
+            if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
+                Pair(key, fieldHint.outputTransformation.apply(rawValue))
             else
-                Pair(key, resource.getPropertyOrNull(k))
+                let(value = if (rawValue == null && isNullableListingType(v.type)) new Listing {} else rawValue)
+                Pair(key, value)
         ).toDynamic()
 
     function schema(resourceClass: reflect.Class): Schema =

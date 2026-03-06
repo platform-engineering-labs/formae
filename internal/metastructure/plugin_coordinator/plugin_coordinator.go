@@ -29,7 +29,8 @@ type PluginCoordinator struct {
 
 	plugins                   map[string]*RegisteredPlugin // namespace → plugin info (remote)
 	registeredLocalNamespaces map[string]bool              // namespaces registered with RateLimiter (local)
-	pluginManager             *plugin.Manager              // for local plugin fallback
+	testPlugin                plugin.FullResourcePlugin    // test-only: directly injected plugin (e.g. FakeAWS) for workflow tests
+	pluginManager             *plugin.Manager              // legacy fallback (will be removed)
 	retryConfig               model.RetryConfig
 }
 
@@ -64,6 +65,24 @@ func (c *PluginCoordinator) findPluginByNamespace(namespace string) (*Registered
 	return nil, false
 }
 
+// findTestPlugin returns the test plugin if it matches the given namespace (case-insensitive),
+// or falls back to the legacy PluginManager during the transition period.
+func (c *PluginCoordinator) findTestPlugin(namespace string) plugin.FullResourcePlugin {
+	if c.testPlugin != nil && strings.EqualFold(c.testPlugin.Namespace(), namespace) {
+		return c.testPlugin
+	}
+
+	// Legacy fallback: check PluginManager (will be removed)
+	if c.pluginManager != nil {
+		rp, err := c.pluginManager.ResourcePlugin(namespace)
+		if err == nil && rp != nil {
+			return *rp
+		}
+	}
+
+	return nil
+}
+
 // NewPluginCoordinator creates a new PluginCoordinator actor
 func NewPluginCoordinator() gen.ProcessBehavior {
 	return &PluginCoordinator{}
@@ -73,27 +92,30 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	c.plugins = make(map[string]*RegisteredPlugin)
 	c.registeredLocalNamespaces = make(map[string]bool)
 
-	// Get PluginManager from environment (for local plugin fallback)
+	// Test-only: check for directly injected test plugin (e.g. FakeAWS for workflow tests)
+	if tp, ok := c.Env("TestResourcePlugin"); ok {
+		c.testPlugin = tp.(plugin.FullResourcePlugin)
+	}
+
+	// Legacy: Get PluginManager from environment (for local plugin fallback)
 	if pm, ok := c.Env("PluginManager"); ok {
 		c.pluginManager = pm.(*plugin.Manager)
 	}
 
-	// Register all local plugin namespaces with RateLimiter at startup
+	// Register test plugin namespace with RateLimiter at startup
 	// This is needed because ChangesetExecutor requests tokens before SpawnPluginOperator
-	if c.pluginManager != nil {
-		for _, rp := range c.pluginManager.ListResourcePlugins() {
-			namespace := (*rp).Namespace()
-			maxRPS := (*rp).RateLimit().MaxRequestsPerSecondForNamespace
-			err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
-				Namespace:            namespace,
-				MaxRequestsPerSecond: maxRPS,
-			})
-			if err != nil {
-				c.Log().Error("Failed to register local plugin namespace %s with RateLimiter: %v", namespace, err)
-			} else {
-				c.registeredLocalNamespaces[namespace] = true
-				c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", namespace, maxRPS)
-			}
+	if c.testPlugin != nil {
+		namespace := c.testPlugin.Namespace()
+		maxRPS := c.testPlugin.RateLimit().MaxRequestsPerSecondForNamespace
+		err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
+			Namespace:            namespace,
+			MaxRequestsPerSecond: maxRPS,
+		})
+		if err != nil {
+			c.Log().Error("Failed to register test plugin namespace %s with RateLimiter: %v", namespace, err)
+		} else {
+			c.registeredLocalNamespaces[namespace] = true
+			c.Log().Debug("Registered test plugin namespace %s with RateLimiter (maxRPS=%d)", namespace, maxRPS)
 		}
 	}
 
@@ -202,44 +224,31 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 		return messages.SpawnPluginOperatorResult{PID: pid}
 	}
 
-	// 2. Fallback: Check if plugin exists locally via PluginManager
-	if c.pluginManager != nil {
-		// Debug: list available plugins
-		availablePlugins := c.pluginManager.ListResourcePlugins()
-		c.Log().Debug("Available resource plugins: %d", len(availablePlugins))
-		for _, rp := range availablePlugins {
-			c.Log().Debug("  - Plugin namespace: %s", (*rp).Namespace())
-		}
-
-		localPlugin, err := c.pluginManager.ResourcePlugin(req.Namespace)
-		if err != nil {
-			c.Log().Error("No plugin found for namespace: %s (error: %v)", req.Namespace, err)
-		}
-		if err == nil && localPlugin != nil {
-			// Register namespace with RateLimiter if not already registered
-			if !c.registeredLocalNamespaces[req.Namespace] {
-				maxRPS := (*localPlugin).RateLimit().MaxRequestsPerSecondForNamespace
-				err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
-					Namespace:            req.Namespace,
-					MaxRequestsPerSecond: maxRPS,
-				})
-				if err != nil {
-					c.Log().Error("Failed to register namespace %s with RateLimiter: %v", req.Namespace, err)
-					// Don't fail the spawn - rate limiting is not critical
-				} else {
-					c.registeredLocalNamespaces[req.Namespace] = true
-					c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, maxRPS)
-				}
-			}
-
-			pid, err := c.localSpawn(*localPlugin, registerName)
+	// 2. Fallback: Check test plugin / legacy PluginManager
+	if localPlugin := c.findTestPlugin(req.Namespace); localPlugin != nil {
+		// Register namespace with RateLimiter if not already registered
+		if !c.registeredLocalNamespaces[req.Namespace] {
+			maxRPS := localPlugin.RateLimit().MaxRequestsPerSecondForNamespace
+			err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
+				Namespace:            req.Namespace,
+				MaxRequestsPerSecond: maxRPS,
+			})
 			if err != nil {
-				c.Log().Error("Failed to local spawn PluginOperator for namespace %s: %v", req.Namespace, err)
-				return messages.SpawnPluginOperatorResult{Error: err.Error()}
+				c.Log().Error("Failed to register namespace %s with RateLimiter: %v", req.Namespace, err)
+				// Don't fail the spawn - rate limiting is not critical
+			} else {
+				c.registeredLocalNamespaces[req.Namespace] = true
+				c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, maxRPS)
 			}
-			c.Log().Debug("Local spawned PluginOperator for namespace %s: pid=%s", req.Namespace, pid)
-			return messages.SpawnPluginOperatorResult{PID: pid}
 		}
+
+		pid, err := c.localSpawn(localPlugin, registerName)
+		if err != nil {
+			c.Log().Error("Failed to local spawn PluginOperator for namespace %s: %v", req.Namespace, err)
+			return messages.SpawnPluginOperatorResult{Error: err.Error()}
+		}
+		c.Log().Debug("Local spawned PluginOperator for namespace %s: pid=%s", req.Namespace, pid)
+		return messages.SpawnPluginOperatorResult{PID: pid}
 	}
 
 	// 3. Plugin not found
@@ -273,7 +282,7 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 }
 
 // localSpawn spawns a PluginOperator locally with the given plugin
-func (c *PluginCoordinator) localSpawn(localPlugin plugin.ResourcePlugin, registerName gen.Atom) (gen.PID, error) {
+func (c *PluginCoordinator) localSpawn(localPlugin plugin.FullResourcePlugin, registerName gen.Atom) (gen.PID, error) {
 	// Get context and retry config from environment
 	ctx := context.Background()
 	if envCtx, ok := c.Env("Context"); ok {
@@ -313,28 +322,19 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 		}
 	}
 
-	// 2. Fall back to local plugins
-	if c.pluginManager == nil {
+	// 2. Fall back to test plugin / legacy PluginManager
+	localPlugin := c.findTestPlugin(req.Namespace)
+	if localPlugin == nil {
 		return messages.PluginInfoResponse{
 			Found: false,
 			Error: fmt.Sprintf("plugin not found: %s", req.Namespace),
 		}
 	}
-
-	resourcePlugin, err := c.pluginManager.ResourcePlugin(req.Namespace)
-	if err != nil {
-		return messages.PluginInfoResponse{
-			Found: false,
-			Error: fmt.Sprintf("plugin not found: %s", req.Namespace),
-		}
-	}
-
-	rp := *resourcePlugin
 
 	// Build schema map from local plugin
 	schemas := make(map[string]model.Schema)
-	for _, rd := range rp.SupportedResources() {
-		schema, err := rp.SchemaForResourceType(rd.Type)
+	for _, rd := range localPlugin.SupportedResources() {
+		schema, err := localPlugin.SchemaForResourceType(rd.Type)
 		if err == nil {
 			schemas[rd.Type] = schema
 		}
@@ -343,10 +343,10 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 	return messages.PluginInfoResponse{
 		Found:              true,
 		Namespace:          req.Namespace,
-		SupportedResources: rp.SupportedResources(),
+		SupportedResources: localPlugin.SupportedResources(),
 		ResourceSchemas:    schemas,
-		MatchFilters:       rp.DiscoveryFilters(),
-		LabelConfig:        rp.LabelConfig(),
+		MatchFilters:       localPlugin.DiscoveryFilters(),
+		LabelConfig:        localPlugin.LabelConfig(),
 	}
 }
 

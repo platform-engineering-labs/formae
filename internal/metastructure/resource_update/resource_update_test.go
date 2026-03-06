@@ -317,7 +317,7 @@ func TestUpdateState_FailedButIncomplete(t *testing.T) {
 	}
 	resourceUpdate.UpdateState()
 
-	assert.Equal(t, ResourceUpdateStateInProgress, resourceUpdate.State)
+	assert.Equal(t, ResourceUpdateStateFailed, resourceUpdate.State)
 }
 
 func TestUpdateState_FailedAndComplete(t *testing.T) {

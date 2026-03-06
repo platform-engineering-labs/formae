@@ -21,6 +21,17 @@ func TestValidateExtractOptions(t *testing.T) {
 		assert.Equal(t, "target file is required", err.Error())
 	})
 
+	t.Run("target path is a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		opts := &ExtractOptions{
+			TargetPath: dir,
+			Query:      "type:AWS::S3::Bucket",
+		}
+		err := validateExtractOptions(opts)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "is a directory, not a file")
+	})
+
 	t.Run("missing query", func(t *testing.T) {
 		opts := &ExtractOptions{
 			TargetPath: "output.pkl",

@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	"github.com/platform-engineering-labs/formae/internal/testplugin/fakeaws"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
@@ -131,6 +132,9 @@ func NewTestMetastructureWithEverything(t *testing.T, pluginOverrides *plugin.Re
 	pluginManager := plugin.NewManager("")
 	pluginManager.Load()
 	m, err := metastructure.NewMetastructureWithDataStoreAndContext(ctx, cfg, pluginManager, db, "test")
+	if err == nil {
+		m.TestResourcePlugin = fakeaws.NewFakeAWS()
+	}
 	if err != nil {
 		t.Error(err)
 	}
