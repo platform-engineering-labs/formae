@@ -19,19 +19,19 @@ import (
 
 type Changeset struct {
 	CommandID      string
-	Pipeline       *ResourceUpdatePipeline
+	DAG            *ExecutionDAG
 	trackedUpdates map[string]bool
 }
 
-type ResourceUpdatePipeline struct {
-	ResourceUpdateGroups map[pkgmodel.FormaeURI]*ResourceUpdateGroup
+type ExecutionDAG struct {
+	Nodes map[pkgmodel.FormaeURI]*DAGNode
 }
 
-type ResourceUpdateGroup struct {
-	URI              pkgmodel.FormaeURI
-	Updates          []*resource_update.ResourceUpdate
-	DownstreamGroups []*ResourceUpdateGroup
-	UpstreamGroups   []*ResourceUpdateGroup
+type DAGNode struct {
+	URI        pkgmodel.FormaeURI
+	Updates    []*resource_update.ResourceUpdate
+	Downstream []*DAGNode
+	Upstream   []*DAGNode
 }
 
 func NewChangesetFromResourceUpdates(
@@ -41,11 +41,11 @@ func NewChangesetFromResourceUpdates(
 ) (Changeset, error) {
 	changeset := Changeset{
 		CommandID:      commandID,
-		Pipeline:       NewResourceUpdatePipeline(),
+		DAG:            NewExecutionDAG(),
 		trackedUpdates: make(map[string]bool),
 	}
 
-	if err := changeset.Pipeline.Init(resourceUpdates); err != nil {
+	if err := changeset.DAG.Init(resourceUpdates); err != nil {
 		return Changeset{}, err
 	}
 
@@ -58,7 +58,7 @@ func createOperationURI(baseURI pkgmodel.FormaeURI, operation resource_update.Op
 }
 
 // buildOperationRelationships builds relationships between operation nodes
-func (p *ResourceUpdatePipeline) buildOperationRelationships(allOps []resource_update.ResourceUpdate) {
+func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.ResourceUpdate) {
 	// Step 1: Build delete dependencies (REVERSED)
 	p.buildDeleteDependencies(allOps)
 
@@ -70,7 +70,7 @@ func (p *ResourceUpdatePipeline) buildOperationRelationships(allOps []resource_u
 }
 
 // buildDeleteDependencies creates REVERSED dependencies for delete operations
-func (p *ResourceUpdatePipeline) buildDeleteDependencies(allOps []resource_update.ResourceUpdate) {
+func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.ResourceUpdate) {
 	deleteOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
 
 	// Collect all delete operations
@@ -83,14 +83,14 @@ func (p *ResourceUpdatePipeline) buildDeleteDependencies(allOps []resource_updat
 	// Build REVERSED dependencies for deletes
 	for _, deleteOp := range deleteOps {
 		dependentOpURI := createOperationURI(deleteOp.URI(), resource_update.OperationDelete)
-		dependentGroup := p.ResourceUpdateGroups[dependentOpURI]
+		dependentGroup := p.Nodes[dependentOpURI]
 
 		for _, resolvableURI := range deleteOp.RemainingResolvables {
 			dependencyBaseURI := resolvableURI.Stripped()
 
 			if _, exists := deleteOps[dependencyBaseURI]; exists {
 				dependencyOpURI := createOperationURI(dependencyBaseURI, resource_update.OperationDelete)
-				dependencyGroup := p.ResourceUpdateGroups[dependencyOpURI]
+				dependencyGroup := p.Nodes[dependencyOpURI]
 
 				// REVERSE: dependency delete waits for dependent delete to complete
 				dependencyGroup.LinkWith(dependentGroup)
@@ -100,7 +100,7 @@ func (p *ResourceUpdatePipeline) buildDeleteDependencies(allOps []resource_updat
 }
 
 // buildCreateUpdateDependencies creates NORMAL dependencies for create/update operations
-func (p *ResourceUpdatePipeline) buildCreateUpdateDependencies(allOps []resource_update.ResourceUpdate) {
+func (p *ExecutionDAG) buildCreateUpdateDependencies(allOps []resource_update.ResourceUpdate) {
 	createUpdateOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
 
 	// Collect all create/update operations
@@ -113,7 +113,7 @@ func (p *ResourceUpdatePipeline) buildCreateUpdateDependencies(allOps []resource
 	// Build NORMAL dependencies for creates/updates
 	for _, createOp := range createUpdateOps {
 		dependentOpURI := createOperationURI(createOp.URI(), createOp.Operation)
-		dependentGroup := p.ResourceUpdateGroups[dependentOpURI]
+		dependentGroup := p.Nodes[dependentOpURI]
 
 		for _, resolvableURI := range createOp.RemainingResolvables {
 			dependencyBaseURI := resolvableURI.Stripped()
@@ -121,7 +121,7 @@ func (p *ResourceUpdatePipeline) buildCreateUpdateDependencies(allOps []resource
 			// Check if there's a corresponding create/update operation for this dependency
 			if dependencyOp, exists := createUpdateOps[dependencyBaseURI]; exists {
 				dependencyOpURI := createOperationURI(dependencyBaseURI, dependencyOp.Operation)
-				dependencyGroup := p.ResourceUpdateGroups[dependencyOpURI]
+				dependencyGroup := p.Nodes[dependencyOpURI]
 
 				// NORMAL: dependent waits for dependency to complete
 				dependentGroup.LinkWith(dependencyGroup)
@@ -131,7 +131,7 @@ func (p *ResourceUpdatePipeline) buildCreateUpdateDependencies(allOps []resource
 }
 
 // connectDeleteToCreate connects delete operations to their corresponding create operations for the same resource
-func (p *ResourceUpdatePipeline) connectDeleteToCreate(allOps []resource_update.ResourceUpdate) {
+func (p *ExecutionDAG) connectDeleteToCreate(allOps []resource_update.ResourceUpdate) {
 	deleteOps := make(map[string]*resource_update.ResourceUpdate) // Use stack+label as key
 	createOps := make(map[string]*resource_update.ResourceUpdate) // Use stack+label as key
 
@@ -154,8 +154,8 @@ func (p *ResourceUpdatePipeline) connectDeleteToCreate(allOps []resource_update.
 			deleteOpURI := createOperationURI(deleteOp.URI(), resource_update.OperationDelete)
 			createOpURI := createOperationURI(createOp.URI(), resource_update.OperationCreate)
 
-			deleteGroup := p.ResourceUpdateGroups[deleteOpURI]
-			createGroup := p.ResourceUpdateGroups[createOpURI]
+			deleteGroup := p.Nodes[deleteOpURI]
+			createGroup := p.Nodes[createOpURI]
 
 			if deleteGroup != nil && createGroup != nil {
 				// Create waits for delete to complete (replacement order)
@@ -165,13 +165,13 @@ func (p *ResourceUpdatePipeline) connectDeleteToCreate(allOps []resource_update.
 	}
 }
 
-func NewResourceUpdatePipeline() *ResourceUpdatePipeline {
-	return &ResourceUpdatePipeline{
-		ResourceUpdateGroups: make(map[pkgmodel.FormaeURI]*ResourceUpdateGroup),
+func NewExecutionDAG() *ExecutionDAG {
+	return &ExecutionDAG{
+		Nodes: make(map[pkgmodel.FormaeURI]*DAGNode),
 	}
 }
 
-func (p *ResourceUpdatePipeline) Init(resourceUpdates []resource_update.ResourceUpdate) error {
+func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate) error {
 	// Step 1: Create individual nodes for each operation (including split replace operations)
 	var allOps []resource_update.ResourceUpdate
 
@@ -198,11 +198,11 @@ func (p *ResourceUpdatePipeline) Init(resourceUpdates []resource_update.Resource
 		// Create unique identifier that includes operation
 		operationURI := createOperationURI(update.URI(), update.Operation)
 
-		p.ResourceUpdateGroups[operationURI] = &ResourceUpdateGroup{
-			URI:              operationURI,
-			Updates:          []*resource_update.ResourceUpdate{update},
-			DownstreamGroups: []*ResourceUpdateGroup{},
-			UpstreamGroups:   []*ResourceUpdateGroup{},
+		p.Nodes[operationURI] = &DAGNode{
+			URI:        operationURI,
+			Updates:    []*resource_update.ResourceUpdate{update},
+			Downstream: []*DAGNode{},
+			Upstream:   []*DAGNode{},
 		}
 	}
 
@@ -217,8 +217,8 @@ func (p *ResourceUpdatePipeline) Init(resourceUpdates []resource_update.Resource
 	return nil
 }
 
-func (p *ResourceUpdatePipeline) HasCycles() bool {
-	for _, group := range p.ResourceUpdateGroups {
+func (p *ExecutionDAG) HasCycles() bool {
+	for _, group := range p.Nodes {
 		visited := make(map[pkgmodel.FormaeURI]struct{})
 		if dfs(group, visited) {
 			return true
@@ -228,17 +228,17 @@ func (p *ResourceUpdatePipeline) HasCycles() bool {
 	return false
 }
 
-func dfs(group *ResourceUpdateGroup, visited map[pkgmodel.FormaeURI]struct{}) bool {
+func dfs(group *DAGNode, visited map[pkgmodel.FormaeURI]struct{}) bool {
 	if _, exists := visited[group.URI]; exists {
 		return true
 	}
 	visited[group.URI] = struct{}{}
 
-	if len(group.DownstreamGroups) == 0 {
+	if len(group.Downstream) == 0 {
 		return false
 	}
 
-	for _, g := range group.DownstreamGroups {
+	for _, g := range group.Downstream {
 		visitedCopied := maps.Clone(visited)
 		if dfs(g, visitedCopied) {
 			return true
@@ -248,46 +248,46 @@ func dfs(group *ResourceUpdateGroup, visited map[pkgmodel.FormaeURI]struct{}) bo
 	return false
 }
 
-func (rug *ResourceUpdateGroup) LinkWith(upstream *ResourceUpdateGroup) {
+func (rug *DAGNode) LinkWith(upstream *DAGNode) {
 	// Avoid duplicate links
-	for _, existing := range rug.UpstreamGroups {
+	for _, existing := range rug.Upstream {
 		if existing.URI == upstream.URI {
 			return
 		}
 	}
 
-	rug.UpstreamGroups = append(rug.UpstreamGroups, upstream)
-	upstream.DownstreamGroups = append(upstream.DownstreamGroups, rug)
+	rug.Upstream = append(rug.Upstream, upstream)
+	upstream.Downstream = append(upstream.Downstream, rug)
 }
 
-func (rug *ResourceUpdateGroup) UnlinkWith(upstream *ResourceUpdateGroup) {
+func (rug *DAGNode) UnlinkWith(upstream *DAGNode) {
 	// Remove from upstream groups
-	for i, group := range rug.UpstreamGroups {
+	for i, group := range rug.Upstream {
 		if group.URI == upstream.URI {
-			rug.UpstreamGroups = append(rug.UpstreamGroups[:i], rug.UpstreamGroups[i+1:]...)
+			rug.Upstream = append(rug.Upstream[:i], rug.Upstream[i+1:]...)
 			break
 		}
 	}
 
 	// Remove from downstream groups of upstream
-	for i, group := range upstream.DownstreamGroups {
+	for i, group := range upstream.Downstream {
 		if group.URI == rug.URI {
-			upstream.DownstreamGroups = append(upstream.DownstreamGroups[:i], upstream.DownstreamGroups[i+1:]...)
+			upstream.Downstream = append(upstream.Downstream[:i], upstream.Downstream[i+1:]...)
 			break
 		}
 	}
 }
 
-func (rug *ResourceUpdateGroup) RemoveUpstreamGroup(upstream *ResourceUpdateGroup) {
-	for i, group := range rug.UpstreamGroups {
+func (rug *DAGNode) RemoveUpstreamGroup(upstream *DAGNode) {
+	for i, group := range rug.Upstream {
 		if group.URI == upstream.URI {
-			rug.UpstreamGroups = append(rug.UpstreamGroups[:i], rug.UpstreamGroups[i+1:]...)
+			rug.Upstream = append(rug.Upstream[:i], rug.Upstream[i+1:]...)
 			break
 		}
 	}
 }
 
-func (rug *ResourceUpdateGroup) HasRunningUpdate() bool {
+func (rug *DAGNode) HasRunningUpdate() bool {
 	for _, update := range rug.Updates {
 		if update.State == resource_update.ResourceUpdateStateInProgress {
 			return true
@@ -296,7 +296,7 @@ func (rug *ResourceUpdateGroup) HasRunningUpdate() bool {
 	return false
 }
 
-func (rug *ResourceUpdateGroup) GetRunningUpdate() *resource_update.ResourceUpdate {
+func (rug *DAGNode) GetRunningUpdate() *resource_update.ResourceUpdate {
 	for _, update := range rug.Updates {
 		if update.State == resource_update.ResourceUpdateStateInProgress {
 			return update
@@ -305,7 +305,7 @@ func (rug *ResourceUpdateGroup) GetRunningUpdate() *resource_update.ResourceUpda
 	return nil
 }
 
-func (rug *ResourceUpdateGroup) NextUpdate() (*resource_update.ResourceUpdate, string) {
+func (rug *DAGNode) NextUpdate() (*resource_update.ResourceUpdate, string) {
 	for _, update := range rug.Updates {
 		if update.State == resource_update.ResourceUpdateStateNotStarted {
 			key := getResourceUpdateIdentifier(update)
@@ -315,7 +315,7 @@ func (rug *ResourceUpdateGroup) NextUpdate() (*resource_update.ResourceUpdate, s
 	return nil, ""
 }
 
-func (rug *ResourceUpdateGroup) Pop(update *resource_update.ResourceUpdate) {
+func (rug *DAGNode) Pop(update *resource_update.ResourceUpdate) {
 	for i, u := range rug.Updates {
 		if u.URI() == update.URI() && u.Operation == update.Operation {
 			rug.Updates = append(rug.Updates[:i], rug.Updates[i+1:]...)
@@ -324,7 +324,7 @@ func (rug *ResourceUpdateGroup) Pop(update *resource_update.ResourceUpdate) {
 	}
 }
 
-func (rug *ResourceUpdateGroup) Done() bool {
+func (rug *DAGNode) Done() bool {
 	return len(rug.Updates) == 0
 }
 
@@ -332,14 +332,14 @@ func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_
 	var executable []*resource_update.ResourceUpdate
 	total := 0
 
-	for _, group := range c.Pipeline.ResourceUpdateGroups {
+	for _, group := range c.DAG.Nodes {
 		// Skip if group has running updates (blocking)
 		if group.HasRunningUpdate() {
 			continue
 		}
 
 		// Check if all upstream dependencies are satisfied
-		if len(group.UpstreamGroups) == 0 && !group.Done() && len(group.Updates) > 0 {
+		if len(group.Upstream) == 0 && !group.Done() && len(group.Updates) > 0 {
 			nextUpdate, updateKey := group.NextUpdate()
 			if total < max && nextUpdate != nil && nextUpdate.DesiredState.Namespace() == namespace &&
 				nextUpdate.State == resource_update.ResourceUpdateStateNotStarted {
@@ -364,14 +364,14 @@ func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_
 
 func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 	result := make(map[string]int)
-	for _, group := range c.Pipeline.ResourceUpdateGroups {
+	for _, group := range c.DAG.Nodes {
 		// Skip if group has running updates (blocking)
 		if group.HasRunningUpdate() {
 			continue
 		}
 
 		// Check if all upstream dependencies are satisfied
-		if len(group.UpstreamGroups) == 0 && !group.Done() && len(group.Updates) > 0 {
+		if len(group.Upstream) == 0 && !group.Done() && len(group.Updates) > 0 {
 			nextUpdate, updateKey := group.NextUpdate()
 			if nextUpdate != nil && nextUpdate.State == resource_update.ResourceUpdateStateNotStarted {
 				// Check if we haven't already tracked this update
@@ -390,9 +390,9 @@ func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 	return result
 }
 
-func (c *Changeset) UpdatePipeline(update *resource_update.ResourceUpdate) ([]*resource_update.ResourceUpdate, error) {
+func (c *Changeset) UpdateDAG(update *resource_update.ResourceUpdate) ([]*resource_update.ResourceUpdate, error) {
 	uri := createOperationURI(update.URI(), update.Operation)
-	upstream, exists := c.Pipeline.ResourceUpdateGroups[uri]
+	upstream, exists := c.DAG.Nodes[uri]
 	if !exists {
 		return nil, fmt.Errorf("resource group not found for URI: %s", uri)
 	}
@@ -402,7 +402,7 @@ func (c *Changeset) UpdatePipeline(update *resource_update.ResourceUpdate) ([]*r
 
 		// Unblock downstream dependencies for create/update operations
 		if update.Operation == resource_update.OperationCreate || update.Operation == resource_update.OperationUpdate {
-			for _, downstream := range upstream.DownstreamGroups {
+			for _, downstream := range upstream.Downstream {
 				// Check if this downstream was waiting on this specific resource
 				for _, downstreamUpdate := range downstream.Updates {
 					for _, resolvableURI := range downstreamUpdate.RemainingResolvables {
@@ -418,10 +418,10 @@ func (c *Changeset) UpdatePipeline(update *resource_update.ResourceUpdate) ([]*r
 		// Remove completed groups
 		if upstream.Done() {
 			// Unlink all downstream relationships
-			for _, downstream := range upstream.DownstreamGroups {
+			for _, downstream := range upstream.Downstream {
 				downstream.RemoveUpstreamGroup(upstream)
 			}
-			delete(c.Pipeline.ResourceUpdateGroups, uri)
+			delete(c.DAG.Nodes, uri)
 		}
 
 		return nil, nil
@@ -442,15 +442,15 @@ func (c *Changeset) UpdatePipeline(update *resource_update.ResourceUpdate) ([]*r
 		// Pop each cascading failed resource from its group
 		for _, failedUpdate := range failedUpdates {
 			failedURI := createOperationURI(failedUpdate.URI(), failedUpdate.Operation)
-			if failedGroup, exists := c.Pipeline.ResourceUpdateGroups[failedURI]; exists {
+			if failedGroup, exists := c.DAG.Nodes[failedURI]; exists {
 				failedGroup.Pop(failedUpdate)
 
 				if failedGroup.Done() {
 					// Unlink all downstream relationships
-					for _, downstream := range failedGroup.DownstreamGroups {
+					for _, downstream := range failedGroup.Downstream {
 						downstream.RemoveUpstreamGroup(failedGroup)
 					}
-					delete(c.Pipeline.ResourceUpdateGroups, failedURI)
+					delete(c.DAG.Nodes, failedURI)
 				}
 			}
 		}
@@ -458,10 +458,10 @@ func (c *Changeset) UpdatePipeline(update *resource_update.ResourceUpdate) ([]*r
 		// Remove the original failed resource's group if it's now empty
 		if upstream.Done() {
 			// Unlink all downstream relationships
-			for _, downstream := range upstream.DownstreamGroups {
+			for _, downstream := range upstream.Downstream {
 				downstream.RemoveUpstreamGroup(upstream)
 			}
-			delete(c.Pipeline.ResourceUpdateGroups, uri)
+			delete(c.DAG.Nodes, uri)
 		}
 
 		return failedUpdates, nil
@@ -489,12 +489,12 @@ func (c *Changeset) recursivelyFailDependencies(failedUpdate *resource_update.Re
 	}
 	visited[uri] = true
 
-	upstream, exists := c.Pipeline.ResourceUpdateGroups[uri]
+	upstream, exists := c.DAG.Nodes[uri]
 	if !exists {
 		return
 	}
 
-	for _, downstreamGroup := range upstream.DownstreamGroups {
+	for _, downstreamGroup := range upstream.Downstream {
 		for _, downstreamUpdate := range downstreamGroup.Updates {
 			if downstreamUpdate.State == resource_update.ResourceUpdateStateNotStarted {
 				downstreamUpdate.State = resource_update.ResourceUpdateStateFailed
@@ -506,40 +506,13 @@ func (c *Changeset) recursivelyFailDependencies(failedUpdate *resource_update.Re
 	}
 }
 
-func (c *Changeset) getExecutableUpdates() []*resource_update.ResourceUpdate {
-	var executable []*resource_update.ResourceUpdate
-
-	for _, group := range c.Pipeline.ResourceUpdateGroups {
-		if group.HasRunningUpdate() {
-			continue
-		}
-
-		if len(group.UpstreamGroups) == 0 && !group.Done() && len(group.Updates) > 0 {
-			nextUpdate, updateKey := group.NextUpdate()
-			if nextUpdate != nil && nextUpdate.State == resource_update.ResourceUpdateStateNotStarted {
-				if !c.trackedUpdates[updateKey] {
-					executable = append(executable, nextUpdate)
-					c.trackedUpdates[updateKey] = true
-					nextUpdate.State = resource_update.ResourceUpdateStateInProgress
-				}
-			}
-		}
-	}
-
-	sort.Slice(executable, func(i, j int) bool {
-		return string(executable[i].URI()) < string(executable[j].URI())
-	})
-
-	return executable
-}
-
-func (c *Changeset) PrintPipeline() string {
+func (c *Changeset) PrintDAG() string {
 
 	var result strings.Builder
-	fmt.Fprintf(&result, "Changeset Pipeline: %s\n", c.CommandID)
+	fmt.Fprintf(&result, "Changeset DAG: %s\n", c.CommandID)
 	result.WriteString("========================\n")
 
-	for uri, group := range c.Pipeline.ResourceUpdateGroups {
+	for uri, group := range c.DAG.Nodes {
 		fmt.Fprintf(&result, "Group: %s\n", uri)
 		result.WriteString("  Updates:\n")
 		for _, update := range group.Updates {
@@ -547,12 +520,12 @@ func (c *Changeset) PrintPipeline() string {
 		}
 
 		result.WriteString("  Upstream Dependencies:\n")
-		for _, dep := range group.UpstreamGroups {
+		for _, dep := range group.Upstream {
 			fmt.Fprintf(&result, "    - %s\n", dep.URI)
 		}
 
 		result.WriteString("  Downstream Dependents:\n")
-		for _, dep := range group.DownstreamGroups {
+		for _, dep := range group.Downstream {
 			fmt.Fprintf(&result, "    - %s\n", dep.URI)
 		}
 
@@ -564,13 +537,13 @@ func (c *Changeset) PrintPipeline() string {
 
 func (c *Changeset) IsComplete() bool {
 	// If no groups remain, changeset is complete
-	if len(c.Pipeline.ResourceUpdateGroups) == 0 {
+	if len(c.DAG.Nodes) == 0 {
 		return true
 	}
 
 	// Check if all remaining updates are in failed state
 	allFailed := true
-	for _, group := range c.Pipeline.ResourceUpdateGroups {
+	for _, group := range c.DAG.Nodes {
 		for _, update := range group.Updates {
 			if update.State != resource_update.ResourceUpdateStateFailed && update.State != resource_update.ResourceUpdateStateRejected {
 				allFailed = false
