@@ -91,7 +91,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-command-1", pkgmodel.CommandApply)
 	require.NoError(t, err)
 
-	// Print initial pipeline state
+	// Print initial DAG state
 
 	// Step 1: Get first executable updates - should be subnet-1 delete (has dependency)
 	require.Equal(t, map[string]int{"AWS": 1}, changeset.AvailableExecutableUpdates())
@@ -109,7 +109,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	executableUpdates[0].State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(executableUpdates[0])
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -126,7 +126,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	nextUpdates[0].State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(nextUpdates[0])
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates2 := changeset.GetExecutableUpdates("AWS", 5)
@@ -143,7 +143,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	nextUpdates2[0].State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(nextUpdates2[0])
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates3 := changeset.GetExecutableUpdates("AWS", 5)
@@ -170,7 +170,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 		update.State = resource_update.ResourceUpdateStateSuccess
 		_, err := changeset.UpdateDAG(update)
 		if err != nil {
-			t.Fatalf("Error updating pipeline: %v", err)
+			t.Fatalf("Error updating DAG: %v", err)
 		}
 	}
 
@@ -312,7 +312,7 @@ func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(subnet1Delete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline after subnet-1 delete: %v", err)
+		t.Fatalf("Error updating DAG after subnet-1 delete: %v", err)
 	}
 
 	nextUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -423,7 +423,7 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-command-1", pkgmodel.CommandApply)
 	assert.NoError(t, err)
 
-	// Print initial pipeline state for debugging
+	// Print initial DAG state for debugging
 
 	// Get initial executable updates
 	require.Equal(t, map[string]int{"AWS": 2}, changeset.AvailableExecutableUpdates())
@@ -470,7 +470,7 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	vpc2Create.State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(vpc2Create)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	// Complete the delete chain to verify the create chain behavior
@@ -486,7 +486,7 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(subnet1Delete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates2 := changeset.GetExecutableUpdates("AWS", 5)
@@ -500,7 +500,7 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 			update.State = resource_update.ResourceUpdateStateSuccess
 			_, err := changeset.UpdateDAG(update)
 			if err != nil {
-				t.Fatalf("Error updating pipeline: %v", err)
+				t.Fatalf("Error updating DAG: %v", err)
 			}
 
 			// After vpc delete, should have vpc create
@@ -664,7 +664,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	vpc2Create.State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(vpc2Create)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	// Step 2: Complete test-subnet-1 delete
@@ -679,7 +679,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(subnet1Delete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates2 := changeset.GetExecutableUpdates("AWS", 5)
@@ -701,7 +701,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	vpcDelete.State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(vpcDelete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 		return
 	}
 
@@ -724,7 +724,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	vpcCreate.State = resource_update.ResourceUpdateStateSuccess
 	_, err = changeset.UpdateDAG(vpcCreate)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	finalUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -961,7 +961,7 @@ func TestChangeset_UpdateDAG_FailureCascadeRemovesNodes(t *testing.T) {
 
 	changeset, err := NewChangesetFromResourceUpdates(
 		[]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate, instanceUpdate},
-		"test-update-pipeline-cascade",
+		"test-update-DAG-cascade",
 		pkgmodel.CommandApply,
 	)
 	require.NoError(t, err)
@@ -985,7 +985,7 @@ func TestChangeset_UpdateDAG_FailureCascadeRemovesNodes(t *testing.T) {
 			"Resource %s should be marked as Failed", update.DesiredState.Label)
 	}
 
-	// Verify empty groups were removed from pipeline
+	// Verify empty groups were removed from DAG
 	assert.Len(t, changeset.DAG.Nodes, 0,
 		"All groups should be removed after cascading failures")
 

@@ -248,47 +248,47 @@ func dfs(group *DAGNode, visited map[pkgmodel.FormaeURI]struct{}) bool {
 	return false
 }
 
-func (rug *DAGNode) LinkWith(upstream *DAGNode) {
+func (n *DAGNode) LinkWith(upstream *DAGNode) {
 	// Avoid duplicate links
-	for _, existing := range rug.Upstream {
+	for _, existing := range n.Upstream {
 		if existing.URI == upstream.URI {
 			return
 		}
 	}
 
-	rug.Upstream = append(rug.Upstream, upstream)
-	upstream.Downstream = append(upstream.Downstream, rug)
+	n.Upstream = append(n.Upstream, upstream)
+	upstream.Downstream = append(upstream.Downstream, n)
 }
 
-func (rug *DAGNode) UnlinkWith(upstream *DAGNode) {
+func (n *DAGNode) UnlinkWith(upstream *DAGNode) {
 	// Remove from upstream groups
-	for i, group := range rug.Upstream {
+	for i, group := range n.Upstream {
 		if group.URI == upstream.URI {
-			rug.Upstream = append(rug.Upstream[:i], rug.Upstream[i+1:]...)
+			n.Upstream = append(n.Upstream[:i], n.Upstream[i+1:]...)
 			break
 		}
 	}
 
 	// Remove from downstream groups of upstream
 	for i, group := range upstream.Downstream {
-		if group.URI == rug.URI {
+		if group.URI == n.URI {
 			upstream.Downstream = append(upstream.Downstream[:i], upstream.Downstream[i+1:]...)
 			break
 		}
 	}
 }
 
-func (rug *DAGNode) RemoveUpstreamGroup(upstream *DAGNode) {
-	for i, group := range rug.Upstream {
+func (n *DAGNode) RemoveUpstreamGroup(upstream *DAGNode) {
+	for i, group := range n.Upstream {
 		if group.URI == upstream.URI {
-			rug.Upstream = append(rug.Upstream[:i], rug.Upstream[i+1:]...)
+			n.Upstream = append(n.Upstream[:i], n.Upstream[i+1:]...)
 			break
 		}
 	}
 }
 
-func (rug *DAGNode) HasRunningUpdate() bool {
-	for _, update := range rug.Updates {
+func (n *DAGNode) HasRunningUpdate() bool {
+	for _, update := range n.Updates {
 		if update.State == resource_update.ResourceUpdateStateInProgress {
 			return true
 		}
@@ -296,8 +296,8 @@ func (rug *DAGNode) HasRunningUpdate() bool {
 	return false
 }
 
-func (rug *DAGNode) GetRunningUpdate() *resource_update.ResourceUpdate {
-	for _, update := range rug.Updates {
+func (n *DAGNode) GetRunningUpdate() *resource_update.ResourceUpdate {
+	for _, update := range n.Updates {
 		if update.State == resource_update.ResourceUpdateStateInProgress {
 			return update
 		}
@@ -305,8 +305,8 @@ func (rug *DAGNode) GetRunningUpdate() *resource_update.ResourceUpdate {
 	return nil
 }
 
-func (rug *DAGNode) NextUpdate() (*resource_update.ResourceUpdate, string) {
-	for _, update := range rug.Updates {
+func (n *DAGNode) NextUpdate() (*resource_update.ResourceUpdate, string) {
+	for _, update := range n.Updates {
 		if update.State == resource_update.ResourceUpdateStateNotStarted {
 			key := getResourceUpdateIdentifier(update)
 			return update, key
@@ -315,17 +315,17 @@ func (rug *DAGNode) NextUpdate() (*resource_update.ResourceUpdate, string) {
 	return nil, ""
 }
 
-func (rug *DAGNode) Pop(update *resource_update.ResourceUpdate) {
-	for i, u := range rug.Updates {
+func (n *DAGNode) Pop(update *resource_update.ResourceUpdate) {
+	for i, u := range n.Updates {
 		if u.URI() == update.URI() && u.Operation == update.Operation {
-			rug.Updates = append(rug.Updates[:i], rug.Updates[i+1:]...)
+			n.Updates = append(n.Updates[:i], n.Updates[i+1:]...)
 			break
 		}
 	}
 }
 
-func (rug *DAGNode) Done() bool {
-	return len(rug.Updates) == 0
+func (n *DAGNode) Done() bool {
+	return len(n.Updates) == 0
 }
 
 func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_update.ResourceUpdate {

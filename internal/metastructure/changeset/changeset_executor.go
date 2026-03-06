@@ -118,7 +118,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
 	// Cleanup empty stacks after successful completion
 	if newState == StateFinishedSuccessfully {
-		// Use the stacks captured at start, since the pipeline is empty by now
+		// Use the stacks captured at start, since the DAG is empty by now
 		proc.Log().Debug("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
 			resourcePersisterPID := gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()}
@@ -189,7 +189,7 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 	data.changeset = message.Changeset
 	data.notifyOnComplete = message.NotifyOnComplete
 
-	// Capture stacks with delete operations NOW, before the pipeline is modified during execution
+	// Capture stacks with delete operations NOW, before the DAG is modified during execution
 	data.stacksWithDeletes = collectStacksWithDeletes(data.changeset.DAG)
 
 	// Ensure the resolve cache is started
@@ -363,10 +363,10 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 		}
 	}
 
-	// Update pipeline and get next executable updates and any failed updates
+	// Update DAG and get next executable updates and any failed updates
 	cascadingFailures, err := data.changeset.UpdateDAG(finishedUpdate)
 	if err != nil {
-		proc.Log().Error("Failed to update pipeline", "error", err)
+		proc.Log().Error("Failed to update DAG", "error", err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -543,7 +543,7 @@ func changesetHasUserUpdates(changeset Changeset) bool {
 }
 
 // collectStacksWithDeletes returns a list of unique stack labels that had delete operations
-// in the pipeline, excluding the unmanaged stack.
+// in the DAG, excluding the unmanaged stack.
 func collectStacksWithDeletes(dag *ExecutionDAG) []string {
 	stackSet := make(map[string]struct{})
 	for _, group := range dag.Nodes {
