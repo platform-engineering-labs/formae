@@ -299,6 +299,30 @@ jobs:
       - pkg_linux_arm64
       - pkg_linux_x8664
 
+  notify_helm_chart:
+    runs-on: ubuntu-latest
+    if: ${{ contains(fromJSON('["", "all"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
+    needs:
+      - pkg_container
+
+    steps:
+      - name: Generate peldroid token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.PELDROID_APP_ID }}
+          private-key: ${{ secrets.PELDROID_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: formae-helm
+
+      - name: Dispatch to helm-chart repo
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: platform-engineering-labs/formae-helm
+          event-type: formae-release
+          client-payload: '{"version": "${{ github.ref_name }}"}'
+
   notify_success:
     runs-on: ubuntu-latest
     needs: [pkg_pkl, pkg_linux_arm64, pkg_linux_x8664, pkg_macos_arm64, pkg_macos_x8664, pkg_container]
