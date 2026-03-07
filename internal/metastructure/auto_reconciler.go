@@ -371,7 +371,7 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	}
 
 	// Create changeset
-	cs, err := changeset.NewChangesetFromResourceUpdates(resourceUpdates, reconcileCommand.ID, pkgmodel.CommandApply)
+	cs, err := changeset.NewChangeset(resourceUpdates, nil, reconcileCommand.ID, pkgmodel.CommandApply)
 	if err != nil {
 		return "", fmt.Errorf("failed to create changeset: %w", err)
 	}
