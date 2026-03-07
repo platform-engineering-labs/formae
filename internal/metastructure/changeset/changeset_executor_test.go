@@ -19,7 +19,7 @@ import (
 func TestChangesetExecutor_EmptyChangesetFinishesImmediately(t *testing.T) {
 	emptyChangeset := Changeset{
 		CommandID:      "test-command-empty",
-		DAG:       &ExecutionDAG{},
+		DAG:            &ExecutionDAG{},
 		trackedUpdates: make(map[string]bool),
 	}
 
