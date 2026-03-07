@@ -24,6 +24,7 @@ const (
 	TargetOperationDelete = types.OperationDelete
 
 	TargetUpdateStateNotStarted = types.TargetUpdateStateNotStarted
+	TargetUpdateStateInProgress = types.TargetUpdateStateInProgress
 	TargetUpdateStateSuccess    = types.TargetUpdateStateSuccess
 	TargetUpdateStateFailed     = types.TargetUpdateStateFailed
 )
@@ -47,6 +48,38 @@ func (tu *TargetUpdate) HasChange() bool {
 	}
 	return tu.ExistingTarget.Discoverable != tu.Target.Discoverable
 }
+
+// NodeURI returns a synthetic URI for the target update, used as a DAG node key.
+func (tu *TargetUpdate) NodeURI() pkgmodel.FormaeURI {
+	return pkgmodel.FormaeURI("target://" + tu.Target.Label + "/" + string(tu.Operation))
+}
+
+// Resolvables returns nil because target updates have no resolvable references.
+func (tu *TargetUpdate) Resolvables() []pkgmodel.FormaeURI { return nil }
+
+// Namespace returns the target's namespace.
+func (tu *TargetUpdate) Namespace() string { return tu.Target.Namespace }
+
+// IsRateLimited returns false because target updates are local datastore operations.
+func (tu *TargetUpdate) IsRateLimited() bool { return false }
+
+// IsReady returns true if the target update has not yet started.
+func (tu *TargetUpdate) IsReady() bool { return tu.State == TargetUpdateStateNotStarted }
+
+// IsRunning returns true if the target update is in progress.
+func (tu *TargetUpdate) IsRunning() bool { return tu.State == TargetUpdateStateInProgress }
+
+// IsSuccess returns true if the target update completed successfully.
+func (tu *TargetUpdate) IsSuccess() bool { return tu.State == TargetUpdateStateSuccess }
+
+// IsFailed returns true if the target update failed.
+func (tu *TargetUpdate) IsFailed() bool { return tu.State == TargetUpdateStateFailed }
+
+// MarkInProgress transitions the target update to the InProgress state.
+func (tu *TargetUpdate) MarkInProgress() { tu.State = TargetUpdateStateInProgress }
+
+// MarkFailed transitions the target update to the Failed state.
+func (tu *TargetUpdate) MarkFailed() { tu.State = TargetUpdateStateFailed }
 
 // ValidateImmutableFields validates that immutable fields (namespace, config) haven't changed
 // Returns an error if namespace or config differ between existing and new targets

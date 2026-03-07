@@ -13,6 +13,7 @@ import (
 	"log/slog"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -27,6 +28,7 @@ type Update interface {
 	NodeURI() pkgmodel.FormaeURI
 	Resolvables() []pkgmodel.FormaeURI
 	Namespace() string
+	IsRateLimited() bool
 	IsReady() bool
 	IsRunning() bool
 	IsSuccess() bool
@@ -54,8 +56,9 @@ type DAGNode struct {
 	Dependencies []*DAGNode
 }
 
-func NewChangesetFromResourceUpdates(
+func NewChangeset(
 	resourceUpdates []resource_update.ResourceUpdate,
+	targetUpdates []target_update.TargetUpdate,
 	commandID string,
 	command pkgmodel.Command,
 ) (Changeset, error) {
@@ -67,6 +70,16 @@ func NewChangesetFromResourceUpdates(
 
 	if err := changeset.DAG.Init(resourceUpdates); err != nil {
 		return Changeset{}, err
+	}
+
+	for i := range targetUpdates {
+		tu := &targetUpdates[i]
+		changeset.DAG.Nodes[tu.NodeURI()] = &DAGNode{
+			URI:          tu.NodeURI(),
+			Update:       tu,
+			Dependents:   []*DAGNode{},
+			Dependencies: []*DAGNode{},
+		}
 	}
 
 	return changeset, nil
@@ -304,7 +317,7 @@ func (n *DAGNode) IsReady() bool {
 
 func (c *Changeset) GetExecutableUpdates(namespace string, max int) []Update {
 	var executable []Update
-	total := 0
+	rateLimitedCount := 0
 
 	for _, node := range c.DAG.Nodes {
 		if !node.IsReady() || len(node.Dependencies) > 0 {
@@ -312,11 +325,16 @@ func (c *Changeset) GetExecutableUpdates(namespace string, max int) []Update {
 		}
 
 		updateKey := getUpdateIdentifier(node.URI)
-		if total < max && node.Update.Namespace() == namespace && !c.trackedUpdates[updateKey] {
+		if node.Update.Namespace() == namespace && !c.trackedUpdates[updateKey] {
+			if node.Update.IsRateLimited() {
+				if rateLimitedCount >= max {
+					continue
+				}
+				rateLimitedCount++
+			}
 			executable = append(executable, node.Update)
 			c.trackedUpdates[updateKey] = true
 			node.Update.MarkInProgress()
-			total++
 		}
 	}
 
@@ -337,7 +355,13 @@ func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 		updateKey := getUpdateIdentifier(node.URI)
 		if !c.trackedUpdates[updateKey] {
 			ns := node.Update.Namespace()
-			result[ns]++
+			if node.Update.IsRateLimited() {
+				result[ns]++
+			} else {
+				if _, exists := result[ns]; !exists {
+					result[ns] = 0
+				}
+			}
 		}
 	}
 

@@ -24,6 +24,7 @@ const (
 	ResourceUpdaterSupervisor = gen.Atom("ResourceUpdaterSupervisor")
 	StackExpirer              = gen.Atom("StackExpirer")
 	Synchronizer              = gen.Atom("Synchronizer")
+	TargetUpdaterSupervisor   = gen.Atom("TargetUpdaterSupervisor")
 )
 
 func ChangesetExecutor(commandID string) gen.Atom {
@@ -40,4 +41,8 @@ func ResolveCache(commandID string) gen.Atom {
 
 func ResourceUpdater(resourceURI model.FormaeURI, operation string, commandID string) gen.Atom {
 	return gen.Atom(fmt.Sprintf("%s/resource-updater/%s/%s", resourceURI, operation, commandID))
+}
+
+func TargetUpdater(label, operation, commandID string) gen.Atom {
+	return gen.Atom(fmt.Sprintf("target://%s/target-updater/%s/%s", label, operation, commandID))
 }

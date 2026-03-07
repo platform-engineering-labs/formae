@@ -203,7 +203,7 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 	}
 
 	// Create changeset
-	cs, err := changeset.NewChangesetFromResourceUpdates(resourceUpdates, destroyCommand.ID, pkgmodel.CommandDestroy)
+	cs, err := changeset.NewChangeset(resourceUpdates, nil, destroyCommand.ID, pkgmodel.CommandDestroy)
 	if err != nil {
 		return fmt.Errorf("failed to create changeset: %w", err)
 	}
