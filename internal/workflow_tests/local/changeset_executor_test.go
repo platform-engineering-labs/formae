@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -24,6 +25,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
@@ -65,7 +67,7 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 		})
 
 		// Create changeset and start executor
-		cs, err := changeset.NewChangesetFromResourceUpdates([]resource_update.ResourceUpdate{resourceUpdate}, commandID, pkgmodel.CommandApply)
+		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -164,7 +166,7 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		})
 
 		// Create changeset - it will automatically build the dependency pipeline
-		cs, err := changeset.NewChangesetFromResourceUpdates([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, commandID, pkgmodel.CommandApply)
+		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -263,7 +265,7 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 
 		// Create changeset - it will automatically build the dependency pipeline
-		cs, err := changeset.NewChangesetFromResourceUpdates([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, commandID, pkgmodel.CommandApply)
+		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -352,7 +354,7 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 		})
 
 		// Create changeset
-		cs, err := changeset.NewChangesetFromResourceUpdates([]resource_update.ResourceUpdate{resourceUpdate}, commandID, pkgmodel.CommandApply)
+		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -421,7 +423,7 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 		})
 
 		// Create changeset
-		cs, err := changeset.NewChangesetFromResourceUpdates([]resource_update.ResourceUpdate{resourceUpdate}, commandID, pkgmodel.CommandApply)
+		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -561,8 +563,8 @@ func TestChangesetExecutor_StuckOnReadFailureDuringUpdate(t *testing.T) {
 		})
 
 		// Create changeset from the updates
-		cs, err := changeset.NewChangesetFromResourceUpdates(
-			[]resource_update.ResourceUpdate{resOK, resFail}, commandID, pkgmodel.CommandApply)
+		cs, err := changeset.NewChangeset(
+			[]resource_update.ResourceUpdate{resOK, resFail}, nil, commandID, pkgmodel.CommandApply)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -583,6 +585,98 @@ func TestChangesetExecutor_StuckOnReadFailureDuringUpdate(t *testing.T) {
 		testutil.ExpectMessageWithPredicate(t, messages, 15*time.Second, func(msg changeset.ChangesetCompleted) bool {
 			return msg.CommandID == commandID
 		})
+	})
+}
+
+func TestChangesetExecutor_MixedResourceAndTargetUpdates(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "test-request-id",
+						NativeID:        "test-native-id",
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		// Start test helper actor to receive messages
+		messages := make(chan any, 10)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		require.NoError(t, err)
+
+		commandID := "test-command-mixed"
+		resourceUpdate := newTestResourceUpdate("test-vpc", nil, "FakeAWS::EC2::VPC")
+
+		targetUp := target_update.TargetUpdate{
+			Target: pkgmodel.Target{
+				Label:        "new-target",
+				Namespace:    "FakeAWS",
+				Config:       json.RawMessage(`{}`),
+				Discoverable: false,
+			},
+			Operation: target_update.TargetOperationCreate,
+			State:     target_update.TargetUpdateStateNotStarted,
+		}
+
+		// Store the forma command
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:    commandID,
+				State: forma_command.CommandStateNotStarted,
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					resourceUpdate,
+				},
+				TargetUpdates: []target_update.TargetUpdate{
+					targetUp,
+				},
+			},
+		})
+
+		// Create changeset with both resource and target updates
+		cs, err := changeset.NewChangeset(
+			[]resource_update.ResourceUpdate{resourceUpdate},
+			[]target_update.TargetUpdate{targetUp},
+			commandID,
+			pkgmodel.CommandApply,
+		)
+		require.NoError(t, err)
+
+		// Ensure the changeset executor exists
+		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
+			CommandID: commandID,
+		})
+		require.NoError(t, err)
+
+		// Start the changeset
+		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
+			Changeset:        cs,
+			NotifyOnComplete: true,
+		})
+
+		// Wait for the changeset to complete
+		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg changeset.ChangesetCompleted) bool {
+			return msg.CommandID == commandID && msg.State == changeset.ChangeSetStateFinishedSuccessfully
+		})
+
+		// Verify the target was created in the datastore
+		target, err := m.Datastore.LoadTarget("new-target")
+		require.NoError(t, err)
+		assert.Equal(t, "new-target", target.Label)
+		assert.Equal(t, "FakeAWS", target.Namespace)
+
+		// Verify the resource was created
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
+		require.NoError(t, err)
+		assert.Len(t, resources, 1)
+		assert.Equal(t, "test-vpc", resources[0].Label)
 	})
 }
 
