@@ -15,6 +15,24 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// Compile-time verification that ResourceUpdate satisfies the Update interface
+var _ Update = (*resource_update.ResourceUpdate)(nil)
+
+// asResourceUpdate is a test helper that type-asserts an Update to *resource_update.ResourceUpdate
+func asResourceUpdate(t *testing.T, u Update) *resource_update.ResourceUpdate {
+	t.Helper()
+	ru, ok := u.(*resource_update.ResourceUpdate)
+	require.True(t, ok, "expected *resource_update.ResourceUpdate, got %T", u)
+	return ru
+}
+
+// updateDAGHelper computes the node URI and calls UpdateDAG — convenience for tests
+func updateDAGHelper(t *testing.T, c Changeset, ru *resource_update.ResourceUpdate) ([]Update, error) {
+	t.Helper()
+	nodeURI := createOperationURI(ru.URI(), ru.Operation)
+	return c.UpdateDAG(nodeURI, ru)
+}
+
 func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t *testing.T) {
 	var (
 		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -101,13 +119,14 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	if len(executableUpdates) != 1 {
 		t.Fatalf("Expected 1 executable update, got %d", len(executableUpdates))
 	}
-	if executableUpdates[0].DesiredState.Label != "test-subnet-1" || executableUpdates[0].Operation != resource_update.OperationDelete {
-		t.Fatalf("Expected subnet-1 delete, got %s %s", executableUpdates[0].DesiredState.Label, executableUpdates[0].Operation)
+	ru0 := asResourceUpdate(t, executableUpdates[0])
+	if ru0.DesiredState.Label != "test-subnet-1" || ru0.Operation != resource_update.OperationDelete {
+		t.Fatalf("Expected subnet-1 delete, got %s %s", ru0.DesiredState.Label, ru0.Operation)
 	}
 
 	// Step 2: Complete subnet-1 delete
-	executableUpdates[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(executableUpdates[0])
+	ru0.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, changeset, ru0)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -118,13 +137,14 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	if len(nextUpdates) != 1 {
 		t.Fatalf("Expected 1 next update, got %d", len(nextUpdates))
 	}
-	if nextUpdates[0].DesiredState.Label != "test-vpc" || nextUpdates[0].Operation != resource_update.OperationDelete {
-		t.Fatalf("Expected vpc delete, got %s %s", nextUpdates[0].DesiredState.Label, nextUpdates[0].Operation)
+	ruNext0 := asResourceUpdate(t, nextUpdates[0])
+	if ruNext0.DesiredState.Label != "test-vpc" || ruNext0.Operation != resource_update.OperationDelete {
+		t.Fatalf("Expected vpc delete, got %s %s", ruNext0.DesiredState.Label, ruNext0.Operation)
 	}
 
 	// Step 3: Complete VPC delete
-	nextUpdates[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(nextUpdates[0])
+	ruNext0.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, changeset, ruNext0)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -135,13 +155,14 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	if len(nextUpdates2) != 1 {
 		t.Fatalf("Expected 1 next update, got %d", len(nextUpdates2))
 	}
-	if nextUpdates2[0].DesiredState.Label != "test-vpc" || nextUpdates2[0].Operation != resource_update.OperationCreate {
-		t.Fatalf("Expected vpc create, got %s %s", nextUpdates2[0].DesiredState.Label, nextUpdates2[0].Operation)
+	ruNext2 := asResourceUpdate(t, nextUpdates2[0])
+	if ruNext2.DesiredState.Label != "test-vpc" || ruNext2.Operation != resource_update.OperationCreate {
+		t.Fatalf("Expected vpc create, got %s %s", ruNext2.DesiredState.Label, ruNext2.Operation)
 	}
 
 	// Step 4: Complete VPC create
-	nextUpdates2[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(nextUpdates2[0])
+	ruNext2.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, changeset, ruNext2)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -156,8 +177,9 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	// Verify both are subnet creates
 	subnetCreateCount := 0
 	for _, update := range nextUpdates3 {
-		if (update.DesiredState.Label == "test-subnet-1" || update.DesiredState.Label == "test-subnet-2") &&
-			update.Operation == resource_update.OperationCreate {
+		ru := asResourceUpdate(t, update)
+		if (ru.DesiredState.Label == "test-subnet-1" || ru.DesiredState.Label == "test-subnet-2") &&
+			ru.Operation == resource_update.OperationCreate {
 			subnetCreateCount++
 		}
 	}
@@ -167,8 +189,9 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 
 	// Step 5: Complete both subnet creates
 	for _, update := range nextUpdates3 {
-		update.State = resource_update.ResourceUpdateStateSuccess
-		_, err := changeset.UpdateDAG(update)
+		ru := asResourceUpdate(t, update)
+		ru.State = resource_update.ResourceUpdateStateSuccess
+		_, err := updateDAGHelper(t, changeset, ru)
 		if err != nil {
 			t.Fatalf("Error updating DAG: %v", err)
 		}
@@ -285,10 +308,11 @@ func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t
 	foundSubnet1Delete := false
 
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc-2" && ru.Operation == resource_update.OperationCreate {
 			foundVpc2Create = true
 		}
-		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if ru.DesiredState.Label == "test-subnet-1" && ru.Operation == resource_update.OperationDelete {
 			foundSubnet1Delete = true
 		}
 	}
@@ -303,14 +327,15 @@ func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t
 	// Complete test-subnet-1 delete first
 	var subnet1Delete *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
-			subnet1Delete = update
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-subnet-1" && ru.Operation == resource_update.OperationDelete {
+			subnet1Delete = ru
 			break
 		}
 	}
 
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(subnet1Delete)
+	_, err = updateDAGHelper(t, changeset, subnet1Delete)
 	if err != nil {
 		t.Fatalf("Error updating DAG after subnet-1 delete: %v", err)
 	}
@@ -321,7 +346,8 @@ func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t
 	// Plus test-vpc-2 create should still be available
 	foundVpcDelete := false
 	for _, update := range nextUpdates {
-		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc" && ru.Operation == resource_update.OperationDelete {
 			foundVpcDelete = true
 			break
 		}
@@ -443,10 +469,11 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	foundSubnet1Delete := false
 
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc-2" && ru.Operation == resource_update.OperationCreate {
 			foundVpc2Create = true
 		}
-		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if ru.DesiredState.Label == "test-subnet-1" && ru.Operation == resource_update.OperationDelete {
 			foundSubnet1Delete = true
 		}
 	}
@@ -461,14 +488,15 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	// Complete test-vpc-2 create (should not affect anything since it's independent)
 	var vpc2Create *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
-			vpc2Create = update
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc-2" && ru.Operation == resource_update.OperationCreate {
+			vpc2Create = ru
 			break
 		}
 	}
 
 	vpc2Create.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(vpc2Create)
+	_, err = updateDAGHelper(t, changeset, vpc2Create)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -477,14 +505,15 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	// Step 1: Complete subnet-1 delete
 	var subnet1Delete *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
-			subnet1Delete = update
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-subnet-1" && ru.Operation == resource_update.OperationDelete {
+			subnet1Delete = ru
 			break
 		}
 	}
 
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(subnet1Delete)
+	_, err = updateDAGHelper(t, changeset, subnet1Delete)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -494,11 +523,12 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	// Should have vpc delete now
 	foundVpcDelete := false
 	for _, update := range nextUpdates2 {
-		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc" && ru.Operation == resource_update.OperationDelete {
 			foundVpcDelete = true
 			// Complete vpc delete
-			update.State = resource_update.ResourceUpdateStateSuccess
-			_, err := changeset.UpdateDAG(update)
+			ru.State = resource_update.ResourceUpdateStateSuccess
+			_, err := updateDAGHelper(t, changeset, ru)
 			if err != nil {
 				t.Fatalf("Error updating DAG: %v", err)
 			}
@@ -509,7 +539,8 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 			// Should have vpc create available
 			foundVpcCreate := false
 			for _, update2 := range nextUpdates3 {
-				if update2.DesiredState.Label == "test-vpc" && update2.Operation == resource_update.OperationCreate {
+				ru2 := asResourceUpdate(t, update2)
+				if ru2.DesiredState.Label == "test-vpc" && ru2.Operation == resource_update.OperationCreate {
 					foundVpcCreate = true
 					break
 				}
@@ -633,14 +664,15 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	foundSubnet1Delete := false
 
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc-2" && ru.Operation == resource_update.OperationCreate {
 			foundVpc2Create = true
 		}
-		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
+		if ru.DesiredState.Label == "test-subnet-1" && ru.Operation == resource_update.OperationDelete {
 			foundSubnet1Delete = true
 		}
 		// Verify subnet-2 is NOT executable
-		if update.DesiredState.Label == "test-subnet-2" {
+		if ru.DesiredState.Label == "test-subnet-2" {
 			t.Fatalf("test-subnet-2 should not be executable initially (depends on both VPCs)")
 		}
 	}
@@ -655,14 +687,15 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	// Step 1: Complete test-vpc-2 create
 	var vpc2Create *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-vpc-2" && update.Operation == resource_update.OperationCreate {
-			vpc2Create = update
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc-2" && ru.Operation == resource_update.OperationCreate {
+			vpc2Create = ru
 			break
 		}
 	}
 
 	vpc2Create.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(vpc2Create)
+	_, err = updateDAGHelper(t, changeset, vpc2Create)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -670,14 +703,15 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	// Step 2: Complete test-subnet-1 delete
 	var subnet1Delete *resource_update.ResourceUpdate
 	for _, update := range executableUpdates {
-		if update.DesiredState.Label == "test-subnet-1" && update.Operation == resource_update.OperationDelete {
-			subnet1Delete = update
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-subnet-1" && ru.Operation == resource_update.OperationDelete {
+			subnet1Delete = ru
 			break
 		}
 	}
 
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(subnet1Delete)
+	_, err = updateDAGHelper(t, changeset, subnet1Delete)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -687,8 +721,9 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	// Step 3: Complete test-vpc delete
 	var vpcDelete *resource_update.ResourceUpdate
 	for _, update := range nextUpdates2 {
-		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationDelete {
-			vpcDelete = update
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc" && ru.Operation == resource_update.OperationDelete {
+			vpcDelete = ru
 			break
 		}
 	}
@@ -699,7 +734,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	}
 
 	vpcDelete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(vpcDelete)
+	_, err = updateDAGHelper(t, changeset, vpcDelete)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 		return
@@ -710,8 +745,9 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	// Step 4: Complete test-vpc create
 	var vpcCreate *resource_update.ResourceUpdate
 	for _, update := range nextUpdates3 {
-		if update.DesiredState.Label == "test-vpc" && update.Operation == resource_update.OperationCreate {
-			vpcCreate = update
+		ru := asResourceUpdate(t, update)
+		if ru.DesiredState.Label == "test-vpc" && ru.Operation == resource_update.OperationCreate {
+			vpcCreate = ru
 			break
 		}
 	}
@@ -722,7 +758,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	}
 
 	vpcCreate.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(vpcCreate)
+	_, err = updateDAGHelper(t, changeset, vpcCreate)
 	if err != nil {
 		t.Fatalf("Error updating DAG: %v", err)
 	}
@@ -735,8 +771,9 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 	subnetCreateCount := 0
 
 	for _, update := range finalUpdates {
-		if (update.DesiredState.Label == "test-subnet-1" || update.DesiredState.Label == "test-subnet-2") &&
-			update.Operation == resource_update.OperationCreate {
+		ru := asResourceUpdate(t, update)
+		if (ru.DesiredState.Label == "test-subnet-1" || ru.DesiredState.Label == "test-subnet-2") &&
+			ru.Operation == resource_update.OperationCreate {
 			subnetCreateCount++
 		}
 	}
@@ -787,10 +824,11 @@ func TestChangeset_Init_DifferentTypesSameLabelNoFalseReplace(t *testing.T) {
 	// Find the delete and create operations
 	var subnetDelete, vpcCreate *resource_update.ResourceUpdate
 	for i := range executables {
-		if executables[i].Operation == resource_update.OperationDelete {
-			subnetDelete = executables[i]
-		} else if executables[i].Operation == resource_update.OperationCreate {
-			vpcCreate = executables[i]
+		ru := asResourceUpdate(t, executables[i])
+		if ru.Operation == resource_update.OperationDelete {
+			subnetDelete = ru
+		} else if ru.Operation == resource_update.OperationCreate {
+			vpcCreate = ru
 		}
 	}
 
@@ -801,12 +839,12 @@ func TestChangeset_Init_DifferentTypesSameLabelNoFalseReplace(t *testing.T) {
 
 	// Complete delete op
 	subnetDelete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(subnetDelete)
+	_, err = updateDAGHelper(t, changeset, subnetDelete)
 	assert.NoError(t, err)
 
 	// Complete create op
 	vpcCreate.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdateDAG(vpcCreate)
+	_, err = updateDAGHelper(t, changeset, vpcCreate)
 	assert.NoError(t, err)
 
 	noUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -905,11 +943,14 @@ func TestChangeset_FailureCascade_TransitiveDependentsAllFail(t *testing.T) {
 
 	// Simulate VPC failure
 	vpcUpdate.State = resource_update.ResourceUpdateStateFailed
-	failedUpdates := changeset.failResourceUpdate(&vpcUpdate)
+	vpcNodeURI := createOperationURI(vpcUpdate.URI(), vpcUpdate.Operation)
+	failedNodes := changeset.failDependents(changeset.DAG.Nodes[vpcNodeURI])
 
-	failedLabels := make([]string, 0, len(failedUpdates))
-	for _, update := range failedUpdates {
-		failedLabels = append(failedLabels, update.DesiredState.Label)
+	failedLabels := make([]string, 0, len(failedNodes)+1)
+	failedLabels = append(failedLabels, vpcUpdate.DesiredState.Label)
+	for _, node := range failedNodes {
+		ru := node.Update.(*resource_update.ResourceUpdate)
+		failedLabels = append(failedLabels, ru.DesiredState.Label)
 	}
 
 	// both subnet AND instance should be failed
@@ -972,7 +1013,7 @@ func TestChangeset_UpdateDAG_FailureCascadeRemovesNodes(t *testing.T) {
 
 	// Mark VPC as failed and call UpdateDAG
 	vpcUpdate.State = resource_update.ResourceUpdateStateFailed
-	failedUpdates, err := changeset.UpdateDAG(&vpcUpdate)
+	failedUpdates, err := updateDAGHelper(t, changeset, &vpcUpdate)
 	require.NoError(t, err)
 
 	// Verify cascading failures were detected
@@ -981,8 +1022,9 @@ func TestChangeset_UpdateDAG_FailureCascadeRemovesNodes(t *testing.T) {
 
 	// Verify all failed resources have Failed state
 	for _, update := range failedUpdates {
-		assert.Equal(t, resource_update.ResourceUpdateStateFailed, update.State,
-			"Resource %s should be marked as Failed", update.DesiredState.Label)
+		ru := asResourceUpdate(t, update)
+		assert.Equal(t, resource_update.ResourceUpdateStateFailed, ru.State,
+			"Resource %s should be marked as Failed", ru.DesiredState.Label)
 	}
 
 	// Verify empty groups were removed from DAG
@@ -1168,10 +1210,11 @@ func TestChangeset_UpdateDAG_RejectedUpdateCascadesToDependents(t *testing.T) {
 
 	exec := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, exec, 1)
-	assert.Equal(t, "vpc", exec[0].DesiredState.Label)
+	ruExec0 := asResourceUpdate(t, exec[0])
+	assert.Equal(t, "vpc", ruExec0.DesiredState.Label)
 
-	exec[0].State = resource_update.ResourceUpdateStateRejected
-	cascaded, err := cs.UpdateDAG(exec[0])
+	ruExec0.State = resource_update.ResourceUpdateStateRejected
+	cascaded, err := updateDAGHelper(t, cs, ruExec0)
 	require.NoError(t, err)
 
 	assert.Len(t, cascaded, 2)
@@ -1232,19 +1275,21 @@ func TestChangeset_ExecutionOrder_DestroyChainCompletesInReverseOrder(t *testing
 	// Subnet delete first (reversed dependency order)
 	exec := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, exec, 1)
-	assert.Equal(t, "subnet", exec[0].DesiredState.Label)
+	ruExec := asResourceUpdate(t, exec[0])
+	assert.Equal(t, "subnet", ruExec.DesiredState.Label)
 
-	exec[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = cs.UpdateDAG(exec[0])
+	ruExec.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, ruExec)
 	require.NoError(t, err)
 
 	// VPC delete now unblocked
 	exec2 := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, exec2, 1)
-	assert.Equal(t, "vpc", exec2[0].DesiredState.Label)
+	ruExec2 := asResourceUpdate(t, exec2[0])
+	assert.Equal(t, "vpc", ruExec2.DesiredState.Label)
 
-	exec2[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = cs.UpdateDAG(exec2[0])
+	ruExec2.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, ruExec2)
 	require.NoError(t, err)
 
 	assert.True(t, cs.IsComplete())
@@ -1276,21 +1321,23 @@ func TestChangeset_ExecutionOrder_UpdateOperationRespectsDependencies(t *testing
 	// VPC update should be first (subnet depends on it)
 	exec := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, exec, 1)
-	assert.Equal(t, "vpc", exec[0].DesiredState.Label)
-	assert.Equal(t, resource_update.OperationUpdate, exec[0].Operation)
+	ruExec := asResourceUpdate(t, exec[0])
+	assert.Equal(t, "vpc", ruExec.DesiredState.Label)
+	assert.Equal(t, resource_update.OperationUpdate, ruExec.Operation)
 
-	exec[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = cs.UpdateDAG(exec[0])
+	ruExec.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, ruExec)
 	require.NoError(t, err)
 
 	// Subnet update now unblocked
 	exec2 := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, exec2, 1)
-	assert.Equal(t, "subnet", exec2[0].DesiredState.Label)
-	assert.Equal(t, resource_update.OperationUpdate, exec2[0].Operation)
+	ruExec2 := asResourceUpdate(t, exec2[0])
+	assert.Equal(t, "subnet", ruExec2.DesiredState.Label)
+	assert.Equal(t, resource_update.OperationUpdate, ruExec2.Operation)
 
-	exec2[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = cs.UpdateDAG(exec2[0])
+	ruExec2.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, ruExec2)
 	require.NoError(t, err)
 
 	assert.True(t, cs.IsComplete())
@@ -1348,19 +1395,21 @@ func TestChangeset_Init_ReplaceOperationSplitsIntoDeleteAndCreateNodes(t *testin
 	// Delete should execute first
 	exec := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, exec, 1)
-	assert.Equal(t, resource_update.OperationDelete, exec[0].Operation)
+	ruExec := asResourceUpdate(t, exec[0])
+	assert.Equal(t, resource_update.OperationDelete, ruExec.Operation)
 
-	exec[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = cs.UpdateDAG(exec[0])
+	ruExec.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, ruExec)
 	require.NoError(t, err)
 
 	// Then create
 	exec2 := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, exec2, 1)
-	assert.Equal(t, resource_update.OperationCreate, exec2[0].Operation)
+	ruExec2 := asResourceUpdate(t, exec2[0])
+	assert.Equal(t, resource_update.OperationCreate, ruExec2.Operation)
 
-	exec2[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = cs.UpdateDAG(exec2[0])
+	ruExec2.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, ruExec2)
 	require.NoError(t, err)
 
 	assert.True(t, cs.IsComplete())

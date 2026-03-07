@@ -406,6 +406,22 @@ func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessag
 	return json.RawMessage(result), nil
 }
 
+// changeset.Update interface implementation for ExecutionDAG integration
+
+func (ru *ResourceUpdate) NodeURI() pkgmodel.FormaeURI { return ru.URI() }
+func (ru *ResourceUpdate) Resolvables() []pkgmodel.FormaeURI {
+	return ru.RemainingResolvables
+}
+func (ru *ResourceUpdate) Namespace() string { return string(ru.DesiredState.Namespace()) }
+func (ru *ResourceUpdate) IsReady() bool     { return ru.State == ResourceUpdateStateNotStarted }
+func (ru *ResourceUpdate) IsRunning() bool   { return ru.State == ResourceUpdateStateInProgress }
+func (ru *ResourceUpdate) IsSuccess() bool   { return ru.State == ResourceUpdateStateSuccess }
+func (ru *ResourceUpdate) IsFailed() bool {
+	return ru.State == ResourceUpdateStateFailed || ru.State == ResourceUpdateStateRejected
+}
+func (ru *ResourceUpdate) MarkInProgress() { ru.State = ResourceUpdateStateInProgress }
+func (ru *ResourceUpdate) MarkFailed()     { ru.State = ResourceUpdateStateFailed }
+
 // propertyMerger handles the recursive merging of JSON properties
 type propertyMerger struct {
 	userRoot   gjson.Result

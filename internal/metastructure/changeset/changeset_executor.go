@@ -273,8 +273,10 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	if state == StateCanceling {
 		// Find and update the finished resource
 		for _, node := range data.changeset.DAG.Nodes {
-			if node.Update.URI() == message.Uri && node.Update.State == resource_update.ResourceUpdateStateInProgress {
-				node.Update.State = message.State
+			if node.Update.NodeURI() == message.Uri && node.Update.IsRunning() {
+				if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+					ru.State = message.State
+				}
 				proc.Log().Debug("In-progress resource finished during cancellation",
 					"uri", message.Uri,
 					"finalState", message.State)
@@ -309,8 +311,10 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 
 	// Look through all nodes to find the update with matching URI and state
 	for _, node := range data.changeset.DAG.Nodes {
-		if node.Update.URI() == message.Uri && node.Update.State == resource_update.ResourceUpdateStateInProgress {
-			finishedUpdate = node.Update
+		if node.Update.NodeURI() == message.Uri && node.Update.IsRunning() {
+			if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+				finishedUpdate = ru
+			}
 			break
 		}
 	}
@@ -319,7 +323,7 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 		// Warn only if the URI is still tracked anywhere else it's likely been completed
 		stillTracked := false
 		for _, node := range data.changeset.DAG.Nodes {
-			if node.Update.URI() == message.Uri {
+			if node.Update.NodeURI() == message.Uri {
 				stillTracked = true
 				break
 			}
@@ -350,7 +354,8 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	}
 
 	// Update DAG and get next executable updates and any failed updates
-	cascadingFailures, err := data.changeset.UpdateDAG(finishedUpdate)
+	nodeURI := createOperationURI(finishedUpdate.URI(), finishedUpdate.Operation)
+	cascadingFailures, err := data.changeset.UpdateDAG(nodeURI, finishedUpdate)
 	if err != nil {
 		proc.Log().Error("Failed to update DAG", "error", err)
 		return StateFinishedWithError, data, nil, nil
@@ -366,20 +371,24 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 		// Skip the original failure since it was already marked by ResourceUpdater via MarkResourceUpdateAsComplete
 		var failedResources []forma_persister.ResourceUpdateRef
 		for _, failedUpdate := range cascadingFailures {
+			ru, ok := failedUpdate.(*resource_update.ResourceUpdate)
+			if !ok {
+				continue // skip non-resource updates (future: handle target updates)
+			}
 			// Skip the original failure - it's already handled by the ResourceUpdater
-			if failedUpdate.URI() == finishedUpdate.URI() && failedUpdate.Operation == finishedUpdate.Operation {
+			if ru.URI() == finishedUpdate.URI() && ru.Operation == finishedUpdate.Operation {
 				proc.Log().Debug("Skipping original failure (already marked by ResourceUpdater)",
-					"uri", failedUpdate.URI(),
-					"operation", failedUpdate.Operation)
+					"uri", ru.URI(),
+					"operation", ru.Operation)
 				continue
 			}
 			proc.Log().Debug("Resource marked as failed due to cascade",
-				"uri", failedUpdate.URI(),
-				"operation", failedUpdate.Operation,
+				"uri", ru.URI(),
+				"operation", ru.Operation,
 				"originalFailure", message.Uri)
 			failedResources = append(failedResources, forma_persister.ResourceUpdateRef{
-				URI:       failedUpdate.URI(),
-				Operation: failedUpdate.Operation,
+				URI:       ru.URI(),
+				Operation: ru.Operation,
 			})
 		}
 
@@ -410,27 +419,33 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	return resume(from, state, data, Resume{}, proc)
 }
 
-func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID string, proc gen.Process) error {
+func startResourceUpdates(updates []Update, commandID string, proc gen.Process) error {
 	for _, update := range updates {
-		proc.Log().Debug("Starting resource updater", "uri", update.URI(), "operation", update.Operation)
+		ru, ok := update.(*resource_update.ResourceUpdate)
+		if !ok {
+			proc.Log().Error("Unexpected update type in startResourceUpdates", "uri", update.NodeURI())
+			continue
+		}
+
+		proc.Log().Debug("Starting resource updater", "uri", ru.URI(), "operation", ru.Operation)
 
 		// Register non-sync resources as in-progress with the Synchronizer
 		// to prevent race conditions where sync might include resources being updated by user operations
-		if update.Source != resource_update.FormaCommandSourceSynchronize {
+		if ru.Source != resource_update.FormaCommandSourceSynchronize {
 			synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
 			err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
-				ResourceURI: string(update.URI()),
+				ResourceURI: string(ru.URI()),
 			})
 			if err != nil {
-				proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", update.URI())
+				proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", ru.URI())
 				// Don't return error - this is not critical enough to fail the operation
 			}
 		}
 
 		_, err := proc.Call(gen.ProcessID{Name: actornames.ResourceUpdaterSupervisor, Node: proc.Node().Name()},
 			resource_update.EnsureResourceUpdater{
-				ResourceURI: update.URI(),
-				Operation:   string(update.Operation),
+				ResourceURI: ru.URI(),
+				Operation:   string(ru.Operation),
 				CommandID:   commandID,
 			})
 		if err != nil {
@@ -438,9 +453,9 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 			return err
 		}
 
-		err = proc.Send(gen.ProcessID{Name: actornames.ResourceUpdater(update.URI(), string(update.Operation), commandID), Node: proc.Node().Name()},
+		err = proc.Send(gen.ProcessID{Name: actornames.ResourceUpdater(ru.URI(), string(ru.Operation), commandID), Node: proc.Node().Name()},
 			resource_update.StartResourceUpdate{
-				ResourceUpdate: *update,
+				ResourceUpdate: *ru,
 				CommandID:      commandID,
 			})
 		if err != nil {
@@ -460,12 +475,14 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 	var inProgressCount int
 
 	for _, node := range data.changeset.DAG.Nodes {
-		if node.Update.State == resource_update.ResourceUpdateStateNotStarted {
-			resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
-				URI:       node.Update.URI(),
-				Operation: node.Update.Operation,
-			})
-		} else if node.Update.State == resource_update.ResourceUpdateStateInProgress {
+		if node.Update.IsReady() {
+			if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+				resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
+					URI:       ru.URI(),
+					Operation: ru.Operation,
+				})
+			}
+		} else if node.Update.IsRunning() {
 			inProgressCount++
 		}
 	}
@@ -514,8 +531,10 @@ func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdow
 // Returns true if at least one update has Source == FormaCommandSourceUser.
 func changesetHasUserUpdates(changeset Changeset) bool {
 	for _, node := range changeset.DAG.Nodes {
-		if node.Update.Source == resource_update.FormaCommandSourceUser {
-			return true
+		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+			if ru.Source == resource_update.FormaCommandSourceUser {
+				return true
+			}
 		}
 	}
 	return false
@@ -526,10 +545,12 @@ func changesetHasUserUpdates(changeset Changeset) bool {
 func collectStacksWithDeletes(dag *ExecutionDAG) []string {
 	stackSet := make(map[string]struct{})
 	for _, node := range dag.Nodes {
-		if node.Update.Operation == resource_update.OperationDelete || node.Update.Operation == resource_update.OperationReplace {
-			stackLabel := node.Update.StackLabel
-			if stackLabel != "" && stackLabel != constants.UnmanagedStack {
-				stackSet[stackLabel] = struct{}{}
+		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+			if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReplace {
+				stackLabel := ru.StackLabel
+				if stackLabel != "" && stackLabel != constants.UnmanagedStack {
+					stackSet[stackLabel] = struct{}{}
+				}
 			}
 		}
 	}

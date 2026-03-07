@@ -17,6 +17,24 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// Update is the interface for items that can be scheduled in the ExecutionDAG.
+// Both ResourceUpdate and (future) TargetUpdate implement this interface.
+//
+// Operation type is intentionally NOT part of this interface. It is baked into
+// DAGNode.URI at construction time via createOperationURI(). After construction,
+// the DAG treats node URIs as opaque keys.
+type Update interface {
+	NodeURI() pkgmodel.FormaeURI
+	Resolvables() []pkgmodel.FormaeURI
+	Namespace() string
+	IsReady() bool
+	IsRunning() bool
+	IsSuccess() bool
+	IsFailed() bool
+	MarkInProgress()
+	MarkFailed()
+}
+
 type Changeset struct {
 	CommandID      string
 	DAG            *ExecutionDAG
@@ -29,7 +47,7 @@ type ExecutionDAG struct {
 
 type DAGNode struct {
 	URI          pkgmodel.FormaeURI
-	Update       *resource_update.ResourceUpdate
+	Update       Update
 	Dependents   []*DAGNode
 	Dependencies []*DAGNode
 }
@@ -275,15 +293,15 @@ func (n *DAGNode) Unlink(upstream *DAGNode) {
 }
 
 func (n *DAGNode) IsRunning() bool {
-	return n.Update.State == resource_update.ResourceUpdateStateInProgress
+	return n.Update.IsRunning()
 }
 
 func (n *DAGNode) IsReady() bool {
-	return n.Update.State == resource_update.ResourceUpdateStateNotStarted
+	return n.Update.IsReady()
 }
 
-func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_update.ResourceUpdate {
-	var executable []*resource_update.ResourceUpdate
+func (c *Changeset) GetExecutableUpdates(namespace string, max int) []Update {
+	var executable []Update
 	total := 0
 
 	for _, node := range c.DAG.Nodes {
@@ -291,17 +309,17 @@ func (c *Changeset) GetExecutableUpdates(namespace string, max int) []*resource_
 			continue
 		}
 
-		updateKey := getResourceUpdateIdentifier(node.Update)
-		if total < max && node.Update.DesiredState.Namespace() == namespace && !c.trackedUpdates[updateKey] {
+		updateKey := getUpdateIdentifier(node.URI)
+		if total < max && node.Update.Namespace() == namespace && !c.trackedUpdates[updateKey] {
 			executable = append(executable, node.Update)
 			c.trackedUpdates[updateKey] = true
-			node.Update.State = resource_update.ResourceUpdateStateInProgress
+			node.Update.MarkInProgress()
 			total++
 		}
 	}
 
 	sort.Slice(executable, func(i, j int) bool {
-		return string(executable[i].URI()) < string(executable[j].URI())
+		return string(executable[i].NodeURI()) < string(executable[j].NodeURI())
 	})
 
 	return executable
@@ -314,9 +332,9 @@ func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 			continue
 		}
 
-		updateKey := getResourceUpdateIdentifier(node.Update)
+		updateKey := getUpdateIdentifier(node.URI)
 		if !c.trackedUpdates[updateKey] {
-			ns := string(node.Update.DesiredState.Namespace())
+			ns := node.Update.Namespace()
 			result[ns]++
 		}
 	}
@@ -324,47 +342,49 @@ func (c *Changeset) AvailableExecutableUpdates() map[string]int {
 	return result
 }
 
-func (c *Changeset) UpdateDAG(update *resource_update.ResourceUpdate) ([]*resource_update.ResourceUpdate, error) {
-	uri := createOperationURI(update.URI(), update.Operation)
-	node, exists := c.DAG.Nodes[uri]
+func (c *Changeset) UpdateDAG(nodeURI pkgmodel.FormaeURI, update Update) ([]Update, error) {
+	node, exists := c.DAG.Nodes[nodeURI]
 	if !exists {
-		return nil, fmt.Errorf("DAG node not found for URI: %s", uri)
+		return nil, fmt.Errorf("DAG node not found for URI: %s", nodeURI)
 	}
 
-	if update.State == resource_update.ResourceUpdateStateSuccess {
-		c.removeNode(node, uri)
+	if update.IsSuccess() {
+		c.removeNode(node, nodeURI)
 		return nil, nil
 	}
 
-	if update.State == resource_update.ResourceUpdateStateFailed || update.State == resource_update.ResourceUpdateStateRejected {
-		failedUpdates := c.failResourceUpdate(update)
+	if update.IsFailed() {
+		failedNodes := c.failDependents(node)
 
-		if len(failedUpdates) > 1 {
+		if len(failedNodes) > 0 {
 			slog.Debug("Cascading failure detected",
-				"originalFailure", update.DesiredState.Label,
-				"cascadingCount", len(failedUpdates)-1)
+				"originalFailure", update.NodeURI(),
+				"cascadingCount", len(failedNodes))
 		}
 
 		// Remove each cascading failed node from the DAG
-		for _, failedUpdate := range failedUpdates {
-			failedURI := createOperationURI(failedUpdate.URI(), failedUpdate.Operation)
-			if failedNode, exists := c.DAG.Nodes[failedURI]; exists {
-				c.removeNode(failedNode, failedURI)
-			}
+		for _, failedNode := range failedNodes {
+			c.removeNode(failedNode, failedNode.URI)
 		}
 
 		// Remove the original failed node
-		c.removeNode(node, uri)
+		c.removeNode(node, nodeURI)
 
+		// Collect the updates from the failed nodes for the caller
+		var failedUpdates []Update
+		for _, fn := range failedNodes {
+			failedUpdates = append(failedUpdates, fn.Update)
+		}
+		failedUpdates = append(failedUpdates, update)
 		return failedUpdates, nil
 	}
 
 	// Any other state reaching here is unexpected — treat as failure to
 	// prevent the changeset from getting permanently stuck.
-	slog.Warn("Unexpected resource update state in UpdateDAG, treating as failure",
-		"uri", update.URI(), "state", update.State)
-	update.State = resource_update.ResourceUpdateStateFailed
-	return c.UpdateDAG(update)
+	slog.Warn("Unexpected update state in UpdateDAG, treating as failure",
+		"uri", update.NodeURI())
+	update.MarkFailed()
+	return c.UpdateDAG(nodeURI, update)
 }
 
 func (c *Changeset) removeNode(node *DAGNode, uri pkgmodel.FormaeURI) {
@@ -374,36 +394,27 @@ func (c *Changeset) removeNode(node *DAGNode, uri pkgmodel.FormaeURI) {
 	delete(c.DAG.Nodes, uri)
 }
 
-func (c *Changeset) failResourceUpdate(update *resource_update.ResourceUpdate) []*resource_update.ResourceUpdate {
-	var failedUpdates []*resource_update.ResourceUpdate
+func (c *Changeset) failDependents(node *DAGNode) []*DAGNode {
+	var failedNodes []*DAGNode
 	visited := make(map[pkgmodel.FormaeURI]bool)
 
-	c.recursivelyFailDependencies(update, &failedUpdates, visited)
+	c.recursivelyFailDependents(node, &failedNodes, visited)
 
-	// Include original failed update
-	failedUpdates = append(failedUpdates, update)
-	return failedUpdates
+	return failedNodes
 }
 
-func (c *Changeset) recursivelyFailDependencies(failedUpdate *resource_update.ResourceUpdate, failedUpdates *[]*resource_update.ResourceUpdate, visited map[pkgmodel.FormaeURI]bool) {
-	uri := createOperationURI(failedUpdate.URI(), failedUpdate.Operation)
-
-	if visited[uri] {
+func (c *Changeset) recursivelyFailDependents(node *DAGNode, failedNodes *[]*DAGNode, visited map[pkgmodel.FormaeURI]bool) {
+	if visited[node.URI] {
 		return
 	}
-	visited[uri] = true
-
-	node, exists := c.DAG.Nodes[uri]
-	if !exists {
-		return
-	}
+	visited[node.URI] = true
 
 	for _, downstream := range node.Dependents {
-		if downstream.Update.State == resource_update.ResourceUpdateStateNotStarted {
-			downstream.Update.State = resource_update.ResourceUpdateStateFailed
-			*failedUpdates = append(*failedUpdates, downstream.Update)
+		if downstream.Update.IsReady() {
+			downstream.Update.MarkFailed()
+			*failedNodes = append(*failedNodes, downstream)
 
-			c.recursivelyFailDependencies(downstream.Update, failedUpdates, visited)
+			c.recursivelyFailDependents(downstream, failedNodes, visited)
 		}
 	}
 }
@@ -415,7 +426,6 @@ func (c *Changeset) PrintDAG() string {
 
 	for uri, node := range c.DAG.Nodes {
 		fmt.Fprintf(&result, "Node: %s\n", uri)
-		fmt.Fprintf(&result, "  Update: %s (%s)\n", node.Update.Operation, node.Update.State)
 
 		result.WriteString("  Dependencies:\n")
 		for _, dep := range node.Dependencies {
@@ -439,8 +449,7 @@ func (c *Changeset) IsComplete() bool {
 	}
 
 	for _, node := range c.DAG.Nodes {
-		if node.Update.State != resource_update.ResourceUpdateStateFailed &&
-			node.Update.State != resource_update.ResourceUpdateStateRejected {
+		if !node.Update.IsFailed() {
 			return false
 		}
 	}
@@ -448,6 +457,6 @@ func (c *Changeset) IsComplete() bool {
 	return true
 }
 
-func getResourceUpdateIdentifier(update *resource_update.ResourceUpdate) string {
-	return fmt.Sprintf("%s-%s", update.URI(), update.Operation)
+func getUpdateIdentifier(nodeURI pkgmodel.FormaeURI) string {
+	return string(nodeURI)
 }
