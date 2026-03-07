@@ -29,10 +29,10 @@ const (
 )
 
 // ChangesetExecutor is a state machine that processes a set of resource updates delivered by a forma. The changeset
-// organizes the updates into a datastructure called the Pipeline, which contains groups of updates that can be executed
+// organizes the updates into a datastructure called the DAG, which contains groups of updates that can be executed
 // in parallel. For each update, the executor will spawn a ResourceUpdater actor to handle the actual update and a
 // ResolveCache to cache resolvables during the lifetime of the changeset execution. The ResourceUpdater reports the
-// results back to the ChangesetExecutor, which updates the Pipeline and determines the next steps.
+// results back to the ChangesetExecutor, which updates the DAG and determines the next steps.
 // Note: multiple changeset executors can be running in parallel, as long as they don't touch the same resources.
 //
 // The state machine transitions are as follows:
@@ -118,7 +118,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
 	// Cleanup empty stacks after successful completion
 	if newState == StateFinishedSuccessfully {
-		// Use the stacks captured at start, since the pipeline is empty by now
+		// Use the stacks captured at start, since the DAG is empty by now
 		proc.Log().Debug("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
 			resourcePersisterPID := gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()}
@@ -189,8 +189,8 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 	data.changeset = message.Changeset
 	data.notifyOnComplete = message.NotifyOnComplete
 
-	// Capture stacks with delete operations NOW, before the pipeline is modified during execution
-	data.stacksWithDeletes = collectStacksWithDeletes(data.changeset.Pipeline)
+	// Capture stacks with delete operations NOW, before the DAG is modified during execution
+	data.stacksWithDeletes = collectStacksWithDeletes(data.changeset.DAG)
 
 	// Ensure the resolve cache is started
 	_, err := proc.Call(
@@ -272,7 +272,7 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	// Update the resource state and check if all in-progress resources are done
 	if state == StateCanceling {
 		// Find and update the finished resource
-		for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
+		for _, group := range data.changeset.DAG.Nodes {
 			for _, update := range group.Updates {
 				if update.URI() == message.Uri && update.State == resource_update.ResourceUpdateStateInProgress {
 					update.State = message.State
@@ -286,7 +286,7 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 
 		// Check if any resources are still in progress
 		inProgressCount := 0
-		for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
+		for _, group := range data.changeset.DAG.Nodes {
 			for _, update := range group.Updates {
 				if update.State == resource_update.ResourceUpdateStateInProgress {
 					inProgressCount++
@@ -312,7 +312,7 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	var finishedUpdate *resource_update.ResourceUpdate
 
 	// Look through all groups to find the update with matching URI and state
-	for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
+	for _, group := range data.changeset.DAG.Nodes {
 		for _, update := range group.Updates {
 			if update.URI() == message.Uri && update.State == resource_update.ResourceUpdateStateInProgress {
 				finishedUpdate = update
@@ -327,7 +327,7 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 	if finishedUpdate == nil {
 		// Warn only if the URI is still tracked anywhere else it's likely been popped
 		stillTracked := false
-		for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
+		for _, group := range data.changeset.DAG.Nodes {
 			for _, u := range group.Updates {
 				if u.URI() == message.Uri {
 					stillTracked = true
@@ -363,10 +363,10 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 		}
 	}
 
-	// Update pipeline and get next executable updates and any failed updates
-	cascadingFailures, err := data.changeset.UpdatePipeline(finishedUpdate)
+	// Update DAG and get next executable updates and any failed updates
+	cascadingFailures, err := data.changeset.UpdateDAG(finishedUpdate)
 	if err != nil {
-		proc.Log().Error("Failed to update pipeline", "error", err)
+		proc.Log().Error("Failed to update DAG", "error", err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -473,7 +473,7 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 	var resourcesToCancel []forma_persister.ResourceUpdateRef
 	var inProgressCount int
 
-	for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
+	for _, group := range data.changeset.DAG.Nodes {
 		for _, update := range group.Updates {
 			// Only cancel resources that haven't started yet (NotStarted state)
 			// Do NOT cancel InProgress resources to avoid orphaned cloud resources
@@ -532,7 +532,7 @@ func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdow
 // changesetHasUserUpdates checks if the changeset contains any updates from user operations.
 // Returns true if at least one update has Source == FormaCommandSourceUser.
 func changesetHasUserUpdates(changeset Changeset) bool {
-	for _, group := range changeset.Pipeline.ResourceUpdateGroups {
+	for _, group := range changeset.DAG.Nodes {
 		for _, update := range group.Updates {
 			if update.Source == resource_update.FormaCommandSourceUser {
 				return true
@@ -543,10 +543,10 @@ func changesetHasUserUpdates(changeset Changeset) bool {
 }
 
 // collectStacksWithDeletes returns a list of unique stack labels that had delete operations
-// in the pipeline, excluding the unmanaged stack.
-func collectStacksWithDeletes(pipeline *ResourceUpdatePipeline) []string {
+// in the DAG, excluding the unmanaged stack.
+func collectStacksWithDeletes(dag *ExecutionDAG) []string {
 	stackSet := make(map[string]struct{})
-	for _, group := range pipeline.ResourceUpdateGroups {
+	for _, group := range dag.Nodes {
 		for _, update := range group.Updates {
 			if update.Operation == resource_update.OperationDelete || update.Operation == resource_update.OperationReplace {
 				stackLabel := update.StackLabel

@@ -15,7 +15,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
+func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t *testing.T) {
 	var (
 		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
 		subnet1KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -91,7 +91,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-command-1", pkgmodel.CommandApply)
 	require.NoError(t, err)
 
-	// Print initial pipeline state
+	// Print initial DAG state
 
 	// Step 1: Get first executable updates - should be subnet-1 delete (has dependency)
 	require.Equal(t, map[string]int{"AWS": 1}, changeset.AvailableExecutableUpdates())
@@ -107,9 +107,9 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 
 	// Step 2: Complete subnet-1 delete
 	executableUpdates[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(executableUpdates[0])
+	_, err = changeset.UpdateDAG(executableUpdates[0])
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -124,9 +124,9 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 
 	// Step 3: Complete VPC delete
 	nextUpdates[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(nextUpdates[0])
+	_, err = changeset.UpdateDAG(nextUpdates[0])
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates2 := changeset.GetExecutableUpdates("AWS", 5)
@@ -141,9 +141,9 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 
 	// Step 4: Complete VPC create
 	nextUpdates2[0].State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(nextUpdates2[0])
+	_, err = changeset.UpdateDAG(nextUpdates2[0])
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates3 := changeset.GetExecutableUpdates("AWS", 5)
@@ -168,9 +168,9 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 	// Step 5: Complete both subnet creates
 	for _, update := range nextUpdates3 {
 		update.State = resource_update.ResourceUpdateStateSuccess
-		_, err := changeset.UpdatePipeline(update)
+		_, err := changeset.UpdateDAG(update)
 		if err != nil {
-			t.Fatalf("Error updating pipeline: %v", err)
+			t.Fatalf("Error updating DAG: %v", err)
 		}
 	}
 
@@ -180,7 +180,7 @@ func TestNewChangesetFromResourceUpdates_Replace_FullExecution(t *testing.T) {
 	}
 }
 
-func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
+func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t *testing.T) {
 	var (
 		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
 		vpc2KsuidURI    = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -310,9 +310,9 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 	}
 
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(subnet1Delete)
+	_, err = changeset.UpdateDAG(subnet1Delete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline after subnet-1 delete: %v", err)
+		t.Fatalf("Error updating DAG after subnet-1 delete: %v", err)
 	}
 
 	nextUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -332,7 +332,7 @@ func TestNewChangesetFromResourceUpdates_Replace2(t *testing.T) {
 	}
 }
 
-func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolvable_Not_In_Changeset(t *testing.T) {
+func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 	var (
 		vpc2KsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
 		vpcKsuidURI      = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -423,7 +423,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-command-1", pkgmodel.CommandApply)
 	assert.NoError(t, err)
 
-	// Print initial pipeline state for debugging
+	// Print initial DAG state for debugging
 
 	// Get initial executable updates
 	require.Equal(t, map[string]int{"AWS": 2}, changeset.AvailableExecutableUpdates())
@@ -468,9 +468,9 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	}
 
 	vpc2Create.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(vpc2Create)
+	_, err = changeset.UpdateDAG(vpc2Create)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	// Complete the delete chain to verify the create chain behavior
@@ -484,9 +484,9 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	}
 
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(subnet1Delete)
+	_, err = changeset.UpdateDAG(subnet1Delete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates2 := changeset.GetExecutableUpdates("AWS", 5)
@@ -498,9 +498,9 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 			foundVpcDelete = true
 			// Complete vpc delete
 			update.State = resource_update.ResourceUpdateStateSuccess
-			_, err := changeset.UpdatePipeline(update)
+			_, err := changeset.UpdateDAG(update)
 			if err != nil {
-				t.Fatalf("Error updating pipeline: %v", err)
+				t.Fatalf("Error updating DAG: %v", err)
 			}
 
 			// After vpc delete, should have vpc create
@@ -526,7 +526,7 @@ func TestNewChangesetFromResourceUpdates_Replace3_With_RootNode_Contains_Resolva
 	}
 }
 
-func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
+func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t *testing.T) {
 	var (
 		vpc2KsuidURI    = pkgmodel.NewFormaeURI(util.NewID(), "")
 		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -662,9 +662,9 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	}
 
 	vpc2Create.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(vpc2Create)
+	_, err = changeset.UpdateDAG(vpc2Create)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	// Step 2: Complete test-subnet-1 delete
@@ -677,9 +677,9 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	}
 
 	subnet1Delete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(subnet1Delete)
+	_, err = changeset.UpdateDAG(subnet1Delete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	nextUpdates2 := changeset.GetExecutableUpdates("AWS", 5)
@@ -699,9 +699,9 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	}
 
 	vpcDelete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(vpcDelete)
+	_, err = changeset.UpdateDAG(vpcDelete)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 		return
 	}
 
@@ -722,9 +722,9 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	}
 
 	vpcCreate.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(vpcCreate)
+	_, err = changeset.UpdateDAG(vpcCreate)
 	if err != nil {
-		t.Fatalf("Error updating pipeline: %v", err)
+		t.Fatalf("Error updating DAG: %v", err)
 	}
 
 	finalUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -746,7 +746,7 @@ func TestNewChangesetFromResourceUpdates_Replace4(t *testing.T) {
 	}
 }
 
-func TestNewChangesetFromResourceUpdates_Different_Types_Same_Label(t *testing.T) {
+func TestChangeset_Init_DifferentTypesSameLabelNoFalseReplace(t *testing.T) {
 	var (
 		vpcKsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
 		subnetKsuid = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -781,7 +781,7 @@ func TestNewChangesetFromResourceUpdates_Different_Types_Same_Label(t *testing.T
 	changeset, err := NewChangesetFromResourceUpdates(resourceUpdateInitial, "test-command-1", pkgmodel.CommandApply)
 	assert.NoError(t, err)
 
-	executables := changeset.getExecutableUpdates()
+	executables := changeset.GetExecutableUpdates("AWS", 100)
 	assert.Len(t, executables, 2, "Expected 2 initial executable updates (independent operations)")
 
 	// Find the delete and create operations
@@ -801,12 +801,12 @@ func TestNewChangesetFromResourceUpdates_Different_Types_Same_Label(t *testing.T
 
 	// Complete delete op
 	subnetDelete.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(subnetDelete)
+	_, err = changeset.UpdateDAG(subnetDelete)
 	assert.NoError(t, err)
 
 	// Complete create op
 	vpcCreate.State = resource_update.ResourceUpdateStateSuccess
-	_, err = changeset.UpdatePipeline(vpcCreate)
+	_, err = changeset.UpdateDAG(vpcCreate)
 	assert.NoError(t, err)
 
 	noUpdates := changeset.GetExecutableUpdates("AWS", 5)
@@ -814,7 +814,7 @@ func TestNewChangesetFromResourceUpdates_Different_Types_Same_Label(t *testing.T
 	assert.True(t, changeset.IsComplete())
 }
 
-func TestNewChangesetFromResourceUpdates_Destroy(t *testing.T) {
+func TestChangeset_ExecutionOrder_DeleteChainReversesCreateDependencies(t *testing.T) {
 	var (
 		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
 		subnet1KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -851,11 +851,11 @@ func TestNewChangesetFromResourceUpdates_Destroy(t *testing.T) {
 	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-command-1", pkgmodel.CommandApply)
 	assert.NoError(t, err)
 
-	executables := changeset.getExecutableUpdates()
+	executables := changeset.GetExecutableUpdates("AWS", 100)
 	assert.NotNil(t, executables)
 }
 
-func TestChangeset_RecursiveFailureCascading(t *testing.T) {
+func TestChangeset_FailureCascade_TransitiveDependentsAllFail(t *testing.T) {
 	var (
 		vpcKsuidURI   = pkgmodel.NewFormaeURI(util.NewID(), "")
 		subnetKsuid   = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -918,7 +918,7 @@ func TestChangeset_RecursiveFailureCascading(t *testing.T) {
 	assert.Len(t, failedLabels, 3) // vpc, subnet, instance
 }
 
-func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
+func TestChangeset_UpdateDAG_FailureCascadeRemovesNodes(t *testing.T) {
 	var (
 		vpcKsuidURI   = pkgmodel.NewFormaeURI(util.NewID(), "")
 		subnetKsuid   = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -961,18 +961,18 @@ func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
 
 	changeset, err := NewChangesetFromResourceUpdates(
 		[]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate, instanceUpdate},
-		"test-update-pipeline-cascade",
+		"test-update-DAG-cascade",
 		pkgmodel.CommandApply,
 	)
 	require.NoError(t, err)
 
 	// Verify initial state: 3 groups
-	assert.Len(t, changeset.Pipeline.ResourceUpdateGroups, 3)
+	assert.Len(t, changeset.DAG.Nodes, 3)
 	assert.False(t, changeset.IsComplete())
 
-	// Mark VPC as failed and call UpdatePipeline
+	// Mark VPC as failed and call UpdateDAG
 	vpcUpdate.State = resource_update.ResourceUpdateStateFailed
-	failedUpdates, err := changeset.UpdatePipeline(&vpcUpdate)
+	failedUpdates, err := changeset.UpdateDAG(&vpcUpdate)
 	require.NoError(t, err)
 
 	// Verify cascading failures were detected
@@ -985,8 +985,8 @@ func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
 			"Resource %s should be marked as Failed", update.DesiredState.Label)
 	}
 
-	// Verify empty groups were removed from pipeline
-	assert.Len(t, changeset.Pipeline.ResourceUpdateGroups, 0,
+	// Verify empty groups were removed from DAG
+	assert.Len(t, changeset.DAG.Nodes, 0,
 		"All groups should be removed after cascading failures")
 
 	// Verify changeset is now complete
@@ -994,7 +994,7 @@ func TestChangeset_UpdatePipeline_FailedResourceCascading(t *testing.T) {
 		"Changeset should be complete when all resources are failed")
 }
 
-func TestChangeset_GetExecutableUpdatesUpUntilN(t *testing.T) {
+func TestChangeset_GetExecutableUpdates_FiltersByNamespace(t *testing.T) {
 	var (
 		bucket1KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
 		bucket2KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -1063,7 +1063,7 @@ func TestChangeset_GetExecutableUpdatesUpUntilN(t *testing.T) {
 	assert.Len(t, res, 1)
 }
 
-func TestChangeset_FormaWithCycle(t *testing.T) {
+func TestChangeset_Init_CyclicDependenciesReturnError(t *testing.T) {
 	var (
 		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
 		subnet1KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
@@ -1105,4 +1105,263 @@ func TestChangeset_FormaWithCycle(t *testing.T) {
 	)
 
 	assert.Error(t, err)
+}
+
+func TestChangeset_GetExecutableUpdates_RespectsMaxLimit(t *testing.T) {
+	bucket1URI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	bucket2URI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	bucket3URI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket-1", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: bucket1URI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket-2", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: bucket2URI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket-3", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: bucket3URI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := NewChangesetFromResourceUpdates(updates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	result := cs.GetExecutableUpdates("AWS", 1)
+	assert.Len(t, result, 1, "max=1 should return at most 1 update")
+
+	available := cs.AvailableExecutableUpdates()
+	assert.Equal(t, 2, available["AWS"])
+}
+
+func TestChangeset_UpdateDAG_RejectedUpdateCascadesToDependents(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	subnetURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "vpc", Type: "AWS::EC2::VPC", Stack: "s", Ksuid: vpcURI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Label: "subnet", Type: "AWS::EC2::Subnet", Stack: "s", Ksuid: subnetURI.KSUID()},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "s",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
+		},
+	}
+
+	cs, err := NewChangesetFromResourceUpdates(updates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	exec := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec, 1)
+	assert.Equal(t, "vpc", exec[0].DesiredState.Label)
+
+	exec[0].State = resource_update.ResourceUpdateStateRejected
+	cascaded, err := cs.UpdateDAG(exec[0])
+	require.NoError(t, err)
+
+	assert.Len(t, cascaded, 2)
+	assert.True(t, cs.IsComplete())
+}
+
+func TestChangeset_IsComplete_InProgressIsNotComplete(t *testing.T) {
+	bucketURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: bucketURI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := NewChangesetFromResourceUpdates(updates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	exec := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec, 1)
+
+	assert.False(t, cs.IsComplete(), "changeset with in-progress update should not be complete")
+}
+
+func TestChangeset_IsComplete_EmptyChangesetIsComplete(t *testing.T) {
+	cs, err := NewChangesetFromResourceUpdates(nil, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	assert.True(t, cs.IsComplete(), "empty changeset should be complete")
+}
+
+func TestChangeset_ExecutionOrder_DestroyChainCompletesInReverseOrder(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	subnetURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "vpc", Type: "AWS::EC2::VPC", Stack: "s", Ksuid: vpcURI.KSUID()},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Label: "subnet", Type: "AWS::EC2::Subnet", Stack: "s", Ksuid: subnetURI.KSUID()},
+			Operation:            resource_update.OperationDelete,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "s",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
+		},
+	}
+
+	cs, err := NewChangesetFromResourceUpdates(updates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Subnet delete first (reversed dependency order)
+	exec := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec, 1)
+	assert.Equal(t, "subnet", exec[0].DesiredState.Label)
+
+	exec[0].State = resource_update.ResourceUpdateStateSuccess
+	_, err = cs.UpdateDAG(exec[0])
+	require.NoError(t, err)
+
+	// VPC delete now unblocked
+	exec2 := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec2, 1)
+	assert.Equal(t, "vpc", exec2[0].DesiredState.Label)
+
+	exec2[0].State = resource_update.ResourceUpdateStateSuccess
+	_, err = cs.UpdateDAG(exec2[0])
+	require.NoError(t, err)
+
+	assert.True(t, cs.IsComplete())
+}
+
+func TestChangeset_ExecutionOrder_UpdateOperationRespectsDependencies(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	subnetURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "vpc", Type: "AWS::EC2::VPC", Stack: "s", Ksuid: vpcURI.KSUID()},
+			Operation:    resource_update.OperationUpdate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Label: "subnet", Type: "AWS::EC2::Subnet", Stack: "s", Ksuid: subnetURI.KSUID()},
+			Operation:            resource_update.OperationUpdate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "s",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
+		},
+	}
+
+	cs, err := NewChangesetFromResourceUpdates(updates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// VPC update should be first (subnet depends on it)
+	exec := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec, 1)
+	assert.Equal(t, "vpc", exec[0].DesiredState.Label)
+	assert.Equal(t, resource_update.OperationUpdate, exec[0].Operation)
+
+	exec[0].State = resource_update.ResourceUpdateStateSuccess
+	_, err = cs.UpdateDAG(exec[0])
+	require.NoError(t, err)
+
+	// Subnet update now unblocked
+	exec2 := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec2, 1)
+	assert.Equal(t, "subnet", exec2[0].DesiredState.Label)
+	assert.Equal(t, resource_update.OperationUpdate, exec2[0].Operation)
+
+	exec2[0].State = resource_update.ResourceUpdateStateSuccess
+	_, err = cs.UpdateDAG(exec2[0])
+	require.NoError(t, err)
+
+	assert.True(t, cs.IsComplete())
+}
+
+func TestChangeset_AvailableExecutableUpdates_SkipsInProgressNodes(t *testing.T) {
+	bucket1URI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	bucket2URI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket-1", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: bucket1URI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket-2", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: bucket2URI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := NewChangesetFromResourceUpdates(updates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Start one update (moves to InProgress)
+	exec := cs.GetExecutableUpdates("AWS", 1)
+	require.Len(t, exec, 1)
+
+	// Only the other bucket should now be available
+	available := cs.AvailableExecutableUpdates()
+	assert.Equal(t, 1, available["AWS"])
+}
+
+func TestChangeset_Init_ReplaceOperationSplitsIntoDeleteAndCreateNodes(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "vpc", Type: "AWS::EC2::VPC", Stack: "s", Ksuid: vpcURI.KSUID()},
+			Operation:    resource_update.OperationReplace,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := NewChangesetFromResourceUpdates(updates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Replace should produce 2 DAG nodes: one delete, one create
+	assert.Len(t, cs.DAG.Nodes, 2)
+
+	// Delete should execute first
+	exec := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec, 1)
+	assert.Equal(t, resource_update.OperationDelete, exec[0].Operation)
+
+	exec[0].State = resource_update.ResourceUpdateStateSuccess
+	_, err = cs.UpdateDAG(exec[0])
+	require.NoError(t, err)
+
+	// Then create
+	exec2 := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, exec2, 1)
+	assert.Equal(t, resource_update.OperationCreate, exec2[0].Operation)
+
+	exec2[0].State = resource_update.ResourceUpdateStateSuccess
+	_, err = cs.UpdateDAG(exec2[0])
+	require.NoError(t, err)
+
+	assert.True(t, cs.IsComplete())
 }
