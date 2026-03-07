@@ -388,7 +388,10 @@ func (c *Changeset) UpdateDAG(nodeURI pkgmodel.FormaeURI, update Update) ([]Upda
 }
 
 func (c *Changeset) removeNode(node *DAGNode, uri pkgmodel.FormaeURI) {
-	for _, dependent := range node.Dependents {
+	// Copy the slice — Unlink modifies node.Dependents during iteration.
+	dependents := make([]*DAGNode, len(node.Dependents))
+	copy(dependents, node.Dependents)
+	for _, dependent := range dependents {
 		dependent.Unlink(node)
 	}
 	delete(c.DAG.Nodes, uri)

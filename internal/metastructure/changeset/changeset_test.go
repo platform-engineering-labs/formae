@@ -203,6 +203,103 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 	}
 }
 
+func TestChangeset_RemoveNode_UnlinksAllDependentsWhenThreeOrMore(t *testing.T) {
+	// Regression test: removeNode must unlink ALL dependents, not just some.
+	// With 3+ dependents, iterating node.Dependents while Unlink modifies
+	// the same slice causes elements to be skipped (Go range captures the
+	// backing array pointer but Unlink shifts elements via append).
+	var (
+		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
+		subnet1KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
+		subnet2KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
+		subnet3KsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
+	)
+
+	// VPC create with 3 dependent subnet creates
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "vpc",
+				Type:  "AWS::EC2::VPC",
+				Stack: "test-stack",
+				Ksuid: vpcKsuidURI.KSUID(),
+			},
+			Operation:  resource_update.OperationCreate,
+			State:      resource_update.ResourceUpdateStateNotStarted,
+			StackLabel: "test-stack",
+		},
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "subnet-1",
+				Type:  "AWS::EC2::Subnet",
+				Stack: "test-stack",
+				Ksuid: subnet1KsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
+		},
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "subnet-2",
+				Type:  "AWS::EC2::Subnet",
+				Stack: "test-stack",
+				Ksuid: subnet2KsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
+		},
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "subnet-3",
+				Type:  "AWS::EC2::Subnet",
+				Stack: "test-stack",
+				Ksuid: subnet3KsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
+		},
+	}
+
+	changeset, err := NewChangesetFromResourceUpdates(resourceUpdates, "test-unlink-all", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Step 1: Only VPC should be executable (no dependencies)
+	executable := changeset.GetExecutableUpdates("AWS", 10)
+	require.Len(t, executable, 1)
+	vpcRU := asResourceUpdate(t, executable[0])
+	assert.Equal(t, "vpc", vpcRU.DesiredState.Label)
+
+	// Step 2: Complete VPC — all 3 subnets must become executable
+	vpcRU.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, changeset, vpcRU)
+	require.NoError(t, err)
+
+	executable2 := changeset.GetExecutableUpdates("AWS", 10)
+	require.Len(t, executable2, 3, "all 3 subnets should be executable after VPC completes")
+
+	labels := make([]string, 0, 3)
+	for _, u := range executable2 {
+		labels = append(labels, asResourceUpdate(t, u).DesiredState.Label)
+	}
+	assert.ElementsMatch(t, []string{"subnet-1", "subnet-2", "subnet-3"}, labels)
+
+	// Step 3: Complete all subnets
+	for _, u := range executable2 {
+		ru := asResourceUpdate(t, u)
+		ru.State = resource_update.ResourceUpdateStateSuccess
+		_, err := updateDAGHelper(t, changeset, ru)
+		require.NoError(t, err)
+	}
+
+	assert.True(t, changeset.IsComplete())
+}
+
 func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t *testing.T) {
 	var (
 		vpcKsuidURI     = pkgmodel.NewFormaeURI(util.NewID(), "")
