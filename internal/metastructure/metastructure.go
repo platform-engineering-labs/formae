@@ -291,8 +291,8 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 
 	// Create changeset early to catch validation errors before simulate
 	var cs changeset.Changeset
-	if len(fa.ResourceUpdates) > 0 {
-		cs, err = changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, fa.Command)
+	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
+		cs, err = changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, fa.Command)
 		if err != nil {
 			return nil, err
 		}
@@ -359,33 +359,6 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	if err != nil {
 		slog.Error("Failed to store forma command", "error", err)
 		return nil, fmt.Errorf("failed to store forma command: %w", err)
-	}
-
-	if len(fa.TargetUpdates) > 0 {
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
-			target_update.PersistTargetUpdates{
-				TargetUpdates: fa.TargetUpdates,
-				CommandID:     fa.ID,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to persist target updates", "error", err)
-			return nil, fmt.Errorf("failed to persist target updates: %w", err)
-		}
-		m.Node.Log().Debug("Successfully persisted target updates", "count", len(fa.TargetUpdates))
-
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-			messages.UpdateTargetStates{
-				CommandID:     fa.ID,
-				TargetUpdates: fa.TargetUpdates,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to update forma command with target states", "error", err)
-			return nil, fmt.Errorf("failed to update forma command with target states: %w", err)
-		}
 	}
 
 	if len(fa.StackUpdates) > 0 {
@@ -464,7 +437,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
-	if len(fa.ResourceUpdates) > 0 {
+	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
@@ -484,8 +457,6 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			slog.Error("Failed to start ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
 			return nil, fmt.Errorf("failed to start ChangesetExecutor: %w", err)
 		}
-	} else {
-		m.Node.Log().Debug("No resource updates, skipping ChangesetExecutor (target-only forma)", "commandID", fa.ID)
 	}
 
 	return &apimodel.SubmitCommandResponse{
@@ -664,33 +635,6 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		return nil, fmt.Errorf("failed to store forma command: %w", err)
 	}
 
-	if len(fa.TargetUpdates) > 0 {
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
-			target_update.PersistTargetUpdates{
-				TargetUpdates: fa.TargetUpdates,
-				CommandID:     fa.ID,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to persist target updates", "error", err)
-			return nil, fmt.Errorf("failed to persist target updates: %w", err)
-		}
-		m.Node.Log().Debug("Successfully persisted target updates", "count", len(fa.TargetUpdates))
-
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-			messages.UpdateTargetStates{
-				CommandID:     fa.ID,
-				TargetUpdates: fa.TargetUpdates,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to update forma command with target states", "error", err)
-			return nil, fmt.Errorf("failed to update forma command with target states: %w", err)
-		}
-	}
-
 	if len(fa.PolicyUpdates) > 0 {
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
@@ -719,8 +663,8 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
-	if len(fa.ResourceUpdates) > 0 {
-		cs, err := changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, pkgmodel.CommandDestroy)
+	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
+		cs, err := changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, pkgmodel.CommandDestroy)
 		if err != nil {
 			return nil, err
 		}
@@ -744,8 +688,6 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			slog.Error("Failed to start ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
 			return nil, fmt.Errorf("failed to start ChangesetExecutor: %w", err)
 		}
-	} else {
-		m.Node.Log().Debug("No resource updates, skipping ChangesetExecutor (target-only destroy)", "commandID", fa.ID)
 	}
 
 	return &apimodel.SubmitCommandResponse{
@@ -1201,38 +1143,8 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			}
 		}
 
-		if len(pendingTargetUpdates) > 0 {
-			_, err = m.callActor(
-				gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
-				target_update.PersistTargetUpdates{
-					TargetUpdates: pendingTargetUpdates,
-					CommandID:     fa.ID,
-				},
-			)
-			if err != nil {
-				slog.Error("Failed to recover target updates for incomplete forma command", "commandID", fa.ID, "error", err)
-				// Continue with other commands even if this one fails
-				continue
-			}
-			m.Node.Log().Debug("Successfully recovered target updates", "commandID", fa.ID, "count", len(pendingTargetUpdates))
-
-			// Update the forma command with the recovered target states
-			_, err = m.callActor(
-				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-				messages.UpdateTargetStates{
-					CommandID:     fa.ID,
-					TargetUpdates: pendingTargetUpdates,
-				},
-			)
-			if err != nil {
-				slog.Error("Failed to update forma command with recovered target states", "commandID", fa.ID, "error", err)
-				// Continue with other commands even if this one fails
-				continue
-			}
-		}
-
 		// This changeset was validated upon the initial apply so we can safely ignore the error.
-		cs, _ := changeset.NewChangesetFromResourceUpdates(fa.ResourceUpdates, fa.ID, pkgmodel.CommandApply)
+		cs, _ := changeset.NewChangeset(fa.ResourceUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply)
 
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command", "commandID", fa.ID)
 		_, err = m.callActor(

@@ -16,7 +16,9 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 const (
@@ -105,12 +107,15 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateEnterCallback(onStateChange),
 		statemachine.WithStateMessageHandler(StateNotStarted, start),
 		statemachine.WithStateMessageHandler(StateProcessing, resourceUpdateFinished),
+		statemachine.WithStateMessageHandler(StateProcessing, targetUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
 		statemachine.WithStateMessageHandler(StateProcessing, cancel),
 		statemachine.WithStateMessageHandler(StateCanceling, resourceUpdateFinished),
+		statemachine.WithStateMessageHandler(StateCanceling, targetUpdateFinished),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
 		statemachine.WithStateMessageHandler(StateCanceled, resourceUpdateFinished), // Ignore late messages from ResourceUpdaters
+		statemachine.WithStateMessageHandler(StateCanceled, targetUpdateFinished),   // Ignore late messages from TargetUpdaters
 		statemachine.WithStateMessageHandler(StateCanceled, shutdown),
 	), nil
 }
@@ -241,9 +246,9 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 			finished = false
 		}
 		updates := data.changeset.GetExecutableUpdates(namespace, n)
-		err = startResourceUpdates(updates, data.changeset.CommandID, proc)
+		err = startUpdates(updates, data.changeset.CommandID, proc)
 		if err != nil {
-			proc.Log().Error("Failed to start executable resource updates for changeset", "commandID", data.changeset.CommandID, "error", err)
+			proc.Log().Error("Failed to start executable updates for changeset", "commandID", data.changeset.CommandID, "error", err)
 			return StateFinishedWithError, data, nil, nil
 		}
 	}
@@ -261,30 +266,85 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 	return StateProcessing, data, actions, nil
 }
 
+// updateFinishedEvent normalizes the incoming completion message from either
+// a ResourceUpdater or TargetUpdater into a common shape for handleUpdateFinished.
+type updateFinishedEvent struct {
+	nodeURI   pkgmodel.FormaeURI // URI to look up in the DAG
+	isSuccess bool
+}
+
 func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message resource_update.ResourceUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
-	// If we're in canceled state, ignore late resource update messages
+	// Build the DAG key — resources use operation-qualified URIs
+	ru := findRunningUpdate[*resource_update.ResourceUpdate](data, message.Uri)
+
+	// Unregister non-sync resources from the Synchronizer before the shared handler
+	// so the resource can be included in sync operations again.
+	if ru != nil && ru.Source != resource_update.FormaCommandSourceSynchronize {
+		synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+		err := proc.Send(synchronizerPID, messages.UnregisterInProgressResource{
+			ResourceURI: string(ru.URI()),
+		})
+		if err != nil {
+			proc.Log().Error("Failed to unregister in-progress resource from synchronizer", "error", err, "resourceURI", ru.URI())
+		}
+	}
+
+	var dagKey pkgmodel.FormaeURI
+	if ru != nil {
+		dagKey = createOperationURI(ru.URI(), ru.Operation)
+	}
+
+	return handleUpdateFinished(from, state, data, updateFinishedEvent{
+		nodeURI:   dagKey,
+		isSuccess: message.State == resource_update.ResourceUpdateStateSuccess,
+	}, proc)
+}
+
+func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message target_update.TargetUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	return handleUpdateFinished(from, state, data, updateFinishedEvent{
+		nodeURI:   message.NodeURI,
+		isSuccess: message.State == target_update.TargetUpdateStateSuccess,
+	}, proc)
+}
+
+// findRunningUpdate searches the DAG for a running update matching messageURI and returns
+// it cast to T, or nil if not found.
+func findRunningUpdate[T Update](data ChangesetData, messageURI pkgmodel.FormaeURI) T {
+	var zero T
+	for _, node := range data.changeset.DAG.Nodes {
+		if node.Update.NodeURI() == messageURI && node.Update.IsRunning() {
+			if typed, ok := node.Update.(T); ok {
+				return typed
+			}
+		}
+	}
+	return zero
+}
+
+func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, event updateFinishedEvent, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	// If we're in canceled state, ignore late messages
 	if state == StateCanceled {
-		proc.Log().Debug("Ignoring ResourceUpdateFinished in canceled state", "uri", message.Uri)
+		proc.Log().Debug("Ignoring update finished in canceled state", "nodeURI", event.nodeURI)
 		return state, data, nil, nil
 	}
 
-	// If we're in canceling state, we're waiting for in-progress resources to finish
-	// Update the resource state and check if all in-progress resources are done
+	// If we're in canceling state, update the node and check if all in-progress are done
 	if state == StateCanceling {
-		// Find and update the finished resource
 		for _, node := range data.changeset.DAG.Nodes {
-			if node.Update.NodeURI() == message.Uri && node.Update.IsRunning() {
-				if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
-					ru.State = message.State
+			if node.Update.NodeURI() == event.nodeURI && node.Update.IsRunning() {
+				if event.isSuccess {
+					// Mark via the Update interface — no type-specific knowledge needed
+					// (success isn't on the interface, but we can leave it running;
+					// the canceling path only needs to drain, not report)
+				} else {
+					node.Update.MarkFailed()
 				}
-				proc.Log().Debug("In-progress resource finished during cancellation",
-					"uri", message.Uri,
-					"finalState", message.State)
+				proc.Log().Debug("In-progress update finished during cancellation",
+					"nodeURI", event.nodeURI, "success", event.isSuccess)
 				break
 			}
 		}
 
-		// Check if any resources are still in progress
 		inProgressCount := 0
 		for _, node := range data.changeset.DAG.Nodes {
 			if node.IsRunning() {
@@ -292,107 +352,69 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 			}
 		}
 
-		// If no more in-progress resources, transition to Canceled
 		if inProgressCount == 0 {
-			proc.Log().Debug("All in-progress resources completed, transitioning to Canceled",
+			proc.Log().Debug("All in-progress updates completed, transitioning to Canceled",
 				"commandID", data.changeset.CommandID)
 			return StateCanceled, data, nil, nil
 		}
 
-		// Still waiting for more resources to finish
-		proc.Log().Debug("Still waiting for in-progress resources during cancellation",
-			"commandID", data.changeset.CommandID,
-			"remainingCount", inProgressCount)
+		proc.Log().Debug("Still waiting for in-progress updates during cancellation",
+			"commandID", data.changeset.CommandID, "remainingCount", inProgressCount)
 		return state, data, nil, nil
 	}
 
-	// Find the resource update that finished
-	var finishedUpdate *resource_update.ResourceUpdate
-
-	// Look through all nodes to find the update with matching URI and state
-	for _, node := range data.changeset.DAG.Nodes {
-		if node.Update.NodeURI() == message.Uri && node.Update.IsRunning() {
-			if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
-				finishedUpdate = ru
-			}
-			break
-		}
-	}
-
-	if finishedUpdate == nil {
-		// Warn only if the URI is still tracked anywhere else it's likely been completed
-		stillTracked := false
-		for _, node := range data.changeset.DAG.Nodes {
-			if node.Update.NodeURI() == message.Uri {
-				stillTracked = true
-				break
-			}
-		}
-		if stillTracked {
-			proc.Log().Warning("Could not find finished resource update", "uri", message.Uri)
-		} else {
-			proc.Log().Debug("Finished resource update not found in active set (likely already popped)", "uri", message.Uri)
-		}
-
+	// Find the finished node in the DAG
+	node, exists := data.changeset.DAG.Nodes[event.nodeURI]
+	if !exists || !node.Update.IsRunning() {
+		proc.Log().Debug("Update finished but not found in active DAG (likely already completed)", "nodeURI", event.nodeURI)
 		return state, data, nil, nil
 	}
 
-	// Update the state
-	finishedUpdate.State = message.State
-
-	// Unregister non-sync resources from the Synchronizer
-	// Now that the operation is complete, the resource can be included in sync operations again
-	if finishedUpdate.Source != resource_update.FormaCommandSourceSynchronize {
-		synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
-		err := proc.Send(synchronizerPID, messages.UnregisterInProgressResource{
-			ResourceURI: string(finishedUpdate.URI()),
-		})
-		if err != nil {
-			proc.Log().Error("Failed to unregister in-progress resource from synchronizer", "error", err, "resourceURI", finishedUpdate.URI())
-			// Don't return error - this is not critical enough to fail the operation
+	// Update the state on the underlying Update
+	if event.isSuccess {
+		// Success is tracked by the specific Update type; we set it via type switch
+		// because the Update interface only has MarkFailed/MarkInProgress.
+		switch u := node.Update.(type) {
+		case *resource_update.ResourceUpdate:
+			u.State = resource_update.ResourceUpdateStateSuccess
+		case *target_update.TargetUpdate:
+			u.State = target_update.TargetUpdateStateSuccess
 		}
+	} else {
+		node.Update.MarkFailed()
 	}
 
-	// Update DAG and get next executable updates and any failed updates
-	nodeURI := createOperationURI(finishedUpdate.URI(), finishedUpdate.Operation)
-	cascadingFailures, err := data.changeset.UpdateDAG(nodeURI, finishedUpdate)
+	// Update DAG and get any cascading failures
+	cascadingFailures, err := data.changeset.UpdateDAG(event.nodeURI, node.Update)
 	if err != nil {
-		proc.Log().Error("Failed to update DAG", "error", err)
+		proc.Log().Error("Failed to update DAG", "error", err, "nodeURI", event.nodeURI)
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	// If we have cascading failures, we need to inform the forma command persister to mark those resource updates
-	// as failed. For non-cascading failures the resource updater would already have taken care of this but as
-	// we never spawn a resource updater for these dependent updates, we need to handle it here.
+	// Persist cascading resource failures via FormaCommandPersister.
+	// Only resource updates need persister notification — target updates are local
+	// datastore operations that were never started.
 	if len(cascadingFailures) > 0 {
-		proc.Log().Warning("Cascading failures detected: %d failures for command %s", len(cascadingFailures), data.changeset.CommandID)
+		proc.Log().Warning("Cascading failures detected: %d for command %s", len(cascadingFailures), data.changeset.CommandID)
 
-		// Extract resource refs (URI + operation) for bulk update
-		// Skip the original failure since it was already marked by ResourceUpdater via MarkResourceUpdateAsComplete
 		var failedResources []forma_persister.ResourceUpdateRef
 		for _, failedUpdate := range cascadingFailures {
 			ru, ok := failedUpdate.(*resource_update.ResourceUpdate)
 			if !ok {
-				continue // skip non-resource updates (future: handle target updates)
+				continue
 			}
-			// Skip the original failure - it's already handled by the ResourceUpdater
-			if ru.URI() == finishedUpdate.URI() && ru.Operation == finishedUpdate.Operation {
-				proc.Log().Debug("Skipping original failure (already marked by ResourceUpdater)",
-					"uri", ru.URI(),
-					"operation", ru.Operation)
+			// Skip the original failure — its updater actor already persisted it.
+			if failedUpdate.NodeURI() == event.nodeURI {
 				continue
 			}
 			proc.Log().Debug("Resource marked as failed due to cascade",
-				"uri", ru.URI(),
-				"operation", ru.Operation,
-				"originalFailure", message.Uri)
+				"uri", ru.URI(), "operation", ru.Operation, "originalFailure", event.nodeURI)
 			failedResources = append(failedResources, forma_persister.ResourceUpdateRef{
 				URI:       ru.URI(),
 				Operation: ru.Operation,
 			})
 		}
 
-		// Only send bulk update if there are actual cascading failures (not just the original)
 		if len(failedResources) > 0 {
 			_, err = proc.Call(
 				gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
@@ -407,61 +429,102 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 		}
 	}
 
-	// Check if the changeset execution is complete
-	// The command state and sensitive data hashing are handled automatically by FormaCommandPersister
-	// when individual resources complete via markResourceUpdateAsComplete or bulk updates
 	if data.changeset.IsComplete() {
 		proc.Log().Debug("Changeset execution finished for command", "commandID", data.changeset.CommandID)
 		return StateFinishedSuccessfully, data, nil, nil
 	}
 
-	// Try to start the next batch of resource updates that can be executed in parallel
 	return resume(from, state, data, Resume{}, proc)
 }
 
-func startResourceUpdates(updates []Update, commandID string, proc gen.Process) error {
+func startUpdates(updates []Update, commandID string, proc gen.Process) error {
 	for _, update := range updates {
-		ru, ok := update.(*resource_update.ResourceUpdate)
-		if !ok {
-			proc.Log().Error("Unexpected update type in startResourceUpdates", "uri", update.NodeURI())
-			continue
-		}
-
-		proc.Log().Debug("Starting resource updater", "uri", ru.URI(), "operation", ru.Operation)
-
-		// Register non-sync resources as in-progress with the Synchronizer
-		// to prevent race conditions where sync might include resources being updated by user operations
-		if ru.Source != resource_update.FormaCommandSourceSynchronize {
-			synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
-			err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
-				ResourceURI: string(ru.URI()),
-			})
-			if err != nil {
-				proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", ru.URI())
-				// Don't return error - this is not critical enough to fail the operation
+		switch u := update.(type) {
+		case *resource_update.ResourceUpdate:
+			if err := startResourceUpdate(u, commandID, proc); err != nil {
+				return err
 			}
+		case *target_update.TargetUpdate:
+			if err := startTargetUpdate(u, commandID, proc); err != nil {
+				return err
+			}
+		default:
+			proc.Log().Error("Unknown update type in startUpdates", "uri", update.NodeURI())
 		}
+	}
 
-		_, err := proc.Call(gen.ProcessID{Name: actornames.ResourceUpdaterSupervisor, Node: proc.Node().Name()},
-			resource_update.EnsureResourceUpdater{
-				ResourceURI: ru.URI(),
-				Operation:   string(ru.Operation),
-				CommandID:   commandID,
-			})
-		if err != nil {
-			proc.Log().Error("Failed to ensure resource updater", "error", err)
-			return err
-		}
+	return nil
+}
 
-		err = proc.Send(gen.ProcessID{Name: actornames.ResourceUpdater(ru.URI(), string(ru.Operation), commandID), Node: proc.Node().Name()},
-			resource_update.StartResourceUpdate{
-				ResourceUpdate: *ru,
-				CommandID:      commandID,
-			})
+func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, proc gen.Process) error {
+	proc.Log().Debug("Starting resource updater", "uri", ru.URI(), "operation", ru.Operation)
+
+	// Register non-sync resources as in-progress with the Synchronizer
+	// to prevent race conditions where sync might include resources being updated by user operations
+	if ru.Source != resource_update.FormaCommandSourceSynchronize {
+		synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+		err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
+			ResourceURI: string(ru.URI()),
+		})
 		if err != nil {
-			proc.Log().Error("Failed to send start message to resource updater", "error", err)
-			return err
+			proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", ru.URI())
+			// Don't return error - this is not critical enough to fail the operation
 		}
+	}
+
+	_, err := proc.Call(gen.ProcessID{Name: actornames.ResourceUpdaterSupervisor, Node: proc.Node().Name()},
+		resource_update.EnsureResourceUpdater{
+			ResourceURI: ru.URI(),
+			Operation:   string(ru.Operation),
+			CommandID:   commandID,
+		})
+	if err != nil {
+		proc.Log().Error("Failed to ensure resource updater", "error", err)
+		return err
+	}
+
+	err = proc.Send(gen.ProcessID{Name: actornames.ResourceUpdater(ru.URI(), string(ru.Operation), commandID), Node: proc.Node().Name()},
+		resource_update.StartResourceUpdate{
+			ResourceUpdate: *ru,
+			CommandID:      commandID,
+		})
+	if err != nil {
+		proc.Log().Error("Failed to send start message to resource updater", "error", err)
+		return err
+	}
+
+	return nil
+}
+
+func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc gen.Process) error {
+	label := tu.Target.Label
+	operation := string(tu.Operation)
+
+	proc.Log().Debug("Starting target updater", "label", label, "operation", operation)
+
+	_, err := proc.Call(
+		gen.ProcessID{Name: actornames.TargetUpdaterSupervisor, Node: proc.Node().Name()},
+		target_update.EnsureTargetUpdater{
+			Label:     label,
+			Operation: operation,
+			CommandID: commandID,
+		},
+	)
+	if err != nil {
+		proc.Log().Error("Failed to ensure target updater", "error", err)
+		return err
+	}
+
+	err = proc.Send(
+		gen.ProcessID{Name: actornames.TargetUpdater(label, operation, commandID), Node: proc.Node().Name()},
+		target_update.StartTargetUpdate{
+			TargetUpdate: *tu,
+			CommandID:    commandID,
+		},
+	)
+	if err != nil {
+		proc.Log().Error("Failed to send start message to target updater", "error", err)
+		return err
 	}
 
 	return nil

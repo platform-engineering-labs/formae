@@ -49,6 +49,7 @@ type TargetUpdateState string
 
 const (
 	TargetUpdateStateNotStarted TargetUpdateState = "NotStarted"
+	TargetUpdateStateInProgress TargetUpdateState = "InProgress"
 	TargetUpdateStateSuccess    TargetUpdateState = "Success"
 	TargetUpdateStateFailed     TargetUpdateState = "Failed"
 )
