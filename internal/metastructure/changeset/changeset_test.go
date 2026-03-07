@@ -1674,3 +1674,170 @@ func TestChangeset_ExecutionOrder_MixedResourceAndTargetUpdates(t *testing.T) {
 
 	assert.True(t, cs.IsComplete())
 }
+
+func TestDAGNode_LinkWith_DuplicateIsNoop(t *testing.T) {
+	nodeA := &DAGNode{URI: "a", Dependents: []*DAGNode{}, Dependencies: []*DAGNode{}}
+	nodeB := &DAGNode{URI: "b", Dependents: []*DAGNode{}, Dependencies: []*DAGNode{}}
+
+	// First link
+	nodeA.LinkWith(nodeB)
+	assert.Len(t, nodeA.Dependencies, 1)
+	assert.Len(t, nodeB.Dependents, 1)
+
+	// Second link with same node — should be a noop
+	nodeA.LinkWith(nodeB)
+	assert.Len(t, nodeA.Dependencies, 1, "duplicate LinkWith should not add a second dependency")
+	assert.Len(t, nodeB.Dependents, 1, "duplicate LinkWith should not add a second dependent")
+}
+
+func TestChangeset_UpdateDAG_UnexpectedStateTreatedAsFailure(t *testing.T) {
+	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: uri.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := NewChangeset(resourceUpdates, nil, "cmd-unexpected", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Get the update to mark it in progress (so it's not "ready" and not "success" and not "failed")
+	updates := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, updates, 1)
+	ru := asResourceUpdate(t, updates[0])
+
+	// Set to InProgress — this is neither success nor failed nor ready
+	ru.State = resource_update.ResourceUpdateStateInProgress
+
+	// UpdateDAG should treat the unexpected state as failure
+	failedUpdates, err := updateDAGHelper(t, cs, ru)
+	require.NoError(t, err)
+	// The unexpected-state code calls MarkFailed and recursively calls UpdateDAG,
+	// so we should get the update back in the failed list
+	require.Len(t, failedUpdates, 1)
+	assert.True(t, failedUpdates[0].IsFailed())
+}
+
+func TestChangeset_IsComplete_AllFailedIsComplete(t *testing.T) {
+	uri1 := pkgmodel.NewFormaeURI(util.NewID(), "")
+	uri2 := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket-1", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: uri1.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket-2", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: uri2.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := NewChangeset(resourceUpdates, nil, "cmd-allfailed", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Get both updates and fail them
+	updates := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, updates, 2)
+
+	for _, u := range updates {
+		ru := asResourceUpdate(t, u)
+		ru.State = resource_update.ResourceUpdateStateFailed
+		_, err = updateDAGHelper(t, cs, ru)
+		require.NoError(t, err)
+	}
+
+	// All nodes removed after failure — should be complete
+	assert.True(t, cs.IsComplete())
+}
+
+func TestChangeset_FailureCascade_SkipsInProgressDependents(t *testing.T) {
+	parentURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	child1URI := pkgmodel.NewFormaeURI(util.NewID(), "")
+	child2URI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "parent", Type: "AWS::EC2::VPC", Stack: "s", Ksuid: parentURI.KSUID()},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Label: "child-1", Type: "AWS::EC2::Subnet", Stack: "s", Ksuid: child1URI.KSUID()},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "s",
+			RemainingResolvables: []pkgmodel.FormaeURI{parentURI},
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Label: "child-2", Type: "AWS::EC2::Subnet", Stack: "s", Ksuid: child2URI.KSUID()},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "s",
+			RemainingResolvables: []pkgmodel.FormaeURI{parentURI},
+		},
+	}
+
+	cs, err := NewChangeset(resourceUpdates, nil, "cmd-cascade-skip", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Start the parent
+	updates := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, updates, 1)
+	parent := asResourceUpdate(t, updates[0])
+	assert.Equal(t, "parent", parent.DesiredState.Label)
+
+	// Complete parent — both children become available
+	parent.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, parent)
+	require.NoError(t, err)
+
+	// Start both children (marks them InProgress)
+	children := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, children, 2)
+
+	child1 := asResourceUpdate(t, children[0])
+	child2 := asResourceUpdate(t, children[1])
+
+	// Fail child1 — child2 is InProgress (not Ready), so cascade should NOT touch it
+	child1.State = resource_update.ResourceUpdateStateFailed
+	failedUpdates, err := updateDAGHelper(t, cs, child1)
+	require.NoError(t, err)
+	// Only child1 itself — child2 is in progress and should not be cascade-failed
+	require.Len(t, failedUpdates, 1)
+
+	// child2 should still be completable
+	child2.State = resource_update.ResourceUpdateStateSuccess
+	_, err = updateDAGHelper(t, cs, child2)
+	require.NoError(t, err)
+
+	assert.True(t, cs.IsComplete())
+}
+
+func TestChangeset_AvailableExecutableUpdates_NonRateLimitedShowsZeroCount(t *testing.T) {
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:    pkgmodel.Target{Label: "my-target", Namespace: "AWS"},
+			Operation: target_update.TargetOperationCreate,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := NewChangeset(nil, targetUpdates, "cmd-nonrl", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	available := cs.AvailableExecutableUpdates()
+	// Non-rate-limited updates should appear in the map with count 0
+	count, exists := available["AWS"]
+	assert.True(t, exists, "namespace should be present for non-rate-limited update")
+	assert.Equal(t, 0, count, "non-rate-limited update should contribute 0 to token count")
+}
