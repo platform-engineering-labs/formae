@@ -9,7 +9,6 @@ package blackbox
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/tests/testcontrol"
@@ -42,14 +41,15 @@ type CommandState struct {
 // CheckInvariants checks the core correctness invariants against actual state.
 // It returns any violations found.
 //
-// ignorePrefixes allows filtering out cloud state entries whose native IDs
-// start with any of the given prefixes (e.g. "cloud-" for out-of-band entries).
+// ignoreNativeIDs contains native IDs of cloud resources that are expected to
+// exist in the cloud but NOT in inventory (e.g. out-of-band created resources
+// tracked in the model's UnmanagedNativeIDs set).
 //
 // Invariants checked:
 //  1. No phantom resources: every resource in inventory exists in cloud state
 //  2. No orphaned cloud resources: every cloud resource is tracked in inventory
 //  3. Property consistency: inventory properties match cloud state properties
-func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testcontrol.CloudStateEntry, ignorePrefixes ...string) []Violation {
+func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testcontrol.CloudStateEntry, ignoreNativeIDs map[string]bool) []Violation {
 	var violations []Violation
 
 	// Build lookup of inventory resources by NativeID
@@ -75,11 +75,11 @@ func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testco
 	}
 
 	// Invariant 2: No orphaned cloud resources
-	// Every cloud resource should be tracked in inventory
-	// (skip entries matching ignorePrefixes — these are out-of-band test artifacts)
+	// Every cloud resource should be tracked in inventory (or be a known
+	// unmanaged resource from the model's tracking set).
 	for nativeID, entry := range cloudState {
 		if _, ok := inventoryByNativeID[nativeID]; !ok {
-			if hasAnyPrefix(nativeID, ignorePrefixes) {
+			if ignoreNativeIDs[nativeID] {
 				continue
 			}
 			violations = append(violations, Violation{
@@ -94,7 +94,7 @@ func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testco
 	for nativeID, cloudEntry := range cloudState {
 		invRes, ok := inventoryByNativeID[nativeID]
 		if !ok {
-			continue // already reported as orphaned
+			continue // already reported as orphaned or ignored
 		}
 		invProps := string(invRes.Properties)
 		if invProps != "" && cloudEntry.Properties != "" && !jsonEqual(invProps, cloudEntry.Properties) {
@@ -107,15 +107,6 @@ func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testco
 	}
 
 	return violations
-}
-
-func hasAnyPrefix(s string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(s, p) {
-			return true
-		}
-	}
-	return false
 }
 
 // CheckReconcileProperties verifies that after a successful reconcile, the

@@ -33,6 +33,13 @@ type StackState struct {
 	AutoReconcile bool
 	TTL           bool
 	TTLExpired    bool
+
+	// LastReconcileIDs and LastReconcileProperties track the resource set and
+	// properties template from the most recent reconcile-mode apply on this
+	// stack. Used by OpForceReconcile to predict outcomes at submission time.
+	LastReconcileIDs             []int
+	LastReconcileProperties      string
+	LastReconcileChildProperties string
 }
 
 // StateModel tracks what the system state should be after each operation.
@@ -46,6 +53,11 @@ type StateModel struct {
 	ProviderStackLabel string // label of stack 0; empty if stackCount < 2
 	// AcceptedCommands tracks commands accepted by the agent during the chaos phase.
 	AcceptedCommands   []AcceptedCommand
+	// UnmanagedNativeIDs tracks cloud resources created out-of-band (via
+	// OpCloudCreate). These are expected to exist in the cloud but NOT in
+	// the agent's inventory. Used by the invariant checker to distinguish
+	// expected orphans from real bugs.
+	UnmanagedNativeIDs map[string]bool
 }
 
 // NewStateModel creates a state model with the given number of stacks,
@@ -98,6 +110,7 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		ResourcesPerStack:  resourcesPerStack,
 		Pool:               pool,
 		ProviderStackLabel: providerLabel,
+		UnmanagedNativeIDs: make(map[string]bool),
 	}
 }
 
@@ -188,6 +201,16 @@ func (m *StateModel) HasExistingDescendants(stackIndex int, idx int) bool {
 // TrackAcceptedCommand records a command that was accepted by the agent.
 func (m *StateModel) TrackAcceptedCommand(commandID string) {
 	m.AcceptedCommands = append(m.AcceptedCommands, AcceptedCommand{CommandID: commandID})
+}
+
+// SaveLastReconcile records the resource set and properties from a reconcile-mode
+// apply. This is used by OpForceReconcile to predict what the agent will restore.
+func (m *StateModel) SaveLastReconcile(stackIndex int, resourceIDs []int, properties, childProperties string) {
+	stack := &m.Stacks[stackIndex]
+	stack.LastReconcileIDs = make([]int, len(resourceIDs))
+	copy(stack.LastReconcileIDs, resourceIDs)
+	stack.LastReconcileProperties = properties
+	stack.LastReconcileChildProperties = childProperties
 }
 
 // ComputeAffectedStacks returns all stack indices that a command on the given
