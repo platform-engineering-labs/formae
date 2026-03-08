@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	model "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -314,6 +315,65 @@ func TestGenerateTargetUpdates_MultipleTargets_MixedScenarios(t *testing.T) {
 	require.NotNil(t, existingTargetUpdate)
 	assert.Equal(t, TargetOperationUpdate, existingTargetUpdate.Operation)
 	assert.NotNil(t, existingTargetUpdate.ExistingTarget)
+}
+
+func TestDetermineTargetUpdate_ConfigChange_GeneratesReplace(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:     "my-target",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"region":"us-east-1"}`),
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"my-target": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:     "my-target",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{"region":"us-west-2"}`),
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
+	assert.NotNil(t, updates[0].ExistingTarget)
+	assert.Equal(t, existingTarget, updates[0].ExistingTarget)
+}
+
+func TestDetermineTargetUpdate_NamespaceChange_ReturnsError(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:     "my-target",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"region":"us-east-1"}`),
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"my-target": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	_, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:     "my-target",
+			Namespace: "Azure",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.Error(t, err)
+	var targetErr model.TargetAlreadyExistsError
+	assert.ErrorAs(t, err, &targetErr)
+	assert.Equal(t, "namespace", targetErr.MismatchType)
 }
 
 type mockTargetDatastore struct {

@@ -146,6 +146,7 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 		FormaCommandSourceUser,
 		targetMap,
 		ds,
+		nil,
 	)
 
 	assert.NoError(t, err)
@@ -270,7 +271,7 @@ func TestGenerateResourceUpdatesForApply_PatchMode(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
@@ -384,7 +385,7 @@ func TestResourceUpdatesForPatch_GeneratesUpdateOperationsForUnmanagedResources(
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)

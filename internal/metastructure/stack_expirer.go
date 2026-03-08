@@ -169,6 +169,7 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 		resource_update.FormaCommandSourceUser, // Treat expiration as user-initiated
 		existingTargets,
 		s.datastore,
+		nil,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate resource updates: %w", err)

@@ -104,15 +104,23 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	if existing == nil {
 		operation = TargetOperationCreate
 	} else {
-		if err := ValidateImmutableFields(existing, &target); err != nil {
-			return TargetUpdate{}, false, err
+		// Namespace change is always an error
+		if existing.Namespace != target.Namespace {
+			return TargetUpdate{}, false, model.TargetAlreadyExistsError{
+				TargetLabel:       target.Label,
+				ExistingNamespace: existing.Namespace,
+				FormaNamespace:    target.Namespace,
+				MismatchType:      "namespace",
+			}
 		}
 
-		if existing.Discoverable == target.Discoverable {
+		if !util.JsonEqualRaw(existing.Config, target.Config) {
+			operation = TargetOperationReplace
+		} else if existing.Discoverable != target.Discoverable {
+			operation = TargetOperationUpdate
+		} else {
 			return TargetUpdate{}, false, nil
 		}
-
-		operation = TargetOperationUpdate
 	}
 
 	return TargetUpdate{
