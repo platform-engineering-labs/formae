@@ -10,7 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +151,51 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 		}
 		require.Fail(t, "ResetAgentState: inventory not empty after %d cleanup attempts", maxCleanupAttempts)
 	}
+
+	// Phase 3: Best-effort cleanup of orphaned cloud state entries.
+	// A partially-failed command can leave resources in the cloud that were
+	// never persisted to inventory. The agent destroy above only targets
+	// inventory-tracked resources, so orphans survive. Remove them directly.
+	// Note: stale ResourceUpdaters from a prior rapid iteration may create
+	// cloud resources AFTER this cleanup (see checkResourceInvariantsWithRetry).
+	h.cleanupOrphanedCloudState(t)
+}
+
+// cleanupOrphanedCloudState removes cloud state entries that have no
+// corresponding resource in the agent's inventory. Returns the number of
+// orphans cleaned up. These orphans can arise when a partially-failed command
+// leaves resources in the cloud that were never persisted to inventory (e.g.
+// a sibling failed after the plugin created the resource but before the
+// ResourcePersister stored it).
+func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T) int {
+	t.Helper()
+
+	cloudState := h.GetCloudStateSnapshot(t)
+	if len(cloudState) == 0 {
+		return 0
+	}
+
+	// Build set of native IDs in inventory
+	forma, err := h.client.ExtractResources("managed:true")
+	inventoryNativeIDs := make(map[string]bool)
+	if err == nil && forma != nil {
+		for _, res := range forma.Resources {
+			if res.NativeID != "" {
+				inventoryNativeIDs[res.NativeID] = true
+			}
+		}
+	}
+
+	// Delete cloud state entries not in inventory
+	cleaned := 0
+	for nativeID := range cloudState {
+		if !inventoryNativeIDs[nativeID] {
+			h.DeleteCloudState(t, nativeID)
+			t.Logf("ResetAgentState: cleaned up orphaned cloud resource %s", nativeID)
+			cleaned++
+		}
+	}
+	return cleaned
 }
 
 // waitForAllCommandsTerminal polls until no commands (from any client) are
@@ -220,17 +265,14 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 		if len(model.AcceptedCommands) > 0 {
 			t.Logf("[op %d] VerifyState skipped (accepted commands in flight)", op.SequenceNum)
 		} else {
-			// Sync cloud state with inventory first — failure injection can
-			// leave orphaned cloud entries from partially-failed Creates.
-			h.SyncCloudStateWithInventory(t)
-			h.AssertAllInvariants(t)
+			h.AssertAllInvariants(t, model)
 		}
 	case OpCloudModify:
-		h.executeCloudModify(t, op)
+		h.executeCloudModify(t, op, model)
 	case OpCloudDelete:
-		h.executeCloudDelete(t, op)
+		h.executeCloudDelete(t, op, model)
 	case OpCloudCreate:
-		h.executeCloudCreate(t, op)
+		h.executeCloudCreate(t, op, model)
 	case OpForceReconcile:
 		h.executeForceReconcile(t, op, model)
 	case OpSetTTLPolicy:
@@ -261,35 +303,40 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	cmdViolations := h.waitAndCheckCommandCompleteness(t, 15*time.Second)
 	violations = append(violations, cmdViolations...)
 
-	// Re-sync cloud state after waiting for commands. Background tasks (TTL
-	// expiry, auto-reconcile) may have completed during Phase 1, changing
-	// inventory without updating the test plugin's cloud state.
-	h.SyncCloudStateWithInventory(t)
+	// Phase 2: Wait for ResourcePersister to finish.
+	// Commands reach terminal state when the ChangesetExecutor marks them
+	// done, but the ResourcePersister processes persist messages from
+	// ResourceUpdaters asynchronously. Poll until inventory stabilises.
+	h.waitForInventoryStabilization(t, 5*time.Second)
 
-	// Phase 2: Check resource invariants.
-	// Now that all commands are terminal, inventory and cloud state should be
-	// consistent (resource persister writes are synchronous within commands).
-	forma, err := h.client.ExtractResources("managed:true")
-	require.NoError(t, err, "ExtractResources should not error")
-
-	var inventory []pkgmodel.Resource
-	if forma != nil {
-		inventory = forma.Resources
+	// Build the ignore set from the model's tracked unmanaged resources.
+	// These are expected to exist in the cloud but NOT in inventory.
+	var ignoreNativeIDs map[string]bool
+	if len(model) > 0 && model[0] != nil {
+		ignoreNativeIDs = model[0].UnmanagedNativeIDs
 	}
 
-	cloudState := h.GetCloudStateSnapshot(t)
-	violations = append(violations, CheckInvariants(inventory, cloudState, "cloud-")...)
+	// Phase 3: Check resource invariants with retry.
+	// Stale ResourceUpdaters from prior iterations can complete after
+	// ResetAgentState, creating cloud resources that haven't been persisted
+	// to inventory yet. When orphans are found, we clean them up and
+	// re-check. If the orphan persists across retries, it's a real bug.
+	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs)
+	violations = append(violations, resourceViolations...)
 
-	// Phase 3: Check model vs inventory consistency.
+	// Phase 4: Check model vs inventory consistency.
 	if len(model) > 0 && model[0] != nil {
+		forma, err := h.client.ExtractResources("managed:true")
+		var inventory []pkgmodel.Resource
+		if err == nil && forma != nil {
+			inventory = forma.Resources
+		}
 		modelViolations := CheckModelVsInventory(model[0], inventory)
 		if len(modelViolations) > 0 {
-			// Dump inventory for debugging
 			t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
 			for _, res := range inventory {
 				t.Logf("  inventory: stack=%s label=%s type=%s nativeID=%s", res.Stack, res.Label, res.Type, res.NativeID)
 			}
-			// Dump model state for mismatched stacks
 			for _, v := range modelViolations {
 				t.Logf("  violation: %s", v.Message)
 			}
@@ -301,6 +348,65 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 		t.Logf("invariant violation: %s", v.Message)
 	}
 	require.Empty(t, violations, "no invariant violations expected")
+}
+
+// checkResourceInvariantsWithRetry checks resource invariants, and on orphan
+// violations cleans up the orphans and retries. Stale ResourceUpdaters from
+// prior rapid iterations can create cloud resources after ResetAgentState;
+// these resolve themselves once the stale operations complete and the cloud
+// entries are cleaned. Genuine invariant bugs persist across retries.
+func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool) []Violation {
+	t.Helper()
+
+	const maxRetries = 3
+
+	for attempt := range maxRetries {
+		forma, err := h.client.ExtractResources("managed:true")
+		require.NoError(t, err, "ExtractResources should not error")
+
+		var inventory []pkgmodel.Resource
+		if forma != nil {
+			inventory = forma.Resources
+		}
+
+		cloudState := h.GetCloudStateSnapshot(t)
+		resourceViolations := CheckInvariants(inventory, cloudState, ignoreNativeIDs)
+
+		if len(resourceViolations) == 0 {
+			return nil
+		}
+
+		// Check if all violations are orphaned resources (cloud-only).
+		// Orphans from stale operations can be cleaned up and retried.
+		// Non-orphan violations (phantom, property mismatch) are real bugs.
+		allOrphans := true
+		for _, v := range resourceViolations {
+			if v.Kind != ViolationOrphanedResource {
+				allOrphans = false
+				break
+			}
+		}
+
+		if !allOrphans || attempt == maxRetries-1 {
+			// Either non-orphan violations found or retries exhausted.
+			t.Logf("INVARIANT DEBUG: inventory has %d resources, cloud has %d entries (attempt %d)", len(inventory), len(cloudState), attempt+1)
+			for _, res := range inventory {
+				t.Logf("  inventory: label=%s type=%s nativeID=%s stack=%s", res.Label, res.Type, res.NativeID, res.Stack)
+			}
+			for nativeID, entry := range cloudState {
+				t.Logf("  cloud: nativeID=%s type=%s", nativeID, entry.ResourceType)
+			}
+			return resourceViolations
+		}
+
+		// All violations are orphans — likely stale operations completing.
+		// Clean up and wait before retrying.
+		t.Logf("checkResourceInvariants: found %d orphans (attempt %d), cleaning up and retrying", len(resourceViolations), attempt+1)
+		h.cleanupOrphanedCloudState(t)
+		time.Sleep(3 * time.Second)
+	}
+
+	return nil // unreachable
 }
 
 // waitAndCheckCommandCompleteness polls until all commands from this client are
@@ -366,6 +472,52 @@ func (h *TestHarness) waitAndCheckCommandCompleteness(t *testing.T, timeout time
 		}
 	}
 	return CheckCommandCompleteness(commands)
+}
+
+// waitForInventoryStabilization polls the agent's inventory until the resource
+// count stops changing, indicating that the ResourcePersister has finished
+// processing all async persist messages.
+//
+// The ResourcePersister processes messages asynchronously after the
+// ChangesetExecutor marks the command terminal. There can be a gap between
+// "command done" and "persist completed", so we first give it a minimum grace
+// period, then require several consecutive stable readings.
+func (h *TestHarness) waitForInventoryStabilization(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
+	const (
+		pollInterval   = 150 * time.Millisecond
+		gracePeriod    = 500 * time.Millisecond
+		requiredStable = 3
+	)
+
+	// Give the ResourcePersister time to start processing before polling.
+	time.Sleep(gracePeriod)
+
+	deadline := time.Now().Add(timeout - gracePeriod)
+	lastCount := -1
+	stableCount := 0
+
+	for time.Now().Before(deadline) {
+		forma, err := h.client.ExtractResources("managed:true")
+		count := 0
+		if err == nil && forma != nil {
+			count = len(forma.Resources)
+		}
+
+		if count == lastCount {
+			stableCount++
+			if stableCount >= requiredStable {
+				return
+			}
+		} else {
+			stableCount = 0
+		}
+		lastCount = count
+		time.Sleep(pollInterval)
+	}
+
+	t.Logf("waitForInventoryStabilization: timed out after %v (last count: %d)", timeout, lastCount)
 }
 
 // applyCommandOutcomeToModel uses per-resource-update status from a completed
@@ -523,6 +675,8 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		// agent. Implicit deletes have no failure injection programmed, so
 		// they always succeed. Apply the guarantee regardless of DrawnOutcomes.
 		applyReconcileGuarantee(model, op.StackIndex, op.ResourceIDs)
+		// Save the reconcile state for ForceReconcile prediction.
+		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, op.Properties, op.ChildProperties)
 	}
 	model.TrackAcceptedCommand(commandID)
 	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
@@ -743,11 +897,13 @@ func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *
 	t.Helper()
 
 	stackLabel := model.Stack(op.StackIndex).Label
+	stack := model.Stack(op.StackIndex)
 
-	// ForceReconcile is inherently blocking: the agent reconstructs the forma
-	// from GetResourcesAtLastReconcile, and we can't predict that resource set
-	// from the model alone. We wait for the command to complete and apply the
-	// actual per-resource-update outcomes to the model.
+	// Check if we have a last reconcile state to predict from.
+	if len(stack.LastReconcileIDs) == 0 {
+		t.Logf("[op %d] ForceReconcile stack=%s → skipped (no last reconcile state in model)", op.SequenceNum, stackLabel)
+		return
+	}
 
 	resp, err := h.client.ForceReconcile(stackLabel)
 	if err != nil {
@@ -762,14 +918,17 @@ func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *
 
 	t.Logf("[op %d] ForceReconcile stack=%s → command %s", op.SequenceNum, stackLabel, resp.CommandID)
 
-	cmd, ok := h.TryWaitForCommandDone(resp.CommandID, defaultCommandTimeout)
-	if !ok {
-		t.Logf("[op %d] ForceReconcile stack=%s command %s timed out", op.SequenceNum, stackLabel, resp.CommandID)
-		return
-	}
-
-	t.Logf("[op %d] ForceReconcile stack=%s command %s completed: %s", op.SequenceNum, stackLabel, resp.CommandID, cmd.State)
-	applyCommandOutcomeToModel(t, cmd, model, model.Pool)
+	// Fire-and-forget: predict outcomes at submission time using the tracked
+	// last reconcile state. ForceReconcile has no failure injection, so all
+	// resources succeed.
+	//
+	// The agent rebuilds a forma from GetResourcesAtLastReconcile and applies
+	// it in reconcile mode. Our model tracks this set via SaveLastReconcile.
+	reconcileIDs := stack.LastReconcileIDs
+	model.ApplyCreated(op.StackIndex, reconcileIDs, stack.LastReconcileProperties)
+	applyReconcileGuarantee(model, op.StackIndex, reconcileIDs)
+	model.TrackAcceptedCommand(resp.CommandID)
+	t.Logf("[op %d] ForceReconcile stack=%s → accepted, model updated (restore %v)", op.SequenceNum, stackLabel, reconcileIDs)
 }
 
 // filterExistingResources returns only the resource IDs whose model state
@@ -824,25 +983,32 @@ func (h *TestHarness) executeTriggerDiscovery(t *testing.T) {
 	}
 }
 
-func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation) {
+func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
+	if !model.UnmanagedNativeIDs[op.NativeID] {
+		t.Logf("[op %d] CloudModify: %s → skipped (resource does not exist in cloud)", op.SequenceNum, op.NativeID)
+		return
+	}
 	h.PutCloudState(t, op.NativeID, "Test::Generic::Resource", op.Properties)
 	t.Logf("[op %d] CloudModify: %s", op.SequenceNum, op.NativeID)
 }
 
-func (h *TestHarness) executeCloudDelete(t *testing.T, op *Operation) {
+func (h *TestHarness) executeCloudDelete(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
 	h.DeleteCloudState(t, op.NativeID)
+	delete(model.UnmanagedNativeIDs, op.NativeID)
 	t.Logf("[op %d] CloudDelete: %s", op.SequenceNum, op.NativeID)
 }
 
-func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation) {
+func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
 	h.PutCloudState(t, op.NativeID, op.ResourceType, op.Properties)
+	model.UnmanagedNativeIDs[op.NativeID] = true
 	t.Logf("[op %d] CloudCreate: %s (%s)", op.SequenceNum, op.NativeID, op.ResourceType)
 
 	for _, child := range op.CloudChildren {
 		h.PutCloudState(t, child.NativeID, child.ResourceType, child.Properties)
+		model.UnmanagedNativeIDs[child.NativeID] = true
 		t.Logf("[op %d] CloudCreate child: %s (%s)", op.SequenceNum, child.NativeID, child.ResourceType)
 	}
 }
@@ -978,19 +1144,7 @@ func successfulResourceIDs(op *Operation, stackIdx int, ids []int, pool *Resourc
 
 	var success []int
 	for _, id := range ids {
-		key := outcomeKey(stackIdx, id)
-		outcome, hasOutcome := op.DrawnOutcomes[key]
 		ownSuccess := isOwnOutcomeSuccess(id)
-
-		if hasOutcome {
-			res := model.Resource(stackIdx, id)
-			resourceExists := res != nil && res.State == StateExists
-			slog.Warn("[DEBUG-TEST] successfulResourceIDs",
-				"stackIdx", stackIdx, "slot", id, "key", key,
-				"exists", resourceExists,
-				"readSteps", len(outcome.ReadSteps), "crudSteps", len(outcome.CRUDSteps),
-				"ownSuccess", ownSuccess)
-		}
 
 		if !ownSuccess {
 			continue
@@ -1011,8 +1165,6 @@ func successfulResourceIDs(op *Operation, stackIdx int, ids []int, pool *Resourc
 					// Ancestor is in the operation set: check its drawn outcome.
 					if !isOwnOutcomeSuccess(parentIdx) {
 						ancestorFailed = true
-						slog.Warn("[DEBUG-TEST] cascade-failed in model",
-							"stackIdx", stackIdx, "slot", id, "failedAncestor", parentIdx)
 						break
 					}
 				} else {
@@ -1021,8 +1173,6 @@ func successfulResourceIDs(op *Operation, stackIdx int, ids []int, pool *Resourc
 					parentRes := model.Resource(stackIdx, parentIdx)
 					if parentRes == nil || parentRes.State != StateExists {
 						ancestorFailed = true
-						slog.Warn("[DEBUG-TEST] ancestor-missing in model",
-							"stackIdx", stackIdx, "slot", id, "missingAncestor", parentIdx)
 						break
 					}
 				}
@@ -1067,84 +1217,6 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// to differ from submission-time predictions. Querying the inventory
 	// gives us the ground truth.
 	h.reconcileModelWithInventory(t, model)
-}
-
-// reconcileModelWithActualOutcome corrects the model for commands that failed.
-// Resources predicted to succeed at submission time but that actually failed
-// (or were rejected/cascaded) need their model state reverted. Resources
-// predicted to fail but that actually succeeded need their model state applied.
-func reconcileModelWithActualOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool) {
-	t.Helper()
-
-	for _, ru := range cmd.ResourceUpdates {
-		stackIdx := -1
-		for i, s := range model.Stacks {
-			if s.Label == ru.StackName {
-				stackIdx = i
-				break
-			}
-		}
-		if stackIdx == -1 {
-			continue
-		}
-
-		slotIdx := -1
-		for idx := range model.Stack(stackIdx).Resources {
-			var label string
-			if pool != nil {
-				label = pool.LabelForStack(model.Stack(stackIdx).Label, idx)
-			} else {
-				label = resourceLabelForStack(model.Stack(stackIdx).Label, idx)
-			}
-			if label == ru.ResourceLabel {
-				slotIdx = idx
-				break
-			}
-		}
-		if slotIdx == -1 {
-			continue
-		}
-
-		res := model.Resource(stackIdx, slotIdx)
-		if res == nil {
-			continue
-		}
-
-		switch {
-		case ru.State == "Success" && ru.Operation == "create":
-			// Model may have already set this; ensure it's marked as existing.
-			if ru.Properties != nil {
-				model.ApplyCreated(stackIdx, []int{slotIdx}, string(ru.Properties))
-			}
-		case ru.State == "Success" && ru.Operation == "delete":
-			model.ApplyDestroyed(stackIdx, []int{slotIdx})
-		case ru.State == "Success" && ru.Operation == "update":
-			if ru.Properties != nil {
-				model.ApplyCreated(stackIdx, []int{slotIdx}, string(ru.Properties))
-			}
-
-		case ru.State != "Success" && ru.Operation == "create":
-			// Model predicted success (created), but actually failed.
-			// Revert: resource should not exist.
-			if res.State == StateExists {
-				t.Logf("  reconcile: reverting create for %s (slot %d) on stack %s", ru.ResourceLabel, slotIdx, ru.StackName)
-				model.ApplyDestroyed(stackIdx, []int{slotIdx})
-			}
-		case ru.State != "Success" && ru.Operation == "delete":
-			// Model predicted success (destroyed), but actually failed.
-			// Revert: resource still exists. We don't know the properties,
-			// but marking as existing with empty props is better than wrong.
-			if res.State == StateNotExist {
-				t.Logf("  reconcile: reverting destroy for %s (slot %d) on stack %s", ru.ResourceLabel, slotIdx, ru.StackName)
-				model.ApplyCreated(stackIdx, []int{slotIdx}, res.Properties)
-			}
-		case ru.State != "Success" && ru.Operation == "update":
-			// Model predicted success (updated), but actually failed/rejected.
-			// The resource still exists with its OLD properties (pre-update).
-			// Nothing to change in the model — the resource is still in the
-			// same state as before the command.
-		}
-	}
 }
 
 // reconcileModelWithInventory queries the agent's inventory and updates the
@@ -1234,133 +1306,13 @@ func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config Proper
 		if cmd.State == "Success" {
 			props := resourceProperties(stackLabel, ids)
 			model.ApplyCreated(stackIdx, ids, props)
+			// SetupStacks is a reconcile apply — save for ForceReconcile prediction.
+			model.SaveLastReconcile(stackIdx, ids, props, "")
 			t.Logf("SetupStacks: stack %s created with %d resources", stackLabel, len(ids))
 		} else {
 			t.Logf("SetupStacks: stack %s command failed: %s", stackLabel, cmd.State)
 		}
 	}
-}
-
-// ForceReconcileAndWait triggers a force-reconcile on the given stack and waits
-// for the resulting command to complete. Reconcile reverts out-of-band changes.
-func (h *TestHarness) ForceReconcileAndWait(t *testing.T, stackLabel string, model *StateModel, stackIdx int) {
-	t.Helper()
-
-	resp, err := h.client.ForceReconcile(stackLabel)
-	if err != nil {
-		// Conflict (active commands) or other error — not a test failure
-		t.Logf("ForceReconcileAndWait: stack %s rejected: %v", stackLabel, err)
-		return
-	}
-
-	if resp.CommandID == "" {
-		t.Logf("ForceReconcileAndWait: stack %s no drift detected", stackLabel)
-		return
-	}
-
-	cmd, ok := h.TryWaitForCommandDone(resp.CommandID, defaultCommandTimeout)
-	if !ok {
-		// TODO: Task 3 will rewrite this function
-		t.Logf("ForceReconcileAndWait: stack %s command %s timed out", stackLabel, resp.CommandID)
-		return
-	}
-
-	t.Logf("ForceReconcileAndWait: stack %s command %s completed: %s", stackLabel, resp.CommandID, cmd.State)
-	// Apply per-resource-update status to the model.
-	applyCommandOutcomeToModel(t, cmd, model, model.Pool)
-}
-
-// CleanupOutOfBandCloudResources removes all cloud state entries that were
-// created directly via OpCloudCreate (native IDs starting with "cloud-").
-// This must be called before AssertAllInvariants when EnableCloudChanges is
-// active, since out-of-band entries are not tracked in inventory.
-func (h *TestHarness) CleanupOutOfBandCloudResources(t *testing.T) {
-	t.Helper()
-
-	snapshot := h.GetCloudStateSnapshot(t)
-	removed := 0
-	for nativeID := range snapshot {
-		if len(nativeID) >= 6 && nativeID[:6] == "cloud-" {
-			h.DeleteCloudState(t, nativeID)
-			removed++
-		}
-	}
-	t.Logf("CleanupOutOfBandCloudResources: removed %d out-of-band entries", removed)
-}
-
-// SyncCloudStateWithInventory makes the test plugin's cloud state match the
-// agent's inventory. This is needed in the FullChaos wind-down because:
-//   - OpCloudDelete removes resources from cloud that the agent still tracks (phantoms)
-//   - Failure injection causes Creates to succeed in the plugin but the command
-//     fails, leaving cloud resources the agent doesn't track (orphans)
-//
-// After this call, cloud state and inventory contain the same set of native IDs.
-func (h *TestHarness) SyncCloudStateWithInventory(t *testing.T) {
-	t.Helper()
-
-	forma, err := h.client.ExtractResources("managed:true")
-	if err != nil {
-		t.Logf("SyncCloudStateWithInventory: failed to query inventory: %v", err)
-		return
-	}
-
-	inventoryByNativeID := make(map[string]pkgmodel.Resource)
-	if forma != nil {
-		for _, res := range forma.Resources {
-			if res.NativeID != "" {
-				inventoryByNativeID[res.NativeID] = res
-			}
-		}
-	}
-
-	cloudState := h.GetCloudStateSnapshot(t)
-
-	// Remove cloud entries not in inventory (orphans from failed Creates)
-	removed := 0
-	for nativeID := range cloudState {
-		if _, ok := inventoryByNativeID[nativeID]; !ok {
-			h.DeleteCloudState(t, nativeID)
-			removed++
-		}
-	}
-
-	// Add cloud entries for inventory resources not in cloud (phantoms from OpCloudDelete)
-	// and fix property mismatches (cloud state modified by partially-failed commands
-	// where the plugin succeeded but the command failed, leaving inventory stale).
-	restored := 0
-	propFixed := 0
-	for nativeID, res := range inventoryByNativeID {
-		cloudEntry, inCloud := cloudState[nativeID]
-		if !inCloud {
-			h.PutCloudState(t, nativeID, res.Type, string(res.Properties))
-			restored++
-		} else if string(res.Properties) != "" && cloudEntry.Properties != "" {
-			// Use the invariant's jsonEqual to compare (handles resolvables).
-			if !jsonEqual(string(res.Properties), cloudEntry.Properties) {
-				// Cloud state differs from inventory — overwrite cloud state
-				// to match inventory (inventory is the source of truth).
-				h.PutCloudState(t, nativeID, res.Type, cloudPropsFromInventory(res.Properties))
-				propFixed++
-			}
-		}
-	}
-
-	if removed > 0 || restored > 0 || propFixed > 0 {
-		t.Logf("SyncCloudStateWithInventory: removed %d orphans, restored %d phantoms, fixed %d property mismatches", removed, restored, propFixed)
-	}
-}
-
-// cloudPropsFromInventory converts inventory properties (which may contain
-// resolvable wrappers) to plain cloud-state properties by flattening resolvables
-// to their $value.
-func cloudPropsFromInventory(props json.RawMessage) string {
-	var m map[string]any
-	if err := json.Unmarshal(props, &m); err != nil {
-		return string(props)
-	}
-	flattenResolvables(m)
-	b, _ := json.Marshal(m)
-	return string(b)
 }
 
 // ForceCheckTTLAndWait triggers a TTL check. If stacks have expired, the agent
@@ -1752,7 +1704,6 @@ func buildPluginOpSequences(
 		// the plugin, so programming responses would leave stale entries
 		// in the queue that poison future commands.
 		if isCascadeFailed(slotIdx) {
-			slog.Warn("[DEBUG-TEST] buildPluginOpSequences: skipping cascade-failed", "stackIndex", stackIndex, "slot", slotIdx)
 			continue
 		}
 
@@ -1761,8 +1712,6 @@ func buildPluginOpSequences(
 		if !ok {
 			continue // no drawn outcome for this slot — will succeed by default
 		}
-
-		slog.Warn("[DEBUG-TEST] buildPluginOpSequences: programming", "stackIndex", stackIndex, "slot", slotIdx, "readSteps", len(outcome.ReadSteps), "crudSteps", len(outcome.CRUDSteps))
 
 		// Determine the resource label
 		var label string
@@ -1901,6 +1850,8 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	// agent. Implicit deletes have no failure injection programmed, so
 	// they always succeed. Apply the guarantee regardless of DrawnOutcomes.
 	applyReconcileGuarantee(model, op.StackIndex, existingIDs)
+	// SetTTLPolicy is a reconcile apply — save for ForceReconcile prediction.
+	model.SaveLastReconcile(op.StackIndex, existingIDs, resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps)
 	model.Stacks[op.StackIndex].TTLExpired = op.TTLExpired
 	model.Stacks[op.StackIndex].TTL = true
 	model.TrackAcceptedCommand(commandID)

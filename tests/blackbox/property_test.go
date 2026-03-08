@@ -67,11 +67,6 @@ func TestProperty_SequentialWithFailures(t *testing.T) {
 				h.ExecuteOperation(t, &op, model)
 			}
 
-			// Synchronize cloud state with inventory before the final invariant
-			// check. Failure injection can leave orphaned cloud entries from
-			// partially-failed Creates.
-			h.SyncCloudStateWithInventory(t)
-
 			h.AssertAllInvariants(t)
 		})
 	})
@@ -131,10 +126,6 @@ func TestProperty_ConcurrentWithFailures(t *testing.T) {
 			// Drain pending fire-and-forget commands before final check
 			h.DrainPendingCommands(t, model, defaultCommandTimeout)
 
-			// Synchronize cloud state with inventory. Failure injection can
-			// leave orphaned cloud entries from partially-failed Creates.
-			h.SyncCloudStateWithInventory(t)
-
 			h.AssertAllInvariants(t)
 		})
 	})
@@ -170,12 +161,6 @@ func TestProperty_FullChaos(t *testing.T) {
 
 			// Wind down: drain pending commands
 			h.DrainPendingCommands(t, model, defaultCommandTimeout)
-
-			// Synchronize cloud state with inventory before the final invariant
-			// check. Chaos operations create expected inconsistencies:
-			//   - OpCloudDelete removes cloud entries the agent still tracks
-			//   - Failure injection can leave cloud entries from partial Creates
-			h.SyncCloudStateWithInventory(t)
 
 			h.AssertAllInvariants(t, model)
 		})
