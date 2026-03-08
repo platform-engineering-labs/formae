@@ -66,7 +66,7 @@ func TestStateModel_Verify_HappyPath(t *testing.T) {
 		"native-1": {NativeID: "native-1", ResourceType: "Test::Generic::Resource", Properties: `{"Name":"a","Value":"v1"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.Empty(t, violations)
 }
 
@@ -77,7 +77,7 @@ func TestStateModel_Verify_PhantomResource(t *testing.T) {
 	}
 	cloudState := map[string]testcontrol.CloudStateEntry{}
 
-	violations := CheckInvariants(inventory, cloudState)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.NotEmpty(t, violations)
 
 	hasPhantom := false
@@ -96,7 +96,7 @@ func TestStateModel_Verify_OrphanedResource(t *testing.T) {
 		"native-0": {NativeID: "native-0", ResourceType: "Test::Generic::Resource"},
 	}
 
-	violations := CheckInvariants(inventory, cloudState)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.NotEmpty(t, violations)
 
 	hasOrphan := false
@@ -118,7 +118,7 @@ func TestStateModel_Verify_PropertyMismatch(t *testing.T) {
 			Properties: `{"Name":"a","Value":"v2"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.NotEmpty(t, violations)
 
 	hasMismatch := false
@@ -140,7 +140,7 @@ func TestStateModel_Verify_PropertyMatch(t *testing.T) {
 			Properties: `{"Name":"a","Value":"v1"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.Empty(t, violations)
 }
 
