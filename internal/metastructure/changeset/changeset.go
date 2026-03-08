@@ -70,15 +70,49 @@ func NewChangeset(
 		return Changeset{}, err
 	}
 
+	// Store split target updates so they outlive this function
+	var splitTargetUpdates []target_update.TargetUpdate
+
 	for i := range targetUpdates {
 		tu := &targetUpdates[i]
-		changeset.DAG.Nodes[tu.NodeURI()] = &DAGNode{
-			URI:          tu.NodeURI(),
-			Update:       tu,
+		if tu.Operation == target_update.TargetOperationReplace {
+			// Split replace into delete + create
+			deleteTU := targetUpdates[i]
+			deleteTU.Operation = target_update.TargetOperationDelete
+			createTU := targetUpdates[i]
+			createTU.Operation = target_update.TargetOperationCreate
+
+			splitTargetUpdates = append(splitTargetUpdates, deleteTU, createTU)
+		} else {
+			changeset.DAG.Nodes[tu.NodeURI()] = &DAGNode{
+				URI:          tu.NodeURI(),
+				Update:       tu,
+				Dependents:   []*DAGNode{},
+				Dependencies: []*DAGNode{},
+			}
+		}
+	}
+
+	// Add split target update nodes (using slice elements for stable addresses)
+	for i := range splitTargetUpdates {
+		stu := &splitTargetUpdates[i]
+		changeset.DAG.Nodes[stu.NodeURI()] = &DAGNode{
+			URI:          stu.NodeURI(),
+			Update:       stu,
 			Dependents:   []*DAGNode{},
 			Dependencies: []*DAGNode{},
 		}
 	}
+
+	// Wire delete → create for split targets
+	for i := 0; i < len(splitTargetUpdates); i += 2 {
+		deleteNode := changeset.DAG.Nodes[splitTargetUpdates[i].NodeURI()]
+		createNode := changeset.DAG.Nodes[splitTargetUpdates[i+1].NodeURI()]
+		createNode.LinkWith(deleteNode)
+	}
+
+	// Build implicit edges between target and resource nodes
+	changeset.DAG.buildTargetResourceEdges(targetUpdates)
 
 	return changeset, nil
 }
@@ -98,6 +132,43 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 
 	// Step 3: Connect same-resource delete to create operations
 	p.connectDeleteToCreate(allOps)
+}
+
+// buildTargetResourceEdges creates implicit ordering edges for target replace operations:
+// resource deletes → target delete → target create → resource creates
+func (dag *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
+	for _, tu := range targetUpdates {
+		if tu.Operation != target_update.TargetOperationReplace {
+			continue
+		}
+
+		targetDeleteURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/delete")
+		targetCreateURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/create")
+		targetDeleteNode := dag.Nodes[targetDeleteURI]
+		targetCreateNode := dag.Nodes[targetCreateURI]
+		if targetDeleteNode == nil || targetCreateNode == nil {
+			continue
+		}
+
+		for _, node := range dag.Nodes {
+			ru, ok := node.Update.(*resource_update.ResourceUpdate)
+			if !ok {
+				continue
+			}
+			if ru.DesiredState.Target != tu.Target.Label {
+				continue
+			}
+
+			if ru.Operation == resource_update.OperationDelete {
+				// Target delete waits for resource deletes
+				targetDeleteNode.LinkWith(node)
+			}
+			if ru.Operation == resource_update.OperationCreate {
+				// Resource creates wait for target create
+				node.LinkWith(targetCreateNode)
+			}
+		}
+	}
 }
 
 // buildDeleteDependencies creates REVERSED dependencies for delete operations

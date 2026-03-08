@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -341,12 +342,38 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	}
 
 	if config.Simulate {
+		var warnings []string
+		for _, tu := range fa.TargetUpdates {
+			if tu.Operation != target_update.TargetOperationReplace {
+				continue
+			}
+			allByStack, loadErr := m.Datastore.LoadAllResourcesByStack()
+			if loadErr != nil {
+				slog.Warn("Failed to load resources for simulate warning", "error", loadErr)
+				continue
+			}
+			unmanagedOnTarget := 0
+			if unmanagedResources, ok := allByStack[constants.UnmanagedStack]; ok {
+				for _, r := range unmanagedResources {
+					if r.Target == tu.Target.Label {
+						unmanagedOnTarget++
+					}
+				}
+			}
+			if unmanagedOnTarget > 0 {
+				warnings = append(warnings, fmt.Sprintf(
+					"Target %q is being replaced. %d unmanaged resource(s) on this target will lose visibility and must be re-discovered.",
+					tu.Target.Label, unmanagedOnTarget))
+			}
+		}
+
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
 			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: fa.HasChanges(),
 				Command:         translateToAPICommand(fa),
+				Warnings:        warnings,
 			},
 		}, nil
 	}
@@ -1351,7 +1378,23 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds)
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build replaced targets set for resource generation
+	var replacedTargets map[string]bool
+	for _, tu := range targetUpdates {
+		if tu.Operation == target_update.TargetOperationReplace {
+			if replacedTargets == nil {
+				replacedTargets = make(map[string]bool)
+			}
+			replacedTargets[tu.Target.Label] = true
+		}
+	}
+
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -1360,11 +1403,6 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 			return nil, targetExistsErr
 		}
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
-	}
-
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
-	if err != nil {
-		return nil, err
 	}
 
 	stackUpdates, err := stack_update.NewStackUpdateGenerator(ds).GenerateStackUpdates(forma.Stacks, command)
