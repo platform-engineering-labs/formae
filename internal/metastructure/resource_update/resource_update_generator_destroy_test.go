@@ -333,6 +333,7 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 				FormaCommandSourceUser,
 				existingTargets,
 				ds,
+				nil,
 			)
 
 			if tt.expectedError != "" {

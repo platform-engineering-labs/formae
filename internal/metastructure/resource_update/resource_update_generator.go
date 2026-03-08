@@ -26,7 +26,9 @@ func GenerateResourceUpdates(
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
 	existingTargets []*pkgmodel.Target,
-	ds ResourceDataLookup) ([]ResourceUpdate, error) {
+	ds ResourceDataLookup,
+	replacedTargets map[string]bool,
+) ([]ResourceUpdate, error) {
 
 	var referenceLabels map[string]string
 	var err error
@@ -78,7 +80,7 @@ func GenerateResourceUpdates(
 	case pkgmodel.CommandDestroy:
 		resourceUpdates, err = generateResourceUpdatesForDestroy(forma, source, targetMap, ds)
 	case pkgmodel.CommandApply:
-		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, targetMap, ds)
+		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, targetMap, ds, replacedTargets)
 	case pkgmodel.CommandSync:
 		resourceUpdates, err = generateResourceUpdatesForSync(forma, source, targetMap, ds)
 	default:
@@ -305,10 +307,16 @@ func generateResourceUpdatesForApply(
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
 	targetMap map[string]*pkgmodel.Target,
-	ds ResourceDataLookup) ([]ResourceUpdate, error) {
+	ds ResourceDataLookup,
+	replacedTargets map[string]bool,
+) ([]ResourceUpdate, error) {
 
 	for _, target := range forma.Targets {
 		if existingTarget, ok := targetMap[target.Label]; ok {
+			if replacedTargets[target.Label] {
+				continue // Config change is handled via target replace
+			}
+
 			if existingTarget.Namespace != target.Namespace {
 				return nil, apimodel.TargetAlreadyExistsError{
 					TargetLabel:       target.Label,
@@ -331,9 +339,9 @@ func generateResourceUpdatesForApply(
 
 	switch mode {
 	case pkgmodel.FormaApplyModeReconcile:
-		return generateResourceUpdatesForReconcile(forma, mode, source, targetMap, ds)
+		return generateResourceUpdatesForReconcile(forma, mode, source, targetMap, ds, replacedTargets)
 	case pkgmodel.FormaApplyModePatch:
-		return generateResourceUpdatesForPatch(forma, mode, source, targetMap, ds)
+		return generateResourceUpdatesForPatch(forma, mode, source, targetMap, ds, replacedTargets)
 	default:
 		return nil, fmt.Errorf("forma apply mode %s not supported", mode)
 	}
@@ -402,7 +410,9 @@ func generateResourceUpdatesForReconcile(
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
 	targetMap map[string]*pkgmodel.Target,
-	ds ResourceDataLookup) ([]ResourceUpdate, error) {
+	ds ResourceDataLookup,
+	replacedTargets map[string]bool,
+) ([]ResourceUpdate, error) {
 
 	var resourceCreates []ResourceUpdate
 	var resourceUpdates []ResourceUpdate
@@ -610,6 +620,70 @@ func generateResourceUpdatesForReconcile(
 		}
 	}
 
+	// Handle target replace: force-replace resources on replaced targets
+	if len(replacedTargets) > 0 {
+		// Convert updates to replaces for resources on replaced targets
+		var newResourceUpdates []ResourceUpdate
+		for _, update := range resourceUpdates {
+			if update.Operation == OperationUpdate && replacedTargets[update.DesiredState.Target] {
+				replaceOps, err := NewResourceUpdateForReplace(
+					update.PriorState, update.DesiredState,
+					update.ExistingTarget, update.ResourceTarget, source,
+				)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create replace for target replace: %w", err)
+				}
+				resourceReplaces = append(resourceReplaces, replaceOps...)
+			} else {
+				newResourceUpdates = append(newResourceUpdates, update)
+			}
+		}
+		resourceUpdates = newResourceUpdates
+
+		// Generate replaces for stacks NOT in forma on replaced targets
+		handledKeys := make(map[string]bool)
+		for _, u := range resourceCreates {
+			handledKeys[fmt.Sprintf("%s/%s/%s", u.DesiredState.Stack, u.DesiredState.Label, u.DesiredState.Type)] = true
+		}
+		for _, u := range resourceUpdates {
+			handledKeys[fmt.Sprintf("%s/%s/%s", u.DesiredState.Stack, u.DesiredState.Label, u.DesiredState.Type)] = true
+		}
+		for _, u := range resourceReplaces {
+			handledKeys[fmt.Sprintf("%s/%s/%s", u.DesiredState.Stack, u.DesiredState.Label, u.DesiredState.Type)] = true
+		}
+		for _, u := range implicitDeleteResources {
+			handledKeys[fmt.Sprintf("%s/%s/%s", u.DesiredState.Stack, u.DesiredState.Label, u.DesiredState.Type)] = true
+		}
+
+		// Generate replaces for managed resources on replaced targets not yet handled.
+		// This covers both stacks NOT in forma (preserving those stacks) and
+		// resources in forma stacks that had no property changes (no-op updates).
+		for stackLabel, resources := range allResourcesByStack {
+			if stackLabel == constants.UnmanagedStack {
+				continue
+			}
+			for _, resource := range resources {
+				if !resource.Managed || !replacedTargets[resource.Target] {
+					continue
+				}
+				key := fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Label, resource.Type)
+				if handledKeys[key] {
+					continue
+				}
+				replaceOps, err := NewResourceUpdateForReplace(
+					*resource, *resource,
+					*targetMap[resource.Target], *targetMap[resource.Target],
+					source,
+				)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create replace for non-forma resource: %w", err)
+				}
+				resourceReplaces = append(resourceReplaces, replaceOps...)
+				handledKeys[key] = true
+			}
+		}
+	}
+
 	// After processing all stacks, find dependencies for delete operations
 	allDeleteUpdates := append(resourceReplaces, implicitDeleteResources...)
 
@@ -651,7 +725,9 @@ func generateResourceUpdatesForPatch(
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
 	targetMap map[string]*pkgmodel.Target,
-	ds ResourceDataLookup) ([]ResourceUpdate, error) {
+	ds ResourceDataLookup,
+	replacedTargets map[string]bool,
+) ([]ResourceUpdate, error) {
 
 	var resourceCreates []ResourceUpdate
 	var resourceUpdates []ResourceUpdate
@@ -753,6 +829,64 @@ func generateResourceUpdatesForPatch(
 					return nil, err
 				}
 				resourceCreates = append(resourceCreates, resourceCreate)
+			}
+		}
+	}
+
+	// Handle target replace: force-replace resources on replaced targets
+	if len(replacedTargets) > 0 {
+		// Convert updates to replaces
+		var newResourceUpdates []ResourceUpdate
+		for _, update := range resourceUpdates {
+			if update.Operation == OperationUpdate && replacedTargets[update.DesiredState.Target] {
+				replaceOps, err := NewResourceUpdateForReplace(
+					update.PriorState, update.DesiredState,
+					update.ExistingTarget, update.ResourceTarget, source,
+				)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create replace for target replace: %w", err)
+				}
+				resourceReplaces = append(resourceReplaces, replaceOps...)
+			} else {
+				newResourceUpdates = append(newResourceUpdates, update)
+			}
+		}
+		resourceUpdates = newResourceUpdates
+
+		// Generate replaces for ALL managed resources on replaced targets not yet handled
+		handledKeys := make(map[string]bool)
+		for _, u := range resourceCreates {
+			handledKeys[fmt.Sprintf("%s/%s/%s", u.DesiredState.Stack, u.DesiredState.Label, u.DesiredState.Type)] = true
+		}
+		for _, u := range resourceUpdates {
+			handledKeys[fmt.Sprintf("%s/%s/%s", u.DesiredState.Stack, u.DesiredState.Label, u.DesiredState.Type)] = true
+		}
+		for _, u := range resourceReplaces {
+			handledKeys[fmt.Sprintf("%s/%s/%s", u.DesiredState.Stack, u.DesiredState.Label, u.DesiredState.Type)] = true
+		}
+
+		for stackLabel, resources := range allResourcesByStack {
+			if stackLabel == constants.UnmanagedStack {
+				continue
+			}
+			for _, resource := range resources {
+				if !resource.Managed || !replacedTargets[resource.Target] {
+					continue
+				}
+				key := fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Label, resource.Type)
+				if handledKeys[key] {
+					continue
+				}
+				replaceOps, err := NewResourceUpdateForReplace(
+					*resource, *resource,
+					*targetMap[resource.Target], *targetMap[resource.Target],
+					source,
+				)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create replace for non-forma resource: %w", err)
+				}
+				resourceReplaces = append(resourceReplaces, replaceOps...)
+				handledKeys[key] = true
 			}
 		}
 	}
