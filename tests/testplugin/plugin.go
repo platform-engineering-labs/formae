@@ -21,6 +21,7 @@ import (
 type TestPlugin struct {
 	cloudState      *CloudState
 	injections      *InjectionState
+	responseQueue   *ResponseQueue
 	opLog           *OperationLog
 	nativeIDCounter atomic.Int64
 }
@@ -106,6 +107,24 @@ func (p *TestPlugin) SchemaForResourceType(resourceType string) (model.Schema, e
 }
 
 func (p *TestPlugin) Create(_ context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
+	// Check response queue first (per-resource programmed responses).
+	if p.responseQueue != nil {
+		if step := p.responseQueue.CheckCreate(request.Properties); step != nil {
+			if step.ErrorCode != "" {
+				p.recordOp("Create", request.ResourceType, "")
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						OperationStatus: resource.OperationStatusFailure,
+						ErrorCode:       resource.OperationErrorCode(step.ErrorCode),
+						StatusMessage:   "injected error",
+					},
+				}, nil
+			}
+			// ErrorCode empty -> proceed to normal success path below.
+		}
+	}
+
+	// Fall through to existing global injection logic.
 	if p.injections != nil {
 		if delay := p.injections.CheckLatency("Create", request.ResourceType); delay > 0 {
 			time.Sleep(delay)
@@ -131,6 +150,20 @@ func (p *TestPlugin) Create(_ context.Context, request *resource.CreateRequest) 
 }
 
 func (p *TestPlugin) Read(_ context.Context, request *resource.ReadRequest) (*resource.ReadResult, error) {
+	// Check response queue first (per-resource programmed responses).
+	if p.responseQueue != nil {
+		if step := p.responseQueue.CheckRead(request.NativeID); step != nil {
+			if step.ErrorCode != "" {
+				p.recordOp("Read", request.ResourceType, request.NativeID)
+				return &resource.ReadResult{
+					ErrorCode: resource.OperationErrorCode(step.ErrorCode),
+				}, nil
+			}
+			// ErrorCode empty -> proceed to normal success path below.
+		}
+	}
+
+	// Fall through to existing global injection logic.
 	if p.injections != nil {
 		if delay := p.injections.CheckLatency("Read", request.ResourceType); delay > 0 {
 			time.Sleep(delay)
@@ -157,6 +190,24 @@ func (p *TestPlugin) Read(_ context.Context, request *resource.ReadRequest) (*re
 }
 
 func (p *TestPlugin) Update(_ context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+	// Check response queue first (per-resource programmed responses).
+	if p.responseQueue != nil {
+		if step := p.responseQueue.CheckUpdate(request.NativeID); step != nil {
+			if step.ErrorCode != "" {
+				p.recordOp("Update", request.ResourceType, request.NativeID)
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						OperationStatus: resource.OperationStatusFailure,
+						ErrorCode:       resource.OperationErrorCode(step.ErrorCode),
+						StatusMessage:   "injected error",
+					},
+				}, nil
+			}
+			// ErrorCode empty -> proceed to normal success path below.
+		}
+	}
+
+	// Fall through to existing global injection logic.
 	if p.injections != nil {
 		if delay := p.injections.CheckLatency("Update", request.ResourceType); delay > 0 {
 			time.Sleep(delay)
@@ -181,6 +232,24 @@ func (p *TestPlugin) Update(_ context.Context, request *resource.UpdateRequest) 
 }
 
 func (p *TestPlugin) Delete(_ context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+	// Check response queue first (per-resource programmed responses).
+	if p.responseQueue != nil {
+		if step := p.responseQueue.CheckDelete(request.NativeID); step != nil {
+			if step.ErrorCode != "" {
+				p.recordOp("Delete", request.ResourceType, request.NativeID)
+				return &resource.DeleteResult{
+					ProgressResult: &resource.ProgressResult{
+						OperationStatus: resource.OperationStatusFailure,
+						ErrorCode:       resource.OperationErrorCode(step.ErrorCode),
+						StatusMessage:   "injected error",
+					},
+				}, nil
+			}
+			// ErrorCode empty -> proceed to normal success path below.
+		}
+	}
+
+	// Fall through to existing global injection logic.
 	if p.injections != nil {
 		if delay := p.injections.CheckLatency("Delete", request.ResourceType); delay > 0 {
 			time.Sleep(delay)

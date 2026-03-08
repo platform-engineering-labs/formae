@@ -6,7 +6,9 @@
 
 package blackbox
 
-import "time"
+import (
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
+)
 
 // OperationKind classifies the type of operation that can be generated
 // by rapid and dispatched by the test harness.
@@ -30,11 +32,11 @@ const (
 	OpCloudDelete // out-of-band deletion of a resource
 	OpCloudCreate // out-of-band creation of a resource
 
-	// Fault operations (dispatched via Ergo to TestController)
+	// Policy operations
 
-	OpInjectError      // inject a plugin error
-	OpInjectLatency    // inject plugin latency
-	OpClearInjections  // clear all injection rules
+	OpForceReconcile // force a reconcile on a stack with auto-reconcile policy
+	OpCheckTTL       // check whether a TTL-enabled stack has expired
+	OpSetTTLPolicy   // set TTL policy on a stack (expired or far-future)
 
 	// Verification
 
@@ -53,24 +55,11 @@ type Operation struct {
 	// For OpApply: "patch" or "reconcile".
 	ApplyMode string
 
-	// For OpApply/OpDestroy: whether to wait for command completion.
-	Blocking bool
-
 	// For OpApply/OpDestroy: which stack to target (index into StateModel.Stacks).
 	StackIndex int
 
 	// For OpCancel: the command ID to cancel (set during execution).
 	CommandID string
-
-	// For OpInjectError: the error message and fire count (0 = permanent).
-	ErrorMsg   string
-	ErrorCount int
-
-	// For OpInjectError/OpInjectLatency: which plugin operation to target.
-	TargetOperation string // "Create", "Read", "Update", "Delete"
-
-	// For OpInjectLatency: how long to delay.
-	Latency time.Duration
 
 	// For OpDestroy: "abort" or "cascade" (how to handle dependent resources).
 	OnDependents string
@@ -87,8 +76,16 @@ type Operation struct {
 	// For OpCloudModify/OpCloudDelete/OpCloudCreate: the native ID.
 	NativeID string
 
+	// For OpSetTTLPolicy: true means set TTL to already-expired, false means far future.
+	TTLExpired bool
+
 	// For OpCloudCreate: child resources to create alongside the parent (OOB tuples).
 	CloudChildren []CloudChildResource
+
+	// For OpApply/OpDestroy: drawn plugin outcomes per resource slot.
+	// Key format: "stackIdx:slotIdx". If a resource update has no entry, it succeeds.
+	// nil map means no failure injection (all succeed).
+	DrawnOutcomes map[string]DrawnOutcome
 
 	// Set during execution to track ordering.
 	SequenceNum int
@@ -101,22 +98,26 @@ type CloudChildResource struct {
 	Properties   string
 }
 
+// DrawnOutcome holds the drawn plugin outcomes for a single resource slot.
+// ReadSteps covers the Read phase (for Update/Delete chains).
+// CRUDSteps covers the Create/Update/Delete phase.
+type DrawnOutcome struct {
+	ReadSteps []testcontrol.ResponseStep // responses for Read in Update/Delete chains
+	CRUDSteps []testcontrol.ResponseStep // responses for Create/Update/Delete step
+}
+
 // CommandKind classifies whether a pending command is an apply or destroy.
 type CommandKind int
 
 const (
 	CommandKindApply CommandKind = iota
 	CommandKindDestroy
+	CommandKindReconcile
 )
 
-// PendingCommand tracks a fire-and-forget command that hasn't completed yet.
-type PendingCommand struct {
-	CommandID    string
-	Kind         CommandKind
-	StackLabel   string
-	ResourceIDs  []int
-	Properties   string
-	OnDependents string // "cascade" when destroy should mark descendants destroyed too
+// AcceptedCommand tracks a command that was accepted by the agent during the chaos phase.
+type AcceptedCommand struct {
+	CommandID string
 }
 
 // Range represents a min/max integer range for generators.
@@ -133,14 +134,11 @@ type PropertyTestConfig struct {
 	// OperationCount is the range of how many operations to generate per sequence.
 	OperationCount Range
 
-	// EnableFailures allows fault injection operations (OpInjectError, OpInjectLatency, OpClearInjections).
+	// EnableFailures enables per-resource-update failure injection via drawn response sequences.
 	EnableFailures bool
 
 	// EnableCloudChanges allows out-of-band cloud operations (OpCloudModify, OpCloudDelete, OpCloudCreate).
 	EnableCloudChanges bool
-
-	// EnableConcurrency allows fire-and-forget (non-blocking) dispatches.
-	EnableConcurrency bool
 
 	// EnableCancel allows cancel operations.
 	EnableCancel bool

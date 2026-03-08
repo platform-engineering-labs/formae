@@ -286,11 +286,24 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		return nil, fmt.Errorf("no resources to reconcile")
 	}
 
-	// Convert snapshots to Resource objects
+	// Convert snapshots to Resource objects.
+	// Snapshot KSUIDs come from the last successful reconcile and may since have
+	// been deleted. Clear stale KSUIDs so assignKSUIDs() can look up the current
+	// live KSUID (or generate a fresh one). Deleted resources have a tombstone
+	// record; their KSUID must never be reused.
 	resources := make([]*pkgmodel.Resource, 0, len(snapshots))
 	for _, snapshot := range snapshots {
+		ksuid := snapshot.KSUID
+		if ksuid != "" {
+			uri := pkgmodel.NewFormaeURI(ksuid, "")
+			existing, err := ds.LoadResource(uri)
+			if err != nil || existing == nil {
+				// KSUID was deleted — clear it so assignKSUIDs() resolves a fresh one
+				ksuid = ""
+			}
+		}
 		res := &pkgmodel.Resource{
-			Ksuid:      snapshot.KSUID,
+			Ksuid:      ksuid,
 			Type:       snapshot.Type,
 			Label:      snapshot.Label,
 			Target:     snapshot.Target,

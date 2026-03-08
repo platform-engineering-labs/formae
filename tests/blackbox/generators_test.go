@@ -8,11 +8,14 @@ package blackbox
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
+
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
 
 func TestGenerator_ProducesValidOperations(t *testing.T) {
@@ -48,9 +51,7 @@ func TestGenerator_RespectsConfig_NoFailures(t *testing.T) {
 		ops := OperationSequenceGen(config).Draw(rt, "ops")
 
 		for _, op := range ops {
-			assert.NotEqual(t, OpInjectError, op.Kind, "should not generate OpInjectError when EnableFailures=false")
-			assert.NotEqual(t, OpInjectLatency, op.Kind, "should not generate OpInjectLatency when EnableFailures=false")
-			assert.NotEqual(t, OpClearInjections, op.Kind, "should not generate OpClearInjections when EnableFailures=false")
+			assert.Nil(t, op.DrawnOutcomes, "DrawnOutcomes should be nil when EnableFailures=false")
 		}
 	})
 }
@@ -68,23 +69,6 @@ func TestGenerator_RespectsConfig_NoCloudChanges(t *testing.T) {
 			assert.NotEqual(t, OpCloudModify, op.Kind, "should not generate OpCloudModify when EnableCloudChanges=false")
 			assert.NotEqual(t, OpCloudDelete, op.Kind, "should not generate OpCloudDelete when EnableCloudChanges=false")
 			assert.NotEqual(t, OpCloudCreate, op.Kind, "should not generate OpCloudCreate when EnableCloudChanges=false")
-		}
-	})
-}
-
-func TestGenerator_RespectsConfig_NoConcurrency(t *testing.T) {
-	rapid.Check(t, func(rt *rapid.T) {
-		config := PropertyTestConfig{
-			ResourceCount:     3,
-			OperationCount:    Range{Min: 10, Max: 30},
-			EnableConcurrency: false,
-		}
-		ops := OperationSequenceGen(config).Draw(rt, "ops")
-
-		for _, op := range ops {
-			if op.Kind == OpApply || op.Kind == OpDestroy {
-				assert.True(t, op.Blocking, "all apply/destroy ops should be blocking when EnableConcurrency=false")
-			}
 		}
 	})
 }
@@ -113,14 +97,10 @@ func TestGenerator_WithFailuresEnabled(t *testing.T) {
 		}
 		ops := OperationSequenceGen(config).Draw(rt, "ops")
 
+		// With EnableFailures, apply/destroy ops should have DrawnOutcomes.
 		for _, op := range ops {
-			if op.Kind == OpInjectError {
-				assert.NotEmpty(t, op.ErrorMsg, "OpInjectError should have an error message")
-				assert.NotEmpty(t, op.TargetOperation, "OpInjectError should have a target operation")
-			}
-			if op.Kind == OpInjectLatency {
-				assert.Greater(t, op.Latency.Milliseconds(), int64(0), "OpInjectLatency should have positive latency")
-				assert.NotEmpty(t, op.TargetOperation, "OpInjectLatency should have a target operation")
+			if op.Kind == OpApply || op.Kind == OpDestroy {
+				assert.NotNil(t, op.DrawnOutcomes, "apply/destroy with EnableFailures should have DrawnOutcomes")
 			}
 		}
 	})
@@ -162,27 +142,6 @@ func TestGenerator_StackIndexWithinBounds(t *testing.T) {
 				assert.Less(t, op.StackIndex, config.StackCount, "StackIndex should be < StackCount")
 			}
 		}
-	})
-}
-
-func TestGenerator_ConcurrencyProducesNonBlocking(t *testing.T) {
-	rapid.Check(t, func(rt *rapid.T) {
-		config := PropertyTestConfig{
-			ResourceCount:     3,
-			StackCount:        2,
-			OperationCount:    Range{Min: 50, Max: 100},
-			EnableConcurrency: true,
-		}
-		ops := OperationSequenceGen(config).Draw(rt, "ops")
-
-		hasNonBlocking := false
-		for _, op := range ops {
-			if (op.Kind == OpApply || op.Kind == OpDestroy) && !op.Blocking {
-				hasNonBlocking = true
-				break
-			}
-		}
-		assert.True(t, hasNonBlocking, "with EnableConcurrency, should produce at least one non-blocking operation in 50+ ops")
 	})
 }
 
@@ -266,5 +225,130 @@ func TestGenerator_PropertiesEntityTagsHaveUniqueKeys(t *testing.T) {
 			assert.False(t, keys[key], "EntityTags keys must be unique, duplicate: %s", key)
 			keys[key] = true
 		}
+	})
+}
+
+// --- Response Sequence Generator Tests ---
+
+func TestResponseSequenceGen(t *testing.T) {
+	t.Run("pluginOpStepsGen_covers_all_four_outcomes", func(t *testing.T) {
+		rapid.Check(t, func(rt *rapid.T) {
+			// Draw 200 outcomes and verify we see all four categories.
+			var (
+				sawSuccess       bool
+				sawRecoverable   bool
+				sawIrrecoverable bool
+				sawExhaust       bool
+			)
+			for i := 0; i < 200; i++ {
+				steps := pluginOpStepsGen(rt, fmt.Sprintf("step-%d", i))
+				switch {
+				case steps == nil:
+					sawSuccess = true
+				case len(steps) == 1 && steps[0].ErrorCode == "AccessDenied":
+					sawIrrecoverable = true
+				case len(steps) == 4 && steps[0].ErrorCode == "Throttling":
+					sawExhaust = true
+				case len(steps) >= 1 && len(steps) <= 3 && steps[0].ErrorCode == "Throttling":
+					sawRecoverable = true
+				}
+			}
+			// With 200 draws, probability of missing any bucket is vanishingly small.
+			assert.True(t, sawSuccess, "should see success outcome (nil steps)")
+			assert.True(t, sawRecoverable, "should see recoverable->success outcome (1-3 Throttling)")
+			assert.True(t, sawIrrecoverable, "should see irrecoverable outcome (AccessDenied)")
+			assert.True(t, sawExhaust, "should see exhaust-retries outcome (4 Throttling)")
+		})
+	})
+
+	t.Run("drawnOutcomeGen_produces_ReadSteps_and_CRUDSteps", func(t *testing.T) {
+		rapid.Check(t, func(rt *rapid.T) {
+			outcome := drawnOutcomeGen(rt, "test")
+			// ReadSteps and CRUDSteps may be nil (success) or non-nil;
+			// the type itself should always be valid.
+			_ = outcome.ReadSteps
+			_ = outcome.CRUDSteps
+
+			// Verify that the steps, when non-nil, contain valid ResponseStep values.
+			for _, step := range outcome.ReadSteps {
+				assert.IsType(t, testcontrol.ResponseStep{}, step)
+			}
+			for _, step := range outcome.CRUDSteps {
+				assert.IsType(t, testcontrol.ResponseStep{}, step)
+			}
+		})
+	})
+
+	t.Run("OpApply_with_EnableFailures_has_DrawnOutcomes", func(t *testing.T) {
+		rapid.Check(t, func(rt *rapid.T) {
+			config := PropertyTestConfig{
+				ResourceCount:  5,
+				OperationCount: Range{Min: 1, Max: 1},
+				EnableFailures: true,
+				StackCount:     2,
+			}
+			op := Operation{Kind: OpApply}
+			fillOperationFields(rt, &op, config)
+
+			require.NotNil(t, op.DrawnOutcomes, "DrawnOutcomes should be non-nil when EnableFailures=true")
+			// Should have entries for all resource slots in the target stack.
+			for i := 0; i < config.ResourceCount; i++ {
+				key := outcomeKey(op.StackIndex, i)
+				_, exists := op.DrawnOutcomes[key]
+				assert.True(t, exists, "DrawnOutcomes should have entry for key %s", key)
+			}
+		})
+	})
+
+	t.Run("OpApply_without_EnableFailures_has_nil_DrawnOutcomes", func(t *testing.T) {
+		rapid.Check(t, func(rt *rapid.T) {
+			config := PropertyTestConfig{
+				ResourceCount:  5,
+				OperationCount: Range{Min: 1, Max: 1},
+				EnableFailures: false,
+				StackCount:     2,
+			}
+			op := Operation{Kind: OpApply}
+			fillOperationFields(rt, &op, config)
+
+			assert.Nil(t, op.DrawnOutcomes, "DrawnOutcomes should be nil when EnableFailures=false")
+		})
+	})
+
+	t.Run("cascade_destroy_draws_outcomes_for_all_stacks", func(t *testing.T) {
+		// Use a config with ResourceCount=5, StackCount=3 and force cascade.
+		// We generate many OpDestroy operations and collect any that have cascade+EnableFailures.
+		rapid.Check(t, func(rt *rapid.T) {
+			config := PropertyTestConfig{
+				ResourceCount:  5,
+				OperationCount: Range{Min: 1, Max: 1},
+				EnableFailures: true,
+				StackCount:     3,
+			}
+
+			// We need a pool for onDependents to be set.
+			op := Operation{Kind: OpDestroy}
+			fillOperationFields(rt, &op, config)
+
+			require.NotNil(t, op.DrawnOutcomes, "DrawnOutcomes should be non-nil for OpDestroy with EnableFailures")
+
+			if op.OnDependents == "cascade" {
+				// Cascade destroy should have entries for ALL stacks.
+				for s := 0; s < config.StackCount; s++ {
+					for i := 0; i < config.ResourceCount; i++ {
+						key := outcomeKey(s, i)
+						_, exists := op.DrawnOutcomes[key]
+						assert.True(t, exists, "cascade destroy should have entry for key %s", key)
+					}
+				}
+				// Total entries should be StackCount * ResourceCount.
+				assert.Equal(t, config.StackCount*config.ResourceCount, len(op.DrawnOutcomes),
+					"cascade destroy should have entries for all stacks * resources")
+			} else {
+				// Non-cascade destroy should only have entries for the target stack.
+				assert.Equal(t, config.ResourceCount, len(op.DrawnOutcomes),
+					"non-cascade destroy should have entries only for target stack")
+			}
+		})
 	})
 }

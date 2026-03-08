@@ -66,15 +66,17 @@ func TestSmoke_TestControllerCommunication(t *testing.T) {
 		}
 		assert.True(t, hasCreate, "operation log should contain a Create operation")
 
-		// Inject an error and verify it takes effect
-		h.InjectError(t, testcontrol.InjectErrorRequest{
-			Operation: "Read",
-			Error:     "injected-test-error",
-			Count:     1,
+		// Program a response sequence and verify it takes effect
+		h.ProgramResponses(t, []testcontrol.PluginOpSequence{
+			{
+				MatchKey:  "smoke-test",
+				Operation: "Read",
+				Steps:     []testcontrol.ResponseStep{{ErrorCode: "Throttling"}},
+			},
 		})
 
-		// Clear injections
-		h.ClearInjections(t)
+		// Clear response queue by programming empty sequences
+		h.ProgramResponses(t, nil)
 	})
 }
 

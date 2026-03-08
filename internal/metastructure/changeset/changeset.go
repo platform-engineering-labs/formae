@@ -198,12 +198,34 @@ func (p *ResourceUpdatePipeline) Init(resourceUpdates []resource_update.Resource
 		// Create unique identifier that includes operation
 		operationURI := createOperationURI(update.URI(), update.Operation)
 
+		if existing, collision := p.ResourceUpdateGroups[operationURI]; collision {
+			slog.Error("BUG: changeset pipeline URI collision — two resource updates map to the same operationURI, one will be silently dropped",
+				"operationURI", operationURI,
+				"existingLabel", existing.Updates[0].DesiredState.Label,
+				"existingStack", existing.Updates[0].DesiredState.Stack,
+				"existingKsuid", existing.Updates[0].DesiredState.Ksuid,
+				"newLabel", update.DesiredState.Label,
+				"newStack", update.DesiredState.Stack,
+				"newKsuid", update.DesiredState.Ksuid,
+				"operation", update.Operation,
+			)
+		}
+
 		p.ResourceUpdateGroups[operationURI] = &ResourceUpdateGroup{
 			URI:              operationURI,
 			Updates:          []*resource_update.ResourceUpdate{update},
 			DownstreamGroups: []*ResourceUpdateGroup{},
 			UpstreamGroups:   []*ResourceUpdateGroup{},
 		}
+	}
+
+	// Detect group count mismatch (indicates silent URI collision)
+	if len(p.ResourceUpdateGroups) != len(allOps) {
+		slog.Error("BUG: changeset pipeline group count mismatch — some resource updates were lost due to URI collisions",
+			"expectedGroups", len(allOps),
+			"actualGroups", len(p.ResourceUpdateGroups),
+			"inputResourceUpdates", len(resourceUpdates),
+		)
 	}
 
 	// Step 3: Build relationships between operation nodes
