@@ -1239,6 +1239,38 @@ func TestServer_ForceReconcile_Conflict(t *testing.T) {
 	}
 }
 
+func TestServer_ForceReconcile_PolicyRequired(t *testing.T) {
+	meta := &FakeMetastructure{
+		reconcileResponses: []WrappedReconcileResponse{
+			{
+				Response: nil,
+				Error: apimodel.ReconcilePolicyRequiredError{
+					StackLabel: "no-policy-stack",
+				},
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/no-policy-stack/reconcile", nil)
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("stack")
+	c.SetParamValues("no-policy-stack")
+
+	if assert.NoError(t, server.ForceReconcile(c)) {
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.ReconcilePolicyRequiredError]
+		err := json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.ReconcilePolicyRequired, errorResponse.ErrorType)
+		assert.Equal(t, "no-policy-stack", errorResponse.Data.StackLabel)
+	}
+}
+
 func TestServer_ForceCheckTTL_StacksExpired(t *testing.T) {
 	meta := &FakeMetastructure{
 		checkTTLResponses: []WrappedCheckTTLResponse{
