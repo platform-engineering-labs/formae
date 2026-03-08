@@ -271,7 +271,16 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 			},
 		)
 		if err != nil {
-			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister", "error", err)
+			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister",
+				"error", err,
+				"commandID", data.commandID,
+				"ksuid", data.originalResourceKsuidURI.KSUID(),
+				"operation", data.resourceUpdate.Operation)
+		} else {
+			proc.Log().Debug("ResourceUpdater: MarkAsComplete call succeeded",
+				"commandID", data.commandID,
+				"ksuid", data.originalResourceKsuidURI.KSUID(),
+				"operation", data.resourceUpdate.Operation)
 		}
 
 		// Send a ResourceUpdateFinished message to the requester to inform it about the final state of the resource update.

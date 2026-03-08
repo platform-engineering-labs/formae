@@ -170,4 +170,5 @@ type ForceReconcileResponse struct {
 
 type ForceCheckTTLResponse struct {
 	ExpiredStacks []string `json:"expired_stacks"`
+	CommandIDs    []string `json:"command_ids,omitempty"`
 }

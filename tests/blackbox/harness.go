@@ -174,6 +174,7 @@ func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*
 		if err == nil && statusResp != nil && len(statusResp.Commands) > 0 {
 			cmd := statusResp.Commands[0]
 			if cmd.State == "Success" || cmd.State == "Failed" || cmd.State == "Canceled" {
+				slog.Warn("[DEBUG-TEST] waitForCommand: terminal state reached", "commandID", commandID, "state", cmd.State, "at", time.Now().Format("15:04:05.000"))
 				return &cmd, true
 			}
 		}
@@ -210,28 +211,23 @@ func (h *TestHarness) GetOperationLog(t *testing.T) []testcontrol.OperationLogEn
 	return opLog.Entries
 }
 
-// InjectError sends an error injection request to the test plugin's TestController.
-func (h *TestHarness) InjectError(t *testing.T, req testcontrol.InjectErrorRequest) {
+// ProgramResponses sends drawn response sequences to the test plugin's TestController.
+func (h *TestHarness) ProgramResponses(t *testing.T, sequences []testcontrol.PluginOpSequence) {
 	t.Helper()
-
-	_, err := h.callTestController(req)
-	require.NoError(t, err, "InjectError failed")
+	_, err := h.callTestController(testcontrol.ProgramResponsesRequest{
+		Sequences: sequences,
+	})
+	require.NoError(t, err, "ProgramResponses failed")
 }
 
-// ClearInjections clears all fault injection rules in the test plugin's TestController.
-func (h *TestHarness) ClearInjections(t *testing.T) {
+// UnprogramResponses removes previously programmed response sequences.
+// Used to roll back responses when a command is rejected after programming.
+func (h *TestHarness) UnprogramResponses(t *testing.T, sequences []testcontrol.PluginOpSequence) {
 	t.Helper()
-
-	_, err := h.callTestController(testcontrol.ClearInjectionsRequest{})
-	require.NoError(t, err, "ClearInjections failed")
-}
-
-// InjectLatency sends a latency injection request to the test plugin's TestController.
-func (h *TestHarness) InjectLatency(t *testing.T, req testcontrol.InjectLatencyRequest) {
-	t.Helper()
-
-	_, err := h.callTestController(req)
-	require.NoError(t, err, "InjectLatency failed")
+	_, err := h.callTestController(testcontrol.UnprogramResponsesRequest{
+		Sequences: sequences,
+	})
+	require.NoError(t, err, "UnprogramResponses failed")
 }
 
 // PutCloudState creates or updates a cloud state entry in the test plugin.
@@ -383,6 +379,9 @@ func newTestConfig(t *testing.T, port int) *pkgmodel.Config {
 			},
 			Discovery: pkgmodel.DiscoveryConfig{
 				Enabled: false,
+			},
+			StackExpirer: pkgmodel.StackExpirerConfig{
+				Interval: 24 * time.Hour,
 			},
 		},
 	}

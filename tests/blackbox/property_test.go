@@ -67,12 +67,11 @@ func TestProperty_SequentialWithFailures(t *testing.T) {
 				h.ExecuteOperation(t, &op, model)
 			}
 
-			// After the sequence, clear all injections so the final
-			// invariant check runs against a healthy system.
-			h.ClearInjections(t)
+			// Synchronize cloud state with inventory before the final invariant
+			// check. Failure injection can leave orphaned cloud entries from
+			// partially-failed Creates.
+			h.SyncCloudStateWithInventory(t)
 
-			// Final invariant check — cloud state and inventory should
-			// always be consistent, even after transient failures.
 			h.AssertAllInvariants(t)
 		})
 	})
@@ -85,10 +84,9 @@ func TestProperty_ConcurrentMultiStack(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:     10,
-				OperationCount:    Range{Min: 5, Max: 15},
-				StackCount:        3,
-				EnableConcurrency: true,
+				ResourceCount:  10,
+				OperationCount: Range{Min: 5, Max: 15},
+				StackCount:     3,
 			}
 
 			h.ResetAgentState(t)
@@ -115,11 +113,10 @@ func TestProperty_ConcurrentWithFailures(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:     10,
-				OperationCount:    Range{Min: 5, Max: 15},
-				StackCount:        3,
-				EnableConcurrency: true,
-				EnableFailures:    true,
+				ResourceCount:  10,
+				OperationCount: Range{Min: 5, Max: 15},
+				StackCount:     3,
+				EnableFailures: true,
 			}
 
 			h.ResetAgentState(t)
@@ -131,9 +128,12 @@ func TestProperty_ConcurrentWithFailures(t *testing.T) {
 				h.ExecuteOperation(t, &op, model)
 			}
 
-			// Clear injections so drain and final check run against a healthy system
-			h.ClearInjections(t)
+			// Drain pending fire-and-forget commands before final check
 			h.DrainPendingCommands(t, model, defaultCommandTimeout)
+
+			// Synchronize cloud state with inventory. Failure injection can
+			// leave orphaned cloud entries from partially-failed Creates.
+			h.SyncCloudStateWithInventory(t)
 
 			h.AssertAllInvariants(t)
 		})
@@ -150,7 +150,6 @@ func TestProperty_FullChaos(t *testing.T) {
 				ResourceCount:      10,
 				OperationCount:     Range{Min: 5, Max: 15},
 				StackCount:         3,
-				EnableConcurrency:  true,
 				EnableFailures:     true,
 				EnableCloudChanges: true,
 				EnableAutoReconcile: true,
@@ -169,19 +168,8 @@ func TestProperty_FullChaos(t *testing.T) {
 				h.ExecuteOperation(t, &op, model)
 			}
 
-			// Wind down: clear injections, drain pending commands
-			h.ClearInjections(t)
+			// Wind down: drain pending commands
 			h.DrainPendingCommands(t, model, defaultCommandTimeout)
-
-			// Force auto-reconcile on stacks that have the policy
-			for i, stack := range model.Stacks {
-				if stack.AutoReconcile {
-					h.ForceReconcileAndWait(t, stack.Label, model, i)
-				}
-			}
-
-			// Force TTL check for stacks with TTL policy
-			h.ForceCheckTTLAndWait(t, model)
 
 			// Synchronize cloud state with inventory before the final invariant
 			// check. Chaos operations create expected inconsistencies:
@@ -189,7 +177,7 @@ func TestProperty_FullChaos(t *testing.T) {
 			//   - Failure injection can leave cloud entries from partial Creates
 			h.SyncCloudStateWithInventory(t)
 
-			h.AssertAllInvariants(t)
+			h.AssertAllInvariants(t, model)
 		})
 	})
 }

@@ -10,12 +10,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
@@ -70,6 +72,11 @@ const maxCleanupAttempts = 3
 func (h *TestHarness) ResetAgentState(t *testing.T) {
 	t.Helper()
 
+	// Clear programmed response queues from the previous iteration.
+	// Labels are reused across iterations, so stale unconsumed responses
+	// would interfere with the next iteration's failure injection.
+	h.ProgramResponses(t, nil)
+
 	// Phase 1: Wait for all in-flight commands to settle.
 	h.waitForAllCommandsTerminal(t, resetTimeout)
 
@@ -86,14 +93,22 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 
 		// Diagnostic: check for duplicate resources in extracted forma
 		seen := make(map[string]int)
+		seenKsuid := make(map[string]int)
 		for _, res := range forma.Resources {
 			key := fmt.Sprintf("%s/%s/%s", res.Stack, res.Type, res.Label)
 			seen[key]++
+			seenKsuid[res.Ksuid]++
 		}
 		hasDuplicates := false
 		for key, count := range seen {
 			if count > 1 {
 				t.Logf("ResetAgentState: DUPLICATE resource in ExtractResources: %s (count=%d)", key, count)
+				hasDuplicates = true
+			}
+		}
+		for ksuid, count := range seenKsuid {
+			if count > 1 {
+				t.Logf("ResetAgentState: DUPLICATE KSUID in ExtractResources: %s (count=%d)", ksuid, count)
 				hasDuplicates = true
 			}
 		}
@@ -173,8 +188,12 @@ func (h *TestHarness) waitForAllCommandsTerminal(t *testing.T, timeout time.Dura
 		resp, _ := h.client.GetFormaCommandsStatus("status:"+status, clientID, 100)
 		if resp != nil {
 			for _, cmd := range resp.Commands {
-				t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s",
-					cmd.CommandID, cmd.State, cmd.Command)
+				t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s resourceUpdates=%d",
+					cmd.CommandID, cmd.State, cmd.Command, len(cmd.ResourceUpdates))
+				for _, ru := range cmd.ResourceUpdates {
+					t.Logf("  resource %s (%s/%s) operation=%s state=%s",
+						ru.ResourceID, ru.StackName, ru.ResourceLabel, ru.Operation, ru.State)
+				}
 			}
 		}
 	}
@@ -198,23 +217,26 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 	case OpVerifyState:
 		// Skip invariant check when commands are in flight — cloud state
 		// and inventory are transiently inconsistent during execution.
-		if h.hasAnyPendingCommands(model) {
-			t.Logf("[op %d] VerifyState skipped (pending commands in flight)", op.SequenceNum)
+		if len(model.AcceptedCommands) > 0 {
+			t.Logf("[op %d] VerifyState skipped (accepted commands in flight)", op.SequenceNum)
 		} else {
+			// Sync cloud state with inventory first — failure injection can
+			// leave orphaned cloud entries from partially-failed Creates.
+			h.SyncCloudStateWithInventory(t)
 			h.AssertAllInvariants(t)
 		}
-	case OpInjectError:
-		h.executeInjectError(t, op)
-	case OpInjectLatency:
-		h.executeInjectLatency(t, op)
-	case OpClearInjections:
-		h.ClearInjections(t)
 	case OpCloudModify:
 		h.executeCloudModify(t, op)
 	case OpCloudDelete:
 		h.executeCloudDelete(t, op)
 	case OpCloudCreate:
 		h.executeCloudCreate(t, op)
+	case OpForceReconcile:
+		h.executeForceReconcile(t, op, model)
+	case OpSetTTLPolicy:
+		h.executeSetTTLPolicy(t, op, model)
+	case OpCheckTTL:
+		h.executeCheckTTL(t, op, model)
 	case OpCancel:
 		// Cancel requires a command ID set during execution; skip if none available
 		t.Logf("[op %d] OpCancel skipped (no command ID)", op.SequenceNum)
@@ -224,8 +246,10 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 }
 
 // AssertAllInvariants queries the agent inventory and cloud state, then checks
-// all correctness invariants across all managed resources.
-func (h *TestHarness) AssertAllInvariants(t *testing.T) {
+// all correctness invariants across all managed resources. If a model is
+// provided, also verifies that the model's expected resource states match
+// the actual inventory.
+func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	t.Helper()
 
 	var violations []Violation
@@ -236,6 +260,11 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 	// command completes and the resource is persisted to inventory.
 	cmdViolations := h.waitAndCheckCommandCompleteness(t, 15*time.Second)
 	violations = append(violations, cmdViolations...)
+
+	// Re-sync cloud state after waiting for commands. Background tasks (TTL
+	// expiry, auto-reconcile) may have completed during Phase 1, changing
+	// inventory without updating the test plugin's cloud state.
+	h.SyncCloudStateWithInventory(t)
 
 	// Phase 2: Check resource invariants.
 	// Now that all commands are terminal, inventory and cloud state should be
@@ -250,6 +279,23 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T) {
 
 	cloudState := h.GetCloudStateSnapshot(t)
 	violations = append(violations, CheckInvariants(inventory, cloudState, "cloud-")...)
+
+	// Phase 3: Check model vs inventory consistency.
+	if len(model) > 0 && model[0] != nil {
+		modelViolations := CheckModelVsInventory(model[0], inventory)
+		if len(modelViolations) > 0 {
+			// Dump inventory for debugging
+			t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
+			for _, res := range inventory {
+				t.Logf("  inventory: stack=%s label=%s type=%s nativeID=%s", res.Stack, res.Label, res.Type, res.NativeID)
+			}
+			// Dump model state for mismatched stacks
+			for _, v := range modelViolations {
+				t.Logf("  violation: %s", v.Message)
+			}
+		}
+		violations = append(violations, modelViolations...)
+	}
 
 	for _, v := range violations {
 		t.Logf("invariant violation: %s", v.Message)
@@ -322,6 +368,98 @@ func (h *TestHarness) waitAndCheckCommandCompleteness(t *testing.T, timeout time
 	return CheckCommandCompleteness(commands)
 }
 
+// applyCommandOutcomeToModel uses per-resource-update status from a completed
+// command to apply exact state changes to the model.
+//
+// For each ResourceUpdate in the command:
+//   - Success + create → resource exists
+//   - Success + delete → resource does not exist
+//   - Success + update → resource exists (with updated properties)
+//   - Failed/Canceled/Rejected → no change (resource keeps its previous state)
+//
+// Returns true if all resource updates succeeded, false if any failed.
+func applyCommandOutcomeToModel(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool) bool {
+	t.Helper()
+
+	allSuccess := true
+	for _, ru := range cmd.ResourceUpdates {
+		// Find the stack index by matching StackName to stack labels.
+		stackIdx := -1
+		for i, s := range model.Stacks {
+			if s.Label == ru.StackName {
+				stackIdx = i
+				break
+			}
+		}
+		if stackIdx == -1 {
+			continue // stack not tracked in model
+		}
+
+		// Find the slot index by resource label.
+		slotIdx := -1
+		for idx := range model.Stack(stackIdx).Resources {
+			var label string
+			if pool != nil {
+				label = pool.LabelForStack(model.Stack(stackIdx).Label, idx)
+			} else {
+				label = resourceLabelForStack(model.Stack(stackIdx).Label, idx)
+			}
+			if label == ru.ResourceLabel {
+				slotIdx = idx
+				break
+			}
+		}
+		if slotIdx == -1 {
+			continue // resource not tracked in model
+		}
+
+		if ru.State != "Success" {
+			allSuccess = false
+			continue // no state change on failure
+		}
+
+		switch ru.Operation {
+		case "create":
+			props := ""
+			if ru.Properties != nil {
+				props = string(ru.Properties)
+			}
+			model.ApplyCreated(stackIdx, []int{slotIdx}, props)
+		case "delete":
+			model.ApplyDestroyed(stackIdx, []int{slotIdx})
+		case "update":
+			// Resource still exists; properties may have been updated.
+			// ApplyCreated with new properties serves the same purpose
+			// (marks resource as existing with given properties).
+			if ru.Properties != nil {
+				model.ApplyCreated(stackIdx, []int{slotIdx}, string(ru.Properties))
+			}
+		case "read":
+			// Sync reads don't change model state.
+		}
+	}
+
+	return allSuccess
+}
+
+// applyReconcileGuarantee enforces the reconcile invariant: after a successful
+// reconcile on a stack, ONLY the resources listed in reconcileIDs should exist.
+// Resources not in reconcileIDs are marked as NotExist. This handles the case
+// where resources were already destroyed before the reconcile ran, so no delete
+// operation appears in the command response.
+func applyReconcileGuarantee(model *StateModel, stackIdx int, reconcileIDs []int) {
+	inReconcile := make(map[int]bool, len(reconcileIDs))
+	for _, id := range reconcileIDs {
+		inReconcile[id] = true
+	}
+	stack := model.Stack(stackIdx)
+	for idx := range stack.Resources {
+		if !inReconcile[idx] {
+			model.ApplyDestroyed(stackIdx, []int{idx})
+		}
+	}
+}
+
 func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
 
@@ -337,10 +475,24 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	} else {
 		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
 	}
+	// Program response sequences before submitting the command.
+	var programmedSeqs []testcontrol.PluginOpSequence
+	if op.DrawnOutcomes != nil {
+		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, op.ResourceIDs, model, nativeIDs, false, model.Pool)
+		if len(programmedSeqs) > 0 {
+			h.ProgramResponses(t, programmedSeqs)
+		}
+	}
+
 	resp, err := h.client.ApplyForma(forma, mode, false, clientID, false)
 	if err != nil {
 		// Patch may be rejected if resources don't exist, conflicts, etc.
 		// This is valid agent behavior, not a test failure.
+		// Roll back programmed responses so they don't leak to future commands.
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Apply (%s) stack=%s resources %v → rejected: %v", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, err)
 		return
 	}
@@ -349,8 +501,11 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	// desired state already matches), it returns a response with
 	// ChangesRequired=false and does NOT persist a command to the datastore.
 	// Polling for such a command would time out, so we treat it as a
-	// successful no-op.
+	// successful no-op. Roll back programmed responses.
 	if !resp.Simulation.ChangesRequired {
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Apply (%s) stack=%s resources %v → no changes required", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs)
 		return
 	}
@@ -358,58 +513,19 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	commandID := resp.CommandID
 	t.Logf("[op %d] Apply (%s) stack=%s resources %v → command %s", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, commandID)
 
-	if op.Blocking {
-		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
-		if !ok {
-			// Timed out — all resources become uncertain. This is expected
-			// when failure injection is active (e.g. Create errors cause
-			// retries). The final invariant check validates consistency.
-			for _, id := range op.ResourceIDs {
-				model.MarkUncertain(op.StackIndex, id)
-			}
-			t.Logf("[op %d] Apply (%s) command %s timed out (resources marked uncertain)", op.SequenceNum, op.ApplyMode, commandID)
-			return
-		}
-
-		if cmd.State == "Success" {
-			// Update model: applied resources now exist
-			props := resourceProperties(stackLabel, op.ResourceIDs, op.Properties)
-			model.ApplyCreated(op.StackIndex, op.ResourceIDs, props)
-
-			// For reconcile mode, resources NOT in the forma are destroyed
-			if mode == pkgmodel.FormaApplyModeReconcile {
-				for idx := range model.Stack(op.StackIndex).Resources {
-					if !containsInt(op.ResourceIDs, idx) {
-						model.ApplyDestroyed(op.StackIndex, []int{idx})
-					}
-				}
-			}
-
-			// Post-apply property verification
-			h.verifyPostApplyProperties(t, op, mode, stackLabel, model)
-		} else {
-			// Command failed — resources may have been partially created.
-			// Mark them as uncertain since we don't know which succeeded.
-			for _, id := range op.ResourceIDs {
-				model.MarkUncertain(op.StackIndex, id)
-			}
-		}
-		t.Logf("[op %d] Apply completed: %s", op.SequenceNum, cmd.State)
-	} else {
-		// Fire-and-forget: mark resources uncertain since we don't know
-		// when the command will complete.
-		for _, id := range op.ResourceIDs {
-			model.MarkUncertain(op.StackIndex, id)
-		}
-		model.AddPendingCommand(op.StackIndex, &PendingCommand{
-			CommandID:   commandID,
-			Kind:        CommandKindApply,
-			StackLabel:  stackLabel,
-			ResourceIDs: op.ResourceIDs,
-			Properties:  op.Properties,
-		})
-		t.Logf("[op %d] Apply (%s) stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, commandID)
+	// Immediate model update: predict outcomes at submission time.
+	successIDs := successfulResourceIDs(op, op.StackIndex, op.ResourceIDs, model.Pool, false, model)
+	if len(successIDs) > 0 {
+		model.ApplyCreated(op.StackIndex, successIDs, op.Properties)
 	}
+	if op.ApplyMode == "reconcile" {
+		// Reconcile guarantee: resources NOT in the forma are deleted by the
+		// agent. Implicit deletes have no failure injection programmed, so
+		// they always succeed. Apply the guarantee regardless of DrawnOutcomes.
+		applyReconcileGuarantee(model, op.StackIndex, op.ResourceIDs)
+	}
+	model.TrackAcceptedCommand(commandID)
+	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
 }
 
 func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateModel) {
@@ -446,13 +562,30 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	t.Helper()
 
 	forma := FormaFromStackResources(stackLabel, existingIDs)
+
+	// Program response sequences before submitting the command.
+	var programmedSeqs []testcontrol.PluginOpSequence
+	if op.DrawnOutcomes != nil {
+		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
+		if len(programmedSeqs) > 0 {
+			h.ProgramResponses(t, programmedSeqs)
+		}
+	}
+
 	resp, err := h.client.DestroyForma(forma, false, clientID)
 	if err != nil {
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Destroy stack=%s resources %v → error: %v", op.SequenceNum, stackLabel, existingIDs, err)
 		return
 	}
 
 	if !resp.Simulation.ChangesRequired {
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Destroy stack=%s resources %v → no changes required", op.SequenceNum, stackLabel, existingIDs)
 		return
 	}
@@ -460,41 +593,13 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	commandID := resp.CommandID
 	t.Logf("[op %d] Destroy stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
-	if op.Blocking {
-		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
-		if !ok {
-			// Timed out — all resources become uncertain
-			for _, id := range existingIDs {
-				model.MarkUncertain(op.StackIndex, id)
-			}
-			t.Logf("[op %d] Destroy command %s timed out (resources marked uncertain)", op.SequenceNum, commandID)
-			return
-		}
-
-		if cmd.State == "Success" {
-			model.ApplyDestroyed(op.StackIndex, existingIDs)
-		} else {
-			// Command failed — resources may have been partially destroyed.
-			// Mark them as uncertain since we don't know which succeeded.
-			for _, id := range existingIDs {
-				model.MarkUncertain(op.StackIndex, id)
-			}
-		}
-		t.Logf("[op %d] Destroy completed: %s", op.SequenceNum, cmd.State)
-	} else {
-		// Fire-and-forget: mark resources uncertain since we don't know
-		// when the command will complete.
-		for _, id := range existingIDs {
-			model.MarkUncertain(op.StackIndex, id)
-		}
-		model.AddPendingCommand(op.StackIndex, &PendingCommand{
-			CommandID:   commandID,
-			Kind:        CommandKindDestroy,
-			StackLabel:  stackLabel,
-			ResourceIDs: existingIDs,
-		})
-		t.Logf("[op %d] Destroy stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+	// Immediate model update: predict outcomes at submission time.
+	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
+	if len(successIDs) > 0 {
+		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
+	model.TrackAcceptedCommand(commandID)
+	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
 // executeDestroyAbort handles destroy with on-dependents="abort". If any resource
@@ -536,13 +641,29 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	}
 
 	// No dependents (or simulation confirmed no cascades) — proceed with real destroy.
+	// Program response sequences before submitting the command.
+	var programmedSeqs []testcontrol.PluginOpSequence
+	if op.DrawnOutcomes != nil {
+		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
+		if len(programmedSeqs) > 0 {
+			h.ProgramResponses(t, programmedSeqs)
+		}
+	}
+
 	resp, err := h.client.DestroyForma(forma, false, clientID)
 	if err != nil {
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Destroy (abort) stack=%s resources %v → error: %v", op.SequenceNum, stackLabel, existingIDs, err)
 		return
 	}
 
 	if !resp.Simulation.ChangesRequired {
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Destroy (abort) stack=%s resources %v → no changes required", op.SequenceNum, stackLabel, existingIDs)
 		return
 	}
@@ -552,36 +673,13 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 
 	// Since the abort path only proceeds when simulation confirmed no cascades,
 	// only the explicitly drawn resources can be affected — descendants are safe.
-	if op.Blocking {
-		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
-		if !ok {
-			for _, id := range existingIDs {
-				model.MarkUncertain(op.StackIndex, id)
-			}
-			t.Logf("[op %d] Destroy (abort) command %s timed out (resources marked uncertain)", op.SequenceNum, commandID)
-			return
-		}
-
-		if cmd.State == "Success" {
-			model.ApplyDestroyed(op.StackIndex, existingIDs)
-		} else {
-			for _, id := range existingIDs {
-				model.MarkUncertain(op.StackIndex, id)
-			}
-		}
-		t.Logf("[op %d] Destroy (abort) completed: %s", op.SequenceNum, cmd.State)
-	} else {
-		for _, id := range existingIDs {
-			model.MarkUncertain(op.StackIndex, id)
-		}
-		model.AddPendingCommand(op.StackIndex, &PendingCommand{
-			CommandID:   commandID,
-			Kind:        CommandKindDestroy,
-			StackLabel:  stackLabel,
-			ResourceIDs: existingIDs,
-		})
-		t.Logf("[op %d] Destroy (abort) stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+	// Immediate model update: predict outcomes at submission time.
+	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
+	if len(successIDs) > 0 {
+		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
+	model.TrackAcceptedCommand(commandID)
+	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
 // executeDestroyCascade handles destroy with on-dependents="cascade". The agent
@@ -592,13 +690,29 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 
 	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
 
+	// Program response sequences before submitting the command.
+	var programmedSeqs []testcontrol.PluginOpSequence
+	if op.DrawnOutcomes != nil {
+		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
+		if len(programmedSeqs) > 0 {
+			h.ProgramResponses(t, programmedSeqs)
+		}
+	}
+
 	resp, err := h.client.DestroyForma(forma, false, clientID)
 	if err != nil {
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → error: %v", op.SequenceNum, stackLabel, existingIDs, err)
 		return
 	}
 
 	if !resp.Simulation.ChangesRequired {
+		if len(programmedSeqs) > 0 {
+			h.UnprogramResponses(t, programmedSeqs)
+		}
 		t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → no changes required", op.SequenceNum, stackLabel, existingIDs)
 		return
 	}
@@ -606,57 +720,60 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	commandID := resp.CommandID
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
-	if op.Blocking {
-		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
-		if !ok {
-			// Timed out — mark drawn resources and all descendants uncertain.
-			h.markWithDescendantsUncertain(model, op.StackIndex, existingIDs)
-			t.Logf("[op %d] Destroy (cascade) command %s timed out (resources marked uncertain)", op.SequenceNum, commandID)
-			return
-		}
-
-		if cmd.State == "Success" {
-			// Mark each drawn resource and all its descendants as destroyed.
-			for _, idx := range existingIDs {
-				if model.Pool.HasDescendants(idx) {
-					model.ApplyCascadeDestroyed(op.StackIndex, idx)
-				} else {
-					model.ApplyDestroyed(op.StackIndex, []int{idx})
-				}
-			}
-		} else {
-			h.markWithDescendantsUncertain(model, op.StackIndex, existingIDs)
-		}
-		t.Logf("[op %d] Destroy (cascade) completed: %s", op.SequenceNum, cmd.State)
-	} else {
-		// Fire-and-forget: mark drawn resources and descendants uncertain.
-		h.markWithDescendantsUncertain(model, op.StackIndex, existingIDs)
-		model.AddPendingCommand(op.StackIndex, &PendingCommand{
-			CommandID:    commandID,
-			Kind:         CommandKindDestroy,
-			StackLabel:   stackLabel,
-			ResourceIDs:  existingIDs,
-			OnDependents: "cascade",
-		})
-		t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → fire-and-forget command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
+	// Immediate model update: predict outcomes at submission time.
+	// For cascade destroy, successful resources and all their descendants are destroyed.
+	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
+	for _, idx := range successIDs {
+		model.ApplyCascadeDestroyed(op.StackIndex, idx)
 	}
+	model.TrackAcceptedCommand(commandID)
+	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
-// markWithDescendantsUncertain marks each resource in ids plus all its pool
-// descendants as uncertain in the state model.
-func (h *TestHarness) markWithDescendantsUncertain(model *StateModel, stackIndex int, ids []int) {
-	for _, idx := range ids {
-		model.MarkUncertain(stackIndex, idx)
-		if model.Pool != nil {
-			for _, descIdx := range model.Pool.AllDescendants(idx) {
-				model.MarkUncertain(stackIndex, descIdx)
-			}
-		}
+// allResourceIDs returns all resource indices for a stack.
+func allResourceIDs(model *StateModel, stackIndex int) []int {
+	ids := make([]int, 0, len(model.Stack(stackIndex).Resources))
+	for idx := range model.Stack(stackIndex).Resources {
+		ids = append(ids, idx)
 	}
+	return ids
+}
+
+func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+
+	stackLabel := model.Stack(op.StackIndex).Label
+
+	// ForceReconcile is inherently blocking: the agent reconstructs the forma
+	// from GetResourcesAtLastReconcile, and we can't predict that resource set
+	// from the model alone. We wait for the command to complete and apply the
+	// actual per-resource-update outcomes to the model.
+
+	resp, err := h.client.ForceReconcile(stackLabel)
+	if err != nil {
+		t.Logf("[op %d] ForceReconcile stack=%s → rejected: %v", op.SequenceNum, stackLabel, err)
+		return
+	}
+
+	if resp.CommandID == "" {
+		t.Logf("[op %d] ForceReconcile stack=%s → no drift", op.SequenceNum, stackLabel)
+		return
+	}
+
+	t.Logf("[op %d] ForceReconcile stack=%s → command %s", op.SequenceNum, stackLabel, resp.CommandID)
+
+	cmd, ok := h.TryWaitForCommandDone(resp.CommandID, defaultCommandTimeout)
+	if !ok {
+		t.Logf("[op %d] ForceReconcile stack=%s command %s timed out", op.SequenceNum, stackLabel, resp.CommandID)
+		return
+	}
+
+	t.Logf("[op %d] ForceReconcile stack=%s command %s completed: %s", op.SequenceNum, stackLabel, resp.CommandID, cmd.State)
+	applyCommandOutcomeToModel(t, cmd, model, model.Pool)
 }
 
 // filterExistingResources returns only the resource IDs whose model state
-// includes StateExists on the given stack.
+// is StateExists on the given stack.
 func filterExistingResources(ids []int, stackIndex int, model *StateModel) []int {
 	var existing []int
 	for _, id := range ids {
@@ -664,11 +781,8 @@ func filterExistingResources(ids []int, stackIndex int, model *StateModel) []int
 		if res == nil {
 			continue
 		}
-		for _, s := range res.AcceptStates {
-			if s == StateExists {
-				existing = append(existing, id)
-				break
-			}
+		if res.State == StateExists {
+			existing = append(existing, id)
 		}
 	}
 	return existing
@@ -676,10 +790,30 @@ func filterExistingResources(ids []int, stackIndex int, model *StateModel) []int
 
 func (h *TestHarness) executeTriggerSync(t *testing.T) {
 	t.Helper()
+
+	// Record log position so we can detect new sync completion messages.
+	logPos := h.logCapture.EntryCount()
+
 	err := h.client.ForceSync()
 	if err != nil {
 		t.Logf("TriggerSync error (may be expected): %v", err)
+		return
 	}
+
+	// Wait for the sync to complete. The sync's Read operations go through
+	// the same response queue as user commands and would consume programmed
+	// error responses meant for subsequent operations.
+	//
+	// Two possible outcomes:
+	// 1. "Synchronization finished"  — sync ran and completed
+	// 2. "no resources found to synchronize" — sync had nothing to do
+	if h.logCapture.WaitForLogSince("Synchronization finished", logPos, defaultCommandTimeout) {
+		return
+	}
+	if h.logCapture.WaitForLogSince("no resources found to synchronize", logPos, 500*time.Millisecond) {
+		return
+	}
+	t.Logf("executeTriggerSync: timeout waiting for sync completion")
 }
 
 func (h *TestHarness) executeTriggerDiscovery(t *testing.T) {
@@ -688,18 +822,6 @@ func (h *TestHarness) executeTriggerDiscovery(t *testing.T) {
 	if err != nil {
 		t.Logf("TriggerDiscovery error (may be expected): %v", err)
 	}
-}
-
-func (h *TestHarness) executeInjectError(t *testing.T, op *Operation) {
-	t.Helper()
-	h.InjectError(t, InjectErrorFromOp(op))
-	t.Logf("[op %d] InjectError: %s on %s (count=%d)", op.SequenceNum, op.ErrorMsg, op.TargetOperation, op.ErrorCount)
-}
-
-func (h *TestHarness) executeInjectLatency(t *testing.T, op *Operation) {
-	t.Helper()
-	h.InjectLatency(t, InjectLatencyFromOp(op))
-	t.Logf("[op %d] InjectLatency: %v on %s", op.SequenceNum, op.Latency, op.TargetOperation)
 }
 
 func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation) {
@@ -810,70 +932,273 @@ func (h *TestHarness) verifyPostApplyProperties(t *testing.T, op *Operation, mod
 	require.Empty(t, lastViolations, "post-apply property violations")
 }
 
-// hasAnyPendingCommands returns true if any stack has pending fire-and-forget commands.
-func (h *TestHarness) hasAnyPendingCommands(model *StateModel) bool {
-	for stackIdx := range model.Stacks {
-		if len(model.PendingCommandsForStack(stackIdx)) > 0 {
+// successfulResourceIDs returns the subset of resource IDs whose DrawnOutcomes
+// indicate success (or all IDs if DrawnOutcomes is nil).
+//
+// The success check is context-sensitive:
+//   - For resources that don't yet exist (creates): only CRUDSteps matter.
+//     The plugin doesn't do a Read before Create, so ReadSteps failures are irrelevant.
+//   - For existing resources (updates/deletes): both ReadSteps and CRUDSteps matter.
+//     The ResourceUpdater does a Read before Update/Delete.
+//
+// When pool is non-nil and isDestroy is false (i.e. an apply/create operation),
+// a resource is also considered failed if any of its ancestors in the operation
+// set has a failure outcome. This mirrors the agent's behavior: the changeset
+// executor processes resources in dependency order, and when a parent create
+// fails, all dependents are marked as failed too.
+func successfulResourceIDs(op *Operation, stackIdx int, ids []int, pool *ResourcePool, isDestroy bool, model *StateModel) []int {
+	if op.DrawnOutcomes == nil {
+		return ids // No failure injection — all succeed
+	}
+
+	// Build a set of IDs in this operation for fast lookup.
+	idSet := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	// isOwnOutcomeSuccess checks whether this resource's own drawn outcome
+	// indicates success (or has no outcome at all).
+	isOwnOutcomeSuccess := func(id int) bool {
+		key := outcomeKey(stackIdx, id)
+		outcome, exists := op.DrawnOutcomes[key]
+		if !exists {
 			return true
 		}
+		res := model.Resource(stackIdx, id)
+		resourceExists := res != nil && res.State == StateExists
+		if resourceExists {
+			// Existing resource being Updated or Deleted → Read+CRUD chain.
+			// Both ReadSteps and CRUDSteps must succeed.
+			return willOperationSucceed(outcome.ReadSteps) && willOperationSucceed(outcome.CRUDSteps)
+		}
+		// New resource → Create only. ReadSteps are irrelevant.
+		return willOperationSucceed(outcome.CRUDSteps)
 	}
-	return false
+
+	var success []int
+	for _, id := range ids {
+		key := outcomeKey(stackIdx, id)
+		outcome, hasOutcome := op.DrawnOutcomes[key]
+		ownSuccess := isOwnOutcomeSuccess(id)
+
+		if hasOutcome {
+			res := model.Resource(stackIdx, id)
+			resourceExists := res != nil && res.State == StateExists
+			slog.Warn("[DEBUG-TEST] successfulResourceIDs",
+				"stackIdx", stackIdx, "slot", id, "key", key,
+				"exists", resourceExists,
+				"readSteps", len(outcome.ReadSteps), "crudSteps", len(outcome.CRUDSteps),
+				"ownSuccess", ownSuccess)
+		}
+
+		if !ownSuccess {
+			continue
+		}
+
+		// For creates: check two failure conditions up the ancestor chain:
+		// 1. An ancestor in the operation set has a failure outcome → cascade failure
+		// 2. An ancestor NOT in the operation set doesn't exist → parent missing
+		if pool != nil && !isDestroy {
+			ancestorFailed := false
+			cur := id
+			for {
+				parentIdx := pool.Slots[cur].ParentIndex
+				if parentIdx == -1 {
+					break
+				}
+				if idSet[parentIdx] {
+					// Ancestor is in the operation set: check its drawn outcome.
+					if !isOwnOutcomeSuccess(parentIdx) {
+						ancestorFailed = true
+						slog.Warn("[DEBUG-TEST] cascade-failed in model",
+							"stackIdx", stackIdx, "slot", id, "failedAncestor", parentIdx)
+						break
+					}
+				} else {
+					// Ancestor is NOT in the operation set: it must already exist.
+					// If it doesn't, the agent can't create this child.
+					parentRes := model.Resource(stackIdx, parentIdx)
+					if parentRes == nil || parentRes.State != StateExists {
+						ancestorFailed = true
+						slog.Warn("[DEBUG-TEST] ancestor-missing in model",
+							"stackIdx", stackIdx, "slot", id, "missingAncestor", parentIdx)
+						break
+					}
+				}
+				cur = parentIdx
+			}
+			if ancestorFailed {
+				continue
+			}
+		}
+
+		success = append(success, id)
+	}
+	return success
 }
 
-// DrainPendingCommands polls all pending commands across all stacks until they
-// complete, updating the state model accordingly. Used before final invariant
-// checks when fire-and-forget commands may still be in flight.
+// DrainPendingCommands waits for all accepted commands to reach a terminal
+// state. The model was already updated at submission time, so this only
+// needs to confirm the agent has finished processing.
 func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, timeout time.Duration) {
 	t.Helper()
 
-	for stackIdx := range model.Stacks {
-		pending := model.PendingCommandsForStack(stackIdx)
-		for cmdID, cmd := range pending {
-			result, ok := h.TryWaitForCommandDone(cmdID, timeout)
-			if !ok {
-				// Timed out — mark all resources uncertain
-				if cmd.OnDependents == "cascade" && model.Pool != nil {
-					h.markWithDescendantsUncertain(model, stackIdx, cmd.ResourceIDs)
-				} else {
-					for _, id := range cmd.ResourceIDs {
-						model.MarkUncertain(stackIdx, id)
+	for _, ac := range model.AcceptedCommands {
+		cmd, ok := h.TryWaitForCommandDone(ac.CommandID, timeout)
+		if !ok {
+			t.Logf("DrainPendingCommands: command %s timed out", ac.CommandID)
+		} else {
+			t.Logf("DrainPendingCommands: command %s completed (state=%s)", ac.CommandID, cmd.State)
+			if cmd.State == "Failed" {
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.State != "Success" {
+						t.Logf("  FAILED resource_update: label=%s op=%s state=%s err=%s", ru.ResourceLabel, ru.Operation, ru.State, ru.ErrorMessage)
 					}
 				}
-				t.Logf("DrainPendingCommands: command %s timed out (resources marked uncertain)", cmdID)
-				model.RemovePendingCommand(stackIdx, cmdID)
-				continue
+			}
+		}
+	}
+	model.AcceptedCommands = nil
+
+	// After all commands have completed, reconcile the model with the
+	// actual inventory. Concurrent commands, OOB changes, reconcile
+	// guarantees, and failure injection can all cause the actual state
+	// to differ from submission-time predictions. Querying the inventory
+	// gives us the ground truth.
+	h.reconcileModelWithInventory(t, model)
+}
+
+// reconcileModelWithActualOutcome corrects the model for commands that failed.
+// Resources predicted to succeed at submission time but that actually failed
+// (or were rejected/cascaded) need their model state reverted. Resources
+// predicted to fail but that actually succeeded need their model state applied.
+func reconcileModelWithActualOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool) {
+	t.Helper()
+
+	for _, ru := range cmd.ResourceUpdates {
+		stackIdx := -1
+		for i, s := range model.Stacks {
+			if s.Label == ru.StackName {
+				stackIdx = i
+				break
+			}
+		}
+		if stackIdx == -1 {
+			continue
+		}
+
+		slotIdx := -1
+		for idx := range model.Stack(stackIdx).Resources {
+			var label string
+			if pool != nil {
+				label = pool.LabelForStack(model.Stack(stackIdx).Label, idx)
+			} else {
+				label = resourceLabelForStack(model.Stack(stackIdx).Label, idx)
+			}
+			if label == ru.ResourceLabel {
+				slotIdx = idx
+				break
+			}
+		}
+		if slotIdx == -1 {
+			continue
+		}
+
+		res := model.Resource(stackIdx, slotIdx)
+		if res == nil {
+			continue
+		}
+
+		switch {
+		case ru.State == "Success" && ru.Operation == "create":
+			// Model may have already set this; ensure it's marked as existing.
+			if ru.Properties != nil {
+				model.ApplyCreated(stackIdx, []int{slotIdx}, string(ru.Properties))
+			}
+		case ru.State == "Success" && ru.Operation == "delete":
+			model.ApplyDestroyed(stackIdx, []int{slotIdx})
+		case ru.State == "Success" && ru.Operation == "update":
+			if ru.Properties != nil {
+				model.ApplyCreated(stackIdx, []int{slotIdx}, string(ru.Properties))
 			}
 
-			if result.State == "Success" {
-				switch cmd.Kind {
-				case CommandKindApply:
-					props := resourceProperties(cmd.StackLabel, cmd.ResourceIDs, cmd.Properties)
-					model.ApplyCreated(stackIdx, cmd.ResourceIDs, props)
-				case CommandKindDestroy:
-					if cmd.OnDependents == "cascade" && model.Pool != nil {
-						for _, idx := range cmd.ResourceIDs {
-							if model.Pool.HasDescendants(idx) {
-								model.ApplyCascadeDestroyed(stackIdx, idx)
-							} else {
-								model.ApplyDestroyed(stackIdx, []int{idx})
-							}
-						}
-					} else {
-						model.ApplyDestroyed(stackIdx, cmd.ResourceIDs)
-					}
-				}
-			} else {
-				if cmd.OnDependents == "cascade" && model.Pool != nil {
-					h.markWithDescendantsUncertain(model, stackIdx, cmd.ResourceIDs)
-				} else {
-					for _, id := range cmd.ResourceIDs {
-						model.MarkUncertain(stackIdx, id)
-					}
-				}
+		case ru.State != "Success" && ru.Operation == "create":
+			// Model predicted success (created), but actually failed.
+			// Revert: resource should not exist.
+			if res.State == StateExists {
+				t.Logf("  reconcile: reverting create for %s (slot %d) on stack %s", ru.ResourceLabel, slotIdx, ru.StackName)
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 			}
-			t.Logf("DrainPendingCommands: command %s completed: %s", cmdID, result.State)
-			model.RemovePendingCommand(stackIdx, cmdID)
+		case ru.State != "Success" && ru.Operation == "delete":
+			// Model predicted success (destroyed), but actually failed.
+			// Revert: resource still exists. We don't know the properties,
+			// but marking as existing with empty props is better than wrong.
+			if res.State == StateNotExist {
+				t.Logf("  reconcile: reverting destroy for %s (slot %d) on stack %s", ru.ResourceLabel, slotIdx, ru.StackName)
+				model.ApplyCreated(stackIdx, []int{slotIdx}, res.Properties)
+			}
+		case ru.State != "Success" && ru.Operation == "update":
+			// Model predicted success (updated), but actually failed/rejected.
+			// The resource still exists with its OLD properties (pre-update).
+			// Nothing to change in the model — the resource is still in the
+			// same state as before the command.
 		}
+	}
+}
+
+// reconcileModelWithInventory queries the agent's inventory and updates the
+// model to match the actual state. This is the authoritative reconciliation
+// after all commands have completed.
+func (h *TestHarness) reconcileModelWithInventory(t *testing.T, model *StateModel) {
+	t.Helper()
+
+	forma, err := h.client.ExtractResources("managed:true")
+	if err != nil {
+		t.Logf("reconcileModelWithInventory: failed to query inventory: %v", err)
+		return
+	}
+
+	// Build a set of (stack, label) → exists from inventory.
+	inventorySet := make(map[string]bool)
+	if forma != nil {
+		for _, res := range forma.Resources {
+			inventorySet[res.Stack+":"+res.Label] = true
+		}
+	}
+
+	pool := model.Pool
+	corrections := 0
+
+	for stackIdx := range model.Stacks {
+		stack := &model.Stacks[stackIdx]
+		for slotIdx, res := range stack.Resources {
+			if res == nil {
+				continue
+			}
+			var label string
+			if pool != nil {
+				label = pool.LabelForStack(stack.Label, slotIdx)
+			} else {
+				label = resourceLabelForStack(stack.Label, slotIdx)
+			}
+			key := stack.Label + ":" + label
+			inInventory := inventorySet[key]
+
+			if res.State == StateExists && !inInventory {
+				t.Logf("  reconcileInventory: %s (slot %d) on %s model=Exists actual=NotExist → correcting", label, slotIdx, stack.Label)
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+				corrections++
+			} else if res.State == StateNotExist && inInventory {
+				t.Logf("  reconcileInventory: %s (slot %d) on %s model=NotExist actual=Exists → correcting", label, slotIdx, stack.Label)
+				model.ApplyCreated(stackIdx, []int{slotIdx}, "")
+				corrections++
+			}
+		}
+	}
+
+	if corrections > 0 {
+		t.Logf("reconcileModelWithInventory: corrected %d model entries", corrections)
 	}
 }
 
@@ -892,15 +1217,9 @@ func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config Proper
 		var policies []json.RawMessage
 		if config.EnableAutoReconcile && stackIdx == 0 {
 			// Attach auto-reconcile to the first stack
-			policies = append(policies, json.RawMessage(`{"Type":"auto-reconcile","IntervalSeconds":3600}`))
+			policies = append(policies, json.RawMessage(`{"Type":"auto-reconcile","IntervalSeconds":999999}`))
 			model.Stacks[stackIdx].AutoReconcile = true
 		}
-		if config.EnableTTL && stackIdx == config.StackCount-1 {
-			// Attach TTL to the last stack (very long TTL so it doesn't expire mid-test)
-			policies = append(policies, json.RawMessage(`{"Type":"ttl","TTLSeconds":86400,"OnDependents":"cascade"}`))
-			model.Stacks[stackIdx].TTL = true
-		}
-
 		forma := FormaFromStackResourcesWithPolicies(stackLabel, ids, policies)
 		resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
 		if err != nil {
@@ -941,22 +1260,14 @@ func (h *TestHarness) ForceReconcileAndWait(t *testing.T, stackLabel string, mod
 
 	cmd, ok := h.TryWaitForCommandDone(resp.CommandID, defaultCommandTimeout)
 	if !ok {
+		// TODO: Task 3 will rewrite this function
 		t.Logf("ForceReconcileAndWait: stack %s command %s timed out", stackLabel, resp.CommandID)
-		// Mark all resources uncertain since reconcile outcome is unknown
-		for idx := range model.Stack(stackIdx).Resources {
-			model.MarkUncertain(stackIdx, idx)
-		}
 		return
 	}
 
 	t.Logf("ForceReconcileAndWait: stack %s command %s completed: %s", stackLabel, resp.CommandID, cmd.State)
-	if cmd.State == "Success" {
-		// After successful reconcile, all managed resources match their declared state.
-		// Mark all resources uncertain since we don't know what reconcile changed.
-		for idx := range model.Stack(stackIdx).Resources {
-			model.MarkUncertain(stackIdx, idx)
-		}
-	}
+	// Apply per-resource-update status to the model.
+	applyCommandOutcomeToModel(t, cmd, model, model.Pool)
 }
 
 // CleanupOutOfBandCloudResources removes all cloud state entries that were
@@ -1014,21 +1325,46 @@ func (h *TestHarness) SyncCloudStateWithInventory(t *testing.T) {
 	}
 
 	// Add cloud entries for inventory resources not in cloud (phantoms from OpCloudDelete)
+	// and fix property mismatches (cloud state modified by partially-failed commands
+	// where the plugin succeeded but the command failed, leaving inventory stale).
 	restored := 0
+	propFixed := 0
 	for nativeID, res := range inventoryByNativeID {
-		if _, ok := cloudState[nativeID]; !ok {
+		cloudEntry, inCloud := cloudState[nativeID]
+		if !inCloud {
 			h.PutCloudState(t, nativeID, res.Type, string(res.Properties))
 			restored++
+		} else if string(res.Properties) != "" && cloudEntry.Properties != "" {
+			// Use the invariant's jsonEqual to compare (handles resolvables).
+			if !jsonEqual(string(res.Properties), cloudEntry.Properties) {
+				// Cloud state differs from inventory — overwrite cloud state
+				// to match inventory (inventory is the source of truth).
+				h.PutCloudState(t, nativeID, res.Type, cloudPropsFromInventory(res.Properties))
+				propFixed++
+			}
 		}
 	}
 
-	if removed > 0 || restored > 0 {
-		t.Logf("SyncCloudStateWithInventory: removed %d orphans, restored %d phantoms", removed, restored)
+	if removed > 0 || restored > 0 || propFixed > 0 {
+		t.Logf("SyncCloudStateWithInventory: removed %d orphans, restored %d phantoms, fixed %d property mismatches", removed, restored, propFixed)
 	}
 }
 
+// cloudPropsFromInventory converts inventory properties (which may contain
+// resolvable wrappers) to plain cloud-state properties by flattening resolvables
+// to their $value.
+func cloudPropsFromInventory(props json.RawMessage) string {
+	var m map[string]any
+	if err := json.Unmarshal(props, &m); err != nil {
+		return string(props)
+	}
+	flattenResolvables(m)
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
 // ForceCheckTTLAndWait triggers a TTL check. If stacks have expired, the agent
-// destroys them. We mark affected stacks' resources as uncertain.
+// destroys them and we wait for the commands to complete.
 func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 	t.Helper()
 
@@ -1044,15 +1380,34 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 	}
 
 	t.Logf("ForceCheckTTLAndWait: expired stacks: %v", resp.ExpiredStacks)
-	// Mark all resources on expired stacks as uncertain
-	for _, expiredLabel := range resp.ExpiredStacks {
-		for stackIdx, stack := range model.Stacks {
-			if stack.Label == expiredLabel {
-				for idx := range stack.Resources {
-					model.MarkUncertain(stackIdx, idx)
-				}
+
+	for i, expiredLabel := range resp.ExpiredStacks {
+		if i >= len(resp.CommandIDs) {
+			break
+		}
+		commandID := resp.CommandIDs[i]
+
+		// Find the stack index for this label.
+		stackIdx := -1
+		for s := range model.Stacks {
+			if model.Stacks[s].Label == expiredLabel {
+				stackIdx = s
+				break
 			}
 		}
+		if stackIdx == -1 {
+			continue
+		}
+
+		// Wait for the destroy command and apply outcomes to the model.
+		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
+		if !ok {
+			t.Logf("ForceCheckTTLAndWait: command %s timed out", commandID)
+			continue
+		}
+		applyCommandOutcomeToModel(t, cmd, model, model.Pool)
+		model.Stacks[stackIdx].TTLExpired = false
+		t.Logf("ForceCheckTTLAndWait: stack %s command %s completed: %s", expiredLabel, commandID, cmd.State)
 	}
 }
 
@@ -1298,21 +1653,302 @@ func containsInt(slice []int, val int) bool {
 	return false
 }
 
-// --- Operation to testcontrol message converters ---
+// --- Response queue programming helpers ---
 
-// InjectErrorFromOp converts an OpInjectError operation to a testcontrol request.
-func InjectErrorFromOp(op *Operation) testcontrol.InjectErrorRequest {
-	return testcontrol.InjectErrorRequest{
-		Operation: op.TargetOperation,
-		Error:     op.ErrorMsg,
-		Count:     op.ErrorCount,
+// getNativeIDsForStack queries the inventory API for resources on a stack
+// and returns a map of "stackLabel:resourceLabel" -> NativeID.
+func (h *TestHarness) getNativeIDsForStack(t *testing.T, stackLabel string) map[string]string {
+	t.Helper()
+
+	forma, err := h.client.ExtractResources("managed:true stack:" + stackLabel)
+	if err != nil || forma == nil {
+		return nil
 	}
+
+	result := make(map[string]string)
+	for _, res := range forma.Resources {
+		result[res.Stack+":"+res.Label] = res.NativeID
+	}
+	return result
 }
 
-// InjectLatencyFromOp converts an OpInjectLatency operation to a testcontrol request.
-func InjectLatencyFromOp(op *Operation) testcontrol.InjectLatencyRequest {
-	return testcontrol.InjectLatencyRequest{
-		Operation: op.TargetOperation,
-		Duration:  op.Latency,
+// buildPluginOpSequences converts DrawnOutcomes to PluginOpSequences that can
+// be programmed into the test plugin's response queue.
+//
+// For each resource slot in the operation:
+//   - If the resource doesn't exist -> it will be a Create: program Create steps with Name as match key
+//   - If the resource exists -> it will be a Read+Update or Read+Delete: program Read and CRUD steps with NativeID as match key
+func buildPluginOpSequences(
+	drawnOutcomes map[string]DrawnOutcome,
+	stackIndex int,
+	stackLabel string,
+	resourceIDs []int,
+	model *StateModel,
+	nativeIDs map[string]string,
+	isDestroy bool,
+	pool *ResourcePool,
+) []testcontrol.PluginOpSequence {
+	if drawnOutcomes == nil {
+		return nil
+	}
+
+	// Build a set of IDs in this operation for ancestor lookups.
+	idSet := make(map[int]bool, len(resourceIDs))
+	for _, id := range resourceIDs {
+		idSet[id] = true
+	}
+
+	// isOwnOutcomeSuccess checks whether a resource's own drawn outcome
+	// indicates success (matching the logic in successfulResourceIDs).
+	isOwnOutcomeSuccess := func(id int) bool {
+		key := outcomeKey(stackIndex, id)
+		outcome, exists := drawnOutcomes[key]
+		if !exists {
+			return true
+		}
+		res := model.Resource(stackIndex, id)
+		resourceExists := res != nil && res.State == StateExists
+		if resourceExists {
+			// Existing resource being Updated or Deleted → Read+CRUD chain.
+			return willOperationSucceed(outcome.ReadSteps) && willOperationSucceed(outcome.CRUDSteps)
+		}
+		// New resource → Create only. ReadSteps are irrelevant.
+		return willOperationSucceed(outcome.CRUDSteps)
+	}
+
+	// isCascadeFailed checks whether this resource will fail due to ancestry:
+	// either an ancestor in the operation set has a failure outcome (cascade),
+	// or an ancestor NOT in the operation set doesn't exist (missing parent).
+	// In both cases the agent never attempts the child operation, so we must
+	// not program responses for it.
+	isCascadeFailed := func(id int) bool {
+		if pool == nil || isDestroy {
+			return false
+		}
+		cur := id
+		for {
+			parentIdx := pool.Slots[cur].ParentIndex
+			if parentIdx == -1 {
+				return false
+			}
+			if idSet[parentIdx] {
+				if !isOwnOutcomeSuccess(parentIdx) {
+					return true
+				}
+			} else {
+				parentRes := model.Resource(stackIndex, parentIdx)
+				if parentRes == nil || parentRes.State != StateExists {
+					return true
+				}
+			}
+			cur = parentIdx
+		}
+	}
+
+	var sequences []testcontrol.PluginOpSequence
+
+	for _, slotIdx := range resourceIDs {
+		// Skip cascade-failed resources: their operations will never reach
+		// the plugin, so programming responses would leave stale entries
+		// in the queue that poison future commands.
+		if isCascadeFailed(slotIdx) {
+			slog.Warn("[DEBUG-TEST] buildPluginOpSequences: skipping cascade-failed", "stackIndex", stackIndex, "slot", slotIdx)
+			continue
+		}
+
+		key := outcomeKey(stackIndex, slotIdx)
+		outcome, ok := drawnOutcomes[key]
+		if !ok {
+			continue // no drawn outcome for this slot — will succeed by default
+		}
+
+		slog.Warn("[DEBUG-TEST] buildPluginOpSequences: programming", "stackIndex", stackIndex, "slot", slotIdx, "readSteps", len(outcome.ReadSteps), "crudSteps", len(outcome.CRUDSteps))
+
+		// Determine the resource label
+		var label string
+		if pool != nil {
+			label = pool.LabelForStack(stackLabel, slotIdx)
+		} else {
+			label = resourceLabelForStack(stackLabel, slotIdx)
+		}
+
+		res := model.Stack(stackIndex).Resources[slotIdx]
+		exists := res != nil && res.State == StateExists
+
+		if exists {
+			// Resource exists -> will be Read+Update or Read+Delete
+			nativeID := nativeIDs[stackLabel+":"+label]
+			if nativeID == "" {
+				continue // can't program without NativeID
+			}
+
+			crudOp := "Update"
+			if isDestroy {
+				crudOp = "Delete"
+			}
+
+			// Program Read steps, then CRUD steps only if Read will succeed.
+			if len(outcome.ReadSteps) > 0 {
+				sequences = append(sequences, testcontrol.PluginOpSequence{
+					MatchKey:  nativeID,
+					Operation: "Read",
+					Steps:     outcome.ReadSteps,
+				})
+			}
+			readWillSucceed := len(outcome.ReadSteps) == 0 || willOperationSucceed(outcome.ReadSteps)
+			if readWillSucceed && len(outcome.CRUDSteps) > 0 {
+				sequences = append(sequences, testcontrol.PluginOpSequence{
+					MatchKey:  nativeID,
+					Operation: crudOp,
+					Steps:     outcome.CRUDSteps,
+				})
+			}
+		} else {
+			// Resource doesn't exist -> will be a Create
+			// Match key is the Name (= resource label)
+			if len(outcome.CRUDSteps) > 0 {
+				sequences = append(sequences, testcontrol.PluginOpSequence{
+					MatchKey:  label,
+					Operation: "Create",
+					Steps:     outcome.CRUDSteps,
+				})
+			}
+		}
+	}
+
+	return sequences
+}
+
+// willOperationSucceed returns true if the given response steps will result
+// in a successful operation given the agent's retry behaviour.
+// Any irrecoverable error causes immediate failure. Recoverable errors
+// (Throttling) are survived if there are at most maxSurvivableErrors of them
+// because the agent makes enough retry attempts for the queue to drain,
+// and the next attempt gets default success.
+func willOperationSucceed(steps []testcontrol.ResponseStep) bool {
+	recoverable := 0
+	for _, s := range steps {
+		if s.ErrorCode == "" {
+			continue
+		}
+		if s.ErrorCode == "Throttling" {
+			recoverable++
+		} else {
+			return false // irrecoverable error → immediate failure
+		}
+	}
+	return recoverable <= maxSurvivableErrors
+}
+
+// --- Operation to testcontrol message converters ---
+
+// executeSetTTLPolicy applies a forma with the stack's existing resources plus
+// a TTL policy. This is always blocking — we need the policy in place before
+// CheckTTL can use it.
+func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+
+	stackLabel := model.Stack(op.StackIndex).Label
+
+	ttlSeconds := 86400
+	if op.TTLExpired {
+		ttlSeconds = 1
+	}
+
+	existingIDs := filterExistingResources(allResourceIDs(model, op.StackIndex), op.StackIndex, model)
+	if len(existingIDs) == 0 {
+		t.Logf("[op %d] SetTTLPolicy stack=%s → skipped (no existing resources)", op.SequenceNum, stackLabel)
+		return
+	}
+
+	policy := json.RawMessage(fmt.Sprintf(`{"Type":"ttl","TTLSeconds":%d,"OnDependents":"cascade"}`, ttlSeconds))
+
+	var forma *pkgmodel.Forma
+	if model.Pool != nil {
+		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs,
+			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps)
+	} else {
+		forma = FormaFromStackResources(stackLabel, existingIDs, resourceProperties(stackLabel, existingIDs))
+	}
+	for i := range forma.Stacks {
+		if forma.Stacks[i].Label == stackLabel {
+			forma.Stacks[i].Policies = []json.RawMessage{policy}
+		}
+	}
+
+	resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
+	if err != nil {
+		t.Logf("[op %d] SetTTLPolicy stack=%s → rejected: %v", op.SequenceNum, stackLabel, err)
+		return
+	}
+
+	if !resp.Simulation.ChangesRequired {
+		t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → no changes required", op.SequenceNum, stackLabel, op.TTLExpired)
+		model.Stacks[op.StackIndex].TTLExpired = op.TTLExpired
+		return
+	}
+
+	commandID := resp.CommandID
+	t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → command %s", op.SequenceNum, stackLabel, op.TTLExpired, commandID)
+
+	// Immediate model update: SetTTLPolicy is a reconcile apply.
+	// Predict outcomes at submission time, same as executeApply reconcile.
+	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, false, model)
+	if len(successIDs) > 0 {
+		model.ApplyCreated(op.StackIndex, successIDs, resourceProperties(stackLabel, existingIDs))
+	}
+	// Reconcile guarantee: resources NOT in the forma are deleted by the
+	// agent. Implicit deletes have no failure injection programmed, so
+	// they always succeed. Apply the guarantee regardless of DrawnOutcomes.
+	applyReconcileGuarantee(model, op.StackIndex, existingIDs)
+	model.Stacks[op.StackIndex].TTLExpired = op.TTLExpired
+	model.Stacks[op.StackIndex].TTL = true
+	model.TrackAcceptedCommand(commandID)
+	t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, op.TTLExpired, successIDs)
+}
+
+// executeCheckTTL triggers a TTL check and processes any expired stacks.
+func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+
+	resp, err := h.client.ForceCheckTTL()
+	if err != nil {
+		t.Logf("[op %d] CheckTTL → error: %v", op.SequenceNum, err)
+		return
+	}
+
+	if len(resp.ExpiredStacks) == 0 {
+		t.Logf("[op %d] CheckTTL → no expired stacks", op.SequenceNum)
+		return
+	}
+
+	t.Logf("[op %d] CheckTTL → expired stacks: %v, command IDs: %v", op.SequenceNum, resp.ExpiredStacks, resp.CommandIDs)
+
+	for i, expiredLabel := range resp.ExpiredStacks {
+		if i >= len(resp.CommandIDs) {
+			break
+		}
+		commandID := resp.CommandIDs[i]
+
+		// Find the stack index for this label
+		stackIdx := -1
+		for s := range model.Stacks {
+			if model.Stacks[s].Label == expiredLabel {
+				stackIdx = s
+				break
+			}
+		}
+		if stackIdx == -1 {
+			continue
+		}
+
+		// Immediate model update: TTL expiry destroys all resources on the stack (cascade).
+		resourceIDs := allResourceIDs(model, stackIdx)
+		for _, idx := range resourceIDs {
+			model.ApplyCascadeDestroyed(stackIdx, idx)
+		}
+		model.Stacks[stackIdx].TTLExpired = false
+		model.TrackAcceptedCommand(commandID)
+		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }

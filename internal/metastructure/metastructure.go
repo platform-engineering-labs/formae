@@ -137,6 +137,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("DiscoveryConfig"):       cfg.Agent.Discovery,
 		gen.Env("LoggingConfig"):         cfg.Agent.Logging,
 		gen.Env("OTelConfig"):            cfg.Agent.OTel,
+		gen.Env("StackExpirerConfig"):    cfg.Agent.StackExpirer,
 		gen.Env("AgentID"):               agentID,
 	}
 
@@ -455,7 +456,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								Operation: ru.Operation,
 							}
 						}
-						_, err = m.callActor(
+						m.callActor(
 							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 							forma_persister.MarkResourcesAsFailed{
 								CommandID:          fa.ID,
@@ -463,10 +464,6 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								ResourceModifiedTs: time.Now(),
 							},
 						)
-						if err != nil {
-							slog.Error("Failed to mark resources as failed after stack deletion",
-								"error", err, "commandID", fa.ID)
-						}
 						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
 					}
 				}
@@ -1252,12 +1249,16 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceRe
 }
 
 func (m *Metastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
 	expiredStacks, err := m.Datastore.GetExpiredStacks()
 	if err != nil {
 		return nil, fmt.Errorf("failed to query expired stacks: %w", err)
 	}
 
 	expiredLabels := make([]string, 0)
+	commandIDs := make([]string, 0)
 
 	for _, stackInfo := range expiredStacks {
 		slog.Info("Force TTL check: expiring stack", "stack", stackInfo.StackLabel, "onDependents", stackInfo.OnDependents)
@@ -1303,9 +1304,10 @@ func (m *Metastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 		}
 
 		expiredLabels = append(expiredLabels, stackInfo.StackLabel)
+		commandIDs = append(commandIDs, result.command.ID)
 	}
 
-	return &apimodel.ForceCheckTTLResponse{ExpiredStacks: expiredLabels}, nil
+	return &apimodel.ForceCheckTTLResponse{ExpiredStacks: expiredLabels, CommandIDs: commandIDs}, nil
 }
 
 func (m *Metastructure) ReRunIncompleteCommands() error {

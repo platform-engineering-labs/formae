@@ -56,10 +56,17 @@ func (s *StackExpirer) Init(args ...any) error {
 	s.datastore = ds.(datastore.Datastore)
 	s.interval = DefaultStackExpirerInterval
 
-	if _, err := s.SendAfter(s.PID(), CheckExpiredStacks{}, DefaultStackExpirerInterval); err != nil {
+	if cfg, ok := s.Env("StackExpirerConfig"); ok {
+		expirerCfg := cfg.(pkgmodel.StackExpirerConfig)
+		if expirerCfg.Interval > 0 {
+			s.interval = expirerCfg.Interval
+		}
+	}
+
+	if _, err := s.SendAfter(s.PID(), CheckExpiredStacks{}, s.interval); err != nil {
 		return fmt.Errorf("failed to send initial check message: %s", err)
 	}
-	s.Log().Info("Stack expirer ready, interval=%s", DefaultStackExpirerInterval)
+	s.Log().Info("Stack expirer ready, interval=%s", s.interval)
 
 	return nil
 }
