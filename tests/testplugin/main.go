@@ -27,11 +27,13 @@ func main() {
 	cs := NewCloudState()
 	ol := NewOperationLog()
 	inj := NewInjectionState()
+	rq := NewResponseQueue()
 
 	p := &TestPlugin{
-		cloudState: cs,
-		injections: inj,
-		opLog:      ol,
+		cloudState:    cs,
+		injections:    inj,
+		responseQueue: rq,
+		opLog:         ol,
 	}
 
 	// Register message types for network serialization
@@ -86,6 +88,7 @@ func main() {
 		gen.Env("CloudState"):     cs,
 		gen.Env("InjectionState"): inj,
 		gen.Env("OperationLog"):   ol,
+		gen.Env("ResponseQueue"):  rq,
 		gen.Env("RetryConfig"): model.RetryConfig{
 			StatusCheckInterval: 5 * time.Second,
 			MaxRetries:          3,

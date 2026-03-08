@@ -19,9 +19,10 @@ import (
 type TestController struct {
 	act.Actor
 
-	cloudState *CloudState
-	injections *InjectionState
-	opLog      *OperationLog
+	cloudState    *CloudState
+	injections    *InjectionState
+	opLog         *OperationLog
+	responseQueue *ResponseQueue
 }
 
 // NewTestController is the factory function for the TestController actor.
@@ -47,6 +48,12 @@ func (tc *TestController) Init(args ...any) error {
 		return fmt.Errorf("TestController: missing 'OperationLog' environment variable")
 	}
 	tc.opLog = ol.(*OperationLog)
+
+	rq, ok := tc.Env("ResponseQueue")
+	if !ok {
+		return fmt.Errorf("TestController: missing 'ResponseQueue' environment variable")
+	}
+	tc.responseQueue = rq.(*ResponseQueue)
 
 	tc.Log().Info("TestController initialized")
 	return nil
@@ -89,6 +96,15 @@ func (tc *TestController) HandleCall(from gen.PID, ref gen.Ref, request any) (an
 		return testcontrol.GetCloudStateSnapshotResponse{
 			Entries: tc.cloudState.Snapshot(),
 		}, nil
+
+	// --- Response Queue ---
+	case testcontrol.ProgramResponsesRequest:
+		tc.responseQueue.Program(msg.Sequences)
+		return testcontrol.ProgramResponsesResponse{}, nil
+
+	case testcontrol.UnprogramResponsesRequest:
+		tc.responseQueue.Unprogram(msg.Sequences)
+		return testcontrol.UnprogramResponsesResponse{}, nil
 
 	// --- Operation Log ---
 	case testcontrol.GetOperationLogRequest:

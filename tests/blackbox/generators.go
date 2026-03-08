@@ -11,8 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
-
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 	"pgregory.net/rapid"
 )
 
@@ -48,14 +47,17 @@ func allowedKinds(config PropertyTestConfig) []OperationKind {
 	// Base operations always available
 	kinds := []OperationKind{OpApply, OpDestroy, OpVerifyState, OpTriggerSync, OpTriggerDiscovery}
 
-	if config.EnableFailures {
-		kinds = append(kinds, OpInjectError, OpInjectLatency, OpClearInjections)
-	}
 	if config.EnableCloudChanges {
 		kinds = append(kinds, OpCloudModify, OpCloudDelete, OpCloudCreate)
 	}
 	if config.EnableCancel {
 		kinds = append(kinds, OpCancel)
+	}
+	if config.EnableAutoReconcile {
+		kinds = append(kinds, OpForceReconcile)
+	}
+	if config.EnableTTL {
+		kinds = append(kinds, OpCheckTTL, OpSetTTLPolicy)
 	}
 
 	return kinds
@@ -68,6 +70,62 @@ func stackIndexGen(t *rapid.T, config PropertyTestConfig) int {
 		return 0
 	}
 	return rapid.IntRange(0, config.StackCount-1).Draw(t, "stackIdx")
+}
+
+// outcomeKey builds the map key for DrawnOutcomes.
+func outcomeKey(stackIdx, slotIdx int) string {
+	return fmt.Sprintf("%d:%d", stackIdx, slotIdx)
+}
+
+// pluginOpStepsGen draws a response sequence for a single plugin operation.
+// Weighted: ~75% success, ~10% recoverable->success, ~10% irrecoverable, ~5% recoverable->fail.
+//
+// Retry semantics: with MaxRetries=N, the agent sets maxAttempts=N+1 and starts
+// with attempts=1. The retry condition (data.attempts <= maxAttempts) allows
+// retrying at attempts 1,2,3 — giving 4 total calls (initial + 3 retries).
+// With MaxRetries=2 (harness config): survives up to 3 Throttling errors; need 4 to exhaust.
+func pluginOpStepsGen(t *rapid.T, label string) []testcontrol.ResponseStep {
+	roll := rapid.IntRange(0, 99).Draw(t, label)
+	switch {
+	case roll < 75: // success — empty steps (falls through to success)
+		return nil
+	case roll < 85: // recoverable -> success: 1-4 Throttling (within retry budget)
+		retries := rapid.IntRange(1, maxSurvivableErrors).Draw(t, label+"-retries")
+		steps := make([]testcontrol.ResponseStep, retries)
+		for i := range steps {
+			steps[i] = testcontrol.ResponseStep{ErrorCode: "Throttling"}
+		}
+		return steps
+	case roll < 95: // irrecoverable failure
+		return []testcontrol.ResponseStep{{ErrorCode: "AccessDenied"}}
+	default: // recoverable -> exhaust retries
+		steps := make([]testcontrol.ResponseStep, exhaustRetryCount)
+		for i := range steps {
+			steps[i] = testcontrol.ResponseStep{ErrorCode: "Throttling"}
+		}
+		return steps
+	}
+}
+
+// Retry budget constants derived from the harness RetryConfig (MaxRetries=2).
+// maxAttempts = MaxRetries + 1 = 3. The PluginOperator starts with attempts=1.
+// The retry condition (data.attempts <= maxAttempts) allows retrying at
+// attempts 1,2,3 — giving 4 total calls (initial + 3 retries).
+// Can survive maxAttempts-1 = 3 recoverable errors (success on 4th call).
+// 4 errors exhaust retries (fails on 4th attempt since 4 > maxAttempts).
+const (
+	harnessMaxRetries   = 2
+	maxAttempts         = harnessMaxRetries + 1 // 3
+	maxSurvivableErrors = maxAttempts           // 3 — agent survives and succeeds on 4th call
+	exhaustRetryCount   = maxSurvivableErrors + 1 // 4 — agent exhausts retries and fails
+)
+
+// drawnOutcomeGen draws a complete outcome for one resource slot.
+func drawnOutcomeGen(t *rapid.T, label string) DrawnOutcome {
+	return DrawnOutcome{
+		ReadSteps: pluginOpStepsGen(t, label+"-read"),
+		CRUDSteps: pluginOpStepsGen(t, label+"-crud"),
+	}
 }
 
 // fillOperationFields populates the kind-specific fields on the operation.
@@ -98,8 +156,13 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 		} else {
 			op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
 		}
-		op.Blocking = blockingGen(t, config)
 		op.Properties = resourcePropsGen(t)
+		if config.EnableFailures {
+			op.DrawnOutcomes = make(map[string]DrawnOutcome)
+			for i := 0; i < config.ResourceCount; i++ {
+				op.DrawnOutcomes[outcomeKey(op.StackIndex, i)] = drawnOutcomeGen(t, fmt.Sprintf("outcome-%d", i))
+			}
+		}
 
 	case OpDestroy:
 		op.StackIndex = stackIndexGen(t, config)
@@ -109,24 +172,28 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 		} else {
 			op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
 		}
-		op.Blocking = blockingGen(t, config)
+		if config.EnableFailures {
+			op.DrawnOutcomes = make(map[string]DrawnOutcome)
+			for i := 0; i < config.ResourceCount; i++ {
+				op.DrawnOutcomes[outcomeKey(op.StackIndex, i)] = drawnOutcomeGen(t, fmt.Sprintf("outcome-%d", i))
+			}
+			// For cascade destroys, also draw outcomes for other stacks
+			if op.OnDependents == "cascade" {
+				for s := 0; s < config.StackCount; s++ {
+					if s == op.StackIndex {
+						continue
+					}
+					for i := 0; i < config.ResourceCount; i++ {
+						op.DrawnOutcomes[outcomeKey(s, i)] = drawnOutcomeGen(t, fmt.Sprintf("cascade-%d-%d", s, i))
+					}
+				}
+			}
+		}
 
 	case OpCancel:
 		// CommandID is set during execution, nothing to generate
 
 	case OpTriggerSync, OpTriggerDiscovery, OpVerifyState:
-		// No additional fields needed
-
-	case OpInjectError:
-		op.TargetOperation = pluginOperationGen(t)
-		op.ErrorMsg = errorMsgGen(t)
-		op.ErrorCount = rapid.IntRange(0, 5).Draw(t, "errorCount")
-
-	case OpInjectLatency:
-		op.TargetOperation = pluginOperationGen(t)
-		op.Latency = time.Duration(rapid.IntRange(50, 5000).Draw(t, "latencyMs")) * time.Millisecond
-
-	case OpClearInjections:
 		// No additional fields needed
 
 	case OpCloudModify:
@@ -135,6 +202,22 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 
 	case OpCloudDelete:
 		op.NativeID = cloudNativeIDGen(t)
+
+	case OpForceReconcile:
+		op.StackIndex = stackIndexGen(t, config)
+		if config.EnableFailures {
+			op.DrawnOutcomes = make(map[string]DrawnOutcome)
+			for i := 0; i < config.ResourceCount; i++ {
+				op.DrawnOutcomes[outcomeKey(op.StackIndex, i)] = drawnOutcomeGen(t, fmt.Sprintf("outcome-%d", i))
+			}
+		}
+
+	case OpCheckTTL:
+		// No additional fields needed
+
+	case OpSetTTLPolicy:
+		op.StackIndex = stackIndexGen(t, config)
+		op.TTLExpired = rapid.Bool().Draw(t, "ttlExpired")
 
 	case OpCloudCreate:
 		op.NativeID = cloudNativeIDGen(t)
@@ -259,29 +342,6 @@ func onDependentsGen(t *rapid.T) string {
 func applyModeGen(t *rapid.T, config PropertyTestConfig) string {
 	modes := []string{"patch", "reconcile"}
 	return modes[rapid.IntRange(0, len(modes)-1).Draw(t, "mode")]
-}
-
-func blockingGen(t *rapid.T, config PropertyTestConfig) bool {
-	if !config.EnableConcurrency {
-		return true
-	}
-	return rapid.Bool().Draw(t, "blocking")
-}
-
-func pluginOperationGen(t *rapid.T) string {
-	ops := []string{"Create", "Read", "Update", "Delete"}
-	return ops[rapid.IntRange(0, len(ops)-1).Draw(t, "pluginOp")]
-}
-
-
-func errorMsgGen(t *rapid.T) string {
-	msgs := []string{
-		"injected-transient-error",
-		"injected-permanent-error",
-		"injected-throttle-error",
-		"injected-not-found-error",
-	}
-	return msgs[rapid.IntRange(0, len(msgs)-1).Draw(t, "errorMsg")]
 }
 
 func cloudNativeIDGen(t *rapid.T) string {

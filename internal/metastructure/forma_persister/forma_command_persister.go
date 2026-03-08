@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -55,6 +56,17 @@ func buildResourceUpdateIndex(cmd *forma_command.FormaCommand) map[string]int {
 	ksuidOpToIndex := make(map[string]int, len(cmd.ResourceUpdates))
 	for i, ru := range cmd.ResourceUpdates {
 		key := resourceUpdateKey(ru.DesiredState.Ksuid, types.OperationType(ru.Operation))
+		if existingIdx, collision := ksuidOpToIndex[key]; collision {
+			slog.Error("BUG: buildResourceUpdateIndex collision — two resource updates share the same ksuid:operation key",
+				"commandID", cmd.ID,
+				"key", key,
+				"existingIdx", existingIdx,
+				"existingLabel", cmd.ResourceUpdates[existingIdx].DesiredState.Label,
+				"existingStack", cmd.ResourceUpdates[existingIdx].DesiredState.Stack,
+				"newIdx", i,
+				"newLabel", ru.DesiredState.Label,
+				"newStack", ru.DesiredState.Stack)
+		}
 		ksuidOpToIndex[key] = i
 	}
 	return ksuidOpToIndex
@@ -268,7 +280,10 @@ func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.Form
 		pendingCompletions: len(command.ResourceUpdates),
 	}
 
-	f.Log().Debug("Stored and cached new Forma command", "commandID", command.ID)
+	f.Log().Debug("Stored and cached new Forma command",
+		"commandID", command.ID,
+		"pendingCompletions", len(command.ResourceUpdates),
+		"indexEntries", len(buildResourceUpdateIndex(command)))
 
 	return true, nil
 }
@@ -514,6 +529,13 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		// This counter tracks the number of expected MarkResourceUpdateAsComplete messages,
 		// NOT the number of resources in non-final state (which can be set by UpdateResourceProgress).
 		cached.pendingCompletions--
+		f.Log().Debug("MarkResourceUpdateAsComplete: decremented pendingCompletions",
+			"commandID", msg.CommandID,
+			"ksuid", msg.ResourceURI.KSUID(),
+			"operation", msg.Operation,
+			"finalState", msg.FinalState,
+			"pendingCompletions", cached.pendingCompletions,
+			"totalResourceUpdates", len(cmd.ResourceUpdates))
 		if cached.pendingCompletions < 0 {
 			return false, fmt.Errorf("unexpected completion for command %s resource %s: pendingCompletions went below zero, this indicates a programming error", msg.CommandID, msg.ResourceURI.KSUID())
 		}
@@ -522,6 +544,10 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 
 		// Calculate new command state
 		cmd.State = overallCommandState(cmd)
+		f.Log().Debug("MarkResourceUpdateAsComplete: computed overallCommandState",
+			"commandID", msg.CommandID,
+			"newState", cmd.State,
+			"pendingCompletions", cached.pendingCompletions)
 
 		// If command is in final state, do full finalization (hash sensitive data, potentially delete, etc.)
 		// Otherwise just update command meta for performance

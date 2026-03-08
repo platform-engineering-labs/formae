@@ -214,6 +214,19 @@ func (p *ResourcePool) CrossStackParentType(idx int) string {
 	return p.Slots[parentSlotIdx].Type
 }
 
+// CrossStackDependents returns indices of cross-stack slots that reference
+// the given parent slot. These are slots on consumer stacks that depend on
+// a resource in the provider stack.
+func (p *ResourcePool) CrossStackDependents(parentSlotIdx int) []int {
+	var deps []int
+	for i := range p.Slots {
+		if p.Slots[i].CrossStackParentSlot == parentSlotIdx {
+			deps = append(deps, i)
+		}
+	}
+	return deps
+}
+
 // ParentType returns the resource type of the parent.
 func (p *ResourcePool) ParentType(idx int) string {
 	parentIdx := p.Slots[idx].ParentIndex

@@ -259,7 +259,16 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 			},
 		)
 		if err != nil {
-			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister", "error", err)
+			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister",
+				"error", err,
+				"commandID", data.commandID,
+				"ksuid", data.originalResourceKsuidURI.KSUID(),
+				"operation", data.resourceUpdate.Operation)
+		} else {
+			proc.Log().Debug("ResourceUpdater: MarkAsComplete call succeeded",
+				"commandID", data.commandID,
+				"ksuid", data.originalResourceKsuidURI.KSUID(),
+				"operation", data.resourceUpdate.Operation)
 		}
 
 		// Send a ResourceUpdateFinished message to the requester to inform it about the final state of the resource update.
@@ -675,7 +684,10 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		// If we successfully persisted the read operation in the Synchronizing state, we should reject the resource update
 		// and exit the state machine.
 		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && hash != "" && !data.resourceUpdate.IsDelete() {
-			proc.Log().Warning("Resource update rejected as a change to the resource was detected")
+			proc.Log().Warning("Resource update rejected as a change to the resource was detected",
+				"label", data.resourceUpdate.DesiredState.Label,
+				"type", data.resourceUpdate.DesiredState.Type,
+				"hash", hash)
 			data.resourceUpdate.Reject()
 
 			return StateRejected, data, nil, nil

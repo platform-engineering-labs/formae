@@ -100,6 +100,10 @@ type OTelConfig struct {
 	Prometheus  PrometheusConfig `pkl:"prometheus"`
 }
 
+type StackExpirerConfig struct {
+	Interval time.Duration
+}
+
 type AgentConfig struct {
 	Server          ServerConfig
 	Datastore       DatastoreConfig
@@ -108,6 +112,7 @@ type AgentConfig struct {
 	Discovery       DiscoveryConfig
 	Logging         LoggingConfig
 	OTel            OTelConfig
+	StackExpirer    StackExpirerConfig
 }
 
 type APIConfig struct {

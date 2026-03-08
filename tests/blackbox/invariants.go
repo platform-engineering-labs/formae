@@ -24,6 +24,7 @@ const (
 	ViolationPropertyMismatch                           // inventory and cloud properties differ
 	ViolationCommandNotTerminal                         // command not in terminal state
 	ViolationResolvableNotResolved                      // resolvable $ref not properly resolved
+	ViolationModelInventoryMismatch                     // model expected state doesn't match inventory
 )
 
 // Violation describes a single invariant violation.
@@ -470,4 +471,59 @@ func extractResolvedValue(v any) string {
 		}
 	}
 	return ""
+}
+
+// CheckModelVsInventory verifies that the model's expected resource states
+// match what the agent actually has in inventory. For each resource tracked
+// in the model, it checks whether its existence in inventory is consistent
+// with the model's State.
+func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []Violation {
+	var violations []Violation
+
+	// Build a set of (stack, label) pairs present in inventory
+	inventorySet := make(map[string]bool, len(inventory))
+	for _, res := range inventory {
+		key := res.Stack + "/" + res.Label
+		inventorySet[key] = true
+	}
+
+	for s := range model.Stacks {
+		stack := &model.Stacks[s]
+		for idx, res := range stack.Resources {
+			var label string
+			if model.Pool != nil {
+				label = model.Pool.LabelForStack(stack.Label, idx)
+			} else {
+				label = resourceLabelForStack(stack.Label, idx)
+			}
+
+			key := stack.Label + "/" + label
+			existsInInventory := inventorySet[key]
+
+			var actual ResourceState
+			if existsInInventory {
+				actual = StateExists
+			} else {
+				actual = StateNotExist
+			}
+
+			if res.State != actual {
+				stateStr := "NotExist"
+				if actual == StateExists {
+					stateStr = "Exists"
+				}
+				expectedStr := "NotExist"
+				if res.State == StateExists {
+					expectedStr = "Exists"
+				}
+				violations = append(violations, Violation{
+					Kind: ViolationModelInventoryMismatch,
+					Message: fmt.Sprintf("stack %s resource %s (slot %d): inventory=%s but model expects %s",
+						stack.Label, label, idx, stateStr, expectedStr),
+				})
+			}
+		}
+	}
+
+	return violations
 }

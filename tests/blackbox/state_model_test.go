@@ -23,7 +23,7 @@ func TestStateModel_NewModel(t *testing.T) {
 	for i := range 3 {
 		res := model.Resource(0, i)
 		require.NotNil(t, res)
-		assert.Equal(t, []ResourceState{StateNotExist}, res.AcceptStates)
+		assert.Equal(t, StateNotExist, res.State)
 	}
 }
 
@@ -33,13 +33,13 @@ func TestStateModel_ApplyCreated(t *testing.T) {
 	model.ApplyCreated(0, []int{0, 2}, `{"Name":"a","Value":"v1"}`)
 
 	// Resources 0 and 2 should now be StateExists
-	assert.Equal(t, []ResourceState{StateExists}, model.Resource(0, 0).AcceptStates)
+	assert.Equal(t, StateExists, model.Resource(0, 0).State)
 	assert.Equal(t, `{"Name":"a","Value":"v1"}`, model.Resource(0, 0).Properties)
 
-	assert.Equal(t, []ResourceState{StateExists}, model.Resource(0, 2).AcceptStates)
+	assert.Equal(t, StateExists, model.Resource(0, 2).State)
 
 	// Resource 1 should remain StateNotExist
-	assert.Equal(t, []ResourceState{StateNotExist}, model.Resource(0, 1).AcceptStates)
+	assert.Equal(t, StateNotExist, model.Resource(0, 1).State)
 }
 
 func TestStateModel_ApplyDestroyed(t *testing.T) {
@@ -51,33 +51,8 @@ func TestStateModel_ApplyDestroyed(t *testing.T) {
 	// Destroy resource 0
 	model.ApplyDestroyed(0, []int{0})
 
-	assert.Equal(t, []ResourceState{StateNotExist}, model.Resource(0, 0).AcceptStates)
-	assert.Equal(t, []ResourceState{StateExists}, model.Resource(0, 1).AcceptStates)
-}
-
-func TestStateModel_MarkUncertain(t *testing.T) {
-	model := NewStateModel(1, 2)
-
-	// Create a resource
-	model.ApplyCreated(0, []int{0}, `{"Name":"a"}`)
-
-	// Mark it as uncertain (e.g., after failure injection)
-	model.MarkUncertain(0, 0)
-
-	// Should accept both states
-	states := model.Resource(0, 0).AcceptStates
-	assert.Contains(t, states, StateExists)
-	assert.Contains(t, states, StateNotExist)
-}
-
-func TestStateModel_MarkUncertain_Idempotent(t *testing.T) {
-	model := NewStateModel(1, 1)
-	model.ApplyCreated(0, []int{0}, `{"Name":"a"}`)
-
-	model.MarkUncertain(0, 0)
-	model.MarkUncertain(0, 0) // second call should not add duplicates
-
-	assert.Len(t, model.Resource(0, 0).AcceptStates, 2)
+	assert.Equal(t, StateNotExist, model.Resource(0, 0).State)
+	assert.Equal(t, StateExists, model.Resource(0, 1).State)
 }
 
 func TestStateModel_Verify_HappyPath(t *testing.T) {
@@ -169,17 +144,6 @@ func TestStateModel_Verify_PropertyMatch(t *testing.T) {
 	assert.Empty(t, violations)
 }
 
-func TestStateModel_PendingCommands(t *testing.T) {
-	model := NewStateModel(1, 1)
-
-	cmd := &PendingCommand{CommandID: "cmd-1", Kind: CommandKindApply, StackLabel: "stack-0", ResourceIDs: []int{0}}
-	model.AddPendingCommand(0, cmd)
-	assert.True(t, model.HasPendingCommands(0))
-
-	model.RemovePendingCommand(0, "cmd-1")
-	assert.False(t, model.HasPendingCommands(0))
-}
-
 func TestStateModel_CommandsTerminal(t *testing.T) {
 	commands := []CommandState{
 		{ID: "cmd-1", State: "Success"},
@@ -210,41 +174,12 @@ func TestStateModel_MultiStack_ResourcesIndependent(t *testing.T) {
 	model.ApplyCreated(0, []int{0, 1}, `{"Name":"a"}`)
 
 	// Stack 0 resources should be StateExists
-	assert.Equal(t, []ResourceState{StateExists}, model.Resource(0, 0).AcceptStates)
-	assert.Equal(t, []ResourceState{StateExists}, model.Resource(0, 1).AcceptStates)
+	assert.Equal(t, StateExists, model.Resource(0, 0).State)
+	assert.Equal(t, StateExists, model.Resource(0, 1).State)
 
 	// Stack 1 resources should still be StateNotExist
-	assert.Equal(t, []ResourceState{StateNotExist}, model.Resource(1, 0).AcceptStates)
-	assert.Equal(t, []ResourceState{StateNotExist}, model.Resource(1, 1).AcceptStates)
-}
-
-func TestStateModel_MultiStack_PendingCommandsPerStack(t *testing.T) {
-	model := NewStateModel(2, 2)
-
-	cmd := &PendingCommand{CommandID: "cmd-1", Kind: CommandKindApply, StackLabel: "stack-0", ResourceIDs: []int{0}}
-	model.AddPendingCommand(0, cmd)
-
-	assert.True(t, model.HasPendingCommands(0))
-	assert.False(t, model.HasPendingCommands(1))
-}
-
-func TestStateModel_MultiStack_MarkUncertainIsolated(t *testing.T) {
-	model := NewStateModel(2, 2)
-
-	// Create resource 0 on both stacks
-	model.ApplyCreated(0, []int{0}, `{"Name":"a"}`)
-	model.ApplyCreated(1, []int{0}, `{"Name":"b"}`)
-
-	// Mark uncertain only on stack 0
-	model.MarkUncertain(0, 0)
-
-	// Stack 0 resource should be uncertain
-	states0 := model.Resource(0, 0).AcceptStates
-	assert.Contains(t, states0, StateExists)
-	assert.Contains(t, states0, StateNotExist)
-
-	// Stack 1 resource should still be deterministic
-	assert.Equal(t, []ResourceState{StateExists}, model.Resource(1, 0).AcceptStates)
+	assert.Equal(t, StateNotExist, model.Resource(1, 0).State)
+	assert.Equal(t, StateNotExist, model.Resource(1, 1).State)
 }
 
 func TestStateModel_MultiStack_StackLabels(t *testing.T) {
@@ -259,6 +194,42 @@ func TestStateModel_MultiStack_StackCount(t *testing.T) {
 	model := NewStateModel(3, 2)
 	assert.Equal(t, 3, len(model.Stacks))
 	assert.Equal(t, 2, model.ResourcesPerStack)
+}
+
+func TestStateModel_ComputeAffectedStacks(t *testing.T) {
+	// 2 stacks, 5 resources per stack (1 tree), cross-stack enabled
+	model := NewStateModel(2, 5)
+
+	// Non-cascade destroy on stack 0 — only affects stack 0
+	affected := model.ComputeAffectedStacks(0, []int{0}, "")
+	assert.Equal(t, []int{0}, affected)
+
+	// Cascade destroy of parent (slot 0) on stack 0 — slot 0 has cross-stack
+	// dependents (slots 5, 6) that live on consumer stacks (stack 1)
+	affected = model.ComputeAffectedStacks(0, []int{0}, "cascade")
+	assert.Contains(t, affected, 0)
+	assert.Contains(t, affected, 1)
+
+	// Cascade destroy of a child (slot 1) on stack 0 — no cross-stack deps
+	affected = model.ComputeAffectedStacks(0, []int{1}, "cascade")
+	assert.Equal(t, []int{0}, affected)
+
+	// Non-cascade destroy on stack 1 — only affects stack 1
+	affected = model.ComputeAffectedStacks(1, []int{0}, "abort")
+	assert.Equal(t, []int{1}, affected)
+}
+
+func TestStateModel_TrackAcceptedCommand(t *testing.T) {
+	model := NewStateModel(1, 3)
+
+	assert.Empty(t, model.AcceptedCommands)
+
+	model.TrackAcceptedCommand("cmd-1")
+	model.TrackAcceptedCommand("cmd-2")
+
+	assert.Len(t, model.AcceptedCommands, 2)
+	assert.Equal(t, "cmd-1", model.AcceptedCommands[0].CommandID)
+	assert.Equal(t, "cmd-2", model.AcceptedCommands[1].CommandID)
 }
 
 func TestStateModel_Stack(t *testing.T) {

@@ -44,6 +44,14 @@ func RegisterEDFTypes() error {
 		// Operation log
 		GetOperationLogRequest{},
 		GetOperationLogResponse{},
+
+		// Response sequences
+		ResponseStep{},
+		PluginOpSequence{},
+		ProgramResponsesRequest{},
+		ProgramResponsesResponse{},
+		UnprogramResponsesRequest{},
+		UnprogramResponsesResponse{},
 	}
 
 	for _, t := range types {

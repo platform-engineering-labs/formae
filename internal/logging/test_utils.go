@@ -81,6 +81,31 @@ func (c *TestLogCapture) WaitForLog(substr string, timeout time.Duration) bool {
 	return false
 }
 
+// EntryCount returns the current number of captured log entries.
+func (c *TestLogCapture) EntryCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.Entries)
+}
+
+// WaitForLogSince polls for a log entry containing substr, only examining
+// entries added after startIndex. Returns true if found within timeout.
+func (c *TestLogCapture) WaitForLogSince(substr string, startIndex int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		c.mu.RLock()
+		for i := startIndex; i < len(c.Entries); i++ {
+			if strings.Contains(c.Entries[i], substr) {
+				c.mu.RUnlock()
+				return true
+			}
+		}
+		c.mu.RUnlock()
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
 // GetEntries returns a copy of all log entries
 func (c *TestLogCapture) GetEntries() []string {
 	c.mu.RLock()

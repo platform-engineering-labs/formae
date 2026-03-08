@@ -296,7 +296,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		ksuid := snapshot.KSUID
 		if ksuid != "" {
 			uri := pkgmodel.NewFormaeURI(ksuid, "")
-			existing, err := data.datastore.LoadResource(uri)
+			existing, err := ds.LoadResource(uri)
 			if err != nil || existing == nil {
 				// KSUID was deleted — clear it so assignKSUIDs() resolves a fresh one
 				ksuid = ""
