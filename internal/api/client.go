@@ -312,6 +312,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.StackDeletedDuringApply:
+		var errResp apimodel.ErrorResponse[apimodel.StackDeletedDuringApplyError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse StackDeletedDuringApply error: %w", err)
+		}
+		return nil, &errResp
+
 	default:
 		return nil, fmt.Errorf("unknown error type: %s", baseError.Error)
 	}
@@ -553,6 +560,8 @@ func (c *Client) ForceReconcile(stackLabel string) (*apimodel.ForceReconcileResp
 		return &result, nil
 	case http.StatusConflict:
 		return nil, fmt.Errorf("stack has active commands, reconcile skipped")
+	case http.StatusForbidden:
+		return nil, fmt.Errorf("stack does not have an auto-reconcile policy attached; force-reconcile requires one")
 	default:
 		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
 	}

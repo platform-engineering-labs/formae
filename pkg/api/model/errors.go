@@ -25,6 +25,8 @@ const (
 	StackReferenceNotFound       APIError = "StackReferenceNotFound"
 	TargetReferenceNotFound      APIError = "TargetReferenceNotFound"
 	InvalidQuery                 APIError = "InvalidQueryError"
+	StackDeletedDuringApply      APIError = "StackDeletedDuringApply"
+	ReconcilePolicyRequired      APIError = "ReconcilePolicyRequired"
 )
 
 type ErrorResponse[T any] struct {
@@ -153,6 +155,22 @@ type TargetReferenceNotFoundError struct {
 
 func (e TargetReferenceNotFoundError) Error() string {
 	return fmt.Sprintf("target %s does not exist in existing targets and added targets", e.TargetLabel)
+}
+
+type StackDeletedDuringApplyError struct {
+	StackLabel string `json:"StackLabel"`
+}
+
+func (e StackDeletedDuringApplyError) Error() string {
+	return fmt.Sprintf("stack '%s' was deleted by a concurrent command during apply", e.StackLabel)
+}
+
+type ReconcilePolicyRequiredError struct {
+	StackLabel string `json:"StackLabel"`
+}
+
+func (e ReconcilePolicyRequiredError) Error() string {
+	return fmt.Sprintf("stack '%s' does not have an auto-reconcile policy attached; force-reconcile is not allowed without one", e.StackLabel)
 }
 
 type TargetHasResourcesError struct {

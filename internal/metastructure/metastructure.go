@@ -1234,6 +1234,24 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceRe
 		}
 	}
 
+	// Verify the stack has an auto-reconcile policy attached.
+	// Force-reconcile is a destructive operation that reverts all resources to
+	// their last-known desired state. Require explicit opt-in via policy.
+	reconcileInfos, err := m.Datastore.GetStacksWithAutoReconcilePolicy()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check auto-reconcile policies: %w", err)
+	}
+	hasPolicy := false
+	for _, info := range reconcileInfos {
+		if info.StackLabel == stackLabel {
+			hasPolicy = true
+			break
+		}
+	}
+	if !hasPolicy {
+		return nil, apimodel.ReconcilePolicyRequiredError{StackLabel: stackLabel}
+	}
+
 	// Prepare the reconcile command and changeset
 	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile")
 	if err != nil {

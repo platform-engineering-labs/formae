@@ -492,6 +492,7 @@ func (s *Server) ListDrift(c echo.Context) error {
 // @Param stack path string true "The stack label to reconcile."
 // @Success 202 {object} apimodel.ForceReconcileResponse "Accepted: Reconcile command created and executing."
 // @Success 200 {object} apimodel.ForceReconcileResponse "OK: No drift detected, nothing to reconcile."
+// @Failure 403 {object} apimodel.ReconcilePolicyRequiredError "Forbidden: Stack does not have an auto-reconcile policy."
 // @Failure 409 {object} apimodel.ForceReconcileResponse "Conflict: Stack has active commands, reconcile skipped."
 // @Failure 500 {string} string "Internal Server Error."
 // @Router /stacks/{stack}/reconcile [post]
@@ -700,6 +701,16 @@ func mapError(c echo.Context, err error) error {
 	var targetReferenceNotFoundError apimodel.TargetReferenceNotFoundError
 	if errors.As(err, &targetReferenceNotFoundError) {
 		return apiError(c, http.StatusBadRequest, apimodel.TargetReferenceNotFound, targetReferenceNotFoundError)
+	}
+
+	var stackDeletedError apimodel.StackDeletedDuringApplyError
+	if errors.As(err, &stackDeletedError) {
+		return apiError(c, http.StatusConflict, apimodel.StackDeletedDuringApply, stackDeletedError)
+	}
+
+	var reconcilePolicyError apimodel.ReconcilePolicyRequiredError
+	if errors.As(err, &reconcilePolicyError) {
+		return apiError(c, http.StatusForbidden, apimodel.ReconcilePolicyRequired, reconcilePolicyError)
 	}
 
 	if err != nil {
