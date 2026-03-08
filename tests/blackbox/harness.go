@@ -174,8 +174,7 @@ func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*
 		if err == nil && statusResp != nil && len(statusResp.Commands) > 0 {
 			cmd := statusResp.Commands[0]
 			if cmd.State == "Success" || cmd.State == "Failed" || cmd.State == "Canceled" {
-				slog.Warn("[DEBUG-TEST] waitForCommand: terminal state reached", "commandID", commandID, "state", cmd.State, "at", time.Now().Format("15:04:05.000"))
-				return &cmd, true
+					return &cmd, true
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -371,7 +370,7 @@ func newTestConfig(t *testing.T, port int) *pkgmodel.Config {
 			},
 			Retry: pkgmodel.RetryConfig{
 				MaxRetries:          2,
-				RetryDelay:          1 * time.Second,
+				RetryDelay:          250 * time.Millisecond,
 				StatusCheckInterval: 1 * time.Second,
 			},
 			Synchronization: pkgmodel.SynchronizationConfig{
