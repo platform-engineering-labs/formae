@@ -158,6 +158,111 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 // standalone policies (no resources) completes successfully without hanging.
 // This is a regression test for a bug where policy-only destroy commands would hang
 // indefinitely because the policy updates were never processed/persisted.
+// TestMetastructure_DestroyReadThrottlingShouldRetryAndFail verifies that when a
+// recoverable error (Throttling) occurs during the Read/sync phase of a delete
+// operation, the error is properly retried and eventually causes the destroy to
+// fail. This is a regression test for a bug where TreatNotFoundAsSuccess=true
+// (set during delete reads) caused ALL error codes to be silently treated as
+// success, not just NotFound.
+func TestMetastructure_DestroyReadThrottlingShouldRetryAndFail(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				// Always return Throttling — simulates rate limiting during delete's sync phase.
+				return &resource.ReadResult{
+					ErrorCode: resource.OperationErrorCodeThrottling,
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		if err != nil {
+			t.Fatalf("Failed to create metastructure: %v", err)
+			return
+		}
+
+		// Step 1: Create a resource (Create path does NOT call Read)
+		f := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{
+				{Label: "test-stack1"},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "test-resource-throttle",
+					Type:       "FakeAWS::S3::Bucket",
+					Properties: json.RawMessage(`{"foo":"bar"}`),
+					Stack:      "test-stack1",
+					Target:     "test-target",
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{Label: "test-target"},
+			},
+		}
+
+		m.ApplyForma(f, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+
+		// Wait for create to succeed
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			if err != nil || len(fas) != 1 {
+				return false
+			}
+			return fas[0].State == forma_command.CommandStateSuccess
+		}, 5*time.Second, 100*time.Millisecond, "Create should succeed (Read not called during create)")
+
+		// Step 2: Destroy the resource — the Read (sync) phase should hit Throttling
+		m.DestroyForma(f, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+
+		// Wait for destroy to complete — should FAIL because Read retries are exhausted
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+
+			var destroyCmd *forma_command.FormaCommand
+			for _, fc := range fas {
+				if fc.Command == pkgmodel.CommandDestroy {
+					destroyCmd = fc
+					break
+				}
+			}
+			if destroyCmd == nil {
+				return false
+			}
+
+			return destroyCmd.State == forma_command.CommandStateFailed
+		}, 15*time.Second, 500*time.Millisecond, "Destroy should FAIL because Read hit Throttling")
+
+		// Verify the resource still exists (wasn't deleted)
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack1")
+		assert.NoError(t, err)
+		assert.Len(t, resources, 1, "Resource should still exist after failed destroy")
+
+		// Verify the destroy command shows Failed state
+		fas, err := m.Datastore.LoadFormaCommands()
+		assert.NoError(t, err)
+
+		var destroyCmd *forma_command.FormaCommand
+		for _, fc := range fas {
+			if fc.Command == pkgmodel.CommandDestroy {
+				destroyCmd = fc
+				break
+			}
+		}
+		assert.NotNil(t, destroyCmd)
+		assert.Equal(t, forma_command.CommandStateFailed, destroyCmd.State)
+		assert.Len(t, destroyCmd.ResourceUpdates, 1)
+		assert.Equal(t, resource_update.ResourceUpdateStateFailed, destroyCmd.ResourceUpdates[0].State)
+	})
+}
+
 func TestMetastructure_DestroyPolicyOnlyForma(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, def, err := test_helpers.NewTestMetastructure(t, nil)
