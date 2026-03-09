@@ -357,6 +357,53 @@ func TestCompareMap(t *testing.T) {
 	})
 }
 
+// TestCompareProperties_ResolvableNestedInArray verifies that compareProperties
+// handles resolvable refs nested inside array elements. The array element itself
+// is NOT a resolvable — it's a map that contains a resolvable field.
+// Currently compareArrayUnordered only checks if the element itself is resolvable
+// and falls through to JSON string comparison, which fails because expected has
+// $visibility while actual has $value.
+func TestCompareProperties_ResolvableNestedInArray(t *testing.T) {
+	expectedProperties := map[string]any{
+		"items": []any{
+			map[string]any{
+				"name": "default",
+				"ref": map[string]any{
+					"$label":      "my-ref",
+					"$property":   "name",
+					"$res":        true,
+					"$stack":      "my-stack",
+					"$type":       "TEST::Core::Namespace",
+					"$visibility": "Clear",
+				},
+			},
+		},
+	}
+
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"items": []any{
+				map[string]any{
+					"name": "default",
+					"ref": map[string]any{
+						"$label":    "my-ref",
+						"$property": "name",
+						"$res":      true,
+						"$stack":    "my-stack",
+						"$type":     "TEST::Core::Namespace",
+						"$value":    "resolved-value",
+					},
+				},
+			},
+		},
+	}
+
+	result := compareProperties(t, expectedProperties, actualResource, "after create")
+	if !result {
+		t.Errorf("compareProperties should pass when an array element contains a nested resolvable with resolved $value")
+	}
+}
+
 func TestGetTestType(t *testing.T) {
 	tests := []struct {
 		name     string
