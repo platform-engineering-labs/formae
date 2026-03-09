@@ -268,6 +268,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markResourceUpdateAsComplete(&msg)
 	case FinalizeIncompleteCommand:
 		return f.finalizeIncompleteCommand(&msg)
+	case messages.MarkTargetUpdateAsComplete:
+		return f.markTargetUpdateAsComplete(&msg)
 	default:
 		return nil, fmt.Errorf("unhandled message type: %T", msg)
 	}
@@ -420,6 +422,57 @@ func (f *FormaCommandPersister) updateTargetStates(msg *messages.UpdateTargetSta
 	}
 
 	f.Log().Debug("Successfully updated Forma command with target states", "commandID", msg.CommandID)
+	return true, nil
+}
+
+func (f *FormaCommandPersister) markTargetUpdateAsComplete(msg *messages.MarkTargetUpdateAsComplete) (bool, error) {
+	f.Log().Debug("Marking target update as complete", "commandID", msg.CommandID, "target", msg.TargetLabel, "operation", msg.TargetOperation, "state", msg.FinalState)
+
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		f.Log().Error("Failed to load Forma command for target completion", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to load Forma command for target completion: %w", err)
+	}
+
+	command := cached.command
+	for i := range command.TargetUpdates {
+		tu := &command.TargetUpdates[i]
+		if tu.Target.Label != msg.TargetLabel {
+			continue
+		}
+
+		if string(tu.Operation) == msg.TargetOperation {
+			// Direct match (e.g., standalone delete or create)
+			tu.State = msg.FinalState
+			break
+		}
+
+		// Handle replace: the DAG splits replace into delete + create.
+		// The delete phase completing moves replace to InProgress;
+		// the create phase completing moves it to the final state.
+		if string(tu.Operation) == "replace" {
+			if msg.TargetOperation == "delete" {
+				tu.State = types.TargetUpdateStateInProgress
+			} else if msg.TargetOperation == "create" {
+				tu.State = msg.FinalState
+			}
+			break
+		}
+	}
+
+	command.State = overallCommandState(command)
+
+	if command.IsInFinalState() {
+		if err := f.finalizeAndPersist(cached); err != nil {
+			return false, err
+		}
+	} else {
+		if err := f.datastore.UpdateFormaCommandProgress(command.ID, command.State, command.ModifiedTs); err != nil {
+			f.Log().Error("Failed to update Forma command meta", "commandID", msg.CommandID, "error", err)
+			return false, fmt.Errorf("failed to update Forma command meta: %w", err)
+		}
+	}
+
 	return true, nil
 }
 
@@ -681,6 +734,17 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 	var states []types.ResourceUpdateState
 	for _, res := range command.ResourceUpdates {
 		states = append(states, res.State)
+	}
+
+	// Check if any target updates are not in a final state
+	for _, tu := range command.TargetUpdates {
+		switch tu.State {
+		case types.TargetUpdateStateNotStarted, types.TargetUpdateStateInProgress:
+			return forma_command.CommandStateInProgress
+		case types.TargetUpdateStateFailed:
+			states = append(states, types.ResourceUpdateStateFailed)
+		}
+		// Success targets don't affect overall state
 	}
 
 	// Check if any resources are not in a final state

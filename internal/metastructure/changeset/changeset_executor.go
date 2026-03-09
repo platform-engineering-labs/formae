@@ -351,6 +351,27 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 }
 
 func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message target_update.TargetUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	// Notify the FormaCommandPersister about the target update completion.
+	// This is done here (not in the TargetUpdater) to avoid an import cycle
+	// between target_update and messages packages.
+	node, exists := data.changeset.DAG.Nodes[message.NodeURI]
+	if exists {
+		if tu, ok := node.Update.(*target_update.TargetUpdate); ok {
+			_, err := proc.Call(
+				gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: proc.Node().Name()},
+				messages.MarkTargetUpdateAsComplete{
+					CommandID:       data.changeset.CommandID,
+					TargetLabel:     tu.Target.Label,
+					TargetOperation: string(tu.Operation),
+					FinalState:      message.State,
+				},
+			)
+			if err != nil {
+				proc.Log().Error("Failed to update target state in persister", "error", err, "target", tu.Target.Label)
+			}
+		}
+	}
+
 	return handleUpdateFinished(from, state, data, updateFinishedEvent{
 		nodeURI:   message.NodeURI,
 		isSuccess: message.State == target_update.TargetUpdateStateSuccess,
