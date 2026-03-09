@@ -49,7 +49,7 @@ type MetastructureAPI interface {
 	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	CancelCommand(commandID string, clientID string) error
+	CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error)
 	CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
@@ -791,24 +791,28 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 	return m.DestroyForma(forma, config, clientID)
 }
 
-func (m *Metastructure) CancelCommand(commandID string, clientID string) error {
+func (m *Metastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
 	slog.Info("Canceling command", "commandID", commandID, "clientID", clientID)
 
-	// Send Cancel message to the ChangesetExecutor for this command
 	changesetExecutorPID := gen.ProcessID{
 		Name: actornames.ChangesetExecutor(commandID),
 		Node: m.Node.Name(),
 	}
 
-	err := m.Node.Send(changesetExecutorPID, changeset.Cancel{
+	result, err := m.callActor(changesetExecutorPID, changeset.Cancel{
 		CommandID: commandID,
 	})
 	if err != nil {
-		slog.Error("Failed to send cancel message to changeset executor", "commandID", commandID, "error", err)
-		return fmt.Errorf("failed to send cancel message: %w", err)
+		slog.Error("Failed to cancel command", "commandID", commandID, "error", err)
+		return nil, fmt.Errorf("failed to cancel command: %w", err)
 	}
 
-	return nil
+	cancelResp, ok := result.(changeset.CancelResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type from changeset executor: %T", result)
+	}
+
+	return &cancelResp, nil
 }
 
 func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
@@ -835,20 +839,27 @@ func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*a
 
 	// Filter to only InProgress commands
 	var canceledCommandIDs []string
+	allResourceStates := make(map[string]apimodel.CancelResourceState)
 	for _, cmd := range commandsToCancel {
 		if cmd.State == forma_command.CommandStateInProgress {
-			err := m.CancelCommand(cmd.ID, clientID)
+			cancelResp, err := m.CancelCommand(cmd.ID, clientID)
 			if err != nil {
 				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
 				// Continue with other commands even if one fails
 				continue
 			}
 			canceledCommandIDs = append(canceledCommandIDs, cmd.ID)
+			if cancelResp != nil {
+				for uri, state := range cancelResp.ResourceStates {
+					allResourceStates[uri] = apimodel.CancelResourceState{State: state}
+				}
+			}
 		}
 	}
 
 	return &apimodel.CancelCommandResponse{
-		CommandIDs: canceledCommandIDs,
+		CommandIDs:           canceledCommandIDs,
+		ResourceUpdateStates: allResourceStates,
 	}, nil
 }
 

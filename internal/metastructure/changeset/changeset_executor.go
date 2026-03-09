@@ -77,6 +77,11 @@ type Cancel struct {
 	CommandID string
 }
 
+// CancelResponse contains per-resource-update states at cancel time.
+type CancelResponse struct {
+	ResourceStates map[string]string // URI → state ("Canceled", "InProgress", "Success", "Failed")
+}
+
 type ChangesetState string
 
 const (
@@ -111,7 +116,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateMessageHandler(StateProcessing, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, targetUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
-		statemachine.WithStateMessageHandler(StateProcessing, cancel),
+		statemachine.WithStateCallHandler(StateProcessing, cancel),
 		statemachine.WithStateMessageHandler(StateCanceling, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateCanceling, targetUpdateFinished),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
@@ -643,23 +648,38 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 	return nil
 }
 
-func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
 	proc.Log().Debug("ChangesetExecutor received cancel request", "commandID", message.CommandID)
 
 	// Collect resources by state
 	var resourcesToCancel []forma_persister.ResourceUpdateRef
 	var inProgressCount int
+	resourceStates := make(map[string]string)
 
 	for _, node := range data.changeset.DAG.Nodes {
-		if node.Update.IsReady() {
-			if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
-				resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
-					URI:       ru.URI(),
-					Operation: ru.Operation,
-				})
-			}
-		} else if node.Update.IsRunning() {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		uri := string(ru.URI())
+		switch ru.State {
+		case resource_update.ResourceUpdateStateNotStarted:
+			resourceStates[uri] = "Canceled"
+			resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
+				URI:       ru.URI(),
+				Operation: ru.Operation,
+			})
+		case resource_update.ResourceUpdateStateInProgress:
+			resourceStates[uri] = "InProgress"
 			inProgressCount++
+		case resource_update.ResourceUpdateStateSuccess:
+			resourceStates[uri] = "Success"
+		case resource_update.ResourceUpdateStateFailed:
+			resourceStates[uri] = "Failed"
+		case resource_update.ResourceUpdateStateCanceled:
+			resourceStates[uri] = "Canceled"
+		default:
+			resourceStates[uri] = string(ru.State)
 		}
 	}
 
@@ -681,22 +701,22 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 			"canceledCount", len(resourcesToCancel))
 	}
 
+	cancelResp := CancelResponse{ResourceStates: resourceStates}
+
 	// Determine next state
 	var nextState gen.Atom
 	if inProgressCount > 0 {
-		// We have in-progress resources - transition to Canceling state and wait for them to finish
 		proc.Log().Debug("Command is canceling, waiting for in-progress resources to complete",
 			"commandID", message.CommandID,
 			"inProgressCount", inProgressCount)
 		nextState = StateCanceling
 	} else {
-		// No in-progress resources - transition directly to Canceled
 		proc.Log().Debug("Command canceled immediately (no in-progress resources)",
 			"commandID", message.CommandID)
 		nextState = StateCanceled
 	}
 
-	return nextState, data, nil, nil
+	return nextState, data, cancelResp, nil, nil
 }
 
 func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {

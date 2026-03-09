@@ -48,7 +48,13 @@ type CommandID struct {
 }
 
 type CancelCommandResponse struct {
-	CommandIDs []string `json:"CommandIds"`
+	CommandIDs           []string                       `json:"CommandIds"`
+	ResourceUpdateStates map[string]CancelResourceState `json:"ResourceUpdateStates,omitempty"`
+}
+
+// CancelResourceState represents the state of a resource update at cancel time.
+type CancelResourceState struct {
+	State string `json:"State"` // "Canceled", "InProgress", "Success", "Failed"
 }
 
 type ResourceUpdate struct {
