@@ -25,6 +25,7 @@ const (
 	StackReferenceNotFound       APIError = "StackReferenceNotFound"
 	TargetReferenceNotFound      APIError = "TargetReferenceNotFound"
 	InvalidQuery                 APIError = "InvalidQueryError"
+	StackDeletedDuringApply      APIError = "StackDeletedDuringApply"
 )
 
 type ErrorResponse[T any] struct {
@@ -153,6 +154,14 @@ type TargetReferenceNotFoundError struct {
 
 func (e TargetReferenceNotFoundError) Error() string {
 	return fmt.Sprintf("target %s does not exist in existing targets and added targets", e.TargetLabel)
+}
+
+type StackDeletedDuringApplyError struct {
+	StackLabel string `json:"StackLabel"`
+}
+
+func (e StackDeletedDuringApplyError) Error() string {
+	return fmt.Sprintf("stack %q was deleted during apply setup", e.StackLabel)
 }
 
 type TargetHasResourcesError struct {

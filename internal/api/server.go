@@ -644,6 +644,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusBadRequest, apimodel.StackReferenceNotFound, stackReferenceNotFoundError)
 	}
 
+	var stackDeletedError apimodel.StackDeletedDuringApplyError
+	if errors.As(err, &stackDeletedError) {
+		return apiError(c, http.StatusConflict, apimodel.StackDeletedDuringApply, stackDeletedError)
+	}
+
 	var targetReferenceNotFoundError apimodel.TargetReferenceNotFoundError
 	if errors.As(err, &targetReferenceNotFoundError) {
 		return apiError(c, http.StatusBadRequest, apimodel.TargetReferenceNotFound, targetReferenceNotFoundError)

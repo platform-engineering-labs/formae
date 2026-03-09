@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -432,6 +433,31 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 					stack, err := m.Datastore.GetStackByLabel(pu.StackLabel)
 					if err == nil && stack != nil {
 						stackIDMap[pu.StackLabel] = stack.ID
+					} else {
+						// STOPGAP: The stack was deleted by a concurrent command between conflict check
+						// and policy persist. This race is possible because stack/target/policy updates
+						// are persisted outside the changeset execution DAG. The correct fix is to
+						// incorporate these updates into the changeset so they are executed atomically
+						// with resource updates. For now, fail the stored command to prevent it from
+						// being orphaned in NotStarted state.
+						slog.Warn("Stack deleted during apply setup, failing stored command",
+							"commandID", fa.ID, "stackLabel", pu.StackLabel)
+						refs := make([]forma_persister.ResourceUpdateRef, len(fa.ResourceUpdates))
+						for i, ru := range fa.ResourceUpdates {
+							refs[i] = forma_persister.ResourceUpdateRef{
+								URI:       ru.DesiredState.URI(),
+								Operation: ru.Operation,
+							}
+						}
+						m.callActor(
+							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+							forma_persister.MarkResourcesAsFailed{
+								CommandID:          fa.ID,
+								Resources:          refs,
+								ResourceModifiedTs: time.Now(),
+							},
+						)
+						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
 					}
 				}
 			}
@@ -620,7 +646,16 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 
 	// Check for conflicting commands before generating resource updates (same reasoning as ApplyForma).
 	if !config.Simulate {
-		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
+		stackLabels := stackLabelsFromForma(forma)
+
+		// For destroy commands, also check stacks affected by cascade deletes
+		cascadeStacks, err := m.findCascadeStackLabels(forma)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute cascade stacks: %w", err)
+		}
+		stackLabels = append(stackLabels, cascadeStacks...)
+
+		if err := m.checkForConflictingCommands(stackLabels); err != nil {
 			return nil, err
 		}
 	}
@@ -1305,6 +1340,43 @@ func stackLabelsFromForma(forma *pkgmodel.Forma) []string {
 		}
 	}
 	return labels
+}
+
+// findCascadeStackLabels returns stack labels that would be affected by cascade
+// deletes for the given forma's resources. It queries the datastore for
+// cross-stack dependents of resources being destroyed.
+func (m *Metastructure) findCascadeStackLabels(forma *pkgmodel.Forma) ([]string, error) {
+	var ksuids []string
+	for _, r := range forma.Resources {
+		if r.Ksuid != "" {
+			ksuids = append(ksuids, r.Ksuid)
+		}
+	}
+	if len(ksuids) == 0 {
+		return nil, nil
+	}
+
+	dependentsMap, err := m.Datastore.FindResourcesDependingOnMany(ksuids)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool)
+	for _, r := range forma.Resources {
+		seen[r.Stack] = true
+	}
+
+	var cascadeStacks []string
+	for _, dependents := range dependentsMap {
+		for _, dep := range dependents {
+			if !seen[dep.Stack] && dep.Stack != constants.UnmanagedStack {
+				seen[dep.Stack] = true
+				cascadeStacks = append(cascadeStacks, dep.Stack)
+			}
+		}
+	}
+
+	return cascadeStacks, nil
 }
 
 // filterUnabsorbedModifications returns only those modifications that have NOT been

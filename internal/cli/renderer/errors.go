@@ -86,6 +86,10 @@ func RenderErrorMessage(err error) (string, error) {
 		msg = display.Redf("target `%s` was not found, make sure to reference an existing target, or provide the target in the Forma.\n", errResp.Data.TargetLabel)
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.StackDeletedDuringApplyError]); ok {
+		msg = display.Redf("stack `%s` was deleted by a concurrent command during apply setup. Please retry.\n", errResp.Data.StackLabel)
+	}
+
 	if msg == "" {
 		return "", err
 	}
