@@ -46,9 +46,11 @@ type ExecutionDAG struct {
 }
 
 type DAGNode struct {
-	URI          pkgmodel.FormaeURI
-	Update       Update
-	Dependents   []*DAGNode
+	URI    pkgmodel.FormaeURI
+	Update Update
+	// Dependents are nodes that depend on this node (downstream; blocked until this node completes).
+	Dependents []*DAGNode
+	// Dependencies are nodes that this node depends on (upstream; must complete before this node can start).
 	Dependencies []*DAGNode
 }
 
