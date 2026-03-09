@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v4"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -96,8 +97,8 @@ func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCom
 	return nextResponse.SubmitCommandResponse, nextResponse.Error
 }
 
-func (m *FakeMetastructure) CancelCommand(commandID string, clientID string) error {
-	return nil
+func (m *FakeMetastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
+	return nil, nil
 }
 
 func (m *FakeMetastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
@@ -977,6 +978,46 @@ func TestServer_CancelCommands_MissingClientID(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	assert.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+}
+
+func TestServer_CancelCommands_WithResourceUpdateStates(t *testing.T) {
+	fakeMetastructure := &FakeMetastructure{
+		cancelResponses: []WrappedCancelResponse{
+			{
+				CancelCommandResponse: &apimodel.CancelCommandResponse{
+					CommandIDs: []string{"cmd-1"},
+					ResourceUpdateStates: map[string]apimodel.CancelResourceState{
+						"formae://res-1": {State: "Canceled"},
+						"formae://res-2": {State: "InProgress"},
+						"formae://res-3": {State: "Success"},
+					},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
+	req.Header.Set("Client-ID", "test-client")
+	rec := httptest.NewRecorder()
+
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.CancelCommands(c)) {
+		assert.Equal(t, http.StatusAccepted, rec.Code)
+
+		body := rec.Body.Bytes()
+		var response apimodel.CancelCommandResponse
+		err := json.Unmarshal(body, &response)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"cmd-1"}, response.CommandIDs)
+		assert.Len(t, response.ResourceUpdateStates, 3)
+		assert.Equal(t, "Canceled", response.ResourceUpdateStates["formae://res-1"].State)
+		assert.Equal(t, "InProgress", response.ResourceUpdateStates["formae://res-2"].State)
+		assert.Equal(t, "Success", response.ResourceUpdateStates["formae://res-3"].State)
+	}
 }
 
 func TestServer_ListTargets_Success(t *testing.T) {
