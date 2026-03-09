@@ -138,7 +138,7 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 
 // buildTargetResourceEdges creates implicit ordering edges for target replace operations:
 // resource deletes → target delete → target create → resource creates
-func (dag *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
+func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
 	for _, tu := range targetUpdates {
 		if tu.Operation != target_update.TargetOperationReplace {
 			continue
@@ -146,13 +146,13 @@ func (dag *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.
 
 		targetDeleteURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/delete")
 		targetCreateURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/create")
-		targetDeleteNode := dag.Nodes[targetDeleteURI]
-		targetCreateNode := dag.Nodes[targetCreateURI]
+		targetDeleteNode := p.Nodes[targetDeleteURI]
+		targetCreateNode := p.Nodes[targetCreateURI]
 		if targetDeleteNode == nil || targetCreateNode == nil {
 			continue
 		}
 
-		for _, node := range dag.Nodes {
+		for _, node := range p.Nodes {
 			ru, ok := node.Update.(*resource_update.ResourceUpdate)
 			if !ok {
 				continue
