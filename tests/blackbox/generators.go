@@ -53,7 +53,7 @@ func allowedKinds(config PropertyTestConfig) []OperationKind {
 	if config.EnableCancel {
 		kinds = append(kinds, OpCancel)
 	}
-	if config.EnableAutoReconcile {
+	if config.EnableForceReconcile {
 		kinds = append(kinds, OpForceReconcile)
 	}
 	if config.EnableTTL {

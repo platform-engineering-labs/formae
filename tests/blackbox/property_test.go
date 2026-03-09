@@ -37,8 +37,10 @@ func TestProperty_SequentialHappyPath(t *testing.T) {
 				h.ExecuteOperation(t, &op, model)
 			}
 
-			// Final invariant check
-			h.AssertAllInvariants(t)
+			// Drain pending fire-and-forget commands before final check
+			h.DrainPendingCommands(t, model, defaultCommandTimeout)
+
+			h.AssertAllInvariants(t, model)
 		})
 	})
 }
@@ -67,7 +69,9 @@ func TestProperty_SequentialWithFailures(t *testing.T) {
 				h.ExecuteOperation(t, &op, model)
 			}
 
-			h.AssertAllInvariants(t)
+			h.DrainPendingCommands(t, model, defaultCommandTimeout)
+
+			h.AssertAllInvariants(t, model)
 		})
 	})
 }
@@ -96,7 +100,7 @@ func TestProperty_ConcurrentMultiStack(t *testing.T) {
 			// Drain all pending fire-and-forget commands before final check
 			h.DrainPendingCommands(t, model, defaultCommandTimeout)
 
-			h.AssertAllInvariants(t)
+			h.AssertAllInvariants(t, model)
 		})
 	})
 }
@@ -126,7 +130,7 @@ func TestProperty_ConcurrentWithFailures(t *testing.T) {
 			// Drain pending fire-and-forget commands before final check
 			h.DrainPendingCommands(t, model, defaultCommandTimeout)
 
-			h.AssertAllInvariants(t)
+			h.AssertAllInvariants(t, model)
 		})
 	})
 }
@@ -138,13 +142,14 @@ func TestProperty_FullChaos(t *testing.T) {
 
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
-				ResourceCount:      10,
-				OperationCount:     Range{Min: 5, Max: 15},
-				StackCount:         3,
-				EnableFailures:     true,
-				EnableCloudChanges: true,
-				EnableAutoReconcile: true,
-				EnableTTL:          true,
+				ResourceCount:        10,
+				OperationCount:       Range{Min: 5, Max: 15},
+				StackCount:           3,
+				EnableFailures:       true,
+				EnableCloudChanges:   true,
+				EnableCancel:         true,
+				EnableForceReconcile: true,
+				EnableTTL:            true,
 			}
 
 			h.ResetAgentState(t)

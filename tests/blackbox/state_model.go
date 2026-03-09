@@ -30,8 +30,7 @@ type ExpectedResource struct {
 type StackState struct {
 	Label         string
 	Resources     map[int]*ExpectedResource
-	AutoReconcile bool
-	TTL           bool
+	TTL bool
 	TTLExpired    bool
 
 	// LastReconcileIDs and LastReconcileProperties track the resource set and
@@ -198,9 +197,41 @@ func (m *StateModel) HasExistingDescendants(stackIndex int, idx int) bool {
 	return false
 }
 
-// TrackAcceptedCommand records a command that was accepted by the agent.
-func (m *StateModel) TrackAcceptedCommand(commandID string) {
-	m.AcceptedCommands = append(m.AcceptedCommands, AcceptedCommand{CommandID: commandID})
+// TrackAcceptedCommand records a command that was accepted by the agent,
+// along with pre-command resource snapshots for potential cancel revert.
+func (m *StateModel) TrackAcceptedCommand(commandID string, snapshots []ResourceSnapshot) {
+	m.AcceptedCommands = append(m.AcceptedCommands, AcceptedCommand{
+		CommandID: commandID,
+		Snapshots: snapshots,
+	})
+}
+
+// SnapshotResources captures the current state of the given resources for later revert.
+func (m *StateModel) SnapshotResources(stackIndex int, resourceIDs []int) []ResourceSnapshot {
+	snapshots := make([]ResourceSnapshot, 0, len(resourceIDs))
+	for _, id := range resourceIDs {
+		res := m.Resource(stackIndex, id)
+		if res != nil {
+			snapshots = append(snapshots, ResourceSnapshot{
+				StackIndex: stackIndex,
+				SlotIndex:  id,
+				State:      res.State,
+				Properties: res.Properties,
+			})
+		}
+	}
+	return snapshots
+}
+
+// RevertResources restores resources to their snapshotted state.
+func (m *StateModel) RevertResources(snapshots []ResourceSnapshot) {
+	for _, snap := range snapshots {
+		res := m.Resource(snap.StackIndex, snap.SlotIndex)
+		if res != nil {
+			res.State = snap.State
+			res.Properties = snap.Properties
+		}
+	}
 }
 
 // SaveLastReconcile records the resource set and properties from a reconcile-mode
