@@ -23,7 +23,11 @@ typealias AvailabilityZone = String
 
 open class Config {
   hidden fixed type: String = "FakeAWS"
+
+  @formae.ConfigFieldHint { createOnly = false }
   hidden profile: String?
+
+  @formae.ConfigFieldHint { createOnly = true }
   hidden region: Region
 
   fixed Type: String = type

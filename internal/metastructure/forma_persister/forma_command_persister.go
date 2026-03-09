@@ -624,7 +624,14 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 		states = append(states, res.State)
 	}
 
-	// Check if any resources are not in a final state
+	// Include target update states in the overall calculation.
+	// Target updates use a different state type but the string values match,
+	// so we convert them to ResourceUpdateState for unified processing.
+	for _, tu := range command.TargetUpdates {
+		states = append(states, types.ResourceUpdateState(tu.State))
+	}
+
+	// Check if any updates are not in a final state
 	hasNonFinalState := slices.ContainsFunc(states, func(s types.ResourceUpdateState) bool {
 		return s != types.ResourceUpdateStateSuccess &&
 			s != types.ResourceUpdateStateFailed &&
@@ -636,12 +643,12 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 		return forma_command.CommandStateInProgress
 	}
 
-	// All resources are in final state, determine which final state
+	// All updates are in final state, determine which final state
 	hasCanceled := slices.ContainsFunc(states, func(s types.ResourceUpdateState) bool {
 		return s == types.ResourceUpdateStateCanceled
 	})
 
-	// Check if any resources were canceled
+	// Check if any updates were canceled
 	if hasCanceled {
 		return forma_command.CommandStateCanceled
 	}
@@ -650,7 +657,7 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 		return s == types.ResourceUpdateStateFailed || s == types.ResourceUpdateStateRejected
 	})
 
-	// Check if any resources failed or were rejected
+	// Check if any updates failed or were rejected
 	if hasFailedOrRejected {
 		return forma_command.CommandStateFailed
 	}

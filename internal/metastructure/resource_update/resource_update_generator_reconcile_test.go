@@ -292,6 +292,7 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				existingTargets,
 				ds,
 				nil,
+				nil,
 			)
 
 			if tt.expectedError != "" {
@@ -805,7 +806,7 @@ func TestGenerateResourceUpdatesForReconcile_MissingResolvable(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 }
@@ -901,7 +902,7 @@ func TestResourceUpdatesForReconcile_GeneratesUpdateOperationsForUnmanagedResour
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -955,7 +956,7 @@ func TestGenerateResourceUpdatesForReconcile_Create(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
@@ -1012,7 +1013,7 @@ func TestGenerateResourceUpdatesForReconcile_StackExists_NoChanges(t *testing.T)
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 0) // No changes needed
 }
@@ -1101,7 +1102,7 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationDelete, updates[0].Operation)
@@ -1189,7 +1190,7 @@ func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -1276,7 +1277,7 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 2)
 
@@ -1380,7 +1381,7 @@ func TestGenerateResourceUpdatesForReconcile_ForwardReferenceToNewResource(t *te
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 
 	assert.NoError(t, err, "forward reference to new resource should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")
@@ -1476,7 +1477,7 @@ func TestGenerateResourceUpdatesForReconcile_AddNewResourceWithForwardReference(
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 
 	assert.NoError(t, err, "adding new resource with forward reference should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")

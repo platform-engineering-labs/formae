@@ -60,6 +60,55 @@ local testTarget = new formae.Target {
     }
 }
 
+// Test Config class with ConfigFieldHint annotations for ConfigSchema tests
+local class TestConfig {
+    hidden fixed type: String = "TEST"
+
+    @formae.ConfigFieldHint { createOnly = false }
+    hidden profile: String?
+
+    @formae.ConfigFieldHint { createOnly = true }
+    hidden region: String
+
+    fixed Type: String = type
+    fixed Profile: String? = profile
+    fixed Region: String = region
+}
+
+local testConfigInstance = new TestConfig {
+    profile = "dev"
+    region = "us-east-1"
+}
+
+local targetWithConfigSchema = new formae.Target {
+    label = "config-schema-target"
+    namespace = "TEST"
+    discoverable = true
+    config = testConfigInstance
+}
+
+local targetWithoutConfig = new formae.Target {
+    label = "no-config-target"
+    namespace = "NONE"
+    discoverable = true
+}
+
+// Config class with no annotated fields (no ConfigFieldHint)
+local class PlainConfig {
+    hidden fixed type: String = "PLAIN"
+    hidden name: String
+
+    fixed Type: String = type
+    fixed Name: String = name
+}
+
+local targetWithPlainConfig = new formae.Target {
+    label = "plain-config-target"
+    namespace = "PLAIN"
+    discoverable = true
+    config = new PlainConfig { name = "test" }
+}
+
 // Test base resource class
 @formae.ResourceHint {
     type = "AWS::S3::Bucket"
@@ -335,5 +384,44 @@ facts {
         hints.containsKey("bucketName") &&
         schema.Identifier == "BucketName" &&
         type == "AWS::S3::Bucket"
+    }
+
+    ["Target with annotated config has ConfigSchema"] {
+        targetWithConfigSchema.ConfigSchema != null
+    }
+
+    ["ConfigSchema has correct hints"] {
+        let (schema = targetWithConfigSchema.ConfigSchema)
+        schema.Hints != null &&
+        schema.Hints.length == 2
+    }
+
+    ["ConfigSchema profile hint is mutable"] {
+        let (schema = targetWithConfigSchema.ConfigSchema)
+        schema.Hints.containsKey("Profile") &&
+        schema.Hints["Profile"].CreateOnly == false
+    }
+
+    ["ConfigSchema region hint is createOnly"] {
+        let (schema = targetWithConfigSchema.ConfigSchema)
+        schema.Hints.containsKey("Region") &&
+        schema.Hints["Region"].CreateOnly == true
+    }
+
+    ["Target without config has null ConfigSchema"] {
+        targetWithoutConfig.ConfigSchema == null
+    }
+
+    ["Target with plain config (no annotations) has null ConfigSchema"] {
+        targetWithPlainConfig.ConfigSchema == null
+    }
+
+    ["configHints returns correct mapping"] {
+        let (hints = formae.fq.configHints(reflect.Class(TestConfig)))
+        hints.length == 2 &&
+        hints.containsKey("Profile") &&
+        hints.containsKey("Region") &&
+        hints["Profile"].CreateOnly == false &&
+        hints["Region"].CreateOnly == true
     }
 }

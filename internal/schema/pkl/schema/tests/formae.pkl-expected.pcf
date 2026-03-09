@@ -71,6 +71,7 @@ examples {
         Region = "us-east-1"
         AccessKey = "test-key"
       }
+      ConfigSchema = null
       Discoverable = true
     }
   }

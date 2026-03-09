@@ -28,6 +28,7 @@ func GenerateResourceUpdates(
 	existingTargets []*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	updatedTargets map[string]bool,
 ) ([]ResourceUpdate, error) {
 
 	var referenceLabels map[string]string
@@ -80,7 +81,7 @@ func GenerateResourceUpdates(
 	case pkgmodel.CommandDestroy:
 		resourceUpdates, err = generateResourceUpdatesForDestroy(forma, source, targetMap, ds)
 	case pkgmodel.CommandApply:
-		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, targetMap, ds, replacedTargets)
+		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, targetMap, ds, replacedTargets, updatedTargets)
 	case pkgmodel.CommandSync:
 		resourceUpdates, err = generateResourceUpdatesForSync(forma, source, targetMap, ds)
 	default:
@@ -309,12 +310,17 @@ func generateResourceUpdatesForApply(
 	targetMap map[string]*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	updatedTargets map[string]bool,
 ) ([]ResourceUpdate, error) {
 
 	for _, target := range forma.Targets {
 		if existingTarget, ok := targetMap[target.Label]; ok {
 			if replacedTargets[target.Label] {
 				continue // Config change is handled via target replace
+			}
+
+			if updatedTargets[target.Label] {
+				continue // Mutable config change is handled via target update
 			}
 
 			if existingTarget.Namespace != target.Namespace {

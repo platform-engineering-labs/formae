@@ -87,9 +87,10 @@ const (
 type ChangesetData struct {
 	changeset         Changeset
 	requestedBy       gen.PID
-	notifyOnComplete  bool     // If true, send ChangesetCompleted to requestedBy when done
-	discoveryPaused   bool     // Tracks if this changeset paused Discovery
-	stacksWithDeletes []string // Stacks that had delete operations, captured at start
+	notifyOnComplete  bool                        // If true, send ChangesetCompleted to requestedBy when done
+	discoveryPaused   bool                        // Tracks if this changeset paused Discovery
+	stacksWithDeletes []string                    // Stacks that had delete operations, captured at start
+	targetUpdates     []target_update.TargetUpdate // Target updates captured at start for final state persistence
 }
 
 type RegisterEvents struct{}
@@ -197,6 +198,10 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 	// Capture stacks with delete operations NOW, before the DAG is modified during execution
 	data.stacksWithDeletes = collectStacksWithDeletes(data.changeset.DAG)
 
+	// Capture target updates NOW, before the DAG is modified during execution.
+	// We need these to update the FormaCommand with final target states when the changeset completes.
+	data.targetUpdates = collectTargetUpdates(data.changeset.DAG)
+
 	// Ensure the resolve cache is started
 	_, err := proc.Call(
 		gen.ProcessID{Node: proc.Node().Name(), Name: actornames.ChangesetSupervisor},
@@ -301,6 +306,15 @@ func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, me
 }
 
 func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message target_update.TargetUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	// Update the captured target update with its final state so we can
+	// persist the completed states to the FormaCommand when the changeset finishes.
+	for i := range data.targetUpdates {
+		if data.targetUpdates[i].NodeURI() == message.NodeURI {
+			data.targetUpdates[i].State = message.State
+			break
+		}
+	}
+
 	return handleUpdateFinished(from, state, data, updateFinishedEvent{
 		nodeURI:   message.NodeURI,
 		isSuccess: message.State == target_update.TargetUpdateStateSuccess,
@@ -431,6 +445,21 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 
 	if data.changeset.IsComplete() {
 		proc.Log().Debug("Changeset execution finished for command", "commandID", data.changeset.CommandID)
+
+		// Persist final target update states to the FormaCommand.
+		// This is critical when the changeset has only target updates and no resource
+		// updates, because the command state is otherwise never transitioned to a final state.
+		if len(data.targetUpdates) > 0 {
+			formaCommandPersisterPID := gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()}
+			_, err := proc.Call(formaCommandPersisterPID, messages.UpdateTargetStates{
+				CommandID:     data.changeset.CommandID,
+				TargetUpdates: data.targetUpdates,
+			})
+			if err != nil {
+				proc.Log().Error("Failed to update FormaCommand with target states", "error", err, "commandID", data.changeset.CommandID)
+			}
+		}
+
 		return StateFinishedSuccessfully, data, nil, nil
 	}
 
@@ -601,6 +630,19 @@ func changesetHasUserUpdates(changeset Changeset) bool {
 		}
 	}
 	return false
+}
+
+// collectTargetUpdates extracts all target updates from the DAG nodes.
+// These are captured at start so they can be used to update the FormaCommand
+// after the changeset completes (by which time the DAG nodes have been removed).
+func collectTargetUpdates(dag *ExecutionDAG) []target_update.TargetUpdate {
+	var updates []target_update.TargetUpdate
+	for _, node := range dag.Nodes {
+		if tu, ok := node.Update.(*target_update.TargetUpdate); ok {
+			updates = append(updates, *tu)
+		}
+	}
+	return updates
 }
 
 // collectStacksWithDeletes returns a list of unique stack labels that had delete operations

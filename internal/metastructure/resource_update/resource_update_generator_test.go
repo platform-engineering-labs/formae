@@ -429,7 +429,7 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -597,7 +597,7 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -649,7 +649,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
 
@@ -686,7 +686,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -723,7 +723,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -765,7 +765,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -811,7 +811,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "test-target", updates[0].ResourceTarget.Label)
@@ -837,7 +837,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -862,7 +862,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -882,7 +882,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 
 		existingTargets := []*pkgmodel.Target{} // No existing targets
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "new-target", updates[0].ResourceTarget.Label)
@@ -1128,7 +1128,7 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, updates, 2, "Should have delete for old type and create for new type")

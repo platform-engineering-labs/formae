@@ -39,7 +39,11 @@ func RegisterSharedEDFTypes() error {
 		// Third: Resource depends on Schema
 		model.Resource{},
 
-		// Fourth: Target and other model types
+		// Fourth: Target config schema types (must come before Target)
+		model.ConfigFieldHint{},
+		model.ConfigSchema{},
+
+		// Fifth: Target and other model types
 		model.Target{},
 		model.Stack{},
 		model.Forma{},

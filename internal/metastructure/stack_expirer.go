@@ -170,6 +170,7 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 		existingTargets,
 		s.datastore,
 		nil,
+		nil,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate resource updates: %w", err)
