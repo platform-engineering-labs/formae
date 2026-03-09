@@ -15,7 +15,7 @@ on:
     branches: [ "main" ]
 
 # Cancel in-progress runs when the same branch is pushed again.
-# Different PRs will run in parallel (separate concurrency groups).
+# Different PRs run in parallel (separate concurrency groups).
 concurrency:
   group: cloud-e2e-tests-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
