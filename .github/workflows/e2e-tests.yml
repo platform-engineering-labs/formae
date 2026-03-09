@@ -14,10 +14,11 @@ on:
   pull_request:
     branches: [ "main" ]
 
-# Ensure only one test runs at a time on cloud accounts (shared with plugin-sdk-tests)
+# Cancel in-progress runs when the same branch is pushed again.
+# Different PRs will run in parallel (separate concurrency groups).
 concurrency:
-  group: cloud-e2e-tests
-  cancel-in-progress: false
+  group: cloud-e2e-tests-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   id-token: write
