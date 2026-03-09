@@ -224,8 +224,8 @@ func TestStateModel_TrackAcceptedCommand(t *testing.T) {
 
 	assert.Empty(t, model.AcceptedCommands)
 
-	model.TrackAcceptedCommand("cmd-1")
-	model.TrackAcceptedCommand("cmd-2")
+	model.TrackAcceptedCommand("cmd-1", nil)
+	model.TrackAcceptedCommand("cmd-2", nil)
 
 	assert.Len(t, model.AcceptedCommands, 2)
 	assert.Equal(t, "cmd-1", model.AcceptedCommands[0].CommandID)
