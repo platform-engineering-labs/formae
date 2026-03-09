@@ -46,6 +46,13 @@ type UpdateTargetStates struct {
 	TargetUpdates []target_update.TargetUpdate
 }
 
+type MarkTargetUpdateAsComplete struct {
+	CommandID      string
+	TargetLabel    string
+	TargetOperation string
+	FinalState     types.TargetUpdateState
+}
+
 type UpdateStackStates struct {
 	CommandID    string
 	StackUpdates []stack_update.StackUpdate
