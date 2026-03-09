@@ -115,9 +115,18 @@ const (
 	CommandKindReconcile
 )
 
+// ResourceSnapshot captures the state of a resource before a command modifies it.
+type ResourceSnapshot struct {
+	StackIndex int
+	SlotIndex  int
+	State      ResourceState
+	Properties string
+}
+
 // AcceptedCommand tracks a command that was accepted by the agent during the chaos phase.
 type AcceptedCommand struct {
 	CommandID string
+	Snapshots []ResourceSnapshot // pre-command state for revert on cancel
 }
 
 // Range represents a min/max integer range for generators.
@@ -143,8 +152,8 @@ type PropertyTestConfig struct {
 	// EnableCancel allows cancel operations.
 	EnableCancel bool
 
-	// EnableAutoReconcile enables auto-reconcile policy on one stack.
-	EnableAutoReconcile bool
+	// EnableForceReconcile enables OpForceReconcile operations.
+	EnableForceReconcile bool
 
 	// EnableTTL enables TTL policy on one stack.
 	EnableTTL bool

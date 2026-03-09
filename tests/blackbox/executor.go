@@ -280,8 +280,7 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 	case OpCheckTTL:
 		h.executeCheckTTL(t, op, model)
 	case OpCancel:
-		// Cancel requires a command ID set during execution; skip if none available
-		t.Logf("[op %d] OpCancel skipped (no command ID)", op.SequenceNum)
+		h.executeCancel(t, op, model)
 	default:
 		t.Fatalf("unknown operation kind: %d", op.Kind)
 	}
@@ -665,6 +664,18 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	commandID := resp.CommandID
 	t.Logf("[op %d] Apply (%s) stack=%s resources %v → command %s", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, commandID)
 
+	// Snapshot resources before model update for potential cancel revert.
+	// For reconcile, snapshot all resources on the stack (implicit deletes affect others).
+	var snapshotIDs []int
+	if op.ApplyMode == "reconcile" {
+		for id := range model.Stack(op.StackIndex).Resources {
+			snapshotIDs = append(snapshotIDs, id)
+		}
+	} else {
+		snapshotIDs = op.ResourceIDs
+	}
+	snapshots := model.SnapshotResources(op.StackIndex, snapshotIDs)
+
 	// Immediate model update: predict outcomes at submission time.
 	successIDs := successfulResourceIDs(op, op.StackIndex, op.ResourceIDs, model.Pool, false, model)
 	if len(successIDs) > 0 {
@@ -678,7 +689,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		// Save the reconcile state for ForceReconcile prediction.
 		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, op.Properties, op.ChildProperties)
 	}
-	model.TrackAcceptedCommand(commandID)
+	model.TrackAcceptedCommand(commandID, snapshots)
 	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
 }
 
@@ -747,12 +758,15 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	commandID := resp.CommandID
 	t.Logf("[op %d] Destroy stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
+	// Snapshot before model update for potential cancel revert.
+	snapshots := model.SnapshotResources(op.StackIndex, existingIDs)
+
 	// Immediate model update: predict outcomes at submission time.
 	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID)
+	model.TrackAcceptedCommand(commandID, snapshots)
 	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -825,6 +839,9 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	commandID := resp.CommandID
 	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
+	// Snapshot before model update for potential cancel revert.
+	snapshots := model.SnapshotResources(op.StackIndex, existingIDs)
+
 	// Since the abort path only proceeds when simulation confirmed no cascades,
 	// only the explicitly drawn resources can be affected — descendants are safe.
 	// Immediate model update: predict outcomes at submission time.
@@ -832,7 +849,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID)
+	model.TrackAcceptedCommand(commandID, snapshots)
 	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -874,13 +891,21 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	commandID := resp.CommandID
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
+	// Snapshot all resources on affected stacks before model update (cascade may affect descendants).
+	var snapshots []ResourceSnapshot
+	for _, si := range model.ComputeAffectedStacks(op.StackIndex, existingIDs, op.OnDependents) {
+		for id := range model.Stack(si).Resources {
+			snapshots = append(snapshots, model.SnapshotResources(si, []int{id})...)
+		}
+	}
+
 	// Immediate model update: predict outcomes at submission time.
 	// For cascade destroy, successful resources and all their descendants are destroyed.
 	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
 	for _, idx := range successIDs {
 		model.ApplyCascadeDestroyed(op.StackIndex, idx)
 	}
-	model.TrackAcceptedCommand(commandID)
+	model.TrackAcceptedCommand(commandID, snapshots)
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -918,6 +943,13 @@ func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *
 
 	t.Logf("[op %d] ForceReconcile stack=%s → command %s", op.SequenceNum, stackLabel, resp.CommandID)
 
+	// Snapshot all resources on the stack (reconcile can create and delete).
+	var snapshotIDs []int
+	for id := range model.Stack(op.StackIndex).Resources {
+		snapshotIDs = append(snapshotIDs, id)
+	}
+	snapshots := model.SnapshotResources(op.StackIndex, snapshotIDs)
+
 	// Fire-and-forget: predict outcomes at submission time using the tracked
 	// last reconcile state. ForceReconcile has no failure injection, so all
 	// resources succeed.
@@ -927,8 +959,80 @@ func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *
 	reconcileIDs := stack.LastReconcileIDs
 	model.ApplyCreated(op.StackIndex, reconcileIDs, stack.LastReconcileProperties)
 	applyReconcileGuarantee(model, op.StackIndex, reconcileIDs)
-	model.TrackAcceptedCommand(resp.CommandID)
+	model.TrackAcceptedCommand(resp.CommandID, snapshots)
 	t.Logf("[op %d] ForceReconcile stack=%s → accepted, model updated (restore %v)", op.SequenceNum, stackLabel, reconcileIDs)
+}
+
+func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+
+	if len(model.AcceptedCommands) == 0 {
+		t.Logf("[op %d] Cancel → skipped (no pending commands)", op.SequenceNum)
+		return
+	}
+
+	// Cancel the most recent command (matches API behavior with no query).
+	target := model.AcceptedCommands[len(model.AcceptedCommands)-1]
+
+	resp, err := h.client.CancelCommands("", clientID)
+	if err != nil {
+		t.Logf("[op %d] Cancel command %s → error: %v", op.SequenceNum, target.CommandID, err)
+		return
+	}
+	if resp == nil {
+		t.Logf("[op %d] Cancel command %s → not found (already completed)", op.SequenceNum, target.CommandID)
+		return
+	}
+
+	t.Logf("[op %d] Cancel command %s → accepted", op.SequenceNum, target.CommandID)
+
+	// Wait for the canceled command to reach a terminal state so we can read
+	// per-resource-update outcomes.
+	cmd, ok := h.TryWaitForCommandDone(target.CommandID, defaultCommandTimeout)
+	if !ok {
+		t.Logf("[op %d] Cancel command %s → timed out waiting for completion", op.SequenceNum, target.CommandID)
+		return
+	}
+
+	t.Logf("[op %d] Cancel command %s → completed (state=%s)", op.SequenceNum, target.CommandID, cmd.State)
+
+	// Build label → snapshot lookup for the canceled command's snapshots.
+	labelToSnapshot := buildLabelToSnapshotMap(target.Snapshots, model)
+
+	// Revert model for resources that ended up in Canceled state.
+	var reverted int
+	for _, ru := range cmd.ResourceUpdates {
+		if ru.State == "Canceled" {
+			if snap, ok := labelToSnapshot[ru.ResourceLabel]; ok {
+				model.RevertResources([]ResourceSnapshot{snap})
+				reverted++
+			}
+		}
+	}
+
+	// Remove the canceled command from AcceptedCommands so DrainPendingCommands
+	// doesn't wait for it again.
+	model.AcceptedCommands = model.AcceptedCommands[:len(model.AcceptedCommands)-1]
+
+	t.Logf("[op %d] Cancel command %s → reverted %d canceled resources", op.SequenceNum, target.CommandID, reverted)
+}
+
+// buildLabelToSnapshotMap builds a lookup from resource label to ResourceSnapshot
+// by converting each snapshot's (stackIndex, slotIndex) to the label that the
+// agent uses.
+func buildLabelToSnapshotMap(snapshots []ResourceSnapshot, model *StateModel) map[string]ResourceSnapshot {
+	m := make(map[string]ResourceSnapshot, len(snapshots))
+	for _, snap := range snapshots {
+		stackLabel := model.Stack(snap.StackIndex).Label
+		var label string
+		if model.Pool != nil {
+			label = model.Pool.LabelForStack(stackLabel, snap.SlotIndex)
+		} else {
+			label = resourceLabelForStack(stackLabel, snap.SlotIndex)
+		}
+		m[label] = snap
+	}
+	return m
 }
 
 // filterExistingResources returns only the resource IDs whose model state
@@ -950,29 +1054,16 @@ func filterExistingResources(ids []int, stackIndex int, model *StateModel) []int
 func (h *TestHarness) executeTriggerSync(t *testing.T) {
 	t.Helper()
 
-	// Record log position so we can detect new sync completion messages.
-	logPos := h.logCapture.EntryCount()
-
+	// Fire-and-forget: sync runs concurrently with user commands. Resources
+	// in active changesets are excluded from sync (registered upfront in the
+	// ChangesetExecutor), so sync only touches idle resources. Sync doesn't
+	// have programmed failure responses and doesn't affect the model.
 	err := h.client.ForceSync()
 	if err != nil {
 		t.Logf("TriggerSync error (may be expected): %v", err)
 		return
 	}
-
-	// Wait for the sync to complete. The sync's Read operations go through
-	// the same response queue as user commands and would consume programmed
-	// error responses meant for subsequent operations.
-	//
-	// Two possible outcomes:
-	// 1. "Synchronization finished"  — sync ran and completed
-	// 2. "no resources found to synchronize" — sync had nothing to do
-	if h.logCapture.WaitForLogSince("Synchronization finished", logPos, defaultCommandTimeout) {
-		return
-	}
-	if h.logCapture.WaitForLogSince("no resources found to synchronize", logPos, 500*time.Millisecond) {
-		return
-	}
-	t.Logf("executeTriggerSync: timeout waiting for sync completion")
+	t.Logf("TriggerSync: fired")
 }
 
 func (h *TestHarness) executeTriggerDiscovery(t *testing.T) {
@@ -1286,13 +1377,7 @@ func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config Proper
 		stackLabel := model.Stack(stackIdx).Label
 		ids := []int{0} // just the first resource
 
-		var policies []json.RawMessage
-		if config.EnableAutoReconcile && stackIdx == 0 {
-			// Attach auto-reconcile to the first stack
-			policies = append(policies, json.RawMessage(`{"Type":"auto-reconcile","IntervalSeconds":999999}`))
-			model.Stacks[stackIdx].AutoReconcile = true
-		}
-		forma := FormaFromStackResourcesWithPolicies(stackLabel, ids, policies)
+		forma := FormaFromStackResources(stackLabel, ids)
 		resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
 		if err != nil {
 			t.Logf("SetupStacks: stack %s apply rejected: %v", stackLabel, err)
@@ -1429,16 +1514,6 @@ func (h *TestHarness) dumpRawResourceRows(t *testing.T, resources []pkgmodel.Res
 // pool indices on the default stack. Used by smoke tests and ResetAgentState.
 func FormaFromResourceIDs(ids []int) *pkgmodel.Forma {
 	return FormaFromStackResources("default", ids)
-}
-
-// FormaFromStackResourcesWithPolicies builds a forma with resources and optional
-// stack policies (auto-reconcile, TTL, etc.).
-func FormaFromStackResourcesWithPolicies(stackLabel string, ids []int, policies []json.RawMessage, propsTemplate ...string) *pkgmodel.Forma {
-	forma := FormaFromStackResources(stackLabel, ids, propsTemplate...)
-	if len(policies) > 0 {
-		forma.Stacks[0].Policies = policies
-	}
-	return forma
 }
 
 // FormaFromStackResources builds a forma containing the resources at the given
@@ -1840,6 +1915,13 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	commandID := resp.CommandID
 	t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → command %s", op.SequenceNum, stackLabel, op.TTLExpired, commandID)
 
+	// Snapshot all resources on the stack (reconcile can create and delete).
+	var snapshotIDs []int
+	for id := range model.Stack(op.StackIndex).Resources {
+		snapshotIDs = append(snapshotIDs, id)
+	}
+	snapshots := model.SnapshotResources(op.StackIndex, snapshotIDs)
+
 	// Immediate model update: SetTTLPolicy is a reconcile apply.
 	// Predict outcomes at submission time, same as executeApply reconcile.
 	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, false, model)
@@ -1854,7 +1936,7 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	model.SaveLastReconcile(op.StackIndex, existingIDs, resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps)
 	model.Stacks[op.StackIndex].TTLExpired = op.TTLExpired
 	model.Stacks[op.StackIndex].TTL = true
-	model.TrackAcceptedCommand(commandID)
+	model.TrackAcceptedCommand(commandID, snapshots)
 	t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, op.TTLExpired, successIDs)
 }
 
@@ -1893,13 +1975,16 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 			continue
 		}
 
-		// Immediate model update: TTL expiry destroys all resources on the stack (cascade).
+		// Snapshot all resources on the stack before model update.
 		resourceIDs := allResourceIDs(model, stackIdx)
+		snapshots := model.SnapshotResources(stackIdx, resourceIDs)
+
+		// Immediate model update: TTL expiry destroys all resources on the stack (cascade).
 		for _, idx := range resourceIDs {
 			model.ApplyCascadeDestroyed(stackIdx, idx)
 		}
 		model.Stacks[stackIdx].TTLExpired = false
-		model.TrackAcceptedCommand(commandID)
+		model.TrackAcceptedCommand(commandID, snapshots)
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }
