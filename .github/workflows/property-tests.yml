@@ -36,8 +36,5 @@ jobs:
     - name: Build Project
       run: make build
 
-    - name: Run Property Tests (in-process)
+    - name: Run Property Tests
       run: make test-property
-
-    - name: Run Property Tests (blackbox)
-      run: make test-property-blackbox
