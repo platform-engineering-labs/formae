@@ -191,6 +191,14 @@ open class FieldHint extends Annotation {
     fixed IndexField: String = indexField ?? ""
 }
 
+/// Annotation for target config fields to declare mutability.
+/// Fields without this annotation are treated as immutable (createOnly).
+open class ConfigFieldHint extends Annotation {
+    hidden createOnly: Boolean = true  // default: immutable
+
+    fixed CreateOnly: Boolean = createOnly
+}
+
 // Schema output class
 open class Schema {
     /// Property to store as the NativeId following create
@@ -208,6 +216,11 @@ open class Schema {
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
 }
 
+/// Schema describing per-field mutability of a target's config.
+open class ConfigSchema {
+    Hints: Mapping<String, ConfigFieldHint>?
+}
+
 open class Target {
     hidden label: String
     hidden namespace: String = config.type.toUpperCase()
@@ -223,6 +236,13 @@ open class Target {
     fixed Label: String = label
     fixed Namespace: String = namespace
     fixed Config: Any? = config
+    fixed ConfigSchema: ConfigSchema? =
+        if (config != null)
+            let (hints = module.fq.configHints(reflect.Class(config.getClass())))
+            if (hints.length > 0)
+                new ConfigSchema { Hints = hints }
+            else null
+        else null
     fixed Discoverable: Boolean = discoverable
 }
 
@@ -599,6 +619,15 @@ class Fq {
         ))
 
         (directMapping.toMap() + nestedMapping.toMap()).toMapping()
+
+    function configHints(configClass: reflect.Class): Mapping<String, ConfigFieldHint> =
+        configClass.properties
+            .filter((_, v) -> v.allAnnotations.filterIsInstance(ConfigFieldHint).length > 0)
+            .map((k, v) ->
+                let(hint = v.allAnnotations.filterIsInstance(ConfigFieldHint).firstOrNull)
+                Pair(k.capitalize(), hint)
+            )
+            .toMapping()
 }
 
 const fq: Fq = new Fq{}

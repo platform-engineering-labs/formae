@@ -275,3 +275,119 @@ func TestApplyForma_TargetReplace_SimulateWarnsAboutUnmanagedResources(t *testin
 		assert.True(t, foundWarning, "should have a warning about unmanaged resources on the replaced target, got: %v", resp.Simulation.Warnings)
 	})
 }
+
+func TestApplyForma_TargetMutableConfigChange_UpdatesInPlace(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:       resource.OperationCreate,
+					OperationStatus: resource.OperationStatusSuccess,
+					RequestID:       "1234",
+					NativeID:        "5678",
+				}}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err, "Failed to create metastructure")
+
+		// Step 1: Seed initial state — target with ConfigSchema that has a mutable field
+		initialForma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Resources: []pkgmodel.Resource{{
+				Label:   "test-bucket",
+				Type:    "FakeAWS::S3::Bucket",
+				Stack:   "test-stack",
+				Target:  "test-target",
+				Managed: true,
+			}},
+			Targets: []pkgmodel.Target{{
+				Label:     "test-target",
+				Namespace: "FakeAWS",
+				Config:    json.RawMessage(`{"Region":"us-east-1","Profile":"prod"}`),
+				ConfigSchema: pkgmodel.ConfigSchema{
+					Hints: map[string]pkgmodel.ConfigFieldHint{
+						"Region":  {CreateOnly: true},
+						"Profile": {CreateOnly: false},
+					},
+				},
+			}},
+		}
+
+		_, err = m.ApplyForma(
+			initialForma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			require.NoError(t, err)
+			incomplete, err := m.Datastore.LoadIncompleteFormaCommands()
+			require.NoError(t, err)
+			return len(fas) == 1 && len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "first apply should complete")
+
+		// Step 2: Apply with only mutable field changed (Profile: prod → staging)
+		updateForma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Resources: []pkgmodel.Resource{{
+				Label:   "test-bucket",
+				Type:    "FakeAWS::S3::Bucket",
+				Stack:   "test-stack",
+				Target:  "test-target",
+				Managed: true,
+			}},
+			Targets: []pkgmodel.Target{{
+				Label:     "test-target",
+				Namespace: "FakeAWS",
+				Config:    json.RawMessage(`{"Region":"us-east-1","Profile":"staging"}`),
+				ConfigSchema: pkgmodel.ConfigSchema{
+					Hints: map[string]pkgmodel.ConfigFieldHint{
+						"Region":  {CreateOnly: true},
+						"Profile": {CreateOnly: false},
+					},
+				},
+			}},
+		}
+
+		_, err = m.ApplyForma(
+			updateForma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+
+		// Step 3: Wait for the second command to complete
+		var commands []*forma_command.FormaCommand
+		assert.Eventually(t, func() bool {
+			commands, err = m.Datastore.LoadFormaCommands()
+			require.NoError(t, err)
+			incomplete, err := m.Datastore.LoadIncompleteFormaCommands()
+			require.NoError(t, err)
+			return len(commands) == 2 && len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "second apply should complete")
+
+		// Step 4: Verify the second command has NO resource delete/create operations
+		updateCommand := commands[0] // newest first
+		for _, ru := range updateCommand.ResourceUpdates {
+			assert.NotEqual(t, resource_update.OperationDelete, ru.Operation,
+				"mutable config change should not delete resources")
+			assert.NotEqual(t, resource_update.OperationCreate, ru.Operation,
+				"mutable config change should not recreate resources")
+		}
+
+		// Step 5: Verify the target config was updated in the datastore
+		target, err := m.Datastore.LoadTarget("test-target")
+		require.NoError(t, err)
+		require.NotNil(t, target)
+		assert.JSONEq(t, `{"Region":"us-east-1","Profile":"staging"}`, string(target.Config))
+
+		// Step 6: Verify the resource still exists unchanged
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+		assert.Equal(t, "test-bucket", resources[0].Label)
+	})
+}

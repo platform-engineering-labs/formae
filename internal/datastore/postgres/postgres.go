@@ -2398,7 +2398,7 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	defer span.End()
 
 	query := `
-	SELECT version, namespace, config, discoverable
+	SELECT version, namespace, config, discoverable, config_schema
 	FROM targets
 	WHERE label = $1
 	ORDER BY version DESC
@@ -2410,7 +2410,8 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	var namespace string
 	var config json.RawMessage
 	var discoverable bool
-	if err := row.Scan(&version, &namespace, &config, &discoverable); err != nil {
+	var configSchemaStr sql.NullString
+	if err := row.Scan(&version, &namespace, &config, &discoverable, &configSchemaStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -2421,6 +2422,7 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 		Label:        label,
 		Namespace:    namespace,
 		Config:       config,
+		ConfigSchema: unmarshalConfigSchemaPostgres(configSchemaStr),
 		Discoverable: discoverable,
 		Version:      version,
 	}, nil
@@ -2443,7 +2445,7 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	}
 
 	query := fmt.Sprintf(`
-	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable
+	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable, t1.config_schema
 	FROM targets t1
 	WHERE t1.label IN (%s)
 	AND NOT EXISTS (
@@ -2466,7 +2468,8 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 		var version int
 		var config json.RawMessage
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+		var configSchemaStr sql.NullString
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable, &configSchemaStr); err != nil {
 			return nil, err
 		}
 
@@ -2474,6 +2477,7 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: unmarshalConfigSchemaPostgres(configSchemaStr),
 			Discoverable: discoverable,
 			Version:      version,
 		})
@@ -2489,7 +2493,7 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	// Get latest version per label where discoverable = true, deduplicated by config using DISTINCT ON
 	query := `
 	WITH latest_targets AS (
-		SELECT label, version, namespace, config, discoverable
+		SELECT label, version, namespace, config, discoverable, config_schema
 		FROM targets t1
 		WHERE discoverable = TRUE
 		AND NOT EXISTS (
@@ -2499,7 +2503,7 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 			AND t2.version > t1.version
 		)
 	)
-	SELECT DISTINCT ON (config) label, version, namespace, config, discoverable
+	SELECT DISTINCT ON (config) label, version, namespace, config, discoverable, config_schema
 	FROM latest_targets
 	ORDER BY config, version DESC`
 
@@ -2515,7 +2519,8 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 		var version int
 		var config json.RawMessage
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &ns, &config, &discoverable); err != nil {
+		var configSchemaStr sql.NullString
+		if err := rows.Scan(&label, &version, &ns, &config, &discoverable, &configSchemaStr); err != nil {
 			return nil, err
 		}
 
@@ -2523,6 +2528,7 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 			Label:        label,
 			Namespace:    ns,
 			Config:       config,
+			ConfigSchema: unmarshalConfigSchemaPostgres(configSchemaStr),
 			Discoverable: discoverable,
 			Version:      version,
 		})
@@ -2536,7 +2542,7 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 	defer span.End()
 
 	queryStr := `
-		SELECT label, version, namespace, config, discoverable
+		SELECT label, version, namespace, config, discoverable, config_schema
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2563,7 +2569,8 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 		var version int
 		var config json.RawMessage
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+		var configSchemaStr sql.NullString
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable, &configSchemaStr); err != nil {
 			return nil, err
 		}
 
@@ -2571,6 +2578,7 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: unmarshalConfigSchemaPostgres(configSchemaStr),
 			Discoverable: discoverable,
 			Version:      version,
 		})
@@ -3024,6 +3032,33 @@ func (d DatastorePostgres) BulkStoreResources(resources []pkgmodel.Resource, com
 	return lastVersionID, nil
 }
 
+// marshalConfigSchemaPostgres serializes a ConfigSchema to a JSON string for storage.
+// Returns nil if the schema has no hints (zero value).
+func marshalConfigSchemaPostgres(schema pkgmodel.ConfigSchema) (any, error) {
+	if len(schema.Hints) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+// unmarshalConfigSchemaPostgres deserializes a ConfigSchema from a nullable JSON string.
+// Returns zero-value ConfigSchema if the string is null or empty.
+func unmarshalConfigSchemaPostgres(s sql.NullString) pkgmodel.ConfigSchema {
+	if !s.Valid || s.String == "" {
+		return pkgmodel.ConfigSchema{}
+	}
+	var schema pkgmodel.ConfigSchema
+	if err := json.Unmarshal([]byte(s.String), &schema); err != nil {
+		slog.Error("Failed to unmarshal config_schema", "error", err)
+		return pkgmodel.ConfigSchema{}
+	}
+	return schema
+}
+
 func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error) {
 	ctx, span := tracer.Start(context.Background(), "CreateTarget")
 	defer span.End()
@@ -3033,11 +3068,16 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 		return "", err
 	}
 
+	configSchema, err := marshalConfigSchemaPostgres(target.ConfigSchema)
+	if err != nil {
+		return "", err
+	}
+
 	query := `
-	INSERT INTO targets (label, version, namespace, config, discoverable)
-	VALUES ($1, 1, $2, $3, $4)
+	INSERT INTO targets (label, version, namespace, config, discoverable, config_schema)
+	VALUES ($1, 1, $2, $3, $4, $5)
 	`
-	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, target.Discoverable)
+	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, target.Discoverable, configSchema)
 	if err != nil {
 		slog.Error("failed to create target", "error", err, "label", target.Label)
 		return "", err
@@ -3068,8 +3108,13 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 		return "", err
 	}
 
-	insertQuery := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES ($1, $2, $3, $4, $5)`
-	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, target.Discoverable)
+	configSchema, err := marshalConfigSchemaPostgres(target.ConfigSchema)
+	if err != nil {
+		return "", err
+	}
+
+	insertQuery := `INSERT INTO targets (label, version, namespace, config, discoverable, config_schema) VALUES ($1, $2, $3, $4, $5, $6)`
+	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, target.Discoverable, configSchema)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err

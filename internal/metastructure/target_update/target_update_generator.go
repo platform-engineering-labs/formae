@@ -114,12 +114,18 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			}
 		}
 
-		if !util.JsonEqualRaw(existing.Config, target.Config) {
+		configChange := ClassifyConfigChange(existing.Config, target.Config, existing.ConfigSchema)
+		switch configChange {
+		case ConfigImmutableChange:
 			operation = TargetOperationReplace
-		} else if existing.Discoverable != target.Discoverable {
+		case ConfigMutableChange:
 			operation = TargetOperationUpdate
-		} else {
-			return TargetUpdate{}, false, nil
+		default:
+			if existing.Discoverable != target.Discoverable {
+				operation = TargetOperationUpdate
+			} else {
+				return TargetUpdate{}, false, nil
+			}
 		}
 	}
 

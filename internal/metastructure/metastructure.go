@@ -1383,18 +1383,25 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
-	// Build replaced targets set for resource generation
+	// Build target change sets for resource generation
 	var replacedTargets map[string]bool
+	var updatedTargets map[string]bool
 	for _, tu := range targetUpdates {
-		if tu.Operation == target_update.TargetOperationReplace {
+		switch tu.Operation {
+		case target_update.TargetOperationReplace:
 			if replacedTargets == nil {
 				replacedTargets = make(map[string]bool)
 			}
 			replacedTargets[tu.Target.Label] = true
+		case target_update.TargetOperationUpdate:
+			if updatedTargets == nil {
+				updatedTargets = make(map[string]bool)
+			}
+			updatedTargets[tu.Target.Label] = true
 		}
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, updatedTargets)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr

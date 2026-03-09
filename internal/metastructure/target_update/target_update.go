@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -81,30 +79,6 @@ func (tu *TargetUpdate) MarkInProgress() { tu.State = TargetUpdateStateInProgres
 
 // MarkFailed transitions the target update to the Failed state.
 func (tu *TargetUpdate) MarkFailed() { tu.State = TargetUpdateStateFailed }
-
-// ValidateImmutableFields validates that immutable fields (namespace, config) haven't changed
-// Returns an error if namespace or config differ between existing and new targets
-func ValidateImmutableFields(existing, new *pkgmodel.Target) error {
-	if existing.Namespace != new.Namespace {
-		return model.TargetAlreadyExistsError{
-			TargetLabel:       new.Label,
-			ExistingNamespace: existing.Namespace,
-			FormaNamespace:    new.Namespace,
-			MismatchType:      "namespace",
-		}
-	}
-
-	if !util.JsonEqualRaw(existing.Config, new.Config) {
-		return model.TargetAlreadyExistsError{
-			TargetLabel:    new.Label,
-			ExistingConfig: existing.Config,
-			FormaConfig:    new.Config,
-			MismatchType:   "config",
-		}
-	}
-
-	return nil
-}
 
 // PersistTargetUpdates is sent to the ResourcePersister actor to persist target updates
 // to the datastore.
