@@ -562,7 +562,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 		progressResult.OperationStatus = resource.OperationStatusFailure
 		progressResult.ErrorCode = resource.OperationErrorCodeUnforeseenError
 		progressResult.StatusMessage = err.Error()
-	} else if result.ErrorCode != "" && !operation.TreatNotFoundAsSuccess() {
+	} else if result.ErrorCode != "" && !(operation.TreatNotFoundAsSuccess() && result.ErrorCode == resource.OperationErrorCodeNotFound) {
 		progressResult.OperationStatus = resource.OperationStatusFailure
 		progressResult.ErrorCode = result.ErrorCode
 	} else if result.ErrorCode == resource.OperationErrorCodeNotFound && operation.TreatNotFoundAsSuccess() {
