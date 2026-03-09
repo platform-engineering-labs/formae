@@ -138,7 +138,10 @@ const (
 	StateRejected             = gen.Atom("rejected")
 )
 
-const PluginOperationCallTimeout = 60 // seconds
+// PluginOperationCallTimeout is the maximum time (in seconds) to wait for a
+// plugin operator to respond to a resource operation. Exposed as a variable
+// so tests can reduce it.
+var PluginOperationCallTimeout = 60
 
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
@@ -369,7 +372,8 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		proc)
 	if err != nil {
 		proc.Log().Error("failed to start delete operation", "error", err, "resourceURI", data.resourceUpdate.DesiredState.URI())
-		return StateDeleting, data, nil, nil
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
 	}
 
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
