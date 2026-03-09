@@ -136,38 +136,52 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 	p.connectDeleteToCreate(allOps)
 }
 
-// buildTargetResourceEdges creates implicit ordering edges for target replace operations:
-// resource deletes → target delete → target create → resource creates
+// buildTargetResourceEdges creates implicit ordering edges between target and resource nodes:
+//   - Replace: resource deletes → target delete → target create → resource creates
+//   - Delete:  resource deletes → target delete
 func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
 	for _, tu := range targetUpdates {
-		if tu.Operation != target_update.TargetOperationReplace {
-			continue
-		}
-
-		targetDeleteURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/delete")
-		targetCreateURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/create")
-		targetDeleteNode := p.Nodes[targetDeleteURI]
-		targetCreateNode := p.Nodes[targetCreateURI]
-		if targetDeleteNode == nil || targetCreateNode == nil {
-			continue
-		}
-
-		for _, node := range p.Nodes {
-			ru, ok := node.Update.(*resource_update.ResourceUpdate)
-			if !ok {
-				continue
-			}
-			if ru.DesiredState.Target != tu.Target.Label {
+		switch tu.Operation {
+		case target_update.TargetOperationReplace:
+			targetDeleteURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/delete")
+			targetCreateURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/create")
+			targetDeleteNode := p.Nodes[targetDeleteURI]
+			targetCreateNode := p.Nodes[targetCreateURI]
+			if targetDeleteNode == nil || targetCreateNode == nil {
 				continue
 			}
 
-			if ru.Operation == resource_update.OperationDelete {
-				// Target delete waits for resource deletes
-				targetDeleteNode.LinkWith(node)
+			for _, node := range p.Nodes {
+				ru, ok := node.Update.(*resource_update.ResourceUpdate)
+				if !ok || ru.DesiredState.Target != tu.Target.Label {
+					continue
+				}
+				if ru.Operation == resource_update.OperationDelete {
+					targetDeleteNode.LinkWith(node)
+				}
+				if ru.Operation == resource_update.OperationCreate {
+					node.LinkWith(targetCreateNode)
+				}
 			}
-			if ru.Operation == resource_update.OperationCreate {
-				// Resource creates wait for target create
-				node.LinkWith(targetCreateNode)
+
+		case target_update.TargetOperationDelete:
+			targetDeleteNode := p.Nodes[tu.NodeURI()]
+			if targetDeleteNode == nil {
+				continue
+			}
+
+			for _, node := range p.Nodes {
+				ru, ok := node.Update.(*resource_update.ResourceUpdate)
+				if !ok {
+					continue
+				}
+				if ru.DesiredState.Target != tu.Target.Label && ru.PriorState.Target != tu.Target.Label {
+					continue
+				}
+				if ru.Operation == resource_update.OperationDelete {
+					// Target delete waits for resource deletes
+					targetDeleteNode.LinkWith(node)
+				}
 			}
 		}
 	}

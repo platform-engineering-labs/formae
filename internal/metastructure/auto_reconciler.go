@@ -347,7 +347,7 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		resource_update.FormaCommandSourcePolicyAutoReconcile,
 		existingTargets,
 		data.datastore,
-		nil,
+		nil, nil,
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate resource updates: %w", err)

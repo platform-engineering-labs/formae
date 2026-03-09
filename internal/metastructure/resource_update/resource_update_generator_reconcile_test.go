@@ -292,6 +292,7 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				existingTargets,
 				ds,
 				nil,
+				nil,
 			)
 
 			if tt.expectedError != "" {
@@ -1380,7 +1381,7 @@ func TestGenerateResourceUpdatesForReconcile_ForwardReferenceToNewResource(t *te
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 
 	assert.NoError(t, err, "forward reference to new resource should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")
@@ -1476,7 +1477,7 @@ func TestGenerateResourceUpdatesForReconcile_AddNewResourceWithForwardReference(
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 
 	assert.NoError(t, err, "adding new resource with forward reference should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")

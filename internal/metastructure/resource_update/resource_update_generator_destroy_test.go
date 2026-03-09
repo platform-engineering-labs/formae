@@ -334,6 +334,7 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 				existingTargets,
 				ds,
 				nil,
+				nil,
 			)
 
 			if tt.expectedError != "" {
@@ -401,6 +402,7 @@ func TestGenerateResourceUpdatesForDestroy_NewResourceUpdateForDestroy(t *testin
 		FormaCommandSourceUser,
 		targetMap,
 		ds,
+		nil,
 	)
 
 	assert.NoError(t, err)
@@ -489,6 +491,7 @@ func TestGenerateResourceUpdatesForDestroy_WithDependencies(t *testing.T) {
 		FormaCommandSourceUser,
 		targetMap,
 		ds,
+		nil,
 	)
 
 	assert.NoError(t, err)
@@ -582,6 +585,7 @@ func TestGenerateResourceUpdatesForDestroy_WithCrossStackDependencies(t *testing
 		FormaCommandSourceUser,
 		targetMap,
 		ds,
+		nil,
 	)
 
 	assert.NoError(t, err)
@@ -659,6 +663,7 @@ func TestGenerateResourceUpdatesForDestroy_PartialResourcesWithDependencies(t *t
 		FormaCommandSourceUser,
 		targetMap,
 		ds,
+		nil,
 	)
 
 	assert.NoError(t, err)
