@@ -305,6 +305,11 @@ test-e2e: build install-external-plugins
 test-property:
 	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
 
+## test-property-blackbox: Run blackbox property tests (FullChaos 100 iterations, others 50)
+test-property-blackbox:
+	go test -C tests/blackbox -tags=property -run 'TestProperty_Sequential|TestProperty_Concurrent' -v -count=1 -rapid.checks=50 -timeout=60m
+	go test -C tests/blackbox -tags=property -run TestProperty_FullChaos -v -count=1 -rapid.checks=100 -timeout=60m
+
 ## mutation-test: Run mutation testing across all unit-tested packages and generate report
 mutation-test: build
 	@echo "Running mutation testing (this will take a while)..."
