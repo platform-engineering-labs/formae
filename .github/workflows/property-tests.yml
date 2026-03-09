@@ -1,6 +1,12 @@
 name: formae-property-tests
 
 on:
+  pull_request:
+    paths:
+    - 'internal/**'
+    - 'pkg/**'
+    - 'tests/blackbox/**'
+    - 'tests/testplugin/**'
   workflow_dispatch:
   # Run 1x a day at midnight UTC
   schedule:
@@ -9,13 +15,14 @@ on:
 jobs:
   property-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         fetch-tags: true
-    
+
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
@@ -28,6 +35,9 @@ jobs:
 
     - name: Build Project
       run: make build
-        
-    - name: Run Property Tests
+
+    - name: Run Property Tests (in-process)
       run: make test-property
+
+    - name: Run Property Tests (blackbox)
+      run: make test-property-blackbox
