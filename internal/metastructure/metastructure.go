@@ -1503,23 +1503,37 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
+	// Build per-target resource presence map for destroy semantics:
+	// targets with resources in the forma are preserved on destroy.
+	resourceTargetLabels := make(map[string]bool)
+	for _, r := range forma.Resources {
+		resourceTargetLabels[r.Target] = true
+	}
+
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, resourceTargetLabels)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build replaced targets set for resource generation
+	// Build affected targets sets for resource generation
 	var replacedTargets map[string]bool
+	var deletedTargets map[string]bool
 	for _, tu := range targetUpdates {
-		if tu.Operation == target_update.TargetOperationReplace {
+		switch tu.Operation {
+		case target_update.TargetOperationReplace:
 			if replacedTargets == nil {
 				replacedTargets = make(map[string]bool)
 			}
 			replacedTargets[tu.Target.Label] = true
+		case target_update.TargetOperationDelete:
+			if deletedTargets == nil {
+				deletedTargets = make(map[string]bool)
+			}
+			deletedTargets[tu.Target.Label] = true
 		}
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, deletedTargets)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr

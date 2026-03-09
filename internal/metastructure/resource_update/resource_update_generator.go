@@ -28,6 +28,7 @@ func GenerateResourceUpdates(
 	existingTargets []*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	deletedTargets map[string]bool,
 ) ([]ResourceUpdate, error) {
 
 	var referenceLabels map[string]string
@@ -78,7 +79,7 @@ func GenerateResourceUpdates(
 
 	switch command {
 	case pkgmodel.CommandDestroy:
-		resourceUpdates, err = generateResourceUpdatesForDestroy(forma, source, targetMap, ds)
+		resourceUpdates, err = generateResourceUpdatesForDestroy(forma, source, targetMap, ds, deletedTargets)
 	case pkgmodel.CommandApply:
 		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, targetMap, ds, replacedTargets)
 	case pkgmodel.CommandSync:
@@ -162,7 +163,9 @@ func generateResourceUpdatesForDestroy(
 	forma *pkgmodel.Forma,
 	source FormaCommandSource,
 	targetMap map[string]*pkgmodel.Target,
-	ds ResourceDataLookup) ([]ResourceUpdate, error) {
+	ds ResourceDataLookup,
+	deletedTargets map[string]bool,
+) ([]ResourceUpdate, error) {
 
 	var resourceDestroys []ResourceUpdate
 
@@ -199,6 +202,38 @@ func generateResourceUpdatesForDestroy(
 					explicitDeleteKSUIDs[existingResource.Ksuid] = true
 					resourceDestroys = append(resourceDestroys, resourceDestroy)
 				}
+			}
+		}
+	}
+
+	// Generate cascade deletes for all managed resources in deleted targets
+	if len(deletedTargets) > 0 {
+		allResourcesByStack, err := ds.LoadAllResourcesByStack()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load resources for target cascade delete: %w", err)
+		}
+
+		for _, resources := range allResourcesByStack {
+			for _, res := range resources {
+				if !res.Managed || !deletedTargets[res.Target] {
+					continue
+				}
+				if explicitDeleteKSUIDs[res.Ksuid] {
+					continue // Already being deleted explicitly
+				}
+
+				target, ok := targetMap[res.Target]
+				if !ok {
+					continue
+				}
+
+				resourceDestroy, err := NewResourceUpdateForDestroy(*res, *target, source)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create cascade resource destroy for %s: %w", res.Label, err)
+				}
+
+				explicitDeleteKSUIDs[res.Ksuid] = true
+				resourceDestroys = append(resourceDestroys, resourceDestroy)
 			}
 		}
 	}
