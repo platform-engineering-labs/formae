@@ -449,7 +449,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								Operation: ru.Operation,
 							}
 						}
-						m.callActor(
+						_, err = m.callActor(
 							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 							forma_persister.MarkResourcesAsFailed{
 								CommandID:          fa.ID,
@@ -457,6 +457,10 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								ResourceModifiedTs: time.Now(),
 							},
 						)
+						if err != nil {
+							slog.Error("Failed to mark resources as failed after stack deletion",
+								"error", err, "commandID", fa.ID)
+						}
 						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
 					}
 				}
