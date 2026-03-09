@@ -268,10 +268,45 @@ func resolvableMetadataKey(v any) string {
 	return label + "|" + typ + "|" + stack + "|" + prop
 }
 
+// normalizeResolvables strips $visibility and $value from resolvable refs
+// so that expected (with $visibility) and actual (with $value) produce
+// identical JSON for comparison. The stable metadata fields ($res, $label,
+// $type, $stack, $property) are preserved.
+func normalizeResolvables(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		if isResolvable(val) {
+			norm := make(map[string]any)
+			for k, v := range val {
+				if k == "$visibility" || k == "$value" {
+					continue
+				}
+				norm[k] = v
+			}
+			return norm
+		}
+		norm := make(map[string]any)
+		for k, v := range val {
+			norm[k] = normalizeResolvables(v)
+		}
+		return norm
+	case []any:
+		norm := make([]any, len(val))
+		for i, v := range val {
+			norm[i] = normalizeResolvables(v)
+		}
+		return norm
+	default:
+		return v
+	}
+}
+
 // compareArrayUnordered compares two arrays ignoring element order.
 // If the array contains resolvable elements, it uses element-wise matching
 // that validates resolvable metadata and $value. Otherwise, elements are
-// serialized to JSON for canonical comparison.
+// serialized to JSON for canonical comparison. Nested resolvables inside
+// map elements are normalized before comparison so that $visibility vs
+// $value differences don't cause false mismatches.
 func compareArrayUnordered(t *testing.T, key string, expected, actual any, context string) bool {
 	expectedArr, ok := expected.([]any)
 	if !ok {
@@ -303,9 +338,10 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 		return compareArrayWithResolvables(t, key, expectedArr, actualArr, context)
 	}
 
-	// Fast path: serialize to JSON, sort, and compare
+	// Serialize to JSON, sort, and compare. Normalize resolvables so that
+	// $visibility (expected) and $value (actual) are stripped before comparison.
 	serialize := func(v any) string {
-		b, _ := json.Marshal(v)
+		b, _ := json.Marshal(normalizeResolvables(v))
 		return string(b)
 	}
 
@@ -340,7 +376,7 @@ func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualAr
 	matched := make([]bool, len(actualArr))
 
 	serialize := func(v any) string {
-		b, _ := json.Marshal(v)
+		b, _ := json.Marshal(normalizeResolvables(v))
 		return string(b)
 	}
 
