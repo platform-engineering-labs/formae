@@ -228,9 +228,7 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		statemachine.WithStateMessageHandler(StateSynchronizing, pluginOperationMissingInAction),
 		statemachine.WithStateMessageHandler(StateSynchronizing, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
-		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, ignoreProgressUpdate),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
-		statemachine.WithStateMessageHandler(StateFinishedWithError, ignoreProgressUpdate),
 		statemachine.WithStateMessageHandler(StateRejected, shutdown),
 	), nil
 }
@@ -255,13 +253,6 @@ func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Sh
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
-// ignoreProgressUpdate absorbs late TrackedProgress messages that arrive after
-// the ResourceUpdater has already moved to a terminal state. Without this, a
-// stale message from the PluginOperator would crash the FSM.
-func ignoreProgressUpdate(_ gen.PID, state gen.Atom, data ResourceUpdateData, _ plugin.TrackedProgress, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	proc.Log().Warning("ResourceUpdater: ignoring late TrackedProgress in terminal state", "state", state)
-	return state, data, nil, nil
-}
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, error) {
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
