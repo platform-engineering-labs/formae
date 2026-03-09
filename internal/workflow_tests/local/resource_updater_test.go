@@ -445,6 +445,103 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 	})
 }
 
+func TestResourceUpdater_DeleteOperationFailsWhenPluginCrashes(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Reduce the plugin call timeout so the test doesn't wait 60s for the
+		// crashed PluginOperator's CallWithTimeout to expire.
+		orig := resource_update.PluginOperationCallTimeout
+		resource_update.PluginOperationCallTimeout = 3
+		t.Cleanup(func() { resource_update.PluginOperationCallTimeout = orig })
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: "FakeAWS::S3::Bucket",
+					Properties:   `{"foo":"bar","baz":"qux","a":[3,4,2]}`,
+				}, nil
+			},
+			// Return nil result (not an error) so the PluginOperator panics on
+			// result.ProgressResult, crashing the actor. This causes the
+			// ResourceUpdater's doPluginOperation → CallWithTimeout to return an
+			// error, exercising the "failed to start delete operation" path.
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return nil, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		if err != nil {
+			t.Fatalf("Failed to create metastructure: %v", err)
+			return
+		}
+
+		messages := make(chan any, 1)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:      "test-forma-command-delete-crash",
+				State:   forma_command.CommandStateNotStarted,
+				StartTs: util.TimeNow(),
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					{
+						Operation: resource_update.OperationDelete,
+						DesiredState: pkgmodel.Resource{
+							Label: "test-resource",
+							Type:  "FakeAWS::S3::Bucket",
+							Stack: "test-stack",
+							Ksuid: initialResource.DesiredState.Ksuid,
+						},
+					},
+				},
+			},
+		})
+
+		hash, err := testutil.Call(m.Node, "ResourcePersister", resource_update.PersistResourceUpdate{
+			PluginOperation: resource.OperationCreate,
+			ResourceUpdate:  *initialResource,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, hash)
+
+		updateResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
+		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
+			ResourceURI: initialResource.DesiredState.URI(),
+			CommandID:   "test-forma-command-delete-crash",
+			Operation:   string(updateResource.Operation),
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-delete-crash"), resource_update.StartResourceUpdate{
+			ResourceUpdate: *updateResource,
+			CommandID:      "test-forma-command-delete-crash",
+		})
+
+		// The delete operation should fail (not hang) because the PluginOperator
+		// crashed. Before the fix, the ResourceUpdater stayed stuck in StateDeleting
+		// and this assertion would time out.
+		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
+			return msg.Uri == initialResource.DesiredState.URI() &&
+				msg.State == resource_update.ResourceUpdateStateFailed
+		})
+
+		// Verify the forma command reflects the failure
+		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
+			CommandID: "test-forma-command-delete-crash",
+		})
+		assert.NoError(t, err)
+
+		command, ok := commandRes.(*forma_command.FormaCommand)
+		assert.True(t, ok)
+		assert.Equal(t, forma_command.CommandStateFailed, command.State)
+		assert.Len(t, command.ResourceUpdates, 1)
+		assert.Equal(t, resource_update.ResourceUpdateStateFailed, command.ResourceUpdates[0].State)
+	})
+}
+
 func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
