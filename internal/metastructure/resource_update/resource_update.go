@@ -412,10 +412,11 @@ func (ru *ResourceUpdate) NodeURI() pkgmodel.FormaeURI { return ru.URI() }
 func (ru *ResourceUpdate) Resolvables() []pkgmodel.FormaeURI {
 	return ru.RemainingResolvables
 }
-func (ru *ResourceUpdate) Namespace() string { return string(ru.DesiredState.Namespace()) }
-func (ru *ResourceUpdate) IsReady() bool     { return ru.State == ResourceUpdateStateNotStarted }
-func (ru *ResourceUpdate) IsRunning() bool   { return ru.State == ResourceUpdateStateInProgress }
-func (ru *ResourceUpdate) IsSuccess() bool   { return ru.State == ResourceUpdateStateSuccess }
+func (ru *ResourceUpdate) Namespace() string   { return string(ru.DesiredState.Namespace()) }
+func (ru *ResourceUpdate) IsRateLimited() bool { return true }
+func (ru *ResourceUpdate) IsReady() bool       { return ru.State == ResourceUpdateStateNotStarted }
+func (ru *ResourceUpdate) IsRunning() bool     { return ru.State == ResourceUpdateStateInProgress }
+func (ru *ResourceUpdate) IsSuccess() bool     { return ru.State == ResourceUpdateStateSuccess }
 func (ru *ResourceUpdate) IsFailed() bool {
 	return ru.State == ResourceUpdateStateFailed || ru.State == ResourceUpdateStateRejected
 }

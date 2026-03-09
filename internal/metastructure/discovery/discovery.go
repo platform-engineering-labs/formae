@@ -694,7 +694,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	}
 
 	// Sync commands (READs) will never contain cycles so we can safely ignore the error here.
-	cs, _ := changeset.NewChangesetFromResourceUpdates(syncCommand.ResourceUpdates, syncCommand.ID, pkgmodel.CommandApply)
+	cs, _ := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandApply)
 
 	proc.Log().Debug("Ensuring ChangesetExecutor for sync command", "commandID", syncCommand.ID)
 	_, err = proc.Call(
