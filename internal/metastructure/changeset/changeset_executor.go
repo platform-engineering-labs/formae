@@ -74,6 +74,11 @@ type Cancel struct {
 	CommandID string
 }
 
+// CancelResponse contains per-resource-update states at cancel time.
+type CancelResponse struct {
+	ResourceStates map[string]string // URI → state ("Canceled", "InProgress", "Success", "Failed")
+}
+
 type ChangesetState string
 
 const (
@@ -106,7 +111,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateMessageHandler(StateNotStarted, start),
 		statemachine.WithStateMessageHandler(StateProcessing, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
-		statemachine.WithStateMessageHandler(StateProcessing, cancel),
+		statemachine.WithStateCallHandler(StateProcessing, cancel),
 		statemachine.WithStateMessageHandler(StateCanceling, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
@@ -223,7 +228,38 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 		}
 	}
 
+	// Register ALL non-sync resources with the Synchronizer upfront to prevent
+	// a race where a sync cycle could read (and persist) OOB changes for a
+	// resource before the ResourceUpdater's own sync-Read runs. Without this,
+	// the sync-Read would see no diff (sync already equalised DB and cloud)
+	// and the update would proceed when it should have been rejected.
+	if changesetHasUserUpdates(data.changeset) {
+		registerAllResourcesWithSynchronizer(data.changeset.Pipeline, proc)
+	}
+
 	return resume(from, state, data, Resume{}, proc)
+}
+
+// registerAllResourcesWithSynchronizer sends RegisterInProgressResource for
+// every non-sync resource in the pipeline. This must happen before any
+// rate-limiting or batching so that a concurrent sync cycle cannot slip in
+// and read a resource that is about to be updated.
+func registerAllResourcesWithSynchronizer(pipeline *ResourceUpdatePipeline, proc gen.Process) {
+	synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+	for _, group := range pipeline.ResourceUpdateGroups {
+		for _, update := range group.Updates {
+			if update.Source == resource_update.FormaCommandSourceSynchronize {
+				continue
+			}
+			err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
+				ResourceURI: string(update.URI()),
+			})
+			if err != nil {
+				proc.Log().Error("Failed to register in-progress resource with synchronizer",
+					"error", err, "resourceURI", update.URI())
+			}
+		}
+	}
 }
 
 func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
@@ -428,19 +464,6 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 	for _, update := range updates {
 		proc.Log().Debug("Starting resource updater", "uri", update.URI(), "operation", update.Operation)
 
-		// Register non-sync resources as in-progress with the Synchronizer
-		// to prevent race conditions where sync might include resources being updated by user operations
-		if update.Source != resource_update.FormaCommandSourceSynchronize {
-			synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
-			err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
-				ResourceURI: string(update.URI()),
-			})
-			if err != nil {
-				proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", update.URI())
-				// Don't return error - this is not critical enough to fail the operation
-			}
-		}
-
 		_, err := proc.Call(gen.ProcessID{Name: actornames.ResourceUpdaterSupervisor, Node: proc.Node().Name()},
 			resource_update.EnsureResourceUpdater{
 				ResourceURI: update.URI(),
@@ -466,25 +489,35 @@ func startResourceUpdates(updates []*resource_update.ResourceUpdate, commandID s
 	return nil
 }
 
-func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
 	proc.Log().Debug("ChangesetExecutor received cancel request", "commandID", message.CommandID)
 
 	// Collect resources by state
 	var resourcesToCancel []forma_persister.ResourceUpdateRef
 	var inProgressCount int
+	resourceStates := make(map[string]string)
 
 	for _, group := range data.changeset.Pipeline.ResourceUpdateGroups {
 		for _, update := range group.Updates {
-			// Only cancel resources that haven't started yet (NotStarted state)
-			// Do NOT cancel InProgress resources to avoid orphaned cloud resources
-			if update.State == resource_update.ResourceUpdateStateNotStarted {
+			uri := string(update.URI())
+			switch update.State {
+			case resource_update.ResourceUpdateStateNotStarted:
+				resourceStates[uri] = "Canceled"
 				resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
 					URI:       update.URI(),
 					Operation: update.Operation,
 				})
-			} else if update.State == resource_update.ResourceUpdateStateInProgress {
-				// Count in-progress resources - we need to wait for these to complete
+			case resource_update.ResourceUpdateStateInProgress:
+				resourceStates[uri] = "InProgress"
 				inProgressCount++
+			case resource_update.ResourceUpdateStateSuccess:
+				resourceStates[uri] = "Success"
+			case resource_update.ResourceUpdateStateFailed:
+				resourceStates[uri] = "Failed"
+			case resource_update.ResourceUpdateStateCanceled:
+				resourceStates[uri] = "Canceled"
+			default:
+				resourceStates[uri] = string(update.State)
 			}
 		}
 	}
@@ -507,22 +540,22 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 			"canceledCount", len(resourcesToCancel))
 	}
 
+	cancelResp := CancelResponse{ResourceStates: resourceStates}
+
 	// Determine next state
 	var nextState gen.Atom
 	if inProgressCount > 0 {
-		// We have in-progress resources - transition to Canceling state and wait for them to finish
 		proc.Log().Debug("Command is canceling, waiting for in-progress resources to complete",
 			"commandID", message.CommandID,
 			"inProgressCount", inProgressCount)
 		nextState = StateCanceling
 	} else {
-		// No in-progress resources - transition directly to Canceled
 		proc.Log().Debug("Command canceled immediately (no in-progress resources)",
 			"commandID", message.CommandID)
 		nextState = StateCanceled
 	}
 
-	return nextState, data, nil, nil
+	return nextState, data, cancelResp, nil, nil
 }
 
 func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
