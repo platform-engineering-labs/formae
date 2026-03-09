@@ -228,7 +228,40 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 		}
 	}
 
+	// Register ALL non-sync resources with the Synchronizer upfront to prevent
+	// a race where a sync cycle could read (and persist) OOB changes for a
+	// resource before the ResourceUpdater's own sync-Read runs. Without this,
+	// the sync-Read would see no diff (sync already equalised DB and cloud)
+	// and the update would proceed when it should have been rejected.
+	if changesetHasUserUpdates(data.changeset) {
+		registerAllResourcesWithSynchronizer(data.changeset.DAG, proc)
+	}
+
 	return resume(from, state, data, Resume{}, proc)
+}
+
+// registerAllResourcesWithSynchronizer sends RegisterInProgressResource for
+// every non-sync resource in the DAG. This must happen before any ResourceUpdater
+// starts so that a concurrent sync cycle cannot slip in and read a resource that
+// is about to be updated.
+func registerAllResourcesWithSynchronizer(dag *ExecutionDAG, proc gen.Process) {
+	synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+	for _, node := range dag.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		if ru.Source == resource_update.FormaCommandSourceSynchronize {
+			continue
+		}
+		err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
+			ResourceURI: string(ru.URI()),
+		})
+		if err != nil {
+			proc.Log().Error("Failed to register in-progress resource with synchronizer",
+				"error", err, "resourceURI", ru.URI())
+		}
+	}
 }
 
 func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
