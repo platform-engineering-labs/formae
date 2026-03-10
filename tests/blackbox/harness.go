@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
+	"math/rand/v2"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,10 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/api"
-	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
-	"github.com/platform-engineering-labs/formae/internal/logging"
-	"github.com/platform-engineering-labs/formae/internal/metastructure"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -37,102 +35,78 @@ import (
 
 const clientID = "blackbox-test"
 
-// TestHarness manages an in-process formae agent with an HTTP server and
-// external test plugin for blackbox testing. All agent communication goes
-// through the REST API via api.Client. TestController communication goes
-// through Ergo cross-node calls via a harness-owned Ergo node.
+// formaeBinary is set by TestMain to the path of the compiled formae binary.
+var formaeBinary string
+
+// TestHarness manages a formae agent subprocess with an external test plugin
+// for blackbox testing. All agent communication goes through the REST API via
+// api.Client. TestController communication goes through Ergo cross-node calls
+// via a harness-owned Ergo node.
 type TestHarness struct {
 	t          *testing.T
 	client     *api.Client
-	m          *metastructure.Metastructure
 	cancel     context.CancelFunc
-	cfg        *pkgmodel.Config
 	pluginsDir string
-	logCapture *logging.TestLogCapture
+
+	// Agent subprocess
+	agentCmd     *exec.Cmd
+	agentLogFile *os.File
+	agentDataDir string
+
+	// Config values needed for restarts and Ergo connection
+	agentBinary    string
+	configPath     string
+	port           int
+	nodename       string
+	cookie         string
+	dbPath         string
 
 	// Ergo node for communicating with the test plugin's TestController
 	ergoNode       gen.Node
 	pluginNodeName gen.Atom
 }
 
-// NewTestHarness builds the test plugin binary, starts the agent metastructure
-// and HTTP server, creates an Ergo node for TestController communication,
-// and waits for the plugin to register.
+// NewTestHarness builds the test plugin binary, starts the agent as an external
+// subprocess, creates an Ergo node for TestController communication, and waits
+// for the plugin to register.
 func NewTestHarness(t *testing.T, timeout time.Duration) *TestHarness {
 	t.Helper()
 
-	// Create isolated plugins directory
 	pluginsDir := t.TempDir()
-
-	// Build the test plugin binary
 	buildTestPluginToDir(t, pluginsDir)
 
-	// Create test config with a free port for the HTTP server
+	dataDir := t.TempDir()
 	port := getFreePort(t)
-	cfg := newTestConfig(t, port)
+	dbPath := filepath.Join(dataDir, "formae.db")
+	nodename := "agent-bb-" + randomString(10)
+	cookie := randomString(32)
 
-	// Setup log capture
-	logCapture := setupLogCapture()
-
-	// Create a cancellable context for the HTTP server
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Create and start metastructure
-	m, pluginManager := startMetastructure(t, ctx, cfg, pluginsDir)
-
-	// Start the HTTP server
-	apiServer := api.NewServer(ctx, m, pluginManager, &cfg.Agent.Server, &pkgmodel.PluginConfig{}, nil)
-	go apiServer.Start()
-
-	// Create the API client
-	client := api.NewClient(pkgmodel.APIConfig{
-		URL:  "http://localhost",
-		Port: port,
-	}, nil, nil)
-
-	// Wait for the HTTP server to be ready
-	client.WaitOnAvailable()
-
-	// Compute the test plugin's Ergo node name using the same formula as the
-	// plugin process supervisor: {nodename}-{namespace}-plugin@{hostname}
 	pluginNodeName := gen.Atom(fmt.Sprintf("%s-%s-plugin@%s",
-		cfg.Agent.Server.Nodename,
-		strings.ToLower("Test"),
-		cfg.Agent.Server.Hostname,
-	))
+		nodename, strings.ToLower("Test"), "localhost"))
 
 	h := &TestHarness{
 		t:              t,
-		client:         client,
-		m:              m,
-		cancel:         cancel,
-		cfg:            cfg,
+		agentBinary:    formaeBinary,
+		agentDataDir:   dataDir,
 		pluginsDir:     pluginsDir,
-		logCapture:     logCapture,
+		port:           port,
+		nodename:       nodename,
+		cookie:         cookie,
+		dbPath:         dbPath,
 		pluginNodeName: pluginNodeName,
 	}
 
-	// Wait for the test plugin to register
-	found := logCapture.WaitForLog("Plugin registered", timeout)
-	require.True(t, found, "Test plugin should have registered within %v", timeout)
-	t.Logf("Test plugin registered")
-
-	// Start the harness Ergo node for TestController communication
-	h.startErgoNode(t)
-
+	h.configPath = h.writePKLConfig(t)
+	h.startAgent(t, timeout)
 	return h
 }
 
-// Cleanup stops the Ergo node, HTTP server, metastructure, and cleans up.
+// Cleanup stops the Ergo node and the agent subprocess.
 func (h *TestHarness) Cleanup() {
 	if h.ergoNode != nil {
 		h.ergoNode.Stop()
 	}
-	h.cancel()
-	h.m.Stop(true)
-	if h.cfg.Agent.Datastore.Sqlite.FilePath != ":memory:" {
-		_ = os.Remove(h.cfg.Agent.Datastore.Sqlite.FilePath)
-	}
+	h.stopAgent()
 }
 
 // Client returns the API client for direct use in tests.
@@ -251,6 +225,14 @@ func (h *TestHarness) DeleteCloudState(t *testing.T, nativeID string) {
 	require.NoError(t, err, "DeleteCloudState failed")
 }
 
+// OpenGate asks the test plugin's TestController to open the plugin gate,
+// unblocking all CRUD operations.
+func (h *TestHarness) OpenGate(t *testing.T) {
+	t.Helper()
+	_, err := h.callTestController(testcontrol.OpenGateRequest{})
+	require.NoError(t, err, "OpenGate failed")
+}
+
 // callTestController sends a synchronous Ergo call to the TestController
 // actor on the test plugin's node.
 func (h *TestHarness) callTestController(request any) (any, error) {
@@ -263,6 +245,158 @@ func (h *TestHarness) callTestController(request any) (any, error) {
 
 // --- internal helpers ---
 
+// randomString generates a random alphanumeric string of length n.
+func randomString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[rand.IntN(len(letters))]
+	}
+	return string(b)
+}
+
+// writePKLConfig generates a PKL configuration file for the agent subprocess.
+func (h *TestHarness) writePKLConfig(t *testing.T) string {
+	t.Helper()
+	configPath := filepath.Join(h.agentDataDir, "formae.conf.pkl")
+	content := fmt.Sprintf(`amends "formae:/Config.pkl"
+
+agent {
+    server {
+        port = %d
+        nodename = %q
+        secret = %q
+    }
+    datastore {
+        datastoreType = "sqlite"
+        sqlite {
+            filePath = %q
+        }
+    }
+    synchronization {
+        enabled = false
+    }
+    discovery {
+        enabled = false
+    }
+    retry {
+        maxRetries = 2
+        retryDelay = 250.ms
+        statusCheckInterval = 1.s
+    }
+}
+
+plugins {
+    pluginDir = %q
+}
+`, h.port, h.nodename, h.cookie, h.dbPath, h.pluginsDir)
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	require.NoError(t, err)
+	return configPath
+}
+
+// startAgent launches the formae agent as a subprocess, waits for health and
+// plugin registration, starts the Ergo node, and opens the plugin gate.
+func (h *TestHarness) startAgent(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+
+	cmd := exec.CommandContext(ctx, h.agentBinary, "agent", "start", "--config", h.configPath)
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("FORMAE_PID_FILE=%s", filepath.Join(h.agentDataDir, "formae.pid")))
+
+	logFile, err := os.Create(filepath.Join(h.agentDataDir, "agent.log"))
+	require.NoError(t, err)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	h.agentLogFile = logFile
+
+	err = cmd.Start()
+	require.NoError(t, err, "Failed to start agent")
+	h.agentCmd = cmd
+
+	h.client = api.NewClient(pkgmodel.APIConfig{
+		URL:  "http://localhost",
+		Port: h.port,
+	}, nil, nil)
+
+	h.waitForHealth(t, timeout)
+	h.waitForPlugin(t, timeout)
+	h.startErgoNode(t)
+	h.OpenGate(t)
+}
+
+// waitForHealth polls the agent health endpoint until it responds with HTTP 200.
+func (h *TestHarness) waitForHealth(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	healthURL := fmt.Sprintf("http://localhost:%d/api/v1/health", h.port)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(healthURL)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			resp.Body.Close()
+			t.Logf("Agent health check passed")
+			return
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// Dump agent log on failure
+	if data, err := os.ReadFile(filepath.Join(h.agentDataDir, "agent.log")); err == nil {
+		t.Logf("=== Agent log ===\n%s\n=== End ===", string(data))
+	}
+	t.Fatalf("agent health check failed after %v", timeout)
+}
+
+// waitForPlugin polls the agent stats endpoint until at least one plugin is registered.
+func (h *TestHarness) waitForPlugin(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		stats, err := h.client.Stats()
+		if err == nil && stats != nil && len(stats.Plugins) > 0 {
+			t.Logf("Plugin registered: %v", stats.Plugins)
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// Dump agent log on failure
+	if data, err := os.ReadFile(filepath.Join(h.agentDataDir, "agent.log")); err == nil {
+		t.Logf("=== Agent log ===\n%s\n=== End ===", string(data))
+	}
+	t.Fatalf("plugin did not register within %v", timeout)
+}
+
+// stopAgent sends SIGTERM to the agent subprocess, waits for graceful shutdown,
+// and falls back to context cancellation if needed.
+func (h *TestHarness) stopAgent() {
+	if h.agentCmd == nil || h.agentCmd.Process == nil {
+		return
+	}
+	_ = h.agentCmd.Process.Signal(syscall.SIGTERM)
+	done := make(chan error, 1)
+	go func() { done <- h.agentCmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		h.cancel()
+		<-done
+	}
+	if h.agentLogFile != nil {
+		h.agentLogFile.Close()
+	}
+	if h.t.Failed() {
+		logPath := filepath.Join(h.agentDataDir, "agent.log")
+		if data, err := os.ReadFile(logPath); err == nil {
+			h.t.Logf("=== Agent log ===\n%s\n=== End ===", string(data))
+		}
+	}
+}
+
 // startErgoNode creates an Ergo node for the test harness. It uses the same
 // network cookie as the agent so it can communicate with the test plugin's node.
 func (h *TestHarness) startErgoNode(t *testing.T) {
@@ -274,11 +408,11 @@ func (h *TestHarness) startErgoNode(t *testing.T) {
 	err = testcontrol.RegisterEDFTypes()
 	require.NoError(t, err, "RegisterEDFTypes failed")
 
-	nodeName := gen.Atom(fmt.Sprintf("test-harness-%s@localhost", util.RandomString(8)))
+	nodeName := gen.Atom(fmt.Sprintf("test-harness-%s@localhost", randomString(8)))
 
 	options := gen.NodeOptions{}
 	options.Network.Mode = gen.NetworkModeEnabled
-	options.Network.Cookie = h.cfg.Agent.Server.Secret
+	options.Network.Cookie = h.cookie
 	options.Log.Level = gen.LogLevelWarning
 
 	node, err := ergo.StartNode(nodeName, options)
@@ -340,77 +474,6 @@ func copyFile(t *testing.T, src, dst string) {
 
 	_, err = io.Copy(out, in)
 	require.NoError(t, err)
-}
-
-func newTestConfig(t *testing.T, port int) *pkgmodel.Config {
-	t.Helper()
-
-	prefix := util.RandomString(10) + "-"
-
-	tmpFile, err := os.CreateTemp("", "formae_blackbox_test_*.db")
-	require.NoError(t, err)
-	_ = tmpFile.Close()
-
-	cookie := util.RandomString(32)
-
-	return &pkgmodel.Config{
-		Agent: pkgmodel.AgentConfig{
-			Server: pkgmodel.ServerConfig{
-				Nodename:     "agent-bb-" + prefix,
-				Hostname:     "localhost",
-				Port:         port,
-				ObserverPort: 0,
-				Secret:       cookie,
-			},
-			Datastore: pkgmodel.DatastoreConfig{
-				DatastoreType: pkgmodel.SqliteDatastore,
-				Sqlite: pkgmodel.SqliteConfig{
-					FilePath: tmpFile.Name(),
-				},
-			},
-			Retry: pkgmodel.RetryConfig{
-				MaxRetries:          2,
-				RetryDelay:          250 * time.Millisecond,
-				StatusCheckInterval: 1 * time.Second,
-			},
-			Synchronization: pkgmodel.SynchronizationConfig{
-				Enabled: false,
-			},
-			Discovery: pkgmodel.DiscoveryConfig{
-				Enabled: false,
-			},
-			StackExpirer: pkgmodel.StackExpirerConfig{
-				Interval: 24 * time.Hour,
-			},
-		},
-	}
-}
-
-func startMetastructure(t *testing.T, ctx context.Context, cfg *pkgmodel.Config, pluginsDir string) (*metastructure.Metastructure, *plugin.Manager) {
-	t.Helper()
-
-	db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
-	require.NoError(t, err)
-
-	pluginManager := plugin.NewManager(pluginsDir)
-	pluginManager.Load()
-
-	m, err := metastructure.NewMetastructureWithDataStoreAndContext(ctx, cfg, pluginManager, db, "test")
-	require.NoError(t, err)
-
-	err = m.Start()
-	require.NoError(t, err)
-
-	return m, pluginManager
-}
-
-func setupLogCapture() *logging.TestLogCapture {
-	capture := logging.NewTestLogCapture()
-	handler := slog.NewTextHandler(capture, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	})
-	slog.SetDefault(slog.New(handler))
-	return capture
 }
 
 // SimpleForma creates a forma with N Test::Generic::Resource resources in the default stack.

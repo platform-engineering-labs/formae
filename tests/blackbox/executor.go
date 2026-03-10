@@ -1455,7 +1455,7 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 func (h *TestHarness) dumpRawResourceRows(t *testing.T, resources []pkgmodel.Resource, seen map[string]int) {
 	t.Helper()
 
-	dbPath := h.cfg.Agent.Datastore.Sqlite.FilePath
+	dbPath := h.dbPath
 	if dbPath == "" || dbPath == ":memory:" {
 		t.Logf("dumpRawResourceRows: cannot query in-memory DB directly")
 		return
