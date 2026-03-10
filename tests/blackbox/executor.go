@@ -72,6 +72,14 @@ const maxCleanupAttempts = 3
 func (h *TestHarness) ResetAgentState(t *testing.T) {
 	t.Helper()
 
+	// If the agent was killed and not restarted, restart it before cleanup.
+	if h.agentCmd == nil {
+		h.RestartAgent(t, 30*time.Second)
+	}
+
+	// Clear cloud state mirror — new iteration starts clean.
+	h.cloudStateMirror = make(map[string]testcontrol.CloudStateEntry)
+
 	// Clear programmed response queues from the previous iteration.
 	// Labels are reused across iterations, so stale unconsumed responses
 	// would interfere with the next iteration's failure injection.
@@ -281,6 +289,8 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 		h.executeCheckTTL(t, op, model)
 	case OpCancel:
 		h.executeCancel(t, op, model)
+	case OpCrashAgent:
+		h.executeCrashAgent(t, model)
 	default:
 		t.Fatalf("unknown operation kind: %d", op.Kind)
 	}
@@ -609,6 +619,16 @@ func applyReconcileGuarantee(model *StateModel, stackIdx int, reconcileIDs []int
 			model.ApplyDestroyed(stackIdx, []int{idx})
 		}
 	}
+}
+
+func (h *TestHarness) executeCrashAgent(t *testing.T, model *StateModel) {
+	t.Helper()
+	t.Logf(">>> OpCrashAgent: killing agent")
+
+	h.KillAgent(t)
+	h.RestartAgent(t, 30*time.Second)
+
+	t.Logf(">>> OpCrashAgent: agent restarted, state re-injected")
 }
 
 func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateModel) {
@@ -1302,6 +1322,12 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	}
 	model.AcceptedCommands = nil
 
+	// If any stack has an expired TTL, the background StackExpirer will
+	// eventually destroy it. We need to ensure that destruction completes
+	// before reconciling the model. Poll until ForceCheckTTL processes the
+	// expired stack or inventory confirms the resources are gone.
+	h.drainExpiredTTLStacks(t, model)
+
 	// After all commands have completed, reconcile the model with the
 	// actual inventory. Concurrent commands, OOB changes, reconcile
 	// guarantees, and failure injection can all cause the actual state
@@ -1446,6 +1472,83 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 		model.Stacks[stackIdx].TTLExpired = false
 		t.Logf("ForceCheckTTLAndWait: stack %s command %s completed: %s", expiredLabel, commandID, cmd.State)
 	}
+}
+
+// drainExpiredTTLStacks ensures that any stacks with expired TTL policies are
+// fully destroyed before returning. The background StackExpirer may not have
+// fired yet, so we poll ForceCheckTTL until the expired stacks are processed
+// or the resources disappear from inventory.
+func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
+	t.Helper()
+
+	hasExpired := false
+	for _, stack := range model.Stacks {
+		if stack.TTLExpired {
+			hasExpired = true
+			break
+		}
+	}
+	if !hasExpired {
+		return
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		// Try to trigger the TTL check via the API.
+		h.ForceCheckTTLAndWait(t, model)
+
+		// Check if any stacks still have TTLExpired=true.
+		stillExpired := false
+		for _, stack := range model.Stacks {
+			if stack.TTLExpired {
+				stillExpired = true
+				break
+			}
+		}
+		if !stillExpired {
+			return
+		}
+
+		// ForceCheckTTL returned "no expired stacks" but the model still
+		// has TTLExpired=true. The StackExpirer may be in-flight or hasn't
+		// detected the expiry yet. Check if the resources are already gone
+		// from inventory (StackExpirer completed without our knowledge).
+		forma, err := h.client.ExtractResources("managed:true")
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		inventorySet := make(map[string]bool)
+		if forma != nil {
+			for _, res := range forma.Resources {
+				inventorySet[res.Stack] = true
+			}
+		}
+
+		allGone := true
+		for i, stack := range model.Stacks {
+			if stack.TTLExpired && inventorySet[stack.Label] {
+				allGone = false
+			} else if stack.TTLExpired && !inventorySet[stack.Label] {
+				// Stack's resources are gone from inventory — the StackExpirer
+				// already handled it. Update the model.
+				for slotIdx := range stack.Resources {
+					if stack.Resources[slotIdx] != nil {
+						model.ApplyDestroyed(i, []int{slotIdx})
+					}
+				}
+				model.Stacks[i].TTLExpired = false
+				t.Logf("drainExpiredTTLStacks: stack %s resources gone from inventory, model updated", stack.Label)
+			}
+		}
+		if allGone {
+			return
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	t.Logf("drainExpiredTTLStacks: timed out waiting for expired TTL stacks to be processed")
 }
 
 // dumpRawResourceRows queries the raw SQLite database to show all rows for

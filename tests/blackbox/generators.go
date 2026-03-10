@@ -24,6 +24,19 @@ func OperationSequenceGen(config PropertyTestConfig) *rapid.Generator[[]Operatio
 		for i := range ops {
 			ops[i] = SingleOperationGen(config).Draw(t, fmt.Sprintf("op-%d", i))
 		}
+
+		// Enforce OpCrashAgent constraints: at most once, not first or last.
+		crashSeen := false
+		for i := range ops {
+			if ops[i].Kind == OpCrashAgent {
+				if crashSeen || i == 0 || i == len(ops)-1 {
+					ops[i].Kind = OpVerifyState
+				} else {
+					crashSeen = true
+				}
+			}
+		}
+
 		return ops
 	})
 }
@@ -58,6 +71,9 @@ func allowedKinds(config PropertyTestConfig) []OperationKind {
 	}
 	if config.EnableTTL {
 		kinds = append(kinds, OpCheckTTL, OpSetTTLPolicy)
+	}
+	if config.EnableCrashInjection {
+		kinds = append(kinds, OpCrashAgent)
 	}
 
 	return kinds

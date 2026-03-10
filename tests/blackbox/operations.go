@@ -41,6 +41,10 @@ const (
 	// Verification
 
 	OpVerifyState // query actual state and check invariants
+
+	// Crash injection
+
+	OpCrashAgent // kill the agent with SIGKILL and restart it
 )
 
 // Operation represents a single step in a property-test operation sequence.
@@ -157,6 +161,9 @@ type PropertyTestConfig struct {
 
 	// EnableTTL enables TTL policy on one stack.
 	EnableTTL bool
+
+	// EnableCrashInjection allows OpCrashAgent operations (kill -9 + restart).
+	EnableCrashInjection bool
 
 	// StackCount is the number of independent stacks (1 for sequential tests, 2-3 for concurrent).
 	StackCount int
