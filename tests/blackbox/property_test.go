@@ -137,7 +137,7 @@ func TestProperty_ConcurrentWithFailures(t *testing.T) {
 
 func TestProperty_FullChaos(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		h := NewTestHarness(t, 15*time.Second)
+		h := NewTestHarness(t, 30*time.Second)
 		defer h.Cleanup()
 
 		rapid.Check(t, func(rt *rapid.T) {
@@ -150,6 +150,7 @@ func TestProperty_FullChaos(t *testing.T) {
 				EnableCancel:         true,
 				EnableForceReconcile: true,
 				EnableTTL:            true,
+				EnableCrashInjection: true,
 			}
 
 			h.ResetAgentState(t)
@@ -165,7 +166,7 @@ func TestProperty_FullChaos(t *testing.T) {
 			}
 
 			// Wind down: drain pending commands
-			h.DrainPendingCommands(t, model, defaultCommandTimeout)
+			h.DrainPendingCommands(t, model, 30*time.Second)
 
 			h.AssertAllInvariants(t, model)
 		})

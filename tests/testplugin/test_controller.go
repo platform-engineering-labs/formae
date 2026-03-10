@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -19,11 +20,12 @@ import (
 type TestController struct {
 	act.Actor
 
-	cloudState    *CloudState
-	injections    *InjectionState
-	opLog         *OperationLog
-	responseQueue *ResponseQueue
-	gate          chan struct{}
+	cloudState       *CloudState
+	injections       *InjectionState
+	opLog            *OperationLog
+	responseQueue    *ResponseQueue
+	gate             chan struct{}
+	nativeIDCounter  *atomic.Int64
 }
 
 // NewTestController is the factory function for the TestController actor.
@@ -61,6 +63,12 @@ func (tc *TestController) Init(args ...any) error {
 		return fmt.Errorf("TestController: missing 'Gate' environment variable")
 	}
 	tc.gate = g.(chan struct{})
+
+	nic, ok := tc.Env("NativeIDCounter")
+	if !ok {
+		return fmt.Errorf("TestController: missing 'NativeIDCounter' environment variable")
+	}
+	tc.nativeIDCounter = nic.(*atomic.Int64)
 
 	tc.Log().Info("TestController initialized")
 	return nil
@@ -117,6 +125,11 @@ func (tc *TestController) HandleCall(from gen.PID, ref gen.Ref, request any) (an
 	case testcontrol.OpenGateRequest:
 		close(tc.gate)
 		return testcontrol.OpenGateResponse{}, nil
+
+	// --- Native ID Counter ---
+	case testcontrol.SetNativeIDCounterRequest:
+		tc.nativeIDCounter.Store(msg.Value)
+		return testcontrol.SetNativeIDCounterResponse{}, nil
 
 	// --- Operation Log ---
 	case testcontrol.GetOperationLogRequest:

@@ -64,6 +64,14 @@ type TestHarness struct {
 	// Ergo node for communicating with the test plugin's TestController
 	ergoNode       gen.Node
 	pluginNodeName gen.Atom
+
+	// Cloud state mirror — tracks all PutCloudState/DeleteCloudState calls
+	// so we can re-inject after a crash.
+	cloudStateMirror map[string]testcontrol.CloudStateEntry
+
+	// Response sequence accumulator — tracks all ProgramResponses calls
+	// so we can re-program after a crash.
+	allProgrammedSequences []testcontrol.PluginOpSequence
 }
 
 // NewTestHarness builds the test plugin binary, starts the agent as an external
@@ -96,8 +104,10 @@ func NewTestHarness(t *testing.T, timeout time.Duration) *TestHarness {
 		pluginNodeName: pluginNodeName,
 	}
 
+	h.cloudStateMirror = make(map[string]testcontrol.CloudStateEntry)
+
 	h.configPath = h.writePKLConfig(t)
-	h.startAgent(t, timeout)
+	h.startAgent(t, timeout, true)
 	return h
 }
 
@@ -191,6 +201,13 @@ func (h *TestHarness) ProgramResponses(t *testing.T, sequences []testcontrol.Plu
 		Sequences: sequences,
 	})
 	require.NoError(t, err, "ProgramResponses failed")
+
+	if sequences == nil {
+		// nil clears everything — also clear the accumulator
+		h.allProgrammedSequences = nil
+	} else {
+		h.allProgrammedSequences = append(h.allProgrammedSequences, sequences...)
+	}
 }
 
 // UnprogramResponses removes previously programmed response sequences.
@@ -213,6 +230,12 @@ func (h *TestHarness) PutCloudState(t *testing.T, nativeID, resourceType, proper
 		Properties:   properties,
 	})
 	require.NoError(t, err, "PutCloudState failed")
+
+	h.cloudStateMirror[nativeID] = testcontrol.CloudStateEntry{
+		NativeID:     nativeID,
+		ResourceType: resourceType,
+		Properties:   properties,
+	}
 }
 
 // DeleteCloudState deletes a cloud state entry from the test plugin.
@@ -223,6 +246,8 @@ func (h *TestHarness) DeleteCloudState(t *testing.T, nativeID string) {
 		NativeID: nativeID,
 	})
 	require.NoError(t, err, "DeleteCloudState failed")
+
+	delete(h.cloudStateMirror, nativeID)
 }
 
 // OpenGate asks the test plugin's TestController to open the plugin gate,
@@ -231,6 +256,15 @@ func (h *TestHarness) OpenGate(t *testing.T) {
 	t.Helper()
 	_, err := h.callTestController(testcontrol.OpenGateRequest{})
 	require.NoError(t, err, "OpenGate failed")
+}
+
+// SetNativeIDCounter sets the plugin's native ID counter to prevent ID
+// collisions after a crash+restart. The counter resets to 0 when the plugin
+// restarts, so existing native IDs would be reused.
+func (h *TestHarness) SetNativeIDCounter(t *testing.T, value int64) {
+	t.Helper()
+	_, err := h.callTestController(testcontrol.SetNativeIDCounterRequest{Value: value})
+	require.NoError(t, err, "SetNativeIDCounter failed")
 }
 
 // callTestController sends a synchronous Ergo call to the TestController
@@ -243,7 +277,132 @@ func (h *TestHarness) callTestController(request any) (any, error) {
 	return callRemote(h.ergoNode, target, request, 5)
 }
 
+// KillAgent sends SIGKILL to the agent process, killing it and its child
+// plugin immediately. Waits for the process to be reaped.
+func (h *TestHarness) KillAgent(t *testing.T) {
+	t.Helper()
+	require.NotNil(t, h.agentCmd, "agent not running")
+	require.NotNil(t, h.agentCmd.Process, "agent process not started")
+
+	pid := h.agentCmd.Process.Pid
+	t.Logf("Killing agent (pid %d)", pid)
+
+	err := syscall.Kill(pid, syscall.SIGKILL)
+	require.NoError(t, err, "SIGKILL failed")
+
+	// Reap the process
+	_ = h.agentCmd.Wait()
+
+	// Stop harness Ergo node (the remote plugin node is gone)
+	if h.ergoNode != nil {
+		h.ergoNode.Stop()
+		h.ergoNode = nil
+	}
+
+	// Close the log file handle
+	if h.agentLogFile != nil {
+		h.agentLogFile.Close()
+		h.agentLogFile = nil
+	}
+
+	h.agentCmd = nil
+}
+
+// RestartAgent starts a new agent subprocess with the same config (same SQLite DB).
+// Reconstructs the plugin's cloud state from the agent's inventory and the OOB
+// mirror, re-programs response sequences, then opens the gate.
+func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
+	// Start the agent but DON'T open the gate yet — ReRunIncompleteCommands
+	// fires during startup and would execute CRUD ops before cloud state is
+	// reconstructed. The gate keeps those ops blocked until we're ready.
+	h.startAgent(t, timeout, false)
+
+	// Reconstruct cloud state from the agent's inventory. The agent's SQLite
+	// DB survives the crash, so it knows which resources should exist. The
+	// plugin's in-memory CloudState was lost, so we re-inject everything.
+	//
+	// IMPORTANT: ExtractResources returns properties with $res wrapper objects
+	// (e.g. {"$res":true,"$label":"...","$value":"parent-name"}) but the cloud
+	// plugin expects flat/plain values (e.g. "parent-name"). We must flatten
+	// resolvables before re-injection, otherwise the plugin returns $res objects
+	// on Read, which corrupts the $ref.$value in mergeRefsPreservingUserRefs.
+	forma, err := h.client.ExtractResources("managed:true")
+	if err == nil && forma != nil {
+		for _, res := range forma.Resources {
+			if res.NativeID == "" {
+				continue
+			}
+			flatProps := flattenPropertiesForCloud(res.Properties)
+			_, err := h.callTestController(testcontrol.PutCloudStateRequest{
+				NativeID:     res.NativeID,
+				ResourceType: res.Type,
+				Properties:   flatProps,
+			})
+			if err != nil {
+				t.Logf("warning: failed to re-inject cloud state for %s: %v", res.NativeID, err)
+			}
+		}
+	}
+
+	// Re-inject OOB cloud state from the mirror (resources not in inventory).
+	for _, entry := range h.cloudStateMirror {
+		_, err := h.callTestController(testcontrol.PutCloudStateRequest{
+			NativeID:     entry.NativeID,
+			ResourceType: entry.ResourceType,
+			Properties:   entry.Properties,
+		})
+		if err != nil {
+			t.Logf("warning: failed to re-inject OOB cloud state for %s: %v", entry.NativeID, err)
+		}
+	}
+
+	// Set the plugin's native ID counter past all existing IDs to prevent
+	// collisions. The counter resets to 0 on restart, so without this, new
+	// creates would reuse IDs like test-1, test-2, etc.
+	var maxID int64
+	if forma != nil {
+		for _, res := range forma.Resources {
+			if id := parseNativeIDNum(res.NativeID); id > maxID {
+				maxID = id
+			}
+		}
+	}
+	for _, entry := range h.cloudStateMirror {
+		if id := parseNativeIDNum(entry.NativeID); id > maxID {
+			maxID = id
+		}
+	}
+	if maxID > 0 {
+		h.SetNativeIDCounter(t, maxID)
+	}
+
+	// Re-program all response sequences (bypass ProgramResponses to avoid
+	// double-accumulating).
+	if len(h.allProgrammedSequences) > 0 {
+		_, err := h.callTestController(testcontrol.ProgramResponsesRequest{
+			Sequences: h.allProgrammedSequences,
+		})
+		require.NoError(t, err, "re-inject response sequences failed")
+	}
+
+	// Now that cloud state and response sequences are ready, open the gate
+	// so the re-run commands can proceed with correct state.
+	h.OpenGate(t)
+}
+
 // --- internal helpers ---
+
+// parseNativeIDNum extracts the numeric suffix from a test plugin native ID
+// (format "test-N"). Returns 0 if the format doesn't match.
+func parseNativeIDNum(nativeID string) int64 {
+	var id int64
+	if _, err := fmt.Sscanf(nativeID, "test-%d", &id); err != nil {
+		return 0
+	}
+	return id
+}
 
 // randomString generates a random alphanumeric string of length n.
 func randomString(n int) string {
@@ -296,8 +455,10 @@ plugins {
 }
 
 // startAgent launches the formae agent as a subprocess, waits for health and
-// plugin registration, starts the Ergo node, and opens the plugin gate.
-func (h *TestHarness) startAgent(t *testing.T, timeout time.Duration) {
+// plugin registration, and starts the Ergo node. If openGate is true, it also
+// opens the plugin gate immediately. For crash recovery, the caller should pass
+// false and open the gate manually after reconstructing cloud state.
+func (h *TestHarness) startAgent(t *testing.T, timeout time.Duration, openGate bool) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -307,7 +468,7 @@ func (h *TestHarness) startAgent(t *testing.T, timeout time.Duration) {
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, fmt.Sprintf("FORMAE_PID_FILE=%s", filepath.Join(h.agentDataDir, "formae.pid")))
 
-	logFile, err := os.Create(filepath.Join(h.agentDataDir, "agent.log"))
+	logFile, err := os.OpenFile(filepath.Join(h.agentDataDir, "agent.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	require.NoError(t, err)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -325,7 +486,9 @@ func (h *TestHarness) startAgent(t *testing.T, timeout time.Duration) {
 	h.waitForHealth(t, timeout)
 	h.waitForPlugin(t, timeout)
 	h.startErgoNode(t)
-	h.OpenGate(t)
+	if openGate {
+		h.OpenGate(t)
+	}
 }
 
 // waitForHealth polls the agent health endpoint until it responds with HTTP 200.
@@ -504,4 +667,21 @@ func SimpleForma(n int) *pkgmodel.Forma {
 			},
 		},
 	}
+}
+
+// flattenPropertiesForCloud strips $ref and $res wrapper objects from properties,
+// replacing them with their $value. This is needed when re-injecting cloud state
+// after a restart because ExtractResources returns $res format but the plugin
+// expects flat values.
+func flattenPropertiesForCloud(raw json.RawMessage) string {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return string(raw)
+	}
+	flattenResolvables(m)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return string(raw)
+	}
+	return string(out)
 }

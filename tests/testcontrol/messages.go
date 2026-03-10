@@ -113,3 +113,14 @@ type OpenGateRequest struct{}
 
 // OpenGateResponse is the reply to OpenGateRequest.
 type OpenGateResponse struct{}
+
+// --- Native ID Counter Messages ---
+
+// SetNativeIDCounterRequest asks the TestController to set the plugin's
+// native ID counter to the given value, preventing ID collisions after restart.
+type SetNativeIDCounterRequest struct {
+	Value int64
+}
+
+// SetNativeIDCounterResponse is the reply to SetNativeIDCounterRequest.
+type SetNativeIDCounterResponse struct{}
