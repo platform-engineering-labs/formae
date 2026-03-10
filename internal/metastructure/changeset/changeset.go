@@ -72,44 +72,44 @@ func NewChangeset(
 		return Changeset{}, err
 	}
 
-	// Store split target updates so they outlive this function
-	var splitTargetUpdates []target_update.TargetUpdate
+	// Copy target updates into a local slice so the DAG owns its own memory.
+	// Without this, DAG nodes would point into the FormaCommand's TargetUpdates
+	// backing array, which the FormaCommandPersister also mutates — violating
+	// actor isolation and causing state corruption.
+	var allTargetOps []target_update.TargetUpdate
+	type replacePair struct{ deleteIdx, createIdx int }
+	var replacePairs []replacePair
 
 	for i := range targetUpdates {
-		tu := &targetUpdates[i]
-		if tu.Operation == target_update.TargetOperationReplace {
-			// Split replace into delete + create
+		if targetUpdates[i].Operation == target_update.TargetOperationReplace {
 			deleteTU := targetUpdates[i]
 			deleteTU.Operation = target_update.TargetOperationDelete
 			createTU := targetUpdates[i]
 			createTU.Operation = target_update.TargetOperationCreate
-
-			splitTargetUpdates = append(splitTargetUpdates, deleteTU, createTU)
+			replacePairs = append(replacePairs, replacePair{
+				deleteIdx: len(allTargetOps),
+				createIdx: len(allTargetOps) + 1,
+			})
+			allTargetOps = append(allTargetOps, deleteTU, createTU)
 		} else {
-			changeset.DAG.Nodes[tu.NodeURI()] = &DAGNode{
-				URI:          tu.NodeURI(),
-				Update:       tu,
-				Dependents:   []*DAGNode{},
-				Dependencies: []*DAGNode{},
-			}
+			allTargetOps = append(allTargetOps, targetUpdates[i])
 		}
 	}
 
-	// Add split target update nodes (using slice elements for stable addresses)
-	for i := range splitTargetUpdates {
-		stu := &splitTargetUpdates[i]
-		changeset.DAG.Nodes[stu.NodeURI()] = &DAGNode{
-			URI:          stu.NodeURI(),
-			Update:       stu,
+	for i := range allTargetOps {
+		tu := &allTargetOps[i]
+		changeset.DAG.Nodes[tu.NodeURI()] = &DAGNode{
+			URI:          tu.NodeURI(),
+			Update:       tu,
 			Dependents:   []*DAGNode{},
 			Dependencies: []*DAGNode{},
 		}
 	}
 
-	// Wire delete → create for split targets
-	for i := 0; i < len(splitTargetUpdates); i += 2 {
-		deleteNode := changeset.DAG.Nodes[splitTargetUpdates[i].NodeURI()]
-		createNode := changeset.DAG.Nodes[splitTargetUpdates[i+1].NodeURI()]
+	// Wire delete → create for split replace targets
+	for _, pair := range replacePairs {
+		deleteNode := changeset.DAG.Nodes[allTargetOps[pair.deleteIdx].NodeURI()]
+		createNode := changeset.DAG.Nodes[allTargetOps[pair.createIdx].NodeURI()]
 		createNode.LinkWith(deleteNode)
 	}
 
