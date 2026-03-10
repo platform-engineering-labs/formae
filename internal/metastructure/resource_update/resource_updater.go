@@ -400,7 +400,7 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 	}
 
 	timeout := statemachine.StateTimeout{
-		Duration: data.retryConfig.StatusCheckInterval * 2,
+		Duration: data.retryConfig.StatusCheckInterval * 10,
 		Message:  ResolveCacheMissingInAction{},
 	}
 
