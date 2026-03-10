@@ -104,3 +104,12 @@ type GetOperationLogRequest struct{}
 type GetOperationLogResponse struct {
 	Entries []OperationLogEntry
 }
+
+// --- Gate Messages ---
+
+// OpenGateRequest asks the TestController to open the plugin gate,
+// unblocking all CRUD operations.
+type OpenGateRequest struct{}
+
+// OpenGateResponse is the reply to OpenGateRequest.
+type OpenGateResponse struct{}

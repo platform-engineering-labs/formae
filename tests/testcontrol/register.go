@@ -52,6 +52,10 @@ func RegisterEDFTypes() error {
 		ProgramResponsesResponse{},
 		UnprogramResponsesRequest{},
 		UnprogramResponsesResponse{},
+
+		// Gate
+		OpenGateRequest{},
+		OpenGateResponse{},
 	}
 
 	for _, t := range types {

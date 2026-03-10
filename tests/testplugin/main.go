@@ -28,12 +28,14 @@ func main() {
 	ol := NewOperationLog()
 	inj := NewInjectionState()
 	rq := NewResponseQueue()
+	gate := make(chan struct{})
 
 	p := &TestPlugin{
 		cloudState:    cs,
 		injections:    inj,
 		responseQueue: rq,
 		opLog:         ol,
+		gate:          gate,
 	}
 
 	// Register message types for network serialization
@@ -89,6 +91,7 @@ func main() {
 		gen.Env("InjectionState"): inj,
 		gen.Env("OperationLog"):   ol,
 		gen.Env("ResponseQueue"):  rq,
+		gen.Env("Gate"):        gate,
 		gen.Env("RetryConfig"): model.RetryConfig{
 			StatusCheckInterval: 5 * time.Second,
 			MaxRetries:          3,
