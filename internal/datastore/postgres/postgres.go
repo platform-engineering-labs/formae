@@ -2956,8 +2956,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 		}
 	} else {
 		// For non-delete operations, compare resources
-		if readWriteEqual && readOnlyEqual {
-			// Resource data is identical, return existing version ID
+		if readWriteEqual && readOnlyEqual && resource.Ksuid == ksuid {
+			// Resource data is identical and KSUID matches, return existing version ID
 			return fmt.Sprintf("%s_%s", resource.Ksuid, version), nil
 		}
 	}

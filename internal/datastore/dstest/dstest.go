@@ -44,6 +44,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDifferentResourceTypesSameNativeId(t, newDS)
 	RunGetResourceModificationsSinceLastReconcile(t, newDS)
 	RunStoreResourceAfterDeleteWithSameNativeID(t, newDS)
+	RunStoreResourceWithDifferentKSUIDSameData(t, newDS)
 
 	RunQueryTargetsAll(t, newDS)
 	RunQueryTargetsByNamespace(t, newDS)

@@ -853,7 +853,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		}
 	} else {
 		// For non-delete operations, compare resources
-		if readWriteEqual && readOnlyEqual {
+		if readWriteEqual && readOnlyEqual && resource.Ksuid == ksuid {
 			// Resource data is identical, return existing version ID
 			return fmt.Sprintf("%s_%s", resource.Ksuid, version), nil
 		}
