@@ -870,3 +870,95 @@ func RunStoreResourceAfterDeleteWithSameNativeID(t *testing.T, newDS func(t *tes
 		assert.Equal(t, nativeID, loaded.NativeID)
 	})
 }
+
+// RunStoreResourceWithDifferentKSUIDSameData reproduces the KSUID mismatch bug.
+//
+// The scenario:
+//   1. User deploys chart A (e.g. keycloak) — a namespace gets KSUID-A in the DB
+//   2. User switches to chart B (e.g. nginx) via reconcile — chart A's resources get deleted
+//   3. User switches back to chart A — the SAME namespace is re-created
+//
+// What goes wrong on step 3:
+//   - Formae assigns a new KSUID-B to the namespace (the old one was deleted from its bookkeeping)
+//   - The K8S plugin creates the namespace successfully (same name, but K8S gives it a new UID)
+//   - storeResource looks up the DB by native_id + type and finds the OLD row with KSUID-A
+//   - The data hasn't changed (same namespace name, same properties)
+//   - So storeResource says "nothing changed, skip the write" and returns early
+//   - But it skipped writing a row for KSUID-B — so KSUID-B doesn't exist in the DB
+//   - The configmap in chart A has a resolvable ref pointing to KSUID-B (e.g. formae://KSUID-B#/metadata/name)
+//   - That ref can't be resolved because KSUID-B was never stored → crash
+//
+// Why this test doesn't use delete+recreate:
+//   DeleteResource stores data as "{}", so the next store always sees different data
+//   and the early return never fires. The bug only triggers when the native_id+type lookup
+//   finds a row with IDENTICAL data but a DIFFERENT KSUID — which is what this test sets up
+//   directly by storing twice with different KSUIDs.
+func RunStoreResourceWithDifferentKSUIDSameData(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StoreResource_WithDifferentKSUIDSameData", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		target := &pkgmodel.Target{
+			Label:     "target-1",
+			Namespace: "default",
+			Config:    json.RawMessage(`{}`),
+		}
+		_, err := ds.CreateTarget(target)
+		assert.NoError(t, err)
+
+		nativeID := "test-ns/my-configmap"
+		resourceType := "K8S::Core::ConfigMap"
+		properties := json.RawMessage(`{"metadata":{"name":"my-configmap","namespace":"test-ns"}}`)
+
+		// Step 1: Store resource with KSUID-A
+		ksuidA := util.NewID()
+		resourceA := &pkgmodel.Resource{
+			Ksuid:      ksuidA,
+			NativeID:   nativeID,
+			Stack:      "test-stack",
+			Type:       resourceType,
+			Label:      "cm",
+			Target:     "target-1",
+			Managed:    true,
+			Properties: properties,
+		}
+		_, err = ds.StoreResource(resourceA, "cmd-1")
+		assert.NoError(t, err)
+
+		// Verify resource exists under KSUID-A
+		loaded, err := ds.LoadResourceById(ksuidA)
+		assert.NoError(t, err)
+		assert.NotNil(t, loaded, "resource should exist under KSUID-A")
+
+		// Step 2: Store same native_id+type+data with a new KSUID-B
+		// This is the state after assignKSUIDs generates a new KSUID for a re-created resource
+		time.Sleep(1100 * time.Millisecond) // KSUID has 1-second precision
+		ksuidB := util.NewID()
+		resourceB := &pkgmodel.Resource{
+			Ksuid:      ksuidB,
+			NativeID:   nativeID,
+			Stack:      "test-stack",
+			Type:       resourceType,
+			Label:      "cm",
+			Target:     "target-1",
+			Managed:    true,
+			Properties: properties,
+		}
+		versionB, err := ds.StoreResource(resourceB, "cmd-2")
+		assert.NoError(t, err)
+
+		// Step 3: Verify the returned version contains KSUID-B
+		assert.True(t, strings.HasPrefix(versionB, ksuidB+"_"),
+			"StoreResource version should start with KSUID-B (%s), got: %s", ksuidB, versionB)
+
+		// Step 4: Verify the resource is loadable under KSUID-B (fails before fix)
+		loaded, err = ds.LoadResourceById(ksuidB)
+		assert.NoError(t, err)
+		if assert.NotNil(t, loaded, "resource should be loadable under KSUID-B") {
+			assert.Equal(t, ksuidB, loaded.Ksuid, "loaded resource should have KSUID-B")
+			assert.Equal(t, nativeID, loaded.NativeID)
+		}
+	})
+}
+
