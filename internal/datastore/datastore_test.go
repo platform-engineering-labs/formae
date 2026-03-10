@@ -2369,3 +2369,121 @@ func TestDatastore_StoreResource_AfterDeleteWithSameNativeID(t *testing.T) {
 	assert.Equal(t, ksuidB, loaded.Ksuid, "resource should have KSUID-B, not the old KSUID-A")
 	assert.Equal(t, nativeID, loaded.NativeID)
 }
+
+// TestDatastore_LoadResource_DeleteTombstone verifies that LoadResource returns nil
+// for a resource whose latest version is a delete tombstone, rather than returning
+// a stale pre-deletion version.
+func TestDatastore_LoadResource_DeleteTombstone(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v", err)
+	}
+	defer cleanupDatastore(ds)
+
+	ksuid := util.NewID()
+	resource := &pkgmodel.Resource{
+		Ksuid:      ksuid,
+		NativeID:   "native-tombstone-1",
+		Stack:      "test-stack",
+		Type:       "AWS::S3::Bucket",
+		Label:      "my-bucket",
+		Managed:    true,
+		Properties: json.RawMessage(`{"BucketName": "test-bucket"}`),
+	}
+
+	// Store the resource (creates version 1)
+	_, err = ds.StoreResource(resource, "cmd-create")
+	assert.NoError(t, err)
+
+	// Verify it can be loaded
+	loaded, err := ds.LoadResource(resource.URI())
+	assert.NoError(t, err)
+	assert.NotNil(t, loaded, "resource should exist after create")
+
+	// Delete the resource (creates version 2 with delete tombstone)
+	_, err = ds.DeleteResource(resource, "cmd-delete")
+	assert.NoError(t, err)
+
+	// LoadResource must return nil for a deleted resource
+	loaded, err = ds.LoadResource(resource.URI())
+	assert.NoError(t, err)
+	assert.Nil(t, loaded, "LoadResource should return nil for a resource with a delete tombstone")
+}
+
+// TestDatastore_LoadResourceById_DeleteTombstone verifies that LoadResourceById returns nil
+// for a resource whose latest version is a delete tombstone.
+func TestDatastore_LoadResourceById_DeleteTombstone(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v", err)
+	}
+	defer cleanupDatastore(ds)
+
+	ksuid := util.NewID()
+	resource := &pkgmodel.Resource{
+		Ksuid:      ksuid,
+		NativeID:   "native-tombstone-2",
+		Stack:      "test-stack",
+		Type:       "AWS::S3::Bucket",
+		Label:      "my-bucket-2",
+		Managed:    true,
+		Properties: json.RawMessage(`{"BucketName": "test-bucket-2"}`),
+	}
+
+	// Store the resource
+	_, err = ds.StoreResource(resource, "cmd-create")
+	assert.NoError(t, err)
+
+	// Verify it can be loaded by ID
+	loaded, err := ds.LoadResourceById(ksuid)
+	assert.NoError(t, err)
+	assert.NotNil(t, loaded, "resource should exist after create")
+
+	// Delete the resource
+	_, err = ds.DeleteResource(resource, "cmd-delete")
+	assert.NoError(t, err)
+
+	// LoadResourceById must return nil for a deleted resource
+	loaded, err = ds.LoadResourceById(ksuid)
+	assert.NoError(t, err)
+	assert.Nil(t, loaded, "LoadResourceById should return nil for a resource with a delete tombstone")
+}
+
+// TestDatastore_GetKSUIDByTriplet_DeleteTombstone verifies that GetKSUIDByTriplet returns
+// an empty string for a resource whose latest version is a delete tombstone.
+func TestDatastore_GetKSUIDByTriplet_DeleteTombstone(t *testing.T) {
+	ds, err := prepareDatastore()
+	if err != nil {
+		t.Fatalf("Failed to prepare datastore: %v", err)
+	}
+	defer cleanupDatastore(ds)
+
+	ksuid := util.NewID()
+	resource := &pkgmodel.Resource{
+		Ksuid:      ksuid,
+		NativeID:   "native-tombstone-3",
+		Stack:      "test-stack",
+		Type:       "AWS::S3::Bucket",
+		Label:      "my-bucket-3",
+		Managed:    true,
+		Properties: json.RawMessage(`{"BucketName": "test-bucket-3"}`),
+	}
+
+	// Store the resource
+	_, err = ds.StoreResource(resource, "cmd-create")
+	assert.NoError(t, err)
+
+	// Verify it can be found by triplet
+	foundKsuid, err := ds.GetKSUIDByTriplet("test-stack", "my-bucket-3", "AWS::S3::Bucket")
+	assert.NoError(t, err)
+	assert.Equal(t, ksuid, foundKsuid, "should find ksuid by triplet after create")
+
+	// Delete the resource
+	_, err = ds.DeleteResource(resource, "cmd-delete")
+	assert.NoError(t, err)
+
+	// GetKSUIDByTriplet must return empty string for a deleted resource
+	foundKsuid, err = ds.GetKSUIDByTriplet("test-stack", "my-bucket-3", "AWS::S3::Bucket")
+	assert.NoError(t, err)
+	assert.Empty(t, foundKsuid, "GetKSUIDByTriplet should return empty string for a resource with a delete tombstone")
+}

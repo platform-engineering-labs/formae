@@ -1462,16 +1462,14 @@ func (d *DatastoreAuroraDataAPI) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel
 	ctx := context.Background()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, operation
 	FROM resources
 	WHERE uri = :uri
-	AND operation != :operation
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: string(uri)}},
-		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
 	}
 
 	output, err := d.executeStatement(ctx, query, params)
@@ -1484,8 +1482,17 @@ func (d *DatastoreAuroraDataAPI) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel
 	}
 
 	record := output.Records[0]
-	if len(record) < 2 {
+	if len(record) < 3 {
 		return nil, fmt.Errorf("unexpected record length: %d", len(record))
+	}
+
+	operation, err := getStringField(record[2])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse operation: %w", err)
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return nil, nil // Latest version is a delete tombstone
 	}
 
 	jsonData, err := getStringField(record[0])
@@ -1645,16 +1652,14 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 	ctx := context.Background()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, operation
 	FROM resources
 	WHERE ksuid = :ksuid
-	AND operation != :operation
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
-		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
 	}
 
 	output, err := d.executeStatement(ctx, query, params)
@@ -1667,8 +1672,17 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 	}
 
 	record := output.Records[0]
-	if len(record) < 2 {
+	if len(record) < 3 {
 		return nil, fmt.Errorf("unexpected record length: %d", len(record))
+	}
+
+	operation, err := getStringField(record[2])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse operation: %w", err)
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return nil, nil // Latest version is a delete tombstone
 	}
 
 	jsonData, err := getStringField(record[0])
@@ -2561,10 +2575,9 @@ func (d *DatastoreAuroraDataAPI) GetKSUIDByTriplet(stack, label, resourceType st
 	ctx := context.Background()
 
 	query := `
-	SELECT ksuid
+	SELECT ksuid, operation
 	FROM resources
 	WHERE stack = :stack AND label = :label AND LOWER(type) = LOWER(:type)
-	AND operation != :operation
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -2572,7 +2585,6 @@ func (d *DatastoreAuroraDataAPI) GetKSUIDByTriplet(stack, label, resourceType st
 		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: stack}},
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
 		{Name: aws.String("type"), Value: &types.FieldMemberStringValue{Value: resourceType}},
-		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
 	}
 
 	output, err := d.executeStatement(ctx, query, params)
@@ -2584,7 +2596,21 @@ func (d *DatastoreAuroraDataAPI) GetKSUIDByTriplet(stack, label, resourceType st
 		return "", nil
 	}
 
-	return getStringField(output.Records[0][0])
+	record := output.Records[0]
+	if len(record) < 2 {
+		return "", fmt.Errorf("unexpected record length: %d", len(record))
+	}
+
+	operation, err := getStringField(record[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to parse operation: %w", err)
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return "", nil // Latest version is a delete tombstone
+	}
+
+	return getStringField(record[0])
 }
 
 func (d *DatastoreAuroraDataAPI) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error) {

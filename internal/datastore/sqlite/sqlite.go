@@ -928,22 +928,26 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, operation
 	FROM resources
 	WHERE uri = ?
-	AND operation != ?
 	ORDER BY version DESC
 	LIMIT 1
 	`
-	row := d.conn.QueryRow(query, uri, resource_update.OperationDelete)
+	row := d.conn.QueryRow(query, uri)
 
 	var jsonData string
 	var ksuid string
-	if err := row.Scan(&jsonData, &ksuid); err != nil {
+	var operation string
+	if err := row.Scan(&jsonData, &ksuid, &operation); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Resource not found, return nil without error
 		}
 		return nil, err
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return nil, nil // Latest version is a delete tombstone
 	}
 
 	var loadedResource pkgmodel.Resource
@@ -2964,22 +2968,26 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, operation
 	FROM resources
 	WHERE ksuid = ?
-	AND operation != ?
 	ORDER BY version DESC
 	LIMIT 1
 	`
-	row := d.conn.QueryRow(query, ksuid, resource_update.OperationDelete)
+	row := d.conn.QueryRow(query, ksuid)
 
 	var jsonData string
 	var ksuidResult string
-	if err := row.Scan(&jsonData, &ksuidResult); err != nil {
+	var operation string
+	if err := row.Scan(&jsonData, &ksuidResult, &operation); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Resource not found
 		}
 		return nil, err
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return nil, nil // Latest version is a delete tombstone
 	}
 
 	var loadedResource pkgmodel.Resource
@@ -3122,21 +3130,25 @@ func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (s
 	defer span.End()
 
 	query := `
-	SELECT ksuid
+	SELECT ksuid, operation
 	FROM resources
 	WHERE stack = ? AND label = ? AND LOWER(type) = LOWER(?)
-	AND operation != ?
 	ORDER BY version DESC
 	LIMIT 1
 	`
-	row := d.conn.QueryRow(query, stack, label, resourceType, resource_update.OperationDelete)
+	row := d.conn.QueryRow(query, stack, label, resourceType)
 
 	var ksuidResult string
-	if err := row.Scan(&ksuidResult); err != nil {
+	var operation string
+	if err := row.Scan(&ksuidResult, &operation); err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
 		}
 		return "", err
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return "", nil // Latest version is a delete tombstone
 	}
 
 	return ksuidResult, nil

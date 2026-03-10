@@ -615,21 +615,25 @@ func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) 
 	defer span.End()
 
 	query := `
-	SELECT ksuid
+	SELECT ksuid, operation
 	FROM resources
 	WHERE stack = $1 AND label = $2 AND LOWER(type) = LOWER($3)
-	AND operation != $4
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(ctx, query, stack, label, resourceType, resource_update.OperationDelete)
+	row := d.pool.QueryRow(ctx, query, stack, label, resourceType)
 
 	var ksuid string
-	if err := row.Scan(&ksuid); err != nil {
+	var operation string
+	if err := row.Scan(&ksuid, &operation); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", nil
 		}
 		return "", err
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return "", nil // Latest version is a delete tombstone
 	}
 
 	return ksuid, nil
@@ -990,22 +994,26 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, operation
 	FROM resources
 	WHERE uri = $1
-	AND operation != $2
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(ctx, query, uri, resource_update.OperationDelete)
+	row := d.pool.QueryRow(ctx, query, uri)
 
 	var jsonData string
 	var ksuid string
-	if err := row.Scan(&jsonData, &ksuid); err != nil {
+	var operation string
+	if err := row.Scan(&jsonData, &ksuid, &operation); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Resource not found, return nil without error
 		}
 		return nil, err
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return nil, nil // Latest version is a delete tombstone
 	}
 
 	var resource pkgmodel.Resource
@@ -1022,22 +1030,26 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, operation
 	FROM resources
 	WHERE ksuid = $1
-	AND operation != $2
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
-	row := d.pool.QueryRow(ctx, query, ksuid, resource_update.OperationDelete)
+	row := d.pool.QueryRow(ctx, query, ksuid)
 
 	var jsonData string
 	var ksuidResult string
-	if err := row.Scan(&jsonData, &ksuidResult); err != nil {
+	var operation string
+	if err := row.Scan(&jsonData, &ksuidResult, &operation); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Resource not found
 		}
 		return nil, err
+	}
+
+	if operation == string(resource_update.OperationDelete) {
+		return nil, nil // Latest version is a delete tombstone
 	}
 
 	var resource pkgmodel.Resource
