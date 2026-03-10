@@ -177,6 +177,7 @@ var recoverableErrorCodes = map[OperationErrorCode]struct{}{
 	OperationErrorCodeNetworkFailure:       {},
 	OperationErrorCodeInternalFailure:      {},
 	OperationErrorCodeNotFound:             {},
+	OperationErrorCodeResourceConflict:     {},
 }
 
 func IsRecoverable(code OperationErrorCode) bool {
