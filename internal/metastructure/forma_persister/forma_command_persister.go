@@ -220,6 +220,14 @@ type MarkResourcesAsCanceled struct {
 	Resources []ResourceUpdateRef
 }
 
+// FinalizeIncompleteCommand is sent during crash recovery when all resource
+// updates in a command have already reached a terminal state but the command
+// itself was never marked complete (the agent crashed between the last
+// resource completion and the command state transition).
+type FinalizeIncompleteCommand struct {
+	CommandID string
+}
+
 func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message any) (any, error) {
 	start := time.Now()
 	defer func() {
@@ -246,6 +254,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markResourcesAsCanceled(&msg)
 	case messages.MarkResourceUpdateAsComplete:
 		return f.markResourceUpdateAsComplete(&msg)
+	case FinalizeIncompleteCommand:
+		return f.finalizeIncompleteCommand(&msg)
 	default:
 		return nil, fmt.Errorf("unhandled message type: %T", msg)
 	}
@@ -544,6 +554,36 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 			"commandID", msg.CommandID,
 			"resource", msg.ResourceURI.KSUID(),
 			"operation", msg.Operation)
+	}
+
+	return true, nil
+}
+
+// finalizeIncompleteCommand handles crash recovery for commands where all
+// resource updates reached a terminal state but the command itself never
+// transitioned. It computes the final command state and persists it through
+// the normal finalization path (hashing, cache eviction, etc.).
+func (f *FormaCommandPersister) finalizeIncompleteCommand(msg *FinalizeIncompleteCommand) (bool, error) {
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load command for finalization: %w", err)
+	}
+
+	cmd := cached.command
+
+	// Guard: all resource updates must be in a terminal state.
+	if nonFinal := countNonFinalResources(cmd); nonFinal > 0 {
+		return false, fmt.Errorf("cannot finalize command %s: %d resource updates still non-terminal", msg.CommandID, nonFinal)
+	}
+
+	cmd.State = overallCommandState(cmd)
+	cmd.ModifiedTs = time.Now()
+
+	f.Log().Info("Finalizing incomplete command after crash recovery",
+		"commandID", msg.CommandID, "finalState", cmd.State)
+
+	if err := f.finalizeAndPersist(cached); err != nil {
+		return false, fmt.Errorf("failed to finalize incomplete command: %w", err)
 	}
 
 	return true, nil
