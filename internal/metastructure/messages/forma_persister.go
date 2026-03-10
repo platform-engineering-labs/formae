@@ -47,10 +47,10 @@ type UpdateTargetStates struct {
 }
 
 type MarkTargetUpdateAsComplete struct {
-	CommandID      string
-	TargetLabel    string
+	CommandID       string
+	TargetLabel     string
 	TargetOperation string
-	FinalState     types.TargetUpdateState
+	FinalState      types.TargetUpdateState
 }
 
 type UpdateStackStates struct {
