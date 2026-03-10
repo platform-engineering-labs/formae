@@ -56,6 +56,10 @@ func RegisterEDFTypes() error {
 		// Gate
 		OpenGateRequest{},
 		OpenGateResponse{},
+
+		// Native ID counter
+		SetNativeIDCounterRequest{},
+		SetNativeIDCounterResponse{},
 	}
 
 	for _, t := range types {

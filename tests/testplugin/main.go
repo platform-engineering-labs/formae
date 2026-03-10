@@ -91,7 +91,8 @@ func main() {
 		gen.Env("InjectionState"): inj,
 		gen.Env("OperationLog"):   ol,
 		gen.Env("ResponseQueue"):  rq,
-		gen.Env("Gate"):        gate,
+		gen.Env("Gate"):             gate,
+		gen.Env("NativeIDCounter"):  &p.nativeIDCounter,
 		gen.Env("RetryConfig"): model.RetryConfig{
 			StatusCheckInterval: 5 * time.Second,
 			MaxRetries:          3,
