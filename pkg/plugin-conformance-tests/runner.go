@@ -34,18 +34,45 @@ func filterTestCases(t *testing.T, testCases []TestCase) []TestCase {
 		patterns[i] = strings.TrimSpace(patterns[i])
 	}
 
+	// For each pattern, check if it exactly matches any ResourceType.
+	// If so, use exact matching for that pattern to avoid substring
+	// collisions (e.g. "s3-bucket" matching "s3-bucketpolicy").
+	// If no exact match exists, fall back to substring matching.
+	exactPatterns := make(map[string]bool)
+	for _, pattern := range patterns {
+		if pattern == "" {
+			continue
+		}
+		for _, tc := range testCases {
+			if strings.EqualFold(tc.ResourceType, pattern) {
+				exactPatterns[strings.ToLower(pattern)] = true
+				break
+			}
+		}
+	}
+
 	var filtered []TestCase
 	for _, tc := range testCases {
 		for _, pattern := range patterns {
 			if pattern == "" {
 				continue
 			}
-			// Match against test name, resource type, or PKL file path
-			if strings.Contains(strings.ToLower(tc.Name), strings.ToLower(pattern)) ||
-				strings.Contains(strings.ToLower(tc.ResourceType), strings.ToLower(pattern)) ||
-				strings.Contains(strings.ToLower(tc.PKLFile), strings.ToLower(pattern)) {
-				filtered = append(filtered, tc)
-				break // Don't add the same test case twice
+			patternLower := strings.ToLower(pattern)
+
+			if exactPatterns[patternLower] {
+				// Exact match on ResourceType only
+				if strings.EqualFold(tc.ResourceType, pattern) {
+					filtered = append(filtered, tc)
+					break
+				}
+			} else {
+				// Substring match against test name, resource type, or PKL file path
+				if strings.Contains(strings.ToLower(tc.Name), patternLower) ||
+					strings.Contains(strings.ToLower(tc.ResourceType), patternLower) ||
+					strings.Contains(strings.ToLower(tc.PKLFile), patternLower) {
+					filtered = append(filtered, tc)
+					break
+				}
 			}
 		}
 	}
