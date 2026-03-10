@@ -23,6 +23,7 @@ type TestController struct {
 	injections    *InjectionState
 	opLog         *OperationLog
 	responseQueue *ResponseQueue
+	gate          chan struct{}
 }
 
 // NewTestController is the factory function for the TestController actor.
@@ -54,6 +55,12 @@ func (tc *TestController) Init(args ...any) error {
 		return fmt.Errorf("TestController: missing 'ResponseQueue' environment variable")
 	}
 	tc.responseQueue = rq.(*ResponseQueue)
+
+	g, ok := tc.Env("Gate")
+	if !ok {
+		return fmt.Errorf("TestController: missing 'Gate' environment variable")
+	}
+	tc.gate = g.(chan struct{})
 
 	tc.Log().Info("TestController initialized")
 	return nil
@@ -105,6 +112,11 @@ func (tc *TestController) HandleCall(from gen.PID, ref gen.Ref, request any) (an
 	case testcontrol.UnprogramResponsesRequest:
 		tc.responseQueue.Unprogram(msg.Sequences)
 		return testcontrol.UnprogramResponsesResponse{}, nil
+
+	// --- Gate ---
+	case testcontrol.OpenGateRequest:
+		close(tc.gate)
+		return testcontrol.OpenGateResponse{}, nil
 
 	// --- Operation Log ---
 	case testcontrol.GetOperationLogRequest:

@@ -24,6 +24,7 @@ type TestPlugin struct {
 	responseQueue   *ResponseQueue
 	opLog           *OperationLog
 	nativeIDCounter atomic.Int64
+	gate            <-chan struct{}
 }
 
 // Compile-time checks to satisfy protocol
@@ -107,6 +108,7 @@ func (p *TestPlugin) SchemaForResourceType(resourceType string) (model.Schema, e
 }
 
 func (p *TestPlugin) Create(_ context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
+	<-p.gate
 	// Check response queue first (per-resource programmed responses).
 	if p.responseQueue != nil {
 		if step := p.responseQueue.CheckCreate(request.Properties); step != nil {
@@ -150,6 +152,7 @@ func (p *TestPlugin) Create(_ context.Context, request *resource.CreateRequest) 
 }
 
 func (p *TestPlugin) Read(_ context.Context, request *resource.ReadRequest) (*resource.ReadResult, error) {
+	<-p.gate
 	// Check response queue first (per-resource programmed responses).
 	if p.responseQueue != nil {
 		if step := p.responseQueue.CheckRead(request.NativeID); step != nil {
@@ -190,6 +193,7 @@ func (p *TestPlugin) Read(_ context.Context, request *resource.ReadRequest) (*re
 }
 
 func (p *TestPlugin) Update(_ context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+	<-p.gate
 	// Check response queue first (per-resource programmed responses).
 	if p.responseQueue != nil {
 		if step := p.responseQueue.CheckUpdate(request.NativeID); step != nil {
@@ -232,6 +236,7 @@ func (p *TestPlugin) Update(_ context.Context, request *resource.UpdateRequest) 
 }
 
 func (p *TestPlugin) Delete(_ context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+	<-p.gate
 	// Check response queue first (per-resource programmed responses).
 	if p.responseQueue != nil {
 		if step := p.responseQueue.CheckDelete(request.NativeID); step != nil {
@@ -277,6 +282,7 @@ func (p *TestPlugin) Status(_ context.Context, _ *resource.StatusRequest) (*reso
 }
 
 func (p *TestPlugin) List(_ context.Context, request *resource.ListRequest) (*resource.ListResult, error) {
+	<-p.gate
 	if p.injections != nil {
 		if delay := p.injections.CheckLatency("List", request.ResourceType); delay > 0 {
 			time.Sleep(delay)
