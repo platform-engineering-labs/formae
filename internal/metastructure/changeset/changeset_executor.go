@@ -85,12 +85,12 @@ const (
 )
 
 type ChangesetData struct {
-	changeset                  Changeset
-	requestedBy                gen.PID
-	notifyOnComplete           bool     // If true, send ChangesetCompleted to requestedBy when done
-	discoveryPaused            bool     // Tracks if this changeset paused Discovery
-	stacksWithDeletes          []string // Stacks that had delete operations, captured at start
-	syncExcludedResourceURIs   []string // Resource URIs registered with Synchronizer, captured at start
+	changeset                Changeset
+	requestedBy              gen.PID
+	notifyOnComplete         bool     // If true, send ChangesetCompleted to requestedBy when done
+	discoveryPaused          bool     // Tracks if this changeset paused Discovery
+	stacksWithDeletes        []string // Stacks that had delete operations, captured at start
+	syncExcludedResourceURIs []string // Resource URIs registered with Synchronizer, captured at start
 }
 
 type RegisterEvents struct{}
