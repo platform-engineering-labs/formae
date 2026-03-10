@@ -1421,7 +1421,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 			}
 		}
 	} else {
-		if readWriteEqual && readOnlyEqual {
+		if readWriteEqual && readOnlyEqual && resource.Ksuid == ksuid {
 			return fmt.Sprintf("%s_%s", resource.Ksuid, version), nil
 		}
 	}
