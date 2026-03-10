@@ -129,6 +129,122 @@ func TestFilterTestCases(t *testing.T) {
 	}
 }
 
+// TestFilterTestCases_ExactMatchPriority verifies that when a filter pattern
+// exactly matches a ResourceType, only that exact match is returned — not
+// substring matches. This prevents CI cross-contamination where e.g.
+// "s3-bucket" also matches "s3-bucketpolicy".
+func TestFilterTestCases_ExactMatchPriority(t *testing.T) {
+	testCases := []TestCase{
+		{
+			Name:         "AWS::s3-bucket",
+			PKLFile:      "/path/to/testdata/s3-bucket.pkl",
+			ResourceType: "s3-bucket",
+			PluginName:   "aws",
+		},
+		{
+			Name:         "AWS::s3-bucketpolicy",
+			PKLFile:      "/path/to/testdata/s3-bucketpolicy.pkl",
+			ResourceType: "s3-bucketpolicy",
+			PluginName:   "aws",
+		},
+		{
+			Name:         "AWS::ec2-transitgateway",
+			PKLFile:      "/path/to/testdata/ec2-transitgateway.pkl",
+			ResourceType: "ec2-transitgateway",
+			PluginName:   "aws",
+		},
+		{
+			Name:         "AWS::ec2-transitgatewayroutetable",
+			PKLFile:      "/path/to/testdata/ec2-transitgatewayroutetable.pkl",
+			ResourceType: "ec2-transitgatewayroutetable",
+			PluginName:   "aws",
+		},
+		{
+			Name:         "AWS::iam-role",
+			PKLFile:      "/path/to/testdata/iam-role.pkl",
+			ResourceType: "iam-role",
+			PluginName:   "aws",
+		},
+		{
+			Name:         "AWS::iam-rolepolicy",
+			PKLFile:      "/path/to/testdata/iam-rolepolicy.pkl",
+			ResourceType: "iam-rolepolicy",
+			PluginName:   "aws",
+		},
+	}
+
+	tests := []struct {
+		name          string
+		filter        string
+		expectedNames []string
+	}{
+		{
+			name:          "exact match s3-bucket does not match s3-bucketpolicy",
+			filter:        "s3-bucket",
+			expectedNames: []string{"AWS::s3-bucket"},
+		},
+		{
+			name:          "exact match ec2-transitgateway does not match ec2-transitgatewayroutetable",
+			filter:        "ec2-transitgateway",
+			expectedNames: []string{"AWS::ec2-transitgateway"},
+		},
+		{
+			name:          "exact match iam-role does not match iam-rolepolicy",
+			filter:        "iam-role",
+			expectedNames: []string{"AWS::iam-role"},
+		},
+		{
+			name:          "exact match s3-bucketpolicy returns only s3-bucketpolicy",
+			filter:        "s3-bucketpolicy",
+			expectedNames: []string{"AWS::s3-bucketpolicy"},
+		},
+		{
+			name:          "non-exact filter still uses substring matching",
+			filter:        "transitgateway",
+			expectedNames: []string{"AWS::ec2-transitgateway", "AWS::ec2-transitgatewayroutetable"},
+		},
+		{
+			name:          "multiple exact filters",
+			filter:        "s3-bucket,iam-role",
+			expectedNames: []string{"AWS::s3-bucket", "AWS::iam-role"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set environment variable
+			if tt.filter != "" {
+				os.Setenv("FORMAE_TEST_FILTER", tt.filter)
+				defer os.Unsetenv("FORMAE_TEST_FILTER")
+			} else {
+				os.Unsetenv("FORMAE_TEST_FILTER")
+			}
+
+			// Run filter
+			filtered := filterTestCases(t, testCases)
+
+			// Check count
+			if len(filtered) != len(tt.expectedNames) {
+				t.Errorf("expected %d test cases, got %d", len(tt.expectedNames), len(filtered))
+				t.Logf("expected: %v", tt.expectedNames)
+				t.Logf("got: %v", testCaseNames(filtered))
+				return
+			}
+
+			// Check names match (order may differ for multi-filter cases)
+			gotNames := make(map[string]bool)
+			for _, tc := range filtered {
+				gotNames[tc.Name] = true
+			}
+			for _, expected := range tt.expectedNames {
+				if !gotNames[expected] {
+					t.Errorf("expected test case %q not found in filtered results", expected)
+				}
+			}
+		})
+	}
+}
+
 func TestFilterTestCases_NoMatch(t *testing.T) {
 	testCases := []TestCase{
 		{
