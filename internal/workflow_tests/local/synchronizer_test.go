@@ -915,6 +915,184 @@ func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
 	})
 }
 
+// TestSynchronizer_UnregistersResourcesAfterFailedChangeset verifies that resources
+// are unregistered from the Synchronizer's exclusion list when a changeset finishes
+// with errors, so that subsequent sync cycles can include them.
+func TestSynchronizer_UnregistersResourcesAfterFailedChangeset(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var mu sync.Mutex
+		syncReadCount := 0
+		// Track which command is which so Read can behave differently for create vs update
+		createDone := false
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "create-" + request.Label,
+						NativeID:        request.Label,
+					},
+				}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				// Fail the update operation
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationUpdate,
+						OperationStatus: resource.OperationStatusFailure,
+						RequestID:       "update-" + request.Label,
+						NativeID:        request.Label,
+						ErrorCode:       resource.OperationErrorCodeNotStabilized,
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				mu.Lock()
+				done := createDone
+				mu.Unlock()
+
+				if done {
+					// After create is done, count reads from sync operations
+					mu.Lock()
+					syncReadCount++
+					mu.Unlock()
+				}
+
+				// Always return consistent properties matching what was created
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"foo":"original"}`,
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		cfg.Agent.Retry.MaxRetries = 0
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+
+		// Step 1: Create a resource
+		f := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "test-resource",
+					Type:       "FakeAWS::Resource",
+					Properties: json.RawMessage(`{"foo":"original"}`),
+					Stack:      stack,
+					Schema:     pkgmodel.Schema{Fields: []string{"foo"}},
+					Target:     "test-target",
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "test-target"}},
+		}
+
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		require.NoError(t, err)
+
+		// Wait for resource creation to complete
+		require.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range commands {
+				if cmd.Command == pkgmodel.CommandApply && cmd.State == forma_command.CommandStateSuccess {
+					return true
+				}
+			}
+			return false
+		}, 5*time.Second, 100*time.Millisecond)
+
+		mu.Lock()
+		createDone = true
+		mu.Unlock()
+
+		// Step 2: Submit an update that will fail (Update returns OperationStatusFailure)
+		// The Read returns properties matching the DB so no OOB rejection occurs,
+		// then the actual Update call fails.
+		fUpdate := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "test-resource",
+					Type:       "FakeAWS::Resource",
+					Properties: json.RawMessage(`{"foo":"updated"}`),
+					Stack:      stack,
+					Schema:     pkgmodel.Schema{Fields: []string{"foo"}},
+					Target:     "test-target",
+				},
+			},
+			Targets: []pkgmodel.Target{},
+		}
+
+		_, err = m.ApplyForma(fUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		require.NoError(t, err)
+
+		// Wait for the update command to reach a terminal state
+		require.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			terminalCount := 0
+			for _, cmd := range commands {
+				if cmd.Command == pkgmodel.CommandApply && cmd.State == forma_command.CommandStateSuccess || cmd.State == forma_command.CommandStateFailed {
+					terminalCount++
+				}
+			}
+			return terminalCount >= 2
+		}, 10*time.Second, 100*time.Millisecond)
+
+		// Reset the counter so we only measure reads from the upcoming sync
+		mu.Lock()
+		syncReadCount = 0
+		mu.Unlock()
+
+		// Allow time for the changeset executor's async unregister messages
+		// to be processed by the Synchronizer actor.
+		time.Sleep(500 * time.Millisecond)
+
+		// Step 3: Trigger a sync — this should include the resource
+		// (proving it was unregistered after the failed changeset)
+		err = m.ForceSync()
+		require.NoError(t, err)
+
+		// Wait for sync to either create a command or finish without one
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			reads := syncReadCount
+			mu.Unlock()
+			if reads > 0 {
+				return true // Sync read the resource
+			}
+			// Also check if a sync command was created
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range commands {
+				if cmd.Command == pkgmodel.CommandSync {
+					return true
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond)
+
+		// The sync should have called Read on the resource (it was unregistered)
+		mu.Lock()
+		reads := syncReadCount
+		mu.Unlock()
+		assert.Greater(t, reads, 0, "Sync should have read the resource after the changeset unregistered it")
+	})
+}
+
 // TestSynchronizer_SyncPicksUpNewSchemaFields verifies that when a plugin's schema
 // evolves to include new fields, the synchronizer picks up the fresh schema from the
 // plugin rather than using the stale schema stored in the database. This ensures that

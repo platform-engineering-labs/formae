@@ -85,11 +85,12 @@ const (
 )
 
 type ChangesetData struct {
-	changeset         Changeset
-	requestedBy       gen.PID
-	notifyOnComplete  bool     // If true, send ChangesetCompleted to requestedBy when done
-	discoveryPaused   bool     // Tracks if this changeset paused Discovery
-	stacksWithDeletes []string // Stacks that had delete operations, captured at start
+	changeset                Changeset
+	requestedBy              gen.PID
+	notifyOnComplete         bool     // If true, send ChangesetCompleted to requestedBy when done
+	discoveryPaused          bool     // Tracks if this changeset paused Discovery
+	stacksWithDeletes        []string // Stacks that had delete operations, captured at start
+	syncExcludedResourceURIs []string // Resource URIs registered with Synchronizer, captured at start
 }
 
 type RegisterEvents struct{}
@@ -150,6 +151,13 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 			} else {
 				proc.Log().Debug("Resumed Discovery after user changeset completed", "commandID", data.changeset.CommandID)
 			}
+		}
+
+		// Unregister all resources from the Synchronizer so they can be
+		// included in future sync cycles. This is the counterpart to
+		// registerAllResourcesWithSynchronizer called in start().
+		if len(data.syncExcludedResourceURIs) > 0 {
+			unregisterAllResourcesFromSynchronizer(data.syncExcludedResourceURIs, proc)
 		}
 
 		// Shutdown resolve cache
@@ -228,7 +236,61 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 		}
 	}
 
+	// Register ALL non-sync resources with the Synchronizer upfront to prevent
+	// a race where a sync cycle could read (and persist) OOB changes for a
+	// resource before the ResourceUpdater's own sync-Read runs. Without this,
+	// the sync-Read would see no diff (sync already equalised DB and cloud)
+	// and the update would proceed when it should have been rejected.
+	if changesetHasUserUpdates(data.changeset) {
+		data.syncExcludedResourceURIs = registerAllResourcesWithSynchronizer(data.changeset.DAG, proc)
+	}
+
 	return resume(from, state, data, Resume{}, proc)
+}
+
+// registerAllResourcesWithSynchronizer sends RegisterInProgressResource for
+// every non-sync resource in the DAG. This must happen before any ResourceUpdater
+// starts so that a concurrent sync cycle cannot slip in and read a resource that
+// is about to be updated. Returns the list of registered URIs so they can be
+// unregistered when the changeset reaches a terminal state.
+func registerAllResourcesWithSynchronizer(dag *ExecutionDAG, proc gen.Process) []string {
+	synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+	var registeredURIs []string
+	for _, node := range dag.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		if ru.Source == resource_update.FormaCommandSourceSynchronize {
+			continue
+		}
+		uri := string(ru.URI())
+		err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
+			ResourceURI: uri,
+		})
+		if err != nil {
+			proc.Log().Error("Failed to register in-progress resource with synchronizer",
+				"error", err, "resourceURI", ru.URI())
+		}
+		registeredURIs = append(registeredURIs, uri)
+	}
+	return registeredURIs
+}
+
+// unregisterAllResourcesFromSynchronizer sends UnregisterInProgressResource for
+// every resource URI that was registered at changeset start. Uses the saved list
+// rather than the DAG because nodes are removed from the DAG as they complete.
+func unregisterAllResourcesFromSynchronizer(resourceURIs []string, proc gen.Process) {
+	synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
+	for _, uri := range resourceURIs {
+		err := proc.Send(synchronizerPID, messages.UnregisterInProgressResource{
+			ResourceURI: uri,
+		})
+		if err != nil {
+			proc.Log().Error("Failed to unregister in-progress resource from synchronizer",
+				"error", err, "resourceURI", uri)
+		}
+	}
 }
 
 func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
@@ -276,18 +338,6 @@ type updateFinishedEvent struct {
 func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message resource_update.ResourceUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	// Build the DAG key — resources use operation-qualified URIs
 	ru := findRunningUpdate[*resource_update.ResourceUpdate](data, message.Uri)
-
-	// Unregister non-sync resources from the Synchronizer before the shared handler
-	// so the resource can be included in sync operations again.
-	if ru != nil && ru.Source != resource_update.FormaCommandSourceSynchronize {
-		synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
-		err := proc.Send(synchronizerPID, messages.UnregisterInProgressResource{
-			ResourceURI: string(ru.URI()),
-		})
-		if err != nil {
-			proc.Log().Error("Failed to unregister in-progress resource from synchronizer", "error", err, "resourceURI", ru.URI())
-		}
-	}
 
 	var dagKey pkgmodel.FormaeURI
 	if ru != nil {
