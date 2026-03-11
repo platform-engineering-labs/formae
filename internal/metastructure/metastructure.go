@@ -1165,17 +1165,49 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 
 	for _, fa := range commands {
 		// Derive state from progress and prepare for re-execution.
-		// - Success: Keep as Success (completed, don't re-execute)
-		// - Failed: Keep as Failed (completed with error, don't re-execute)
 		// - InProgress: Reset to NotStarted (was interrupted, needs retry)
 		// - NotStarted: Keep as NotStarted (never started, needs execution)
+		// - Terminal states (Success, Failed, etc.): Exclude from the new
+		//   changeset entirely. Including them would re-create dependency
+		//   links that can never be resolved (the changeset executor only
+		//   picks up NotStarted resources, so a Success parent would block
+		//   its children forever).
+		var pendingUpdates []resource_update.ResourceUpdate
 		for i := range fa.ResourceUpdates {
-			fa.ResourceUpdates[i].UpdateState()
-			// InProgress means the operation was in progress when the agent crashed/restarted.
-			// We need to reset it to NotStarted so the changeset executor will re-queue it.
-			if fa.ResourceUpdates[i].State == resource_update.ResourceUpdateStateInProgress {
-				fa.ResourceUpdates[i].State = resource_update.ResourceUpdateStateNotStarted
+			ru := &fa.ResourceUpdates[i]
+			// Only re-derive state for non-terminal resources.
+			// Terminal resources (e.g. cascaded failures) have authoritative DB state
+			// but may have empty ProgressResult, which UpdateState() would
+			// incorrectly interpret as NotStarted.
+			switch ru.State {
+			case resource_update.ResourceUpdateStateSuccess,
+				resource_update.ResourceUpdateStateFailed,
+				resource_update.ResourceUpdateStateRejected,
+				resource_update.ResourceUpdateStateCanceled:
+				continue
 			}
+			ru.UpdateState()
+			if ru.State == resource_update.ResourceUpdateStateInProgress {
+				ru.State = resource_update.ResourceUpdateStateNotStarted
+			}
+			if ru.State == resource_update.ResourceUpdateStateNotStarted {
+				pendingUpdates = append(pendingUpdates, *ru)
+			}
+		}
+
+		// If all resource updates already reached a terminal state, the command
+		// just needs its own state updated — no changeset execution needed.
+		// This happens when the agent crashed after all CRUD ops completed but
+		// before the command transitioned to a final state.
+		if len(pendingUpdates) == 0 {
+			_, err := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
+			)
+			if err != nil {
+				slog.Error("Failed to finalize incomplete command", "commandID", fa.ID, "error", err)
+			}
+			continue
 		}
 
 		var pendingTargetUpdates []target_update.TargetUpdate
@@ -1185,8 +1217,10 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			}
 		}
 
-		// This changeset was validated upon the initial apply so we can safely ignore the error.
-		cs, _ := changeset.NewChangeset(fa.ResourceUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply)
+		// Build the changeset from only the pending (non-terminal) resource
+		// updates. Terminal resources are excluded so they don't create
+		// phantom dependency links in the new changeset's pipeline.
+		cs, _ := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply)
 
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command", "commandID", fa.ID)
 		_, err = m.callActor(
