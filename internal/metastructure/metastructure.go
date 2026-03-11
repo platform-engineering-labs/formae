@@ -431,7 +431,10 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			if pu.StackLabel != "" {
 				if _, ok := stackIDMap[pu.StackLabel]; !ok {
 					stack, err := m.Datastore.GetStackByLabel(pu.StackLabel)
-					if err == nil && stack != nil {
+					if err != nil {
+						return nil, fmt.Errorf("failed to look up stack %q for policy update: %w", pu.StackLabel, err)
+					}
+					if stack != nil {
 						stackIDMap[pu.StackLabel] = stack.ID
 					} else {
 						// STOPGAP: The stack was deleted by a concurrent command between conflict check
@@ -1350,34 +1353,47 @@ func stackLabelsFromForma(forma *pkgmodel.Forma) []string {
 // deletes for the given forma's resources. It queries the datastore for
 // cross-stack dependents of resources being destroyed.
 func (m *Metastructure) findCascadeStackLabels(forma *pkgmodel.Forma) ([]string, error) {
-	var ksuids []string
+	currentLevel := make([]string, 0)
 	for _, r := range forma.Resources {
 		if r.Ksuid != "" {
-			ksuids = append(ksuids, r.Ksuid)
+			currentLevel = append(currentLevel, r.Ksuid)
 		}
 	}
-	if len(ksuids) == 0 {
+	if len(currentLevel) == 0 {
 		return nil, nil
 	}
 
-	dependentsMap, err := m.Datastore.FindResourcesDependingOnMany(ksuids)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool)
+	seenStacks := make(map[string]bool)
 	for _, r := range forma.Resources {
-		seen[r.Stack] = true
+		seenStacks[r.Stack] = true
 	}
 
+	processed := make(map[string]bool)
 	var cascadeStacks []string
-	for _, dependents := range dependentsMap {
-		for _, dep := range dependents {
-			if !seen[dep.Stack] && dep.Stack != constants.UnmanagedStack {
-				seen[dep.Stack] = true
-				cascadeStacks = append(cascadeStacks, dep.Stack)
+
+	// BFS: traverse dependents level by level (mirrors findCascadeDeletes)
+	for len(currentLevel) > 0 {
+		dependentsMap, err := m.Datastore.FindResourcesDependingOnMany(currentLevel)
+		if err != nil {
+			return nil, err
+		}
+
+		var nextLevel []string
+		for _, dependents := range dependentsMap {
+			for _, dep := range dependents {
+				if processed[dep.Ksuid] {
+					continue
+				}
+				processed[dep.Ksuid] = true
+
+				if !seenStacks[dep.Stack] && dep.Stack != constants.UnmanagedStack {
+					seenStacks[dep.Stack] = true
+					cascadeStacks = append(cascadeStacks, dep.Stack)
+				}
+				nextLevel = append(nextLevel, dep.Ksuid)
 			}
 		}
+		currentLevel = nextLevel
 	}
 
 	return cascadeStacks, nil
