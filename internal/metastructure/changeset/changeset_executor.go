@@ -364,6 +364,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 					TargetLabel:     tu.Target.Label,
 					TargetOperation: string(tu.Operation),
 					FinalState:      message.State,
+					ModifiedTs:      util.TimeNow(),
 				},
 			)
 			if err != nil {

@@ -444,18 +444,25 @@ func (f *FormaCommandPersister) markTargetUpdateAsComplete(msg *messages.MarkTar
 		if string(tu.Operation) == msg.TargetOperation {
 			// Direct match (e.g., standalone delete or create)
 			tu.State = msg.FinalState
+			tu.ModifiedTs = msg.ModifiedTs
 			break
 		}
 
 		// Handle replace: the DAG splits replace into delete + create.
-		// The delete phase completing moves replace to InProgress;
-		// the create phase completing moves it to the final state.
+		// The delete phase succeeding moves replace to InProgress;
+		// the delete phase failing propagates the failure (create won't fire).
+		// The create phase completing moves it to the final state.
 		if string(tu.Operation) == "replace" {
 			if msg.TargetOperation == "delete" {
-				tu.State = types.TargetUpdateStateInProgress
+				if msg.FinalState == types.TargetUpdateStateSuccess {
+					tu.State = types.TargetUpdateStateInProgress
+				} else {
+					tu.State = msg.FinalState
+				}
 			} else if msg.TargetOperation == "create" {
 				tu.State = msg.FinalState
 			}
+			tu.ModifiedTs = msg.ModifiedTs
 			break
 		}
 	}
