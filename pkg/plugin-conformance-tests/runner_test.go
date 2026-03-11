@@ -365,7 +365,7 @@ func TestCompareProperties_NestedResolvable(t *testing.T) {
 		},
 	}
 
-	result := compareProperties(t, expectedProperties, actualResource, "after create")
+	result := compareProperties(t, expectedProperties, actualResource, "after create", map[string]bool{})
 	if !result {
 		t.Errorf("compareProperties should pass when SubResource contains a nested Resolvable with resolved $value")
 	}
@@ -393,7 +393,7 @@ func TestCompareMap(t *testing.T) {
 				"$value":    "arn:aws:iam::123456789012:role/my-role",
 			},
 		}
-		if !compareMap(t, "Config", expected, actual, "test") {
+		if !compareMap(t, "Config", expected, actual, "test", map[string]bool{}) {
 			t.Error("compareMap should pass for nested resolvable")
 		}
 	})
@@ -406,12 +406,13 @@ func TestCompareMap(t *testing.T) {
 		actual := map[string]any{
 			"Name": "different-value",
 		}
-		if compareMap(fakeT, "Config", expected, actual, "test") {
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]bool{}) {
 			t.Error("compareMap should fail for scalar mismatch")
 		}
 	})
 
-	t.Run("extra keys in actual are ignored", func(t *testing.T) {
+	t.Run("extra keys in actual flagged when not provider default", func(t *testing.T) {
+		fakeT := &testing.T{}
 		expected := map[string]any{
 			"Name": "my-app",
 		}
@@ -419,8 +420,24 @@ func TestCompareMap(t *testing.T) {
 			"Name":    "my-app",
 			"ExtraID": "extra-value",
 		}
-		if !compareMap(t, "Config", expected, actual, "test") {
-			t.Error("compareMap should pass when actual has extra keys not in expected")
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]bool{}) {
+			t.Error("compareMap should fail when actual has extra keys not marked as provider default")
+		}
+	})
+
+	t.Run("extra keys in actual allowed when provider default", func(t *testing.T) {
+		expected := map[string]any{
+			"Name": "my-app",
+		}
+		actual := map[string]any{
+			"Name":    "my-app",
+			"ExtraID": "extra-value",
+		}
+		providerDefaults := map[string]bool{
+			"Config.ExtraID": true,
+		}
+		if !compareMap(t, "Config", expected, actual, "test", providerDefaults) {
+			t.Error("compareMap should pass when extra key is a provider default")
 		}
 	})
 
@@ -453,7 +470,7 @@ func TestCompareMap(t *testing.T) {
 				},
 			},
 		}
-		if !compareMap(t, "Config", expected, actual, "test") {
+		if !compareMap(t, "Config", expected, actual, "test", map[string]bool{}) {
 			t.Error("compareMap should pass for deeply nested resolvable")
 		}
 	})
@@ -467,7 +484,7 @@ func TestCompareMap(t *testing.T) {
 		actual := map[string]any{
 			"Name": "my-app",
 		}
-		if compareMap(fakeT, "Config", expected, actual, "test") {
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]bool{}) {
 			t.Error("compareMap should fail when expected key is missing from actual")
 		}
 	})
@@ -514,9 +531,224 @@ func TestCompareProperties_ResolvableNestedInArray(t *testing.T) {
 		},
 	}
 
-	result := compareProperties(t, expectedProperties, actualResource, "after create")
+	result := compareProperties(t, expectedProperties, actualResource, "after create", map[string]bool{})
 	if !result {
 		t.Errorf("compareProperties should pass when an array element contains a nested resolvable with resolved $value")
+	}
+}
+
+func TestCompareArrayUnordered_ProviderDefaultsAllowed(t *testing.T) {
+	// Mimics K8S service ports: expected has {name, port}, actual has {name, port, protocol, targetPort}
+	// protocol and targetPort are hasProviderDefault — should be allowed
+	expected := []any{
+		map[string]any{"name": "http", "port": float64(80)},
+	}
+	actual := []any{
+		map[string]any{"name": "http", "port": float64(80), "protocol": "TCP", "targetPort": float64(80)},
+	}
+	providerDefaults := map[string]bool{
+		"spec.ports.protocol":   true,
+		"spec.ports.targetPort": true,
+	}
+	result := compareArrayUnordered(t, "spec.ports", expected, actual, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when extra keys are provider defaults")
+	}
+}
+
+func TestCompareArrayUnordered_NonProviderDefaultFlagged(t *testing.T) {
+	// Extra key "bogus" is NOT a provider default — should fail
+	expected := []any{
+		map[string]any{"name": "http", "port": float64(80)},
+	}
+	actual := []any{
+		map[string]any{"name": "http", "port": float64(80), "bogus": "bad"},
+	}
+	providerDefaults := map[string]bool{
+		"spec.ports.protocol": true,
+	}
+	// Use a sub-test so the failure doesn't abort the parent
+	inner := &testing.T{}
+	result := compareArrayUnordered(inner, "spec.ports", expected, actual, "after create", providerDefaults)
+	if result {
+		t.Error("should fail when extra key is not a provider default")
+	}
+}
+
+func TestCompareArrayUnordered_MultipleElementsDifferentOrder(t *testing.T) {
+	// Two ports, both with provider-default extra keys, different order
+	expected := []any{
+		map[string]any{"name": "https", "port": float64(443)},
+		map[string]any{"name": "http", "port": float64(80)},
+	}
+	actual := []any{
+		map[string]any{"name": "http", "port": float64(80), "protocol": "TCP", "targetPort": float64(80)},
+		map[string]any{"name": "https", "port": float64(443), "protocol": "TCP", "targetPort": float64(443)},
+	}
+	providerDefaults := map[string]bool{
+		"spec.ports.protocol":   true,
+		"spec.ports.targetPort": true,
+	}
+	result := compareArrayUnordered(t, "spec.ports", expected, actual, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass with multiple elements in different order when extra keys are provider defaults")
+	}
+}
+
+func TestCompareArrayUnordered_NestedProviderDefaults(t *testing.T) {
+	// Mimics K8S webhooks: expected has {name, clientConfig}, actual has extra nested fields
+	expected := []any{
+		map[string]any{
+			"name": "my-webhook",
+			"clientConfig": map[string]any{
+				"service": map[string]any{"name": "webhook-svc", "namespace": "default"},
+			},
+		},
+	}
+	actual := []any{
+		map[string]any{
+			"name": "my-webhook",
+			"clientConfig": map[string]any{
+				"service": map[string]any{"name": "webhook-svc", "namespace": "default", "port": float64(443)},
+			},
+			"matchPolicy":    "Equivalent",
+			"timeoutSeconds": float64(10),
+			"failurePolicy":  "Fail",
+			"sideEffects":    "None",
+		},
+	}
+	providerDefaults := map[string]bool{
+		"webhooks.matchPolicy":          true,
+		"webhooks.timeoutSeconds":       true,
+		"webhooks.failurePolicy":        true,
+		"webhooks.sideEffects":          true,
+		"webhooks.clientConfig.service.port": true,
+	}
+	result := compareArrayUnordered(t, "webhooks", expected, actual, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass for nested maps when extra keys are provider defaults")
+	}
+}
+
+func TestCompareProperties_ProviderDefaultsAllowed(t *testing.T) {
+	// Full-path test: extra fields in array map elements allowed when hasProviderDefault
+	expectedProperties := map[string]any{
+		"metadata": map[string]any{"name": "my-service"},
+		"spec": map[string]any{
+			"ports": []any{
+				map[string]any{"name": "http", "port": float64(80)},
+			},
+		},
+	}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"metadata": map[string]any{"name": "my-service"},
+			"spec": map[string]any{
+				"ports": []any{
+					map[string]any{"name": "http", "port": float64(80), "protocol": "TCP", "targetPort": float64(80)},
+				},
+			},
+		},
+	}
+	providerDefaults := map[string]bool{
+		"spec.ports.protocol":   true,
+		"spec.ports.targetPort": true,
+	}
+	result := compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when extra array element keys are provider defaults")
+	}
+}
+
+func TestCompareProperties_ExtraTopLevelProviderDefault(t *testing.T) {
+	// Actual has an extra top-level key that is a provider default
+	expectedProperties := map[string]any{
+		"metadata": map[string]any{"name": "my-svc"},
+	}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"metadata":      map[string]any{"name": "my-svc"},
+			"clusterIP":     "10.96.0.1",
+		},
+	}
+	providerDefaults := map[string]bool{
+		"clusterIP": true,
+	}
+	result := compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when extra top-level key is a provider default")
+	}
+}
+
+func TestCompareProperties_ExtraTopLevelNonProviderDefault(t *testing.T) {
+	// Actual has an extra top-level key that is NOT a provider default — should fail
+	expectedProperties := map[string]any{
+		"metadata": map[string]any{"name": "my-svc"},
+	}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"metadata": map[string]any{"name": "my-svc"},
+			"bogus":    "unexpected",
+		},
+	}
+	providerDefaults := map[string]bool{}
+	inner := &testing.T{}
+	result := compareProperties(inner, expectedProperties, actualResource, "after create", providerDefaults)
+	if result {
+		t.Error("should fail when extra top-level key is not a provider default")
+	}
+}
+
+func TestCompareMap_ExtraNestedProviderDefault(t *testing.T) {
+	// Extra nested key in a map that is a provider default
+	expected := map[string]any{"name": "my-svc"}
+	actual := map[string]any{"name": "my-svc", "sessionAffinity": "None"}
+	providerDefaults := map[string]bool{
+		"spec.sessionAffinity": true,
+	}
+	result := compareMap(t, "spec", expected, actual, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when extra nested key is a provider default")
+	}
+}
+
+func TestCompareMap_ExtraNestedNonProviderDefault(t *testing.T) {
+	// Extra nested key that is NOT a provider default — should fail
+	expected := map[string]any{"name": "my-svc"}
+	actual := map[string]any{"name": "my-svc", "unknown": "bad"}
+	providerDefaults := map[string]bool{}
+	inner := &testing.T{}
+	result := compareMap(inner, "spec", expected, actual, "after create", providerDefaults)
+	if result {
+		t.Error("should fail when extra nested key is not a provider default")
+	}
+}
+
+func TestIsProviderDefault(t *testing.T) {
+	providerDefaults := map[string]bool{
+		"spec.ports.protocol":   true,
+		"spec.sessionAffinity":  true,
+		"webhooks.matchPolicy":  true,
+	}
+
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"spec.ports.protocol", true},
+		{"spec.ports[0].protocol", true},
+		{"spec.ports[12].protocol", true},
+		{"spec.sessionAffinity", true},
+		{"webhooks[0].matchPolicy", true},
+		{"spec.ports.bogus", false},
+		{"spec.unknown", false},
+		{"bogus", false},
+	}
+	for _, tc := range tests {
+		got := isProviderDefault(tc.path, providerDefaults)
+		if got != tc.expected {
+			t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+		}
 	}
 }
 

@@ -328,13 +328,61 @@ func normalizeResolvables(v any) any {
 	}
 }
 
+// extractProviderDefaultPaths extracts field paths with HasProviderDefault=true
+// from the Schema Hints on a resource. Returns a set of dot-separated paths
+// (e.g. "spec.ports.protocol", "spec.containers.imagePullPolicy").
+func extractProviderDefaultPaths(resource map[string]any) map[string]bool {
+	result := make(map[string]bool)
+	schema, ok := resource["Schema"].(map[string]any)
+	if !ok {
+		return result
+	}
+	hints, ok := schema["Hints"].(map[string]any)
+	if !ok {
+		return result
+	}
+	for path, hint := range hints {
+		hintMap, ok := hint.(map[string]any)
+		if !ok {
+			continue
+		}
+		if hpd, ok := hintMap["HasProviderDefault"].(bool); ok && hpd {
+			result[path] = true
+		}
+	}
+	return result
+}
+
+// isProviderDefault checks if a given field path (dot-separated) matches
+// a provider default path. Handles array traversal by stripping array
+// segments — e.g. path "spec.ports[0].protocol" is checked as "spec.ports.protocol".
+func isProviderDefault(fieldPath string, providerDefaults map[string]bool) bool {
+	if providerDefaults[fieldPath] {
+		return true
+	}
+	// Strip array index segments: spec.ports[0].protocol → spec.ports.protocol
+	cleaned := fieldPath
+	for {
+		start := strings.Index(cleaned, "[")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(cleaned[start:], "]")
+		if end == -1 {
+			break
+		}
+		cleaned = cleaned[:start] + cleaned[start+end+1:]
+	}
+	return providerDefaults[cleaned]
+}
+
 // compareArrayUnordered compares two arrays ignoring element order.
 // If the array contains resolvable elements, it uses element-wise matching
 // that validates resolvable metadata and $value. Otherwise, elements are
 // serialized to JSON for canonical comparison. Nested resolvables inside
 // map elements are normalized before comparison so that $visibility vs
 // $value differences don't cause false mismatches.
-func compareArrayUnordered(t *testing.T, key string, expected, actual any, context string) bool {
+func compareArrayUnordered(t *testing.T, key string, expected, actual any, context string, providerDefaults map[string]bool) bool {
 	expectedArr, ok := expected.([]any)
 	if !ok {
 		t.Errorf("Expected %s is not an array (%s)", key, context)
@@ -362,7 +410,15 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 
 	// If array contains resolvables, use element-wise matching
 	if hasResolvables {
-		return compareArrayWithResolvables(t, key, expectedArr, actualArr, context)
+		return compareArrayWithResolvables(t, key, expectedArr, actualArr, context, providerDefaults)
+	}
+
+	// If elements are maps, use schema-aware matching that allows extra
+	// fields only when they are marked hasProviderDefault in the schema.
+	if len(expectedArr) > 0 {
+		if _, isMap := expectedArr[0].(map[string]any); isMap {
+			return compareArrayOfMaps(t, key, expectedArr, actualArr, context, providerDefaults)
+		}
 	}
 
 	// Serialize to JSON, sort, and compare. Normalize resolvables so that
@@ -395,10 +451,176 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 	return true
 }
 
+// compareArrayOfMaps compares arrays of map elements using schema-aware matching.
+// For each expected map element, it finds a matching actual map element where
+// all expected keys match (subset matching for finding pairs). Then it runs
+// bidirectional compareMap which flags extra actual keys unless they are
+// hasProviderDefault in the schema.
+func compareArrayOfMaps(t *testing.T, key string, expectedArr, actualArr []any, context string, providerDefaults map[string]bool) bool {
+	ok := true
+	matched := make([]bool, len(actualArr))
+
+	for i, expectedVal := range expectedArr {
+		expectedMap, isMap := expectedVal.(map[string]any)
+		if !isMap {
+			// Non-map element — serialize and compare exactly
+			expectedJSON, _ := json.Marshal(normalizeResolvables(expectedVal))
+			found := false
+			for j, actualVal := range actualArr {
+				if matched[j] {
+					continue
+				}
+				actualJSON, _ := json.Marshal(normalizeResolvables(actualVal))
+				if string(expectedJSON) == string(actualJSON) {
+					matched[j] = true
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Array %s[%d] has no match in actual (%s): %s", key, i, context, string(expectedJSON))
+				ok = false
+			}
+			continue
+		}
+
+		// Find matching actual element using subset comparison
+		matchIdx := -1
+		for j, actualVal := range actualArr {
+			if matched[j] {
+				continue
+			}
+			actualMap, isActualMap := actualVal.(map[string]any)
+			if !isActualMap {
+				continue
+			}
+			if mapSubsetMatch(expectedMap, actualMap) {
+				matchIdx = j
+				break
+			}
+		}
+
+		if matchIdx >= 0 {
+			matched[matchIdx] = true
+			// Run compareMap for detailed error reporting (now bidirectional)
+			actualMap := actualArr[matchIdx].(map[string]any)
+			if !compareMap(t, fmt.Sprintf("%s[%d]", key, i), expectedMap, actualMap, context, providerDefaults) {
+				ok = false
+			}
+		} else {
+			expectedJSON, _ := json.Marshal(expectedMap)
+			t.Errorf("Array %s[%d] has no matching element in actual (%s): %s", key, i, context, string(expectedJSON))
+			ok = false
+		}
+	}
+
+	return ok
+}
+
+// mapSubsetMatch checks if all keys in expected exist in actual with matching
+// values. This is a non-reporting version of compareMap for use in matching.
+// Resolvables are normalized before comparison.
+func mapSubsetMatch(expected, actual map[string]any) bool {
+	for key, expectedValue := range expected {
+		actualValue, exists := actual[key]
+		if !exists {
+			return false
+		}
+		expectedValue = normalizeResolvables(expectedValue)
+		actualValue = normalizeResolvables(actualValue)
+
+		switch ev := expectedValue.(type) {
+		case map[string]any:
+			av, ok := actualValue.(map[string]any)
+			if !ok {
+				return false
+			}
+			if !mapSubsetMatch(ev, av) {
+				return false
+			}
+		case []any:
+			av, ok := actualValue.([]any)
+			if !ok {
+				return false
+			}
+			if !arraySubsetMatch(ev, av) {
+				return false
+			}
+		default:
+			eStr := fmt.Sprintf("%v", expectedValue)
+			aStr := fmt.Sprintf("%v", actualValue)
+			if eStr != aStr && normalizeEscaping(eStr) != normalizeEscaping(aStr) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// arraySubsetMatch checks if two arrays match, using subset matching for map
+// elements and exact comparison for scalars.
+func arraySubsetMatch(expected, actual []any) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	// If elements are maps, use subset matching
+	if len(expected) > 0 {
+		if _, isMap := expected[0].(map[string]any); isMap {
+			matched := make([]bool, len(actual))
+			for _, ev := range expected {
+				eMap, ok := ev.(map[string]any)
+				if !ok {
+					return false
+				}
+				found := false
+				for j, av := range actual {
+					if matched[j] {
+						continue
+					}
+					aMap, ok := av.(map[string]any)
+					if !ok {
+						continue
+					}
+					if mapSubsetMatch(eMap, aMap) {
+						matched[j] = true
+						found = true
+						break
+					}
+				}
+				if !found {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	// For non-map elements, serialize and compare sorted
+	serialize := func(v any) string {
+		b, _ := json.Marshal(normalizeResolvables(v))
+		return string(b)
+	}
+	eSorted := make([]string, len(expected))
+	for i, v := range expected {
+		eSorted[i] = serialize(v)
+	}
+	sort.Strings(eSorted)
+	aSorted := make([]string, len(actual))
+	for i, v := range actual {
+		aSorted[i] = serialize(v)
+	}
+	sort.Strings(aSorted)
+	for i := range eSorted {
+		if eSorted[i] != aSorted[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // compareArrayWithResolvables compares arrays element-wise, handling resolvable
 // elements by matching on metadata and validating $value, and non-resolvable
 // elements by JSON equality.
-func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualArr []any, context string) bool {
+func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualArr []any, context string, providerDefaults map[string]bool) bool {
 	ok := true
 	matched := make([]bool, len(actualArr))
 
@@ -441,6 +663,20 @@ func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualAr
 					}
 				}
 			}
+		} else if expMap, isMap := exp.(map[string]any); isMap {
+			// Non-resolvable map element — use subset matching
+			for j, act := range actualArr {
+				if matched[j] {
+					continue
+				}
+				if actMap, isActMap := act.(map[string]any); isActMap {
+					if mapSubsetMatch(expMap, actMap) {
+						matched[j] = true
+						found = true
+						break
+					}
+				}
+			}
 		} else {
 			expJSON := serialize(exp)
 			for j, act := range actualArr {
@@ -466,10 +702,12 @@ func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualAr
 }
 
 // compareMap recursively compares two maps, handling nested Resolvables,
-// arrays, and sub-maps. This is needed for SubResource properties that
-// contain Resolvable references (e.g. ResourceLifecycleConfig.ServiceRole).
-func compareMap(t *testing.T, name string, expected, actual map[string]any, context string) bool {
+// arrays, and sub-maps. Performs bidirectional comparison:
+// 1. expected→actual: all expected keys must exist and match in actual
+// 2. actual→expected: extra keys in actual must be hasProviderDefault in schema
+func compareMap(t *testing.T, name string, expected, actual map[string]any, context string, providerDefaults map[string]bool) bool {
 	ok := true
+	// Forward: expected → actual
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
@@ -484,14 +722,14 @@ func compareMap(t *testing.T, name string, expected, actual map[string]any, cont
 			continue
 		}
 		if expectedArr, isArray := expectedValue.([]any); isArray {
-			if !compareArrayUnordered(t, name+"."+key, expectedArr, actualValue, context) {
+			if !compareArrayUnordered(t, name+"."+key, expectedArr, actualValue, context, providerDefaults) {
 				ok = false
 			}
 			continue
 		}
 		if expectedMap, isMap := expectedValue.(map[string]any); isMap {
 			if actualMap, isActualMap := actualValue.(map[string]any); isActualMap {
-				if !compareMap(t, name+"."+key, expectedMap, actualMap, context) {
+				if !compareMap(t, name+"."+key, expectedMap, actualMap, context, providerDefaults) {
 					ok = false
 				}
 				continue
@@ -508,11 +746,24 @@ func compareMap(t *testing.T, name string, expected, actual map[string]any, cont
 			}
 		}
 	}
+	// Reverse: actual → expected — flag extra keys not in hasProviderDefault
+	for key := range actual {
+		if _, inExpected := expected[key]; inExpected {
+			continue
+		}
+		fieldPath := name + "." + key
+		if !isProviderDefault(fieldPath, providerDefaults) {
+			t.Errorf("Property %s.%s is not expected and not a provider default (%s)", name, key, context)
+			ok = false
+		}
+	}
 	return ok
 }
 
-// compareProperties compares expected properties against actual properties from inventory
-func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string) bool {
+// compareProperties compares expected properties against actual properties from inventory.
+// Uses schema hints to allow extra fields marked hasProviderDefault while flagging
+// any other unexpected fields in the actual response.
+func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string, providerDefaults map[string]bool) bool {
 	hasErrors := false
 
 	actualProperties, ok := actualResource["Properties"].(map[string]any)
@@ -522,6 +773,7 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 	}
 
 	t.Logf("Comparing expected properties with actual properties (%s)...", context)
+	// Forward: expected → actual
 	for key, expectedValue := range expectedProperties {
 		actualValue, exists := actualProperties[key]
 		if !exists {
@@ -541,12 +793,12 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 
 		// Use order-independent comparison for all arrays
 		if _, isArray := expectedValue.([]any); isArray {
-			if !compareArrayUnordered(t, key, expectedValue, actualValue, context) {
+			if !compareArrayUnordered(t, key, expectedValue, actualValue, context, providerDefaults) {
 				hasErrors = true
 			}
 		} else if expectedMap, isMap := expectedValue.(map[string]any); isMap {
 			if actualMap, isActualMap := actualValue.(map[string]any); isActualMap {
-				if !compareMap(t, key, expectedMap, actualMap, context) {
+				if !compareMap(t, key, expectedMap, actualMap, context, providerDefaults) {
 					hasErrors = true
 				}
 			} else {
@@ -565,6 +817,17 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 					hasErrors = true
 				}
 			}
+		}
+	}
+
+	// Reverse: actual → expected — flag extra keys not in hasProviderDefault
+	for key := range actualProperties {
+		if _, inExpected := expectedProperties[key]; inExpected {
+			continue
+		}
+		if !isProviderDefault(key, providerDefaults) {
+			t.Errorf("Property %s is not expected and not a provider default (%s)", key, context)
+			hasErrors = true
 		}
 	}
 
@@ -621,7 +884,8 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	if !ok {
 		t.Fatal("Expected resource should have Properties field")
 	}
-	t.Logf("Expected resource type: %s", actualResourceType)
+	providerDefaults := extractProviderDefaultPaths(expectedResource)
+	t.Logf("Expected resource type: %s (provider default paths: %d)", actualResourceType, len(providerDefaults))
 
 	// === Step 2: Wait for plugin to be registered before any commands ===
 	t.Log("Step 2: Waiting for plugin to be registered...")
@@ -672,7 +936,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 
 	// Compare properties using helper
-	if !compareProperties(t, expectedProperties, actualResource, "after create") {
+	if !compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults) {
 		allPropertiesMatched = false
 	}
 
@@ -722,7 +986,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 		extractedResource := extractedResult.Resources[0]
 
 		// Compare properties using the same logic as inventory comparison
-		if !compareProperties(t, expectedProperties, extractedResource, "after extract") {
+		if !compareProperties(t, expectedProperties, extractedResource, "after extract", providerDefaults) {
 			allPropertiesMatched = false
 		}
 		t.Log("Extract validation completed!")
@@ -755,7 +1019,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	resourceAfterSync := inventoryAfterSync.Resources[0]
 
 	// Compare properties using helper - verifies idempotency
-	if !compareProperties(t, expectedProperties, resourceAfterSync, "after sync") {
+	if !compareProperties(t, expectedProperties, resourceAfterSync, "after sync", providerDefaults) {
 		allPropertiesMatched = false
 	}
 	t.Log("Idempotency verified!")
@@ -842,7 +1106,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 				oldNativeID, newNativeID)
 		}
 
-		if !compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update") {
+		if !compareProperties(t, updateExpectedProperties, resourceAfterUpdate, "after update", providerDefaults) {
 			allPropertiesMatched = false
 		}
 		t.Log("Update test completed successfully!")
@@ -931,7 +1195,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 		// Verify properties match expected state
 		resourceAfterReplace := inventoryAfterReplace.Resources[0]
-		if !compareProperties(t, replaceExpectedProperties, resourceAfterReplace, "after replace") {
+		if !compareProperties(t, replaceExpectedProperties, resourceAfterReplace, "after replace", providerDefaults) {
 			allPropertiesMatched = false
 		}
 
