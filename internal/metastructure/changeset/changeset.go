@@ -231,12 +231,35 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate) er
 		// Create unique identifier that includes operation
 		operationURI := createOperationURI(update.URI(), update.Operation)
 
+		if existing, collision := p.Nodes[operationURI]; collision {
+			ru := existing.Update.(*resource_update.ResourceUpdate)
+			slog.Error("BUG: changeset DAG URI collision — two resource updates map to the same operationURI, one will be silently dropped",
+				"operationURI", operationURI,
+				"existingLabel", ru.DesiredState.Label,
+				"existingStack", ru.DesiredState.Stack,
+				"existingKsuid", ru.DesiredState.Ksuid,
+				"newLabel", update.DesiredState.Label,
+				"newStack", update.DesiredState.Stack,
+				"newKsuid", update.DesiredState.Ksuid,
+				"operation", update.Operation,
+			)
+		}
+
 		p.Nodes[operationURI] = &DAGNode{
 			URI:          operationURI,
 			Update:       update,
 			Dependents:   []*DAGNode{},
 			Dependencies: []*DAGNode{},
 		}
+	}
+
+	// Detect node count mismatch (indicates silent URI collision)
+	if len(p.Nodes) != len(allOps) {
+		slog.Error("BUG: changeset DAG node count mismatch — some resource updates were lost due to URI collisions",
+			"expectedNodes", len(allOps),
+			"actualNodes", len(p.Nodes),
+			"inputResourceUpdates", len(resourceUpdates),
+		)
 	}
 
 	// Step 3: Build relationships between operation nodes
