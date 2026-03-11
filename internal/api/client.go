@@ -312,6 +312,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.StackDeletedDuringApply:
+		var errResp apimodel.ErrorResponse[apimodel.StackDeletedDuringApplyError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse StackDeletedDuringApply error: %w", err)
+		}
+		return nil, &errResp
+
 	default:
 		return nil, fmt.Errorf("unknown error type: %s", baseError.Error)
 	}

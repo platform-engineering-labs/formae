@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -403,8 +404,40 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			if pu.StackLabel != "" {
 				if _, ok := stackIDMap[pu.StackLabel]; !ok {
 					stack, err := m.Datastore.GetStackByLabel(pu.StackLabel)
-					if err == nil && stack != nil {
+					if err != nil {
+						return nil, fmt.Errorf("failed to look up stack %q for policy update: %w", pu.StackLabel, err)
+					}
+					if stack != nil {
 						stackIDMap[pu.StackLabel] = stack.ID
+					} else {
+						// STOPGAP: The stack was deleted by a concurrent command between conflict check
+						// and policy persist. This race is possible because stack/target/policy updates
+						// are persisted outside the changeset execution DAG. The correct fix is to
+						// incorporate these updates into the changeset so they are executed atomically
+						// with resource updates. For now, fail the stored command to prevent it from
+						// being orphaned in NotStarted state.
+						slog.Warn("Stack deleted during apply setup, failing stored command",
+							"commandID", fa.ID, "stackLabel", pu.StackLabel)
+						refs := make([]forma_persister.ResourceUpdateRef, len(fa.ResourceUpdates))
+						for i, ru := range fa.ResourceUpdates {
+							refs[i] = forma_persister.ResourceUpdateRef{
+								URI:       ru.DesiredState.URI(),
+								Operation: ru.Operation,
+							}
+						}
+						_, err = m.callActor(
+							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+							forma_persister.MarkResourcesAsFailed{
+								CommandID:          fa.ID,
+								Resources:          refs,
+								ResourceModifiedTs: time.Now(),
+							},
+						)
+						if err != nil {
+							slog.Error("Failed to mark resources as failed after stack deletion",
+								"error", err, "commandID", fa.ID)
+						}
+						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
 					}
 				}
 			}
@@ -591,7 +624,16 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 
 	// Check for conflicting commands before generating resource updates (same reasoning as ApplyForma).
 	if !config.Simulate {
-		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
+		stackLabels := stackLabelsFromForma(forma)
+
+		// For destroy commands, also check stacks affected by cascade deletes
+		cascadeStacks, err := m.findCascadeStackLabels(forma)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute cascade stacks: %w", err)
+		}
+		stackLabels = append(stackLabels, cascadeStacks...)
+
+		if err := m.checkForConflictingCommands(stackLabels); err != nil {
 			return nil, err
 		}
 	}
@@ -1217,6 +1259,56 @@ func stackLabelsFromForma(forma *pkgmodel.Forma) []string {
 		}
 	}
 	return labels
+}
+
+// findCascadeStackLabels returns stack labels that would be affected by cascade
+// deletes for the given forma's resources. It queries the datastore for
+// cross-stack dependents of resources being destroyed.
+func (m *Metastructure) findCascadeStackLabels(forma *pkgmodel.Forma) ([]string, error) {
+	currentLevel := make([]string, 0)
+	for _, r := range forma.Resources {
+		if r.Ksuid != "" {
+			currentLevel = append(currentLevel, r.Ksuid)
+		}
+	}
+	if len(currentLevel) == 0 {
+		return nil, nil
+	}
+
+	seenStacks := make(map[string]bool)
+	for _, r := range forma.Resources {
+		seenStacks[r.Stack] = true
+	}
+
+	processed := make(map[string]bool)
+	var cascadeStacks []string
+
+	// BFS: traverse dependents level by level (mirrors findCascadeDeletes)
+	for len(currentLevel) > 0 {
+		dependentsMap, err := m.Datastore.FindResourcesDependingOnMany(currentLevel)
+		if err != nil {
+			return nil, err
+		}
+
+		var nextLevel []string
+		for _, dependents := range dependentsMap {
+			for _, dep := range dependents {
+				if processed[dep.Ksuid] {
+					continue
+				}
+				processed[dep.Ksuid] = true
+
+				if !seenStacks[dep.Stack] && dep.Stack != constants.UnmanagedStack {
+					seenStacks[dep.Stack] = true
+					cascadeStacks = append(cascadeStacks, dep.Stack)
+				}
+				nextLevel = append(nextLevel, dep.Ksuid)
+			}
+		}
+		currentLevel = nextLevel
+	}
+
+	return cascadeStacks, nil
 }
 
 // filterUnabsorbedModifications returns only those modifications that have NOT been
