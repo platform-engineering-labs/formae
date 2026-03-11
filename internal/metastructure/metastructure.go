@@ -343,13 +343,15 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 
 	if config.Simulate {
 		var warnings []string
+		allByStack, loadErr := m.Datastore.LoadAllResourcesByStack()
+		if loadErr != nil {
+			slog.Warn("Failed to load resources for simulate warning", "error", loadErr)
+		}
 		for _, tu := range fa.TargetUpdates {
 			if tu.Operation != target_update.TargetOperationReplace {
 				continue
 			}
-			allByStack, loadErr := m.Datastore.LoadAllResourcesByStack()
-			if loadErr != nil {
-				slog.Warn("Failed to load resources for simulate warning", "error", loadErr)
+			if allByStack == nil {
 				continue
 			}
 			unmanagedOnTarget := 0

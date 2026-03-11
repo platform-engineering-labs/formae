@@ -51,6 +51,7 @@ type MarkTargetUpdateAsComplete struct {
 	TargetLabel     string
 	TargetOperation string
 	FinalState      types.TargetUpdateState
+	ModifiedTs      time.Time
 }
 
 type UpdateStackStates struct {
