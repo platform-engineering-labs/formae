@@ -7,8 +7,10 @@
 package blackbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // ResourceState represents whether a resource is expected to exist.
@@ -28,30 +30,29 @@ type ExpectedResource struct {
 
 // StackState holds the per-stack state: resources.
 type StackState struct {
-	Label         string
-	Resources     map[int]*ExpectedResource
-	TTL bool
-	TTLExpired    bool
+	Label      string
+	Resources  map[int]*ExpectedResource
+	TTL        bool
+	TTLExpired bool
 
-	// LastReconcileIDs and LastReconcileProperties track the resource set and
-	// properties template from the most recent reconcile-mode apply on this
-	// stack. Used by OpForceReconcile to predict outcomes at submission time.
-	LastReconcileIDs             []int
-	LastReconcileProperties      string
-	LastReconcileChildProperties string
+	// LastReconcileIDs and LastReconcileResourceProperties track the resource set
+	// and exact expected properties from the most recent reconcile-mode apply on
+	// this stack. Used by OpForceReconcile to predict outcomes at submission time.
+	LastReconcileIDs                []int
+	LastReconcileResourceProperties map[int]string
 }
 
 // StateModel tracks what the system state should be after each operation.
 // It supports multiple independent stacks, each with their own resource pool.
 type StateModel struct {
-	Stacks             []StackState
+	Stacks []StackState
 	// ResourcesPerStack is the base count passed to NewStateModel; does not
 	// include cross-stack slots appended by NewResourcePoolWithCrossStack.
 	ResourcesPerStack  int
 	Pool               *ResourcePool
 	ProviderStackLabel string // label of stack 0; empty if stackCount < 2
 	// AcceptedCommands tracks commands accepted by the agent during the chaos phase.
-	AcceptedCommands   []AcceptedCommand
+	AcceptedCommands []AcceptedCommand
 	// UnmanagedNativeIDs tracks cloud resources created out-of-band (via
 	// OpCloudCreate). These are expected to exist in the cloud but NOT in
 	// the agent's inventory. Used by the invariant checker to distinguish
@@ -124,11 +125,40 @@ func (m *StateModel) Resource(stackIndex, idx int) *ExpectedResource {
 	return m.Stacks[stackIndex].Resources[idx]
 }
 
+// LabelForResource returns the expected label for the resource slot on the stack.
+func (m *StateModel) LabelForResource(stackIndex, idx int) string {
+	stackLabel := m.Stacks[stackIndex].Label
+	if m.Pool != nil {
+		return m.Pool.LabelForStack(stackLabel, idx)
+	}
+	return resourceLabelForStack(stackLabel, idx)
+}
+
+// TypeForResource returns the expected type for the resource slot.
+func (m *StateModel) TypeForResource(idx int) string {
+	if m.Pool != nil {
+		return m.Pool.Slots[idx].Type
+	}
+	return "Test::Generic::Resource"
+}
+
 // ApplyCreated marks the given resources on the given stack as existing
 // with the given properties.
 func (m *StateModel) ApplyCreated(stackIndex int, resourceIDs []int, properties string) {
 	stack := &m.Stacks[stackIndex]
 	for _, id := range resourceIDs {
+		if res, ok := stack.Resources[id]; ok {
+			res.State = StateExists
+			res.Properties = properties
+		}
+	}
+}
+
+// ApplyCreatedResolved marks resources as existing using already-resolved
+// per-resource properties.
+func (m *StateModel) ApplyCreatedResolved(stackIndex int, propertiesByID map[int]string) {
+	stack := &m.Stacks[stackIndex]
+	for id, properties := range propertiesByID {
 		if res, ok := stack.Resources[id]; ok {
 			res.State = StateExists
 			res.Properties = properties
@@ -234,14 +264,107 @@ func (m *StateModel) RevertResources(snapshots []ResourceSnapshot) {
 	}
 }
 
-// SaveLastReconcile records the resource set and properties from a reconcile-mode
-// apply. This is used by OpForceReconcile to predict what the agent will restore.
-func (m *StateModel) SaveLastReconcile(stackIndex int, resourceIDs []int, properties, childProperties string) {
+// SaveLastReconcile records the resource set and exact expected properties from a
+// reconcile-mode apply. This is used by OpForceReconcile to predict what the
+// agent will restore.
+func (m *StateModel) SaveLastReconcile(stackIndex int, resourceIDs []int, propertiesByID map[int]string) {
 	stack := &m.Stacks[stackIndex]
 	stack.LastReconcileIDs = make([]int, len(resourceIDs))
 	copy(stack.LastReconcileIDs, resourceIDs)
-	stack.LastReconcileProperties = properties
-	stack.LastReconcileChildProperties = childProperties
+	stack.LastReconcileResourceProperties = make(map[int]string, len(propertiesByID))
+	for id, properties := range propertiesByID {
+		stack.LastReconcileResourceProperties[id] = properties
+	}
+}
+
+// CurrentProperties returns a copy of the model's current exact properties for
+// the given resource IDs.
+func (m *StateModel) CurrentProperties(stackIndex int, resourceIDs []int) map[int]string {
+	propertiesByID := make(map[int]string, len(resourceIDs))
+	for _, id := range resourceIDs {
+		if res := m.Resource(stackIndex, id); res != nil && res.State == StateExists {
+			propertiesByID[id] = res.Properties
+		}
+	}
+	return propertiesByID
+}
+
+// ResolvePropertiesForResources expands per-operation property templates into
+// exact expected properties for the given resource IDs.
+func (m *StateModel) ResolvePropertiesForResources(stackIndex int, resourceIDs []int, properties, childProperties string) map[int]string {
+	propertiesByID := make(map[int]string, len(resourceIDs))
+	for _, id := range resourceIDs {
+		propertiesByID[id] = m.ResolvePropertiesForResource(stackIndex, id, properties, childProperties)
+	}
+	return propertiesByID
+}
+
+// ResolvePropertiesForResource expands an operation's property templates into the
+// exact expected properties for a single resource slot.
+func (m *StateModel) ResolvePropertiesForResource(stackIndex, id int, properties, childProperties string) string {
+	label := m.LabelForResource(stackIndex, id)
+	if m.Pool == nil {
+		return strings.Replace(properties, `"NAME"`, `"`+label+`"`, 1)
+	}
+
+	if m.Pool.IsParent(id) {
+		return strings.Replace(properties, `"NAME"`, `"`+label+`"`, 1)
+	}
+
+	resolved := strings.Replace(childProperties, `"NAME"`, `"`+label+`"`, 1)
+	parentLabel := m.parentIdentifierForResource(stackIndex, id)
+	return strings.Replace(resolved, `"PARENT_ID"`, `"`+parentLabel+`"`, 1)
+}
+
+// NormalizePropertiesForResource rewrites a resource properties blob into the
+// exact normalized form expected by the model for that slot.
+func (m *StateModel) NormalizePropertiesForResource(stackIndex, id int, properties string) string {
+	if properties == "" || m.Pool == nil || m.Pool.IsParent(id) {
+		return properties
+	}
+
+	var props map[string]any
+	if err := json.Unmarshal([]byte(properties), &props); err != nil {
+		return properties
+	}
+
+	props["ParentId"] = m.parentIdentifierForResource(stackIndex, id)
+	bytes, err := json.Marshal(props)
+	if err != nil {
+		return properties
+	}
+	return string(bytes)
+}
+
+func (m *StateModel) parentIdentifierForResource(stackIndex, id int) string {
+	stackLabel := m.Stacks[stackIndex].Label
+	if m.Pool.IsCrossStack(id) {
+		parentID := m.Pool.Slots[id].CrossStackParentSlot
+		return m.resourceIdentifierForSlot(0, parentID)
+	}
+	parentID := m.Pool.Slots[id].ParentIndex
+	if parentID == -1 {
+		return stackLabel
+	}
+	return m.resourceIdentifierForSlot(stackIndex, parentID)
+}
+
+func (m *StateModel) resourceIdentifierForSlot(stackIndex, id int) string {
+	label := m.LabelForResource(stackIndex, id)
+	res := m.Resource(stackIndex, id)
+	if res == nil || res.Properties == "" {
+		return label
+	}
+
+	var props map[string]any
+	if err := json.Unmarshal([]byte(res.Properties), &props); err != nil {
+		return label
+	}
+	name, ok := props["Name"].(string)
+	if !ok || name == "" {
+		return label
+	}
+	return name
 }
 
 // ComputeAffectedStacks returns all stack indices that a command on the given
@@ -282,4 +405,3 @@ func (m *StateModel) ComputeAffectedStacks(stackIndex int, resourceIDs []int, on
 	sort.Ints(result)
 	return result
 }
-

@@ -232,6 +232,53 @@ func TestStateModel_TrackAcceptedCommand(t *testing.T) {
 	assert.Equal(t, "cmd-2", model.AcceptedCommands[1].CommandID)
 }
 
+func TestStateModel_CheckModelVsInventory_PropertiesAndType(t *testing.T) {
+	model := NewStateModel(1, 1)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`)
+
+	inventory := []pkgmodel.Resource{
+		{
+			Stack:      "stack-0",
+			Label:      "res-stack-0-a",
+			Type:       "Test::Generic::Resource",
+			Properties: []byte(`{"Name":"res-stack-0-a","Value":"v2","SetTags":[],"EntityTags":[],"OrderedItems":[]}`),
+		},
+	}
+
+	violations := CheckModelVsInventory(model, inventory)
+	assert.NotEmpty(t, violations)
+
+	hasPropertyMismatch := false
+	for _, v := range violations {
+		if v.Kind == ViolationModelInventoryMismatch {
+			hasPropertyMismatch = true
+		}
+	}
+	assert.True(t, hasPropertyMismatch, "should detect model/inventory property mismatch")
+
+	inventory[0].Properties = []byte(`{"Name":"res-stack-0-a","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`)
+	inventory[0].Type = "Test::Generic::WrongType"
+	violations = CheckModelVsInventory(model, inventory)
+	assert.NotEmpty(t, violations)
+}
+
+func TestStateModel_ResolvePropertiesForResources_WithPool(t *testing.T) {
+	model := NewStateModel(2, 5)
+	resolved := model.ResolvePropertiesForResources(
+		1,
+		[]int{0, 1, 5},
+		`{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`,
+		`{"Name":"NAME","ParentId":"PARENT_ID","Value":"v2"}`,
+	)
+
+	assert.JSONEq(t, `{"Name":"res-stack-1-a","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`,
+		resolved[0])
+	assert.JSONEq(t, `{"Name":"child-stack-1-a-0","ParentId":"res-stack-1-a","Value":"v2"}`,
+		resolved[1])
+	assert.JSONEq(t, `{"Name":"child-stack-1-xstack-0","ParentId":"res-stack-0-a","Value":"v2"}`,
+		resolved[5])
+}
+
 func TestStateModel_Stack(t *testing.T) {
 	model := NewStateModel(2, 3)
 
