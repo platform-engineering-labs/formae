@@ -1227,49 +1227,41 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 		}
 		res.Properties = resolvedProps
 
-		// Create the resource
-		result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", CreateResourceRequest{
-			ResourceType: res.Type,
-			Namespace:    namespace,
-			Label:        res.Label,
-			Properties:   res.Properties,
-			Target:       target,
-		}, 120) // 2 minute timeout for the initial call
-		if err != nil {
-			return createdResources, fmt.Errorf("CreateResource call failed for %s: %w", res.Label, err)
-		}
-
-		createResult, ok := result.(CreateResourceResult)
-		if !ok {
-			return createdResources, fmt.Errorf("unexpected response type for %s: %T", res.Label, result)
-		}
-
-		if createResult.Error != "" {
-			return createdResources, fmt.Errorf("create failed for %s: %s", res.Label, createResult.Error)
-		}
-
-		// Wait for the operation to complete by polling
-		progress := createResult.InitialProgress
-		if progress.OperationStatus == resource.OperationStatusInProgress {
-			h.t.Logf("Resource %s creation in progress, waiting for completion...", res.Label)
-			progress, err = h.waitForOperationProgress(createResult.OperatorPID, progress, 10*time.Minute)
+		// Create the resource with retry on recoverable errors
+		label := fmt.Sprintf("create %s", res.Label)
+		finalProgress, err := h.retryOnRecoverable(label, func() (*pluginOperationResult, error) {
+			result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", CreateResourceRequest{
+				ResourceType: res.Type,
+				Namespace:    namespace,
+				Label:        res.Label,
+				Properties:   res.Properties,
+				Target:       target,
+			}, 120)
 			if err != nil {
-				return createdResources, fmt.Errorf("waiting for create to complete for %s: %w", res.Label, err)
+				return nil, fmt.Errorf("CreateResource call failed for %s: %w", res.Label, err)
 			}
+			createResult, ok := result.(CreateResourceResult)
+			if !ok {
+				return nil, fmt.Errorf("unexpected response type for %s: %T", res.Label, result)
+			}
+			return &pluginOperationResult{
+				operatorPID:     createResult.OperatorPID,
+				initialProgress: createResult.InitialProgress,
+				err:             createResult.Error,
+			}, nil
+		})
+		if err != nil {
+			return createdResources, err
 		}
 
-		if progress.OperationStatus == resource.OperationStatusFailure {
-			return createdResources, fmt.Errorf("create failed for %s: %s (code: %s)", res.Label, progress.StatusMessage, progress.ErrorCode)
-		}
-
-		h.t.Logf("Resource %s created successfully, NativeID: %s", res.Label, progress.NativeID)
+		h.t.Logf("Resource %s created successfully, NativeID: %s", res.Label, finalProgress.NativeID)
 
 		// Track the created resource for cleanup and for resolving subsequent resolvables
 		createdResources = append(createdResources, CreatedResourceInfo{
 			ResourceType: res.Type,
 			Label:        res.Label,
-			NativeID:     progress.NativeID,
-			Properties:   progress.ResourceProperties,
+			NativeID:     finalProgress.NativeID,
+			Properties:   finalProgress.ResourceProperties,
 		})
 	}
 
@@ -1553,42 +1545,80 @@ func (h *TestHarness) DeleteUnmanagedResource(resourceType, nativeID string, tar
 		return fmt.Errorf("plugin not ready: %w", err)
 	}
 
-	// Call PluginCoordinator to delete the resource
-	result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", DeleteResourceRequest{
-		ResourceType: resourceType,
-		Namespace:    namespace,
-		NativeID:     nativeID,
-		Target:       *target,
-	}, 120) // 2 minute timeout for the initial call
-	if err != nil {
-		return fmt.Errorf("DeleteResource call failed: %w", err)
-	}
-
-	deleteResult, ok := result.(DeleteResourceResult)
-	if !ok {
-		return fmt.Errorf("unexpected response type: %T", result)
-	}
-
-	if deleteResult.Error != "" {
-		return fmt.Errorf("delete failed: %s", deleteResult.Error)
-	}
-
-	// Wait for the operation to complete by polling
-	progress := deleteResult.InitialProgress
-	if progress.OperationStatus == resource.OperationStatusInProgress {
-		h.t.Logf("Resource deletion in progress, waiting for completion...")
-		progress, err = h.waitForOperationProgress(deleteResult.OperatorPID, progress, 10*time.Minute)
+	// Delete with retry on recoverable errors (e.g., IncorrectState when a dependency is still detaching)
+	_, err := h.retryOnRecoverable("delete", func() (*pluginOperationResult, error) {
+		result, err := testutil.CallWithTimeout(h.ergoNode, "PluginCoordinator", DeleteResourceRequest{
+			ResourceType: resourceType,
+			Namespace:    namespace,
+			NativeID:     nativeID,
+			Target:       *target,
+		}, 120)
 		if err != nil {
-			return fmt.Errorf("waiting for delete to complete: %w", err)
+			return nil, fmt.Errorf("DeleteResource call failed: %w", err)
 		}
-	}
-
-	if progress.OperationStatus == resource.OperationStatusFailure {
-		return fmt.Errorf("delete failed: %s (code: %s)", progress.StatusMessage, progress.ErrorCode)
+		deleteResult, ok := result.(DeleteResourceResult)
+		if !ok {
+			return nil, fmt.Errorf("unexpected response type: %T", result)
+		}
+		return &pluginOperationResult{
+			operatorPID:     deleteResult.OperatorPID,
+			initialProgress: deleteResult.InitialProgress,
+			err:             deleteResult.Error,
+		}, nil
+	})
+	if err != nil {
+		return err
 	}
 
 	h.t.Logf("Resource deleted successfully")
 	return nil
+}
+
+// pluginOperationResult holds the common fields from Create/Delete result types.
+type pluginOperationResult struct {
+	operatorPID     gen.PID
+	initialProgress resource.ProgressResult
+	err             string // non-empty if the coordinator returned an error
+}
+
+// retryOnRecoverable executes a plugin operation (create/delete) with retries on recoverable errors.
+// The opFn performs the actor call and returns the initial result. The caller's label is used for logging.
+func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOperationResult, error)) (resource.ProgressResult, error) {
+	const maxRetries = 6
+	const retryDelay = 10 * time.Second
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		res, err := opFn()
+		if err != nil {
+			return resource.ProgressResult{}, err
+		}
+		if res.err != "" {
+			return resource.ProgressResult{}, fmt.Errorf("%s failed: %s", label, res.err)
+		}
+
+		progress := res.initialProgress
+		if progress.OperationStatus == resource.OperationStatusInProgress {
+			h.t.Logf("%s in progress, waiting for completion...", label)
+			progress, err = h.waitForOperationProgress(res.operatorPID, progress, 10*time.Minute)
+			if err != nil {
+				return resource.ProgressResult{}, fmt.Errorf("waiting for %s to complete: %w", label, err)
+			}
+		}
+
+		if progress.OperationStatus == resource.OperationStatusFailure {
+			if resource.IsRecoverable(progress.ErrorCode) && attempt < maxRetries {
+				h.t.Logf("%s failed with recoverable error (code: %s), retry %d/%d: %s",
+					label, progress.ErrorCode, attempt+1, maxRetries, progress.StatusMessage)
+				time.Sleep(retryDelay)
+				continue
+			}
+			return resource.ProgressResult{}, fmt.Errorf("%s failed: %s (code: %s)", label, progress.StatusMessage, progress.ErrorCode)
+		}
+
+		return progress, nil
+	}
+
+	return resource.ProgressResult{}, fmt.Errorf("%s failed: exhausted %d retries", label, maxRetries)
 }
 
 // stripFormaeTags removes FormaeStackLabel and FormaeResourceLabel from resource tags

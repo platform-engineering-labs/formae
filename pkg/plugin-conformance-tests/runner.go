@@ -1354,7 +1354,8 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 	}
 	target := forma.Targets[0]
 
-	// Register cleanup to delete all created resources (in reverse order - dependents before dependencies)
+	// Register cleanup to delete all created resources (in reverse order - dependents before dependencies).
+	// DeleteUnmanagedResource handles retries on recoverable errors internally.
 	harness.RegisterCleanup(func() {
 		t.Logf("Cleaning up %d unmanaged resource(s)...", len(createdResources))
 		for i := len(createdResources) - 1; i >= 0; i-- {
