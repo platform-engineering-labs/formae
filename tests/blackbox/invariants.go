@@ -18,12 +18,12 @@ import (
 type ViolationKind int
 
 const (
-	ViolationPhantomResource       ViolationKind = iota // in inventory but not in cloud
-	ViolationOrphanedResource                           // in cloud but not in inventory
-	ViolationPropertyMismatch                           // inventory and cloud properties differ
-	ViolationCommandNotTerminal                         // command not in terminal state
-	ViolationResolvableNotResolved                      // resolvable $ref not properly resolved
-	ViolationModelInventoryMismatch                     // model expected state doesn't match inventory
+	ViolationPhantomResource        ViolationKind = iota // in inventory but not in cloud
+	ViolationOrphanedResource                            // in cloud but not in inventory
+	ViolationPropertyMismatch                            // inventory and cloud properties differ
+	ViolationCommandNotTerminal                          // command not in terminal state
+	ViolationResolvableNotResolved                       // resolvable $ref not properly resolved
+	ViolationModelInventoryMismatch                      // model expected state doesn't match inventory
 )
 
 // Violation describes a single invariant violation.
@@ -470,26 +470,26 @@ func extractResolvedValue(v any) string {
 // with the model's State.
 func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []Violation {
 	var violations []Violation
+	expectedExistingKeys := make(map[string]bool)
 
-	// Build a set of (stack, label) pairs present in inventory
-	inventorySet := make(map[string]bool, len(inventory))
+	// Build a lookup of inventory resources by (stack, label).
+	inventoryByKey := make(map[string]pkgmodel.Resource, len(inventory))
 	for _, res := range inventory {
 		key := res.Stack + "/" + res.Label
-		inventorySet[key] = true
+		inventoryByKey[key] = res
 	}
 
 	for s := range model.Stacks {
 		stack := &model.Stacks[s]
 		for idx, res := range stack.Resources {
-			var label string
-			if model.Pool != nil {
-				label = model.Pool.LabelForStack(stack.Label, idx)
-			} else {
-				label = resourceLabelForStack(stack.Label, idx)
-			}
+			label := model.LabelForResource(s, idx)
+			resourceType := model.TypeForResource(idx)
 
 			key := stack.Label + "/" + label
-			existsInInventory := inventorySet[key]
+			invRes, existsInInventory := inventoryByKey[key]
+			if res.State == StateExists {
+				expectedExistingKeys[key] = true
+			}
 
 			var actual ResourceState
 			if existsInInventory {
@@ -512,8 +512,41 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 					Message: fmt.Sprintf("stack %s resource %s (slot %d): inventory=%s but model expects %s",
 						stack.Label, label, idx, stateStr, expectedStr),
 				})
+				continue
+			}
+
+			if res.State != StateExists {
+				continue
+			}
+
+			if invRes.Type != resourceType {
+				violations = append(violations, Violation{
+					Kind: ViolationModelInventoryMismatch,
+					Message: fmt.Sprintf("stack %s resource %s (slot %d): inventory type=%s but model expects %s",
+						stack.Label, label, idx, invRes.Type, resourceType),
+				})
+			}
+
+			if !jsonEqual(string(invRes.Properties), res.Properties) {
+				violations = append(violations, Violation{
+					Kind: ViolationModelInventoryMismatch,
+					Message: fmt.Sprintf("stack %s resource %s (slot %d): inventory properties=%s but model expects %s",
+						stack.Label, label, idx, string(invRes.Properties), res.Properties),
+				})
 			}
 		}
+	}
+
+	for _, res := range inventory {
+		key := res.Stack + "/" + res.Label
+		if expectedExistingKeys[key] {
+			continue
+		}
+		violations = append(violations, Violation{
+			Kind: ViolationModelInventoryMismatch,
+			Message: fmt.Sprintf("inventory contains unexpected managed resource: stack %s resource %s type=%s",
+				res.Stack, res.Label, res.Type),
+		})
 	}
 
 	return violations
