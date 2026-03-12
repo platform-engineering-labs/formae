@@ -143,6 +143,18 @@ func getOperationTimeout() time.Duration {
 	return 5 * time.Minute // Default timeout
 }
 
+// getDiscoveryTimeout returns the timeout duration for discovery inventory polling.
+// It reads from FORMAE_TEST_DISCOVERY_TIMEOUT environment variable (in minutes).
+// Default is 2 minutes.
+func getDiscoveryTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_DISCOVERY_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return 2 * time.Minute // Default timeout
+}
+
 // RunCRUDTests discovers test cases from the testdata directory and runs
 // the standard CRUD lifecycle test for each resource type.
 //
@@ -1420,7 +1432,7 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 
 	// Step 6: Wait for resource to appear in inventory
 	t.Log("Step 6: Waiting for resource in inventory...")
-	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, 2*time.Minute); err != nil {
+	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, getDiscoveryTimeout()); err != nil {
 		t.Fatalf("resource not discovered: %v", err)
 	}
 
