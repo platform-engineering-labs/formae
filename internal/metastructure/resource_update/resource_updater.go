@@ -253,7 +253,6 @@ func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Sh
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
-
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, error) {
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
 		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister", "state", newState, "commandID", data.commandID)
@@ -683,26 +682,9 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	proc.Log().Debug("ResourceUpdater: sending progress update to the forma command persister", "state", state, "resourceURI", data.resourceUpdate.DesiredState.URI(), "progress", message.Operation)
-	_, err = proc.Call(
-		formaCommandPersisterProcess(proc),
-		messages.UpdateResourceProgress{
-			CommandID:          data.commandID,
-			ResourceURI:        data.resourceUpdate.DesiredState.URI(),
-			Operation:          data.resourceUpdate.Operation,
-			ResourceStartTs:    data.resourceUpdate.StartTs,
-			ResourceModifiedTs: data.resourceUpdate.ModifiedTs, // Updated by RecordProgress above
-			ResourceState:      data.resourceUpdate.State,
-			Progress:           message,
-		},
-	)
-	if err != nil {
-		proc.Log().Error("failed to send UpdateResourceProgress message to forma command persister", "error", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
-
-	// If the plugin operation has finished successfully, we persist the resource update to the stack, inform the stack updater and exit
+	// If the plugin operation has finished successfully, persist the resource
+	// BEFORE recording the progress as Success. This prevents a crash window
+	// where the command record shows Success but the resource was never written.
 	if message.FinishedSuccessfully() {
 		if data.commandSource == FormaCommandSourceDiscovery {
 			// Merge Properties and ReadOnlyProperties to get complete cloud state for filtering
@@ -768,7 +750,54 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			return StateRejected, data, nil, nil
 		}
 
+		// Now that the resource is persisted, record the success progress in
+		// the command record. This ordering ensures that if we crash between
+		// the resource persist and this call, the resource exists and the
+		// command re-run will handle it correctly (idempotent).
+		proc.Log().Debug("ResourceUpdater: persisting success progress after resource persist",
+			"state", state, "resourceURI", data.resourceUpdate.DesiredState.URI())
+		_, err = proc.Call(
+			formaCommandPersisterProcess(proc),
+			messages.UpdateResourceProgress{
+				CommandID:          data.commandID,
+				ResourceURI:        data.resourceUpdate.DesiredState.URI(),
+				Operation:          data.resourceUpdate.Operation,
+				ResourceStartTs:    data.resourceUpdate.StartTs,
+				ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
+				ResourceState:      data.resourceUpdate.State,
+				Progress:           message,
+			},
+		)
+		if err != nil {
+			proc.Log().Error("failed to send UpdateResourceProgress after resource persist", "error", err)
+			// Resource is already persisted; don't fail the update for a
+			// progress bookkeeping error — the onStateChange handler will
+			// send MarkResourceUpdateAsComplete anyway.
+		}
+
 		return nextState(state, data, proc)
+	}
+
+	// For non-success progress (in-progress or failed), persist progress
+	// to the command record immediately.
+	proc.Log().Debug("ResourceUpdater: sending progress update to the forma command persister",
+		"state", state, "resourceURI", data.resourceUpdate.DesiredState.URI(), "progress", message.Operation)
+	_, err = proc.Call(
+		formaCommandPersisterProcess(proc),
+		messages.UpdateResourceProgress{
+			CommandID:          data.commandID,
+			ResourceURI:        data.resourceUpdate.DesiredState.URI(),
+			Operation:          data.resourceUpdate.Operation,
+			ResourceStartTs:    data.resourceUpdate.StartTs,
+			ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
+			ResourceState:      data.resourceUpdate.State,
+			Progress:           message,
+		},
+	)
+	if err != nil {
+		proc.Log().Error("failed to send UpdateResourceProgress message to forma command persister", "error", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
 	}
 
 	if message.Failed() {

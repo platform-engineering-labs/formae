@@ -456,7 +456,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								Operation: ru.Operation,
 							}
 						}
-						m.callActor(
+						_, markErr := m.callActor(
 							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 							forma_persister.MarkResourcesAsFailed{
 								CommandID:          fa.ID,
@@ -464,6 +464,10 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								ResourceModifiedTs: time.Now(),
 							},
 						)
+						if markErr != nil {
+							slog.Error("Failed to mark resources as failed after stack deletion",
+								"commandID", fa.ID, "stackLabel", pu.StackLabel, "error", markErr)
+						}
 						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
 					}
 				}
@@ -1379,6 +1383,34 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			if ru.State == resource_update.ResourceUpdateStateNotStarted {
 				pendingUpdates = append(pendingUpdates, *ru)
 			}
+			ru.UpdateState()
+			if ru.State == resource_update.ResourceUpdateStateInProgress {
+				ru.State = resource_update.ResourceUpdateStateNotStarted
+			}
+			if ru.State == resource_update.ResourceUpdateStateNotStarted {
+				slog.Error("ReRunIncompleteCommands: including pending resource",
+					"commandID", fa.ID,
+					"resourceURI", ru.URI(),
+					"operation", ru.Operation,
+					"resolvableCount", len(ru.RemainingResolvables),
+				)
+				pendingUpdates = append(pendingUpdates, *ru)
+			}
+		}
+
+		// If all resource updates already reached a terminal state, the command
+		// just needs its own state updated — no changeset execution needed.
+		// This happens when the agent crashed after all CRUD ops completed but
+		// before the command transitioned to a final state.
+		if len(pendingUpdates) == 0 {
+			_, err := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
+			)
+			if err != nil {
+				slog.Error("Failed to finalize incomplete command", "commandID", fa.ID, "error", err)
+			}
+			continue
 		}
 
 		// If all resource updates already reached a terminal state, the command

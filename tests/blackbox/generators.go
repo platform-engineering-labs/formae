@@ -11,9 +11,27 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
 	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 	"pgregory.net/rapid"
 )
+
+func resourcePoolForConfig(config PropertyTestConfig) *ResourcePool {
+	if config.ResourceCount%SlotsPerTree != 0 {
+		return nil
+	}
+	if config.StackCount > 1 {
+		return NewResourcePoolWithCrossStack(config.ResourceCount)
+	}
+	return NewResourcePool(config.ResourceCount)
+}
+
+func slotCountForConfig(config PropertyTestConfig, pool *ResourcePool) int {
+	if pool != nil {
+		return len(pool.Slots)
+	}
+	return config.ResourceCount
+}
 
 // OperationSequenceGen returns a rapid generator that produces a slice of
 // operations whose kinds and parameters respect the given config.
@@ -131,8 +149,8 @@ func pluginOpStepsGen(t *rapid.T, label string) []testcontrol.ResponseStep {
 // 4 errors exhaust retries (fails on 4th attempt since 4 > maxAttempts).
 const (
 	harnessMaxRetries   = 2
-	maxAttempts         = harnessMaxRetries + 1 // 3
-	maxSurvivableErrors = maxAttempts           // 3 — agent survives and succeeds on 4th call
+	maxAttempts         = harnessMaxRetries + 1   // 3
+	maxSurvivableErrors = maxAttempts             // 3 — agent survives and succeeds on 4th call
 	exhaustRetryCount   = maxSurvivableErrors + 1 // 4 — agent exhausts retries and fails
 )
 
@@ -146,11 +164,8 @@ func drawnOutcomeGen(t *rapid.T, label string) DrawnOutcome {
 
 // fillOperationFields populates the kind-specific fields on the operation.
 func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
-	// Create pool once for tree-aware resource generation.
-	var pool *ResourcePool
-	if config.ResourceCount%SlotsPerTree == 0 {
-		pool = NewResourcePool(config.ResourceCount)
-	}
+	pool := resourcePoolForConfig(config)
+	slotCount := slotCountForConfig(config, pool)
 
 	switch op.Kind {
 	case OpApply:
@@ -164,9 +179,9 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 			// Patch mode only applies what's specified, so a child-without-parent
 			// is valid and exercises the clean-fail path.
 			if op.ApplyMode == "reconcile" {
-				op.ResourceIDs = resourceIDsGenWithPoolAncestry(t, pool, 1)
+				op.ResourceIDs = resourceIDsGenWithPoolAncestry(t, pool, op.StackIndex, 1)
 			} else {
-				op.ResourceIDs = resourceIDsGenWithPool(t, pool, 1)
+				op.ResourceIDs = resourceIDsGenWithPool(t, pool, op.StackIndex, 1)
 			}
 			op.ChildProperties = childPropsGen(t)
 		} else {
@@ -175,7 +190,10 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 		op.Properties = resourcePropsGen(t)
 		if config.EnableFailures {
 			op.DrawnOutcomes = make(map[string]DrawnOutcome)
-			for i := 0; i < config.ResourceCount; i++ {
+			for i := 0; i < slotCount; i++ {
+				if pool != nil && op.StackIndex == 0 && pool.IsCrossStack(i) {
+					continue
+				}
 				op.DrawnOutcomes[outcomeKey(op.StackIndex, i)] = drawnOutcomeGen(t, fmt.Sprintf("outcome-%d", i))
 			}
 		}
@@ -183,14 +201,17 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 	case OpDestroy:
 		op.StackIndex = stackIndexGen(t, config)
 		if pool != nil {
-			op.ResourceIDs = resourceIDsGenWithPool(t, pool, 1)
+			op.ResourceIDs = resourceIDsGenWithPool(t, pool, op.StackIndex, 1)
 			op.OnDependents = onDependentsGen(t)
 		} else {
 			op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
 		}
 		if config.EnableFailures {
 			op.DrawnOutcomes = make(map[string]DrawnOutcome)
-			for i := 0; i < config.ResourceCount; i++ {
+			for i := 0; i < slotCount; i++ {
+				if pool != nil && op.StackIndex == 0 && pool.IsCrossStack(i) {
+					continue
+				}
 				op.DrawnOutcomes[outcomeKey(op.StackIndex, i)] = drawnOutcomeGen(t, fmt.Sprintf("outcome-%d", i))
 			}
 			// For cascade destroys, also draw outcomes for other stacks
@@ -199,7 +220,10 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 					if s == op.StackIndex {
 						continue
 					}
-					for i := 0; i < config.ResourceCount; i++ {
+					for i := 0; i < slotCount; i++ {
+						if pool != nil && s == 0 && pool.IsCrossStack(i) {
+							continue
+						}
 						op.DrawnOutcomes[outcomeKey(s, i)] = drawnOutcomeGen(t, fmt.Sprintf("cascade-%d-%d", s, i))
 					}
 				}
@@ -223,7 +247,10 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 		op.StackIndex = stackIndexGen(t, config)
 		if config.EnableFailures {
 			op.DrawnOutcomes = make(map[string]DrawnOutcome)
-			for i := 0; i < config.ResourceCount; i++ {
+			for i := 0; i < slotCount; i++ {
+				if pool != nil && op.StackIndex == 0 && pool.IsCrossStack(i) {
+					continue
+				}
 				op.DrawnOutcomes[outcomeKey(op.StackIndex, i)] = drawnOutcomeGen(t, fmt.Sprintf("outcome-%d", i))
 			}
 		}
@@ -285,13 +312,10 @@ func resourceIDsGen(t *rapid.T, poolSize int, minCount int) []int {
 // resourceIDsGenWithPool generates resource indices from the tree pool.
 // The drawn set is returned as-is, without expanding to include ancestors.
 // Use this for patch-mode applies where a child-without-parent is valid input.
-func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, minCount int) []int {
-	count := rapid.IntRange(minCount, len(pool.Slots)).Draw(t, "resCount")
+func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, stackIndex, minCount int) []int {
+	all := selectablePoolIndices(pool, stackIndex)
+	count := rapid.IntRange(minCount, len(all)).Draw(t, "resCount")
 
-	all := make([]int, len(pool.Slots))
-	for i := range all {
-		all[i] = i
-	}
 	for i := len(all) - 1; i > 0; i-- {
 		j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("shuffle-%d", i))
 		all[i], all[j] = all[j], all[i]
@@ -308,13 +332,10 @@ func resourceIDsGenWithPool(t *rapid.T, pool *ResourcePool, minCount int) []int 
 // Use this for reconcile-mode applies: reconcile declares complete desired state,
 // so including a child without its parent would force a cascade-delete of the
 // parent while simultaneously keeping the child — a contradictory changeset.
-func resourceIDsGenWithPoolAncestry(t *rapid.T, pool *ResourcePool, minCount int) []int {
-	count := rapid.IntRange(minCount, len(pool.Slots)).Draw(t, "resCount")
+func resourceIDsGenWithPoolAncestry(t *rapid.T, pool *ResourcePool, stackIndex, minCount int) []int {
+	all := selectablePoolIndices(pool, stackIndex)
+	count := rapid.IntRange(minCount, len(all)).Draw(t, "resCount")
 
-	all := make([]int, len(pool.Slots))
-	for i := range all {
-		all[i] = i
-	}
 	for i := len(all) - 1; i > 0; i-- {
 		j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("shuffle-%d", i))
 		all[i], all[j] = all[j], all[i]
@@ -334,6 +355,17 @@ func resourceIDsGenWithPoolAncestry(t *rapid.T, pool *ResourcePool, minCount int
 	}
 	sort.Ints(result)
 	return result
+}
+
+func selectablePoolIndices(pool *ResourcePool, stackIndex int) []int {
+	all := make([]int, 0, len(pool.Slots))
+	for i := range pool.Slots {
+		if stackIndex == 0 && pool.IsCrossStack(i) {
+			continue
+		}
+		all = append(all, i)
+	}
+	return all
 }
 
 // childPropsGen generates a JSON properties string for child/grandchild resources.

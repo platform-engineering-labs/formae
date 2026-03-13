@@ -889,6 +889,9 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			if corrected[key] {
 				continue
 			}
+			if pool != nil && pool.IsCrossStack(key.slotIdx) {
+				continue
+			}
 			res := model.Resource(key.stackIdx, key.slotIdx)
 			if res == nil || res.State == snap.State {
 				continue
@@ -1665,6 +1668,7 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// before reconciling the model. Poll until ForceCheckTTL processes the
 	// expired stack or inventory confirms the resources are gone.
 	h.drainExpiredTTLStacks(t, model)
+	h.reconcileCrossStackSlotsToInventory(t, model)
 }
 
 func (h *TestHarness) reconcileAmbiguousFailedCommandsToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
@@ -1686,12 +1690,62 @@ func (h *TestHarness) reconcileAmbiguousFailedCommandsToInventory(t *testing.T, 
 		if dc.cmd == nil || dc.cmd.State == "Success" {
 			continue
 		}
+		for _, snap := range dc.ac.Snapshots {
+			if model.Pool != nil && model.Pool.IsCrossStack(snap.SlotIndex) {
+				continue
+			}
+			res := model.Resource(snap.StackIndex, snap.SlotIndex)
+			if res == nil {
+				continue
+			}
+			key := model.Stack(snap.StackIndex).Label + "/" + model.LabelForResource(snap.StackIndex, snap.SlotIndex)
+			if invRes, ok := inventoryByKey[key]; ok {
+				props := model.NormalizePropertiesForResource(snap.StackIndex, snap.SlotIndex, string(invRes.Properties))
+				model.ApplyCreated(snap.StackIndex, []int{snap.SlotIndex}, props)
+			} else {
+				model.ApplyDestroyed(snap.StackIndex, []int{snap.SlotIndex})
+			}
+		}
 		for _, ru := range dc.cmd.ResourceUpdates {
 			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
 			if stackIdx == -1 || slotIdx == -1 {
 				continue
 			}
 			key := ru.StackName + "/" + ru.ResourceLabel
+			if invRes, ok := inventoryByKey[key]; ok {
+				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(invRes.Properties))
+				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
+			} else {
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+			}
+		}
+	}
+}
+
+func (h *TestHarness) reconcileCrossStackSlotsToInventory(t *testing.T, model *StateModel) {
+	t.Helper()
+	if model == nil || model.Pool == nil {
+		return
+	}
+
+	forma, err := h.client.ExtractResources("managed:true")
+	if err != nil {
+		return
+	}
+
+	inventoryByKey := make(map[string]pkgmodel.Resource)
+	if forma != nil {
+		for _, res := range forma.Resources {
+			inventoryByKey[res.Stack+"/"+res.Label] = res
+		}
+	}
+
+	for stackIdx := range model.Stacks {
+		for slotIdx := range model.Stack(stackIdx).Resources {
+			if !model.Pool.IsCrossStack(slotIdx) {
+				continue
+			}
+			key := model.Stack(stackIdx).Label + "/" + model.LabelForResource(stackIdx, slotIdx)
 			if invRes, ok := inventoryByKey[key]; ok {
 				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(invRes.Properties))
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
@@ -1780,6 +1834,13 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 			continue
 		}
 		applyCommandOutcomeToModel(t, cmd, model, model.Pool)
+		if cmd.State == "Success" {
+			for slotIdx := range model.Stack(stackIdx).Resources {
+				if model.Stack(stackIdx).Resources[slotIdx] != nil {
+					model.ApplyDestroyed(stackIdx, []int{slotIdx})
+				}
+			}
+		}
 		model.Stacks[stackIdx].TTLExpired = false
 		t.Logf("ForceCheckTTLAndWait: stack %s command %s completed: %s", expiredLabel, commandID, cmd.State)
 	}

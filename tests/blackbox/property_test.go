@@ -143,7 +143,7 @@ func TestProperty_FullChaos(t *testing.T) {
 		rapid.Check(t, func(rt *rapid.T) {
 			config := PropertyTestConfig{
 				ResourceCount:        10,
-				OperationCount:       Range{Min: 5, Max: 15},
+				OperationCount:       Range{Min: 10, Max: 30},
 				StackCount:           3,
 				EnableFailures:       true,
 				EnableCloudChanges:   true,

@@ -20,7 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	pkgplugin "github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/assert"
 )
@@ -29,7 +29,7 @@ import (
 // commands get picked up and run through completely after a node crash.
 func TestMetastructure_FinishIncompleteFormaCommands(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		overrides := &plugin.ResourcePluginOverrides{
+		overrides := &pkgplugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
 				return &resource.CreateResult{
 					ProgressResult: &resource.ProgressResult{
@@ -150,7 +150,7 @@ func TestMetastructure_FinishIncompleteFormaCommands(t *testing.T) {
 // 3. Verify the command transitions to the correct final state
 func TestMetastructure_FinalizeAllTerminalAfterCrash(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		overrides := &plugin.ResourcePluginOverrides{}
+		overrides := &pkgplugin.ResourcePluginOverrides{}
 		tmpDir := t.TempDir()
 		dbPath := tmpDir + "/finalize-test.db"
 		cfg := test_helpers.NewTestMetastructureConfig()
@@ -251,7 +251,7 @@ func TestMetastructure_FinalizeAllTerminalAfterCrash(t *testing.T) {
 func TestMetastructure_CascadedFailuresNotReExecutedAfterCrash(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		createCallCount := 0
-		overrides := &plugin.ResourcePluginOverrides{
+		overrides := &pkgplugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
 				createCallCount++
 				return &resource.CreateResult{
@@ -305,7 +305,7 @@ func TestMetastructure_CascadedFailuresNotReExecutedAfterCrash(t *testing.T) {
 					},
 					Operation: resource_update.OperationCreate,
 					State:     resource_update.ResourceUpdateStateFailed,
-					ProgressResult: []plugin.TrackedProgress{
+					ProgressResult: []pkgplugin.TrackedProgress{
 						{ProgressResult: resource.ProgressResult{
 							Operation:       resource.OperationCreate,
 							OperationStatus: resource.OperationStatusFailure,

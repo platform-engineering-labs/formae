@@ -328,12 +328,34 @@ func (m *StateModel) NormalizePropertiesForResource(stackIndex, id int, properti
 		return properties
 	}
 
-	props["ParentId"] = m.parentIdentifierForResource(stackIndex, id)
+	if parentID, ok := props["ParentId"]; ok {
+		if wrapper, ok := parentID.(map[string]any); ok && isResolvableWrapperValue(wrapper) {
+			if value, hasValue := wrapper["$value"]; hasValue {
+				props["ParentId"] = value
+			} else {
+				props["ParentId"] = m.parentIdentifierForResource(stackIndex, id)
+			}
+		}
+	} else {
+		props["ParentId"] = m.parentIdentifierForResource(stackIndex, id)
+	}
 	bytes, err := json.Marshal(props)
 	if err != nil {
 		return properties
 	}
 	return string(bytes)
+}
+
+func isResolvableWrapperValue(m map[string]any) bool {
+	if _, hasRef := m["$ref"]; hasRef {
+		return true
+	}
+	if res, hasRes := m["$res"]; hasRes {
+		if b, ok := res.(bool); ok && b {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *StateModel) parentIdentifierForResource(stackIndex, id int) string {
