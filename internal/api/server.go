@@ -708,11 +708,6 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusBadRequest, apimodel.TargetReferenceNotFound, targetReferenceNotFoundError)
 	}
 
-	var stackDeletedError apimodel.StackDeletedDuringApplyError
-	if errors.As(err, &stackDeletedError) {
-		return apiError(c, http.StatusConflict, apimodel.StackDeletedDuringApply, stackDeletedError)
-	}
-
 	var reconcilePolicyError apimodel.ReconcilePolicyRequiredError
 	if errors.As(err, &reconcilePolicyError) {
 		return apiError(c, http.StatusForbidden, apimodel.ReconcilePolicyRequired, reconcilePolicyError)

@@ -59,8 +59,8 @@ func TestGenerator_RespectsConfig_NoFailures(t *testing.T) {
 func TestGenerator_RespectsConfig_NoCloudChanges(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		config := PropertyTestConfig{
-			ResourceCount:  3,
-			OperationCount: Range{Min: 10, Max: 30},
+			ResourceCount:      3,
+			OperationCount:     Range{Min: 10, Max: 30},
 			EnableCloudChanges: false,
 		}
 		ops := OperationSequenceGen(config).Draw(rt, "ops")
@@ -142,6 +142,44 @@ func TestGenerator_StackIndexWithinBounds(t *testing.T) {
 				assert.Less(t, op.StackIndex, config.StackCount, "StackIndex should be < StackCount")
 			}
 		}
+	})
+}
+
+func TestGenerator_MultiStackUsesCrossStackPool(t *testing.T) {
+	pool := resourcePoolForConfig(PropertyTestConfig{ResourceCount: 5, StackCount: 3})
+	require.NotNil(t, pool)
+	assert.Equal(t, 7, len(pool.Slots))
+	assert.True(t, pool.IsCrossStack(5))
+	assert.True(t, pool.IsCrossStack(6))
+}
+
+func TestGenerator_ProviderStackExcludesCrossStackSlots(t *testing.T) {
+	pool := NewResourcePoolWithCrossStack(5)
+	rapid.Check(t, func(rt *rapid.T) {
+		ids := resourceIDsGenWithPool(rt, pool, 0, 1)
+		for _, id := range ids {
+			assert.False(t, pool.IsCrossStack(id), "provider stack should not draw cross-stack slots")
+		}
+	})
+}
+
+func TestGenerator_ConsumerStacksCanDrawCrossStackSlots(t *testing.T) {
+	pool := NewResourcePoolWithCrossStack(5)
+	rapid.Check(t, func(rt *rapid.T) {
+		foundCrossStack := false
+		for i := 0; i < 25; i++ {
+			ids := resourceIDsGenWithPool(rt, pool, 1, 1)
+			for _, id := range ids {
+				if pool.IsCrossStack(id) {
+					foundCrossStack = true
+					break
+				}
+			}
+			if foundCrossStack {
+				break
+			}
+		}
+		assert.True(t, foundCrossStack, "consumer stacks should be able to draw cross-stack slots")
 	})
 }
 
@@ -325,6 +363,8 @@ func TestResponseSequenceGen(t *testing.T) {
 				EnableFailures: true,
 				StackCount:     3,
 			}
+			pool := resourcePoolForConfig(config)
+			slotCount := slotCountForConfig(config, pool)
 
 			// We need a pool for onDependents to be set.
 			op := Operation{Kind: OpDestroy}
@@ -335,18 +375,30 @@ func TestResponseSequenceGen(t *testing.T) {
 			if op.OnDependents == "cascade" {
 				// Cascade destroy should have entries for ALL stacks.
 				for s := 0; s < config.StackCount; s++ {
-					for i := 0; i < config.ResourceCount; i++ {
+					for i := 0; i < slotCount; i++ {
+						if pool != nil && s == 0 && pool.IsCrossStack(i) {
+							continue
+						}
 						key := outcomeKey(s, i)
 						_, exists := op.DrawnOutcomes[key]
 						assert.True(t, exists, "cascade destroy should have entry for key %s", key)
 					}
 				}
-				// Total entries should be StackCount * ResourceCount.
-				assert.Equal(t, config.StackCount*config.ResourceCount, len(op.DrawnOutcomes),
+				expected := slotCount * (config.StackCount - 1)
+				if pool != nil {
+					expected += config.ResourceCount
+				} else {
+					expected += slotCount
+				}
+				assert.Equal(t, expected, len(op.DrawnOutcomes),
 					"cascade destroy should have entries for all stacks * resources")
 			} else {
 				// Non-cascade destroy should only have entries for the target stack.
-				assert.Equal(t, config.ResourceCount, len(op.DrawnOutcomes),
+				expected := slotCount
+				if pool != nil && op.StackIndex == 0 {
+					expected = config.ResourceCount
+				}
+				assert.Equal(t, expected, len(op.DrawnOutcomes),
 					"non-cascade destroy should have entries only for target stack")
 			}
 		})

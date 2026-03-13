@@ -131,6 +131,11 @@ type ResourceSnapshot struct {
 type AcceptedCommand struct {
 	CommandID string
 	Snapshots []ResourceSnapshot // pre-command state for revert on cancel
+	// Resolved is true when the cancel handler has already processed this
+	// command. The command remains in AcceptedCommands so that
+	// DrainPendingCommands can include its outcome when resolving conflicts
+	// between overlapping commands (reverse-order processing).
+	Resolved bool
 }
 
 // Range represents a min/max integer range for generators.

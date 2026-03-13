@@ -181,6 +181,23 @@ func (h *TestHarness) GetCloudStateSnapshot(t *testing.T) map[string]testcontrol
 	return snapshot.Entries
 }
 
+// TryGetCloudStateSnapshot is like GetCloudStateSnapshot but returns an error
+// instead of failing the test. Used when the agent's actor system may have
+// crashed (e.g. supervisor restart intensity exceeded) and the Ergo route is
+// stale.
+func (h *TestHarness) TryGetCloudStateSnapshot() (map[string]testcontrol.CloudStateEntry, error) {
+	resp, err := h.callTestController(testcontrol.GetCloudStateSnapshotRequest{})
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot, ok := resp.(testcontrol.GetCloudStateSnapshotResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type: %T", resp)
+	}
+	return snapshot.Entries, nil
+}
+
 // GetOperationLog queries the test plugin's TestController for the
 // operation log. Returns the log entries.
 func (h *TestHarness) GetOperationLog(t *testing.T) []testcontrol.OperationLogEntry {
@@ -387,9 +404,28 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
 		require.NoError(t, err, "re-inject response sequences failed")
 	}
 
+	// Dump ReRunIncompleteCommands diagnostics from agent log before opening
+	// the gate (the re-run happens during startup, before gate opens).
+	h.dumpAgentLogLines(t, "ReRunIncompleteCommands")
+
 	// Now that cloud state and response sequences are ready, open the gate
 	// so the re-run commands can proceed with correct state.
 	h.OpenGate(t)
+}
+
+// dumpAgentLogLines reads the agent log and prints lines matching the given substring.
+func (h *TestHarness) dumpAgentLogLines(t *testing.T, substr string) {
+	t.Helper()
+	logPath := filepath.Join(h.agentDataDir, "agent.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, substr) {
+			t.Logf("  [agent] %s", line)
+		}
+	}
 }
 
 // --- internal helpers ---
