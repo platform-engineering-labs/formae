@@ -237,10 +237,12 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 		// No additional fields needed
 
 	case OpCloudModify:
+		op.CloudTargetManaged = rapid.Bool().Draw(t, "cloudTargetManaged")
 		op.NativeID = cloudNativeIDGen(t)
 		op.Properties = cloudPropertiesGen(t)
 
 	case OpCloudDelete:
+		op.CloudTargetManaged = rapid.Bool().Draw(t, "cloudTargetManaged")
 		op.NativeID = cloudNativeIDGen(t)
 
 	case OpForceReconcile:

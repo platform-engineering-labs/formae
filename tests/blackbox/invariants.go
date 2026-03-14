@@ -42,14 +42,14 @@ type CommandState struct {
 // It returns any violations found.
 //
 // ignoreNativeIDs contains native IDs of cloud resources that are expected to
-// exist in the cloud but NOT in inventory (e.g. out-of-band created resources
-// tracked in the model's UnmanagedNativeIDs set).
+// exist in the cloud but NOT in inventory yet (e.g. out-of-band created
+// unmanaged resources that have not been discovered).
 //
 // Invariants checked:
 //  1. No phantom resources: every resource in inventory exists in cloud state
 //  2. No orphaned cloud resources: every cloud resource is tracked in inventory
 //  3. Property consistency: inventory properties match cloud state properties
-func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testcontrol.CloudStateEntry, ignoreNativeIDs map[string]bool) []Violation {
+func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testcontrol.CloudStateEntry, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool) []Violation {
 	var violations []Violation
 
 	// Build lookup of inventory resources by NativeID
@@ -64,6 +64,9 @@ func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testco
 	// Every resource in inventory should exist in cloud state
 	for _, res := range inventory {
 		if res.NativeID == "" {
+			continue
+		}
+		if ignoreManagedDriftNativeIDs[res.NativeID] {
 			continue
 		}
 		if _, ok := cloudState[res.NativeID]; !ok {
@@ -92,6 +95,9 @@ func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testco
 	// Invariant 3: Property consistency
 	// For resources present in both, properties should match
 	for nativeID, cloudEntry := range cloudState {
+		if ignoreManagedDriftNativeIDs[nativeID] {
+			continue
+		}
 		invRes, ok := inventoryByNativeID[nativeID]
 		if !ok {
 			continue // already reported as orphaned or ignored
@@ -484,6 +490,9 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 		for idx, res := range stack.Resources {
 			label := model.LabelForResource(s, idx)
 			resourceType := model.TypeForResource(idx)
+			if model.HasPendingManagedDriftAffectingSlot(s, idx) {
+				continue
+			}
 
 			key := stack.Label + "/" + label
 			invRes, existsInInventory := inventoryByKey[key]
@@ -527,11 +536,17 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 				})
 			}
 
-			if !jsonEqual(string(invRes.Properties), res.Properties) {
+			expectedProperties := expectedPropertiesForComparison(model, s, idx, res.Properties, inventoryByKey)
+			actualProperties := string(invRes.Properties)
+			if model.Pool != nil && !model.Pool.IsParent(idx) {
+				actualProperties = stripPropertyKey(actualProperties, "ParentId")
+				expectedProperties = stripPropertyKey(expectedProperties, "ParentId")
+			}
+			if !jsonEqual(actualProperties, expectedProperties) {
 				violations = append(violations, Violation{
 					Kind: ViolationModelInventoryMismatch,
 					Message: fmt.Sprintf("stack %s resource %s (slot %d): inventory properties=%s but model expects %s",
-						stack.Label, label, idx, string(invRes.Properties), res.Properties),
+						stack.Label, label, idx, string(invRes.Properties), expectedProperties),
 				})
 			}
 		}
@@ -542,11 +557,202 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 		if expectedExistingKeys[key] {
 			continue
 		}
+		stackIdx, slotIdx, ok := model.findResourceSlot(res.Stack, res.Label)
+		if ok && model.HasPendingManagedDriftAffectingSlot(stackIdx, slotIdx) {
+			continue
+		}
 		violations = append(violations, Violation{
 			Kind: ViolationModelInventoryMismatch,
 			Message: fmt.Sprintf("inventory contains unexpected managed resource: stack %s resource %s type=%s",
 				res.Stack, res.Label, res.Type),
 		})
+	}
+
+	return violations
+}
+
+func expectedPropertiesForComparison(model *StateModel, stackIdx, slotIdx int, properties string, inventoryByKey map[string]pkgmodel.Resource) string {
+	if properties == "" || model.Pool == nil || model.Pool.IsParent(slotIdx) {
+		return properties
+	}
+	var props map[string]any
+	if err := json.Unmarshal([]byte(properties), &props); err != nil {
+		return properties
+	}
+	parentStackLabel, parentLabel, ok := expectedParentResourceKey(model, stackIdx, slotIdx)
+	if !ok {
+		return properties
+	}
+	if invParent, ok := inventoryByKey[parentStackLabel+"/"+parentLabel]; ok {
+		var parentProps map[string]any
+		if err := json.Unmarshal(invParent.Properties, &parentProps); err == nil {
+			if name, ok := parentProps["Name"].(string); ok && name != "" {
+				props["ParentId"] = name
+				bytes, err := json.Marshal(props)
+				if err == nil {
+					return string(bytes)
+				}
+			}
+		}
+	}
+	return properties
+}
+
+func expectedParentResourceKey(model *StateModel, stackIdx, slotIdx int) (string, string, bool) {
+	if model.Pool == nil {
+		return "", "", false
+	}
+	if model.Pool.IsCrossStack(slotIdx) {
+		parentSlot := model.Pool.Slots[slotIdx].CrossStackParentSlot
+		if parentSlot < 0 {
+			return "", "", false
+		}
+		return model.ProviderStackLabel, model.LabelForResource(0, parentSlot), true
+	}
+	parentSlot := model.Pool.Slots[slotIdx].ParentIndex
+	if parentSlot < 0 {
+		return "", "", false
+	}
+	return model.Stack(stackIdx).Label, model.LabelForResource(stackIdx, parentSlot), true
+}
+
+func stripPropertyKey(properties, key string) string {
+	if properties == "" {
+		return properties
+	}
+	var props map[string]any
+	if err := json.Unmarshal([]byte(properties), &props); err != nil {
+		return properties
+	}
+	delete(props, key)
+	bytes, err := json.Marshal(props)
+	if err != nil {
+		return properties
+	}
+	return string(bytes)
+}
+
+// CheckUnmanagedModelVsInventory verifies that unmanaged resources expected in
+// inventory match the actual unmanaged inventory, and that unexpected unmanaged
+// resources are not present.
+func CheckUnmanagedModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []Violation {
+	var violations []Violation
+	expected := make(map[string]*ExpectedUnmanagedResource)
+	actual := make(map[string]pkgmodel.Resource)
+
+	for _, res := range inventory {
+		if res.NativeID == "" {
+			continue
+		}
+		actual[res.NativeID] = res
+	}
+
+	for nativeID, res := range model.UnmanagedResources {
+		if !res.PresentInInventory {
+			continue
+		}
+		expected[nativeID] = res
+		actualRes, ok := actual[nativeID]
+		if !ok {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("unmanaged resource %s expected in inventory but missing", nativeID),
+			})
+			continue
+		}
+		if actualRes.Managed {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("unmanaged resource %s unexpectedly marked managed in inventory", nativeID),
+			})
+		}
+		if actualRes.Stack != "$unmanaged" {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("unmanaged resource %s has stack=%s, expected $unmanaged", nativeID, actualRes.Stack),
+			})
+		}
+		if res.ResourceType != "" && actualRes.Type != res.ResourceType {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("unmanaged resource %s type=%s, expected %s", nativeID, actualRes.Type, res.ResourceType),
+			})
+		}
+		if !jsonEqual(string(actualRes.Properties), res.InventoryProperties) {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("unmanaged resource %s inventory properties=%s but model expects %s", nativeID, string(actualRes.Properties), res.InventoryProperties),
+			})
+		}
+	}
+
+	for nativeID, res := range actual {
+		if expected[nativeID] != nil {
+			continue
+		}
+		violations = append(violations, Violation{
+			Kind:    ViolationModelInventoryMismatch,
+			Message: fmt.Sprintf("inventory contains unexpected unmanaged resource: %s (%s)", nativeID, res.Type),
+		})
+	}
+
+	return violations
+}
+
+func CheckManagedDriftVsInventory(model *StateModel, inventory []pkgmodel.Resource) []Violation {
+	var violations []Violation
+	actualByNativeID := make(map[string]pkgmodel.Resource, len(inventory))
+	for _, res := range inventory {
+		if res.NativeID == "" {
+			continue
+		}
+		actualByNativeID[res.NativeID] = res
+	}
+
+	for nativeID, expected := range model.ManagedDriftedResources {
+		if expected.PendingSync {
+			continue
+		}
+		actual, ok := actualByNativeID[nativeID]
+		if !ok {
+			if expected.PresentInInventory {
+				violations = append(violations, Violation{
+					Kind:    ViolationModelInventoryMismatch,
+					Message: fmt.Sprintf("managed drift resource %s expected in inventory but missing", nativeID),
+				})
+			}
+			continue
+		}
+		if !actual.Managed {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("managed drift resource %s unexpectedly marked unmanaged in inventory", nativeID),
+			})
+		}
+		if expected.StackLabel != "" && actual.Stack != expected.StackLabel {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("managed drift resource %s stack=%s, expected %s", nativeID, actual.Stack, expected.StackLabel),
+			})
+		}
+		if expected.ResourceLabel != "" && actual.Label != expected.ResourceLabel {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("managed drift resource %s label=%s, expected %s", nativeID, actual.Label, expected.ResourceLabel),
+			})
+		}
+		if expected.ResourceType != "" && actual.Type != expected.ResourceType {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("managed drift resource %s type=%s, expected %s", nativeID, actual.Type, expected.ResourceType),
+			})
+		}
+		if expected.InventoryProperties != "" && !jsonEqual(string(actual.Properties), expected.InventoryProperties) {
+			violations = append(violations, Violation{
+				Kind:    ViolationModelInventoryMismatch,
+				Message: fmt.Sprintf("managed drift resource %s inventory properties=%s but model expects %s", nativeID, string(actual.Properties), expected.InventoryProperties),
+			})
+		}
 	}
 
 	return violations

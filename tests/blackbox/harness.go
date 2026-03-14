@@ -54,12 +54,12 @@ type TestHarness struct {
 	agentDataDir string
 
 	// Config values needed for restarts and Ergo connection
-	agentBinary    string
-	configPath     string
-	port           int
-	nodename       string
-	cookie         string
-	dbPath         string
+	agentBinary string
+	configPath  string
+	port        int
+	nodename    string
+	cookie      string
+	dbPath      string
 
 	// Ergo node for communicating with the test plugin's TestController
 	ergoNode       gen.Node
@@ -158,8 +158,44 @@ func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*
 		if err == nil && statusResp != nil && len(statusResp.Commands) > 0 {
 			cmd := statusResp.Commands[0]
 			if cmd.State == "Success" || cmd.State == "Failed" || cmd.State == "Canceled" {
-					return &cmd, true
+				return &cmd, true
 			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, false
+}
+
+func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
+	statusResp, err := h.client.GetFormaCommandsStatus("command:sync", "", 1)
+	if err != nil {
+		return nil, err
+	}
+	if statusResp == nil || len(statusResp.Commands) == 0 {
+		return nil, nil
+	}
+	cmd := statusResp.Commands[0]
+	return &cmd, nil
+}
+
+// WaitForNextSyncCommand waits for a new sync command created after the current
+// latest sync command, then waits for that command to reach a terminal state.
+// Returns nil,false if no new sync command appears within the timeout.
+func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.Command, bool) {
+	before, err := h.latestSyncCommand()
+	if err != nil {
+		return nil, false
+	}
+	beforeID := ""
+	if before != nil {
+		beforeID = before.CommandID
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		current, err := h.latestSyncCommand()
+		if err == nil && current != nil && current.CommandID != "" && current.CommandID != beforeID {
+			return h.waitForCommand(current.CommandID, time.Until(deadline))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -209,6 +245,21 @@ func (h *TestHarness) GetOperationLog(t *testing.T) []testcontrol.OperationLogEn
 	opLog, ok := resp.(testcontrol.GetOperationLogResponse)
 	require.True(t, ok, "unexpected response type: %T", resp)
 	return opLog.Entries
+}
+
+// TryGetOperationLog is like GetOperationLog but returns an error instead of
+// failing the test. Used in recovery paths where the plugin control route may
+// be temporarily stale after crashes or restart-intensity failures.
+func (h *TestHarness) TryGetOperationLog() ([]testcontrol.OperationLogEntry, error) {
+	resp, err := h.callTestController(testcontrol.GetOperationLogRequest{})
+	if err != nil {
+		return nil, err
+	}
+	opLog, ok := resp.(testcontrol.GetOperationLogResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type: %T", resp)
+	}
+	return opLog.Entries, nil
 }
 
 // ProgramResponses sends drawn response sequences to the test plugin's TestController.

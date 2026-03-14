@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // ResourceState represents whether a resource is expected to exist.
@@ -26,6 +28,33 @@ type ExpectedResource struct {
 	Index      int
 	Properties string
 	State      ResourceState
+}
+
+// ExpectedUnmanagedResource tracks the expected state of a discovered
+// unmanaged resource across cloud state and inventory.
+type ExpectedUnmanagedResource struct {
+	NativeID            string
+	ResourceType        string
+	CloudProperties     string
+	InventoryProperties string
+	PresentInCloud      bool
+	PresentInInventory  bool
+}
+
+// ExpectedManagedDrift tracks the cloud-side state of a managed resource after
+// out-of-band changes and the inventory state observed after sync.
+type ExpectedManagedDrift struct {
+	StackLabel          string
+	ResourceLabel       string
+	ResourceType        string
+	NativeID            string
+	CloudProperties     string
+	InventoryProperties string
+	SnapshotProperties  string
+	SnapshotState       ResourceState
+	PresentInCloud      bool
+	PresentInInventory  bool
+	PendingSync         bool
 }
 
 // StackState holds the per-stack state: resources.
@@ -53,11 +82,13 @@ type StateModel struct {
 	ProviderStackLabel string // label of stack 0; empty if stackCount < 2
 	// AcceptedCommands tracks commands accepted by the agent during the chaos phase.
 	AcceptedCommands []AcceptedCommand
-	// UnmanagedNativeIDs tracks cloud resources created out-of-band (via
-	// OpCloudCreate). These are expected to exist in the cloud but NOT in
-	// the agent's inventory. Used by the invariant checker to distinguish
-	// expected orphans from real bugs.
-	UnmanagedNativeIDs map[string]bool
+	// UnmanagedResources tracks out-of-band cloud resources and whether they are
+	// expected to have been ingested into the unmanaged inventory.
+	UnmanagedResources map[string]*ExpectedUnmanagedResource
+	// ManagedDriftedResources tracks managed resources that have been mutated or
+	// deleted out-of-band so sync behavior can be asserted explicitly.
+	ManagedDriftedResources map[string]*ExpectedManagedDrift
+	AuthoritativeSlots      map[string]bool
 }
 
 // NewStateModel creates a state model with the given number of stacks,
@@ -106,12 +137,365 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		providerLabel = stacks[0].Label
 	}
 	return &StateModel{
-		Stacks:             stacks,
-		ResourcesPerStack:  resourcesPerStack,
-		Pool:               pool,
-		ProviderStackLabel: providerLabel,
-		UnmanagedNativeIDs: make(map[string]bool),
+		Stacks:                  stacks,
+		ResourcesPerStack:       resourcesPerStack,
+		Pool:                    pool,
+		ProviderStackLabel:      providerLabel,
+		UnmanagedResources:      make(map[string]*ExpectedUnmanagedResource),
+		ManagedDriftedResources: make(map[string]*ExpectedManagedDrift),
+		AuthoritativeSlots:      make(map[string]bool),
 	}
+}
+
+func slotKeyString(stackIdx, slotIdx int) string {
+	return fmt.Sprintf("%d/%d", stackIdx, slotIdx)
+}
+
+func (m *StateModel) MarkAuthoritativeSlot(stackIdx, slotIdx int) {
+	m.AuthoritativeSlots[slotKeyString(stackIdx, slotIdx)] = true
+}
+
+func (m *StateModel) ClearAuthoritativeSlot(stackIdx, slotIdx int) {
+	delete(m.AuthoritativeSlots, slotKeyString(stackIdx, slotIdx))
+}
+
+func (m *StateModel) IsAuthoritativeSlot(stackIdx, slotIdx int) bool {
+	return m.AuthoritativeSlots[slotKeyString(stackIdx, slotIdx)]
+}
+
+func (m *StateModel) ClearAuthorityForResourceIDs(stackIdx int, ids []int) {
+	for _, id := range ids {
+		m.ClearAuthoritativeSlot(stackIdx, id)
+	}
+}
+
+func (m *StateModel) ClearAuthorityForStack(stackIdx int) {
+	for id := range m.Stack(stackIdx).Resources {
+		m.ClearAuthoritativeSlot(stackIdx, id)
+	}
+}
+
+func (m *StateModel) ApplyManagedCloudModify(stackLabel, resourceLabel, resourceType, nativeID, properties string) {
+	if nativeID == "" {
+		return
+	}
+	res := m.ManagedDriftedResources[nativeID]
+	if res == nil {
+		res = &ExpectedManagedDrift{NativeID: nativeID}
+		if stackIdx, slotIdx, ok := m.findResourceSlot(stackLabel, resourceLabel); ok {
+			if existing := m.Resource(stackIdx, slotIdx); existing != nil {
+				res.SnapshotProperties = existing.Properties
+				res.SnapshotState = existing.State
+			}
+		}
+		m.ManagedDriftedResources[nativeID] = res
+	}
+	res.StackLabel = stackLabel
+	res.ResourceLabel = resourceLabel
+	res.ResourceType = resourceType
+	res.CloudProperties = properties
+	res.PresentInCloud = true
+	res.PendingSync = true
+}
+
+func (m *StateModel) ApplyManagedCloudDelete(stackLabel, resourceLabel, resourceType, nativeID string) {
+	if nativeID == "" {
+		return
+	}
+	res := m.ManagedDriftedResources[nativeID]
+	if res == nil {
+		res = &ExpectedManagedDrift{NativeID: nativeID}
+		if stackIdx, slotIdx, ok := m.findResourceSlot(stackLabel, resourceLabel); ok {
+			if existing := m.Resource(stackIdx, slotIdx); existing != nil {
+				res.SnapshotProperties = existing.Properties
+				res.SnapshotState = existing.State
+			}
+		}
+		m.ManagedDriftedResources[nativeID] = res
+	}
+	res.StackLabel = stackLabel
+	res.ResourceLabel = resourceLabel
+	res.ResourceType = resourceType
+	res.CloudProperties = ""
+	res.PresentInCloud = false
+	res.PendingSync = true
+}
+
+func (m *StateModel) ReconcileManagedDriftInventory(inventory []pkgmodel.Resource) {
+	actualByNativeID := make(map[string]pkgmodel.Resource, len(inventory))
+	for _, res := range inventory {
+		if res.NativeID == "" {
+			continue
+		}
+		actualByNativeID[res.NativeID] = res
+	}
+
+	for nativeID, expected := range m.ManagedDriftedResources {
+		actual, ok := actualByNativeID[nativeID]
+		if !ok {
+			if !expected.PresentInCloud {
+				expected.PresentInInventory = false
+				expected.InventoryProperties = ""
+				expected.PendingSync = false
+				m.applyManagedDriftToResource(expected, nil)
+				delete(m.ManagedDriftedResources, nativeID)
+			}
+			continue
+		}
+		if expected.PresentInCloud && !jsonContainsSubset(string(actual.Properties), expected.CloudProperties) {
+			// Sync has not ingested the drift yet; leave the resource pending.
+			continue
+		}
+		if !expected.PresentInCloud {
+			// Managed delete drift is still pending until sync removes it from inventory.
+			continue
+		}
+		expected.PresentInInventory = true
+		expected.InventoryProperties = string(actual.Properties)
+		if expected.ResourceType == "" {
+			expected.ResourceType = actual.Type
+		}
+		m.applyManagedDriftToResource(expected, &actual)
+		expected.PendingSync = false
+		delete(m.ManagedDriftedResources, nativeID)
+	}
+}
+
+func (m *StateModel) PendingManagedDriftNativeIDs() map[string]bool {
+	ignore := make(map[string]bool)
+	for nativeID, res := range m.ManagedDriftedResources {
+		if res.PendingSync {
+			ignore[nativeID] = true
+		}
+	}
+	return ignore
+}
+
+func (m *StateModel) ManagedDriftNativeIDs() map[string]bool {
+	ignore := make(map[string]bool)
+	for nativeID := range m.ManagedDriftedResources {
+		ignore[nativeID] = true
+	}
+	return ignore
+}
+
+func (m *StateModel) HasPendingManagedDriftForResource(stackLabel, resourceLabel string) bool {
+	for _, res := range m.ManagedDriftedResources {
+		if res.PendingSync && res.StackLabel == stackLabel && res.ResourceLabel == resourceLabel {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *StateModel) HasPendingManagedDriftAffectingSlot(stackIdx, slotIdx int) bool {
+	stack := m.Stack(stackIdx)
+	if stack == nil {
+		return false
+	}
+	label := m.LabelForResource(stackIdx, slotIdx)
+	if m.HasPendingManagedDriftForResource(stack.Label, label) {
+		return true
+	}
+	if m.Pool == nil {
+		return false
+	}
+	current := slotIdx
+	for current >= 0 {
+		slot := m.Pool.Slots[current]
+		if slot.ParentIndex >= 0 {
+			parentLabel := m.LabelForResource(stackIdx, slot.ParentIndex)
+			if m.HasPendingManagedDriftForResource(stack.Label, parentLabel) {
+				return true
+			}
+		}
+		current = slot.ParentIndex
+	}
+	if m.Pool.IsCrossStack(slotIdx) && m.ProviderStackLabel != "" {
+		parentSlot := m.Pool.Slots[slotIdx].CrossStackParentSlot
+		if parentSlot >= 0 && m.HasPendingManagedDriftForResource(m.ProviderStackLabel, m.LabelForResource(0, parentSlot)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *StateModel) applyManagedDriftToResource(expected *ExpectedManagedDrift, actual *pkgmodel.Resource) {
+	stackIdx, slotIdx, ok := m.findResourceSlot(expected.StackLabel, expected.ResourceLabel)
+	if !ok {
+		return
+	}
+
+	if actual == nil {
+		m.ApplyDestroyed(stackIdx, []int{slotIdx})
+		m.MarkAuthoritativeSlot(stackIdx, slotIdx)
+		m.refreshDependentParentReferences(stackIdx, slotIdx)
+		return
+	}
+	props := m.NormalizePropertiesForResource(stackIdx, slotIdx, string(actual.Properties))
+	m.ApplyCreated(stackIdx, []int{slotIdx}, props)
+	m.MarkAuthoritativeSlot(stackIdx, slotIdx)
+	m.refreshDependentParentReferences(stackIdx, slotIdx)
+}
+
+func (m *StateModel) findResourceSlot(stackLabel, resourceLabel string) (int, int, bool) {
+	stackIdx := -1
+	for i, stack := range m.Stacks {
+		if stack.Label == stackLabel {
+			stackIdx = i
+			break
+		}
+	}
+	if stackIdx == -1 {
+		return -1, -1, false
+	}
+	for idx := range m.Stack(stackIdx).Resources {
+		if m.LabelForResource(stackIdx, idx) == resourceLabel {
+			return stackIdx, idx, true
+		}
+	}
+	return -1, -1, false
+}
+
+func (m *StateModel) refreshDependentParentReferences(stackIdx, slotIdx int) {
+	if m.Pool == nil {
+		return
+	}
+	for dependent := range m.Stack(stackIdx).Resources {
+		if dependent == slotIdx {
+			continue
+		}
+		if m.Pool.Slots[dependent].ParentIndex != slotIdx {
+			continue
+		}
+		res := m.Resource(stackIdx, dependent)
+		if res == nil || res.State != StateExists || res.Properties == "" {
+			continue
+		}
+		updated := m.NormalizePropertiesForResource(stackIdx, dependent, res.Properties)
+		res.Properties = updated
+		m.refreshDependentParentReferences(stackIdx, dependent)
+	}
+
+	if m.ProviderStackLabel == "" || m.Stack(stackIdx).Label != m.ProviderStackLabel {
+		return
+	}
+	for consumerStackIdx := range m.Stacks {
+		if consumerStackIdx == stackIdx {
+			continue
+		}
+		for dependent := range m.Stack(consumerStackIdx).Resources {
+			if !m.Pool.IsCrossStack(dependent) {
+				continue
+			}
+			if m.Pool.Slots[dependent].CrossStackParentSlot != slotIdx {
+				continue
+			}
+			res := m.Resource(consumerStackIdx, dependent)
+			if res == nil || res.State != StateExists || res.Properties == "" {
+				continue
+			}
+			res.Properties = m.NormalizePropertiesForResource(consumerStackIdx, dependent, res.Properties)
+		}
+	}
+}
+
+func (m *StateModel) EnsureUnmanagedResource(nativeID, resourceType, properties string) *ExpectedUnmanagedResource {
+	if existing, ok := m.UnmanagedResources[nativeID]; ok {
+		if resourceType != "" {
+			existing.ResourceType = resourceType
+		}
+		if properties != "" {
+			existing.CloudProperties = properties
+		}
+		return existing
+	}
+	res := &ExpectedUnmanagedResource{
+		NativeID:        nativeID,
+		ResourceType:    resourceType,
+		CloudProperties: properties,
+	}
+	m.UnmanagedResources[nativeID] = res
+	return res
+}
+
+func (m *StateModel) ApplyUnmanagedCloudCreate(nativeID, resourceType, properties string) {
+	res := m.EnsureUnmanagedResource(nativeID, resourceType, properties)
+	res.PresentInCloud = true
+	res.CloudProperties = properties
+	if res.ResourceType == "" {
+		res.ResourceType = resourceType
+	}
+}
+
+func (m *StateModel) ApplyUnmanagedCloudModify(nativeID, properties string) {
+	res := m.EnsureUnmanagedResource(nativeID, "Test::Generic::Resource", properties)
+	res.PresentInCloud = true
+	res.CloudProperties = properties
+}
+
+func (m *StateModel) ApplyUnmanagedCloudDelete(nativeID string) {
+	res := m.EnsureUnmanagedResource(nativeID, "", "")
+	res.PresentInCloud = false
+	res.CloudProperties = ""
+}
+
+func (m *StateModel) ApplyDiscoveryToUnmanaged() {
+	for _, res := range m.UnmanagedResources {
+		if !res.PresentInCloud {
+			continue
+		}
+		res.PresentInInventory = true
+		res.InventoryProperties = res.CloudProperties
+	}
+}
+
+func (m *StateModel) ApplySyncToUnmanaged() {
+	for _, res := range m.UnmanagedResources {
+		if !res.PresentInInventory {
+			continue
+		}
+		if res.PresentInCloud {
+			res.InventoryProperties = res.CloudProperties
+		} else {
+			res.PresentInInventory = false
+			res.InventoryProperties = ""
+		}
+	}
+}
+
+func (m *StateModel) ReconcileUnmanagedInventoryFromActual(inventory []pkgmodel.Resource) {
+	actualByNativeID := make(map[string]pkgmodel.Resource, len(inventory))
+	for _, res := range inventory {
+		if res.NativeID == "" {
+			continue
+		}
+		actualByNativeID[res.NativeID] = res
+	}
+
+	for nativeID, res := range m.UnmanagedResources {
+		actual, ok := actualByNativeID[nativeID]
+		if !ok {
+			res.PresentInInventory = false
+			res.InventoryProperties = ""
+			continue
+		}
+		res.PresentInInventory = true
+		res.InventoryProperties = string(actual.Properties)
+		if res.ResourceType == "" {
+			res.ResourceType = actual.Type
+		}
+	}
+}
+
+func (m *StateModel) UnmanagedPresentInCloudNativeIDs() map[string]bool {
+	ignore := make(map[string]bool)
+	for nativeID, res := range m.UnmanagedResources {
+		if res.PresentInCloud {
+			ignore[nativeID] = true
+		}
+	}
+	return ignore
 }
 
 // Stack returns the StackState at the given index.
@@ -229,10 +613,11 @@ func (m *StateModel) HasExistingDescendants(stackIndex int, idx int) bool {
 
 // TrackAcceptedCommand records a command that was accepted by the agent,
 // along with pre-command resource snapshots for potential cancel revert.
-func (m *StateModel) TrackAcceptedCommand(commandID string, snapshots []ResourceSnapshot) {
+func (m *StateModel) TrackAcceptedCommand(commandID string, snapshots []ResourceSnapshot, opLogSize int) {
 	m.AcceptedCommands = append(m.AcceptedCommands, AcceptedCommand{
 		CommandID: commandID,
 		Snapshots: snapshots,
+		OpLogSize: opLogSize,
 	})
 }
 
@@ -322,6 +707,17 @@ func (m *StateModel) NormalizePropertiesForResource(stackIndex, id int, properti
 	if properties == "" || m.Pool == nil || m.Pool.IsParent(id) {
 		return properties
 	}
+	return normalizeResolvablePropertiesWithFallback(properties, m.parentIdentifierForResource(stackIndex, id))
+}
+
+func normalizeResolvableProperties(properties string) string {
+	return normalizeResolvablePropertiesWithFallback(properties, "")
+}
+
+func normalizeResolvablePropertiesWithFallback(properties, fallbackParentID string) string {
+	if properties == "" {
+		return properties
+	}
 
 	var props map[string]any
 	if err := json.Unmarshal([]byte(properties), &props); err != nil {
@@ -333,11 +729,11 @@ func (m *StateModel) NormalizePropertiesForResource(stackIndex, id int, properti
 			if value, hasValue := wrapper["$value"]; hasValue {
 				props["ParentId"] = value
 			} else {
-				props["ParentId"] = m.parentIdentifierForResource(stackIndex, id)
+				props["ParentId"] = fallbackParentID
 			}
 		}
-	} else {
-		props["ParentId"] = m.parentIdentifierForResource(stackIndex, id)
+	} else if fallbackParentID != "" {
+		props["ParentId"] = fallbackParentID
 	}
 	bytes, err := json.Marshal(props)
 	if err != nil {
@@ -356,6 +752,74 @@ func isResolvableWrapperValue(m map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func jsonEqualStrings(a, b string) bool {
+	if a == b {
+		return true
+	}
+	var left any
+	if err := json.Unmarshal([]byte(a), &left); err != nil {
+		return false
+	}
+	var right any
+	if err := json.Unmarshal([]byte(b), &right); err != nil {
+		return false
+	}
+	leftBytes, err := json.Marshal(left)
+	if err != nil {
+		return false
+	}
+	rightBytes, err := json.Marshal(right)
+	if err != nil {
+		return false
+	}
+	return string(leftBytes) == string(rightBytes)
+}
+
+func jsonContainsSubset(actualJSON, expectedJSON string) bool {
+	if expectedJSON == "" {
+		return actualJSON == ""
+	}
+	var actual any
+	if err := json.Unmarshal([]byte(actualJSON), &actual); err != nil {
+		return false
+	}
+	var expected any
+	if err := json.Unmarshal([]byte(expectedJSON), &expected); err != nil {
+		return false
+	}
+	return jsonValueContains(actual, expected)
+}
+
+func jsonValueContains(actual, expected any) bool {
+	switch expectedTyped := expected.(type) {
+	case map[string]any:
+		actualTyped, ok := actual.(map[string]any)
+		if !ok {
+			return false
+		}
+		for key, expectedVal := range expectedTyped {
+			actualVal, ok := actualTyped[key]
+			if !ok || !jsonValueContains(actualVal, expectedVal) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		actualTyped, ok := actual.([]any)
+		if !ok || len(actualTyped) != len(expectedTyped) {
+			return false
+		}
+		for i := range expectedTyped {
+			if !jsonValueContains(actualTyped[i], expectedTyped[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return fmt.Sprintf("%v", actual) == fmt.Sprintf("%v", expected)
+	}
 }
 
 func (m *StateModel) parentIdentifierForResource(stackIndex, id int) string {
