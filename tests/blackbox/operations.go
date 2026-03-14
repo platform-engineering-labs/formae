@@ -80,6 +80,10 @@ type Operation struct {
 	// For OpCloudModify/OpCloudDelete/OpCloudCreate: the native ID.
 	NativeID string
 
+	// For cloud drift operations: whether the target is a managed inventory
+	// resource or an unmanaged out-of-band resource.
+	CloudTargetManaged bool
+
 	// For OpSetTTLPolicy: true means set TTL to already-expired, false means far future.
 	TTLExpired bool
 
@@ -131,6 +135,7 @@ type ResourceSnapshot struct {
 type AcceptedCommand struct {
 	CommandID string
 	Snapshots []ResourceSnapshot // pre-command state for revert on cancel
+	OpLogSize int                // operation log length immediately after acceptance
 	// Resolved is true when the cancel handler has already processed this
 	// command. The command remains in AcceptedCommands so that
 	// DrainPendingCommands can include its outcome when resolving conflicts

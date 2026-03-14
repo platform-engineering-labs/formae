@@ -66,7 +66,7 @@ func TestStateModel_Verify_HappyPath(t *testing.T) {
 		"native-1": {NativeID: "native-1", ResourceType: "Test::Generic::Resource", Properties: `{"Name":"a","Value":"v1"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil)
+	violations := CheckInvariants(inventory, cloudState, nil, nil)
 	assert.Empty(t, violations)
 }
 
@@ -77,7 +77,7 @@ func TestStateModel_Verify_PhantomResource(t *testing.T) {
 	}
 	cloudState := map[string]testcontrol.CloudStateEntry{}
 
-	violations := CheckInvariants(inventory, cloudState, nil)
+	violations := CheckInvariants(inventory, cloudState, nil, nil)
 	assert.NotEmpty(t, violations)
 
 	hasPhantom := false
@@ -96,7 +96,7 @@ func TestStateModel_Verify_OrphanedResource(t *testing.T) {
 		"native-0": {NativeID: "native-0", ResourceType: "Test::Generic::Resource"},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil)
+	violations := CheckInvariants(inventory, cloudState, nil, nil)
 	assert.NotEmpty(t, violations)
 
 	hasOrphan := false
@@ -118,7 +118,7 @@ func TestStateModel_Verify_PropertyMismatch(t *testing.T) {
 			Properties: `{"Name":"a","Value":"v2"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil)
+	violations := CheckInvariants(inventory, cloudState, nil, nil)
 	assert.NotEmpty(t, violations)
 
 	hasMismatch := false
@@ -140,7 +140,7 @@ func TestStateModel_Verify_PropertyMatch(t *testing.T) {
 			Properties: `{"Name":"a","Value":"v1"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil)
+	violations := CheckInvariants(inventory, cloudState, nil, nil)
 	assert.Empty(t, violations)
 }
 
@@ -224,12 +224,14 @@ func TestStateModel_TrackAcceptedCommand(t *testing.T) {
 
 	assert.Empty(t, model.AcceptedCommands)
 
-	model.TrackAcceptedCommand("cmd-1", nil)
-	model.TrackAcceptedCommand("cmd-2", nil)
+	model.TrackAcceptedCommand("cmd-1", nil, 3)
+	model.TrackAcceptedCommand("cmd-2", nil, 7)
 
 	assert.Len(t, model.AcceptedCommands, 2)
 	assert.Equal(t, "cmd-1", model.AcceptedCommands[0].CommandID)
 	assert.Equal(t, "cmd-2", model.AcceptedCommands[1].CommandID)
+	assert.Equal(t, 3, model.AcceptedCommands[0].OpLogSize)
+	assert.Equal(t, 7, model.AcceptedCommands[1].OpLogSize)
 }
 
 func TestStateModel_CheckModelVsInventory_PropertiesAndType(t *testing.T) {
@@ -277,6 +279,55 @@ func TestStateModel_ResolvePropertiesForResources_WithPool(t *testing.T) {
 		resolved[1])
 	assert.JSONEq(t, `{"Name":"child-stack-1-xstack-0","ParentId":"res-stack-0-a","Value":"v2"}`,
 		resolved[5])
+}
+
+func TestStateModel_UnmanagedLifecycle(t *testing.T) {
+	model := NewStateModel(1, 1)
+	model.ApplyUnmanagedCloudCreate("cloud-1", "Test::Generic::Resource", `{"Name":"u1","Value":"v1"}`)
+
+	res := model.UnmanagedResources["cloud-1"]
+	assert.True(t, res.PresentInCloud)
+	assert.False(t, res.PresentInInventory)
+
+	model.ApplyDiscoveryToUnmanaged()
+	assert.True(t, res.PresentInInventory)
+	assert.JSONEq(t, `{"Name":"u1","Value":"v1"}`, res.InventoryProperties)
+
+	model.ApplyUnmanagedCloudModify("cloud-1", `{"Name":"u1","Value":"v2"}`)
+	assert.JSONEq(t, `{"Name":"u1","Value":"v1"}`, res.InventoryProperties)
+
+	model.ApplySyncToUnmanaged()
+	assert.JSONEq(t, `{"Name":"u1","Value":"v2"}`, res.InventoryProperties)
+
+	model.ApplyUnmanagedCloudDelete("cloud-1")
+	model.ApplySyncToUnmanaged()
+	assert.False(t, res.PresentInInventory)
+	assert.False(t, res.PresentInCloud)
+}
+
+func TestStateModel_ManagedDriftLifecycle(t *testing.T) {
+	model := NewStateModel(1, 1)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1"}`)
+	model.ApplyManagedCloudModify("stack-0", "res-stack-0-a", "Test::Generic::Resource", "test-1", `{"Name":"res-stack-0-a","Value":"drift"}`)
+
+	model.ReconcileManagedDriftInventory([]pkgmodel.Resource{{
+		Stack:      "stack-0",
+		Label:      "res-stack-0-a",
+		Type:       "Test::Generic::Resource",
+		NativeID:   "test-1",
+		Managed:    true,
+		Properties: []byte(`{"Name":"res-stack-0-a","Value":"drift"}`),
+	}})
+
+	res := model.Resource(0, 0)
+	assert.Equal(t, StateExists, res.State)
+	assert.JSONEq(t, `{"Name":"res-stack-0-a","Value":"drift"}`, res.Properties)
+	assert.Empty(t, model.ManagedDriftedResources)
+
+	model.ApplyManagedCloudDelete("stack-0", "res-stack-0-a", "Test::Generic::Resource", "test-1")
+	model.ReconcileManagedDriftInventory(nil)
+	assert.Equal(t, StateNotExist, model.Resource(0, 0).State)
+	assert.Empty(t, model.ManagedDriftedResources)
 }
 
 func TestStateModel_Stack(t *testing.T) {

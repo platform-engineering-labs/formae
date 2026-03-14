@@ -266,6 +266,7 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 	h.reconcileCompletedAcceptedCommands(t, model)
 	h.drainExpiredTTLStacks(t, model)
 	h.reconcileTTLStacksToInventory(t, model)
+	h.observeManagedDriftInventory(t, model, 500*time.Millisecond)
 
 	switch op.Kind {
 	case OpApply:
@@ -273,9 +274,9 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 	case OpDestroy:
 		h.executeDestroy(t, op, model)
 	case OpTriggerSync:
-		h.executeTriggerSync(t)
+		h.executeTriggerSync(t, model)
 	case OpTriggerDiscovery:
-		h.executeTriggerDiscovery(t)
+		h.executeTriggerDiscovery(t, model)
 	case OpVerifyState:
 		// Skip invariant check when commands are in flight — cloud state
 		// and inventory are transiently inconsistent during execution.
@@ -330,6 +331,8 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", ac.CommandID, cmd.State)
 		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool))
+		h.observeManagedDriftInventory(t, model, 2*time.Second)
+		h.reconcileExplicitFailedResourcesToInventory(t, model, []drainedCommand{{ac: ac, cmd: &cmd}})
 	}
 
 	model.AcceptedCommands = remaining
@@ -357,21 +360,29 @@ func (h *TestHarness) reconcileTTLStacksToInventory(t *testing.T, model *StateMo
 		return
 	}
 
-	stackHasInventory := make(map[string]bool)
+	inventoryByKey := make(map[string]pkgmodel.Resource)
 	if forma != nil {
 		for _, res := range forma.Resources {
-			stackHasInventory[res.Stack] = true
+			inventoryByKey[res.Stack+"/"+res.Label] = res
 		}
 	}
 
 	for stackIdx, stack := range model.Stacks {
-		if !stack.TTL || stackHasInventory[stack.Label] {
+		if !stack.TTL {
 			continue
 		}
+		stackHasAnyInventory := false
 		for slotIdx := range stack.Resources {
+			key := stack.Label + "/" + model.LabelForResource(stackIdx, slotIdx)
+			if _, ok := inventoryByKey[key]; ok {
+				stackHasAnyInventory = true
+				continue
+			}
 			model.ApplyDestroyed(stackIdx, []int{slotIdx})
 		}
-		model.Stacks[stackIdx].TTLExpired = false
+		if !stackHasAnyInventory {
+			model.Stacks[stackIdx].TTLExpired = false
+		}
 	}
 }
 
@@ -396,12 +407,18 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	// done, but the ResourcePersister processes persist messages from
 	// ResourceUpdaters asynchronously. Poll until inventory stabilises.
 	h.waitForInventoryStabilization(t, 5*time.Second)
+	if len(model) > 0 && model[0] != nil {
+		h.reconcileTTLStacksToInventory(t, model[0])
+		h.observeManagedDriftInventory(t, model[0], 2*time.Second)
+		h.reconcileCrossStackSlotsToInventory(t, model[0])
+		h.waitForUnmanagedInventoryExpectations(t, model[0], 5*time.Second)
+	}
 
 	// Build the ignore set from the model's tracked unmanaged resources.
 	// These are expected to exist in the cloud but NOT in inventory.
 	var ignoreNativeIDs map[string]bool
 	if len(model) > 0 && model[0] != nil {
-		ignoreNativeIDs = model[0].UnmanagedNativeIDs
+		ignoreNativeIDs = model[0].UnmanagedPresentInCloudNativeIDs()
 	}
 
 	// Phase 3: Check resource invariants with retry.
@@ -409,17 +426,23 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	// ResetAgentState, creating cloud resources that haven't been persisted
 	// to inventory yet. When orphans are found, we clean them up and
 	// re-check. If the orphan persists across retries, it's a real bug.
-	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs)
+	var ignoreManagedDriftNativeIDs map[string]bool
+	if len(model) > 0 && model[0] != nil {
+		ignoreManagedDriftNativeIDs = model[0].ManagedDriftNativeIDs()
+	}
+	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
 	violations = append(violations, resourceViolations...)
 
 	// Phase 4: Check model vs inventory consistency.
 	if len(model) > 0 && model[0] != nil {
-		forma, err := h.client.ExtractResources("managed:true")
+		managedInventory, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
 		var inventory []pkgmodel.Resource
-		if err == nil && forma != nil {
-			inventory = forma.Resources
+		if err == nil {
+			inventory = managedInventory
 		}
 		modelViolations := CheckModelVsInventory(model[0], inventory)
+		modelViolations = append(modelViolations, CheckUnmanagedModelVsInventory(model[0], unmanagedInventory)...)
+		modelViolations = append(modelViolations, CheckManagedDriftVsInventory(model[0], inventory)...)
 		if len(modelViolations) > 0 {
 			t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
 			for _, res := range inventory {
@@ -443,19 +466,15 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 // prior rapid iterations can create cloud resources after ResetAgentState;
 // these resolve themselves once the stale operations complete and the cloud
 // entries are cleaned. Genuine invariant bugs persist across retries.
-func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool) []Violation {
+func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool) []Violation {
 	t.Helper()
 
 	const maxRetries = 3
 
 	for attempt := range maxRetries {
-		forma, err := h.client.ExtractResources("managed:true")
+		managedInventory, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
 		require.NoError(t, err, "ExtractResources should not error")
-
-		var inventory []pkgmodel.Resource
-		if forma != nil {
-			inventory = forma.Resources
-		}
+		inventory := append(append([]pkgmodel.Resource{}, managedInventory...), unmanagedInventory...)
 
 		cloudState, csErr := h.TryGetCloudStateSnapshot()
 		if csErr != nil {
@@ -466,7 +485,7 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 			h.RestartAgent(t, 30*time.Second)
 			continue
 		}
-		resourceViolations := CheckInvariants(inventory, cloudState, ignoreNativeIDs)
+		resourceViolations := CheckInvariants(inventory, cloudState, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
 
 		if len(resourceViolations) == 0 {
 			return nil
@@ -503,6 +522,27 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 	}
 
 	return nil // unreachable
+}
+
+func (h *TestHarness) extractManagedAndUnmanagedInventory() ([]pkgmodel.Resource, []pkgmodel.Resource, error) {
+	managedForma, err := h.client.ExtractResources("managed:true")
+	if err != nil {
+		return nil, nil, err
+	}
+	unmanagedForma, err := h.client.ExtractResources("managed:false")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var managed []pkgmodel.Resource
+	if managedForma != nil {
+		managed = managedForma.Resources
+	}
+	var unmanaged []pkgmodel.Resource
+	if unmanagedForma != nil {
+		unmanaged = unmanagedForma.Resources
+	}
+	return managed, unmanaged, nil
 }
 
 // waitAndCheckCommandCompleteness polls until all commands from this client are
@@ -595,10 +635,10 @@ func (h *TestHarness) waitForInventoryStabilization(t *testing.T, timeout time.D
 	stableCount := 0
 
 	for time.Now().Before(deadline) {
-		forma, err := h.client.ExtractResources("managed:true")
+		managedInventory, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
 		count := 0
-		if err == nil && forma != nil {
-			count = len(forma.Resources)
+		if err == nil {
+			count = len(managedInventory) + len(unmanagedInventory)
 		}
 
 		if count == lastCount {
@@ -614,6 +654,78 @@ func (h *TestHarness) waitForInventoryStabilization(t *testing.T, timeout time.D
 	}
 
 	t.Logf("waitForInventoryStabilization: timed out after %v (last count: %d)", timeout, lastCount)
+}
+
+func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model *StateModel, timeout time.Duration) {
+	t.Helper()
+	if model == nil {
+		return
+	}
+
+	hasExpected := false
+	for _, res := range model.UnmanagedResources {
+		if res.PresentInInventory {
+			hasExpected = true
+			break
+		}
+	}
+	if !hasExpected {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
+		if err == nil && len(CheckUnmanagedModelVsInventory(model, unmanagedInventory)) == 0 {
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	t.Logf("waitForUnmanagedInventoryExpectations: timed out after %v", timeout)
+}
+
+func (h *TestHarness) observeUnmanagedInventory(t *testing.T, model *StateModel, timeout time.Duration) {
+	t.Helper()
+	if model == nil || len(model.UnmanagedResources) == 0 {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		_, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
+		if err == nil {
+			model.ReconcileUnmanagedInventoryFromActual(unmanagedInventory)
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		if err == nil {
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+func (h *TestHarness) observeManagedDriftInventory(t *testing.T, model *StateModel, timeout time.Duration) {
+	t.Helper()
+	if model == nil || len(model.ManagedDriftedResources) == 0 {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
+		if err == nil {
+			model.ReconcileManagedDriftInventory(managedInventory)
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		if err == nil {
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
 }
 
 // applyCommandOutcomeToModel uses per-resource-update status from a completed
@@ -717,6 +829,30 @@ func resolveResourceUpdateSlot(model *StateModel, pool *ResourcePool, ru apimode
 		}
 	}
 	return stackIdx, slotIdx
+}
+
+func operationLogWindow(entries []testcontrol.OperationLogEntry, start int) []testcontrol.OperationLogEntry {
+	if start <= 0 {
+		return entries
+	}
+	if start >= len(entries) {
+		return nil
+	}
+	return entries[start:]
+}
+
+func hasOperationLogActivity(entries []testcontrol.OperationLogEntry) bool {
+	return len(entries) > 0
+}
+
+func (h *TestHarness) currentOperationLogSize(t *testing.T) int {
+	t.Helper()
+	entries, err := h.TryGetOperationLog()
+	if err != nil {
+		t.Logf("currentOperationLogSize: proceeding without operation-log checkpoint: %v", err)
+		return 0
+	}
+	return len(entries)
 }
 
 func orderedResourceUpdates(model *StateModel, pool *ResourcePool, updates []apimodel.ResourceUpdate) []apimodel.ResourceUpdate {
@@ -826,6 +962,7 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		}
 
 		if ru.State == "Success" {
+			model.ClearAuthoritativeSlot(stackIdx, slotIdx)
 			switch ru.Operation {
 			case "create":
 				props := ""
@@ -835,6 +972,7 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
 			case "delete":
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+				model.MarkAuthoritativeSlot(stackIdx, slotIdx)
 			case "update":
 				if ru.Properties != nil {
 					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
@@ -887,6 +1025,9 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 	if cmd.State != "Success" {
 		for key, snap := range snapBySlot {
 			if corrected[key] {
+				continue
+			}
+			if model.IsAuthoritativeSlot(key.stackIdx, key.slotIdx) {
 				continue
 			}
 			if pool != nil && pool.IsCrossStack(key.slotIdx) {
@@ -1024,7 +1165,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		resolvedProps := model.ResolvePropertiesForResources(op.StackIndex, op.ResourceIDs, op.Properties, op.ChildProperties)
 		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, resolvedProps)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots)
+	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
 	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
 }
 
@@ -1101,7 +1242,7 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots)
+	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
 	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1184,7 +1325,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots)
+	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
 	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1244,7 +1385,7 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	for _, idx := range successIDs {
 		model.ApplyCascadeDestroyed(op.StackIndex, idx)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots)
+	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1305,7 +1446,7 @@ func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *
 	// it in reconcile mode. Our model tracks this set via SaveLastReconcile.
 	model.ApplyCreatedResolved(op.StackIndex, stack.LastReconcileResourceProperties)
 	applyReconcileGuarantee(model, op.StackIndex, reconcileIDs)
-	model.TrackAcceptedCommand(resp.CommandID, snapshots)
+	model.TrackAcceptedCommand(resp.CommandID, snapshots, h.currentOperationLogSize(t))
 	t.Logf("[op %d] ForceReconcile stack=%s → accepted, model updated (restore %v)", op.SequenceNum, stackLabel, reconcileIDs)
 }
 
@@ -1399,55 +1540,164 @@ func filterExistingResources(ids []int, stackIndex int, model *StateModel) []int
 	return existing
 }
 
-func (h *TestHarness) executeTriggerSync(t *testing.T) {
+func (h *TestHarness) executeTriggerSync(t *testing.T, model *StateModel) {
 	t.Helper()
-
 	// Fire-and-forget: sync runs concurrently with user commands. Resources
 	// in active changesets are excluded from sync (registered upfront in the
-	// ChangesetExecutor), so sync only touches idle resources. Sync doesn't
-	// have programmed failure responses and doesn't affect the model.
+	// ChangesetExecutor), so sync only touches idle resources.
 	err := h.client.ForceSync()
 	if err != nil {
 		t.Logf("TriggerSync error (may be expected): %v", err)
 		return
 	}
+	if _, ok := h.WaitForNextSyncCommand(10 * time.Second); !ok {
+		t.Logf("TriggerSync: no new sync command observed")
+	}
+	h.observeUnmanagedInventory(t, model, 2*time.Second)
+	h.observeManagedDriftInventory(t, model, 2*time.Second)
 	t.Logf("TriggerSync: fired")
 }
 
-func (h *TestHarness) executeTriggerDiscovery(t *testing.T) {
+func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 	t.Helper()
 	err := h.client.ForceDiscover()
 	if err != nil {
 		t.Logf("TriggerDiscovery error (may be expected): %v", err)
+		return
 	}
+	h.observeUnmanagedInventory(t, model, 2*time.Second)
+	t.Logf("TriggerDiscovery: fired")
 }
 
 func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
-	if !model.UnmanagedNativeIDs[op.NativeID] {
+	if op.CloudTargetManaged {
+		h.executeManagedCloudModify(t, op, model)
+		return
+	}
+	res := model.UnmanagedResources[op.NativeID]
+	if res == nil || !res.PresentInCloud {
 		t.Logf("[op %d] CloudModify: %s → skipped (resource does not exist in cloud)", op.SequenceNum, op.NativeID)
 		return
 	}
-	h.PutCloudState(t, op.NativeID, "Test::Generic::Resource", op.Properties)
+	h.PutCloudState(t, op.NativeID, res.ResourceType, op.Properties)
+	model.ApplyUnmanagedCloudModify(op.NativeID, op.Properties)
 	t.Logf("[op %d] CloudModify: %s", op.SequenceNum, op.NativeID)
 }
 
 func (h *TestHarness) executeCloudDelete(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
+	if op.CloudTargetManaged {
+		h.executeManagedCloudDelete(t, op, model)
+		return
+	}
 	h.DeleteCloudState(t, op.NativeID)
-	delete(model.UnmanagedNativeIDs, op.NativeID)
+	model.ApplyUnmanagedCloudDelete(op.NativeID)
 	t.Logf("[op %d] CloudDelete: %s", op.SequenceNum, op.NativeID)
+}
+
+func (h *TestHarness) executeManagedCloudModify(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+	managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
+	if err != nil || len(managedInventory) == 0 {
+		t.Logf("[op %d] CloudModify managed → skipped (no managed inventory)", op.SequenceNum)
+		return
+	}
+	target, ok := h.selectManagedDriftTarget(managedInventory, model, op.SequenceNum)
+	if !ok {
+		t.Logf("[op %d] CloudModify managed → skipped (no model-backed managed resource)", op.SequenceNum)
+		return
+	}
+	if target.NativeID == "" {
+		t.Logf("[op %d] CloudModify managed → skipped (missing native ID)", op.SequenceNum)
+		return
+	}
+	h.PutCloudState(t, target.NativeID, target.Type, op.Properties)
+	model.ApplyManagedCloudModify(target.Stack, target.Label, target.Type, target.NativeID, op.Properties)
+	h.observeManagedDriftInventory(t, model, 250*time.Millisecond)
+	h.reconcileManagedDriftBeforeNextCommands(t, model)
+	t.Logf("[op %d] CloudModify managed: %s (%s)", op.SequenceNum, target.Label, target.NativeID)
+}
+
+func (h *TestHarness) executeManagedCloudDelete(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+	managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
+	if err != nil || len(managedInventory) == 0 {
+		t.Logf("[op %d] CloudDelete managed → skipped (no managed inventory)", op.SequenceNum)
+		return
+	}
+	target, ok := h.selectManagedDriftTarget(managedInventory, model, op.SequenceNum)
+	if !ok {
+		t.Logf("[op %d] CloudDelete managed → skipped (no model-backed managed resource)", op.SequenceNum)
+		return
+	}
+	if target.NativeID == "" {
+		t.Logf("[op %d] CloudDelete managed → skipped (missing native ID)", op.SequenceNum)
+		return
+	}
+	h.DeleteCloudState(t, target.NativeID)
+	model.ApplyManagedCloudDelete(target.Stack, target.Label, target.Type, target.NativeID)
+	h.observeManagedDriftInventory(t, model, 250*time.Millisecond)
+	h.reconcileManagedDriftBeforeNextCommands(t, model)
+	t.Logf("[op %d] CloudDelete managed: %s (%s)", op.SequenceNum, target.Label, target.NativeID)
+}
+
+func (h *TestHarness) selectManagedDriftTarget(inventory []pkgmodel.Resource, model *StateModel, sequenceNum int) (pkgmodel.Resource, bool) {
+	if model == nil {
+		return pkgmodel.Resource{}, false
+	}
+	eligible := make([]pkgmodel.Resource, 0, len(inventory))
+	for _, res := range inventory {
+		stackIdx, slotIdx, ok := model.findResourceSlot(res.Stack, res.Label)
+		if !ok {
+			continue
+		}
+		expected := model.Resource(stackIdx, slotIdx)
+		if expected == nil || expected.State != StateExists {
+			continue
+		}
+		eligible = append(eligible, res)
+	}
+	if len(eligible) == 0 {
+		return pkgmodel.Resource{}, false
+	}
+	return eligible[sequenceNum%len(eligible)], true
+}
+
+func (h *TestHarness) reconcileManagedDriftBeforeNextCommands(t *testing.T, model *StateModel) {
+	t.Helper()
+	if model == nil || len(model.ManagedDriftedResources) == 0 {
+		return
+	}
+	// Pending managed drift is an expected divergence until an explicit sync.
+	// Before subsequent command submissions, restore the main stack/slot model to
+	// its pre-drift snapshot so command snapshots remain based on the agent's
+	// current inventory rather than the unsynced cloud state.
+	for _, drift := range model.ManagedDriftedResources {
+		if !drift.PendingSync {
+			continue
+		}
+		stackIdx, slotIdx, ok := model.findResourceSlot(drift.StackLabel, drift.ResourceLabel)
+		if !ok {
+			continue
+		}
+		if drift.SnapshotState == StateExists {
+			model.ApplyCreated(stackIdx, []int{slotIdx}, drift.SnapshotProperties)
+		} else {
+			model.ApplyDestroyed(stackIdx, []int{slotIdx})
+		}
+	}
 }
 
 func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
 	h.PutCloudState(t, op.NativeID, op.ResourceType, op.Properties)
-	model.UnmanagedNativeIDs[op.NativeID] = true
+	model.ApplyUnmanagedCloudCreate(op.NativeID, op.ResourceType, op.Properties)
 	t.Logf("[op %d] CloudCreate: %s (%s)", op.SequenceNum, op.NativeID, op.ResourceType)
 
 	for _, child := range op.CloudChildren {
 		h.PutCloudState(t, child.NativeID, child.ResourceType, child.Properties)
-		model.UnmanagedNativeIDs[child.NativeID] = true
+		model.ApplyUnmanagedCloudCreate(child.NativeID, child.ResourceType, child.Properties)
 		t.Logf("[op %d] CloudCreate child: %s (%s)", op.SequenceNum, child.NativeID, child.ResourceType)
 	}
 }
@@ -1660,7 +1910,7 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected)
 		}
 	}
-	h.reconcileAmbiguousFailedCommandsToInventory(t, model, drained)
+	h.reconcileAmbiguousFailedCommands(t, model, drained)
 	model.AcceptedCommands = nil
 
 	// If any stack has an expired TTL, the background StackExpirer will
@@ -1671,8 +1921,79 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	h.reconcileCrossStackSlotsToInventory(t, model)
 }
 
-func (h *TestHarness) reconcileAmbiguousFailedCommandsToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
+func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *StateModel, drained []drainedCommand) {
 	t.Helper()
+	opLog, err := h.TryGetOperationLog()
+	if err != nil {
+		t.Logf("reconcileAmbiguousFailedCommands: skipping operation-log inspection: %v", err)
+		h.reconcileExplicitFailedResourcesToInventory(t, model, drained)
+		h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
+		return
+	}
+	activitySeen := false
+	for _, dc := range drained {
+		if dc.cmd == nil || dc.cmd.State == "Success" {
+			continue
+		}
+		if hasOperationLogActivity(operationLogWindow(opLog, dc.ac.OpLogSize)) {
+			activitySeen = true
+			break
+		}
+	}
+	if activitySeen {
+		t.Logf("reconcileAmbiguousFailedCommands: observed plugin activity for ambiguous failed commands; relying on command-response reconciliation for non-cross-stack resources")
+	}
+
+	h.reconcileExplicitFailedResourcesToInventory(t, model, drained)
+	h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
+}
+
+func (h *TestHarness) reconcileExplicitFailedResourcesToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
+	t.Helper()
+	if model == nil {
+		return
+	}
+
+	managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
+	if err != nil {
+		return
+	}
+	inventoryByKey := make(map[string]pkgmodel.Resource, len(managedInventory))
+	for _, res := range managedInventory {
+		inventoryByKey[res.Stack+"/"+res.Label] = res
+	}
+
+	for _, dc := range drained {
+		if dc.cmd == nil || dc.cmd.State == "Success" {
+			continue
+		}
+		for _, ru := range dc.cmd.ResourceUpdates {
+			if ru.State == "Success" {
+				continue
+			}
+			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
+			if stackIdx == -1 || slotIdx == -1 {
+				continue
+			}
+			if model.Pool != nil && model.Pool.IsCrossStack(slotIdx) {
+				continue
+			}
+			key := ru.StackName + "/" + ru.ResourceLabel
+			if invRes, ok := inventoryByKey[key]; ok {
+				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(invRes.Properties))
+				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
+			} else {
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+			}
+		}
+	}
+}
+
+func (h *TestHarness) reconcileCrossStackAmbiguousFailedCommandsToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
+	t.Helper()
+	if model == nil || model.Pool == nil {
+		return
+	}
 
 	forma, err := h.client.ExtractResources("managed:true")
 	if err != nil {
@@ -1691,7 +2012,7 @@ func (h *TestHarness) reconcileAmbiguousFailedCommandsToInventory(t *testing.T, 
 			continue
 		}
 		for _, snap := range dc.ac.Snapshots {
-			if model.Pool != nil && model.Pool.IsCrossStack(snap.SlotIndex) {
+			if !model.Pool.IsCrossStack(snap.SlotIndex) {
 				continue
 			}
 			res := model.Resource(snap.StackIndex, snap.SlotIndex)
@@ -1708,7 +2029,7 @@ func (h *TestHarness) reconcileAmbiguousFailedCommandsToInventory(t *testing.T, 
 		}
 		for _, ru := range dc.cmd.ResourceUpdates {
 			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
-			if stackIdx == -1 || slotIdx == -1 {
+			if stackIdx == -1 || slotIdx == -1 || !model.Pool.IsCrossStack(slotIdx) {
 				continue
 			}
 			key := ru.StackName + "/" + ru.ResourceLabel
@@ -1835,6 +2156,11 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 		}
 		applyCommandOutcomeToModel(t, cmd, model, model.Pool)
 		if cmd.State == "Success" {
+			// TTL expiry is modeled as whole-stack deletion. The returned command
+			// response is not guaranteed to enumerate every slot the model tracks,
+			// so we normalize the full stack to NotExist once the TTL command
+			// succeeds. ApplyDestroyed is idempotent, so this is safe even when
+			// the command response already covered some or all of these resources.
 			for slotIdx := range model.Stack(stackIdx).Resources {
 				if model.Stack(stackIdx).Resources[slotIdx] != nil {
 					model.ApplyDestroyed(stackIdx, []int{slotIdx})
@@ -2414,7 +2740,7 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	model.SaveLastReconcile(op.StackIndex, existingIDs, model.CurrentProperties(op.StackIndex, existingIDs))
 	model.Stacks[op.StackIndex].TTLExpired = op.TTLExpired
 	model.Stacks[op.StackIndex].TTL = true
-	model.TrackAcceptedCommand(commandID, snapshots)
+	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
 	t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → accepted, model updated", op.SequenceNum, stackLabel, op.TTLExpired)
 }
 
@@ -2468,7 +2794,7 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 			model.ApplyCascadeDestroyed(stackIdx, idx)
 		}
 		model.Stacks[stackIdx].TTLExpired = false
-		model.TrackAcceptedCommand(commandID, snapshots)
+		model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }
