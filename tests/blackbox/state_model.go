@@ -279,6 +279,22 @@ func (m *StateModel) ManagedDriftNativeIDs() map[string]bool {
 	return ignore
 }
 
+func (m *StateModel) PendingManagedDriftCloudState() (map[string]string, map[string]bool) {
+	propsByNativeID := make(map[string]string)
+	deleted := make(map[string]bool)
+	for nativeID, res := range m.ManagedDriftedResources {
+		if !res.PendingSync {
+			continue
+		}
+		if res.PresentInCloud {
+			propsByNativeID[nativeID] = res.CloudProperties
+		} else {
+			deleted[nativeID] = true
+		}
+	}
+	return propsByNativeID, deleted
+}
+
 func (m *StateModel) HasPendingManagedDriftForResource(stackLabel, resourceLabel string) bool {
 	for _, res := range m.ManagedDriftedResources {
 		if res.PendingSync && res.StackLabel == stackLabel && res.ResourceLabel == resourceLabel {
@@ -318,6 +334,14 @@ func (m *StateModel) HasPendingManagedDriftAffectingSlot(stackIdx, slotIdx int) 
 		}
 	}
 	return false
+}
+
+func (m *StateModel) ClearManagedDriftForResource(stackLabel, resourceLabel string) {
+	for nativeID, res := range m.ManagedDriftedResources {
+		if res.StackLabel == stackLabel && res.ResourceLabel == resourceLabel {
+			delete(m.ManagedDriftedResources, nativeID)
+		}
+	}
 }
 
 func (m *StateModel) applyManagedDriftToResource(expected *ExpectedManagedDrift, actual *pkgmodel.Resource) {

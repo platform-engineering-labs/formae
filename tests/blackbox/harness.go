@@ -197,7 +197,7 @@ func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.C
 		if err == nil && current != nil && current.CommandID != "" && current.CommandID != beforeID {
 			return h.waitForCommand(current.CommandID, time.Until(deadline))
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	return nil, false
 }
@@ -379,7 +379,7 @@ func (h *TestHarness) KillAgent(t *testing.T) {
 // RestartAgent starts a new agent subprocess with the same config (same SQLite DB).
 // Reconstructs the plugin's cloud state from the agent's inventory and the OOB
 // mirror, re-programs response sequences, then opens the gate.
-func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
+func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ...*StateModel) {
 	t.Helper()
 
 	// Start the agent but DON'T open the gate yet — ReRunIncompleteCommands
@@ -397,12 +397,23 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
 	// resolvables before re-injection, otherwise the plugin returns $res objects
 	// on Read, which corrupts the $ref.$value in mergeRefsPreservingUserRefs.
 	forma, err := h.client.ExtractResources("managed:true")
+	pendingManagedProps := map[string]string{}
+	pendingManagedDeletes := map[string]bool{}
+	if len(model) > 0 && model[0] != nil {
+		pendingManagedProps, pendingManagedDeletes = model[0].PendingManagedDriftCloudState()
+	}
 	if err == nil && forma != nil {
 		for _, res := range forma.Resources {
 			if res.NativeID == "" {
 				continue
 			}
+			if pendingManagedDeletes[res.NativeID] {
+				continue
+			}
 			flatProps := flattenPropertiesForCloud(res.Properties)
+			if driftProps, ok := pendingManagedProps[res.NativeID]; ok {
+				flatProps = driftProps
+			}
 			_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 				NativeID:     res.NativeID,
 				ResourceType: res.Type,
@@ -416,6 +427,12 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
 
 	// Re-inject OOB cloud state from the mirror (resources not in inventory).
 	for _, entry := range h.cloudStateMirror {
+		if _, ok := pendingManagedProps[entry.NativeID]; ok {
+			continue
+		}
+		if pendingManagedDeletes[entry.NativeID] {
+			continue
+		}
 		_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 			NativeID:     entry.NativeID,
 			ResourceType: entry.ResourceType,
