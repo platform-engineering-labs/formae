@@ -331,8 +331,9 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", ac.CommandID, cmd.State)
 		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool))
+		h.reconcileManagedDriftOverriddenByCommand(t, model, &cmd)
 		h.observeManagedDriftInventory(t, model, 2*time.Second)
-		h.reconcileExplicitFailedResourcesToInventory(t, model, []drainedCommand{{ac: ac, cmd: &cmd}})
+		h.reconcileExplicitCommandResourcesToInventory(t, model, []drainedCommand{{ac: ac, cmd: &cmd}})
 	}
 
 	model.AcceptedCommands = remaining
@@ -1054,7 +1055,7 @@ func (h *TestHarness) executeCrashAgent(t *testing.T, model *StateModel) {
 	t.Logf(">>> OpCrashAgent: killing agent")
 
 	h.KillAgent(t)
-	h.RestartAgent(t, 30*time.Second)
+	h.RestartAgent(t, 30*time.Second, model)
 
 	t.Logf(">>> OpCrashAgent: agent restarted, state re-injected")
 
@@ -1550,7 +1551,7 @@ func (h *TestHarness) executeTriggerSync(t *testing.T, model *StateModel) {
 		t.Logf("TriggerSync error (may be expected): %v", err)
 		return
 	}
-	if _, ok := h.WaitForNextSyncCommand(10 * time.Second); !ok {
+	if _, ok := h.WaitForNextSyncCommand(2 * time.Second); !ok {
 		t.Logf("TriggerSync: no new sync command observed")
 	}
 	h.observeUnmanagedInventory(t, model, 2*time.Second)
@@ -1908,6 +1909,7 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 		dc := drained[i]
 		if dc.cmd != nil {
 			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected)
+			h.reconcileManagedDriftOverriddenByCommand(t, model, dc.cmd)
 		}
 	}
 	h.reconcileAmbiguousFailedCommands(t, model, drained)
@@ -1921,12 +1923,66 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	h.reconcileCrossStackSlotsToInventory(t, model)
 }
 
+func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, model *StateModel, cmd *apimodel.Command) {
+	t.Helper()
+	if model == nil || cmd == nil || len(model.ManagedDriftedResources) == 0 {
+		return
+	}
+	for _, ru := range cmd.ResourceUpdates {
+		if ru.State != "Success" {
+			continue
+		}
+		if !model.HasPendingManagedDriftForResource(ru.StackName, ru.ResourceLabel) {
+			continue
+		}
+		key := ru.StackName + "/" + ru.ResourceLabel
+		invRes, ok := h.waitForManagedResourceInventory(key, ru.Operation, 2*time.Second)
+		if ru.Operation == "delete" {
+			if ok && invRes.NativeID != "" {
+				h.DeleteCloudState(t, invRes.NativeID)
+			}
+			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
+			continue
+		}
+		if ok {
+			h.PutCloudState(t, invRes.NativeID, invRes.Type, flattenPropertiesForCloud(invRes.Properties))
+			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
+		}
+	}
+}
+
+func (h *TestHarness) waitForManagedResourceInventory(key, operation string, timeout time.Duration) (pkgmodel.Resource, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
+		if err == nil {
+			found := false
+			for _, res := range managedInventory {
+				if res.Stack+"/"+res.Label == key {
+					found = true
+					if operation == "delete" {
+						break
+					}
+					return res, true
+				}
+			}
+			if operation == "delete" && !found {
+				return pkgmodel.Resource{}, true
+			}
+		}
+		if time.Now().After(deadline) {
+			return pkgmodel.Resource{}, false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *StateModel, drained []drainedCommand) {
 	t.Helper()
 	opLog, err := h.TryGetOperationLog()
 	if err != nil {
 		t.Logf("reconcileAmbiguousFailedCommands: skipping operation-log inspection: %v", err)
-		h.reconcileExplicitFailedResourcesToInventory(t, model, drained)
+		h.reconcileExplicitCommandResourcesToInventory(t, model, drained)
 		h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
 		return
 	}
@@ -1944,11 +2000,11 @@ func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *Stat
 		t.Logf("reconcileAmbiguousFailedCommands: observed plugin activity for ambiguous failed commands; relying on command-response reconciliation for non-cross-stack resources")
 	}
 
-	h.reconcileExplicitFailedResourcesToInventory(t, model, drained)
+	h.reconcileExplicitCommandResourcesToInventory(t, model, drained)
 	h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
 }
 
-func (h *TestHarness) reconcileExplicitFailedResourcesToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
+func (h *TestHarness) reconcileExplicitCommandResourcesToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
 	t.Helper()
 	if model == nil {
 		return
@@ -1964,11 +2020,11 @@ func (h *TestHarness) reconcileExplicitFailedResourcesToInventory(t *testing.T, 
 	}
 
 	for _, dc := range drained {
-		if dc.cmd == nil || dc.cmd.State == "Success" {
+		if dc.cmd == nil {
 			continue
 		}
 		for _, ru := range dc.cmd.ResourceUpdates {
-			if ru.State == "Success" {
+			if ru.State == "Success" && ru.Properties != nil {
 				continue
 			}
 			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
@@ -2190,7 +2246,7 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 		return
 	}
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		// Try to trigger the TTL check via the API.
 		h.ForceCheckTTLAndWait(t, model)
@@ -2243,7 +2299,7 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 			return
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 	}
 
 	t.Logf("drainExpiredTTLStacks: timed out waiting for expired TTL stacks to be processed")
