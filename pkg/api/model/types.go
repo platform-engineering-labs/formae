@@ -21,8 +21,9 @@ type Description struct {
 }
 
 type Simulation struct {
-	ChangesRequired bool    `json:"ChangesRequired"`
-	Command         Command `json:"Command"`
+	ChangesRequired bool     `json:"ChangesRequired"`
+	Command         Command  `json:"Command"`
+	Warnings        []string `json:"Warnings,omitempty"`
 }
 
 type ListCommandStatusResponse struct {

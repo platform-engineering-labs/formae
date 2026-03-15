@@ -23,12 +23,20 @@ import (
 )
 
 func RenderSimulation(s *apimodel.Simulation) (string, error) {
+	var buf strings.Builder
+
+	for _, warning := range s.Warnings {
+		buf.WriteString(display.Gold("⚠ " + warning))
+		buf.WriteString("\n")
+	}
+
 	renderHeader := func(cmd apimodel.Command) string { return "Command will" }
 	command, err := renderCommand(s.Command, renderHeader, formatSimulatedResourceUpdate, formatSimulatedTargetUpdate, formatSimulatedStackUpdate, formatSimulatedPolicyUpdate)
 	if err != nil {
 		return "", err
 	}
-	return command, nil
+	buf.WriteString(command)
+	return buf.String(), nil
 }
 
 func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, error) {
