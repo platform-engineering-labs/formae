@@ -135,6 +135,8 @@ func removeWriteOnlyFields(document []byte, writeOnlyFields []string) ([]byte, e
 
 // removeNestedField removes a field at the given path from a nested map structure.
 // For example, path ["LoginProfile", "Password"] removes the Password key from LoginProfile.
+// Handles array traversal: if a path segment resolves to an array, the remaining
+// path is applied to every map element in that array.
 func removeNestedField(obj map[string]any, path []string) {
 	if len(path) == 0 {
 		return
@@ -145,9 +147,24 @@ func removeNestedField(obj map[string]any, path []string) {
 		return
 	}
 
+	val, exists := obj[path[0]]
+	if !exists {
+		return
+	}
+
 	// Navigate to the nested object
-	if nested, ok := obj[path[0]].(map[string]any); ok {
+	if nested, ok := val.(map[string]any); ok {
 		removeNestedField(nested, path[1:])
+		return
+	}
+
+	// Handle arrays: apply remaining path to each map element
+	if arr, ok := val.([]any); ok {
+		for _, elem := range arr {
+			if elemMap, ok := elem.(map[string]any); ok {
+				removeNestedField(elemMap, path[1:])
+			}
+		}
 	}
 }
 
@@ -187,6 +204,8 @@ func removeProviderDefaultFields(document []byte, patch []byte, hasProviderDefau
 
 // fieldExistsInMap checks if a field at the given path exists in a nested map structure.
 // For example, path ["BucketEncryption", "Rules"] checks if obj["BucketEncryption"]["Rules"] exists.
+// Handles array traversal: if a path segment resolves to an array, checks whether
+// the remaining path exists in any map element of that array.
 func fieldExistsInMap(obj map[string]any, path []string) bool {
 	if len(path) == 0 {
 		return false
@@ -204,6 +223,17 @@ func fieldExistsInMap(obj map[string]any, path []string) bool {
 	// Navigate to the nested object
 	if nested, ok := val.(map[string]any); ok {
 		return fieldExistsInMap(nested, path[1:])
+	}
+
+	// Handle arrays: check if remaining path exists in any map element
+	if arr, ok := val.([]any); ok {
+		for _, elem := range arr {
+			if elemMap, ok := elem.(map[string]any); ok {
+				if fieldExistsInMap(elemMap, path[1:]) {
+					return true
+				}
+			}
+		}
 	}
 
 	return false
