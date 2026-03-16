@@ -17,12 +17,12 @@ body:
         - Include as much relevant information as possible.
 
   - type: textarea
-    id: version
+    id: status
     attributes:
-      label: Version
+      label: Status
       description: |
-        Run `formae —version` to show the version. Note: if you are not on the latest version, try upgrading first as your issue might already be resolved.
-      placeholder: Output of `formae —version`
+        Run `formae status agent --output-consumer machine` to show the version. Note: if you are not on the latest version, try upgrading first as your issue might already be resolved.
+      placeholder: Output of `formae status agent --output-consumer machine`
       render: markdown
     validations:
       required: true
