@@ -102,6 +102,7 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 	default:
 		return model.Schema{
 			Identifier: "BucketName",
+			Portable:   true,
 			Fields: []string{
 				"AccelerateConfiguration",
 				"AccessControl",

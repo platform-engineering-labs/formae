@@ -62,6 +62,7 @@ func TestApplyForma_TargetReplace_HappyPath(t *testing.T) {
 					Stack:   "test-stack",
 					Target:  "test-target",
 					Managed: true,
+					Schema:  pkgmodel.Schema{Identifier: "BucketName", Portable: true},
 				},
 			},
 			Targets: []pkgmodel.Target{
@@ -100,6 +101,7 @@ func TestApplyForma_TargetReplace_HappyPath(t *testing.T) {
 					Stack:   "test-stack",
 					Target:  "test-target",
 					Managed: true,
+					Schema:  pkgmodel.Schema{Identifier: "BucketName", Portable: true},
 				},
 			},
 			Targets: []pkgmodel.Target{
@@ -192,6 +194,7 @@ func TestApplyForma_TargetReplace_SimulateWarnsAboutUnmanagedResources(t *testin
 					Stack:   "test-stack",
 					Target:  "test-target",
 					Managed: true,
+					Schema:  pkgmodel.Schema{Identifier: "BucketName", Portable: true},
 				},
 			},
 			Targets: []pkgmodel.Target{
@@ -242,6 +245,7 @@ func TestApplyForma_TargetReplace_SimulateWarnsAboutUnmanagedResources(t *testin
 					Stack:   "test-stack",
 					Target:  "test-target",
 					Managed: true,
+					Schema:  pkgmodel.Schema{Identifier: "BucketName", Portable: true},
 				},
 			},
 			Targets: []pkgmodel.Target{

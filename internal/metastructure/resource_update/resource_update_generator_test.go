@@ -1128,7 +1128,7 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, updates, 2, "Should have delete for old type and create for new type")
@@ -1154,4 +1154,56 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 	// They should be treated as independent, not as a replacement
 	assert.Empty(t, deleteOp.GroupID, "Delete should not be grouped (not a replacement)")
 	assert.Empty(t, createOp.GroupID, "Create should not be grouped (not a replacement)")
+}
+
+func TestTargetReplace_Destroy_IgnoresPortability(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	subnetKsuid := util.NewID()
+
+	// Store a non-portable subnet in DB
+	existingSubnet := pkgmodel.Resource{
+		Label:      "my-subnet",
+		Type:       "AWS::EC2::Subnet",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      subnetKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.1.0/24"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: false,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existingSubnet},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	require.NoError(t, err)
+
+	// Destroy the non-portable subnet - should succeed regardless of portability
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:  "my-subnet",
+				Type:   "AWS::EC2::Subnet",
+				Stack:  "infra",
+				Target: "aws-prod",
+			},
+		},
+	}
+
+	targetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+
+	updates, err := generateResourceUpdatesForDestroy(forma, FormaCommandSourceUser, targetMap, ds, nil)
+
+	require.NoError(t, err, "destroy should ignore portability")
+	assert.Len(t, updates, 1)
+	assert.Equal(t, OperationDelete, updates[0].Operation)
+	assert.Equal(t, "my-subnet", updates[0].DesiredState.Label)
 }

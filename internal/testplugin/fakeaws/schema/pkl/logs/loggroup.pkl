@@ -25,6 +25,7 @@ open class LogGroupResolvable extends formae.Resolvable {
 @fakeaws.ResourceHint {
     type = module.type
     identifier = "LogGroupName"
+    portable = true
 }
 open class LogGroup extends formae.Resource {
     @fakeaws.FieldHint {

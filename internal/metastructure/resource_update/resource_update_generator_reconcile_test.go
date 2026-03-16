@@ -344,6 +344,7 @@ func TestGenerateResourceUpdatesForReconcile_NewResourceUpdateForCreate(t *testi
 		mode,
 		FormaCommandSourceUser,
 		targetMap,
+		targetMap,
 		ds,
 		nil,
 	)
@@ -486,6 +487,7 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 		forma,
 		mode,
 		FormaCommandSourceUser,
+		targetMap,
 		targetMap,
 		ds,
 		nil,
@@ -697,6 +699,7 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 		mode,
 		FormaCommandSourceUser,
 		targetMap,
+		targetMap,
 		ds,
 		nil,
 	)
@@ -806,7 +809,7 @@ func TestGenerateResourceUpdatesForReconcile_MissingResolvable(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 }
@@ -902,7 +905,7 @@ func TestResourceUpdatesForReconcile_GeneratesUpdateOperationsForUnmanagedResour
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -956,7 +959,7 @@ func TestGenerateResourceUpdatesForReconcile_Create(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
@@ -1013,7 +1016,7 @@ func TestGenerateResourceUpdatesForReconcile_StackExists_NoChanges(t *testing.T)
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 0) // No changes needed
 }
@@ -1102,7 +1105,7 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationDelete, updates[0].Operation)
@@ -1190,7 +1193,7 @@ func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -1277,7 +1280,7 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 2)
 
@@ -1490,4 +1493,313 @@ func TestGenerateResourceUpdatesForReconcile_AddNewResourceWithForwardReference(
 		}
 	}
 	assert.GreaterOrEqual(t, createCount, 2, "should create at least my-queue-2 and my-queue-policy-2")
+}
+
+func TestTargetReplace_Reconcile_AllPortable(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	vpcKsuid := util.NewID()
+
+	existingVpc := pkgmodel.Resource{
+		Label:      "my-vpc",
+		Type:       "AWS::EC2::VPC",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      vpcKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: true,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existingVpc},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	assert.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "infra"}},
+		Targets: []pkgmodel.Target{{Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "my-vpc",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "infra",
+				Target:     "aws-prod",
+				Ksuid:      vpcKsuid,
+				Managed:    true,
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				Schema: pkgmodel.Schema{
+					Fields:   []string{"CidrBlock"},
+					Portable: true,
+				},
+			},
+		},
+	}
+
+	replacedTargets := map[string]bool{"aws-prod": true}
+
+	existingTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+	desiredTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		existingTargetMap,
+		desiredTargetMap,
+		ds,
+		replacedTargets,
+	)
+
+	assert.NoError(t, err)
+
+	deleteCount := 0
+	createCount := 0
+	for _, u := range updates {
+		if u.Operation == OperationDelete {
+			deleteCount++
+		}
+		if u.Operation == OperationCreate {
+			createCount++
+		}
+	}
+	assert.Equal(t, 1, deleteCount, "should have 1 delete for vpc")
+	assert.Equal(t, 1, createCount, "should have 1 create for vpc")
+}
+
+func TestTargetReplace_Reconcile_NonPortableInForma_Rejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	subnetKsuid := util.NewID()
+
+	existingSubnet := pkgmodel.Resource{
+		Label:      "my-subnet",
+		Type:       "AWS::EC2::Subnet",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      subnetKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.1.0/24"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: false,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existingSubnet},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	assert.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "infra"}},
+		Targets: []pkgmodel.Target{{Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "my-subnet",
+				Type:       "AWS::EC2::Subnet",
+				Stack:      "infra",
+				Target:     "aws-prod",
+				Ksuid:      subnetKsuid,
+				Managed:    true,
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.1.0/24"}`),
+				Schema: pkgmodel.Schema{
+					Fields:   []string{"CidrBlock"},
+					Portable: false,
+				},
+			},
+		},
+	}
+
+	replacedTargets := map[string]bool{"aws-prod": true}
+
+	existingTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+	desiredTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)},
+	}
+
+	_, err = generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		existingTargetMap,
+		desiredTargetMap,
+		ds,
+		replacedTargets,
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not portable")
+	assert.Contains(t, err.Error(), "AWS::EC2::Subnet")
+}
+
+func TestTargetReplace_Reconcile_NonPortableNotInForma_Succeeds(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	vpcKsuid := util.NewID()
+	subnetKsuid := util.NewID()
+
+	existingVpc := pkgmodel.Resource{
+		Label:      "my-vpc",
+		Type:       "AWS::EC2::VPC",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      vpcKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: true,
+		},
+	}
+
+	existingSubnet := pkgmodel.Resource{
+		Label:      "my-subnet",
+		Type:       "AWS::EC2::Subnet",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      subnetKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.1.0/24"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: false,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existingVpc, existingSubnet},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	assert.NoError(t, err)
+
+	// Forma includes only VPC. In reconcile mode, the subnet is NOT in the forma,
+	// so it will only be deleted (not recreated). Non-portable is fine for delete-only.
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "infra"}},
+		Targets: []pkgmodel.Target{{Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "my-vpc",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "infra",
+				Target:     "aws-prod",
+				Ksuid:      vpcKsuid,
+				Managed:    true,
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				Schema: pkgmodel.Schema{
+					Fields:   []string{"CidrBlock"},
+					Portable: true,
+				},
+			},
+		},
+	}
+
+	replacedTargets := map[string]bool{"aws-prod": true}
+
+	existingTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+	desiredTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		existingTargetMap,
+		desiredTargetMap,
+		ds,
+		replacedTargets,
+	)
+
+	assert.NoError(t, err)
+
+	// Subnet should only have delete ops (implicit reconcile delete), not create
+	for _, u := range updates {
+		if u.DesiredState.Label == "my-subnet" {
+			assert.Equal(t, OperationDelete, u.Operation, "subnet should only be deleted, not recreated")
+		}
+	}
+}
+
+func TestTargetReplace_Reconcile_TargetOnlyForma_RecreatesAll(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	vpcKsuid := util.NewID()
+
+	existingVpc := pkgmodel.Resource{
+		Label:      "my-vpc",
+		Type:       "AWS::EC2::VPC",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      vpcKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: true,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existingVpc},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	assert.NoError(t, err)
+
+	// Forma has only a target, no resources, no stacks
+	forma := &pkgmodel.Forma{
+		Targets: []pkgmodel.Target{{Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)}},
+	}
+
+	replacedTargets := map[string]bool{"aws-prod": true}
+
+	existingTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+	desiredTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		existingTargetMap,
+		desiredTargetMap,
+		ds,
+		replacedTargets,
+	)
+
+	assert.NoError(t, err)
+
+	deleteCount := 0
+	createCount := 0
+	for _, u := range updates {
+		if u.Operation == OperationDelete {
+			deleteCount++
+		}
+		if u.Operation == OperationCreate {
+			createCount++
+		}
+	}
+	assert.Equal(t, 1, deleteCount, "should have 1 delete for vpc")
+	assert.Equal(t, 1, createCount, "should have 1 create for vpc")
 }

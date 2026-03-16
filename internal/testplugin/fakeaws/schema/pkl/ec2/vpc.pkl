@@ -25,6 +25,7 @@ open class VPCResolvable extends formae.Resolvable {
 @fakeaws.ResourceHint {
     type = module.type
     identifier = "VpcId"
+    portable = true
 }
 open class VPC extends formae.Resource {
     @fakeaws.FieldHint {

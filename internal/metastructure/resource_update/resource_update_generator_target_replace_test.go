@@ -22,7 +22,8 @@ func TestGenerateResourceUpdates_TargetReplace_Reconcile_StackInForma(t *testing
 	ksuidA := util.NewID()
 
 	bucketSchema := pkgmodel.Schema{
-		Fields: []string{"BucketName"},
+		Fields:   []string{"BucketName"},
+		Portable: true,
 	}
 
 	// Resource A exists in DB on target aws-prod
@@ -88,7 +89,8 @@ func TestGenerateResourceUpdates_TargetReplace_Reconcile_StackNotInForma(t *test
 	ksuidD := util.NewID()
 
 	lambdaSchema := pkgmodel.Schema{
-		Fields: []string{"FunctionName"},
+		Fields:   []string{"FunctionName"},
+		Portable: true,
 	}
 
 	// Resource D exists on stack "api" which is NOT in the forma
@@ -142,7 +144,8 @@ func TestGenerateResourceUpdates_TargetReplace_Patch(t *testing.T) {
 	ksuidB := util.NewID()
 
 	bucketSchema := pkgmodel.Schema{
-		Fields: []string{"BucketName"},
+		Fields:   []string{"BucketName"},
+		Portable: true,
 	}
 
 	// Resource A in forma on stack "web"
