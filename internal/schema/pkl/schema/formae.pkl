@@ -500,12 +500,21 @@ class Fq {
         else
             throw("Expected DeclaredType for SubResource")
 
+    /// Unwraps type aliases to get the underlying declared type.
+    /// For example, unwraps `ContainerDefinitionDockerLabels` → `Mapping<String, Any>`.
+    function unwrapTypeAlias(type: reflect.Type): reflect.Type =
+        if (type is reflect.DeclaredType && type.referent is reflect.TypeAlias)
+            unwrapTypeAlias(type.referent.referent)
+        else
+            type
+
     /// Checks if a property type is a nullable Listing (Listing<T>?).
     /// Used to render empty lists instead of null for nullable Listing fields,
     /// ensuring they appear as [] in JSON output rather than being omitted.
+    /// Handles type aliases (e.g., `typealias MyList = Listing<String>`).
     function isNullableListingType(type: reflect.Type): Boolean =
         if (type is reflect.NullableType)
-            let(inner = type.member)
+            let(inner = unwrapTypeAlias(type.member))
             inner is reflect.DeclaredType && inner.referent.name == "Listing"
         else
             false
@@ -513,9 +522,10 @@ class Fq {
     /// Checks if a property type is a nullable Mapping (Mapping<K,V>?).
     /// Used to render empty mappings instead of null for nullable Mapping fields,
     /// ensuring they appear as {} in JSON output rather than being omitted.
+    /// Handles type aliases (e.g., `typealias DockerLabels = Mapping<String, Any>`).
     function isNullableMappingType(type: reflect.Type): Boolean =
         if (type is reflect.NullableType)
-            let(inner = type.member)
+            let(inner = unwrapTypeAlias(type.member))
             inner is reflect.DeclaredType && inner.referent.name == "Mapping"
         else
             false
