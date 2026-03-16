@@ -10,6 +10,7 @@ type Schema struct {
 	Hints        map[string]FieldHint `json:"Hints" pkl:"Hints"`
 	Discoverable bool                 `json:"Discoverable" pkl:"Discoverable"`
 	Extractable  bool                 `json:"Extractable" pkl:"Extractable"`
+	Portable     bool                 `json:"Portable" pkl:"Portable"`
 }
 
 type FieldHint struct {
