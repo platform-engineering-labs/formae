@@ -17,15 +17,29 @@ body:
         - Include as much relevant information as possible.
 
   - type: textarea
-    id: status
+    id: version
     attributes:
-      label: Status
+      label: Version
       description: |
-        Run `formae status agent --output-consumer machine` to show the version. Note: if you are not on the latest version, try upgrading first as your issue might already be resolved.
-      placeholder: Output of `formae status agent --output-consumer machine`
+        Run `formae --version` to show the version. Note: if you are not on the latest version, try upgrading first as your issue might already be resolved.
+      placeholder: Output of `formae --version`
       render: markdown
     validations:
       required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Agent status
+      description: |
+        Run `formae status agent` and paste the output below. This helps us understand your environment and plugin versions.
+      value: |
+        ```
+        ...paste output of `formae status agent` here...
+        ```
+      render: markdown
+    validations:
+      required: false
 
   - type: textarea
     id: config
