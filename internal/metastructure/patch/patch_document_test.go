@@ -1032,6 +1032,124 @@ func TestHasValue(t *testing.T) {
 	}
 }
 
+func TestRemoveProviderDefaultFields_NestedFieldInsideArray(t *testing.T) {
+	// Simulates ECS ContainerDefinitions: provider default fields (Cpu, Essential)
+	// are nested inside an array of sub-resources. The path "ContainerDefinitions.Cpu"
+	// must traverse the array and remove Cpu from each element.
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx", "Cpu": 0, "Essential": true},
+			{"Name": "sidecar", "Image": "envoy", "Cpu": 0, "Essential": false}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx", "Essential": true},
+			{"Name": "sidecar", "Image": "envoy", "Essential": false}
+		]
+	}`)
+
+	// Cpu has provider default and is NOT in desired state → should be removed from document
+	// Essential has provider default but IS in desired state → should NOT be removed
+	result, err := removeProviderDefaultFields(document, patch, []string{"ContainerDefinitions.Cpu", "ContainerDefinitions.Essential"})
+	require.NoError(t, err)
+
+	var resultMap map[string]any
+	err = json.Unmarshal(result, &resultMap)
+	require.NoError(t, err)
+
+	containers := resultMap["ContainerDefinitions"].([]any)
+	require.Len(t, containers, 2)
+
+	// Cpu should be removed from both containers (not in desired state)
+	container0 := containers[0].(map[string]any)
+	_, hasCpu0 := container0["Cpu"]
+	assert.False(t, hasCpu0, "Cpu should be removed from first container when not in desired state")
+
+	container1 := containers[1].(map[string]any)
+	_, hasCpu1 := container1["Cpu"]
+	assert.False(t, hasCpu1, "Cpu should be removed from second container when not in desired state")
+
+	// Essential should be kept (present in desired state)
+	_, hasEssential0 := container0["Essential"]
+	assert.True(t, hasEssential0, "Essential should be kept when present in desired state")
+	_, hasEssential1 := container1["Essential"]
+	assert.True(t, hasEssential1, "Essential should be kept when present in desired state")
+}
+
+func TestFieldExistsInMap_ArrayTraversal(t *testing.T) {
+	obj := map[string]any{
+		"ContainerDefinitions": []any{
+			map[string]any{"Name": "app", "Image": "nginx", "Cpu": float64(0)},
+			map[string]any{"Name": "sidecar", "Image": "envoy"},
+		},
+	}
+
+	// Cpu exists in at least one array element
+	assert.True(t, fieldExistsInMap(obj, []string{"ContainerDefinitions", "Cpu"}))
+	// Name exists in array elements
+	assert.True(t, fieldExistsInMap(obj, []string{"ContainerDefinitions", "Name"}))
+	// NotPresent doesn't exist in any element
+	assert.False(t, fieldExistsInMap(obj, []string{"ContainerDefinitions", "NotPresent"}))
+}
+
+func TestRemoveNestedField_ArrayTraversal(t *testing.T) {
+	obj := map[string]any{
+		"Items": []any{
+			map[string]any{"Name": "a", "Secret": "x"},
+			map[string]any{"Name": "b", "Secret": "y"},
+		},
+	}
+
+	removeNestedField(obj, []string{"Items", "Secret"})
+
+	items := obj["Items"].([]any)
+	item0 := items[0].(map[string]any)
+	item1 := items[1].(map[string]any)
+
+	assert.Equal(t, "a", item0["Name"])
+	_, hasSecret0 := item0["Secret"]
+	assert.False(t, hasSecret0, "Secret should be removed from first element")
+
+	assert.Equal(t, "b", item1["Name"])
+	_, hasSecret1 := item1["Secret"]
+	assert.False(t, hasSecret1, "Secret should be removed from second element")
+}
+
+func TestGeneratePatch_ProviderDefaultInsideArray_NoPatch(t *testing.T) {
+	// End-to-end test: provider default fields inside arrays should not generate
+	// patch operations when the user hasn't specified them.
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx", "Cpu": 0, "DockerLabels": {}}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx", "DockerLabels": {}}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions":     {CreateOnly: true},
+			"ContainerDefinitions.Cpu": {HasProviderDefault: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "Expected no patch when only difference is provider default Cpu inside array")
+}
+
 func TestRemoveNonSchemaFields_PreservesEmptyArraysAndMaps(t *testing.T) {
 	document := []byte(`{"Name": "test", "Tags": [], "Metadata": {}}`)
 	schemaFields := []string{"Name", "Tags", "Metadata"}

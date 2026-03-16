@@ -152,6 +152,58 @@ local nestedResource = new TestWithNestedResource {
     }
 }
 
+// Test type alias for Mapping (like ContainerDefinitionDockerLabels = Mapping<String, Any>)
+local typealias TestLabels = Mapping<String, Any>
+
+// Test sub-resource with hasProviderDefault fields and nullable Mapping type alias
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestContainerDef extends formae.SubResource {
+    @formae.FieldHint{hasProviderDefault = true}
+    cpu: Int?
+
+    @formae.FieldHint
+    name: String
+
+    @formae.FieldHint
+    image: String
+
+    dockerLabels: TestLabels?
+
+    ports: Listing<String>?
+}
+
+// Test resource with Listing<SubResource> field
+@formae.ResourceHint {
+    type = "Test::TaskDefinition"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestTaskDef extends formae.Resource {
+    @formae.FieldHint{createOnly = true}
+    containerDefinitions: Listing<TestContainerDef>?
+
+    @formae.FieldHint
+    family: String
+}
+
+local testTaskDef = new TestTaskDef {
+    label = "test-taskdef"
+    family = "my-family"
+    containerDefinitions = new Listing {
+        new TestContainerDef {
+            name = "app"
+            image = "nginx"
+        }
+    }
+}
+
+local testTaskDefNoContainers = new TestTaskDef {
+    label = "test-taskdef-no-containers"
+    family = "my-family"
+}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -323,6 +375,39 @@ facts {
         // Tags should be an empty Listing, not null
         props.Tags != null &&
         props.Tags.length == 0
+    }
+
+    ["Hints propagate through Listing<SubResource>"] {
+        let (hints = testTaskDef.hints())
+        // Top-level hints
+        hints.containsKey("ContainerDefinitions") &&
+        hints["ContainerDefinitions"].CreateOnly == true &&
+        // Nested hints through Listing<SubResource>
+        hints.containsKey("ContainerDefinitions.Cpu") &&
+        hints["ContainerDefinitions.Cpu"].HasProviderDefault == true &&
+        hints.containsKey("ContainerDefinitions.Name") &&
+        hints.containsKey("ContainerDefinitions.Image")
+    }
+
+    ["Nullable Mapping renders as empty map when null"] {
+        // Test subresource rendering directly - nullable Mapping type alias should render as empty Mapping
+        let (containerProps = testTaskDef.containerDefinitions[0].props())
+        containerProps.DockerLabels != null &&
+        containerProps.DockerLabels.length == 0
+    }
+
+    ["Nullable Listing renders as empty list in sub-resource when null"] {
+        // Test subresource rendering directly - nullable Listing should render as empty Listing
+        let (containerProps = testTaskDef.containerDefinitions[0].props())
+        containerProps.Ports != null &&
+        containerProps.Ports.length == 0
+    }
+
+    ["Nullable Listing<SubResource> renders as empty list when null"] {
+        let (rendered = testTaskDefNoContainers.render())
+        let (props = rendered.Properties)
+        props.ContainerDefinitions != null &&
+        props.ContainerDefinitions.length == 0
     }
 
     ["Fq functions work at module level"] {

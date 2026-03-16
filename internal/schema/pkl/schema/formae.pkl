@@ -457,7 +457,13 @@ class Fq {
         if (type is reflect.DeclaredType)
             let(referent = type.referent)
             if (referent is reflect.Class)
-                isSubResourceClass(referent)
+                if (isSubResourceClass(referent))
+                    true
+                // Handle Listing<SubResource> — propagate hints for sub-resources in arrays
+                else if (referent.name == "Listing" && type.typeArguments.length > 0)
+                    isSubResourceType(type.typeArguments[0])
+                else
+                    false
             else if (referent is reflect.TypeAlias)
                 // Handle type alias by checking its aliased type
                 isSubResourceType(referent.referent)
@@ -477,7 +483,13 @@ class Fq {
         if (type is reflect.DeclaredType)
             let(referent = type.referent)
             if (referent is reflect.Class)
-                referent
+                if (isSubResourceClass(referent))
+                    referent
+                // Handle Listing<SubResource> — extract the SubResource class from type argument
+                else if (referent.name == "Listing" && type.typeArguments.length > 0)
+                    getSubResourceClass(type.typeArguments[0])
+                else
+                    throw("Expected SubResource or Listing<SubResource>, got: \(referent.name)")
             else if (referent is reflect.TypeAlias)
                 // Handle type alias by getting the class from the aliased type
                 getSubResourceClass(referent.referent)
@@ -488,13 +500,33 @@ class Fq {
         else
             throw("Expected DeclaredType for SubResource")
 
+    /// Unwraps type aliases to get the underlying declared type.
+    /// For example, unwraps `ContainerDefinitionDockerLabels` → `Mapping<String, Any>`.
+    function unwrapTypeAlias(type: reflect.Type): reflect.Type =
+        if (type is reflect.DeclaredType && type.referent is reflect.TypeAlias)
+            unwrapTypeAlias(type.referent.referent)
+        else
+            type
+
     /// Checks if a property type is a nullable Listing (Listing<T>?).
     /// Used to render empty lists instead of null for nullable Listing fields,
     /// ensuring they appear as [] in JSON output rather than being omitted.
+    /// Handles type aliases (e.g., `typealias MyList = Listing<String>`).
     function isNullableListingType(type: reflect.Type): Boolean =
         if (type is reflect.NullableType)
-            let(inner = type.member)
+            let(inner = unwrapTypeAlias(type.member))
             inner is reflect.DeclaredType && inner.referent.name == "Listing"
+        else
+            false
+
+    /// Checks if a property type is a nullable Mapping (Mapping<K,V>?).
+    /// Used to render empty mappings instead of null for nullable Mapping fields,
+    /// ensuring they appear as {} in JSON output rather than being omitted.
+    /// Handles type aliases (e.g., `typealias DockerLabels = Mapping<String, Any>`).
+    function isNullableMappingType(type: reflect.Type): Boolean =
+        if (type is reflect.NullableType)
+            let(inner = unwrapTypeAlias(type.member))
+            inner is reflect.DeclaredType && inner.referent.name == "Mapping"
         else
             false
 
@@ -511,7 +543,10 @@ class Fq {
                     Pair(key, rawValue)
             else
                 let(key = subResourceHint.outputKeyTransformation.apply(k))
-                let(value = if (rawValue == null && isNullableListingType(v.type)) new Listing {} else rawValue)
+                let(value =
+                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
+                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
+                    else rawValue)
                 Pair(key, value)
         ).toDynamic()
 
@@ -524,7 +559,10 @@ class Fq {
             if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
                 Pair(key, fieldHint.outputTransformation.apply(rawValue))
             else
-                let(value = if (rawValue == null && isNullableListingType(v.type)) new Listing {} else rawValue)
+                let(value =
+                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
+                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
+                    else rawValue)
                 Pair(key, value)
         ).toDynamic()
 
