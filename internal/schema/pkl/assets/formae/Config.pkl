@@ -302,6 +302,8 @@ class CliConfig {
     disableUsageReporting: Boolean = false
 
     auth: (BaseCliAuthConfig|Dynamic)?
+
+    theme: "formae" | "classic" = "formae"
 }
 
 /// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.

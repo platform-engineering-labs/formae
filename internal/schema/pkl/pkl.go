@@ -250,6 +250,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 			},
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
 			Auth:                  translateAuthConfig(&config.Cli.Auth),
+			Theme:                 config.Cli.Theme,
 		},
 	}
 
