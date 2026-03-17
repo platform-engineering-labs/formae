@@ -675,7 +675,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		// If we successfully persisted the read operation in the Synchronizing state, we should reject the resource update
 		// and exit the state machine.
 		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && hash != "" && !data.resourceUpdate.IsDelete() {
-			proc.Log().Warning("Resource update rejected as a change to the resource was detected",
+			proc.Log().Debug("Resource update rejected as a change to the resource was detected",
 				"previousProperties", string(data.resourceUpdate.PreviousProperties),
 				"currentProperties", string(data.resourceUpdate.DesiredState.Properties),
 			)
