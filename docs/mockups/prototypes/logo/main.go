@@ -278,15 +278,24 @@ func renderITerm(img image.Image, widthPx int) error {
 	resized := image.NewRGBA(image.Rect(0, 0, widthPx, heightPx))
 	draw.BiLinear.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
 
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, resized); err != nil {
+	var imgBuf bytes.Buffer
+	if err := png.Encode(&imgBuf, resized); err != nil {
 		return fmt.Errorf("png encode: %w", err)
 	}
 
-	encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
+	rawBytes := imgBuf.Bytes()
+	encoded := base64.StdEncoding.EncodeToString(rawBytes)
 
-	fmt.Printf("\033]1337;File=inline=1;preserveAspectRatio=1;size=%d:%s\a",
-		buf.Len(), encoded)
+	// Build the complete escape sequence in a buffer to ensure atomic write.
+	// Fragmented writes can cause terminals to misparse the sequence.
+	var seq bytes.Buffer
+	fmt.Fprintf(&seq, "\033]1337;File=inline=1;size=%d:%s\a", len(rawBytes), encoded)
+
+	// Single atomic write to stdout
+	_, err := os.Stdout.Write(seq.Bytes())
+	if err != nil {
+		return err
+	}
 	fmt.Println()
 	return nil
 }
