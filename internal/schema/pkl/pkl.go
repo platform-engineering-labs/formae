@@ -198,6 +198,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 				Port: int(config.Cli.API.Port),
 			},
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
+			Theme:                 config.Cli.Theme,
 		},
 		Plugins: pkgmodel.PluginConfig{
 			PluginDir:      config.Plugins.PluginDir,

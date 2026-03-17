@@ -124,6 +124,7 @@ type ArtifactConfig struct {
 type CliConfig struct {
 	API                   APIConfig
 	DisableUsageReporting bool
+	Theme                 string
 }
 
 type PluginConfig struct {

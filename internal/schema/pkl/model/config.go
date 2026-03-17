@@ -131,6 +131,7 @@ type ArtifactConfig struct {
 type CliConfig struct {
 	API                   APIConfig `pkl:"api"`
 	DisableUsageReporting bool      `pkl:"disableUsageReporting"`
+	Theme                 string    `pkl:"theme"`
 }
 
 type PluginConfig struct {

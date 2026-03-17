@@ -184,6 +184,8 @@ class CliConfig {
     api: ApiConfig
 
     disableUsageReporting: Boolean = false
+
+    theme: "formae" | "classic" = "formae"
 }
 
 class PluginConfig {
