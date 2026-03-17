@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,15 +35,36 @@ func filterTestCases(t *testing.T, testCases []TestCase) []TestCase {
 		patterns[i] = strings.TrimSpace(patterns[i])
 	}
 
-	// For each pattern, check if it exactly matches any ResourceType.
-	// If so, use exact matching for that pattern to avoid substring
-	// collisions (e.g. "s3-bucket" matching "s3-bucketpolicy").
-	// If no exact match exists, fall back to substring matching.
-	exactPatterns := make(map[string]bool)
+	// Separate regex patterns (/…/) from literal patterns.
+	// Regex patterns are compiled upfront; invalid regex causes immediate failure.
+	type compiledRegex struct {
+		re *regexp.Regexp
+	}
+	var regexPatterns []compiledRegex
+	var literalPatterns []string
+
 	for _, pattern := range patterns {
 		if pattern == "" {
 			continue
 		}
+		if strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/") {
+			inner := pattern[1 : len(pattern)-1]
+			re, err := regexp.Compile(inner)
+			if err != nil {
+				t.Fatalf("FORMAE_TEST_FILTER: invalid regex %q: %v", pattern, err)
+			}
+			regexPatterns = append(regexPatterns, compiledRegex{re: re})
+		} else {
+			literalPatterns = append(literalPatterns, pattern)
+		}
+	}
+
+	// For each literal pattern, check if it exactly matches any ResourceType.
+	// If so, use exact matching for that pattern to avoid substring
+	// collisions (e.g. "s3-bucket" matching "s3-bucketpolicy").
+	// If no exact match exists, fall back to substring matching.
+	exactPatterns := make(map[string]bool)
+	for _, pattern := range literalPatterns {
 		for _, tc := range testCases {
 			if strings.EqualFold(tc.ResourceType, pattern) {
 				exactPatterns[strings.ToLower(pattern)] = true
@@ -53,10 +75,21 @@ func filterTestCases(t *testing.T, testCases []TestCase) []TestCase {
 
 	var filtered []TestCase
 	for _, tc := range testCases {
-		for _, pattern := range patterns {
-			if pattern == "" {
-				continue
+		// Check regex patterns first
+		matched := false
+		for _, rp := range regexPatterns {
+			if rp.re.MatchString(tc.Name) || rp.re.MatchString(tc.ResourceType) {
+				matched = true
+				break
 			}
+		}
+		if matched {
+			filtered = append(filtered, tc)
+			continue
+		}
+
+		// Check literal patterns
+		for _, pattern := range literalPatterns {
 			patternLower := strings.ToLower(pattern)
 
 			if exactPatterns[patternLower] {
