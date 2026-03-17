@@ -7,8 +7,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image"
+	"image/png"
 	_ "image/png"
 	"os"
 	"strings"
@@ -19,7 +22,7 @@ import (
 )
 
 const (
-	logoPath = "/mnt/c/Users/wfhso/Downloads/Formae_Logo_dark.png"
+	defaultLogoPath = "/mnt/c/Users/wfhso/Downloads/Formae_Logo_dark.png"
 
 	// Crop region for the flower icon (right side of the 2134x556 image)
 	cropX = 1550
@@ -43,6 +46,18 @@ func main() {
 	border := lipgloss.NewStyle().Foreground(p.Border)
 
 	fmt.Println()
+
+	// iTerm2 inline images protocol (Ghostty, iTerm2)
+	for _, arg := range os.Args[1:] {
+		if arg == "--iterm" {
+			fmt.Println(title.Render("  iTerm2 inline images (Ghostty, iTerm2):"))
+			fmt.Println()
+			if err := renderITerm(img, 200); err != nil {
+				fmt.Println(lipgloss.NewStyle().Foreground(p.TextSecondary).Render("  " + err.Error()))
+			}
+			fmt.Println()
+		}
+	}
 
 	// Show braille at multiple sizes
 	sizes := []struct {
@@ -144,8 +159,18 @@ func padTo(totalWidth int, left, right string) string {
 	return strings.Repeat(" ", space)
 }
 
+func getLogoPath() string {
+	for _, arg := range os.Args[1:] {
+		if !strings.HasPrefix(arg, "--") {
+			return arg
+		}
+	}
+	return defaultLogoPath
+}
+
 func loadAndCropFlower() (image.Image, error) {
-	f, err := os.Open(logoPath)
+	path := getLogoPath()
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}
@@ -240,4 +265,28 @@ func encodeBrailleCell(img *image.RGBA, px, py int) rune {
 		}
 	}
 	return ch
+}
+
+// renderITerm renders an image using the iTerm2 inline images protocol.
+// Supported by: iTerm2, Ghostty
+func renderITerm(img image.Image, widthPx int) error {
+	bounds := img.Bounds()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	heightPx := int(float64(widthPx) * float64(srcH) / float64(srcW))
+
+	resized := image.NewRGBA(image.Rect(0, 0, widthPx, heightPx))
+	draw.BiLinear.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, resized); err != nil {
+		return fmt.Errorf("png encode: %w", err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	fmt.Printf("\033]1337;File=inline=1;preserveAspectRatio=1;size=%d:%s\a",
+		buf.Len(), encoded)
+	fmt.Println()
+	return nil
 }
