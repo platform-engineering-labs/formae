@@ -1,0 +1,74 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                      BANNER / LOGO — TUI MOCKUPS                            ║
+║                                                                              ║
+║  The formae flower icon rendered in the terminal.                            ║
+║  Primary: Sixel/Kitty graphics. Fallback: braille characters.                ║
+║  Actual rendering will be validated in terminal prototypes.                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: Full banner (non-TUI commands, e.g., start of apply/destroy)
+================================================================================
+
+  Braille fallback approximation (actual braille art TBD in prototype):
+
+  ⣿⣿⣿⣿⣿⣿⣿⣿    formae v0.82.2
+  ⣿⣿⠋⠉⠉⠋⣿⣿
+  ⣿⠋  ⣿⣿  ⠋⣿
+  ⣿⣿⠋⠉⠉⠋⣿⣿
+  ⣿⣿⣿⣿⣿⣿⣿⣿
+
+  Notes:
+  - Flower icon in orange (SecondaryAccent)
+  - "formae" text + version to the right
+  - Braille art to be crafted from the actual logo in terminal prototype
+  - Sixel/Kitty: renders the actual PNG at appropriate size
+  - Shown before simulation output, status output, etc.
+
+
+================================================================================
+VIEW 2: Compact banner (TUI header element)
+================================================================================
+
+  ┌─ ⣿⣿ formae ──────────────────────────────────────────────────────────────┐
+
+  Or with Sixel/Kitty (small inline icon):
+
+  ┌─ [icon] formae ───────────────────────────────────────────────────────────┐
+
+  Notes:
+  - Minimal: small icon + "formae" text in the panel header
+  - Used in TUI views where the full banner would waste space
+  - Icon is just a few braille cells wide
+
+
+================================================================================
+VIEW 3: No-graphics fallback (ASCII-only terminal)
+================================================================================
+
+  formae v0.82.2
+
+  Notes:
+  - Plain text, no icon
+  - For terminals that don't support braille or graphics
+  - termenv profile detection: if Ascii profile, use this
+
+
+================================================================================
+DETECTION LOGIC
+================================================================================
+
+At startup:
+  1. Check Sixel support (query terminal with escape sequence, short timeout)
+  2. Check Kitty graphics protocol support
+  3. If neither: check if terminal supports braille (Unicode block 0x2800-0x28FF)
+  4. Fallback: plain text
+
+The logo rendering is encapsulated in a function that returns a string,
+so components just call RenderLogo(size) and get the right version.
+
+Size variants:
+  - Full: used by non-TUI commands (banner before output)
+  - Compact: used in TUI panel headers
+  - None: when terminal is too narrow or graphics not supported
