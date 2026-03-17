@@ -1,0 +1,98 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    PROJECT INIT — TUI MOCKUPS                               ║
+║                                                                              ║
+║  Interactive form for: formae project init [path]                            ║
+║  Uses huh for plugin selection when --include is not specified.              ║
+║                                                                              ║
+║  Current CLI:                                                                ║
+║    formae project init ./my-project --schema pkl --include aws               ║
+║    Flags: --schema (default pkl), --include (string array), --yes            ║
+║    Only prompt today: "Continue without plugins?" when no --include          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: Interactive plugin selection (when no --include specified)
+================================================================================
+
+  formae project init ./my-project
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae project init                                                        │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Select resource plugins to include:                                        │
+  │                                                                             │
+  │  [x] aws            AWS CloudControl                                        │
+  │  [ ] azure          Azure Resource Manager                                  │
+  │  [ ] cloudflare     Cloudflare                                              │
+  │  [ ] grafana        Grafana                                                 │
+  │  [ ] proxmox        Proxmox Virtual Environment                             │
+  │                                                                             │
+  │  Schema: pkl                                                                │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  space: toggle  enter: continue  esc: cancel                                │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - huh multi-select with checkboxes
+  - Plugin list populated from installed resource plugins
+    (discovered from plugin directory or queried from the agent)
+  - These are resource plugins — not limited to cloud providers
+  - space toggles selection, ↑↓ navigates
+  - Continuing with nothing selected is allowed
+  - Schema shown as info line (not editable — use --schema flag)
+  - With --include flag: this prompt is skipped entirely
+  - With --yes flag: skips prompt, proceeds with no plugins
+
+
+================================================================================
+VIEW 2: Confirmation + output
+================================================================================
+
+After pressing enter:
+
+  Project initialized at ./my-project
+
+    Schema:   pkl
+    Plugins:  aws
+
+  Notes:
+  - Simple styled output (lipgloss)
+  - Shows path, schema, included plugins
+
+
+================================================================================
+VIEW 3: No plugins selected — confirmation
+================================================================================
+
+If user selects nothing and presses enter:
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                                                                             │
+  │  No plugins selected. The project will not include any resource plugin      │
+  │  schemas. You can add plugins later with --include.                         │
+  │                                                                             │
+  │  Continue? [y/N]                                                            │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Matches current behavior but with huh styled confirmation
+  - Explains the consequence and how to add plugins later
+
+
+================================================================================
+VIEW 4: Non-interactive (--include specified or --yes)
+================================================================================
+
+  formae project init ./my-project --include aws
+
+  Project initialized at ./my-project
+
+    Schema:   pkl
+    Plugins:  aws
+
+  Notes:
+  - No prompt, just styled output
+  - Same as View 2 but without the interactive selection step

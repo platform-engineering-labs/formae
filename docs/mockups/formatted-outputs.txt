@@ -1,0 +1,153 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  FORMATTED OUTPUTS — TUI MOCKUPS                            ║
+║                                                                              ║
+║  Print-and-exit commands styled with lipgloss:                               ║
+║  - formae eval                                                               ║
+║  - formae extract                                                            ║
+║  - formae status agent                                                       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: Eval output
+================================================================================
+
+  formae eval main.pkl
+
+  Evaluating forma:
+    File: main.pkl
+    Mode: reconcile
+
+  Evaluated forma as 'json':
+
+  {
+    "Resources": [
+      {
+        "Type": "AWS::S3::Bucket",
+        "Label": "my-bucket",
+        "Stack": "production",
+        "Target": "aws-us-east-1",
+        "Properties": {
+          "BucketName": "my-bucket",
+          "VersioningConfiguration": {
+            "Status": "Enabled"
+          },
+          "Tags": [
+            { "Key": "Environment", "Value": "production" },
+            { "Key": "ManagedBy", "Value": "formae" }
+          ]
+        }
+      },
+      {
+        "Type": "AWS::EC2::Instance",
+        "Label": "web-1",
+        "Stack": "production",
+        "Target": "aws-us-east-1",
+        "Properties": {
+          "InstanceType": "t3.medium",
+          "ImageId": "ami-0abc123def456789",
+          "SubnetId": "formae://vpc.SubnetId"
+        }
+      }
+    ],
+    "Targets": [
+      {
+        "Label": "aws-us-east-1",
+        "Namespace": "AWS",
+        "Discoverable": true,
+        "Config": {
+          "Region": "us-east-1"
+        }
+      }
+    ]
+  }
+
+  Notes:
+  - Eval outputs the serialized forma (JSON/YAML/PKL depending on --output)
+  - This is the same serialized output as today, just with a styled header
+  - The serialized output is produced by the schema plugin (SerializeForma)
+  - --beautify and --colorize flags replaced by theme system:
+    colorization auto-disabled when piped, beautify is default for human output
+  - Pipe-friendly: colors auto-disabled when stdout is not a TTY
+  - The output format mirrors pkl eval / json serialization
+
+
+================================================================================
+VIEW 2: Extract output
+================================================================================
+
+  formae extract --query='stack:production type:AWS::S3::Bucket'
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Extract to: ./extracted.pkl█                                               │
+  │                                                                             │
+  │  enter: confirm  esc: cancel                                                │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  After confirmation:
+
+  Extracted 2 resources to ./extracted.pkl
+
+    my-bucket (AWS::S3::Bucket) on stack production
+    logs (AWS::S3::Bucket) on stack production
+
+  Notes:
+  - File selector prompt (huh path input)
+  - If no PklProject found in directory tree: prompt to create one
+    (see simulation-preview.txt View 0)
+  - Summary lists what was extracted
+  - Future: smarter distribution across project structure
+
+
+================================================================================
+VIEW 3: Status agent output
+================================================================================
+
+  formae status agent
+
+  The current output renders side-by-side tables. The new version preserves
+  this layout but uses lipgloss-styled tables instead of tablewriter.
+
+  ┌─ Structure ──┐  ┌─ Commands ────────┐  ┌─ Resources ────────────┐
+  │              │  │                   │  │                        │
+  │  Stacks   3  │  │  Total        12  │  │  Total             50  │
+  │  Targets  2  │  │  Successes    10  │  │  Managed            47  │
+  │              │  │  Failures      1  │  │  Unmanaged           3  │
+  │              │  │  In Progress   1  │  │  Unmanaged %        6%  │
+  │              │  │                   │  │                        │
+  └──────────────┘  └───────────────────┘  └────────────────────────┘
+
+  ┌─ Resource Types ─────────────────────┐  ┌─ Resource Errors ──────────┐
+  │                                      │  │                            │
+  │  Total Types            5            │  │  Total Errors           1  │
+  │  AWS::S3::Bucket        8            │  │  AWS::RDS::DBInstance   1  │
+  │  AWS::EC2::Instance    15            │  │                            │
+  │  AWS::RDS::DBInstance   3            │  └────────────────────────────┘
+  │  AWS::Lambda::Function 12            │
+  │  AWS::IAM::Role         9            │
+  │                                      │
+  └──────────────────────────────────────┘
+
+  Notes:
+  - Two rows of side-by-side lipgloss panels (matching current layout)
+  - Row 1: Structure, Commands, Resources
+  - Row 2: Resource Types, Resource Errors (only shown if errors exist)
+  - Color coding preserved from current implementation:
+    Successes in green (classic) or bright white (formae theme)
+    Failures in red
+    In Progress in gray
+    Managed/Unmanaged % colored by threshold (0% green, ≤75% gold, >75% red)
+  - Responsive: on narrow terminals, tables stack vertically instead of
+    side-by-side
+  - Data from Stats struct: Version, AgentID, Clients, Commands, States,
+    Stacks, ManagedResources, UnmanagedResources, Targets, ResourceTypes,
+    ResourceErrors, Plugins
+
+  To add:
+  - Installed plugins with versions
+  - Version, AgentID, Clients
+
+  Open questions (defer to terminal prototype):
+  - Resource Types and Resource Errors can be long lists — need to figure
+    out truncation, scrolling, or collapsing for these panels
+  - Overall layout may need restructuring once we see it rendered

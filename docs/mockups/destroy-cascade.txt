@@ -1,0 +1,109 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  DESTROY CASCADE — TUI MOCKUPS                              ║
+║                                                                              ║
+║  Additional views for formae destroy when cascade deletes are detected.      ║
+║  These augment the simulation preview mockup.                                ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: Destroy simulation with cascade warning
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae destroy — simulation                                                │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  ╭─ Warning ─────────────────────────────────────────────────────────────╮  │
+  │  │  Destroying these resources will also delete other resources that     │  │
+  │  │  depend on them.                                                     │  │
+  │  ╰──────────────────────────────────────────────────────────────────────╯  │
+  │                                                                             │
+  │  Command will:                                                              │
+  │                                                                             │
+  │  Resources                                                                  │
+  │    delete  primary-db (AWS::RDS::DBInstance)                                │
+  │    delete  web-server (AWS::EC2::Instance)                                  │
+  │      └ will be deleted because it depends on primary-db                     │
+  │    delete  log-group (AWS::CloudWatch::LogGroup)                            │
+  │      └ will be deleted because it depends on web-server                     │
+  │    delete  api-handler (AWS::Lambda::Function)                              │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  This operation will delete 4 resource(s), of which 2 will be deleted      │
+  │  because they depend on other targeted resources.                           │
+  │                                                                             │
+  │  Do you want to continue? [y/N]                                             │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Warning panel in yellow (Warning color) before the simulation tree
+  - Dependent resources explain why they are being deleted
+  - Confirmation summary distinguishes direct vs dependent deletes
+  - User must pass --on-dependents=cascade to proceed (or confirm interactively)
+
+
+================================================================================
+VIEW 2: Cascade deletes aborted (default --on-dependents=abort)
+================================================================================
+
+When cascade deletes are detected and --on-dependents is not set (default: abort):
+
+  ╭─ Command Aborted ─────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  Destroying these resources would also delete other resources that         │
+  │  depend on them:                                                           │
+  │                                                                            │
+  │    web-server (AWS::EC2::Instance)                                         │
+  │      will be deleted because it depends on primary-db                      │
+  │    log-group (AWS::CloudWatch::LogGroup)                                   │
+  │      will be deleted because it depends on web-server                      │
+  │                                                                            │
+  │  To proceed, use --on-dependents=cascade                                   │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  Notes:
+  - Styled error panel
+  - Lists all dependent resources with their dependency reason
+  - Clear instruction on how to proceed
+  - This is the default behavior (abort) — no --yes involvement
+
+
+================================================================================
+VIEW 3: Query-based destroy
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae destroy — simulation                          query: stack:staging  │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Command will:                                                              │
+  │                                                                             │
+  │  Stacks                                                                     │
+  │    delete  staging (Staging environment)                                     │
+  │                                                                             │
+  │  Resources                                                                  │
+  │    delete  app (AWS::S3::Bucket)                                            │
+  │    delete  api (AWS::Lambda::Function)                                      │
+  │    delete  api-gw (AWS::ApiGateway::RestApi)                                │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  This operation will delete 1 stack(s) and delete 3 resource(s).           │
+  │                                                                             │
+  │  Do you want to continue? [y/N]                                             │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Header shows "query: ..." instead of file path
+  - Happy path example (no cascades)
+  - Otherwise identical layout to file-based destroy
+
+
+================================================================================
+COLOR NOTE
+================================================================================
+
+Warning panels use yellow (Warning color), NOT orange. Orange is reserved
+for brand/accent (progress bars, logo, callouts). This applies across all
+mockups — the Warning color in the palette should be a distinct yellow.

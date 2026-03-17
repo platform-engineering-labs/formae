@@ -1,0 +1,438 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    STATUS / WATCH — TUI MOCKUPS                             ║
+║                                                                              ║
+║  This is the core shared component used by:                                  ║
+║  - formae status command [--watch]                                           ║
+║  - formae apply (after submission, with --watch)                             ║
+║  - formae destroy (after submission, with --watch)                           ║
+║  - formae cancel (watching cancellation)                                     ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: Multi-command summary (default when viewing multiple commands)
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae status command                                            ↻ live   │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  ID            Type              Mode        Progress        Duration State │
+  │  ─────────────────────────────────────────────────────────────────────────  │
+  │  cmd-abc123    apply             reconcile   ████████░░ 12/15  00:42       │
+  │  cmd-def456    destroy                       ██████████  8/8   00:15  Done  │
+  │  cmd-ghi789    apply             patch       ░░░░░░░░░░  0/3   00:02       │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  enter: drill in  /: search  q: quit                               ?: help │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - "↻ live" indicator when actively polling
+  - Progress bar uses orange fill (SecondaryAccent)
+  - "Done" state in bright white, active commands in dim white
+  - No state label shown for in-progress commands (the bar speaks)
+  - Pending commands show empty progress bar + dark gray text
+  - Press enter to drill into a command's single detail view
+
+
+================================================================================
+VIEW 2: Single command detail — summary mode (after pressing 'enter')
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ← esc                                                            ↻ live   │
+  │                                                                             │
+  │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
+  │  ████████████████████████████████████████░░░░░  12/15 updates              │
+  │                                                                             │
+  │  12 done · 2 in-progress · 1 pending · 0 failed                            │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Targets                                                                    │
+  │    create  aws-us-east-1                                              Done  │
+  │                                                                             │
+  │  Stacks                                                                     │
+  │    create  production                                                 Done  │
+  │                                                                             │
+  │  Policies                                                                   │
+  │    update  auto-reconcile (ttl, production)                           Done  │
+  │                                                                             │
+  │  Resources                                                                  │
+  │    create  my-bucket (AWS::S3::Bucket)                           ◐ 00:05  │
+  │    create  web-1 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-2 (AWS::EC2::Instance)                                 Done  │
+  │    update  primary (AWS::RDS::DBInstance)                        ◐ 00:12  │
+  │    create  web-3 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-4 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-5 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-6 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-7 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-8 (AWS::EC2::Instance)                                 Done  │
+  │    create  cdn (AWS::CloudFront::Distribution)                        ·     │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  d: detail/summary  f: filter  /: search  F: auto-follow          ?: help  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Header shows command type, mode, ID, elapsed time
+  - Full-width progress bar with counts
+  - Summary line: counts by state
+  - Updates grouped by type: Targets, Stacks, Resources, Policies
+  - Resources: operation + label (type) — stack omitted in summary (usually one stack)
+  - Policies: operation + label (policyType, stackLabel)
+  - Status indicators: Done (bright white), ◐ (in-progress, dim white),
+    · (pending, dark gray), ✗ (failed, red), ⊘ (skipped, secondary)
+  - ← esc returns to multi-command list
+
+
+================================================================================
+VIEW 3: Single command — expanded detail mode (after pressing 'd')
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ← esc                                                            ↻ live   │
+  │                                                                             │
+  │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
+  │  ████████████████████████████████████████░░░░░  12/15 updates              │
+  │                                                                             │
+  │  12 done · 2 in-progress · 1 pending · 0 failed                            │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Targets                                                                    │
+  │  ┌─ create aws-us-east-1 ─────────────────────────────────────── Done ──┐  │
+  │  │  Discoverable: yes                                                    │  │
+  │  │  Duration:     3s                                                     │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+  │                                                                             │
+  │  Stacks                                                                     │
+  │  ┌─ create production ────────────────────────────────────────── Done ──┐  │
+  │  │  Description:  Production environment                                 │  │
+  │  │  Duration:     1s                                                     │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+  │                                                                             │
+  │  Policies                                                                   │
+  │  ┌─ update auto-reconcile (ttl, production) ──────────────── Done ─────┐  │
+  │  │  Type:     ttl                                                        │  │
+  │  │  Stack:    production                                                 │  │
+  │  │  Duration: 1s                                                         │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+  │                                                                             │
+  │  Resources                                                                  │
+  │  ┌─ create my-bucket (AWS::S3::Bucket) ────────────────── ◐ 00:05 ─────┐  │
+  │  │  Type:     AWS::S3::Bucket                                            │  │
+  │  │  Stack:    production                                                 │  │
+  │  │  Started:  2m ago                                                     │  │
+  │  │  Attempt:  1/9                                                        │  │
+  │  │  Status:   Creating resource...                                       │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+  │                                                                             │
+  │  ┌─ create web-1 (AWS::EC2::Instance) ─────────────────────── Done ────┐  │
+  │  │  Type:     AWS::EC2::Instance                                         │  │
+  │  │  Stack:    production                                                 │  │
+  │  │  Duration: 8s                                                         │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+  │                                                                             │
+  │  ┌─ update primary (AWS::RDS::DBInstance) ─────────────── ◐ 00:12 ─────┐  │
+  │  │  Type:     AWS::RDS::DBInstance                                       │  │
+  │  │  Stack:    production                                                 │  │
+  │  │  Started:  12s ago                                                    │  │
+  │  │  Attempt:  2/9                                                        │  │
+  │  │  Status:   Modifying database instance...                             │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  d: detail/summary  f: filter  /: search  F: auto-follow          ?: help  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Detail mode wraps each update in a bordered card
+  - Resource cards show: Type, Stack, Duration/Started, Attempt (X/MaxAttempts),
+    Status message (in-progress) or Error message (failed)
+  - Target cards show: Discoverable, Duration, ErrorMessage if failed
+  - Stack cards show: Description, Duration, ErrorMessage if failed
+  - Policy cards show: Type (ttl/auto-reconcile), Stack, Duration,
+    PolicyConfig changes (for updates), ReferencingStacks (for skips)
+  - This view scrolls — only a few cards visible at once
+
+
+================================================================================
+VIEW 3b: Detail mode — failed resource card
+================================================================================
+
+  │  ┌─ delete old-data (AWS::S3::Bucket) ───────────────────── FAILED ────┐  │
+  │  │  Type:     AWS::S3::Bucket                                            │  │
+  │  │  Stack:    production                                                 │  │
+  │  │  Duration: 4s                                                         │  │
+  │  │  Attempt:  9/9                                                        │  │
+  │  │  Error:    BucketNotEmpty: The bucket you tried to delete is not      │  │
+  │  │            empty                                                      │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+
+  Notes:
+  - Failed card border in red
+  - Error message shown in red
+  - Attempt shows max reached (9/9)
+
+
+================================================================================
+VIEW 3c: Detail mode — cascade / skipped resource card
+================================================================================
+
+  │  ┌─ delete legacy-3 (AWS::EC2::Instance) ──────────────── Skipped ─────┐  │
+  │  │  Type:       AWS::EC2::Instance                                       │  │
+  │  │  Stack:      production                                               │  │
+  │  │  Cascade:    yes (depends on legacy-2)                                │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+
+  Notes:
+  - Skipped card shows cascade source
+  - IsCascade + CascadeSource from ResourceUpdate
+
+
+================================================================================
+VIEW 3d: Detail mode — policy skip with referencing stacks
+================================================================================
+
+  │  ┌─ delete retention-policy (ttl, staging) ────────────── Skipped ─────┐  │
+  │  │  Type:               ttl                                              │  │
+  │  │  Stack:              staging                                          │  │
+  │  │  Referencing stacks: production, development                          │  │
+  │  └───────────────────────────────────────────────────────────────────────┘  │
+
+  Notes:
+  - PolicyUpdate.ReferencingStacks shown when policy is skipped
+    because other stacks still reference it
+
+
+================================================================================
+VIEW 4: Single command — large command (auto-collapsed)
+================================================================================
+
+When a command has more updates than fit in the viewport, groups are collapsed:
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ← esc                                                            ↻ live   │
+  │                                                                             │
+  │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
+  │  ████████████████████████████████░░░░░░░░░░░░░  142/200 updates            │
+  │                                                                             │
+  │  142 done · 0 in-progress · 50 pending · 3 failed · 5 skipped             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  ▸ Targets (2)                                                  2/2 Done   │
+  │  ▸ Stacks (3)                                                   3/3 Done   │
+  │  ▾ Resources (192)                                                          │
+  │    ▸ Creates (150)                                          140/150        │
+  │    ▸ Updates (35)                                             0/35         │
+  │    ▾ Deletes (7)                                                            │
+  │      ✗ delete  old-data (AWS::S3::Bucket)                     FAILED       │
+  │        Error: BucketNotEmpty: The bucket is not empty                       │
+  │      ✗ delete  legacy-2 (AWS::EC2::Instance)                  FAILED       │
+  │        Error: DependencyViolation: has attached volumes                     │
+  │      ⊘ delete  legacy-3 (AWS::EC2::Instance)                  Skipped      │
+  │        Depends on: legacy-2 (failed)                                       │
+  │      delete  old-role (AWS::IAM::Role)                        ◐ 00:03     │
+  │      delete  old-policy (AWS::IAM::Policy)                          ·      │
+  │      delete  deprecated (AWS::Lambda::Function)                     Done   │
+  │      delete  old-alarm (AWS::CloudWatch::Alarm)                     Done   │
+  │  ▸ Policies (3)                                                 2/3 Done   │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  d: detail  f: filter  /: search  F: auto-follow                  ?: help  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Groups collapsed with ▸, expanded with ▾
+  - Each group shows count and progress summary
+  - "Deletes" group auto-expanded because it contains failures
+  - Failed items: ✗ in red, error message below
+  - Skipped items: ⊘ with cascade dependency reason
+  - User can expand/collapse groups with enter
+
+
+================================================================================
+VIEW 5: Filter active (after pressing 'f')
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ← esc                                                            ↻ live   │
+  │                                                                             │
+  │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
+  │  ████████████████████████████████░░░░░░░░░░░░░  142/200 updates            │
+  │                                                                             │
+  │  142 done · 0 in-progress · 50 pending · 3 failed · 5 skipped             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Filter: [failed]  ▸done ▸in-progress ▸pending ●failed ▸skipped            │
+  │  ─────────────────────────────────────────────────────────────────────────  │
+  │                                                                             │
+  │    ✗ delete  old-data (AWS::S3::Bucket)                       FAILED       │
+  │      Error: BucketNotEmpty: The bucket is not empty                         │
+  │                                                                             │
+  │    ✗ delete  legacy-2 (AWS::EC2::Instance)                    FAILED       │
+  │      Error: DependencyViolation: has attached volumes                       │
+  │                                                                             │
+  │    ✗ delete  legacy-3 (AWS::EC2::Instance)                    FAILED       │
+  │      Error: DependencyViolation: has attached volumes                       │
+  │                                                                             │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  f: toggle filter  tab: next filter  esc: clear filter             ?: help │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+VIEW 6: Search active (after pressing '/')
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ← esc                                                            ↻ live   │
+  │                                                                             │
+  │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
+  │  ████████████████████████████████████████░░░░░  12/15 updates              │
+  │                                                                             │
+  │  12 done · 2 in-progress · 1 pending · 0 failed                            │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  /: S3█                                                                     │
+  │  ─────────────────────────────────────────────────────────────────────────  │
+  │                                                                             │
+  │    create  my-bucket (AWS::S3::Bucket)                           ◐ 00:05  │
+  │                                                                             │
+  │                                                                             │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  enter: confirm search  esc: cancel search                         ?: help │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+VIEW 7: Auto-follow indicator
+================================================================================
+
+When auto-follow is active:
+
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  d: detail  f: filter  /: search  ↓ auto-following                ?: help  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+When auto-follow is disabled (user scrolled manually):
+
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  d: detail  f: filter  /: search  F: re-follow                    ?: help  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+VIEW 8: Command complete state
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae status command                                          ✓ complete │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  ID            Type              Mode        Progress        Duration State │
+  │  ─────────────────────────────────────────────────────────────────────────  │
+  │  cmd-abc123    apply             reconcile   ██████████ 15/15  01:23  Done  │
+  │  cmd-def456    destroy                       ██████████  8/8   00:15  Done  │
+  │  cmd-ghi789    apply             patch       ██████████  3/3   00:08  Done  │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  All commands completed. Press q to exit.                                   │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+VIEW 9: Failed command final state
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ← esc                                                          ✓ complete │
+  │                                                                             │
+  │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
+  │  ████████████████████████████████░░░░░░░░░░░░░  142/200 updates            │
+  │                                                                             │
+  │  142 done · 0 in-progress · 50 pending · 3 failed · 5 skipped             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Resources                                                                  │
+  │    ✗ delete  old-data (AWS::S3::Bucket)                       FAILED       │
+  │      Error: BucketNotEmpty: The bucket is not empty                         │
+  │                                                                             │
+  │    ✗ delete  legacy-2 (AWS::EC2::Instance)                    FAILED       │
+  │      Error: DependencyViolation: has attached volumes                       │
+  │                                                                             │
+  │    ⊘ delete  legacy-3 (AWS::EC2::Instance)                    Skipped      │
+  │      Depends on: legacy-2 (failed)                                         │
+  │                                                                             │
+  │    ...and 47 more pending (skipped due to failures above)                   │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  d: detail  f: filter  /: search  q: quit                         ?: help  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+DATA FIELDS COVERAGE
+================================================================================
+
+ResourceUpdate fields shown:
+  Summary mode: Operation, ResourceLabel, ResourceType (parenthetical), State,
+                Duration, ErrorMessage, IsCascade/CascadeSource
+  Detail mode:  + Stack, CurrentAttempt/MaxAttempts, StatusMessage,
+                PatchDocument (simulation only, not watch)
+
+TargetUpdate fields shown:
+  Summary mode: Operation, TargetLabel, State, Duration
+  Detail mode:  + Discoverable, ErrorMessage
+
+StackUpdate fields shown:
+  Summary mode: Operation, StackLabel, State, Duration
+  Detail mode:  + Description, ErrorMessage
+
+PolicyUpdate fields shown:
+  Summary mode: Operation, PolicyLabel, PolicyType, StackLabel (parenthetical),
+                State, Duration
+  Detail mode:  + PolicyConfig/OldPolicyConfig (for updates),
+                ReferencingStacks (for skips), ErrorMessage
+
+Fields NOT shown (internal/derived):
+  - ResourceID (internal ksuid, not user-facing)
+  - OldStackName (shown only for stack migration, handled separately)
+  - Properties/OldProperties (used for patch rendering in simulation)
+  - ReferenceLabels (used for reference resolution display)
+  - GroupID (internal grouping)
+  - StartTs/ModifiedTs (we show Duration and relative "started X ago" instead)
+
+
+================================================================================
+COLOR KEY
+================================================================================
+
+  Element                   Formae Theme         Classic Theme
+  ────────────────────────────────────────────────────────────
+  Panel borders             #333355 (dark blue)  #444444 (gray)
+  Command ID                #60A5FA (blue)       #ADD8E6 (light blue)
+  Progress bar fill         #F59E0B (orange)     #B5B55B (gold)
+  Progress bar empty        #555555 (dark gray)  #808080 (gray)
+  Done text                 #E8E8E8 (bright)     #00FF00 (green)
+  In-progress text/spinner  #AAAAAA (dim)        #ADD8E6 (light blue)
+  Pending text              #555555 (dark gray)  #808080 (gray)
+  Failed text               #F87171 (red)        #FF6666 (red)
+  Skipped text              #888888 (secondary)  #808080 (gray)
+  Warning text              #B5B55B (gold)       #B5B55B (gold)
+  Section headers           #888888 (secondary)  #808080 (gray)
+  Keybinding keys           #60A5FA (blue)       #ADD8E6 (light blue)
+  Keybinding descriptions   #555555 (subtle)     #555555 (gray)
+  Failed card border        #F87171 (red)        #FF6666 (red)

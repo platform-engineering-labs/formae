@@ -1,0 +1,239 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  RECONCILE REJECTED — TUI MOCKUPS                           ║
+║                                                                              ║
+║  Shown when formae apply is rejected because stacks have been modified       ║
+║  since the last reconcile (FormaReconcileRejectedError).                     ║
+║                                                                              ║
+║  Current behavior: prints extract commands + manual delete instructions.     ║
+║  New behavior: interactive view showing out-of-band changes with deltas,     ║
+║  multi-select for extraction, or revert all with --force.                    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Data source: FormaReconcileRejectedError
+  - ModifiedStacks: map[stackName] → ModifiedStack
+    - ModifiedResources: []ResourceModification
+      - Stack, Type, Label, Operation
+      - PatchDocument (JSONPatch of the drift)                   [NEW - API addition]
+
+Operations in ResourceModification:
+  - "update" — resource properties changed out-of-band
+  - "create" — resource appeared out-of-band (not in forma code)
+  - "delete" — resource disappeared out-of-band (still in forma code)
+
+User actions (at the bottom, not per-resource):
+  - Extract selected  — extract the selected resources as code into a file
+  - Revert all        — re-apply with --force (reverts ALL out-of-band changes)
+  - Abort             — exit, user handles it manually
+
+
+================================================================================
+VIEW 1: Out-of-band changes — multi-select for extraction
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — reconcile rejected                          mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Your infrastructure has changed since the last reconcile.                  │
+  │  Select resources to extract, or revert all changes.                       │
+  │                                                                             │
+  │  Stack: production (3 changes)                                              │
+  │  ─────────────────────────────────────────────────────────────────────────  │
+  │                                                                             │
+  │  ▾ [x] update  web-config (AWS::SSM::Parameter)                             │
+  │        ├ set  Value: "/api/v1" → "/api/v2"                                  │
+  │        └ set  Description: "API endpoint" → "API endpoint v2"               │
+  │                                                                             │
+  │    [x] create  monitoring-bucket (AWS::S3::Bucket)                          │
+  │                                                                             │
+  │    ·   delete  old-cache (AWS::ElastiCache::Cluster)                        │
+  │        Deleted outside of formae. Remove from your code to align.           │
+  │                                                                             │
+  │  Stack: staging (1 change)                                                  │
+  │  ─────────────────────────────────────────────────────────────────────────  │
+  │                                                                             │
+  │  ▾ [x] update  api-gateway (AWS::ApiGateway::RestApi)                       │
+  │        └ set  StageName: "v1" → "v2"                                        │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  3 selected                                                                 │
+  │                                                                             │
+  │  e: extract selected  r: revert all (--force)  q: abort            ?: help │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Multi-select checkboxes: [x] selected, [ ] not selected
+  - Space or enter toggles selection on the focused resource
+  - 'a' to select all, 'n' to select none
+  - Updates show property delta via PatchDocument (same rendering as simulation)
+  - Creates: just label/type/stack, selectable for extraction
+  - Deletes: shown with · (not selectable) instead of [ ] checkbox.
+    These resources no longer exist in the infrastructure — the user
+    needs to remove them from their forma code to align. Revert all
+    will re-create them.
+  - ▾/▸ toggles delta visibility
+  - Footer shows count of selected resources + the three actions
+
+
+================================================================================
+VIEW 2: Extract selected — file prompt
+================================================================================
+
+After pressing 'e' (extract selected):
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — reconcile rejected                          mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Extracting 3 resources as code:                                            │
+  │    update  web-config (AWS::SSM::Parameter)                                 │
+  │    create  monitoring-bucket (AWS::S3::Bucket)                              │
+  │    update  api-gateway (AWS::ApiGateway::RestApi)                           │
+  │                                                                             │
+  │  Extract to: ./extracted-drift.pkl█                                         │
+  │                                                                             │
+  │  enter: confirm  esc: cancel                                                │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Lists the resources that will be extracted
+  - File path input with sensible default
+  - Tab completion / autocomplete if feasible (huh file input)
+  - On confirm: runs formae extract for each selected resource into
+    the target file, then exits with instructions
+
+
+================================================================================
+VIEW 3: After extraction — next steps
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — reconcile rejected                          mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Extracted 3 resources to ./extracted-drift.pkl                             │
+  │                                                                             │
+  │  Next steps:                                                                │
+  │    1. Review the extracted code in ./extracted-drift.pkl                    │
+  │    2. Incorporate the changes into your forma files                         │
+  │    3. Re-run formae apply                                                   │
+  │                                                                             │
+  │  The following resources were deleted outside of formae and still            │
+  │  exist in your code. Remove them from your forma files to align:           │
+  │    old-cache (AWS::ElastiCache::Cluster) on stack production               │
+  │                                                                             │
+  │  Press q to exit.                                                           │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Confirms what was extracted and where
+  - Clear next steps for the user
+  - Calls out any unhandled deletes with instructions
+  - Does NOT automatically re-apply — the user needs to incorporate
+    the extracted code first, then re-run
+
+
+================================================================================
+VIEW 4: Revert all confirmation
+================================================================================
+
+After pressing 'r' (revert all):
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — reconcile rejected                          mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  This will revert ALL out-of-band changes by re-applying with --force:     │
+  │                                                                             │
+  │    revert  web-config (AWS::SSM::Parameter)            Value → "/api/v1"   │
+  │    revert  monitoring-bucket (AWS::S3::Bucket)         will be removed     │
+  │    revert  old-cache (AWS::ElastiCache::Cluster)       will be re-created  │
+  │    revert  api-gateway (AWS::ApiGateway::RestApi)      StageName → "v1"   │
+  │                                                                             │
+  │  Are you sure? This cannot be undone. [y/N]                                │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Shows exactly what "revert" means for each resource:
+    - Updates: key properties reverted to forma-defined values
+    - Creates: resource removed (it's not in the forma code)
+    - Deletes: resource re-created (it IS in the forma code)
+  - Explicit warning — this is destructive
+  - On confirm: re-runs apply with --force, transitions to watch view
+  - On decline: returns to View 1
+
+
+================================================================================
+VIEW 5: Non-interactive fallback (--yes or non-TTY)
+================================================================================
+
+With --yes, reconcile rejection is an error (no interactive extraction):
+
+  ╭─ Reconcile Rejected ──────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  Your infrastructure has changed since the last reconcile.                 │
+  │                                                                            │
+  │  Options:                                                                  │
+  │    1) Use --force to apply anyway (reverts all out-of-band changes)        │
+  │    2) Extract the changes and incorporate them in your forma:              │
+  │                                                                            │
+  │       formae extract --query='stack:production type:AWS::SSM::Parameter    │
+  │         label:web-config' <target file>                                    │
+  │       formae extract --query='stack:production type:AWS::S3::Bucket        │
+  │         label:monitoring-bucket' <target file>                             │
+  │                                                                            │
+  │    3) Manually remove deleted resources from your code:                    │
+  │       stack: production, type: AWS::ElastiCache::Cluster,                  │
+  │         label: old-cache                                                   │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  Notes:
+  - Fallback for --yes flag or non-TTY
+  - Same information as today, styled in an error panel
+  - No delta shown (non-interactive, keep it concise)
+
+
+================================================================================
+API CHANGES NEEDED
+================================================================================
+
+ResourceModification needs one new field:
+
+  ResourceModification struct {
+    Stack         string          `json:"Stack"`
+    Type          string          `json:"Type"`
+    Label         string          `json:"Label"`
+    Operation     string          `json:"Operation"`
+    PatchDocument json.RawMessage `json:"PatchDocument,omitempty"` // NEW
+  }
+
+  - PatchDocument: JSONPatch document describing the out-of-band change
+    (same format as ResourceUpdate.PatchDocument). Reuses the existing
+    FormatPatchDocument rendering pipeline.
+  - For "update": PatchDocument populated with the property diff
+  - For "create": no PatchDocument (just label/type/stack shown)
+  - For "delete": no PatchDocument (resource is gone from reality,
+    still in forma code — user must manually remove to accept)
+
+
+================================================================================
+DATA FIELDS COVERAGE
+================================================================================
+
+ResourceModification fields shown:
+  - Stack: group header
+  - Type: parenthetical after label
+  - Label: primary identifier
+  - Operation: "update"/"create"/"delete" prefix
+  - PatchDocument: rendered for "update" operations using existing
+    FormatPatchDocument pipeline, shown as set/add/remove patch tree
+
+User-provided data:
+  - Multi-select: which resources to extract
+  - Extract target file path
+
+Future:
+  - LLM-assisted incorporation of extracted code into codebase
+    (matching style, abstractions, naming conventions)
+  - Partial revert (per-resource) once LLM integration is available

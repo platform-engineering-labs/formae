@@ -1,0 +1,148 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    PLUGIN INIT — TUI MOCKUPS                                ║
+║                                                                              ║
+║  Interactive form for: formae plugin init                                    ║
+║  Uses huh for structured multi-field form with validation.                   ║
+║                                                                              ║
+║  Current CLI:                                                                ║
+║    Flags: --name, --namespace, --description, --author, --module-path,       ║
+║           --license, --output-dir, --no-input                                ║
+║    Interactive mode prompts for each field sequentially via BasicPrompter.   ║
+║    --no-input requires all flags and skips prompts.                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: Plugin init — interactive form
+================================================================================
+
+  formae plugin init
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Formae Plugin Initialization                                               │
+  │                                                                             │
+  │  Plugin initialization requires several parameters that will appear in      │
+  │  the plugin's manifest file (formae-plugin.pkl). You can change them        │
+  │  at any time later.                                                         │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Plugin name:                                                               │
+  │  > cloudflare█                                                              │
+  │                                                                             │
+  │  Namespace (e.g. AWS, GCP, OCI):                                            │
+  │  > CLOUDFLARE█                                                              │
+  │                                                                             │
+  │  Description:                                                               │
+  │  > Cloudflare resource plugin for Formae█                                   │
+  │                                                                             │
+  │  Author:                                                                    │
+  │  > Acme Corp█                                                               │
+  │                                                                             │
+  │  Go module path:                                                            │
+  │  > github.com/acme/formae-plugin-cloudflare█                                │
+  │                                                                             │
+  │  License:                                                                   │
+  │  > Apache-2.0  ▾                                                            │
+  │                                                                             │
+  │  Target directory:                                                          │
+  │  > ./cloudflare█                                                            │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  tab/↑↓: navigate  enter: create plugin  esc: cancel                        │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - huh form with all fields on one page (scrollable if needed)
+  - Text inputs for: name, namespace, description, author, module path,
+    target directory
+  - Select/dropdown for license (Apache-2.0, MIT, GPL-3.0-only,
+    BSD-3-Clause, MPL-2.0, AGPL-3.0-only, FSL-1.1-ALv2, Other)
+  - If "Other" selected: additional text input for custom license ID
+  - Target directory defaults to ./<name> (updates as name changes)
+  - Inline validation:
+    - Name: required, valid identifier
+    - Namespace: required, uppercase
+    - Description: required
+    - Author: required
+    - Module path: required, valid Go module path
+  - Any flags provided on CLI pre-fill the form fields
+  - tab/↑↓ navigates between fields
+
+
+================================================================================
+VIEW 2: License selection expanded
+================================================================================
+
+  │  License:                                                                   │
+  │  ┌──────────────────┐                                                       │
+  │  │  Apache-2.0      │                                                       │
+  │  │  MIT             │                                                       │
+  │  │  GPL-3.0-only    │                                                       │
+  │  │  BSD-3-Clause    │                                                       │
+  │  │  MPL-2.0         │                                                       │
+  │  │  AGPL-3.0-only   │                                                       │
+  │  │  FSL-1.1-ALv2    │                                                       │
+  │  │  Other           │                                                       │
+  │  └──────────────────┘                                                       │
+
+  Notes:
+  - huh select component
+  - ↑↓ to navigate, enter to select
+  - "Other" opens a text input for custom SPDX identifier
+
+
+================================================================================
+VIEW 3: Validation error
+================================================================================
+
+  │  Plugin name:                                                               │
+  │  > my plugin█                                                               │
+  │    ✗ Invalid: plugin name must contain only lowercase letters,              │
+  │      numbers, and hyphens                                                   │
+
+  Notes:
+  - Validation errors shown inline below the field in red
+  - Form cannot be submitted until all validations pass
+
+
+================================================================================
+VIEW 4: Progress + success output
+================================================================================
+
+  After pressing enter:
+
+  Downloading template from GitHub...
+  Initializing plugin 'cloudflare' from template...
+
+  Done! Next steps:
+    1. cd ./cloudflare
+    2. Define your resources in schema/pkl/
+    3. Implement ResourcePlugin interface in cloudflare.go
+    4. Run 'make build' to build the plugin
+
+  Notes:
+  - Progress messages while downloading and transforming template
+  - Styled success output with next steps
+  - Matches current output but with lipgloss styling
+
+
+================================================================================
+VIEW 5: Non-interactive (--no-input with all flags)
+================================================================================
+
+  formae plugin init --no-input --name cloudflare --namespace CLOUDFLARE \
+    --description "Cloudflare resource plugin" --author "Acme Corp" \
+    --module-path github.com/acme/formae-plugin-cloudflare
+
+  Downloading template from GitHub...
+  Initializing plugin 'cloudflare' from template...
+
+  Done! Next steps:
+    1. cd ./cloudflare
+    2. Define your resources in schema/pkl/
+    3. Implement ResourcePlugin interface in cloudflare.go
+    4. Run 'make build' to build the plugin
+
+  Notes:
+  - No form shown, straight to progress + success
+  - Errors if required flags are missing

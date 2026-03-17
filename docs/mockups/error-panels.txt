@@ -1,0 +1,166 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    ERROR PANELS — TUI MOCKUPS                               ║
+║                                                                              ║
+║  Consistent error rendering across all commands.                             ║
+║  Styled panels with red borders, error type headers.                         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: Conflicting commands
+================================================================================
+
+  ╭─ Conflicting Commands ────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  Cannot submit command: conflicts with in-progress commands.               │
+  │                                                                            │
+  │  Conflicting command(s):                                                   │
+  │    cmd-abc123  apply reconcile  (started 2m ago)                           │
+  │                                                                            │
+  │  Wait for the conflicting command to finish, or cancel it with:            │
+  │    formae cancel --query='id:cmd-abc123'                                   │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 2: Referenced resources not found
+================================================================================
+
+  ╭─ Resources Not Found ─────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  The forma references resources that do not exist:                         │
+  │                                                                            │
+  │    formae://my-vpc.SubnetId                                                │
+  │      Referenced by: web-1 (AWS::EC2::Instance)                             │
+  │      Expected:      my-vpc (AWS::EC2::VPC) on stack production             │
+  │                                                                            │
+  │    formae://db-secret.Arn                                                  │
+  │      Referenced by: api-handler (AWS::Lambda::Function)                    │
+  │      Expected:      db-secret (AWS::SecretsManager::Secret)                │
+  │                                                                            │
+  │  Ensure the referenced resources exist or are defined in the forma.        │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 3: Patch rejected
+================================================================================
+
+  ╭─ Patch Rejected ──────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  A patch can only modify existing stacks. The following stacks do not      │
+  │  exist:                                                                    │
+  │                                                                            │
+  │    staging                                                                 │
+  │                                                                            │
+  │  Use '--mode reconcile' to create new stacks.                              │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 4: Empty stack rejected
+================================================================================
+
+  ╭─ Empty Stack Rejected ────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  Cannot create an empty stack. The following stacks have no resources:     │
+  │                                                                            │
+  │    staging                                                                 │
+  │                                                                            │
+  │  Add at least one resource to each stack.                                  │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 5: Cycles detected
+================================================================================
+
+  ╭─ Dependency Cycles Detected ──────────────────────────────────────────────╮
+  │                                                                            │
+  │  The forma contains circular dependencies:                                 │
+  │                                                                            │
+  │    web-server → load-balancer → web-server                                 │
+  │                                                                            │
+  │  Remove the circular reference and try again.                              │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 6: Target already exists
+================================================================================
+
+  ╭─ Target Already Exists ───────────────────────────────────────────────────╮
+  │                                                                            │
+  │  The target 'aws-us-east-1' already exists.                                │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 7: Required field missing on create
+================================================================================
+
+  ╭─ Required Field Missing ──────────────────────────────────────────────────╮
+  │                                                                            │
+  │  Cannot create resource: required field missing.                           │
+  │                                                                            │
+  │    Resource:  my-instance (AWS::EC2::Instance)                             │
+  │    Field:     ImageId                                                      │
+  │                                                                            │
+  │  Add the required field to your forma and try again.                       │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 8: Invalid query
+================================================================================
+
+  ╭─ Invalid Query ───────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  The query 'stakc:production' is not valid.                                │
+  │                                                                            │
+  │  Did you mean: stack:production                                            │
+  │                                                                            │
+  │  See docs for query syntax: https://docs.formae.io/en/latest/query-syntax  │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  Notes:
+  - "Did you mean" is aspirational — depends on fuzzy matching support
+
+
+================================================================================
+VIEW 9: Generic / unexpected error
+================================================================================
+
+  ╭─ Error ───────────────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  An unexpected error occurred:                                             │
+  │                                                                            │
+  │  connection refused: could not reach agent at http://localhost:49684        │
+  │                                                                            │
+  │  Ensure the formae agent is running:                                       │
+  │    formae agent start                                                      │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+DESIGN NOTES
+================================================================================
+
+All error panels follow the same structure:
+  1. Red-bordered panel with error type as title
+  2. Human-readable explanation of what went wrong
+  3. Specific details (resources, fields, commands involved)
+  4. Actionable suggestion for resolution
+
+Panel uses ErrorPanel style (red border from theme).
+Error text uses Body style. Specific values (resource names, commands)
+use Accent style (blue). Suggestions use TextSecondary.

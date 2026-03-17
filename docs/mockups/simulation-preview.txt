@@ -1,0 +1,284 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  SIMULATION PREVIEW — TUI MOCKUPS                           ║
+║                                                                              ║
+║  Shown during:                                                               ║
+║  - formae apply (Phase 1: before confirmation)                               ║
+║  - formae destroy (Phase 1: before confirmation)                             ║
+║  - formae apply --simulate / formae destroy --simulate (then exit)           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 0: PklProject not found (shown before simulation if applicable)
+================================================================================
+
+When the user runs formae apply/destroy on a .pkl file and no PklProject
+file is found by walking up the directory tree:
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply                                                               │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  No PklProject file found in the directory tree for:                        │
+  │  ./infra/production/main.pkl                                                │
+  │                                                                             │
+  │  Formae requires a PklProject file to resolve dependencies. A default       │
+  │  PklProject will be created at:                                             │
+  │                                                                             │
+  │  ./infra/production/PklProject                                              │
+  │                                                                             │
+  │  Continue? [y/N]                                                            │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Shown as a huh confirmation before simulation starts
+  - Shows the path of the pkl file being applied
+  - Shows where the PklProject will be created
+  - If user confirms: PklProject created, simulation proceeds
+  - If user declines: apply aborted
+  - With --yes: error out — "No PklProject found. Run formae project init
+    or create a PklProject file manually." No silent side effects.
+  - Future: this will piggyback on project init to download a best-practice
+    template instead of creating a bare PklProject
+
+
+================================================================================
+VIEW 1: Simulation preview — fits in viewport (expanded)
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — simulation                                  mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Command will:                                                              │
+  │                                                                             │
+  │  Targets                                                                    │
+  │    create  aws-us-east-1                                                    │
+  │    update  aws-eu-west-1 to discoverable                                    │
+  │    replace aws-ap-south-1 (region changed)                                  │
+  │                                                                             │
+  │  Stacks                                                                     │
+  │    create  production (Production environment)                              │
+  │                                                                             │
+  │  Policies                                                                   │
+  │    create  auto-reconcile (ttl, production)                                 │
+  │    update  staging-reconcile (auto-reconcile, staging)                       │
+  │      ├ set  Interval: "5m" → "10m"                                          │
+  │      └ set  Label: "staging-reconcile"                                      │
+  │    detach  old-policy (ttl, staging)                                         │
+  │    keep  shared-policy (ttl, shared)                                        │
+  │      └ still referenced by: production, development                         │
+  │                                                                             │
+  │  Resources                                                                  │
+  │    create  my-bucket (AWS::S3::Bucket)                                      │
+  │    create  web-1 (AWS::EC2::Instance)                                       │
+  │    update  primary (AWS::RDS::DBInstance)                                   │
+  │      ├ set  InstanceClass: "db.t3.medium" → "db.t3.large"                  │
+  │      ├ set  MultiAZ: false → true                                          │
+  │      ├ add  Tags[backup]: "daily"                                           │
+  │      └ remove Tags[temporary]                                               │
+  │    update  web-config (AWS::SSM::Parameter)                                 │
+  │      └ set  Value: "v1.2.3" → "v1.3.0"                                     │
+  │    replace  web-server (AWS::EC2::Instance)                                 │
+  │    create  cdn (AWS::CloudFront::Distribution)                              │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  This operation will create 1 target(s), replace 1 target(s), create 1     │
+  │  stack(s), create 1 policy(ies), update 1 policy(ies), create 3            │
+  │  resource(s), update 2 resource(s) and replace 1 resource(s).              │
+  │                                                                             │
+  │  Do you want to continue? [y/N]                                             │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Header shows command type and mode
+  - "Command will:" as tree root (matches current behavior)
+  - Updates ordered: Targets → Stacks → Policies → Resources
+  - Resources/Policies: label (type) format, same as status summary
+  - Update operations show property changes inline with ├/└ tree connectors
+  - Patch format: set/add/remove + property path + old → new value
+  - References rendered using labels not ksuids
+  - Confirmation prompt at bottom with operation summary
+  - If --simulate: show "simulation only" message instead of prompt
+
+
+================================================================================
+VIEW 1b: Simulation — resource being brought under management
+================================================================================
+
+  │  Resources                                                                  │
+  │    update  discovered-bucket (AWS::S3::Bucket)                              │
+  │      └ put resource under management                                        │
+
+  Notes:
+  - When OldStackName is "$unmanaged", show "put resource under management"
+  - Matches current behavior from FormatPatchDocument
+
+
+================================================================================
+VIEW 1c: Simulation — cascade deletes (destroy only)
+================================================================================
+
+  │  Resources                                                                  │
+  │    delete  primary-db (AWS::RDS::DBInstance)                                │
+  │    delete  web-server (AWS::EC2::Instance) (cascade)                        │
+  │      └ depends on primary-db                                                │
+  │    delete  log-group (AWS::CloudWatch::LogGroup) (cascade)                  │
+  │      └ depends on web-server                                                │
+
+  Notes:
+  - IsCascade resources marked with "(cascade)" in gold/warning
+  - CascadeSource shown as "depends on" sub-item
+  - This is the destroy simulation only (apply doesn't have cascades)
+
+
+================================================================================
+VIEW 1d: Simulation — target operations
+================================================================================
+
+  │  Targets                                                                    │
+  │    create  aws-us-east-1                                                    │
+  │    update  aws-eu-west-1 to discoverable                                    │
+  │    update  aws-eu-west-1 to not discoverable                                │
+  │    replace aws-ap-south-1 (region changed)                                  │
+  │    delete  aws-ap-south-1                                                   │
+
+  Notes:
+  - Create: just the label
+  - Update: "to discoverable" / "to not discoverable" (current behavior)
+  - Replace: label + reason for replace in parentheses (immutable field change)
+  - Delete: just the label
+  - Future: when target update/replace PRs land, we'll show the full
+    set of changed fields in a patch tree (same as resource updates)
+
+
+================================================================================
+VIEW 2: Simulation — description acknowledgment
+================================================================================
+
+When the forma file has a description with confirm=true:
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — simulation                                  mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  ┌─────────────────────────────────────────────────────────────────────────┐│
+  │  │  This forma deploys the production database cluster. Applying this     ││
+  │  │  will cause a brief connectivity interruption during the RDS           ││
+  │  │  failover. Please ensure the maintenance window is active.            ││
+  │  └─────────────────────────────────────────────────────────────────────────┘│
+  │                                                                             │
+  │  Press enter to continue...                                                 │
+  │                                                                             │
+  │  (simulation output follows after acknowledgment)                           │
+  │                                                                             │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Description shown in a styled panel before the simulation tree
+  - If description.Confirm is true, user must press enter before seeing
+    the rest of the simulation
+
+
+================================================================================
+VIEW 3: Simulation — large command (auto-collapsed)
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — simulation                                  mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  Command will:                                                              │
+  │                                                                             │
+  │  ▸ Targets (2)                                                              │
+  │  ▸ Stacks (3)                                                               │
+  │  ▸ Policies (4)                                                             │
+  │  ▾ Resources (192)                                                          │
+  │    ▸ Creates (150)                                                          │
+  │    ▾ Updates (35)                                                           │
+  │      update  primary (AWS::RDS::DBInstance)                                 │
+  │        ├ set  InstanceClass: "db.t3.medium" → "db.t3.large"                │
+  │        └ set  MultiAZ: false → true                                         │
+  │      update  web-config (AWS::SSM::Parameter)                               │
+  │        └ set  Value: "v1.2.3" → "v1.3.0"                                   │
+  │      ...and 33 more updates                                                 │
+  │    ▸ Deletes (5)                                                            │
+  │    ▸ Replaces (2)                                                           │
+  │                                                                             │
+  │                                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  ↑↓/j/k: scroll  enter: expand/confirm  /: search  q: abort          ?: help  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Notes:
+  - Same smart auto-collapse as status/watch views
+  - Groups: Targets, Stacks, Policies, Resources (sub-grouped by operation)
+  - Resource sub-groups: Creates, Updates, Deletes, Replaces
+  - Expand groups with enter, collapse with enter again
+  - Updates group shows first few items expanded to show patch changes
+  - "...and N more" for truncated groups
+  - Scrollable with vim keybindings
+  - Confirmation prompt appears after user scrolls through and
+    presses a dedicated confirm key (not overloaded with enter for expand)
+
+
+================================================================================
+VIEW 4: Simulation — no changes needed
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — simulation                                  mode: reconcile│
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │                                                                             │
+  │  No changes needed                                                          │
+  │                                                                             │
+  │  The specified forma resources are up to date.                              │
+  │                                                                             │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+VIEW 5: Simulation — simulate-only mode
+================================================================================
+
+When --simulate is passed, no confirmation prompt. Footer changes to:
+
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  Command will not continue — simulation only                                │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+DATA FIELDS COVERAGE (simulation-specific)
+================================================================================
+
+ResourceUpdate fields shown in simulation:
+  - Operation ("create"/"update"/"delete"/"replace")
+  - ResourceLabel, ResourceType (parenthetical)
+  - PatchDocument: rendered as property change tree (set/add/remove)
+  - Properties/OldProperties: used for patch rendering context
+  - ReferenceLabels: references rendered as labels not ksuids
+  - OldStackName: "$unmanaged" triggers "put resource under management"
+  - IsCascade/CascadeSource: "(cascade)" label + "depends on" sub-item
+  - GroupID: grouped delete+create shown as single "replace" line
+
+TargetUpdate fields shown in simulation:
+  - Operation ("create"/"update"/"replace"/"delete")
+  - TargetLabel
+  - Discoverable (for updates: "to discoverable" / "to not discoverable")
+  - Replace shows reason (immutable field change)
+
+StackUpdate fields shown in simulation:
+  - Operation, StackLabel, Description (parenthetical)
+
+PolicyUpdate fields shown in simulation:
+  - Operation ("create"/"update"/"delete"/"detach"/"skip"→"keep")
+  - PolicyLabel, PolicyType, StackLabel (parenthetical)
+  - PolicyConfig/OldPolicyConfig: config changes as tree (for updates)
+  - ReferencingStacks: for "keep" operations
+
+Fields not relevant for simulation:
+  - State, Duration, CurrentAttempt, MaxAttempts, StatusMessage,
+    ErrorMessage: all pending, not yet executed
+  - ResourceID: internal
+  - StartTs/ModifiedTs: not started yet
