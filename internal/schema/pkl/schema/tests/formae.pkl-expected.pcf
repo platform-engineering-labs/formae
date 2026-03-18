@@ -151,6 +151,7 @@ examples {
       }
       Discoverable = true
       Extractable = true
+      Portable = false
     }
   }
   ["Test Resource - type()"] {
@@ -216,6 +217,7 @@ examples {
         }
         Discoverable = true
         Extractable = true
+        Portable = false
       }
       Properties {
         bucketName = "my-test-bucket"
@@ -289,6 +291,7 @@ examples {
         }
         Discoverable = true
         Extractable = true
+        Portable = false
       }
       Properties {
         bucketName = "my-bucket-no-tags"
@@ -383,6 +386,7 @@ examples {
         }
         Discoverable = true
         Extractable = true
+        Portable = false
       }
       Properties {
         resourceName = "my-resource"
@@ -474,6 +478,7 @@ examples {
       }
       Discoverable = true
       Extractable = true
+      Portable = false
     }
   }
   ["Fq - type"] {
