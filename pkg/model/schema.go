@@ -19,6 +19,12 @@ type FieldHint struct {
 	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
 	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
 
+	// ProviderDefaultKeyPatterns specifies glob patterns for provider-injected
+	// Mapping keys. When HasProviderDefault is true on a Mapping field:
+	//   - empty: tolerate ALL extra keys in the Mapping
+	//   - non-empty: only tolerate keys matching at least one pattern
+	ProviderDefaultKeyPatterns []string `json:"ProviderDefaultKeyPatterns,omitempty" pkl:"ProviderDefaultKeyPatterns"`
+
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
 }

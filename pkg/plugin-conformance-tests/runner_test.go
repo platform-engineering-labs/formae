@@ -466,7 +466,7 @@ func TestCompareProperties_NestedResolvable(t *testing.T) {
 		},
 	}
 
-	result := compareProperties(t, expectedProperties, actualResource, "after create", map[string]bool{})
+	result := compareProperties(t, expectedProperties, actualResource, "after create", map[string]providerDefault{})
 	if !result {
 		t.Errorf("compareProperties should pass when SubResource contains a nested Resolvable with resolved $value")
 	}
@@ -494,7 +494,7 @@ func TestCompareMap(t *testing.T) {
 				"$value":    "arn:aws:iam::123456789012:role/my-role",
 			},
 		}
-		if !compareMap(t, "Config", expected, actual, "test", map[string]bool{}) {
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
 			t.Error("compareMap should pass for nested resolvable")
 		}
 	})
@@ -507,7 +507,7 @@ func TestCompareMap(t *testing.T) {
 		actual := map[string]any{
 			"Name": "different-value",
 		}
-		if compareMap(fakeT, "Config", expected, actual, "test", map[string]bool{}) {
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
 			t.Error("compareMap should fail for scalar mismatch")
 		}
 	})
@@ -521,7 +521,7 @@ func TestCompareMap(t *testing.T) {
 			"Name":    "my-app",
 			"ExtraID": "extra-value",
 		}
-		if compareMap(fakeT, "Config", expected, actual, "test", map[string]bool{}) {
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
 			t.Error("compareMap should fail when actual has extra keys not marked as provider default")
 		}
 	})
@@ -534,8 +534,8 @@ func TestCompareMap(t *testing.T) {
 			"Name":    "my-app",
 			"ExtraID": "extra-value",
 		}
-		providerDefaults := map[string]bool{
-			"Config.ExtraID": true,
+		providerDefaults := map[string]providerDefault{
+			"Config.ExtraID": {},
 		}
 		if !compareMap(t, "Config", expected, actual, "test", providerDefaults) {
 			t.Error("compareMap should pass when extra key is a provider default")
@@ -571,7 +571,7 @@ func TestCompareMap(t *testing.T) {
 				},
 			},
 		}
-		if !compareMap(t, "Config", expected, actual, "test", map[string]bool{}) {
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
 			t.Error("compareMap should pass for deeply nested resolvable")
 		}
 	})
@@ -585,7 +585,7 @@ func TestCompareMap(t *testing.T) {
 		actual := map[string]any{
 			"Name": "my-app",
 		}
-		if compareMap(fakeT, "Config", expected, actual, "test", map[string]bool{}) {
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
 			t.Error("compareMap should fail when expected key is missing from actual")
 		}
 	})
@@ -632,7 +632,7 @@ func TestCompareProperties_ResolvableNestedInArray(t *testing.T) {
 		},
 	}
 
-	result := compareProperties(t, expectedProperties, actualResource, "after create", map[string]bool{})
+	result := compareProperties(t, expectedProperties, actualResource, "after create", map[string]providerDefault{})
 	if !result {
 		t.Errorf("compareProperties should pass when an array element contains a nested resolvable with resolved $value")
 	}
@@ -647,9 +647,9 @@ func TestCompareArrayUnordered_ProviderDefaultsAllowed(t *testing.T) {
 	actual := []any{
 		map[string]any{"name": "http", "port": float64(80), "protocol": "TCP", "targetPort": float64(80)},
 	}
-	providerDefaults := map[string]bool{
-		"spec.ports.protocol":   true,
-		"spec.ports.targetPort": true,
+	providerDefaults := map[string]providerDefault{
+		"spec.ports.protocol":   {},
+		"spec.ports.targetPort": {},
 	}
 	result := compareArrayUnordered(t, "spec.ports", expected, actual, "after create", providerDefaults)
 	if !result {
@@ -665,8 +665,8 @@ func TestCompareArrayUnordered_NonProviderDefaultFlagged(t *testing.T) {
 	actual := []any{
 		map[string]any{"name": "http", "port": float64(80), "bogus": "bad"},
 	}
-	providerDefaults := map[string]bool{
-		"spec.ports.protocol": true,
+	providerDefaults := map[string]providerDefault{
+		"spec.ports.protocol": {},
 	}
 	// Use a sub-test so the failure doesn't abort the parent
 	inner := &testing.T{}
@@ -686,9 +686,9 @@ func TestCompareArrayUnordered_MultipleElementsDifferentOrder(t *testing.T) {
 		map[string]any{"name": "http", "port": float64(80), "protocol": "TCP", "targetPort": float64(80)},
 		map[string]any{"name": "https", "port": float64(443), "protocol": "TCP", "targetPort": float64(443)},
 	}
-	providerDefaults := map[string]bool{
-		"spec.ports.protocol":   true,
-		"spec.ports.targetPort": true,
+	providerDefaults := map[string]providerDefault{
+		"spec.ports.protocol":   {},
+		"spec.ports.targetPort": {},
 	}
 	result := compareArrayUnordered(t, "spec.ports", expected, actual, "after create", providerDefaults)
 	if !result {
@@ -718,12 +718,12 @@ func TestCompareArrayUnordered_NestedProviderDefaults(t *testing.T) {
 			"sideEffects":    "None",
 		},
 	}
-	providerDefaults := map[string]bool{
-		"webhooks.matchPolicy":          true,
-		"webhooks.timeoutSeconds":       true,
-		"webhooks.failurePolicy":        true,
-		"webhooks.sideEffects":          true,
-		"webhooks.clientConfig.service.port": true,
+	providerDefaults := map[string]providerDefault{
+		"webhooks.matchPolicy":          {},
+		"webhooks.timeoutSeconds":       {},
+		"webhooks.failurePolicy":        {},
+		"webhooks.sideEffects":          {},
+		"webhooks.clientConfig.service.port": {},
 	}
 	result := compareArrayUnordered(t, "webhooks", expected, actual, "after create", providerDefaults)
 	if !result {
@@ -751,9 +751,9 @@ func TestCompareProperties_ProviderDefaultsAllowed(t *testing.T) {
 			},
 		},
 	}
-	providerDefaults := map[string]bool{
-		"spec.ports.protocol":   true,
-		"spec.ports.targetPort": true,
+	providerDefaults := map[string]providerDefault{
+		"spec.ports.protocol":   {},
+		"spec.ports.targetPort": {},
 	}
 	result := compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults)
 	if !result {
@@ -772,8 +772,8 @@ func TestCompareProperties_ExtraTopLevelProviderDefault(t *testing.T) {
 			"clusterIP":     "10.96.0.1",
 		},
 	}
-	providerDefaults := map[string]bool{
-		"clusterIP": true,
+	providerDefaults := map[string]providerDefault{
+		"clusterIP": {},
 	}
 	result := compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults)
 	if !result {
@@ -792,7 +792,7 @@ func TestCompareProperties_ExtraTopLevelNonProviderDefault(t *testing.T) {
 			"bogus":    "unexpected",
 		},
 	}
-	providerDefaults := map[string]bool{}
+	providerDefaults := map[string]providerDefault{}
 	inner := &testing.T{}
 	result := compareProperties(inner, expectedProperties, actualResource, "after create", providerDefaults)
 	if result {
@@ -804,8 +804,8 @@ func TestCompareMap_ExtraNestedProviderDefault(t *testing.T) {
 	// Extra nested key in a map that is a provider default
 	expected := map[string]any{"name": "my-svc"}
 	actual := map[string]any{"name": "my-svc", "sessionAffinity": "None"}
-	providerDefaults := map[string]bool{
-		"spec.sessionAffinity": true,
+	providerDefaults := map[string]providerDefault{
+		"spec.sessionAffinity": {},
 	}
 	result := compareMap(t, "spec", expected, actual, "after create", providerDefaults)
 	if !result {
@@ -817,7 +817,7 @@ func TestCompareMap_ExtraNestedNonProviderDefault(t *testing.T) {
 	// Extra nested key that is NOT a provider default — should fail
 	expected := map[string]any{"name": "my-svc"}
 	actual := map[string]any{"name": "my-svc", "unknown": "bad"}
-	providerDefaults := map[string]bool{}
+	providerDefaults := map[string]providerDefault{}
 	inner := &testing.T{}
 	result := compareMap(inner, "spec", expected, actual, "after create", providerDefaults)
 	if result {
@@ -826,31 +826,115 @@ func TestCompareMap_ExtraNestedNonProviderDefault(t *testing.T) {
 }
 
 func TestIsProviderDefault(t *testing.T) {
-	providerDefaults := map[string]bool{
-		"spec.ports.protocol":   true,
-		"spec.sessionAffinity":  true,
-		"webhooks.matchPolicy":  true,
-	}
-
-	tests := []struct {
-		path     string
-		expected bool
-	}{
-		{"spec.ports.protocol", true},
-		{"spec.ports[0].protocol", true},
-		{"spec.ports[12].protocol", true},
-		{"spec.sessionAffinity", true},
-		{"webhooks[0].matchPolicy", true},
-		{"spec.ports.bogus", false},
-		{"spec.unknown", false},
-		{"bogus", false},
-	}
-	for _, tc := range tests {
-		got := isProviderDefault(tc.path, providerDefaults)
-		if got != tc.expected {
-			t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+	t.Run("scalar provider defaults", func(t *testing.T) {
+		providerDefaults := map[string]providerDefault{
+			"spec.ports.protocol":  {},
+			"spec.sessionAffinity": {},
+			"webhooks.matchPolicy": {},
 		}
-	}
+
+		tests := []struct {
+			path     string
+			expected bool
+		}{
+			{"spec.ports.protocol", true},
+			{"spec.ports[0].protocol", true},
+			{"spec.ports[12].protocol", true},
+			{"spec.sessionAffinity", true},
+			{"webhooks[0].matchPolicy", true},
+			{"spec.ports.bogus", false},
+			{"spec.unknown", false},
+			{"bogus", false},
+		}
+		for _, tc := range tests {
+			got := isProviderDefault(tc.path, providerDefaults)
+			if got != tc.expected {
+				t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+			}
+		}
+	})
+
+	t.Run("collection provider defaults - broad tolerance", func(t *testing.T) {
+		providerDefaults := map[string]providerDefault{
+			"metadata.labels":      {IsCollection: true},
+			"spec.selector":        {IsCollection: true},
+			"spec.revisionHistory": {}, // scalar, not collection
+		}
+
+		tests := []struct {
+			path     string
+			expected bool
+		}{
+			// Collection: any child key tolerated
+			{"metadata.labels", true},
+			{"metadata.labels.app", true},
+			{"metadata.labels.env", true},
+			{"metadata.labels.app.kubernetes.io/name", true},
+			{"spec.selector.app", true},
+			{"spec.selector.matchLabels", true},
+			// Scalar: only exact match
+			{"spec.revisionHistory", true},
+			{"spec.revisionHistory.limit", false},
+			// Non-defaults: still flagged
+			{"metadata.annotations", false},
+			{"spec.unknown", false},
+		}
+		for _, tc := range tests {
+			got := isProviderDefault(tc.path, providerDefaults)
+			if got != tc.expected {
+				t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+			}
+		}
+	})
+
+	t.Run("collection provider defaults - key patterns", func(t *testing.T) {
+		providerDefaults := map[string]providerDefault{
+			"metadata.labels": {
+				IsCollection: true,
+				KeyPatterns:  []string{"app", "helm"},
+			},
+		}
+
+		tests := []struct {
+			path     string
+			expected bool
+		}{
+			// Matching patterns
+			{"metadata.labels.app", true},
+			{"metadata.labels.helm", true},
+			// Non-matching patterns
+			{"metadata.labels.env", false},
+			{"metadata.labels.random", false},
+			// Exact match on the collection itself
+			{"metadata.labels", true},
+		}
+		for _, tc := range tests {
+			got := isProviderDefault(tc.path, providerDefaults)
+			if got != tc.expected {
+				t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+			}
+		}
+	})
+
+	t.Run("collection provider defaults with array indices", func(t *testing.T) {
+		providerDefaults := map[string]providerDefault{
+			"spec.template.metadata.labels": {IsCollection: true},
+		}
+
+		tests := []struct {
+			path     string
+			expected bool
+		}{
+			{"spec.template.metadata.labels.app", true},
+			{"spec.template.metadata.labels", true},
+		}
+		for _, tc := range tests {
+			got := isProviderDefault(tc.path, providerDefaults)
+			if got != tc.expected {
+				t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+			}
+		}
+	})
 }
 
 func TestGetTestType(t *testing.T) {
