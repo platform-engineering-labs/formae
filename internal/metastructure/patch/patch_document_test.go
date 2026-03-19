@@ -556,6 +556,7 @@ func TestCollectionSemanticsFromFieldHints(t *testing.T) {
 	expectedCollections := jsonpatch.Collections{
 		Arrays:     []jsonpatch.Path{jsonpatch.Path("$.simpleArray")},
 		EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.entitySet"): jsonpatch.Key("id")},
+		Atomics:    []jsonpatch.Path{},
 	}
 
 	assert.Equal(t, expectedCollections, collections)
@@ -1165,4 +1166,51 @@ func TestRemoveNonSchemaFields_PreservesEmptyArraysAndMaps(t *testing.T) {
 	assert.Equal(t, "test", deserialized["Name"])
 	assert.Equal(t, []any{}, deserialized["Tags"])
 	assert.Equal(t, map[string]any{}, deserialized["Metadata"])
+}
+
+func TestGeneratePatch_AtomicField_SingleReplace(t *testing.T) {
+	// Actual state has a policy document with different Statement content
+	document := []byte(`{"PolicyDocument": {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"}]}, "Queue": "my-queue"}`)
+	// Desired state has updated Statement
+	patch := []byte(`{"PolicyDocument": {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::my-bucket"}]}, "Queue": "my-queue"}`)
+
+	schema := pkgmodel.Schema{
+		Identifier: "Ref",
+		Fields:     []string{"PolicyDocument", "Queue"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"PolicyDocument": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic},
+			"Queue":          {CreateOnly: true},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	var ops []jsonpatch.JsonPatchOperation
+	err = json.Unmarshal(patchDoc, &ops)
+	require.NoError(t, err)
+
+	// Should be a single replace on /PolicyDocument, not recursive ops on /PolicyDocument/Statement/0/Action etc.
+	assert.Len(t, ops, 1, "Expected single atomic replace operation")
+	assert.Equal(t, "replace", ops[0].Operation)
+	assert.Equal(t, "/PolicyDocument", ops[0].Path)
+}
+
+func TestGeneratePatch_AtomicField_NoDiffNoPatch(t *testing.T) {
+	doc := []byte(`{"PolicyDocument": {"Version": "2012-10-17", "Statement": [{"Effect": "Allow"}]}, "Queue": "q"}`)
+
+	schema := pkgmodel.Schema{
+		Identifier: "Ref",
+		Fields:     []string{"PolicyDocument", "Queue"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"PolicyDocument": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic},
+			"Queue":          {},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(doc, doc, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+	assert.Empty(t, patchDoc, "Expected no patch when atomic field is identical")
 }
