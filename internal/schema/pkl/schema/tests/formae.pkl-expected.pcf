@@ -89,6 +89,7 @@ examples {
         Required = true
         RequiredOnCreate = false
         HasProviderDefault = false
+        ProviderDefaultKeyPatterns = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -98,6 +99,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        ProviderDefaultKeyPatterns = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -107,6 +109,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        ProviderDefaultKeyPatterns = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -127,6 +130,7 @@ examples {
           Required = true
           RequiredOnCreate = false
           HasProviderDefault = false
+          ProviderDefaultKeyPatterns = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -136,6 +140,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          ProviderDefaultKeyPatterns = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -145,6 +150,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          ProviderDefaultKeyPatterns = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -192,6 +198,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -201,6 +208,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -210,6 +218,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -265,6 +274,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -274,6 +284,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -283,6 +294,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -323,6 +335,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -332,6 +345,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -341,6 +355,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -350,6 +365,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -359,6 +375,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -368,6 +385,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -377,6 +395,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            ProviderDefaultKeyPatterns = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -412,6 +431,7 @@ examples {
         Required = true
         RequiredOnCreate = false
         HasProviderDefault = false
+        ProviderDefaultKeyPatterns = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -421,6 +441,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        ProviderDefaultKeyPatterns = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -430,6 +451,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        ProviderDefaultKeyPatterns = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -450,6 +472,7 @@ examples {
           Required = true
           RequiredOnCreate = false
           HasProviderDefault = false
+          ProviderDefaultKeyPatterns = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -459,6 +482,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          ProviderDefaultKeyPatterns = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -468,6 +492,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          ProviderDefaultKeyPatterns = null
           UpdateMethod = ""
           IndexField = ""
         }
