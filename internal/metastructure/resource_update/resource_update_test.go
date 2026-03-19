@@ -784,10 +784,10 @@ func TestSplitMap_NestedSplit(t *testing.T) {
 		"kind":       "Service",
 		"spec": map[string]any{
 			"ports":                 []any{map[string]any{"port": float64(80)}},
-			"selector":             map[string]any{"app": "nginx"},
-			"clusterIP":            "10.0.0.1",
-			"clusterIPs":           []any{"10.0.0.1"},
-			"ipFamilies":           []any{"IPv4"},
+			"selector":              map[string]any{"app": "nginx"},
+			"clusterIP":             "10.0.0.1",
+			"clusterIPs":            []any{"10.0.0.1"},
+			"ipFamilies":            []any{"IPv4"},
 			"internalTrafficPolicy": "Cluster",
 		},
 	}
