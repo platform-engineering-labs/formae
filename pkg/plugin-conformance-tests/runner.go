@@ -420,37 +420,44 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]providerDef
 		}
 	}
 
-	// Detect collection fields by checking if the actual properties at this path
-	// contain a map value. This enables broad tolerance (Phase 1) for Mapping fields
-	// with hasProviderDefault=true even without explicit key patterns.
-	if props, ok := resource["Properties"].(map[string]any); ok {
-		for path, pd := range result {
-			if pd.IsCollection {
-				continue // already marked via key patterns
+	// Detect collection (Mapping) fields from the schema structure.
+	// A field with hasProviderDefault that has no child fields in the schema
+	// is a leaf field. If it's an object type (not a scalar), it's a Mapping
+	// where the provider may add extra keys. We detect this by checking if
+	// any other schema field starts with this path as a prefix — if not,
+	// it's a leaf (Mapping or scalar). We then check the actual properties
+	// to confirm it's a map value.
+	fields, _ := schema["Fields"].([]any)
+	fieldSet := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		if s, ok := f.(string); ok {
+			fieldSet[s] = true
+		}
+	}
+	for path, pd := range result {
+		if pd.IsCollection {
+			continue // already marked via key patterns
+		}
+		// Check if this field has any child fields in the schema.
+		// If it does, it's a SubResource (not a Mapping) — skip.
+		hasChildren := false
+		prefix := path + "."
+		for field := range fieldSet {
+			if strings.HasPrefix(field, prefix) {
+				hasChildren = true
+				break
 			}
-			if isMapAtPath(props, path) {
-				pd.IsCollection = true
-				result[path] = pd
-			}
+		}
+		if !hasChildren {
+			// Leaf field with hasProviderDefault — treat as collection (Mapping).
+			// This covers fields like labels: Mapping<String, String> where the
+			// schema defines the field but not its dynamic keys.
+			pd.IsCollection = true
+			result[path] = pd
 		}
 	}
 
 	return result
-}
-
-// isMapAtPath checks if the value at a dot-separated path in a nested map is itself a map.
-func isMapAtPath(obj map[string]any, path string) bool {
-	parts := strings.Split(path, ".")
-	current := any(obj)
-	for _, part := range parts {
-		m, ok := current.(map[string]any)
-		if !ok {
-			return false
-		}
-		current = m[part]
-	}
-	_, isMap := current.(map[string]any)
-	return isMap
 }
 
 // isProviderDefault checks if a given field path (dot-separated) matches
