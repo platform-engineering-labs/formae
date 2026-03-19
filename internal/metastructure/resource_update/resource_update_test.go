@@ -756,6 +756,170 @@ func TestRecordProgress_MergePreservesRefStructuresInArrays(t *testing.T) {
 	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
 
+func TestSplitMap_TopLevelOnly(t *testing.T) {
+	src := map[string]any{
+		"Name":      "my-bucket",
+		"Region":    "us-east-1",
+		"BucketArn": "arn:aws:s3:::my-bucket",
+	}
+	fieldsSet := map[string]struct{}{
+		"Name":   {},
+		"Region": {},
+	}
+	prefixSet := map[string]struct{}{}
+
+	props := make(map[string]any)
+	readOnly := make(map[string]any)
+	splitMap(src, "", fieldsSet, prefixSet, props, readOnly)
+
+	assert.Equal(t, "my-bucket", props["Name"])
+	assert.Equal(t, "us-east-1", props["Region"])
+	assert.Nil(t, props["BucketArn"])
+	assert.Equal(t, "arn:aws:s3:::my-bucket", readOnly["BucketArn"])
+}
+
+func TestSplitMap_NestedSplit(t *testing.T) {
+	src := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"spec": map[string]any{
+			"ports":                 []any{map[string]any{"port": float64(80)}},
+			"selector":             map[string]any{"app": "nginx"},
+			"clusterIP":            "10.0.0.1",
+			"clusterIPs":           []any{"10.0.0.1"},
+			"ipFamilies":           []any{"IPv4"},
+			"internalTrafficPolicy": "Cluster",
+		},
+	}
+	fieldsSet := map[string]struct{}{
+		"apiVersion":                 {},
+		"kind":                       {},
+		"spec.ports":                 {},
+		"spec.selector":              {},
+		"spec.internalTrafficPolicy": {},
+	}
+	prefixSet := map[string]struct{}{
+		"spec": {},
+	}
+
+	props := make(map[string]any)
+	readOnly := make(map[string]any)
+	splitMap(src, "", fieldsSet, prefixSet, props, readOnly)
+
+	assert.Equal(t, "v1", props["apiVersion"])
+	specProps := props["spec"].(map[string]any)
+	assert.NotNil(t, specProps["ports"])
+	assert.NotNil(t, specProps["selector"])
+	assert.Equal(t, "Cluster", specProps["internalTrafficPolicy"])
+	assert.Nil(t, specProps["clusterIP"])
+
+	specRO := readOnly["spec"].(map[string]any)
+	assert.Equal(t, "10.0.0.1", specRO["clusterIP"])
+	assert.NotNil(t, specRO["clusterIPs"])
+	assert.NotNil(t, specRO["ipFamilies"])
+	assert.Nil(t, specRO["ports"])
+}
+
+func TestSplitMap_DeeplyNested(t *testing.T) {
+	src := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers":  []any{map[string]any{"name": "app"}},
+					"nodeName":    "node-1",
+					"tolerations": []any{map[string]any{"key": "not-ready"}},
+				},
+			},
+			"replicas": float64(3),
+		},
+	}
+	fieldsSet := map[string]struct{}{
+		"spec.template.spec.containers": {},
+		"spec.replicas":                 {},
+	}
+	prefixSet := map[string]struct{}{
+		"spec":               {},
+		"spec.template":      {},
+		"spec.template.spec": {},
+	}
+
+	props := make(map[string]any)
+	readOnly := make(map[string]any)
+	splitMap(src, "", fieldsSet, prefixSet, props, readOnly)
+
+	specProps := props["spec"].(map[string]any)
+	assert.Equal(t, float64(3), specProps["replicas"])
+	tmplSpec := specProps["template"].(map[string]any)["spec"].(map[string]any)
+	assert.NotNil(t, tmplSpec["containers"])
+	assert.Nil(t, tmplSpec["nodeName"])
+
+	specRO := readOnly["spec"].(map[string]any)
+	tmplSpecRO := specRO["template"].(map[string]any)["spec"].(map[string]any)
+	assert.Equal(t, "node-1", tmplSpecRO["nodeName"])
+	assert.NotNil(t, tmplSpecRO["tolerations"])
+	assert.Nil(t, tmplSpecRO["containers"])
+}
+
+func TestSplitMap_AllSchemaFields(t *testing.T) {
+	src := map[string]any{"Name": "bucket", "Region": "us-east-1"}
+	fieldsSet := map[string]struct{}{"Name": {}, "Region": {}}
+	prefixSet := map[string]struct{}{}
+
+	props := make(map[string]any)
+	readOnly := make(map[string]any)
+	splitMap(src, "", fieldsSet, prefixSet, props, readOnly)
+
+	assert.Len(t, props, 2)
+	assert.Len(t, readOnly, 0)
+}
+
+func TestSplitMap_NoSchemaFields(t *testing.T) {
+	src := map[string]any{"status": "Active", "resourceVersion": "123"}
+	fieldsSet := map[string]struct{}{}
+	prefixSet := map[string]struct{}{}
+
+	props := make(map[string]any)
+	readOnly := make(map[string]any)
+	splitMap(src, "", fieldsSet, prefixSet, props, readOnly)
+
+	assert.Len(t, props, 0)
+	assert.Len(t, readOnly, 2)
+}
+
+func TestUpdateProperties_DeepSplit(t *testing.T) {
+	ru := &ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Properties: json.RawMessage(`{"spec":{"ports":[{"port":80}]}}`),
+			Schema: pkgmodel.Schema{
+				Fields: []string{"apiVersion", "kind", "spec.ports", "spec.selector"},
+			},
+		},
+	}
+
+	incoming := `{"apiVersion":"v1","kind":"Service","spec":{"ports":[{"port":80,"protocol":"TCP"}],"selector":{"app":"nginx"},"clusterIP":"10.0.0.1","ipFamilies":["IPv4"]}}`
+
+	var props, readOnly json.RawMessage
+	props = ru.DesiredState.Properties
+	err := ru.updateProperties(incoming, &props, &readOnly)
+	require.NoError(t, err)
+
+	var propsMap map[string]any
+	err = json.Unmarshal(props, &propsMap)
+	require.NoError(t, err)
+	assert.Equal(t, "v1", propsMap["apiVersion"])
+	specProps := propsMap["spec"].(map[string]any)
+	assert.NotNil(t, specProps["ports"])
+	assert.NotNil(t, specProps["selector"])
+	assert.Nil(t, specProps["clusterIP"])
+
+	var readOnlyMap map[string]any
+	err = json.Unmarshal(readOnly, &readOnlyMap)
+	require.NoError(t, err)
+	specRO := readOnlyMap["spec"].(map[string]any)
+	assert.Equal(t, "10.0.0.1", specRO["clusterIP"])
+	assert.NotNil(t, specRO["ipFamilies"])
+}
+
 // TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin tests that when user properties
 // have more array elements than plugin returns, the merged result only contains the elements
 // that the plugin returned. This ensures we don't keep stale/removed elements.
