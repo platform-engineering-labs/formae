@@ -246,6 +246,21 @@ func TestValidateImmutableFields_Success_EmptyObjectVsNil(t *testing.T) {
 	assert.NoError(t, err) // {} and nil should be treated as equivalent
 }
 
+func TestTargetUpdate_ResolvablesReturnsRemainingResolvables(t *testing.T) {
+	tu := TargetUpdate{
+		RemainingResolvables: []pkgmodel.FormaeURI{
+			"formae://abc123#/Endpoint",
+			"formae://def456#/CertArn",
+		},
+	}
+	assert.Equal(t, tu.RemainingResolvables, tu.Resolvables())
+}
+
+func TestTargetUpdate_ResolvablesEmptyByDefault(t *testing.T) {
+	tu := TargetUpdate{}
+	assert.Empty(t, tu.Resolvables())
+}
+
 func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
 	update := TargetUpdate{
 		Target: pkgmodel.Target{

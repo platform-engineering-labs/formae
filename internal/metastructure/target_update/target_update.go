@@ -32,14 +32,15 @@ const (
 
 // TargetUpdate represents an update to a target in the system
 type TargetUpdate struct {
-	Target         pkgmodel.Target   `json:"Target"`
-	ExistingTarget *pkgmodel.Target  `json:"ExistingTarget,omitempty"`
-	Operation      TargetOperation   `json:"Operation"`
-	State          TargetUpdateState `json:"State"`
-	StartTs        time.Time         `json:"StartTs"`
-	ModifiedTs     time.Time         `json:"ModifiedTs"`
-	Version        string            `json:"Version"`
-	ErrorMessage   string            `json:"ErrorMessage,omitempty"`
+	Target               pkgmodel.Target      `json:"Target"`
+	ExistingTarget       *pkgmodel.Target     `json:"ExistingTarget,omitempty"`
+	Operation            TargetOperation      `json:"Operation"`
+	State                TargetUpdateState    `json:"State"`
+	StartTs              time.Time            `json:"StartTs"`
+	ModifiedTs           time.Time            `json:"ModifiedTs"`
+	Version              string               `json:"Version"`
+	ErrorMessage         string               `json:"ErrorMessage,omitempty"`
+	RemainingResolvables []pkgmodel.FormaeURI `json:"RemainingResolvables,omitempty"`
 }
 
 // HasChange returns true if the discoverable field changed
@@ -55,8 +56,8 @@ func (tu *TargetUpdate) NodeURI() pkgmodel.FormaeURI {
 	return pkgmodel.FormaeURI("target://" + tu.Target.Label + "/" + string(tu.Operation))
 }
 
-// Resolvables returns nil because target updates have no resolvable references.
-func (tu *TargetUpdate) Resolvables() []pkgmodel.FormaeURI { return nil }
+// Resolvables returns the remaining resolvable URIs for this target update.
+func (tu *TargetUpdate) Resolvables() []pkgmodel.FormaeURI { return tu.RemainingResolvables }
 
 // Namespace returns the target's namespace.
 func (tu *TargetUpdate) Namespace() string { return tu.Target.Namespace }
