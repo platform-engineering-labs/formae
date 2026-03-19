@@ -10,6 +10,10 @@ import (
 
 	"ergo.services/ergo/gen"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
@@ -237,6 +241,74 @@ func TestExtractKSUIDs_NestedRefInArrays(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeriveReplayPendingUpdates_FailsDependentsOfTerminalFailures(t *testing.T) {
+	vpcURI := model.NewFormaeURI(util.NewID(), "")
+	subnetURI := model.NewFormaeURI(util.NewID(), "")
+	grandchildURI := model.NewFormaeURI(util.NewID(), "")
+
+	fa := &forma_command.FormaCommand{
+		ID: "cmd-1",
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: model.Resource{Ksuid: vpcURI.KSUID(), Label: "vpc", Type: "AWS::EC2::VPC", Stack: "stack"},
+				Operation:    resource_update.OperationCreate,
+				State:        resource_update.ResourceUpdateStateFailed,
+				StackLabel:   "stack",
+			},
+			{
+				DesiredState:         model.Resource{Ksuid: subnetURI.KSUID(), Label: "subnet", Type: "AWS::EC2::Subnet", Stack: "stack"},
+				Operation:            resource_update.OperationCreate,
+				State:                resource_update.ResourceUpdateStateNotStarted,
+				StackLabel:           "stack",
+				RemainingResolvables: []model.FormaeURI{vpcURI},
+			},
+			{
+				DesiredState:         model.Resource{Ksuid: grandchildURI.KSUID(), Label: "grandchild", Type: "AWS::EC2::Route", Stack: "stack"},
+				Operation:            resource_update.OperationCreate,
+				State:                resource_update.ResourceUpdateStateNotStarted,
+				StackLabel:           "stack",
+				RemainingResolvables: []model.FormaeURI{subnetURI},
+			},
+		},
+	}
+
+	pending, doomed := deriveReplayPendingUpdates(fa)
+	require.Empty(t, pending)
+	assert.ElementsMatch(t, []forma_persister.ResourceUpdateRef{
+		{URI: model.NewFormaeURI(subnetURI.KSUID(), ""), Operation: resource_update.OperationCreate},
+		{URI: model.NewFormaeURI(grandchildURI.KSUID(), ""), Operation: resource_update.OperationCreate},
+	}, doomed)
+}
+
+func TestDeriveReplayPendingUpdates_KeepsPendingDependentsOfSuccessfulParents(t *testing.T) {
+	vpcURI := model.NewFormaeURI(util.NewID(), "")
+	subnetURI := model.NewFormaeURI(util.NewID(), "")
+
+	fa := &forma_command.FormaCommand{
+		ID: "cmd-2",
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: model.Resource{Ksuid: vpcURI.KSUID(), Label: "vpc", Type: "AWS::EC2::VPC", Stack: "stack"},
+				Operation:    resource_update.OperationCreate,
+				State:        resource_update.ResourceUpdateStateSuccess,
+				StackLabel:   "stack",
+			},
+			{
+				DesiredState:         model.Resource{Ksuid: subnetURI.KSUID(), Label: "subnet", Type: "AWS::EC2::Subnet", Stack: "stack"},
+				Operation:            resource_update.OperationCreate,
+				State:                resource_update.ResourceUpdateStateNotStarted,
+				StackLabel:           "stack",
+				RemainingResolvables: []model.FormaeURI{vpcURI},
+			},
+		},
+	}
+
+	pending, doomed := deriveReplayPendingUpdates(fa)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "subnet", pending[0].DesiredState.Label)
+	assert.Empty(t, doomed)
 }
 
 func TestMetastructure_NetworkingEnabled(t *testing.T) {
