@@ -43,7 +43,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.2
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
-	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260120160109-3221bac3fb58
+	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260319010158-0bb81e14e83f
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/prometheus/client_golang v1.23.2

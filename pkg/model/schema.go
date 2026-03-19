@@ -29,6 +29,7 @@ type FieldUpdateMethod string
 const FieldUpdateMethodArray FieldUpdateMethod = "Array"
 const FieldUpdateMethodEntitySet FieldUpdateMethod = "EntitySet"
 const FieldUpdateMethodSet FieldUpdateMethod = "Set"
+const FieldUpdateMethodAtomic FieldUpdateMethod = "Atomic"
 const FieldUpdateMethodNone FieldUpdateMethod = ""
 
 func filterFields[T bool](s Schema, selector func(FieldHint) T, value T) []string {

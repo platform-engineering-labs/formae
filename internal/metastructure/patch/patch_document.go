@@ -25,6 +25,7 @@ func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) json
 	collections := jsonpatch.Collections{
 		EntitySets: jsonpatch.EntitySets{},
 		Arrays:     []jsonpatch.Path{},
+		Atomics:    []jsonpatch.Path{},
 	}
 
 	for field, hint := range hints {
@@ -34,6 +35,8 @@ func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) json
 			collections.EntitySets[path] = jsonpatch.Key(hint.IndexField)
 		case pkgmodel.FieldUpdateMethodArray:
 			collections.Arrays = append(collections.Arrays, path)
+		case pkgmodel.FieldUpdateMethodAtomic:
+			collections.Atomics = append(collections.Atomics, path)
 		}
 	}
 
