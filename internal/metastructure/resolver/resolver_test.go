@@ -209,6 +209,43 @@ func TestResolvePropertyReferences(t *testing.T) {
 		assert.Equal(t, int64(8080), result.Get("Port.$value").Int())
 	})
 
+	t.Run("resolves JSON object value without double-encoding", func(t *testing.T) {
+		// When a resource property is a JSON object (like an endpoints mapping),
+		// the resolved $value should be a proper JSON object, not a double-encoded string.
+		endpointsRef := newTestRef("Endpoints")
+		properties := fmt.Appendf(nil, `{
+			"Endpoints": {
+				"$ref": "%s"
+			}
+		}`, endpointsRef)
+
+		// The ResolveCache extracts the property value first (gjson.Get + .String()),
+		// so the resolved value IS the object itself, not wrapped in {"Endpoints": ...}.
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(endpointsRef),
+			properties,
+			`{"grafana": "http://localhost:3000", "prometheus": "http://localhost:9090"}`,
+		)
+
+		require.NoError(t, err)
+
+		result := gjson.Parse(string(resolved))
+		// $value should be a proper JSON object, not a string
+		endpointsValue := result.Get("Endpoints.$value")
+		assert.True(t, endpointsValue.IsObject(), "resolved $value should be a JSON object, got: %s", endpointsValue.Raw)
+		assert.Equal(t, "http://localhost:3000", endpointsValue.Get("grafana").String())
+		assert.Equal(t, "http://localhost:9090", endpointsValue.Get("prometheus").String())
+
+		// After conversion to plugin format, the object should be preserved
+		pluginFormat, err := ConvertToPluginFormat(resolved)
+		require.NoError(t, err)
+
+		pluginResult := gjson.Parse(string(pluginFormat))
+		assert.True(t, pluginResult.Get("Endpoints").IsObject(), "plugin format should preserve object structure")
+		assert.Equal(t, "http://localhost:3000", pluginResult.Get("Endpoints.grafana").String())
+		assert.Equal(t, "http://localhost:9090", pluginResult.Get("Endpoints.prometheus").String())
+	})
+
 	t.Run("handles deeply nested objects", func(t *testing.T) {
 		dbEndpointRef := newTestRef("Endpoint")
 		properties := fmt.Appendf(nil, `{
