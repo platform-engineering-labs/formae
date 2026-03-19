@@ -322,6 +322,7 @@ func TestGenerateTargetUpdates_MultipleTargets_MixedScenarios(t *testing.T) {
 
 type mockTargetDatastore struct {
 	targets        map[string]*pkgmodel.Target
+	resources      map[string]*pkgmodel.Resource
 	resourceCounts map[string]int
 	shouldError    bool
 }
@@ -343,6 +344,23 @@ func (m *mockTargetDatastore) LoadTarget(label string) (*pkgmodel.Target, error)
 	return target, nil
 }
 
+func (m *mockTargetDatastore) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	if m.shouldError {
+		return nil, assert.AnError
+	}
+
+	if m.resources == nil {
+		return nil, nil
+	}
+
+	resource, exists := m.resources[ksuid]
+	if !exists {
+		return nil, nil
+	}
+
+	return resource, nil
+}
+
 func (m *mockTargetDatastore) CountResourcesInTarget(targetLabel string) (int, error) {
 	if m.shouldError {
 		return 0, assert.AnError
@@ -358,4 +376,124 @@ func (m *mockTargetDatastore) CountResourcesInTarget(targetLabel string) (int, e
 	}
 
 	return count, nil
+}
+
+func TestGenerateTargetUpdates_ExtractsResolvablesForCreate(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationCreate, updates[0].Operation)
+	assert.Len(t, updates[0].RemainingResolvables, 1)
+	assert.Equal(t, pkgmodel.FormaeURI("formae://abc123#/Endpoint"), updates[0].RemainingResolvables[0])
+}
+
+func TestGenerateTargetUpdates_ReapplyWithSameResolvedValue_NoReplace(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	require.NoError(t, err)
+	// Same resolved value → no change needed, but still need resolvables for execution
+	assert.Empty(t, updates)
+}
+
+func TestGenerateTargetUpdates_ReapplyWithDifferentResolvedValue_Replace(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint": "https://old-cluster.eks.amazonaws.com"}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://new-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
+	assert.Len(t, updates[0].RemainingResolvables, 1)
+}
+
+func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint": "https://old.eks.amazonaws.com"}`),
+			},
+		},
+		// No resources — ref can't be resolved
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://nonexistent#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
 }

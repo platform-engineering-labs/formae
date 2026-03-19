@@ -5,9 +5,13 @@
 package target_update
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
+	"github.com/tidwall/gjson"
+
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -16,6 +20,7 @@ import (
 type TargetDatastore interface {
 	LoadTarget(label string) (*pkgmodel.Target, error)
 	CountResourcesInTarget(targetLabel string) (int, error)
+	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
 }
 
 type TargetUpdateGenerator struct {
@@ -90,6 +95,9 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		}, true, nil
 	}
 
+	// Extract resolvables from target config
+	resolvables := resolver.ExtractResolvableURIsFromJSON(target.Config)
+
 	// Handle apply command (create or update)
 	var operation TargetOperation
 	if existing == nil {
@@ -105,7 +113,12 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			}
 		}
 
-		if !util.JsonEqualRaw(existing.Config, target.Config) {
+		configChanged, err := tp.configChanged(existing.Config, target.Config, resolvables)
+		if err != nil {
+			return TargetUpdate{}, false, fmt.Errorf("failed to compare target configs: %w", err)
+		}
+
+		if configChanged {
 			operation = TargetOperationReplace
 		} else if existing.Discoverable != target.Discoverable {
 			operation = TargetOperationUpdate
@@ -115,11 +128,64 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	}
 
 	return TargetUpdate{
-		Target:         target,
-		ExistingTarget: existing,
-		Operation:      operation,
-		State:          TargetUpdateStateNotStarted,
-		StartTs:        now,
-		ModifiedTs:     now,
+		Target:               target,
+		ExistingTarget:       existing,
+		Operation:            operation,
+		State:                TargetUpdateStateNotStarted,
+		StartTs:              now,
+		ModifiedTs:           now,
+		RemainingResolvables: resolvables,
 	}, true, nil
+}
+
+// configChanged compares the existing stored config with the new config.
+// When the new config contains $ref objects, we resolve them from the DB
+// to get actual values for comparison.
+func (tp *TargetUpdateGenerator) configChanged(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (bool, error) {
+	if len(resolvables) == 0 {
+		return !util.JsonEqualRaw(existingConfig, newConfig), nil
+	}
+
+	// Resolve $ref values from DB for comparison
+	resolvedConfig := make([]byte, len(newConfig))
+	copy(resolvedConfig, newConfig)
+
+	for _, uri := range resolvables {
+		ksuid := uri.KSUID()
+		propertyPath := uri.PropertyPath()
+
+		resource, err := tp.datastore.LoadResourceById(ksuid)
+		if err != nil || resource == nil {
+			// Can't resolve — treat as a config change
+			slog.Debug("Cannot resolve $ref from DB, treating as config change",
+				"uri", uri, "error", err)
+			return true, nil
+		}
+
+		// Extract the property value from the resource
+		value := gjson.GetBytes(resource.Properties, propertyPath)
+		if !value.Exists() {
+			slog.Debug("Referenced property not found in resource, treating as config change",
+				"uri", uri, "propertyPath", propertyPath)
+			return true, nil
+		}
+
+		// Substitute the resolved value into the config
+		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, value.String())
+		if err != nil {
+			return true, nil
+		}
+	}
+
+	// Compare resolved values: strip $ref metadata from both sides
+	existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
+	if err != nil {
+		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+	}
+	newValues, err := resolver.ConvertToPluginFormat(resolvedConfig)
+	if err != nil {
+		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+	}
+
+	return !util.JsonEqualRaw(existingValues, newValues), nil
 }
