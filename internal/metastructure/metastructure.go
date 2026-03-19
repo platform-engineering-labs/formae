@@ -1166,7 +1166,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 	for _, fa := range commands {
 		pendingUpdates, doomedUpdates := deriveReplayPendingUpdates(fa)
 		for _, ref := range doomedUpdates {
-			slog.Error("ReRunIncompleteCommands: marking replay-doomed dependent as failed",
+			slog.Warn("ReRunIncompleteCommands: marking replay-doomed dependent as failed",
 				"commandID", fa.ID,
 				"resourceURI", ref.URI,
 				"operation", ref.Operation,
