@@ -170,22 +170,6 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 				}
 			}
 
-		case target_update.TargetOperationCreate:
-			// For non-replace creates: resources on this target depend on the target being created first
-			targetCreateNode := p.Nodes[tu.NodeURI()]
-			if targetCreateNode == nil {
-				continue
-			}
-			for _, node := range p.Nodes {
-				ru, ok := node.Update.(*resource_update.ResourceUpdate)
-				if !ok || ru.DesiredState.Target != tu.Target.Label {
-					continue
-				}
-				if ru.Operation == resource_update.OperationCreate {
-					node.LinkWith(targetCreateNode)
-				}
-			}
-
 		case target_update.TargetOperationDelete:
 			targetDeleteNode := p.Nodes[tu.NodeURI()]
 			if targetDeleteNode == nil {
