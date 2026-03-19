@@ -1383,19 +1383,6 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			if ru.State == resource_update.ResourceUpdateStateNotStarted {
 				pendingUpdates = append(pendingUpdates, *ru)
 			}
-			ru.UpdateState()
-			if ru.State == resource_update.ResourceUpdateStateInProgress {
-				ru.State = resource_update.ResourceUpdateStateNotStarted
-			}
-			if ru.State == resource_update.ResourceUpdateStateNotStarted {
-				slog.Error("ReRunIncompleteCommands: including pending resource",
-					"commandID", fa.ID,
-					"resourceURI", ru.URI(),
-					"operation", ru.Operation,
-					"resolvableCount", len(ru.RemainingResolvables),
-				)
-				pendingUpdates = append(pendingUpdates, *ru)
-			}
 		}
 
 		// If all resource updates already reached a terminal state, the command
