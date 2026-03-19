@@ -429,7 +429,7 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -597,7 +597,7 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -649,7 +649,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
 
@@ -686,7 +686,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -723,7 +723,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -765,7 +765,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -811,7 +811,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "test-target", updates[0].ResourceTarget.Label)
@@ -837,7 +837,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -862,7 +862,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -882,7 +882,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 
 		existingTargets := []*pkgmodel.Target{} // No existing targets
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "new-target", updates[0].ResourceTarget.Label)
@@ -938,7 +938,7 @@ func TestGenerateResourceUpdatesForDestroy_SameLabel_DifferentTypes(t *testing.T
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	updates, err := generateResourceUpdatesForDestroy(forma, FormaCommandSourceUser, targetMap, ds)
+	updates, err := generateResourceUpdatesForDestroy(forma, FormaCommandSourceUser, targetMap, ds, nil)
 	require.NoError(t, err)
 
 	// Should yield 2 delete ops
@@ -1128,7 +1128,7 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, updates, 2, "Should have delete for old type and create for new type")
@@ -1154,4 +1154,56 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 	// They should be treated as independent, not as a replacement
 	assert.Empty(t, deleteOp.GroupID, "Delete should not be grouped (not a replacement)")
 	assert.Empty(t, createOp.GroupID, "Create should not be grouped (not a replacement)")
+}
+
+func TestTargetReplace_Destroy_IgnoresPortability(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	subnetKsuid := util.NewID()
+
+	// Store a non-portable subnet in DB
+	existingSubnet := pkgmodel.Resource{
+		Label:      "my-subnet",
+		Type:       "AWS::EC2::Subnet",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      subnetKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.1.0/24"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: false,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existingSubnet},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	require.NoError(t, err)
+
+	// Destroy the non-portable subnet - should succeed regardless of portability
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:  "my-subnet",
+				Type:   "AWS::EC2::Subnet",
+				Stack:  "infra",
+				Target: "aws-prod",
+			},
+		},
+	}
+
+	targetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+
+	updates, err := generateResourceUpdatesForDestroy(forma, FormaCommandSourceUser, targetMap, ds, nil)
+
+	require.NoError(t, err, "destroy should ignore portability")
+	assert.Len(t, updates, 1)
+	assert.Equal(t, OperationDelete, updates[0].Operation)
+	assert.Equal(t, "my-subnet", updates[0].DesiredState.Label)
 }

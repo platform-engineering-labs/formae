@@ -48,6 +48,7 @@ open class HostedZoneResolvable extends formae.Resolvable {
 @fakeaws.ResourceHint {
     type = module.type
     identifier = "Id"
+    portable = true
 }
 open class HostedZone extends formae.Resource {
     @fakeaws.FieldHint

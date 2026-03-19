@@ -25,6 +25,7 @@ open class SecurityGroupResolvable extends formae.Resolvable {
 @fakeaws.ResourceHint {
     type = module.type
     identifier = "GroupId"
+    portable = true
 }
 open class SecurityGroup extends formae.Resource {
     @fakeaws.FieldHint {

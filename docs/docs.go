@@ -163,8 +163,14 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
+                    "200": {
+                        "description": "OK: No changes required, or simulation result returned.",
+                        "schema": {
+                            "$ref": "#/definitions/model.SubmitCommandResponse"
+                        }
+                    },
                     "202": {
-                        "description": "Accepted: The command is validated and stored and queued for execution.",
+                        "description": "Accepted: The command is validated, stored, and queued for execution.",
                         "schema": {
                             "$ref": "#/definitions/model.SubmitCommandResponse"
                         },
@@ -423,6 +429,41 @@ const docTemplate = `{
                         "description": "Not Found: No stacks found.",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/stacks/{stack}/changes-since-last-reconcile": {
+            "get": {
+                "description": "Retrieves resource modifications (drift) detected since the last reconcile for a given stack.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stacks"
+                ],
+                "summary": "List drift for a stack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The stack label to check for drift.",
+                        "name": "stack",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: Drift report for the stack.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ModifiedStack"
                         }
                     },
                     "500": {
@@ -1000,6 +1041,9 @@ const docTemplate = `{
                 },
                 "Identifier": {
                     "type": "string"
+                },
+                "Portable": {
+                    "type": "boolean"
                 }
             }
         },
@@ -1011,6 +1055,12 @@ const docTemplate = `{
                 },
                 "Command": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command"
+                },
+                "Warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

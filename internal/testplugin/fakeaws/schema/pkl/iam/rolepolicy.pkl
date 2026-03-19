@@ -17,6 +17,7 @@ const type = "FakeAWS::IAM::RolePolicy"
 @fakeaws.ResourceHint {
     type = module.type
     identifier = "PolicyName"
+    portable = true
 }
 open class RolePolicy extends formae.Resource {
     @fakeaws.FieldHint {

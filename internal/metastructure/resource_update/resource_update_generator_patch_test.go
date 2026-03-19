@@ -145,7 +145,9 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 		mode,
 		FormaCommandSourceUser,
 		targetMap,
+		targetMap,
 		ds,
+		nil,
 	)
 
 	assert.NoError(t, err)
@@ -270,7 +272,7 @@ func TestGenerateResourceUpdatesForApply_PatchMode(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
@@ -384,10 +386,162 @@ func TestResourceUpdatesForPatch_GeneratesUpdateOperationsForUnmanagedResources(
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, ds)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
 	assert.Equal(t, "my-s3-bucket", updates[0].DesiredState.Label)
 	assert.Equal(t, true, updates[0].DesiredState.Managed)
+}
+
+func TestTargetReplace_Patch_AllPortable(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	queueKsuid := util.NewID()
+
+	existingQueue := pkgmodel.Resource{
+		Label:      "my-queue",
+		Type:       "AWS::SQS::Queue",
+		Stack:      "backend",
+		Target:     "aws-prod",
+		Ksuid:      queueKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"QueueName":"my-queue"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"QueueName"},
+			Portable: true,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "backend"}},
+		Resources: []pkgmodel.Resource{existingQueue},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	assert.NoError(t, err)
+
+	// Target-only forma (no resources) - patch mode replaces all managed resources on target
+	forma := &pkgmodel.Forma{
+		Targets: []pkgmodel.Target{{Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)}},
+	}
+
+	replacedTargets := map[string]bool{"aws-prod": true}
+
+	existingTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+	desiredTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)},
+	}
+
+	updates, err := generateResourceUpdatesForPatch(
+		forma,
+		pkgmodel.FormaApplyModePatch,
+		FormaCommandSourceUser,
+		existingTargetMap,
+		desiredTargetMap,
+		ds,
+		replacedTargets,
+	)
+
+	assert.NoError(t, err)
+
+	deleteCount := 0
+	createCount := 0
+	for _, u := range updates {
+		if u.Operation == OperationDelete {
+			deleteCount++
+		}
+		if u.Operation == OperationCreate {
+			createCount++
+		}
+	}
+	assert.Equal(t, 1, deleteCount, "should have 1 delete for queue")
+	assert.Equal(t, 1, createCount, "should have 1 create for queue")
+}
+
+func TestTargetReplace_Patch_NonPortable_Rejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	vpcKsuid := util.NewID()
+	subnetKsuid := util.NewID()
+
+	existingVpc := pkgmodel.Resource{
+		Label:      "my-vpc",
+		Type:       "AWS::EC2::VPC",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      vpcKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: true,
+		},
+	}
+
+	existingSubnet := pkgmodel.Resource{
+		Label:      "my-subnet",
+		Type:       "AWS::EC2::Subnet",
+		Stack:      "infra",
+		Target:     "aws-prod",
+		Ksuid:      subnetKsuid,
+		Managed:    true,
+		Properties: json.RawMessage(`{"CidrBlock":"10.0.1.0/24"}`),
+		Schema: pkgmodel.Schema{
+			Fields:   []string{"CidrBlock"},
+			Portable: false,
+		},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existingVpc, existingSubnet},
+	}
+	_, err := ds.StoreStack(existingStack, "setup-cmd")
+	assert.NoError(t, err)
+
+	// Forma includes only VPC, but patch mode checks ALL resources on the target
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "infra"}},
+		Targets: []pkgmodel.Target{{Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "my-vpc",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "infra",
+				Target:     "aws-prod",
+				Ksuid:      vpcKsuid,
+				Managed:    true,
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				Schema: pkgmodel.Schema{
+					Fields:   []string{"CidrBlock"},
+					Portable: true,
+				},
+			},
+		},
+	}
+
+	replacedTargets := map[string]bool{"aws-prod": true}
+
+	existingTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}
+	desiredTargetMap := map[string]*pkgmodel.Target{
+		"aws-prod": {Label: "aws-prod", Namespace: "aws", Config: json.RawMessage(`{"region":"us-west-2"}`)},
+	}
+
+	_, err = generateResourceUpdatesForPatch(
+		forma,
+		pkgmodel.FormaApplyModePatch,
+		FormaCommandSourceUser,
+		existingTargetMap,
+		desiredTargetMap,
+		ds,
+		replacedTargets,
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not portable")
+	assert.Contains(t, err.Error(), "AWS::EC2::Subnet")
 }

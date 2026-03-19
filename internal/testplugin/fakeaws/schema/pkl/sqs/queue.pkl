@@ -29,6 +29,7 @@ open class QueueResolvable extends formae.Resolvable {
 @fakeaws.ResourceHint {
     type = module.type
     identifier = "QueueUrl"
+    portable = true
 }
 open class Queue extends formae.Resource {
     @fakeaws.FieldHint

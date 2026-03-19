@@ -29,6 +29,7 @@ open class AliasTarget extends formae.SubResource {
 @fakeaws.ResourceHint {
     type = module.type
     identifier = "Id"
+    portable = true
 }
 open class RecordSet extends formae.Resource {
     @fakeaws.FieldHint {

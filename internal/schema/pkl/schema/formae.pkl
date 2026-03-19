@@ -146,6 +146,8 @@ open class ResourceHint extends Annotation {
     discoverable: Boolean = true
     /// Property that dictates whether a resource is extractable via the CLI
     extractable: Boolean = true
+    /// Property that dictates whether a resource can be moved across targets
+    portable: Boolean = false
     /// DocComment
     docComment: String?
 
@@ -203,6 +205,8 @@ open class Schema {
     Discoverable: Boolean = true
     /// Property that dictates whether a resource can be extracted to PKL
     Extractable: Boolean = true
+    /// Property that dictates whether a resource can be moved across targets
+    Portable: Boolean = false
 
     /// Query fields by FieldHint property
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
@@ -574,6 +578,7 @@ class Fq {
                 Hints = hints(resourceClass)
                 Discoverable = hint.discoverable
                 Extractable = hint.extractable
+                Portable = hint.portable
             }
 
     function type(resourceClass: reflect.Class): String =
