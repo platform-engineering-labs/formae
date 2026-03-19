@@ -5,8 +5,10 @@
 package target_update
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -58,6 +60,16 @@ func (tu *TargetUpdate) NodeURI() pkgmodel.FormaeURI {
 
 // Resolvables returns the remaining resolvable URIs for this target update.
 func (tu *TargetUpdate) Resolvables() []pkgmodel.FormaeURI { return tu.RemainingResolvables }
+
+// ResolveValue substitutes a resolved value into the target's Config for the given URI.
+func (tu *TargetUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string) error {
+	config, err := resolver.ResolvePropertyReferences(formaeUri, tu.Target.Config, value)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target config: %w", err)
+	}
+	tu.Target.Config = config
+	return nil
+}
 
 // Namespace returns the target's namespace.
 func (tu *TargetUpdate) Namespace() string { return tu.Target.Namespace }
