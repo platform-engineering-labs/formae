@@ -139,7 +139,13 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 // buildTargetResourceEdges creates implicit ordering edges between target and resource nodes:
 //   - Replace: resource deletes → target delete → target create → resource creates
 //   - Delete:  resource deletes → target delete
+//   - Resolvables: target create/update → depends on resource creates it references
 func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
+	// Build resolvable-based dependency edges for target create/update operations.
+	// When a target config contains $ref to a resource property, the target node
+	// must wait for that resource's create/update to complete first.
+	p.buildTargetResolvableEdges()
+
 	for _, tu := range targetUpdates {
 		switch tu.Operation {
 		case target_update.TargetOperationReplace:
@@ -158,6 +164,22 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 				}
 				if ru.Operation == resource_update.OperationDelete {
 					targetDeleteNode.LinkWith(node)
+				}
+				if ru.Operation == resource_update.OperationCreate {
+					node.LinkWith(targetCreateNode)
+				}
+			}
+
+		case target_update.TargetOperationCreate:
+			// For non-replace creates: resources on this target depend on the target being created first
+			targetCreateNode := p.Nodes[tu.NodeURI()]
+			if targetCreateNode == nil {
+				continue
+			}
+			for _, node := range p.Nodes {
+				ru, ok := node.Update.(*resource_update.ResourceUpdate)
+				if !ok || ru.DesiredState.Target != tu.Target.Label {
+					continue
 				}
 				if ru.Operation == resource_update.OperationCreate {
 					node.LinkWith(targetCreateNode)
@@ -278,6 +300,36 @@ func (p *ExecutionDAG) connectDeleteToCreate(allOps []resource_update.ResourceUp
 			if deleteGroup != nil && createGroup != nil {
 				// Create waits for delete to complete (replacement order)
 				createGroup.LinkWith(deleteGroup)
+			}
+		}
+	}
+}
+
+// buildTargetResolvableEdges links target nodes that have resolvables to the
+// resource nodes they depend on. A target whose config contains $ref to
+// formae://KSUID#/Property must wait for that resource's create/update to finish.
+func (p *ExecutionDAG) buildTargetResolvableEdges() {
+	// Build a map of resource KSUID → DAG node for create/update operations
+	resourceNodes := make(map[string]*DAGNode)
+	for _, node := range p.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		if ru.Operation == resource_update.OperationCreate || ru.Operation == resource_update.OperationUpdate {
+			resourceNodes[ru.DesiredState.Ksuid] = node
+		}
+	}
+
+	for _, node := range p.Nodes {
+		tu, ok := node.Update.(*target_update.TargetUpdate)
+		if !ok {
+			continue
+		}
+		for _, uri := range tu.RemainingResolvables {
+			ksuid := uri.KSUID()
+			if depNode, exists := resourceNodes[ksuid]; exists {
+				node.LinkWith(depNode)
 			}
 		}
 	}
