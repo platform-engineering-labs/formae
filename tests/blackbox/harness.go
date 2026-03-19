@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -72,6 +73,14 @@ type TestHarness struct {
 	// Response sequence accumulator — tracks all ProgramResponses calls
 	// so we can re-program after a crash.
 	allProgrammedSequences []testcontrol.PluginOpSequence
+
+	// strictMode disables best-effort self-healing in assertion paths so tests
+	// fail immediately instead of repairing or retrying through anomalies.
+	strictMode bool
+
+	// terminalCommandStates tracks commands once they reach a terminal state so
+	// we can assert they never later regress back to a non-terminal state.
+	terminalCommandStates map[string]string
 }
 
 // NewTestHarness builds the test plugin binary, starts the agent as an external
@@ -105,10 +114,38 @@ func NewTestHarness(t *testing.T, timeout time.Duration) *TestHarness {
 	}
 
 	h.cloudStateMirror = make(map[string]testcontrol.CloudStateEntry)
+	h.terminalCommandStates = make(map[string]string)
 
 	h.configPath = h.writePKLConfig(t)
 	h.startAgent(t, timeout, true)
 	return h
+}
+
+// SetStrictMode toggles strict assertion behavior. In strict mode the harness
+// avoids auto-repair in end-state validation paths and fails on the first
+// anomaly instead of attempting cleanup/retry.
+func (h *TestHarness) SetStrictMode(strict bool) {
+	h.strictMode = strict
+}
+
+func isTerminalCommandState(state string) bool {
+	return state == "Success" || state == "Failed" || state == "Canceled"
+}
+
+// ObserveCommandState records terminal command states and asserts they never
+// later regress back to a non-terminal state or change terminal outcome.
+func (h *TestHarness) ObserveCommandState(t *testing.T, commandID, state string) {
+	t.Helper()
+	if commandID == "" || state == "" {
+		return
+	}
+	if prev, ok := h.terminalCommandStates[commandID]; ok {
+		require.Equal(t, prev, state, "terminal command state changed for %s", commandID)
+		return
+	}
+	if isTerminalCommandState(state) {
+		h.terminalCommandStates[commandID] = state
+	}
 }
 
 // Cleanup stops the Ergo node and the agent subprocess.
@@ -157,6 +194,7 @@ func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*
 		statusResp, err := h.client.GetFormaCommandsStatus("id:"+commandID, clientID, 1)
 		if err == nil && statusResp != nil && len(statusResp.Commands) > 0 {
 			cmd := statusResp.Commands[0]
+			h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
 			if cmd.State == "Success" || cmd.State == "Failed" || cmd.State == "Canceled" {
 				return &cmd, true
 			}
@@ -167,15 +205,20 @@ func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*
 }
 
 func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
-	statusResp, err := h.client.GetFormaCommandsStatus("command:sync", "", 1)
+	statusResp, err := h.client.GetFormaCommandsStatus("", "", 20)
 	if err != nil {
 		return nil, err
 	}
 	if statusResp == nil || len(statusResp.Commands) == 0 {
 		return nil, nil
 	}
-	cmd := statusResp.Commands[0]
-	return &cmd, nil
+	for _, cmd := range statusResp.Commands {
+		if cmd.Command == "sync" {
+			copy := cmd
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }
 
 // WaitForNextSyncCommand waits for a new sync command created after the current
@@ -286,6 +329,27 @@ func (h *TestHarness) UnprogramResponses(t *testing.T, sequences []testcontrol.P
 		Sequences: sequences,
 	})
 	require.NoError(t, err, "UnprogramResponses failed")
+	h.removeProgrammedSequences(sequences)
+}
+
+func (h *TestHarness) removeProgrammedSequences(sequences []testcontrol.PluginOpSequence) {
+	if len(sequences) == 0 || len(h.allProgrammedSequences) == 0 {
+		return
+	}
+	remaining := make([]testcontrol.PluginOpSequence, 0, len(h.allProgrammedSequences))
+	for _, programmed := range h.allProgrammedSequences {
+		remove := false
+		for _, seq := range sequences {
+			if reflect.DeepEqual(programmed, seq) {
+				remove = true
+				break
+			}
+		}
+		if !remove {
+			remaining = append(remaining, programmed)
+		}
+	}
+	h.allProgrammedSequences = remaining
 }
 
 // PutCloudState creates or updates a cloud state entry in the test plugin.
@@ -316,6 +380,28 @@ func (h *TestHarness) DeleteCloudState(t *testing.T, nativeID string) {
 	require.NoError(t, err, "DeleteCloudState failed")
 
 	delete(h.cloudStateMirror, nativeID)
+}
+
+func (h *TestHarness) TryPutCloudState(nativeID, resourceType, properties string) error {
+	_, err := h.callTestController(testcontrol.PutCloudStateRequest{
+		NativeID:     nativeID,
+		ResourceType: resourceType,
+		Properties:   properties,
+	})
+	if err != nil {
+		return err
+	}
+	h.cloudStateMirror[nativeID] = testcontrol.CloudStateEntry{NativeID: nativeID, ResourceType: resourceType, Properties: properties}
+	return nil
+}
+
+func (h *TestHarness) TryDeleteCloudState(nativeID string) error {
+	_, err := h.callTestController(testcontrol.DeleteCloudStateRequest{NativeID: nativeID})
+	if err != nil {
+		return err
+	}
+	delete(h.cloudStateMirror, nativeID)
+	return nil
 }
 
 // OpenGate asks the test plugin's TestController to open the plugin gate,

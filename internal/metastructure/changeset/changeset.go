@@ -442,6 +442,8 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, co
 	// unrelated reads in the same sync command.
 	if command != pkgmodel.CommandSync {
 		p.buildOperationRelationships(allOps)
+	} else {
+		slog.Error("Changeset: skipping dependency relationships for sync command", "nodeCount", len(allOps))
 	}
 
 	// Step 4: Check for cycles
