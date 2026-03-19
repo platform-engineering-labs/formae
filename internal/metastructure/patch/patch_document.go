@@ -43,6 +43,16 @@ func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) json
 	return collections
 }
 
+func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map[string]string {
+	result := map[string]string{}
+	for field, hint := range hints {
+		if hint.HasProviderDefault && hint.UpdateMethod == pkgmodel.FieldUpdateMethodEntitySet && hint.IndexField != "" {
+			result[field] = hint.IndexField
+		}
+	}
+	return result
+}
+
 func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, properties)
 	if err != nil {
@@ -59,7 +69,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), schema.HasProviderDefault(), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -77,7 +87,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	return json.RawMessage(patchJson), needsReplacement, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, hasProviderDefaultFields []string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
 	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields)
 	if err != nil {
 		return nil, err
@@ -103,8 +113,18 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 		return nil, err
 	}
 
+	// For EntitySet fields with provider defaults, filter elements from the document (actual state)
+	// whose key doesn't appear in the desired state. Cloud providers like AWS populate EntitySet
+	// collections with many default elements (e.g., ~22 LoadBalancer attributes). Including all of
+	// them in the patch can exceed API limits. By stripping unmatched elements before comparison,
+	// only user-specified elements are included in the patch.
+	documentFiltered, err := removeProviderDefaultEntitySetElements(documentWithoutProviderDefaults, patchWithSchemaFieldsOnly, entitySetProviderDefaults)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create the actual patch document
-	patchDoc, err := jsonpatch.CreatePatch(documentWithoutProviderDefaults, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
+	patchDoc, err := jsonpatch.CreatePatch(documentFiltered, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JSON patch: %w", err)
 	}
@@ -195,6 +215,74 @@ func removeProviderDefaultFields(document []byte, patch []byte, hasProviderDefau
 		if !fieldExistsInMap(patchMap, pathParts) {
 			removeNestedField(docMap, pathParts)
 		}
+	}
+
+	serialized, err := json.Marshal(docMap)
+	if err != nil {
+		return nil, err
+	}
+
+	return serialized, nil
+}
+
+// removeProviderDefaultEntitySetElements filters EntitySet arrays in the document (actual state)
+// to only retain elements whose key (by indexField) matches a key in the patch (desired state).
+// This handles cloud providers that populate EntitySet collections with many default elements
+// (e.g., AWS LoadBalancer returns ~22 default attributes). Without filtering, all defaults would
+// be included in the patch, potentially exceeding API limits.
+func removeProviderDefaultEntitySetElements(document []byte, patch []byte, entitySetProviderDefaults map[string]string) ([]byte, error) {
+	if len(entitySetProviderDefaults) == 0 {
+		return document, nil
+	}
+
+	var docMap map[string]any
+	if err := json.Unmarshal(document, &docMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal document: %w", err)
+	}
+
+	var patchMap map[string]any
+	if err := json.Unmarshal(patch, &patchMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal patch: %w", err)
+	}
+
+	for field, indexKey := range entitySetProviderDefaults {
+		docArr, ok := docMap[field].([]any)
+		if !ok {
+			continue
+		}
+
+		patchArr, ok := patchMap[field].([]any)
+		if !ok {
+			// Desired state doesn't have this field at all — remove entire array from document
+			delete(docMap, field)
+			continue
+		}
+
+		// Build a set of keys present in desired state
+		desiredKeys := map[string]struct{}{}
+		for _, elem := range patchArr {
+			if elemMap, ok := elem.(map[string]any); ok {
+				if keyVal, ok := elemMap[indexKey]; ok {
+					desiredKeys[fmt.Sprintf("%v", keyVal)] = struct{}{}
+				}
+			}
+		}
+
+		// Filter document array to only keep elements with matching keys
+		filtered := make([]any, 0, len(patchArr))
+		for _, elem := range docArr {
+			if elemMap, ok := elem.(map[string]any); ok {
+				if keyVal, ok := elemMap[indexKey]; ok {
+					if _, exists := desiredKeys[fmt.Sprintf("%v", keyVal)]; exists {
+						filtered = append(filtered, elem)
+					}
+					continue
+				}
+			}
+			// Keep elements we can't match on (no key field)
+			filtered = append(filtered, elem)
+		}
+		docMap[field] = filtered
 	}
 
 	serialized, err := json.Marshal(docMap)

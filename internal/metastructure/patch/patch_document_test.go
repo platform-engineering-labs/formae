@@ -157,7 +157,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -229,7 +229,7 @@ func TestCreatePatchDocument_ObjectArrayWithKeyValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -303,7 +303,7 @@ func TestCreatePatchDocument_ObjectArrayWithValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -1213,4 +1213,226 @@ func TestGeneratePatch_AtomicField_NoDiffNoPatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, needsReplacement)
 	assert.Empty(t, patchDoc, "Expected no patch when atomic field is identical")
+}
+
+func TestEntitySetProviderDefaultsFromHints(t *testing.T) {
+	hints := map[string]pkgmodel.FieldHint{
+		"LoadBalancerAttributes": {
+			HasProviderDefault: true,
+			UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+			IndexField:         "Key",
+		},
+		"Tags": {
+			UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet,
+			IndexField:   "Key",
+		},
+		"BucketEncryption": {
+			HasProviderDefault: true,
+		},
+		"NormalField": {},
+	}
+
+	result := entitySetProviderDefaultsFromHints(hints)
+
+	assert.Len(t, result, 1)
+	assert.Equal(t, "Key", result["LoadBalancerAttributes"])
+	_, hasTags := result["Tags"]
+	assert.False(t, hasTags, "Tags should not be included (no hasProviderDefault)")
+	_, hasBE := result["BucketEncryption"]
+	assert.False(t, hasBE, "BucketEncryption should not be included (not an EntitySet)")
+}
+
+func TestRemoveProviderDefaultEntitySetElements_FiltersUnmatchedElements(t *testing.T) {
+	// Simulates AWS ELBv2 LoadBalancer: AWS returns ~22 default attributes,
+	// user only specifies 2. Unmatched elements should be removed from document.
+	document := []byte(`{
+		"LoadBalancerName": "my-lb",
+		"LoadBalancerAttributes": [
+			{"Key": "idle_timeout.timeout_seconds", "Value": "60"},
+			{"Key": "routing.http2.enabled", "Value": "true"},
+			{"Key": "access_logs.s3.enabled", "Value": "false"},
+			{"Key": "deletion_protection.enabled", "Value": "false"}
+		]
+	}`)
+
+	patch := []byte(`{
+		"LoadBalancerName": "my-lb",
+		"LoadBalancerAttributes": [
+			{"Key": "idle_timeout.timeout_seconds", "Value": "120"}
+		]
+	}`)
+
+	entitySetDefaults := map[string]string{
+		"LoadBalancerAttributes": "Key",
+	}
+
+	result, err := removeProviderDefaultEntitySetElements(document, patch, entitySetDefaults)
+	require.NoError(t, err)
+
+	var resultMap map[string]any
+	err = json.Unmarshal(result, &resultMap)
+	require.NoError(t, err)
+
+	attrs := resultMap["LoadBalancerAttributes"].([]any)
+	require.Len(t, attrs, 1, "Should only retain elements whose key matches desired state")
+
+	attr0 := attrs[0].(map[string]any)
+	assert.Equal(t, "idle_timeout.timeout_seconds", attr0["Key"])
+	assert.Equal(t, "60", attr0["Value"], "Original value should be preserved for comparison")
+}
+
+func TestRemoveProviderDefaultEntitySetElements_DesiredFieldAbsent(t *testing.T) {
+	// When desired state doesn't have the field at all, remove entire array from document
+	document := []byte(`{
+		"Name": "test",
+		"Attributes": [
+			{"Key": "a", "Value": "1"},
+			{"Key": "b", "Value": "2"}
+		]
+	}`)
+
+	patch := []byte(`{"Name": "test"}`)
+
+	entitySetDefaults := map[string]string{
+		"Attributes": "Key",
+	}
+
+	result, err := removeProviderDefaultEntitySetElements(document, patch, entitySetDefaults)
+	require.NoError(t, err)
+
+	var resultMap map[string]any
+	err = json.Unmarshal(result, &resultMap)
+	require.NoError(t, err)
+
+	_, hasAttrs := resultMap["Attributes"]
+	assert.False(t, hasAttrs, "Attributes should be removed when not in desired state")
+}
+
+func TestRemoveProviderDefaultEntitySetElements_EmptyMap(t *testing.T) {
+	document := []byte(`{"Name": "test", "Attrs": [{"Key": "a"}]}`)
+
+	result, err := removeProviderDefaultEntitySetElements(document, document, nil)
+	require.NoError(t, err)
+	assert.Equal(t, string(document), string(result), "Should be unchanged with nil entitySetDefaults")
+}
+
+func TestGeneratePatch_EntitySetProviderDefaults_PatchMode(t *testing.T) {
+	// End-to-end test: ELBv2 LoadBalancer with provider-default attributes.
+	// AWS returns 4 attributes, user specifies 1. In patch mode, only the
+	// user-specified attribute should be compared; the rest should be ignored.
+	document := []byte(`{
+		"LoadBalancerName": "my-lb",
+		"LoadBalancerAttributes": [
+			{"Key": "idle_timeout.timeout_seconds", "Value": "60"},
+			{"Key": "routing.http2.enabled", "Value": "true"},
+			{"Key": "access_logs.s3.enabled", "Value": "false"},
+			{"Key": "deletion_protection.enabled", "Value": "false"}
+		]
+	}`)
+
+	patch := []byte(`{
+		"LoadBalancerName": "my-lb",
+		"LoadBalancerAttributes": [
+			{"Key": "idle_timeout.timeout_seconds", "Value": "60"}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"LoadBalancerName", "LoadBalancerAttributes"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"LoadBalancerAttributes": {
+				HasProviderDefault: true,
+				UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+				IndexField:         "Key",
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+	assert.Empty(t, patchDoc, "Expected no patch when user-specified attribute matches actual")
+}
+
+func TestGeneratePatch_EntitySetProviderDefaults_WithUserChange(t *testing.T) {
+	// User changes idle_timeout from 60 to 120. Only that attribute should appear in patch.
+	document := []byte(`{
+		"LoadBalancerName": "my-lb",
+		"LoadBalancerAttributes": [
+			{"Key": "idle_timeout.timeout_seconds", "Value": "60"},
+			{"Key": "routing.http2.enabled", "Value": "true"},
+			{"Key": "access_logs.s3.enabled", "Value": "false"},
+			{"Key": "deletion_protection.enabled", "Value": "false"}
+		]
+	}`)
+
+	patch := []byte(`{
+		"LoadBalancerName": "my-lb",
+		"LoadBalancerAttributes": [
+			{"Key": "idle_timeout.timeout_seconds", "Value": "120"}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"LoadBalancerName", "LoadBalancerAttributes"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"LoadBalancerAttributes": {
+				HasProviderDefault: true,
+				UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+				IndexField:         "Key",
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+	require.NotEmpty(t, patchDoc)
+
+	var ops []jsonpatch.JsonPatchOperation
+	err = json.Unmarshal(patchDoc, &ops)
+	require.NoError(t, err)
+
+	// Should get a replace on the Value of the matched element
+	require.Len(t, ops, 1, "Expected exactly one patch operation for the changed attribute")
+	assert.Equal(t, "replace", ops[0].Operation)
+	assert.Contains(t, ops[0].Path, "Value")
+}
+
+func TestGeneratePatch_EntitySetProviderDefaults_ReconcileMode(t *testing.T) {
+	// In reconcile mode, unmatched provider-default elements should also be stripped
+	// to prevent generating remove operations for provider defaults.
+	document := []byte(`{
+		"Name": "my-lb",
+		"Attributes": [
+			{"Key": "a", "Value": "1"},
+			{"Key": "b", "Value": "2"},
+			{"Key": "c", "Value": "3"}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Name": "my-lb",
+		"Attributes": [
+			{"Key": "a", "Value": "1"}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Attributes"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Attributes": {
+				HasProviderDefault: true,
+				UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+				IndexField:         "Key",
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "Expected no patch when only provider-default elements differ in reconcile mode")
 }
