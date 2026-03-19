@@ -20,6 +20,16 @@ type FieldHint struct {
 	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
 	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
 
+	// IsListingItem indicates this field's hint path traverses through one or more
+	// Listing (array) boundaries. When true, consumers should iterate array items
+	// when navigating the path segments listed in ListingSegments.
+	IsListingItem bool `json:"IsListingItem" pkl:"IsListingItem"`
+
+	// ListingSegments contains the path segment names that are Listing (array) boundaries.
+	// For example, for path "spec.template.spec.containers.ports.protocol",
+	// ListingSegments might be ["containers", "ports"] indicating both are arrays.
+	ListingSegments []string `json:"ListingSegments,omitempty" pkl:"ListingSegments"`
+
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
 }

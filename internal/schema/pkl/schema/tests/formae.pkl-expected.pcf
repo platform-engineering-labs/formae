@@ -89,6 +89,8 @@ examples {
         Required = true
         RequiredOnCreate = false
         HasProviderDefault = false
+        IsListingItem = false
+        ListingSegments = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -98,6 +100,8 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        IsListingItem = false
+        ListingSegments = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -107,6 +111,8 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        IsListingItem = false
+        ListingSegments = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -127,6 +133,8 @@ examples {
           Required = true
           RequiredOnCreate = false
           HasProviderDefault = false
+          IsListingItem = false
+          ListingSegments = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -136,6 +144,8 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          IsListingItem = false
+          ListingSegments = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -145,6 +155,8 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          IsListingItem = false
+          ListingSegments = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -192,6 +204,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -201,6 +215,8 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -210,6 +226,8 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -265,6 +283,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -274,6 +294,8 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -283,6 +305,8 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -323,6 +347,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -332,6 +358,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -341,6 +369,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -350,6 +380,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -359,6 +391,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -368,6 +402,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -377,6 +413,8 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            IsListingItem = false
+            ListingSegments = null
             UpdateMethod = ""
             IndexField = ""
           }
@@ -412,6 +450,8 @@ examples {
         Required = true
         RequiredOnCreate = false
         HasProviderDefault = false
+        IsListingItem = false
+        ListingSegments = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -421,6 +461,8 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        IsListingItem = false
+        ListingSegments = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -430,6 +472,8 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        IsListingItem = false
+        ListingSegments = null
         UpdateMethod = ""
         IndexField = ""
       }
@@ -450,6 +494,8 @@ examples {
           Required = true
           RequiredOnCreate = false
           HasProviderDefault = false
+          IsListingItem = false
+          ListingSegments = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -459,6 +505,8 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          IsListingItem = false
+          ListingSegments = null
           UpdateMethod = ""
           IndexField = ""
         }
@@ -468,6 +516,8 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          IsListingItem = false
+          ListingSegments = null
           UpdateMethod = ""
           IndexField = ""
         }

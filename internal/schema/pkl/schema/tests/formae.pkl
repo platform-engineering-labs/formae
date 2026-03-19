@@ -389,6 +389,19 @@ facts {
         hints.containsKey("ContainerDefinitions.Image")
     }
 
+    ["Listing items have IsListingItem and ListingSegments"] {
+        let (hints = testTaskDef.hints())
+        // Top-level field is NOT a listing item (it IS the listing)
+        hints["ContainerDefinitions"].IsListingItem == false &&
+        // Fields inside the Listing<SubResource> ARE listing items
+        hints["ContainerDefinitions.Cpu"].IsListingItem == true &&
+        hints["ContainerDefinitions.Cpu"].ListingSegments == new Listing { "ContainerDefinitions" } &&
+        hints["ContainerDefinitions.Name"].IsListingItem == true &&
+        hints["ContainerDefinitions.Name"].ListingSegments == new Listing { "ContainerDefinitions" } &&
+        hints["ContainerDefinitions.Image"].IsListingItem == true &&
+        hints["ContainerDefinitions.Image"].ListingSegments == new Listing { "ContainerDefinitions" }
+    }
+
     ["Nullable Mapping renders as empty map when null"] {
         // Test subresource rendering directly - nullable Mapping type alias should render as empty Mapping
         let (containerProps = testTaskDef.containerDefinitions[0].props())
