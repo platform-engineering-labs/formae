@@ -46,6 +46,16 @@ func ExtractResolvableURIs(resource pkgmodel.Resource) []pkgmodel.FormaeURI {
 	return resolver.getResolvableURIs()
 }
 
+// ExtractResolvableURIsFromJSON extracts all resolvable URIs from raw JSON.
+// Used for target Config fields.
+func ExtractResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.FormaeURI {
+	if data == nil {
+		return nil
+	}
+	resolver := newPropertyResolver(data)
+	return resolver.getResolvableURIs()
+}
+
 // propertyParser parses JSON properties to identify references and values
 type propertyParser struct {
 	HasRef    bool

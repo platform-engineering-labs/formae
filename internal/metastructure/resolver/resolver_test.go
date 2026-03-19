@@ -872,6 +872,33 @@ func TestExtractResolvableURIs(t *testing.T) {
 	})
 }
 
+func TestExtractResolvableURIsFromJSON(t *testing.T) {
+	t.Run("extracts refs from raw JSON", func(t *testing.T) {
+		config := json.RawMessage(fmt.Sprintf(`{
+			"endpoint": {"$ref": "%s", "$strategy": "SetOnce", "$visibility": "Clear"},
+			"region": "us-east-1",
+			"nested": {
+				"cert": {"$ref": "%s"}
+			}
+		}`, newTestRef("Endpoint"), newTestRef("CertificateArn")))
+
+		uris := ExtractResolvableURIsFromJSON(config)
+
+		assert.Len(t, uris, 2)
+	})
+
+	t.Run("returns empty for no refs", func(t *testing.T) {
+		config := json.RawMessage(`{"region": "us-east-1"}`)
+		uris := ExtractResolvableURIsFromJSON(config)
+		assert.Empty(t, uris)
+	})
+
+	t.Run("returns nil for nil input", func(t *testing.T) {
+		uris := ExtractResolvableURIsFromJSON(nil)
+		assert.Nil(t, uris)
+	})
+}
+
 func TestMetadataInheritance(t *testing.T) {
 	t.Run("inherits metadata from referenced property", func(t *testing.T) {
 		secretRef := newTestRef("SecretString")
