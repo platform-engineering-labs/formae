@@ -126,6 +126,13 @@ type PersistTargetUpdates struct {
 	CommandID     string
 }
 
+// UpdateTargetStates is sent to the FormaCommandPersister to update the
+// target update states in the command record.
+type UpdateTargetStates struct {
+	CommandID     string
+	TargetUpdates []TargetUpdate
+}
+
 // ShouldTriggerDiscovery determines if discovery should be triggered
 // for a target update based on whether the target is newly discoverable.
 // Returns true if:

@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -252,7 +253,7 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.loadFormaCommand(msg.CommandID)
 	case messages.UpdateResourceProgress:
 		return f.updateCommandFromProgress(&msg)
-	case messages.UpdateTargetStates:
+	case target_update.UpdateTargetStates:
 		return f.updateTargetStates(&msg)
 	case messages.UpdateStackStates:
 		return f.updateStackStates(&msg)
@@ -403,7 +404,7 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 	return true, nil
 }
 
-func (f *FormaCommandPersister) updateTargetStates(msg *messages.UpdateTargetStates) (bool, error) {
+func (f *FormaCommandPersister) updateTargetStates(msg *target_update.UpdateTargetStates) (bool, error) {
 	f.Log().Debug("Updating Forma command with target states", "commandID", msg.CommandID, "targetCount", len(msg.TargetUpdates))
 
 	cached, err := f.getOrLoadCommand(msg.CommandID)
