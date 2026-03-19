@@ -887,7 +887,7 @@ func TestIsProviderDefault(t *testing.T) {
 		}
 	})
 
-	t.Run("collection provider defaults - key patterns", func(t *testing.T) {
+	t.Run("collection provider defaults - simple key patterns", func(t *testing.T) {
 		providerDefaults := map[string]providerDefault{
 			"metadata.labels": {
 				IsCollection: true,
@@ -899,14 +899,45 @@ func TestIsProviderDefault(t *testing.T) {
 			path     string
 			expected bool
 		}{
-			// Matching patterns
+			// Matching patterns (first segment match)
 			{"metadata.labels.app", true},
 			{"metadata.labels.helm", true},
+			// Dotted key — first segment "app" matches pattern "app"
+			{"metadata.labels.app.kubernetes.io/name", true},
 			// Non-matching patterns
 			{"metadata.labels.env", false},
 			{"metadata.labels.random", false},
 			// Exact match on the collection itself
 			{"metadata.labels", true},
+		}
+		for _, tc := range tests {
+			got := isProviderDefault(tc.path, providerDefaults)
+			if got != tc.expected {
+				t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+			}
+		}
+	})
+
+	t.Run("collection provider defaults - dotted key patterns", func(t *testing.T) {
+		providerDefaults := map[string]providerDefault{
+			"metadata.labels": {
+				IsCollection: true,
+				KeyPatterns:  []string{"app.kubernetes.io/*", "helm.sh/*"},
+			},
+		}
+
+		tests := []struct {
+			path     string
+			expected bool
+		}{
+			// Full dotted key matches dotted pattern
+			{"metadata.labels.app.kubernetes.io/name", true},
+			{"metadata.labels.app.kubernetes.io/instance", true},
+			{"metadata.labels.helm.sh/chart", true},
+			// Non-matching dotted patterns
+			{"metadata.labels.batch.kubernetes.io/job-name", false},
+			// Simple key doesn't match dotted pattern
+			{"metadata.labels.env", false},
 		}
 		for _, tc := range tests {
 			got := isProviderDefault(tc.path, providerDefaults)

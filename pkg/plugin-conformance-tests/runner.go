@@ -475,15 +475,21 @@ func isProviderDefault(fieldPath string, providerDefaults map[string]providerDef
 			if len(pd.KeyPatterns) == 0 {
 				return true // broad tolerance — all extra keys tolerated
 			}
-			// Extract the immediate key after the Mapping path for pattern matching.
-			// For fieldPath "metadata.labels.app" with Mapping at "metadata.labels",
-			// the key is "app". However, the original JSON key may have been
-			// "app.kubernetes.io/name" which was dot-expanded. We match against
-			// the first segment after the prefix.
+			// Match the remainder after the Mapping path against key patterns.
+			// The remainder may contain dots from dot-expansion of the original
+			// JSON key (e.g., "app.kubernetes.io/name" → remainder "app.kubernetes.io/name").
+			// We try matching both the full remainder and the first segment to
+			// support both dotted patterns ("app.kubernetes.io/*") and simple
+			// patterns ("app").
 			remainder := fieldPath[len(prefix):]
-			key := strings.SplitN(remainder, ".", 2)[0]
 			for _, pattern := range pd.KeyPatterns {
-				if matched, _ := filepath.Match(pattern, key); matched {
+				// Match against full remainder (supports dotted patterns like "app.kubernetes.io/*")
+				if matched, _ := filepath.Match(pattern, remainder); matched {
+					return true
+				}
+				// Match against first segment (supports simple patterns like "app")
+				firstSegment := strings.SplitN(remainder, ".", 2)[0]
+				if matched, _ := filepath.Match(pattern, firstSegment); matched {
 					return true
 				}
 			}
