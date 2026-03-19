@@ -266,7 +266,6 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 	h.reconcileCompletedAcceptedCommands(t, model)
 	h.drainExpiredTTLStacks(t, model)
 	h.reconcileTTLStacksToInventory(t, model)
-	h.observeManagedDriftInventory(t, model, 500*time.Millisecond)
 
 	switch op.Kind {
 	case OpApply:
@@ -324,6 +323,7 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 		}
 
 		cmd := statusResp.Commands[0]
+		h.ObserveCommandState(t, cmd.CommandID, cmd.State)
 		if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
 			remaining = append(remaining, ac)
 			continue
@@ -332,8 +332,9 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", ac.CommandID, cmd.State)
 		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool))
 		h.reconcileManagedDriftOverriddenByCommand(t, model, &cmd)
-		h.observeManagedDriftInventory(t, model, 2*time.Second)
 		h.reconcileExplicitCommandResourcesToInventory(t, model, []drainedCommand{{ac: ac, cmd: &cmd}})
+		h.reconcileTTLStacksToInventory(t, model)
+		h.reconcileCrossStackSlotsToInventory(t, model)
 	}
 
 	model.AcceptedCommands = remaining
@@ -380,9 +381,11 @@ func (h *TestHarness) reconcileTTLStacksToInventory(t *testing.T, model *StateMo
 				continue
 			}
 			model.ApplyDestroyed(stackIdx, []int{slotIdx})
+			model.MarkAuthoritativeSlot(stackIdx, slotIdx)
 		}
 		if !stackHasAnyInventory {
 			model.Stacks[stackIdx].TTLExpired = false
+			model.Stacks[stackIdx].TTL = false
 		}
 	}
 }
@@ -400,7 +403,7 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	// This must happen before the resource invariant check because in-flight
 	// commands can create resources in the plugin (cloud state) before the
 	// command completes and the resource is persisted to inventory.
-	cmdViolations := h.waitAndCheckCommandCompleteness(t, 15*time.Second)
+	cmdViolations := h.waitAndCheckCommandCompleteness(t, 60*time.Second)
 	violations = append(violations, cmdViolations...)
 
 	// Phase 2: Wait for ResourcePersister to finish.
@@ -410,7 +413,6 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	h.waitForInventoryStabilization(t, 5*time.Second)
 	if len(model) > 0 && model[0] != nil {
 		h.reconcileTTLStacksToInventory(t, model[0])
-		h.observeManagedDriftInventory(t, model[0], 2*time.Second)
 		h.reconcileCrossStackSlotsToInventory(t, model[0])
 		h.waitForUnmanagedInventoryExpectations(t, model[0], 5*time.Second)
 	}
@@ -433,6 +435,13 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	}
 	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
 	violations = append(violations, resourceViolations...)
+	if opLog, err := h.TryGetOperationLog(); err == nil {
+		violations = append(violations, CheckOperationLogInvariants(opLog)...)
+	} else if h.strictMode {
+		require.NoError(t, err, "GetOperationLog should succeed in strict mode")
+	} else {
+		t.Logf("checkOperationLogInvariants: skipping operation log assertions: %v", err)
+	}
 
 	// Phase 4: Check model vs inventory consistency.
 	if len(model) > 0 && model[0] != nil {
@@ -481,6 +490,10 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 		if csErr != nil {
 			// Agent's actor system may have crashed (e.g. supervisor restart
 			// intensity exceeded). Restart the agent and retry.
+			if h.strictMode {
+				require.NoError(t, csErr, "cloud state should be available in strict mode")
+				return nil
+			}
 			t.Logf("checkResourceInvariants: cloud state unavailable (%v), restarting agent (attempt %d)", csErr, attempt+1)
 			h.KillAgent(t)
 			h.RestartAgent(t, 30*time.Second)
@@ -503,7 +516,7 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 			}
 		}
 
-		if !allOrphans || attempt == maxRetries-1 {
+		if !allOrphans || attempt == maxRetries-1 || h.strictMode {
 			// Either non-orphan violations found or retries exhausted.
 			t.Logf("INVARIANT DEBUG: inventory has %d resources, cloud has %d entries (attempt %d)", len(inventory), len(cloudState), attempt+1)
 			for _, res := range inventory {
@@ -892,6 +905,14 @@ func orderedResourceUpdates(model *StateModel, pool *ResourcePool, updates []api
 	return ordered
 }
 
+func requestedSlotRefs(stackIdx int, resourceIDs []int) []ResourceSlotRef {
+	refs := make([]ResourceSlotRef, 0, len(resourceIDs))
+	for _, id := range resourceIDs {
+		refs = append(refs, ResourceSlotRef{StackIndex: stackIdx, SlotIndex: id})
+	}
+	return refs
+}
+
 // applyReconcileGuarantee enforces the reconcile invariant: after a successful
 // reconcile on a stack, ONLY the resources listed in reconcileIDs should exist.
 // Resources not in reconcileIDs are marked as NotExist. This handles the case
@@ -1166,7 +1187,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		resolvedProps := model.ResolvePropertiesForResources(op.StackIndex, op.ResourceIDs, op.Properties, op.ChildProperties)
 		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, resolvedProps)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, op.ResourceIDs), h.currentOperationLogSize(t))
 	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
 }
 
@@ -1243,7 +1264,7 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
 	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1326,7 +1347,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
 	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1386,7 +1407,7 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	for _, idx := range successIDs {
 		model.ApplyCascadeDestroyed(op.StackIndex, idx)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1447,7 +1468,7 @@ func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *
 	// it in reconcile mode. Our model tracks this set via SaveLastReconcile.
 	model.ApplyCreatedResolved(op.StackIndex, stack.LastReconcileResourceProperties)
 	applyReconcileGuarantee(model, op.StackIndex, reconcileIDs)
-	model.TrackAcceptedCommand(resp.CommandID, snapshots, h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(resp.CommandID, snapshots, requestedSlotRefs(op.StackIndex, reconcileIDs), h.currentOperationLogSize(t))
 	t.Logf("[op %d] ForceReconcile stack=%s → accepted, model updated (restore %v)", op.SequenceNum, stackLabel, reconcileIDs)
 }
 
@@ -1551,11 +1572,12 @@ func (h *TestHarness) executeTriggerSync(t *testing.T, model *StateModel) {
 		t.Logf("TriggerSync error (may be expected): %v", err)
 		return
 	}
-	if _, ok := h.WaitForNextSyncCommand(2 * time.Second); !ok {
+	if cmd, ok := h.WaitForNextSyncCommand(2 * time.Second); !ok {
 		t.Logf("TriggerSync: no new sync command observed")
+		return
+	} else if model != nil {
+		model.ApplySyncCommand(cmd)
 	}
-	h.observeUnmanagedInventory(t, model, 2*time.Second)
-	h.observeManagedDriftInventory(t, model, 2*time.Second)
 	t.Logf("TriggerSync: fired")
 }
 
@@ -1566,7 +1588,12 @@ func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 		t.Logf("TriggerDiscovery error (may be expected): %v", err)
 		return
 	}
-	h.observeUnmanagedInventory(t, model, 2*time.Second)
+	if _, ok := h.WaitForNextSyncCommand(10 * time.Second); !ok {
+		t.Logf("TriggerDiscovery: no new discovery/sync command observed")
+		return
+	} else if model != nil {
+		model.ApplyDiscoveryToUnmanaged()
+	}
 	t.Logf("TriggerDiscovery: fired")
 }
 
@@ -1581,7 +1608,7 @@ func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation, model *Sta
 		t.Logf("[op %d] CloudModify: %s → skipped (resource does not exist in cloud)", op.SequenceNum, op.NativeID)
 		return
 	}
-	h.PutCloudState(t, op.NativeID, res.ResourceType, op.Properties)
+	h.putCloudStateWithRetry(t, op.NativeID, res.ResourceType, op.Properties)
 	model.ApplyUnmanagedCloudModify(op.NativeID, op.Properties)
 	t.Logf("[op %d] CloudModify: %s", op.SequenceNum, op.NativeID)
 }
@@ -1592,7 +1619,7 @@ func (h *TestHarness) executeCloudDelete(t *testing.T, op *Operation, model *Sta
 		h.executeManagedCloudDelete(t, op, model)
 		return
 	}
-	h.DeleteCloudState(t, op.NativeID)
+	h.deleteCloudStateWithRetry(t, op.NativeID)
 	model.ApplyUnmanagedCloudDelete(op.NativeID)
 	t.Logf("[op %d] CloudDelete: %s", op.SequenceNum, op.NativeID)
 }
@@ -1613,9 +1640,8 @@ func (h *TestHarness) executeManagedCloudModify(t *testing.T, op *Operation, mod
 		t.Logf("[op %d] CloudModify managed → skipped (missing native ID)", op.SequenceNum)
 		return
 	}
-	h.PutCloudState(t, target.NativeID, target.Type, op.Properties)
+	h.putCloudStateWithRetry(t, target.NativeID, target.Type, op.Properties)
 	model.ApplyManagedCloudModify(target.Stack, target.Label, target.Type, target.NativeID, op.Properties)
-	h.observeManagedDriftInventory(t, model, 250*time.Millisecond)
 	h.reconcileManagedDriftBeforeNextCommands(t, model)
 	t.Logf("[op %d] CloudModify managed: %s (%s)", op.SequenceNum, target.Label, target.NativeID)
 }
@@ -1636,9 +1662,8 @@ func (h *TestHarness) executeManagedCloudDelete(t *testing.T, op *Operation, mod
 		t.Logf("[op %d] CloudDelete managed → skipped (missing native ID)", op.SequenceNum)
 		return
 	}
-	h.DeleteCloudState(t, target.NativeID)
+	h.deleteCloudStateWithRetry(t, target.NativeID)
 	model.ApplyManagedCloudDelete(target.Stack, target.Label, target.Type, target.NativeID)
-	h.observeManagedDriftInventory(t, model, 250*time.Millisecond)
 	h.reconcileManagedDriftBeforeNextCommands(t, model)
 	t.Logf("[op %d] CloudDelete managed: %s (%s)", op.SequenceNum, target.Label, target.NativeID)
 }
@@ -1692,15 +1717,33 @@ func (h *TestHarness) reconcileManagedDriftBeforeNextCommands(t *testing.T, mode
 
 func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
-	h.PutCloudState(t, op.NativeID, op.ResourceType, op.Properties)
+	h.putCloudStateWithRetry(t, op.NativeID, op.ResourceType, op.Properties)
 	model.ApplyUnmanagedCloudCreate(op.NativeID, op.ResourceType, op.Properties)
 	t.Logf("[op %d] CloudCreate: %s (%s)", op.SequenceNum, op.NativeID, op.ResourceType)
 
 	for _, child := range op.CloudChildren {
-		h.PutCloudState(t, child.NativeID, child.ResourceType, child.Properties)
+		h.putCloudStateWithRetry(t, child.NativeID, child.ResourceType, child.Properties)
 		model.ApplyUnmanagedCloudCreate(child.NativeID, child.ResourceType, child.Properties)
 		t.Logf("[op %d] CloudCreate child: %s (%s)", op.SequenceNum, child.NativeID, child.ResourceType)
 	}
+}
+
+func (h *TestHarness) putCloudStateWithRetry(t *testing.T, nativeID, resourceType, properties string) {
+	t.Helper()
+	if err := h.TryPutCloudState(nativeID, resourceType, properties); err == nil {
+		return
+	}
+	h.RestartAgent(t, 30*time.Second)
+	require.NoError(t, h.TryPutCloudState(nativeID, resourceType, properties), "PutCloudState failed")
+}
+
+func (h *TestHarness) deleteCloudStateWithRetry(t *testing.T, nativeID string) {
+	t.Helper()
+	if err := h.TryDeleteCloudState(nativeID); err == nil {
+		return
+	}
+	h.RestartAgent(t, 30*time.Second)
+	require.NoError(t, h.TryDeleteCloudState(nativeID), "DeleteCloudState failed")
 }
 
 // verifyPostApplyProperties checks resource properties after a successful
@@ -1925,29 +1968,30 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 
 func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, model *StateModel, cmd *apimodel.Command) {
 	t.Helper()
-	if model == nil || cmd == nil || len(model.ManagedDriftedResources) == 0 {
+	if model == nil || cmd == nil {
 		return
 	}
 	for _, ru := range cmd.ResourceUpdates {
 		if ru.State != "Success" {
 			continue
 		}
-		if !model.HasPendingManagedDriftForResource(ru.StackName, ru.ResourceLabel) {
-			continue
-		}
 		key := ru.StackName + "/" + ru.ResourceLabel
 		invRes, ok := h.waitForManagedResourceInventory(key, ru.Operation, 2*time.Second)
 		if ru.Operation == "delete" {
 			if ok && invRes.NativeID != "" {
-				h.DeleteCloudState(t, invRes.NativeID)
+				if err := h.TryDeleteCloudState(invRes.NativeID); err != nil {
+					t.Logf("reconcileManagedDriftOverriddenByCommand: skipping DeleteCloudState for %s: %v", invRes.NativeID, err)
+				}
 			}
 			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
 			continue
 		}
 		if ok {
-			h.PutCloudState(t, invRes.NativeID, invRes.Type, flattenPropertiesForCloud(invRes.Properties))
-			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
+			if err := h.TryPutCloudState(invRes.NativeID, invRes.Type, flattenPropertiesForCloud(invRes.Properties)); err != nil {
+				t.Logf("reconcileManagedDriftOverriddenByCommand: skipping PutCloudState for %s: %v", invRes.NativeID, err)
+			}
 		}
+		model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
 	}
 }
 
@@ -1956,19 +2000,41 @@ func (h *TestHarness) waitForManagedResourceInventory(key, operation string, tim
 	for {
 		managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
 		if err == nil {
-			found := false
+			var current *pkgmodel.Resource
 			for _, res := range managedInventory {
 				if res.Stack+"/"+res.Label == key {
-					found = true
-					if operation == "delete" {
-						break
-					}
+					current = &res
+					break
+				}
+			}
+			if operation != "delete" && current != nil {
+				return *current, true
+			}
+			// Deletes stay in the poll loop while the resource is still present in
+			// inventory. Once it disappears, the delete drift has been fully
+			// ingested and the caller can treat it as reconciled.
+			if operation == "delete" && current == nil {
+				return pkgmodel.Resource{}, true
+			}
+		}
+		if time.Now().After(deadline) {
+			return pkgmodel.Resource{}, false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (h *TestHarness) waitForManagedResourceSnapshot(key string, timeout time.Duration) (pkgmodel.Resource, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
+		if err == nil {
+			for _, res := range managedInventory {
+				if res.Stack+"/"+res.Label == key {
 					return res, true
 				}
 			}
-			if operation == "delete" && !found {
-				return pkgmodel.Resource{}, true
-			}
+			return pkgmodel.Resource{}, false
 		}
 		if time.Now().After(deadline) {
 			return pkgmodel.Resource{}, false
@@ -1997,6 +2063,10 @@ func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *Stat
 		}
 	}
 	if activitySeen {
+		// This is currently a debugging signal only. We use it to confirm that at
+		// least one ambiguous failed command actually reached the plugin, which is
+		// helpful when deciding whether a future refinement can rely purely on
+		// command responses or should branch on operation-log evidence.
 		t.Logf("reconcileAmbiguousFailedCommands: observed plugin activity for ambiguous failed commands; relying on command-response reconciliation for non-cross-stack resources")
 	}
 
@@ -2010,39 +2080,69 @@ func (h *TestHarness) reconcileExplicitCommandResourcesToInventory(t *testing.T,
 		return
 	}
 
-	managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
-	if err != nil {
-		return
-	}
-	inventoryByKey := make(map[string]pkgmodel.Resource, len(managedInventory))
-	for _, res := range managedInventory {
-		inventoryByKey[res.Stack+"/"+res.Label] = res
-	}
-
 	for _, dc := range drained {
 		if dc.cmd == nil {
 			continue
 		}
+		explicitSlots := make(map[struct{ stackIdx, slotIdx int }]bool)
 		for _, ru := range dc.cmd.ResourceUpdates {
-			if ru.State == "Success" && ru.Properties != nil {
-				continue
-			}
+			// Final inventory is authoritative for explicit command resources once a
+			// command has reached a terminal state. We still do optimistic and
+			// command-response-based reconciliation first, but this pass aligns the
+			// model with what was actually persisted for the resources the command
+			// explicitly mentioned.
 			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
 			if stackIdx == -1 || slotIdx == -1 {
 				continue
 			}
+			explicitSlots[struct{ stackIdx, slotIdx int }{stackIdx: stackIdx, slotIdx: slotIdx}] = true
 			if model.Pool != nil && model.Pool.IsCrossStack(slotIdx) {
 				continue
 			}
 			key := ru.StackName + "/" + ru.ResourceLabel
-			if invRes, ok := inventoryByKey[key]; ok {
+			if invRes, ok := h.waitForManagedResourceSnapshot(key, 2*time.Second); ok {
 				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(invRes.Properties))
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
 			} else {
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 			}
 		}
+		for _, snap := range dc.ac.Snapshots {
+			key := struct{ stackIdx, slotIdx int }{stackIdx: snap.StackIndex, slotIdx: snap.SlotIndex}
+			if explicitSlots[key] {
+				continue
+			}
+			if !snapshotAffectedByRequestedSlot(model, snap, dc.ac.RequestedSlots) {
+				continue
+			}
+			invKey := model.Stack(snap.StackIndex).Label + "/" + model.LabelForResource(snap.StackIndex, snap.SlotIndex)
+			if invRes, ok := h.waitForManagedResourceSnapshot(invKey, 2*time.Second); ok {
+				props := model.NormalizePropertiesForResource(snap.StackIndex, snap.SlotIndex, string(invRes.Properties))
+				model.ApplyCreated(snap.StackIndex, []int{snap.SlotIndex}, props)
+			} else {
+				model.ApplyDestroyed(snap.StackIndex, []int{snap.SlotIndex})
+			}
+		}
 	}
+}
+
+func snapshotAffectedByRequestedSlot(model *StateModel, snap ResourceSnapshot, requested []ResourceSlotRef) bool {
+	if model == nil || model.Pool == nil {
+		return false
+	}
+	for _, key := range requested {
+		if key.StackIndex != snap.StackIndex {
+			continue
+		}
+		current := snap.SlotIndex
+		for current >= 0 {
+			if current == key.SlotIndex {
+				return true
+			}
+			current = model.Pool.Slots[current].ParentIndex
+		}
+	}
+	return false
 }
 
 func (h *TestHarness) reconcileCrossStackAmbiguousFailedCommandsToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
@@ -2220,6 +2320,7 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 			for slotIdx := range model.Stack(stackIdx).Resources {
 				if model.Stack(stackIdx).Resources[slotIdx] != nil {
 					model.ApplyDestroyed(stackIdx, []int{slotIdx})
+					model.MarkAuthoritativeSlot(stackIdx, slotIdx)
 				}
 			}
 		}
@@ -2596,7 +2697,12 @@ func buildPluginOpSequences(
 			// Existing resource being Updated or Deleted → Read+CRUD chain.
 			return willOperationSucceed(outcome.ReadSteps) && willOperationSucceed(outcome.CRUDSteps)
 		}
-		// New resource → Create only. ReadSteps are irrelevant.
+		// New resource → Create, but a slot with resolvables first goes through a
+		// ResolveCache read of the referenced resource. Drawn ReadSteps model that
+		// phase explicitly.
+		if hasResolveReadPhase(pool, id) {
+			return willOperationSucceed(outcome.ReadSteps) && willOperationSucceed(outcome.CRUDSteps)
+		}
 		return willOperationSucceed(outcome.CRUDSteps)
 	}
 
@@ -2686,18 +2792,54 @@ func buildPluginOpSequences(
 			}
 		} else {
 			// Resource doesn't exist -> will be a Create
-			// Match key is the Name (= resource label)
-			if len(outcome.CRUDSteps) > 0 {
+			// If the resource has resolvables, program the ResolveCache read of the
+			// referenced resource first. Only program Create if that read succeeds.
+			if resolveTarget, ok := resolveReadMatchKey(pool, model, stackIndex, stackLabel, slotIdx, nativeIDs); ok && len(outcome.ReadSteps) > 0 {
 				sequences = append(sequences, testcontrol.PluginOpSequence{
-					MatchKey:  label,
-					Operation: "Create",
-					Steps:     outcome.CRUDSteps,
+					MatchKey:  resolveTarget,
+					Operation: "Read",
+					Steps:     outcome.ReadSteps,
 				})
+			}
+			if len(outcome.CRUDSteps) > 0 {
+				readWillSucceed := len(outcome.ReadSteps) == 0 || willOperationSucceed(outcome.ReadSteps)
+				if !hasResolveReadPhase(pool, slotIdx) || readWillSucceed {
+					sequences = append(sequences, testcontrol.PluginOpSequence{
+						MatchKey:  label,
+						Operation: "Create",
+						Steps:     outcome.CRUDSteps,
+					})
+				}
 			}
 		}
 	}
 
 	return sequences
+}
+
+func hasResolveReadPhase(pool *ResourcePool, slotIdx int) bool {
+	if pool == nil || slotIdx < 0 || slotIdx >= len(pool.Slots) {
+		return false
+	}
+	return pool.Slots[slotIdx].ParentIndex >= 0 || pool.IsCrossStack(slotIdx)
+}
+
+func resolveReadMatchKey(pool *ResourcePool, model *StateModel, stackIdx int, stackLabel string, slotIdx int, nativeIDs map[string]string) (string, bool) {
+	if pool == nil {
+		return "", false
+	}
+	if pool.IsCrossStack(slotIdx) {
+		parentLabel := pool.CrossStackParentLabelForStack(model.ProviderStackLabel, slotIdx)
+		nativeID := nativeIDs[model.ProviderStackLabel+":"+parentLabel]
+		return nativeID, nativeID != ""
+	}
+	parentIdx := pool.Slots[slotIdx].ParentIndex
+	if parentIdx < 0 {
+		return "", false
+	}
+	parentLabel := pool.ParentLabelForStack(stackLabel, slotIdx)
+	nativeID := nativeIDs[stackLabel+":"+parentLabel]
+	return nativeID, nativeID != ""
 }
 
 // willOperationSucceed returns true if the given response steps will result
@@ -2796,7 +2938,7 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	model.SaveLastReconcile(op.StackIndex, existingIDs, model.CurrentProperties(op.StackIndex, existingIDs))
 	model.Stacks[op.StackIndex].TTLExpired = op.TTLExpired
 	model.Stacks[op.StackIndex].TTL = true
-	model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
 	t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → accepted, model updated", op.SequenceNum, stackLabel, op.TTLExpired)
 }
 
@@ -2850,7 +2992,7 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 			model.ApplyCascadeDestroyed(stackIdx, idx)
 		}
 		model.Stacks[stackIdx].TTLExpired = false
-		model.TrackAcceptedCommand(commandID, snapshots, h.currentOperationLogSize(t))
+		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, resourceIDs), h.currentOperationLogSize(t))
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }

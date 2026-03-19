@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -259,6 +260,63 @@ func (m *StateModel) ReconcileManagedDriftInventory(inventory []pkgmodel.Resourc
 		expected.PendingSync = false
 		delete(m.ManagedDriftedResources, nativeID)
 	}
+}
+
+func (m *StateModel) ApplySyncToManagedDrift() {
+	for nativeID, expected := range m.ManagedDriftedResources {
+		expected.PendingSync = false
+		if expected.PresentInCloud {
+			actual := pkgmodel.Resource{
+				Stack:      expected.StackLabel,
+				Label:      expected.ResourceLabel,
+				Type:       expected.ResourceType,
+				NativeID:   expected.NativeID,
+				Managed:    true,
+				Properties: []byte(expected.CloudProperties),
+			}
+			m.applyManagedDriftToResource(expected, &actual)
+		} else {
+			m.applyManagedDriftToResource(expected, nil)
+		}
+		delete(m.ManagedDriftedResources, nativeID)
+	}
+}
+
+func (m *StateModel) ApplySyncCommand(cmd *apimodel.Command) {
+	if cmd == nil {
+		return
+	}
+	for _, ru := range cmd.ResourceUpdates {
+		if ru.State != "Success" {
+			continue
+		}
+		if driftNativeID, drift, ok := m.managedDriftForResource(ru.StackName, ru.ResourceLabel); ok {
+			if ru.Operation == "delete" {
+				drift.PresentInCloud = false
+				m.applyManagedDriftToResource(drift, nil)
+			} else if ru.Properties != nil {
+				drift.PresentInCloud = true
+				drift.CloudProperties = string(ru.Properties)
+				actual := pkgmodel.Resource{Stack: ru.StackName, Label: ru.ResourceLabel, Type: ru.ResourceType, Managed: true, Properties: ru.Properties}
+				m.applyManagedDriftToResource(drift, &actual)
+			}
+			drift.PendingSync = false
+			delete(m.ManagedDriftedResources, driftNativeID)
+		}
+	}
+}
+
+func (m *StateModel) ApplyDiscoveryCommand(cmd *apimodel.Command) {
+	m.ApplyDiscoveryToUnmanaged()
+}
+
+func (m *StateModel) managedDriftForResource(stackLabel, resourceLabel string) (string, *ExpectedManagedDrift, bool) {
+	for nativeID, drift := range m.ManagedDriftedResources {
+		if drift.StackLabel == stackLabel && drift.ResourceLabel == resourceLabel {
+			return nativeID, drift, true
+		}
+	}
+	return "", nil, false
 }
 
 func (m *StateModel) PendingManagedDriftNativeIDs() map[string]bool {
@@ -637,11 +695,12 @@ func (m *StateModel) HasExistingDescendants(stackIndex int, idx int) bool {
 
 // TrackAcceptedCommand records a command that was accepted by the agent,
 // along with pre-command resource snapshots for potential cancel revert.
-func (m *StateModel) TrackAcceptedCommand(commandID string, snapshots []ResourceSnapshot, opLogSize int) {
+func (m *StateModel) TrackAcceptedCommand(commandID string, snapshots []ResourceSnapshot, requestedSlots []ResourceSlotRef, opLogSize int) {
 	m.AcceptedCommands = append(m.AcceptedCommands, AcceptedCommand{
-		CommandID: commandID,
-		Snapshots: snapshots,
-		OpLogSize: opLogSize,
+		CommandID:      commandID,
+		Snapshots:      snapshots,
+		RequestedSlots: requestedSlots,
+		OpLogSize:      opLogSize,
 	})
 }
 

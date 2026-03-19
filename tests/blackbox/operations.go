@@ -107,7 +107,11 @@ type CloudChildResource struct {
 }
 
 // DrawnOutcome holds the drawn plugin outcomes for a single resource slot.
-// ReadSteps covers the Read phase (for Update/Delete chains).
+// ReadSteps covers plugin Read phases, including:
+//   - the pre-Read in Update/Delete chains
+//   - ResolveCache reads of referenced resources before Create when the slot has
+//     resolvables (for example parent/child relationships)
+//
 // CRUDSteps covers the Create/Update/Delete phase.
 type DrawnOutcome struct {
 	ReadSteps []testcontrol.ResponseStep // responses for Read in Update/Delete chains
@@ -133,14 +137,20 @@ type ResourceSnapshot struct {
 
 // AcceptedCommand tracks a command that was accepted by the agent during the chaos phase.
 type AcceptedCommand struct {
-	CommandID string
-	Snapshots []ResourceSnapshot // pre-command state for revert on cancel
-	OpLogSize int                // operation log length immediately after acceptance
+	CommandID      string
+	Snapshots      []ResourceSnapshot // pre-command state for revert on cancel
+	OpLogSize      int                // operation log length immediately after acceptance
+	RequestedSlots []ResourceSlotRef
 	// Resolved is true when the cancel handler has already processed this
 	// command. The command remains in AcceptedCommands so that
 	// DrainPendingCommands can include its outcome when resolving conflicts
 	// between overlapping commands (reverse-order processing).
 	Resolved bool
+}
+
+type ResourceSlotRef struct {
+	StackIndex int
+	SlotIndex  int
 }
 
 // Range represents a min/max integer range for generators.

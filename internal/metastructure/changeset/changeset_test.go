@@ -1966,4 +1966,3 @@ func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
 	assert.Empty(t, subnetNode.Dependencies)
 	assert.Empty(t, subnetNode.Dependents)
 }
-}

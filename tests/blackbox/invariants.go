@@ -757,3 +757,38 @@ func CheckManagedDriftVsInventory(model *StateModel, inventory []pkgmodel.Resour
 
 	return violations
 }
+
+// CheckOperationLogInvariants validates stable plugin-side facts. These are
+// intentionally conservative so they hold across crash recovery and restart
+// paths where end-state existence cannot be inferred from the operation log
+// alone. The current checks ensure log shape consistency rather than asserting
+// semantic final-state outcomes.
+func CheckOperationLogInvariants(opLog []testcontrol.OperationLogEntry) []Violation {
+	var violations []Violation
+	if len(opLog) == 0 {
+		return violations
+	}
+
+	for i, entry := range opLog {
+		switch entry.Operation {
+		case "Create", "List":
+			// NativeID may legitimately be empty here.
+		default:
+			if entry.NativeID == "" {
+				violations = append(violations, Violation{
+					Kind:    ViolationPropertyMismatch,
+					Message: fmt.Sprintf("operation log entry %d has operation %s without native ID", i, entry.Operation),
+				})
+			}
+		}
+
+		if entry.ResourceType == "" {
+			violations = append(violations, Violation{
+				Kind:    ViolationPropertyMismatch,
+				Message: fmt.Sprintf("operation log entry %d has operation %s without resource type", i, entry.Operation),
+			})
+		}
+	}
+
+	return violations
+}
