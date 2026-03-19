@@ -352,7 +352,10 @@ func generateResourceUpdatesForApply(
 				}
 			}
 
-			if !util.JsonEqualRaw(existingTarget.Config, target.Config) {
+			// Skip raw config comparison when config contains resolvables ($ref).
+			// The TargetUpdateGenerator handles resolvable-aware comparison.
+			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 &&
+				!util.JsonEqualRaw(existingTarget.Config, target.Config) {
 				return nil, apimodel.TargetAlreadyExistsError{
 					TargetLabel:    target.Label,
 					MismatchType:   "config",

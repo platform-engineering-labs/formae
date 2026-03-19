@@ -123,3 +123,79 @@ func TestApplyForma_TargetWithResolvables(t *testing.T) {
 		assert.Equal(t, "cluster", resources[0].Label)
 	})
 }
+
+func TestApplyForma_ReapplyTargetResolvablesSameValue_NoReplace(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		clusterProps := `{"BucketName":"my-cluster","Endpoint":"https://my-cluster.example.com"}`
+		createCount := 0
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				createCount++
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "1234",
+					NativeID:           "native-" + request.Label,
+					ResourceProperties: request.Properties,
+				}}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   clusterProps,
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		clusterKsuid := "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
+		makeForma := func() *pkgmodel.Forma {
+			return &pkgmodel.Forma{
+				Stacks: []pkgmodel.Stack{{Label: "infra"}},
+				Resources: []pkgmodel.Resource{
+					{
+						Label: "cluster", Type: "FakeAWS::S3::Bucket", Stack: "infra", Target: "provider",
+						Managed: true, Ksuid: clusterKsuid,
+						Schema:     pkgmodel.Schema{Identifier: "BucketName", Portable: true},
+						Properties: json.RawMessage(clusterProps),
+					},
+				},
+				Targets: []pkgmodel.Target{
+					{Label: "provider", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+					{Label: "consumer", Namespace: "FakeAWS", Config: json.RawMessage(fmt.Sprintf(`{
+						"endpoint": {"$ref": "formae://%s#/Endpoint"}
+					}`, clusterKsuid))},
+				},
+			}
+		}
+
+		// First apply
+		_, err = m.ApplyForma(makeForma(),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			return len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "first apply should complete")
+
+		createCountAfterFirst := createCount
+
+		// Second apply — same forma, same resolved values
+		resp, err := m.ApplyForma(makeForma(),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+
+		// No changes required — target config resolves to the same value
+		assert.False(t, resp.Simulation.ChangesRequired, "reapply with same resolved values should require no changes")
+
+		// No new creates should have happened — target was NOT replaced
+		assert.Equal(t, createCountAfterFirst, createCount,
+			"no new creates should happen on reapply with same resolved values")
+	})
+}
