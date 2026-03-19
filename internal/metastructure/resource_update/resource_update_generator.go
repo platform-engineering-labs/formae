@@ -1343,6 +1343,17 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 		}
 	}
 
+	for i, target := range forma.Targets {
+		if target.Config != nil {
+			translatedConfig, externalLabels, err := translatePropertiesJSON(target.Config, tupleToKsuid, ds)
+			if err != nil {
+				return nil, fmt.Errorf("failed to translate target config for %s: %w", target.Label, err)
+			}
+			forma.Targets[i].Config = translatedConfig
+			maps.Copy(ksuidToLabel, externalLabels)
+		}
+	}
+
 	return ksuidToLabel, nil
 }
 
