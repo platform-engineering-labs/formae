@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
@@ -314,6 +315,11 @@ func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties st
 // updateProperties splits the properties from the plugin read result into regular and read-only,
 // based on the resource schema fields, and merges $ref structures from the existing target properties.
 // This preserves $ref structures needed for destroy dependency tracking and PKL extraction.
+//
+// The split works at all nesting levels: top-level keys not in the schema go to ReadOnlyProperties,
+// and nested keys within schema objects that are not themselves in the schema also go to
+// ReadOnlyProperties. Schema.Fields contains the full dot-separated paths for all schema-defined
+// fields (e.g., "spec", "spec.template", "spec.template.spec.containers.imagePullPolicy").
 func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage) error {
 	if incomingProperties == "" {
 		slog.Debug("No properties to split for resource", "uri", ru.URI())
@@ -325,22 +331,27 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 		return err
 	}
 
-	// Build a set of schema fields for quick lookup
+	// Build a set of schema fields for quick lookup.
+	// This includes both top-level and nested paths (e.g., "spec", "spec.template", "spec.template.spec.containers").
 	fieldsSet := make(map[string]struct{})
 	for _, field := range ru.DesiredState.Schema.Fields {
 		fieldsSet[field] = struct{}{}
 	}
 
+	// Also build a prefix set to know which top-level keys have schema children.
+	// For example, if "spec.template" is in the schema, "spec" is a schema prefix.
+	prefixSet := make(map[string]struct{})
+	for _, field := range ru.DesiredState.Schema.Fields {
+		parts := strings.Split(field, ".")
+		for i := 1; i < len(parts); i++ {
+			prefixSet[strings.Join(parts[:i], ".")] = struct{}{}
+		}
+	}
+
 	// Split properties into regular and read-only
 	properties := make(map[string]any)
 	readOnlyProperties := make(map[string]any)
-	for k, v := range allProperties {
-		if _, ok := fieldsSet[k]; ok {
-			properties[k] = v
-		} else {
-			readOnlyProperties[k] = v
-		}
-	}
+	splitMap(allProperties, "", fieldsSet, prefixSet, properties, readOnlyProperties)
 
 	// Marshal back to JSON
 	propertiesJson, err := json.Marshal(properties)
@@ -369,6 +380,47 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 	}
 
 	return nil
+}
+
+// splitMap recursively splits a map into schema-defined properties and read-only properties.
+// Keys whose full path is in fieldsSet go to props. Keys whose full path is a prefix of schema
+// fields (in prefixSet) are recursed into — their children are split individually.
+// Keys not in either set go entirely to readOnly.
+func splitMap(src map[string]any, prefix string, fieldsSet, prefixSet map[string]struct{}, props, readOnly map[string]any) {
+	for k, v := range src {
+		fullPath := k
+		if prefix != "" {
+			fullPath = prefix + "." + k
+		}
+
+		if _, inFields := fieldsSet[fullPath]; inFields {
+			// This exact path is a schema field — keep in properties
+			props[k] = v
+		} else if _, isPrefix := prefixSet[fullPath]; isPrefix {
+			// This path is a prefix of schema fields — recurse into the nested map
+			if nested, ok := v.(map[string]any); ok {
+				nestedProps := make(map[string]any)
+				nestedReadOnly := make(map[string]any)
+				splitMap(nested, fullPath, fieldsSet, prefixSet, nestedProps, nestedReadOnly)
+				if len(nestedProps) > 0 {
+					props[k] = nestedProps
+				}
+				if len(nestedReadOnly) > 0 {
+					readOnly[k] = nestedReadOnly
+				}
+			} else if arr, ok := v.([]any); ok {
+				// For arrays, keep the whole array in properties (array items
+				// are managed as a unit via EntitySet/Array update methods)
+				props[k] = arr
+			} else {
+				// Scalar at a prefix path — shouldn't happen, but keep in properties
+				props[k] = v
+			}
+		} else {
+			// Not in schema at all — read-only
+			readOnly[k] = v
+		}
+	}
 }
 
 // mergeRefsPreservingUserRefs merges user-provided properties with plugin-returned properties.
