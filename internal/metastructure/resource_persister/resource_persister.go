@@ -472,6 +472,16 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 	switch update.Operation {
 	case target_update.TargetOperationCreate:
 		version, err = rp.datastore.CreateTarget(&update.Target)
+		if err != nil && strings.Contains(err.Error(), "UNIQUE constraint") {
+			// Target already exists (e.g., from a previous execution before crash recovery).
+			// Load the existing target and treat as success.
+			existing, loadErr := rp.datastore.LoadTarget(update.Target.Label)
+			if loadErr == nil && existing != nil {
+				version = fmt.Sprintf("%d", existing.Version)
+				err = nil
+				slog.Info("Target already exists (idempotent create)", "label", update.Target.Label)
+			}
+		}
 	case target_update.TargetOperationUpdate:
 		version, err = rp.datastore.UpdateTarget(&update.Target)
 	case target_update.TargetOperationDelete:

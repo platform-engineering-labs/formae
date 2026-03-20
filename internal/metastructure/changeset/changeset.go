@@ -146,6 +146,28 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 	// must wait for that resource's create/update to complete first.
 	p.buildTargetResolvableEdges()
 
+	// Build implicit edges: every resource depends on its target's create/update node.
+	// This ensures the target is persisted (and resolved, if it has resolvables) before
+	// any resource on that target starts executing.
+	for _, tu := range targetUpdates {
+		if tu.Operation == target_update.TargetOperationCreate || tu.Operation == target_update.TargetOperationUpdate {
+			targetNode := p.Nodes[tu.NodeURI()]
+			if targetNode == nil {
+				continue
+			}
+			for _, node := range p.Nodes {
+				ru, ok := node.Update.(*resource_update.ResourceUpdate)
+				if !ok {
+					continue
+				}
+				if ru.DesiredState.Target == tu.Target.Label &&
+					(ru.Operation == resource_update.OperationCreate || ru.Operation == resource_update.OperationUpdate) {
+					node.LinkWith(targetNode)
+				}
+			}
+		}
+	}
+
 	for _, tu := range targetUpdates {
 		switch tu.Operation {
 		case target_update.TargetOperationReplace:

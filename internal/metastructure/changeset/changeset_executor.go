@@ -15,6 +15,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -369,6 +370,29 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 			)
 			if err != nil {
 				proc.Log().Error("Failed to update target state in persister", "error", err, "target", tu.Target.Label)
+			}
+		}
+	}
+
+	// After a target resolves successfully, propagate the resolved config to
+	// all downstream resource updates that reference this target. Without this,
+	// resource updaters would use the stale snapshot from generation time which
+	// still contains unresolved $ref objects.
+	if message.State == target_update.TargetUpdateStateSuccess && message.ResolvedConfig != nil {
+		if tu, ok := node.Update.(*target_update.TargetUpdate); ok {
+			// Convert the resolved config to plugin format: strip $ref/$value
+			// metadata so plugins receive plain values.
+			pluginConfig, err := resolver.ConvertToPluginFormat(message.ResolvedConfig)
+			if err != nil {
+				proc.Log().Error("Failed to convert target config to plugin format", "error", err, "target", tu.Target.Label)
+				pluginConfig = message.ResolvedConfig
+			}
+			for _, n := range data.changeset.DAG.Nodes {
+				if ru, ok := n.Update.(*resource_update.ResourceUpdate); ok {
+					if ru.DesiredState.Target == tu.Target.Label {
+						ru.ResourceTarget.Config = pluginConfig
+					}
+				}
 			}
 		}
 	}

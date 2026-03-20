@@ -97,6 +97,7 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 
 	// Extract resolvables from target config
 	resolvables := resolver.ExtractResolvableURIsFromJSON(target.Config)
+	slog.Info("Target resolvables extracted", "label", target.Label, "count", len(resolvables), "uris", resolvables, "config", string(target.Config))
 
 	// Handle apply command (create or update)
 	var operation TargetOperation

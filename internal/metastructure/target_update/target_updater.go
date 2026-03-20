@@ -5,6 +5,7 @@
 package target_update
 
 import (
+	"encoding/json"
 	"time"
 
 	"ergo.services/actor/statemachine"
@@ -37,8 +38,9 @@ type StartTargetUpdate struct {
 
 // TargetUpdateFinished is sent back to the requester when the target update completes.
 type TargetUpdateFinished struct {
-	NodeURI pkgmodel.FormaeURI
-	State   TargetUpdateState
+	NodeURI        pkgmodel.FormaeURI
+	State          TargetUpdateState
+	ResolvedConfig json.RawMessage // The target config after resolution (with $value filled in)
 }
 
 // Shutdown is sent to terminate the TargetUpdater process.
@@ -185,8 +187,9 @@ func onTargetUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Targe
 		err := proc.Send(
 			data.requestedBy,
 			TargetUpdateFinished{
-				NodeURI: data.targetUpdate.NodeURI(),
-				State:   finalState,
+				NodeURI:        data.targetUpdate.NodeURI(),
+				State:          finalState,
+				ResolvedConfig: data.targetUpdate.Target.Config,
 			},
 		)
 		if err != nil {
