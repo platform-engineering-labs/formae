@@ -494,8 +494,6 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 
 	// Persist cascading failures via FormaCommandPersister.
 	if len(cascadingFailures) > 0 {
-		proc.Log().Warning("Cascading failures detected: %d for command %s", len(cascadingFailures), data.changeset.CommandID)
-
 		var failedResources []forma_persister.ResourceUpdateRef
 		var failedTargets []forma_persister.TargetUpdateRef
 		for _, failedUpdate := range cascadingFailures {
@@ -519,6 +517,9 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 					Operation: u.Operation,
 				})
 			}
+		}
+		if len(failedResources) > 0 {
+			proc.Log().Warning("Cascading failures detected: %d for command %s", len(failedResources), data.changeset.CommandID)
 		}
 
 		persisterPID := gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")}
