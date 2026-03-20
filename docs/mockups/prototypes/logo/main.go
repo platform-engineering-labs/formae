@@ -47,12 +47,20 @@ func main() {
 
 	fmt.Println()
 
-	// iTerm2 inline images protocol (Ghostty, iTerm2)
+	// Graphics protocol rendering
 	for _, arg := range os.Args[1:] {
-		if arg == "--iterm" {
+		switch arg {
+		case "--iterm":
 			fmt.Println(title.Render("  iTerm2 inline images (Ghostty, iTerm2):"))
 			fmt.Println()
 			if err := renderITerm(img, 200); err != nil {
+				fmt.Println(lipgloss.NewStyle().Foreground(p.TextSecondary).Render("  " + err.Error()))
+			}
+			fmt.Println()
+		case "--kitty":
+			fmt.Println(title.Render("  Kitty graphics protocol (WezTerm, Kitty):"))
+			fmt.Println()
+			if err := renderKitty(img, 200); err != nil {
 				fmt.Println(lipgloss.NewStyle().Foreground(p.TextSecondary).Render("  " + err.Error()))
 			}
 			fmt.Println()
@@ -292,6 +300,61 @@ func renderITerm(img image.Image, widthPx int) error {
 	fmt.Fprintf(&seq, "\033]1337;File=inline=1;size=%d:%s\a", len(rawBytes), encoded)
 
 	// Single atomic write to stdout
+	_, err := os.Stdout.Write(seq.Bytes())
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	return nil
+}
+
+// renderKitty renders an image using the Kitty graphics protocol.
+// Supported by: WezTerm (with enable_kitty_graphics), Kitty
+// Uses APC (Application Program Command) escape sequences.
+// Requires tmux allow-passthrough if running inside tmux.
+func renderKitty(img image.Image, widthPx int) error {
+	bounds := img.Bounds()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	heightPx := int(float64(widthPx) * float64(srcH) / float64(srcW))
+
+	resized := image.NewRGBA(image.Rect(0, 0, widthPx, heightPx))
+	draw.BiLinear.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
+
+	var imgBuf bytes.Buffer
+	if err := png.Encode(&imgBuf, resized); err != nil {
+		return fmt.Errorf("png encode: %w", err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(imgBuf.Bytes())
+
+	// Kitty graphics protocol: APC G <params>;<payload> ST
+	// Split payload into chunks of 4096 for large images
+	chunkSize := 4096
+
+	var seq bytes.Buffer
+	for i := 0; i < len(encoded); i += chunkSize {
+		end := i + chunkSize
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		chunk := encoded[i:end]
+
+		more := 1
+		if end >= len(encoded) {
+			more = 0
+		}
+
+		if i == 0 {
+			// First chunk: a=T (transmit+display), f=100 (PNG format), m=more
+			fmt.Fprintf(&seq, "\033_Ga=T,f=100,m=%d;%s\033\\", more, chunk)
+		} else {
+			// Continuation chunks
+			fmt.Fprintf(&seq, "\033_Gm=%d;%s\033\\", more, chunk)
+		}
+	}
+
+	// Atomic write
 	_, err := os.Stdout.Write(seq.Bytes())
 	if err != nil {
 		return err
