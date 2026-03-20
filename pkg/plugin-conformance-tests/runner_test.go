@@ -887,6 +887,59 @@ func TestIsProviderDefault(t *testing.T) {
 		}
 	})
 
+	t.Run("collection provider defaults - simple key patterns", func(t *testing.T) {
+		providerDefaults := map[string]providerDefault{
+			"metadata.labels": {
+				IsCollection: true,
+				KeyPatterns:  []string{"app", "helm"},
+			},
+		}
+
+		tests := []struct {
+			path     string
+			expected bool
+		}{
+			{"metadata.labels.app", true},
+			{"metadata.labels.helm", true},
+			{"metadata.labels.app.example.com/name", true}, // first segment "app" matches
+			{"metadata.labels.env", false},
+			{"metadata.labels.random", false},
+			{"metadata.labels", true},
+		}
+		for _, tc := range tests {
+			got := isProviderDefault(tc.path, providerDefaults)
+			if got != tc.expected {
+				t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+			}
+		}
+	})
+
+	t.Run("collection provider defaults - dotted key patterns", func(t *testing.T) {
+		providerDefaults := map[string]providerDefault{
+			"metadata.labels": {
+				IsCollection: true,
+				KeyPatterns:  []string{"provider.example.com/*", "mgmt.example.com/*"},
+			},
+		}
+
+		tests := []struct {
+			path     string
+			expected bool
+		}{
+			{"metadata.labels.provider.example.com/name", true},
+			{"metadata.labels.provider.example.com/instance", true},
+			{"metadata.labels.mgmt.example.com/chart", true},
+			{"metadata.labels.other.example.com/job-name", false},
+			{"metadata.labels.env", false},
+		}
+		for _, tc := range tests {
+			got := isProviderDefault(tc.path, providerDefaults)
+			if got != tc.expected {
+				t.Errorf("isProviderDefault(%q) = %v, want %v", tc.path, got, tc.expected)
+			}
+		}
+	})
+
 	t.Run("collection provider defaults with array indices", func(t *testing.T) {
 		providerDefaults := map[string]providerDefault{
 			"spec.template.metadata.labels": {IsCollection: true},
