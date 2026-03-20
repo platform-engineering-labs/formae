@@ -62,20 +62,23 @@ func GenerateResourceUpdates(
 	}
 
 	// desiredTargetMap starts as a copy of existingTargetMap, then is overridden
-	// with forma targets. For replaced targets this gives the new config; for
-	// non-replaced targets the config is identical so the override is a no-op.
-	// Used for create/update operations.
+	// with forma targets only for NEW targets (not in DB). For existing targets,
+	// the DB config is preferred because it contains resolved $value from target
+	// resolvables. The forma config may have unresolved $ref objects.
+	// For replaced targets, the replacement is handled separately in the DAG.
 	var desiredTargetMap = make(map[string]*pkgmodel.Target)
 	for _, target := range existingTargets {
 		desiredTargetMap[target.Label] = target
 	}
 	for _, target := range forma.Targets {
 		t := target
-		desiredTargetMap[target.Label] = &t
 		if _, exists := existingTargetMap[target.Label]; !exists {
+			// New target: use forma config
+			desiredTargetMap[target.Label] = &t
 			slog.Debug("Target does not exist in existing targets - adding it", "target", target.Label)
 			existingTargetMap[target.Label] = &t
 		}
+		// Existing targets: keep the DB config (which has resolved $value)
 	}
 
 	// Validate stack references for commands that modify resources, sync commands are triggered from the agent
