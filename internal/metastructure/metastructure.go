@@ -1505,6 +1505,18 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
+	// Translate $res triplet references to $ref KSUID URIs in both resource
+	// properties and target configs. Must happen before GenerateTargetUpdates
+	// so that target config resolvables can be extracted.
+	doTranslate := source != resource_update.FormaCommandSourceSynchronize &&
+		source != resource_update.FormaCommandSourceDiscovery &&
+		command != pkgmodel.CommandDestroy
+	if doTranslate {
+		if _, err := resource_update.TranslateFormaeReferencesToKsuid(forma, ds); err != nil {
+			return nil, fmt.Errorf("failed to translate references to KSUID: %w", err)
+		}
+	}
+
 	// Build per-target resource presence map for destroy semantics:
 	// targets with resources in the forma are preserved on destroy.
 	resourceTargetLabels := make(map[string]bool)

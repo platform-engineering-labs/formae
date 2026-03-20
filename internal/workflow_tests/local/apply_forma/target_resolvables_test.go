@@ -124,6 +124,108 @@ func TestApplyForma_TargetWithResolvables(t *testing.T) {
 	})
 }
 
+func TestApplyForma_TargetWithResolvables_FromTripletURI(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// The cluster resource returns properties including an Endpoint field.
+		clusterProps := `{"BucketName":"my-cluster","Endpoint":"https://my-cluster.example.com"}`
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "1234",
+					NativeID:           "native-" + request.Label,
+					ResourceProperties: request.Properties,
+				}}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   clusterProps,
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err, "Failed to create metastructure")
+
+		// Apply a forma where the target config uses $res triplet format (as PKL would produce),
+		// NOT pre-translated $ref URIs. This exercises the full flow:
+		//   1. translateFormaeReferencesToKsuid converts $res → $ref
+		//   2. ExtractResolvableURIsFromJSON finds the $ref in target config
+		//   3. DAG waits for cluster before resolving consumer target
+		//   4. TargetUpdater resolves endpoint value into target config
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{
+				{Label: "infra"},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:   "cluster",
+					Type:    "FakeAWS::S3::Bucket",
+					Stack:   "infra",
+					Target:  "provider",
+					Managed: true,
+					Schema:  pkgmodel.Schema{Identifier: "BucketName", Portable: true},
+					Properties: json.RawMessage(`{
+						"BucketName": "my-cluster",
+						"Endpoint": "https://my-cluster.example.com"
+					}`),
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{
+					Label:     "provider",
+					Namespace: "FakeAWS",
+					Config:    json.RawMessage(`{"region": "us-east-1"}`),
+				},
+				{
+					Label:     "consumer",
+					Namespace: "FakeAWS",
+					// $res triplet format — as PKL produces. No KSUID, no $ref.
+					Config: json.RawMessage(`{
+						"endpoint": {
+							"$res": true,
+							"$label": "cluster",
+							"$type": "FakeAWS::S3::Bucket",
+							"$stack": "infra",
+							"$property": "Endpoint",
+							"$visibility": "Clear"
+						}
+					}`),
+				},
+			},
+		}
+
+		_, err = m.ApplyForma(
+			forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+
+		// Wait for the command to complete
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			require.NoError(t, err)
+			incomplete, err := m.Datastore.LoadIncompleteFormaCommands()
+			require.NoError(t, err)
+			return len(fas) == 1 && len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "apply command should complete")
+
+		// Verify the consumer target was created with the resolved config
+		consumerTarget, err := m.Datastore.LoadTarget("consumer")
+		require.NoError(t, err)
+		require.NotNil(t, consumerTarget, "consumer target should exist")
+
+		var storedConfig map[string]any
+		require.NoError(t, json.Unmarshal(consumerTarget.Config, &storedConfig))
+		endpointObj, ok := storedConfig["endpoint"].(map[string]any)
+		require.True(t, ok, "endpoint should be a $ref object")
+		assert.Equal(t, "https://my-cluster.example.com", endpointObj["$value"])
+	})
+}
+
 func TestApplyForma_ReapplyTargetResolvablesSameValue_NoReplace(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		clusterProps := `{"BucketName":"my-cluster","Endpoint":"https://my-cluster.example.com"}`

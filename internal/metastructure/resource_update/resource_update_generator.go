@@ -35,9 +35,13 @@ func GenerateResourceUpdates(
 	var referenceLabels map[string]string
 	var err error
 
-	// Only translate references for commands that contain new/modified resources with triplet URIs
-	// Skip for synchronization (database reads), discovery (pre-assigned KSUIDs), and destroy (database resources)
-	doTranslateFormaeReferencesToKsuid := source != FormaCommandSourceSynchronize &&
+	// Only translate references for commands that contain new/modified resources with triplet URIs.
+	// Skip for synchronization (database reads), discovery (pre-assigned KSUIDs), and destroy (database resources).
+	// Also skip if TranslateFormaeReferencesToKsuid was already called upstream (e.g., from FormaCommandFromForma)
+	// — detected by checking if resources already have KSUIDs assigned.
+	alreadyTranslated := len(forma.Resources) > 0 && forma.Resources[0].Ksuid != ""
+	doTranslateFormaeReferencesToKsuid := !alreadyTranslated &&
+		source != FormaCommandSourceSynchronize &&
 		source != FormaCommandSourceDiscovery &&
 		command != pkgmodel.CommandDestroy
 
@@ -1309,6 +1313,13 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 	}
 
 	return resources, ksuidToLabel
+}
+
+// TranslateFormaeReferencesToKsuid translates resolvables values to KSUID refs in both
+// resource properties and target configs. Must be called before GenerateTargetUpdates
+// so that target config resolvables are translated to $ref URIs for extraction.
+func TranslateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLookup) (map[string]string, error) {
+	return translateFormaeReferencesToKsuid(forma, ds)
 }
 
 // translateFormaeReferencesToKsuid translates resolvables values to KSUID refs
