@@ -176,6 +176,14 @@ open class FieldHint extends Annotation {
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
     hidden hasProviderDefault: Boolean = false
+
+    /// Glob patterns for provider-injected Mapping keys.
+    /// When hasProviderDefault = true on a Mapping field:
+    ///   - null/empty: tolerate ALL extra keys (broad tolerance)
+    ///   - non-empty: only tolerate keys matching at least one pattern
+    /// Patterns use filepath.Match syntax (e.g., "provider.example.com/*").
+    hidden providerDefaultKeyPatterns: Listing<String>?
+
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
 
@@ -189,6 +197,7 @@ open class FieldHint extends Annotation {
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed ProviderDefaultKeyPatterns: Listing<String>? = providerDefaultKeyPatterns
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
 }

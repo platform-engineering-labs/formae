@@ -383,6 +383,10 @@ type providerDefault struct {
 	// add extra keys. When true, prefix matching is used — any child path
 	// under this field is tolerated.
 	IsCollection bool
+	// KeyPatterns specifies glob patterns for provider-injected Mapping keys.
+	// When non-empty, only extra keys matching at least one pattern are tolerated.
+	// When empty, all extra keys are tolerated (broad tolerance).
+	KeyPatterns []string
 }
 
 func extractProviderDefaultPaths(resource map[string]any) map[string]providerDefault {
@@ -401,7 +405,16 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]providerDef
 			continue
 		}
 		if hpd, ok := hintMap["HasProviderDefault"].(bool); ok && hpd {
-			result[path] = providerDefault{}
+			pd := providerDefault{}
+			if patterns, ok := hintMap["ProviderDefaultKeyPatterns"].([]any); ok && len(patterns) > 0 {
+				pd.IsCollection = true
+				for _, p := range patterns {
+					if s, ok := p.(string); ok {
+						pd.KeyPatterns = append(pd.KeyPatterns, s)
+					}
+				}
+			}
+			result[path] = pd
 		}
 	}
 
@@ -441,6 +454,7 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]providerDef
 //   - Exact match for scalar fields
 //   - Prefix match for collection (Mapping) fields — any child path is tolerated
 //   - Array index stripping — e.g. "spec.ports[0].protocol" → "spec.ports.protocol"
+//   - Key pattern matching — when patterns are specified, only matching keys are tolerated
 func isProviderDefault(fieldPath string, providerDefaults map[string]providerDefault) bool {
 	// Exact match (scalar provider default)
 	if _, ok := providerDefaults[fieldPath]; ok {
@@ -449,8 +463,28 @@ func isProviderDefault(fieldPath string, providerDefaults map[string]providerDef
 
 	// Prefix match for collection (Mapping) provider defaults
 	for path, pd := range providerDefaults {
-		if pd.IsCollection && strings.HasPrefix(fieldPath, path+".") {
-			return true
+		if !pd.IsCollection {
+			continue
+		}
+		prefix := path + "."
+		if strings.HasPrefix(fieldPath, prefix) {
+			if len(pd.KeyPatterns) == 0 {
+				return true // broad tolerance — all extra keys tolerated
+			}
+			// Match the remainder after the Mapping path against key patterns.
+			// Try both the full remainder (for dotted patterns like "provider.example.com/*")
+			// and the first segment (for simple patterns like "app").
+			remainder := fieldPath[len(prefix):]
+			for _, pattern := range pd.KeyPatterns {
+				if matched, _ := filepath.Match(pattern, remainder); matched {
+					return true
+				}
+				firstSegment := strings.SplitN(remainder, ".", 2)[0]
+				if matched, _ := filepath.Match(pattern, firstSegment); matched {
+					return true
+				}
+			}
+			return false
 		}
 	}
 
