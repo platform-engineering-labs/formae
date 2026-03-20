@@ -168,7 +168,7 @@ open class ListProperty {
     fixed ListParameter: String = listParameter
 }
 
-typealias FieldUpdateMethod = "Array"|"Atomic"|"EntitySet"|"Set"
+typealias FieldUpdateMethod = "Array"|"EntitySet"|"Set"
 
 open class FieldHint extends Annotation {
     hidden createOnly: Boolean = false
