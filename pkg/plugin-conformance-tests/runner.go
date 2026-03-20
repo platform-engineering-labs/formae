@@ -374,20 +374,15 @@ func normalizeResolvables(v any) any {
 }
 
 // extractProviderDefaultPaths extracts field paths with HasProviderDefault=true
-// from the Schema Hints on a resource. Returns a set of dot-separated paths
-// (e.g. "spec.ports.protocol", "spec.containers.imagePullPolicy").
+// from the Schema Hints on a resource.
+//
 // providerDefault holds metadata about a provider-default field path,
-// including whether it's a collection (Mapping) that should use prefix matching
-// and optional key patterns for fine-grained control.
+// including whether it's a collection (Mapping) that should use prefix matching.
 type providerDefault struct {
 	// IsCollection indicates this is a Mapping field where the provider may
 	// add extra keys. When true, prefix matching is used — any child path
 	// under this field is tolerated.
 	IsCollection bool
-	// KeyPatterns specifies glob patterns for provider-injected Mapping keys.
-	// When non-empty, only extra keys matching at least one pattern are tolerated.
-	// When empty, all extra keys are tolerated.
-	KeyPatterns []string
 }
 
 func extractProviderDefaultPaths(resource map[string]any) map[string]providerDefault {
@@ -406,27 +401,13 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]providerDef
 			continue
 		}
 		if hpd, ok := hintMap["HasProviderDefault"].(bool); ok && hpd {
-			pd := providerDefault{}
-			// Check if this field has key patterns (indicates a collection/Mapping field)
-			if patterns, ok := hintMap["ProviderDefaultKeyPatterns"].([]any); ok && len(patterns) > 0 {
-				pd.IsCollection = true
-				for _, p := range patterns {
-					if s, ok := p.(string); ok {
-						pd.KeyPatterns = append(pd.KeyPatterns, s)
-					}
-				}
-			}
-			result[path] = pd
+			result[path] = providerDefault{}
 		}
 	}
 
 	// Detect collection (Mapping) fields from the schema structure.
 	// A field with hasProviderDefault that has no child fields in the schema
-	// is a leaf field. If it's an object type (not a scalar), it's a Mapping
-	// where the provider may add extra keys. We detect this by checking if
-	// any other schema field starts with this path as a prefix — if not,
-	// it's a leaf (Mapping or scalar). We then check the actual properties
-	// to confirm it's a map value.
+	// is a leaf field — likely a Mapping where the provider may add extra keys.
 	fields, _ := schema["Fields"].([]any)
 	fieldSet := make(map[string]bool, len(fields))
 	for _, f := range fields {
@@ -436,10 +417,8 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]providerDef
 	}
 	for path, pd := range result {
 		if pd.IsCollection {
-			continue // already marked via key patterns
+			continue
 		}
-		// Check if this field has any child fields in the schema.
-		// If it does, it's a SubResource (not a Mapping) — skip.
 		hasChildren := false
 		prefix := path + "."
 		for field := range fieldSet {
@@ -449,9 +428,6 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]providerDef
 			}
 		}
 		if !hasChildren {
-			// Leaf field with hasProviderDefault — treat as collection (Mapping).
-			// This covers fields like labels: Mapping<String, String> where the
-			// schema defines the field but not its dynamic keys.
 			pd.IsCollection = true
 			result[path] = pd
 		}
@@ -465,7 +441,6 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]providerDef
 //   - Exact match for scalar fields
 //   - Prefix match for collection (Mapping) fields — any child path is tolerated
 //   - Array index stripping — e.g. "spec.ports[0].protocol" → "spec.ports.protocol"
-//   - Key pattern matching — when patterns are specified, only matching keys are tolerated
 func isProviderDefault(fieldPath string, providerDefaults map[string]providerDefault) bool {
 	// Exact match (scalar provider default)
 	if _, ok := providerDefaults[fieldPath]; ok {
@@ -474,33 +449,8 @@ func isProviderDefault(fieldPath string, providerDefaults map[string]providerDef
 
 	// Prefix match for collection (Mapping) provider defaults
 	for path, pd := range providerDefaults {
-		if !pd.IsCollection {
-			continue
-		}
-		prefix := path + "."
-		if strings.HasPrefix(fieldPath, prefix) {
-			if len(pd.KeyPatterns) == 0 {
-				return true // broad tolerance — all extra keys tolerated
-			}
-			// Match the remainder after the Mapping path against key patterns.
-			// The remainder may contain dots from dot-expansion of the original
-			// JSON key (e.g., "app.kubernetes.io/name" → remainder "app.kubernetes.io/name").
-			// We try matching both the full remainder and the first segment to
-			// support both dotted patterns ("app.kubernetes.io/*") and simple
-			// patterns ("app").
-			remainder := fieldPath[len(prefix):]
-			for _, pattern := range pd.KeyPatterns {
-				// Match against full remainder (supports dotted patterns like "app.kubernetes.io/*")
-				if matched, _ := filepath.Match(pattern, remainder); matched {
-					return true
-				}
-				// Match against first segment (supports simple patterns like "app")
-				firstSegment := strings.SplitN(remainder, ".", 2)[0]
-				if matched, _ := filepath.Match(pattern, firstSegment); matched {
-					return true
-				}
-			}
-			return false
+		if pd.IsCollection && strings.HasPrefix(fieldPath, path+".") {
+			return true
 		}
 	}
 
