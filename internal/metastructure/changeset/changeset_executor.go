@@ -450,8 +450,6 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 	// Only resource updates need persister notification — target updates are local
 	// datastore operations that were never started.
 	if len(cascadingFailures) > 0 {
-		proc.Log().Warning("Cascading failures detected: %d for command %s", len(cascadingFailures), data.changeset.CommandID)
-
 		var failedResources []forma_persister.ResourceUpdateRef
 		for _, failedUpdate := range cascadingFailures {
 			ru, ok := failedUpdate.(*resource_update.ResourceUpdate)
@@ -468,6 +466,9 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 				URI:       ru.URI(),
 				Operation: ru.Operation,
 			})
+		}
+		if len(failedResources) > 0 {
+			proc.Log().Warning("Cascading failures detected: %d for command %s", len(failedResources), data.changeset.CommandID)
 		}
 
 		if len(failedResources) > 0 {
