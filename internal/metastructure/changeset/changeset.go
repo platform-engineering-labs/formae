@@ -68,7 +68,7 @@ func NewChangeset(
 		trackedUpdates: make(map[string]bool),
 	}
 
-	if err := changeset.DAG.Init(resourceUpdates); err != nil {
+	if err := changeset.DAG.Init(resourceUpdates, command); err != nil {
 		return Changeset{}, err
 	}
 
@@ -289,7 +289,7 @@ func NewExecutionDAG() *ExecutionDAG {
 	}
 }
 
-func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate) error {
+func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, command pkgmodel.Command) error {
 	// Step 1: Create individual nodes for each operation (including split replace operations)
 	var allOps []resource_update.ResourceUpdate
 
@@ -347,8 +347,13 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate) er
 		)
 	}
 
-	// Step 3: Build relationships between operation nodes
-	p.buildOperationRelationships(allOps)
+	// Step 3: Build relationships between operation nodes.
+	// Sync commands are pure reads over the current inventory; they should not
+	// inherit apply-style dependency edges because one failed read must not block
+	// unrelated reads in the same sync command.
+	if command != pkgmodel.CommandSync {
+		p.buildOperationRelationships(allOps)
+	}
 
 	// Step 4: Check for cycles
 	if p.HasCycles() {
