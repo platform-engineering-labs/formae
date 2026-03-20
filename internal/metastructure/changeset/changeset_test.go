@@ -1841,3 +1841,114 @@ func TestChangeset_AvailableExecutableUpdates_NonRateLimitedShowsZeroCount(t *te
 	assert.True(t, exists, "namespace should be present for non-rate-limited update")
 	assert.Equal(t, 0, count, "non-rate-limited update should contribute 0 to token count")
 }
+
+func TestChangeset_TargetReplace_SplitsIntoDeleteAndCreate(t *testing.T) {
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:    pkgmodel.Target{Label: "aws-prod", Namespace: "AWS"},
+			Operation: target_update.TargetOperationReplace,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := NewChangeset(nil, targetUpdates, "cmd-1", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// Should have 2 nodes: delete + create
+	assert.Len(t, cs.DAG.Nodes, 2)
+
+	deleteNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://aws-prod/delete")]
+	createNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://aws-prod/create")]
+	require.NotNil(t, deleteNode, "expected delete node")
+	require.NotNil(t, createNode, "expected create node")
+
+	// Create depends on delete
+	require.Len(t, createNode.Dependencies, 1)
+	assert.Equal(t, deleteNode.URI, createNode.Dependencies[0].URI)
+}
+
+func TestChangeset_TargetReplace_ResourceEdges(t *testing.T) {
+	bucketURI := pkgmodel.NewFormaeURI(util.NewID(), "")
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "bucket", Type: "AWS::S3::Bucket",
+				Stack: "web", Ksuid: bucketURI.KSUID(),
+				Target: "aws-prod",
+			},
+			Operation:  resource_update.OperationReplace,
+			State:      resource_update.ResourceUpdateStateNotStarted,
+			StackLabel: "web",
+		},
+	}
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:    pkgmodel.Target{Label: "aws-prod", Namespace: "AWS"},
+			Operation: target_update.TargetOperationReplace,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-2", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// 4 nodes: resource delete, resource create, target delete, target create
+	assert.Len(t, cs.DAG.Nodes, 4)
+
+	targetDeleteNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://aws-prod/delete")]
+	targetCreateNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://aws-prod/create")]
+	require.NotNil(t, targetDeleteNode)
+	require.NotNil(t, targetCreateNode)
+
+	// Target delete should depend on resource delete(s)
+	assert.GreaterOrEqual(t, len(targetDeleteNode.Dependencies), 1,
+		"target delete should depend on at least one resource delete")
+
+	// Resource create should depend on target create
+	resourceCreateURI := createOperationURI(bucketURI, resource_update.OperationCreate)
+	resourceCreateNode := cs.DAG.Nodes[resourceCreateURI]
+	require.NotNil(t, resourceCreateNode, "expected resource create node")
+
+	hasTargetCreateDep := false
+	for _, dep := range resourceCreateNode.Dependencies {
+		if dep.URI == targetCreateNode.URI {
+			hasTargetCreateDep = true
+		}
+	}
+	assert.True(t, hasTargetCreateDep,
+		"resource create should depend on target create")
+}
+
+func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI("vpc-ksuid", "")
+	subnetURI := pkgmodel.NewFormaeURI("subnet-ksuid", "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Ksuid: vpcURI.KSUID(), Stack: "stack", Label: "vpc", Type: "AWS::EC2::VPC"},
+			Operation:    resource_update.OperationRead,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "stack",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Ksuid: subnetURI.KSUID(), Stack: "stack", Label: "subnet", Type: "AWS::EC2::Subnet"},
+			Operation:            resource_update.OperationRead,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
+		},
+	}
+
+	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
+	assert.NoError(t, err)
+
+	vpcNode := cs.DAG.Nodes[createOperationURI(vpcURI, resource_update.OperationRead)]
+	subnetNode := cs.DAG.Nodes[createOperationURI(subnetURI, resource_update.OperationRead)]
+	assert.NotNil(t, vpcNode)
+	assert.NotNil(t, subnetNode)
+	assert.Empty(t, vpcNode.Dependencies)
+	assert.Empty(t, vpcNode.Dependents)
+	assert.Empty(t, subnetNode.Dependencies)
+	assert.Empty(t, subnetNode.Dependents)
+}

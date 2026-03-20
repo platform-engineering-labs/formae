@@ -68,12 +68,36 @@ func NewChangeset(
 		trackedUpdates: make(map[string]bool),
 	}
 
-	if err := changeset.DAG.Init(resourceUpdates); err != nil {
+	if err := changeset.DAG.Init(resourceUpdates, command); err != nil {
 		return Changeset{}, err
 	}
 
+	// Copy target updates into a local slice so the DAG owns its own memory.
+	// Without this, DAG nodes would point into the FormaCommand's TargetUpdates
+	// backing array, which the FormaCommandPersister also mutates — violating
+	// actor isolation and causing state corruption.
+	var allTargetOps []target_update.TargetUpdate
+	type replacePair struct{ deleteIdx, createIdx int }
+	var replacePairs []replacePair
+
 	for i := range targetUpdates {
-		tu := &targetUpdates[i]
+		if targetUpdates[i].Operation == target_update.TargetOperationReplace {
+			deleteTU := targetUpdates[i]
+			deleteTU.Operation = target_update.TargetOperationDelete
+			createTU := targetUpdates[i]
+			createTU.Operation = target_update.TargetOperationCreate
+			replacePairs = append(replacePairs, replacePair{
+				deleteIdx: len(allTargetOps),
+				createIdx: len(allTargetOps) + 1,
+			})
+			allTargetOps = append(allTargetOps, deleteTU, createTU)
+		} else {
+			allTargetOps = append(allTargetOps, targetUpdates[i])
+		}
+	}
+
+	for i := range allTargetOps {
+		tu := &allTargetOps[i]
 		changeset.DAG.Nodes[tu.NodeURI()] = &DAGNode{
 			URI:          tu.NodeURI(),
 			Update:       tu,
@@ -81,6 +105,16 @@ func NewChangeset(
 			Dependencies: []*DAGNode{},
 		}
 	}
+
+	// Wire delete → create for split replace targets
+	for _, pair := range replacePairs {
+		deleteNode := changeset.DAG.Nodes[allTargetOps[pair.deleteIdx].NodeURI()]
+		createNode := changeset.DAG.Nodes[allTargetOps[pair.createIdx].NodeURI()]
+		createNode.LinkWith(deleteNode)
+	}
+
+	// Build implicit edges between target and resource nodes
+	changeset.DAG.buildTargetResourceEdges(targetUpdates)
 
 	return changeset, nil
 }
@@ -100,6 +134,57 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 
 	// Step 3: Connect same-resource delete to create operations
 	p.connectDeleteToCreate(allOps)
+}
+
+// buildTargetResourceEdges creates implicit ordering edges between target and resource nodes:
+//   - Replace: resource deletes → target delete → target create → resource creates
+//   - Delete:  resource deletes → target delete
+func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
+	for _, tu := range targetUpdates {
+		switch tu.Operation {
+		case target_update.TargetOperationReplace:
+			targetDeleteURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/delete")
+			targetCreateURI := pkgmodel.FormaeURI("target://" + tu.Target.Label + "/create")
+			targetDeleteNode := p.Nodes[targetDeleteURI]
+			targetCreateNode := p.Nodes[targetCreateURI]
+			if targetDeleteNode == nil || targetCreateNode == nil {
+				continue
+			}
+
+			for _, node := range p.Nodes {
+				ru, ok := node.Update.(*resource_update.ResourceUpdate)
+				if !ok || ru.DesiredState.Target != tu.Target.Label {
+					continue
+				}
+				if ru.Operation == resource_update.OperationDelete {
+					targetDeleteNode.LinkWith(node)
+				}
+				if ru.Operation == resource_update.OperationCreate {
+					node.LinkWith(targetCreateNode)
+				}
+			}
+
+		case target_update.TargetOperationDelete:
+			targetDeleteNode := p.Nodes[tu.NodeURI()]
+			if targetDeleteNode == nil {
+				continue
+			}
+
+			for _, node := range p.Nodes {
+				ru, ok := node.Update.(*resource_update.ResourceUpdate)
+				if !ok {
+					continue
+				}
+				if ru.DesiredState.Target != tu.Target.Label && ru.PriorState.Target != tu.Target.Label {
+					continue
+				}
+				if ru.Operation == resource_update.OperationDelete {
+					// Target delete waits for resource deletes
+					targetDeleteNode.LinkWith(node)
+				}
+			}
+		}
+	}
 }
 
 // buildDeleteDependencies creates REVERSED dependencies for delete operations
@@ -204,7 +289,7 @@ func NewExecutionDAG() *ExecutionDAG {
 	}
 }
 
-func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate) error {
+func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, command pkgmodel.Command) error {
 	// Step 1: Create individual nodes for each operation (including split replace operations)
 	var allOps []resource_update.ResourceUpdate
 
@@ -262,8 +347,13 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate) er
 		)
 	}
 
-	// Step 3: Build relationships between operation nodes
-	p.buildOperationRelationships(allOps)
+	// Step 3: Build relationships between operation nodes.
+	// Sync commands are pure reads over the current inventory; they should not
+	// inherit apply-style dependency edges because one failed read must not block
+	// unrelated reads in the same sync command.
+	if command != pkgmodel.CommandSync {
+		p.buildOperationRelationships(allOps)
+	}
 
 	// Step 4: Check for cycles
 	if p.HasCycles() {

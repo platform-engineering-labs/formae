@@ -308,6 +308,8 @@ definitions:
         type: object
       Identifier:
         type: string
+      Portable:
+        type: boolean
     type: object
   model.Simulation:
     properties:
@@ -315,6 +317,10 @@ definitions:
         type: boolean
       Command:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
+      Warnings:
+        items:
+          type: string
+        type: array
     type: object
   model.Stack:
     properties:
@@ -559,8 +565,12 @@ paths:
       produces:
       - application/json
       responses:
+        "200":
+          description: 'OK: No changes required, or simulation result returned.'
+          schema:
+            $ref: '#/definitions/model.SubmitCommandResponse'
         "202":
-          description: 'Accepted: The command is validated and stored and queued for
+          description: 'Accepted: The command is validated, stored, and queued for
             execution.'
           headers:
             string Location:
@@ -745,6 +755,30 @@ paths:
           schema:
             type: string
       summary: List stacks
+      tags:
+      - stacks
+  /stacks/{stack}/changes-since-last-reconcile:
+    get:
+      description: Retrieves resource modifications (drift) detected since the last
+        reconcile for a given stack.
+      parameters:
+      - description: The stack label to check for drift.
+        in: path
+        name: stack
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: Drift report for the stack.'
+          schema:
+            $ref: '#/definitions/model.ModifiedStack'
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List drift for a stack
       tags:
       - stacks
   /stacks/{stack}/drift:

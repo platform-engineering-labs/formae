@@ -10,6 +10,7 @@ type Schema struct {
 	Hints        map[string]FieldHint `json:"Hints" pkl:"Hints"`
 	Discoverable bool                 `json:"Discoverable" pkl:"Discoverable"`
 	Extractable  bool                 `json:"Extractable" pkl:"Extractable"`
+	Portable     bool                 `json:"Portable" pkl:"Portable"`
 }
 
 type FieldHint struct {
@@ -34,6 +35,7 @@ type FieldUpdateMethod string
 const FieldUpdateMethodArray FieldUpdateMethod = "Array"
 const FieldUpdateMethodEntitySet FieldUpdateMethod = "EntitySet"
 const FieldUpdateMethodSet FieldUpdateMethod = "Set"
+const FieldUpdateMethodAtomic FieldUpdateMethod = "Atomic"
 const FieldUpdateMethodNone FieldUpdateMethod = ""
 
 func filterFields[T bool](s Schema, selector func(FieldHint) T, value T) []string {

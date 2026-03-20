@@ -342,12 +342,40 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	}
 
 	if config.Simulate {
+		var warnings []string
+		allByStack, loadErr := m.Datastore.LoadAllResourcesByStack()
+		if loadErr != nil {
+			slog.Warn("Failed to load resources for simulate warning", "error", loadErr)
+		}
+		for _, tu := range fa.TargetUpdates {
+			if tu.Operation != target_update.TargetOperationReplace {
+				continue
+			}
+			if allByStack == nil {
+				continue
+			}
+			unmanagedOnTarget := 0
+			if unmanagedResources, ok := allByStack[constants.UnmanagedStack]; ok {
+				for _, r := range unmanagedResources {
+					if r.Target == tu.Target.Label {
+						unmanagedOnTarget++
+					}
+				}
+			}
+			if unmanagedOnTarget > 0 {
+				warnings = append(warnings, fmt.Sprintf(
+					"Target %q is being replaced. %d unmanaged resource(s) on this target will lose visibility and must be re-discovered.",
+					tu.Target.Label, unmanagedOnTarget))
+			}
+		}
+
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
 			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: fa.HasChanges(),
 				Command:         translateToAPICommand(fa),
+				Warnings:        warnings,
 			},
 		}, nil
 	}
@@ -1164,34 +1192,26 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 	}
 
 	for _, fa := range commands {
-		// Derive state from progress and prepare for re-execution.
-		// - InProgress: Reset to NotStarted (was interrupted, needs retry)
-		// - NotStarted: Keep as NotStarted (never started, needs execution)
-		// - Terminal states (Success, Failed, etc.): Exclude from the new
-		//   changeset entirely. Including them would re-create dependency
-		//   links that can never be resolved (the changeset executor only
-		//   picks up NotStarted resources, so a Success parent would block
-		//   its children forever).
-		var pendingUpdates []resource_update.ResourceUpdate
-		for i := range fa.ResourceUpdates {
-			ru := &fa.ResourceUpdates[i]
-			// Only re-derive state for non-terminal resources.
-			// Terminal resources (e.g. cascaded failures) have authoritative DB state
-			// but may have empty ProgressResult, which UpdateState() would
-			// incorrectly interpret as NotStarted.
-			switch ru.State {
-			case resource_update.ResourceUpdateStateSuccess,
-				resource_update.ResourceUpdateStateFailed,
-				resource_update.ResourceUpdateStateRejected,
-				resource_update.ResourceUpdateStateCanceled:
-				continue
-			}
-			ru.UpdateState()
-			if ru.State == resource_update.ResourceUpdateStateInProgress {
-				ru.State = resource_update.ResourceUpdateStateNotStarted
-			}
-			if ru.State == resource_update.ResourceUpdateStateNotStarted {
-				pendingUpdates = append(pendingUpdates, *ru)
+		pendingUpdates, doomedUpdates := deriveReplayPendingUpdates(fa)
+		for _, ref := range doomedUpdates {
+			slog.Warn("ReRunIncompleteCommands: marking replay-doomed dependent as failed",
+				"commandID", fa.ID,
+				"resourceURI", ref.URI,
+				"operation", ref.Operation,
+			)
+		}
+		if len(doomedUpdates) > 0 {
+			_, err := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.MarkResourcesAsFailed{
+					CommandID:          fa.ID,
+					Resources:          doomedUpdates,
+					ResourceModifiedTs: time.Now(),
+				},
+			)
+			if err != nil {
+				slog.Error("Failed to mark replay-doomed resources as failed", "commandID", fa.ID, "error", err)
+				return err
 			}
 		}
 
@@ -1244,6 +1264,80 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 	}
 
 	return nil
+}
+
+func deriveReplayPendingUpdates(fa *forma_command.FormaCommand) ([]resource_update.ResourceUpdate, []forma_persister.ResourceUpdateRef) {
+	failedOrAbsent := make(map[string]struct{})
+	pendingCandidates := make([]resource_update.ResourceUpdate, 0, len(fa.ResourceUpdates))
+
+	for i := range fa.ResourceUpdates {
+		ru := &fa.ResourceUpdates[i]
+		switch ru.State {
+		case resource_update.ResourceUpdateStateSuccess,
+			resource_update.ResourceUpdateStateFailed,
+			resource_update.ResourceUpdateStateRejected,
+			resource_update.ResourceUpdateStateCanceled:
+			slog.Error("ReRunIncompleteCommands: filtering terminal resource",
+				"commandID", fa.ID,
+				"resourceURI", ru.URI(),
+				"state", ru.State,
+				"operation", ru.Operation,
+				"hasNativeID", ru.DesiredState.NativeID != "",
+				"progressCount", len(ru.ProgressResult),
+			)
+			if ru.State != resource_update.ResourceUpdateStateSuccess {
+				failedOrAbsent[ru.URI().KSUID()] = struct{}{}
+			}
+			continue
+		}
+		ru.UpdateState()
+		if ru.State == resource_update.ResourceUpdateStateInProgress {
+			ru.State = resource_update.ResourceUpdateStateNotStarted
+		}
+		if ru.State == resource_update.ResourceUpdateStateNotStarted {
+			pendingCandidates = append(pendingCandidates, *ru)
+		}
+	}
+
+	doomed := make(map[string]forma_persister.ResourceUpdateRef)
+	changed := true
+	for changed {
+		changed = false
+		for _, ru := range pendingCandidates {
+			if _, already := doomed[string(ru.URI())+"/"+string(ru.Operation)]; already {
+				continue
+			}
+			for _, resolvable := range ru.RemainingResolvables {
+				if _, blocked := failedOrAbsent[resolvable.Stripped().KSUID()]; blocked {
+					ref := forma_persister.ResourceUpdateRef{URI: ru.URI(), Operation: ru.Operation}
+					doomed[string(ru.URI())+"/"+string(ru.Operation)] = ref
+					failedOrAbsent[ru.URI().KSUID()] = struct{}{}
+					changed = true
+					break
+				}
+			}
+		}
+	}
+
+	var pending []resource_update.ResourceUpdate
+	for _, ru := range pendingCandidates {
+		if _, blocked := doomed[string(ru.URI())+"/"+string(ru.Operation)]; blocked {
+			continue
+		}
+		slog.Error("ReRunIncompleteCommands: including pending resource",
+			"commandID", fa.ID,
+			"resourceURI", ru.URI(),
+			"operation", ru.Operation,
+			"resolvableCount", len(ru.RemainingResolvables),
+		)
+		pending = append(pending, ru)
+	}
+
+	refs := make([]forma_persister.ResourceUpdateRef, 0, len(doomed))
+	for _, ref := range doomed {
+		refs = append(refs, ref)
+	}
+	return pending, refs
 }
 
 func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string) error {
@@ -1477,7 +1571,37 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds)
+	// Build per-target resource presence map for destroy semantics:
+	// targets with resources in the forma are preserved on destroy.
+	resourceTargetLabels := make(map[string]bool)
+	for _, r := range forma.Resources {
+		resourceTargetLabels[r.Target] = true
+	}
+
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, resourceTargetLabels)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build affected targets sets for resource generation
+	var replacedTargets map[string]bool
+	var deletedTargets map[string]bool
+	for _, tu := range targetUpdates {
+		switch tu.Operation {
+		case target_update.TargetOperationReplace:
+			if replacedTargets == nil {
+				replacedTargets = make(map[string]bool)
+			}
+			replacedTargets[tu.Target.Label] = true
+		case target_update.TargetOperationDelete:
+			if deletedTargets == nil {
+				deletedTargets = make(map[string]bool)
+			}
+			deletedTargets[tu.Target.Label] = true
+		}
+	}
+
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, deletedTargets)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -1486,11 +1610,6 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 			return nil, targetExistsErr
 		}
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
-	}
-
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
-	if err != nil {
-		return nil, err
 	}
 
 	stackUpdates, err := stack_update.NewStackUpdateGenerator(ds).GenerateStackUpdates(forma.Stacks, command)

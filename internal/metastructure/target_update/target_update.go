@@ -19,9 +19,10 @@ type (
 )
 
 const (
-	TargetOperationCreate = types.OperationCreate
-	TargetOperationUpdate = types.OperationUpdate
-	TargetOperationDelete = types.OperationDelete
+	TargetOperationCreate  = types.OperationCreate
+	TargetOperationUpdate  = types.OperationUpdate
+	TargetOperationDelete  = types.OperationDelete
+	TargetOperationReplace = types.OperationReplace
 
 	TargetUpdateStateNotStarted = types.TargetUpdateStateNotStarted
 	TargetUpdateStateInProgress = types.TargetUpdateStateInProgress
