@@ -254,11 +254,6 @@ func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Sh
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, error) {
-	progressCount := 0
-	if data.resourceUpdate != nil {
-		progressCount = len(data.resourceUpdate.ProgressResult)
-	}
-	proc.Log().Error("ResourceUpdater: state change", "oldState", oldState, "newState", newState, "commandID", data.commandID, "resourceURI", data.originalResourceKsuidURI, "resourceState", data.resourceUpdate.State, "progressCount", progressCount)
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
 		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister", "state", newState, "commandID", data.commandID)
 		_, err := proc.Call(
@@ -646,7 +641,6 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 		Duration: data.retryConfig.StatusCheckInterval * 2, // We generously wait twice the interval before we give up.
 		Message:  PluginOperatorMissingInAction{},
 	}
-	proc.Log().Error("ResourceUpdater: scheduling plugin-operator timeout", "state", state, "commandID", data.commandID, "resourceURI", data.originalResourceKsuidURI, "progressCount", len(data.resourceUpdate.ProgressResult), "duration", timeout.Duration)
 
 	return state, data, []statemachine.Action{timeout}, nil
 }
@@ -817,7 +811,6 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		Duration: data.retryConfig.StatusCheckInterval * 2,
 		Message:  PluginOperatorMissingInAction{},
 	}
-	proc.Log().Error("ResourceUpdater: scheduling plugin-operator timeout", "state", state, "commandID", data.commandID, "resourceURI", data.originalResourceKsuidURI, "progressCount", len(data.resourceUpdate.ProgressResult), "duration", timeout.Duration)
 
 	return state, data, []statemachine.Action{timeout}, nil
 }
@@ -935,11 +928,7 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 }
 
 func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	progressCount := 0
-	if data.resourceUpdate != nil {
-		progressCount = len(data.resourceUpdate.ProgressResult)
-	}
-	proc.Log().Error("Plugin operator is missing in action", "state", state, "commandID", data.commandID, "resourceURI", data.originalResourceKsuidURI, "resourceState", data.resourceUpdate.State, "progressCount", progressCount, "from", from)
+	proc.Log().Error("Plugin operator is missing in action", "state", state, "data", data)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }

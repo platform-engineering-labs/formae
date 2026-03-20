@@ -2075,3 +2075,38 @@ func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
 	assert.Empty(t, subnetNode.Dependencies)
 	assert.Empty(t, subnetNode.Dependents)
 }
+
+func TestChangeset_SyncReadFailureDoesNotCascade(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI("vpc-ksuid", "")
+	subnetURI := pkgmodel.NewFormaeURI("subnet-ksuid", "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Ksuid: vpcURI.KSUID(), Stack: "stack", Label: "vpc", Type: "AWS::EC2::VPC"},
+			Operation:    resource_update.OperationRead,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "stack",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Ksuid: subnetURI.KSUID(), Stack: "stack", Label: "subnet", Type: "AWS::EC2::Subnet"},
+			Operation:            resource_update.OperationRead,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
+		},
+	}
+
+	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
+	require.NoError(t, err)
+
+	opURI := createOperationURI(vpcURI, resource_update.OperationRead)
+	failed := cs.DAG.Nodes[opURI].Update
+	failed.MarkFailed()
+	failedUpdates, err := cs.UpdateDAG(opURI, failed)
+	require.NoError(t, err)
+	assert.Len(t, failedUpdates, 1)
+	assert.Equal(t, failed.NodeURI(), failedUpdates[0].NodeURI())
+	remaining := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, remaining, 1)
+	assert.NotEqual(t, failed.NodeURI(), remaining[0].NodeURI())
+}
