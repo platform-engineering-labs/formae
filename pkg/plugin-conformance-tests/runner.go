@@ -374,10 +374,19 @@ func normalizeResolvables(v any) any {
 }
 
 // extractProviderDefaultPaths extracts field paths with HasProviderDefault=true
-// from the Schema Hints on a resource. Returns a set of dot-separated paths
-// (e.g. "spec.ports.protocol", "spec.containers.imagePullPolicy").
-func extractProviderDefaultPaths(resource map[string]any) map[string]bool {
-	result := make(map[string]bool)
+// from the Schema Hints on a resource.
+//
+// providerDefault holds metadata about a provider-default field path,
+// including whether it's a collection (Mapping) that should use prefix matching.
+type providerDefault struct {
+	// IsCollection indicates this is a Mapping field where the provider may
+	// add extra keys. When true, prefix matching is used — any child path
+	// under this field is tolerated.
+	IsCollection bool
+}
+
+func extractProviderDefaultPaths(resource map[string]any) map[string]providerDefault {
+	result := make(map[string]providerDefault)
 	schema, ok := resource["Schema"].(map[string]any)
 	if !ok {
 		return result
@@ -392,19 +401,59 @@ func extractProviderDefaultPaths(resource map[string]any) map[string]bool {
 			continue
 		}
 		if hpd, ok := hintMap["HasProviderDefault"].(bool); ok && hpd {
-			result[path] = true
+			result[path] = providerDefault{}
 		}
 	}
+
+	// Detect collection (Mapping) fields from the schema structure.
+	// A field with hasProviderDefault that has no child fields in the schema
+	// is a leaf field — likely a Mapping where the provider may add extra keys.
+	fields, _ := schema["Fields"].([]any)
+	fieldSet := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		if s, ok := f.(string); ok {
+			fieldSet[s] = true
+		}
+	}
+	for path, pd := range result {
+		if pd.IsCollection {
+			continue
+		}
+		hasChildren := false
+		prefix := path + "."
+		for field := range fieldSet {
+			if strings.HasPrefix(field, prefix) {
+				hasChildren = true
+				break
+			}
+		}
+		if !hasChildren {
+			pd.IsCollection = true
+			result[path] = pd
+		}
+	}
+
 	return result
 }
 
 // isProviderDefault checks if a given field path (dot-separated) matches
-// a provider default path. Handles array traversal by stripping array
-// segments — e.g. path "spec.ports[0].protocol" is checked as "spec.ports.protocol".
-func isProviderDefault(fieldPath string, providerDefaults map[string]bool) bool {
-	if providerDefaults[fieldPath] {
+// a provider default path. Handles:
+//   - Exact match for scalar fields
+//   - Prefix match for collection (Mapping) fields — any child path is tolerated
+//   - Array index stripping — e.g. "spec.ports[0].protocol" → "spec.ports.protocol"
+func isProviderDefault(fieldPath string, providerDefaults map[string]providerDefault) bool {
+	// Exact match (scalar provider default)
+	if _, ok := providerDefaults[fieldPath]; ok {
 		return true
 	}
+
+	// Prefix match for collection (Mapping) provider defaults
+	for path, pd := range providerDefaults {
+		if pd.IsCollection && strings.HasPrefix(fieldPath, path+".") {
+			return true
+		}
+	}
+
 	// Strip array index segments: spec.ports[0].protocol → spec.ports.protocol
 	cleaned := fieldPath
 	for {
@@ -418,7 +467,11 @@ func isProviderDefault(fieldPath string, providerDefaults map[string]bool) bool 
 		}
 		cleaned = cleaned[:start] + cleaned[start+end+1:]
 	}
-	return providerDefaults[cleaned]
+	if cleaned != fieldPath {
+		return isProviderDefault(cleaned, providerDefaults)
+	}
+
+	return false
 }
 
 // compareArrayUnordered compares two arrays ignoring element order.
@@ -427,7 +480,7 @@ func isProviderDefault(fieldPath string, providerDefaults map[string]bool) bool 
 // serialized to JSON for canonical comparison. Nested resolvables inside
 // map elements are normalized before comparison so that $visibility vs
 // $value differences don't cause false mismatches.
-func compareArrayUnordered(t *testing.T, key string, expected, actual any, context string, providerDefaults map[string]bool) bool {
+func compareArrayUnordered(t *testing.T, key string, expected, actual any, context string, providerDefaults map[string]providerDefault) bool {
 	expectedArr, ok := expected.([]any)
 	if !ok {
 		t.Errorf("Expected %s is not an array (%s)", key, context)
@@ -501,7 +554,7 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 // all expected keys match (subset matching for finding pairs). Then it runs
 // bidirectional compareMap which flags extra actual keys unless they are
 // hasProviderDefault in the schema.
-func compareArrayOfMaps(t *testing.T, key string, expectedArr, actualArr []any, context string, providerDefaults map[string]bool) bool {
+func compareArrayOfMaps(t *testing.T, key string, expectedArr, actualArr []any, context string, providerDefaults map[string]providerDefault) bool {
 	ok := true
 	matched := make([]bool, len(actualArr))
 
@@ -665,7 +718,7 @@ func arraySubsetMatch(expected, actual []any) bool {
 // compareArrayWithResolvables compares arrays element-wise, handling resolvable
 // elements by matching on metadata and validating $value, and non-resolvable
 // elements by JSON equality.
-func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualArr []any, context string, providerDefaults map[string]bool) bool {
+func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualArr []any, context string, providerDefaults map[string]providerDefault) bool {
 	ok := true
 	matched := make([]bool, len(actualArr))
 
@@ -750,7 +803,7 @@ func compareArrayWithResolvables(t *testing.T, key string, expectedArr, actualAr
 // arrays, and sub-maps. Performs bidirectional comparison:
 // 1. expected→actual: all expected keys must exist and match in actual
 // 2. actual→expected: extra keys in actual must be hasProviderDefault in schema
-func compareMap(t *testing.T, name string, expected, actual map[string]any, context string, providerDefaults map[string]bool) bool {
+func compareMap(t *testing.T, name string, expected, actual map[string]any, context string, providerDefaults map[string]providerDefault) bool {
 	ok := true
 	// Forward: expected → actual
 	for key, expectedValue := range expected {
@@ -808,7 +861,7 @@ func compareMap(t *testing.T, name string, expected, actual map[string]any, cont
 // compareProperties compares expected properties against actual properties from inventory.
 // Uses schema hints to allow extra fields marked hasProviderDefault while flagging
 // any other unexpected fields in the actual response.
-func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string, providerDefaults map[string]bool) bool {
+func compareProperties(t *testing.T, expectedProperties map[string]any, actualResource map[string]any, context string, providerDefaults map[string]providerDefault) bool {
 	hasErrors := false
 
 	actualProperties, ok := actualResource["Properties"].(map[string]any)
