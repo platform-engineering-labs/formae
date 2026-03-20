@@ -1279,6 +1279,72 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 		t.Errorf("Inventory should be empty after destroy, got %d resources", len(inventoryAfterDestroy.Resources))
 	}
 
+	// === Step 19: Re-apply the resource for OOB delete test ===
+	t.Log("Step 19: Re-applying forma to recreate resource for OOB delete test...")
+	reapplyCommandID, err := harness.Apply(tc.PKLFile)
+	if err != nil {
+		t.Fatalf("Re-apply command failed: %v", err)
+	}
+	if reapplyCommandID == "" {
+		t.Fatal("Re-apply should return a command ID")
+	}
+
+	// === Step 20: Poll for re-apply command to complete successfully ===
+	t.Log("Step 20: Polling for re-apply command completion...")
+	reapplyStatus, err := harness.PollStatus(reapplyCommandID, getOperationTimeout())
+	if err != nil {
+		t.Fatalf("Re-apply command should complete successfully: %v", err)
+	}
+	if reapplyStatus != "Success" {
+		t.Fatalf("Re-apply command should reach Success state, got: %s", reapplyStatus)
+	}
+
+	// === Step 21: Verify resource is back in inventory and capture NativeID ===
+	t.Log("Step 21: Verifying resource recreated in inventory...")
+	inventoryAfterReapply, err := harness.Inventory(fmt.Sprintf("type: %s", actualResourceType))
+	if err != nil {
+		t.Fatalf("Inventory command failed after re-apply: %v", err)
+	}
+	if len(inventoryAfterReapply.Resources) != 1 {
+		t.Fatalf("Inventory should contain exactly 1 resource after re-apply, got %d", len(inventoryAfterReapply.Resources))
+	}
+	oobResource := inventoryAfterReapply.Resources[0]
+	oobNativeID, ok := oobResource["NativeID"].(string)
+	if !ok || oobNativeID == "" {
+		t.Fatal("Recreated resource should have a NativeID")
+	}
+	t.Logf("Recreated resource NativeID: %s", oobNativeID)
+
+	// Parse target from eval output for the OOB delete
+	var forma pkgmodel.Forma
+	if err := json.Unmarshal([]byte(expectedOutput), &forma); err != nil {
+		t.Fatalf("Failed to parse forma for OOB delete: %v", err)
+	}
+	if len(forma.Targets) == 0 {
+		t.Fatal("Forma should have at least one target for OOB delete")
+	}
+	oobTarget := forma.Targets[0]
+
+	// === Step 22: Delete the resource out-of-band (bypassing formae) ===
+	t.Log("Step 22: Deleting resource out-of-band via plugin...")
+	if err := harness.DeleteResourceOOB(actualResourceType, oobNativeID, &oobTarget); err != nil {
+		t.Fatalf("OOB delete failed: %v", err)
+	}
+	t.Log("Resource deleted out-of-band successfully")
+
+	// === Step 23: Trigger sync to detect the OOB deletion ===
+	t.Log("Step 23: Triggering sync to detect OOB deletion...")
+	if err := harness.Sync(); err != nil {
+		t.Fatalf("Sync command failed: %v", err)
+	}
+
+	// === Step 24: Verify resource is removed from inventory (tombstoned by sync) ===
+	t.Log("Step 24: Waiting for resource to be removed from inventory after OOB delete...")
+	if err := harness.WaitForResourceRemovedFromInventory(actualResourceType, oobNativeID, 2*time.Minute); err != nil {
+		t.Fatalf("Resource should be removed from inventory after OOB delete + sync: %v", err)
+	}
+	t.Log("OOB delete detection verified - sync correctly tombstoned the resource!")
+
 	// Only log success if all property comparisons passed
 	if allPropertiesMatched {
 		t.Logf("Resource lifecycle test completed successfully for %s!", tc.Name)

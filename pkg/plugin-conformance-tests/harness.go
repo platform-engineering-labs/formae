@@ -1884,3 +1884,48 @@ func (h *TestHarness) GetStatus(commandID string) (string, error) {
 
 	return response.Commands[0].State, nil
 }
+
+// DeleteResourceOOB deletes a resource directly via the plugin, bypassing formae.
+// This simulates an out-of-band deletion (e.g., user deletes resource in the cloud console).
+func (h *TestHarness) DeleteResourceOOB(resourceType, nativeID string, target *pkgmodel.Target) error {
+	return h.DeleteUnmanagedResource(resourceType, nativeID, target)
+}
+
+// WaitForResourceRemovedFromInventory polls the inventory until the specified resource
+// is no longer present. This is used to verify that sync correctly tombstones resources
+// that were deleted out-of-band.
+func (h *TestHarness) WaitForResourceRemovedFromInventory(resourceType, nativeID string, timeout time.Duration) error {
+	h.t.Logf("Waiting for resource to be removed from inventory: type=%s, nativeID=%s", resourceType, nativeID)
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 2 * time.Second
+
+	for time.Now().Before(deadline) {
+		inventory, err := h.Inventory(fmt.Sprintf("type: %s", resourceType))
+		if err != nil {
+			h.t.Logf("Inventory query failed (will retry): %v", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		found := false
+		for _, res := range inventory.Resources {
+			if resNativeID, ok := res["NativeID"].(string); ok {
+				if resNativeID == nativeID {
+					found = true
+					break
+				}
+			}
+		}
+
+		if !found {
+			h.t.Logf("Resource removed from inventory: NativeID=%s", nativeID)
+			return nil
+		}
+
+		h.t.Logf("Resource still in inventory, polling...")
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for resource %s (type: %s) to be removed from inventory after %v", nativeID, resourceType, timeout)
+}
