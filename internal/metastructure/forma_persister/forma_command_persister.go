@@ -285,11 +285,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markResourceUpdateAsComplete(&msg)
 	case FinalizeIncompleteCommand:
 		return f.finalizeIncompleteCommand(&msg)
-<<<<<<< HEAD
 	case messages.MarkTargetUpdateAsComplete:
 		return f.markTargetUpdateAsComplete(&msg)
-=======
->>>>>>> 67408a4 (test(blackbox): cover cross-stack recovery paths)
 	default:
 		return nil, fmt.Errorf("unhandled message type: %T", msg)
 	}
