@@ -1951,6 +1951,8 @@ func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
 	assert.Empty(t, vpcNode.Dependents)
 	assert.Empty(t, subnetNode.Dependencies)
 	assert.Empty(t, subnetNode.Dependents)
+}
+
 // TestChangeset_CrashRecovery_SuccessParentBlocksChildren demonstrates the bug
 // where including already-completed resources in a recovery changeset creates
 // unresolvable dependency links. When a parent resource (VPC) already succeeded
@@ -2041,39 +2043,6 @@ func TestChangeset_CrashRecovery_FilteredPendingUpdatesOnly(t *testing.T) {
 	updates := cs.GetExecutableUpdates("AWS", 5)
 	require.Len(t, updates, 1, "Subnet should be immediately executable")
 	assert.Equal(t, "test-subnet", updates[0].(*resource_update.ResourceUpdate).DesiredState.Label)
-}
-
-func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
-	vpcURI := pkgmodel.NewFormaeURI("vpc-ksuid", "")
-	subnetURI := pkgmodel.NewFormaeURI("subnet-ksuid", "")
-
-	updates := []resource_update.ResourceUpdate{
-		{
-			DesiredState: pkgmodel.Resource{Ksuid: vpcURI.KSUID(), Stack: "stack", Label: "vpc", Type: "AWS::EC2::VPC"},
-			Operation:    resource_update.OperationRead,
-			State:        resource_update.ResourceUpdateStateNotStarted,
-			StackLabel:   "stack",
-		},
-		{
-			DesiredState:         pkgmodel.Resource{Ksuid: subnetURI.KSUID(), Stack: "stack", Label: "subnet", Type: "AWS::EC2::Subnet"},
-			Operation:            resource_update.OperationRead,
-			State:                resource_update.ResourceUpdateStateNotStarted,
-			StackLabel:           "stack",
-			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
-		},
-	}
-
-	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
-	assert.NoError(t, err)
-
-	vpcNode := cs.DAG.Nodes[createOperationURI(vpcURI, resource_update.OperationRead)]
-	subnetNode := cs.DAG.Nodes[createOperationURI(subnetURI, resource_update.OperationRead)]
-	assert.NotNil(t, vpcNode)
-	assert.NotNil(t, subnetNode)
-	assert.Empty(t, vpcNode.Dependencies)
-	assert.Empty(t, vpcNode.Dependents)
-	assert.Empty(t, subnetNode.Dependencies)
-	assert.Empty(t, subnetNode.Dependents)
 }
 
 func TestChangeset_SyncReadFailureDoesNotCascade(t *testing.T) {

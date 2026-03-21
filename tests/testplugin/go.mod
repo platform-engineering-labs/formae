@@ -11,7 +11,7 @@ replace github.com/platform-engineering-labs/formae/tests/testcontrol => ../test
 require (
 	ergo.services/ergo v1.999.310
 	github.com/masterminds/semver v1.5.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.5
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
