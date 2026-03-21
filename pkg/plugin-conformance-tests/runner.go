@@ -493,6 +493,12 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 	}
 
 	if len(expectedArr) != len(actualArr) {
+		// If expected is empty and the field has a provider default, the user
+		// set an explicit empty collection but the provider filled in a
+		// default value. Accept the provider's value.
+		if len(expectedArr) == 0 && isProviderDefault(key, providerDefaults) {
+			return true
+		}
 		t.Errorf("Array %s length mismatch: expected %d, got %d (%s)", key, len(expectedArr), len(actualArr), context)
 		return false
 	}
@@ -809,6 +815,17 @@ func compareMap(t *testing.T, name string, expected, actual map[string]any, cont
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
+			// Nullable fields that are null (unset) or explicitly empty may be
+			// legitimately absent from the provider response.
+			if expectedValue == nil {
+				continue
+			}
+			if arr, isArr := expectedValue.([]any); isArr && len(arr) == 0 {
+				continue
+			}
+			if m, isMap := expectedValue.(map[string]any); isMap && len(m) == 0 {
+				continue
+			}
 			t.Errorf("Property %s.%s should exist (%s)", name, key, context)
 			ok = false
 			continue
@@ -1313,8 +1330,19 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 
 	// === Step 16: Destroy the resource ===
-	t.Log("Step 16: Destroying resource...")
-	destroyCommandID, err := harness.Destroy(tc.PKLFile)
+	// Use the most recent PKL file for destroy. After update/replace steps,
+	// the stack may contain additional dependency resources (e.g., a second
+	// role or bucket) that were added by the update/replace variant. Using
+	// the original PKL file would only target the original resources, leaving
+	// orphans in the stack that cause ReconcileRejected on re-apply.
+	destroyFile := tc.PKLFile
+	if tc.ReplaceFile != "" {
+		destroyFile = tc.ReplaceFile
+	} else if tc.UpdateFile != "" {
+		destroyFile = tc.UpdateFile
+	}
+	t.Logf("Step 16: Destroying resource (using %s)...", destroyFile)
+	destroyCommandID, err := harness.Destroy(destroyFile)
 	if err != nil {
 		t.Fatalf("Destroy command failed: %v", err)
 	}

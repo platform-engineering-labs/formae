@@ -369,12 +369,12 @@ facts {
         rendered.Label == "test-bucket"
     }
 
-    ["Nullable Listing renders as empty list when null"] {
+    ["Nullable Listing stays null when not set"] {
         let (rendered = testBucketNoTags.render())
         let (props = rendered.Properties)
-        // Tags should be an empty Listing, not null
-        props.Tags != null &&
-        props.Tags.length == 0
+        // Tags should remain null when not set by the user.
+        // The patch layer strips null fields, preventing spurious diffs.
+        props.Tags == null
     }
 
     ["Hints propagate through Listing<SubResource>"] {
@@ -389,25 +389,24 @@ facts {
         hints.containsKey("ContainerDefinitions.Image")
     }
 
-    ["Nullable Mapping renders as empty map when null"] {
-        // Test subresource rendering directly - nullable Mapping type alias should render as empty Mapping
+    ["Nullable Mapping stays null when not set"] {
+        // Nullable Mapping type alias should stay null when not set by the user.
+        // The patch layer strips null fields.
         let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.DockerLabels != null &&
-        containerProps.DockerLabels.length == 0
+        containerProps.DockerLabels == null
     }
 
-    ["Nullable Listing renders as empty list in sub-resource when null"] {
-        // Test subresource rendering directly - nullable Listing should render as empty Listing
+    ["Nullable Listing stays null in sub-resource when not set"] {
+        // Nullable Listing should stay null when not set by the user.
+        // The patch layer strips null fields.
         let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.Ports != null &&
-        containerProps.Ports.length == 0
+        containerProps.Ports == null
     }
 
-    ["Nullable Listing<SubResource> renders as empty list when null"] {
+    ["Nullable Listing<SubResource> stays null when not set"] {
         let (rendered = testTaskDefNoContainers.render())
         let (props = rendered.Properties)
-        props.ContainerDefinitions != null &&
-        props.ContainerDefinitions.length == 0
+        props.ContainerDefinitions == null
     }
 
     ["Fq functions work at module level"] {

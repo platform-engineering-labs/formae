@@ -953,8 +953,7 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsEmptyArray(t *testing
 		"Tags": [{"Key": "OOBTag", "Value": "oob-value"}]
 	}`)
 
-	// Desired state: user's PKL has no tags, which should produce an empty array
-	// (once PKL nullability is fixed; for now we test with explicit empty array)
+	// Desired state: user explicitly set Tags to empty (wants to clear all tags)
 	patch := []byte(`{
 		"Name": "test-resource",
 		"Tags": []
@@ -985,7 +984,11 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsEmptyArray(t *testing
 	assert.Equal(t, "remove", patches[0].Operation)
 }
 
-func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsNull(t *testing.T) {
+func TestGeneratePatch_ReconcileNullMeansNotSpecified(t *testing.T) {
+	// When Tags is null in the desired state, it means the user didn't specify tags.
+	// PKL renders unset nullable Listing fields as null, so null reliably means
+	// "field not set". The patch layer strips null values, producing no diff.
+	// Users who want to clear tags should use an explicit empty array (Tags = []).
 	document := []byte(`{"Name": "test-resource", "Tags": [{"Key": "OOBTag", "Value": "oob-value"}]}`)
 	patch := []byte(`{"Name": "test-resource", "Tags": null}`)
 	schema := pkgmodel.Schema{
@@ -997,16 +1000,83 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsNull(t *testing.T) {
 	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.False(t, needsReplacement)
-	require.NotNil(t, patchDoc, "expected a patch to handle the OOB tag, got nil")
+
+	// Null is stripped → Tags not in desired state → no patch generated
+	assert.Empty(t, patchDoc, "Expected no patch when Tags is null (treated as not specified)")
+}
+
+func TestGeneratePatch_ClearCollectionWithExplicitEmptyArray(t *testing.T) {
+	// Scenario: user previously had Tags with items and now updates to Tags = []
+	// to explicitly clear all tags. The patch must generate a remove operation.
+	// This verifies that the "clear a collection" use case is not broken.
+	document := []byte(`{
+		"Name": "test-resource",
+		"Tags": [{"Key": "a", "Value": "1"}, {"Key": "b", "Value": "2"}]
+	}`)
+
+	// Desired state: user explicitly sets Tags to empty array (wants zero tags)
+	patch := []byte(`{
+		"Name": "test-resource",
+		"Tags": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {UpdateMethod: "EntitySet", IndexField: "Key"},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	require.NotNil(t, patchDoc, "expected a patch to remove tags, got nil")
 
 	var patches []jsonpatch.JsonPatchOperation
 	err = json.Unmarshal(patchDoc, &patches)
 	require.NoError(t, err)
-	require.NotEmpty(t, patches)
-	// jsonpatch generates "replace" (null replaces the array) rather than "remove",
-	// both achieve the same result via CloudControl.
-	assert.Equal(t, "replace", patches[0].Operation)
-	assert.Equal(t, "/Tags", patches[0].Path)
+	require.Len(t, patches, 2, "expected two remove operations (one per tag)")
+
+	// Both operations should be removes
+	for _, p := range patches {
+		assert.Equal(t, "remove", p.Operation, "expected remove operation to clear tags")
+	}
+}
+
+func TestGeneratePatch_EmptyArrayPreservedInDesiredState(t *testing.T) {
+	// Verify that an explicit empty array is NOT stripped from the desired state.
+	// In patch mode (EnsureExists), EntitySet with empty desired produces no ops
+	// because there are no elements to ensure. This is correct: patch mode only
+	// adds/updates, it does not remove. Use reconcile mode to clear collections.
+	document := []byte(`{
+		"Name": "test-resource",
+		"Tags": [{"Key": "a", "Value": "1"}]
+	}`)
+
+	patch := []byte(`{
+		"Name": "test-resource",
+		"Tags": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {UpdateMethod: "EntitySet", IndexField: "Key"},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement)
+
+	// Patch mode with EntitySet: empty desired means "no elements to ensure" → no ops.
+	// This is correct semantics for patch mode. The empty array was still preserved
+	// (not stripped as null would be) — it just produces no operations because
+	// EnsureExists only adds/updates, never removes.
+	assert.Empty(t, patchDoc, "Patch mode with EntitySet and empty desired produces no operations")
 }
 
 func TestHasValue(t *testing.T) {
@@ -1015,7 +1085,7 @@ func TestHasValue(t *testing.T) {
 		val      any
 		expected bool
 	}{
-		{name: "nil", val: nil, expected: true},
+		{name: "nil", val: nil, expected: false},
 		{name: "empty string", val: "", expected: false},
 		{name: "non-empty string", val: "hello", expected: true},
 		{name: "empty array", val: []any{}, expected: true},
@@ -1152,6 +1222,8 @@ func TestGeneratePatch_ProviderDefaultInsideArray_NoPatch(t *testing.T) {
 }
 
 func TestRemoveNonSchemaFields_PreservesEmptyArraysAndMaps(t *testing.T) {
+	// Empty arrays and maps represent explicit "clear this field" intent from the user.
+	// They must be preserved so that patch generation can produce remove operations.
 	document := []byte(`{"Name": "test", "Tags": [], "Metadata": {}}`)
 	schemaFields := []string{"Name", "Tags", "Metadata"}
 
@@ -1166,6 +1238,27 @@ func TestRemoveNonSchemaFields_PreservesEmptyArraysAndMaps(t *testing.T) {
 	assert.Equal(t, "test", deserialized["Name"])
 	assert.Equal(t, []any{}, deserialized["Tags"])
 	assert.Equal(t, map[string]any{}, deserialized["Metadata"])
+}
+
+func TestRemoveNonSchemaFields_StripsNullFields(t *testing.T) {
+	// Null values represent "field not specified" (unset nullable PKL fields).
+	// They should be stripped so no patch is generated for unset fields.
+	document := []byte(`{"Name": "test", "Tags": null, "Metadata": null}`)
+	schemaFields := []string{"Name", "Tags", "Metadata"}
+
+	result, err := removeNonSchemaFields(document, schemaFields)
+	require.NoError(t, err)
+
+	var deserialized map[string]any
+	err = json.Unmarshal(result, &deserialized)
+	require.NoError(t, err)
+
+	assert.Len(t, deserialized, 1, "Null fields should be stripped")
+	assert.Equal(t, "test", deserialized["Name"])
+	_, hasTags := deserialized["Tags"]
+	assert.False(t, hasTags, "Null Tags should be stripped")
+	_, hasMetadata := deserialized["Metadata"]
+	assert.False(t, hasMetadata, "Null Metadata should be stripped")
 }
 
 func TestGeneratePatch_AtomicField_SingleReplace(t *testing.T) {

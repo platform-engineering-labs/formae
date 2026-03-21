@@ -360,7 +360,23 @@ func containsCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnl
 	return false, nil
 }
 
+// hasValue determines whether a field value should be included in the desired
+// state sent to patch generation.
+//
+// Semantics:
+//   - nil  (JSON null)  → field not specified by user → strip
+//   - ""   (empty string) → field not specified → strip
+//   - []   (empty array)  → user explicitly wants an empty collection → keep
+//   - {}   (empty map)    → user explicitly wants an empty map → keep
+//   - everything else     → keep
+//
+// PKL renders unset nullable Listing/Mapping fields as null (not []/{}),
+// so null reliably indicates "not set". An explicit empty collection in
+// the desired state means the user wants to clear that field.
 func hasValue(val any) bool {
+	if val == nil {
+		return false
+	}
 	v, ok := val.(string)
 	return !ok || len(v) > 0
 }
