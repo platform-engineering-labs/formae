@@ -41,10 +41,48 @@ func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) 
 		return res, err
 	}
 
+	// Strip empty arrays and maps from properties. The PKL schema renders
+	// nullable Listing and Mapping fields as [] and {} respectively, but
+	// cloud provider APIs (e.g. CloudControl) may reject empty collections
+	// or interpret them differently than an absent field.
+	strippedProps, err := stripEmptyCollections(convertedProps)
+	if err != nil {
+		return res, err
+	}
+
 	// Return a copy with converted properties
 	result := res
-	result.Properties = convertedProps
+	result.Properties = strippedProps
 	return result, nil
+}
+
+// stripEmptyCollections removes empty arrays [] and empty maps {} from
+// top-level JSON properties. These are rendered by the PKL schema for
+// nullable Listing/Mapping fields the user didn't set, but cloud providers
+// treat absent fields differently from empty collections.
+func stripEmptyCollections(data json.RawMessage) (json.RawMessage, error) {
+	var props map[string]any
+	if err := json.Unmarshal(data, &props); err != nil {
+		return data, nil // not a JSON object, return as-is
+	}
+
+	stripped := make(map[string]any, len(props))
+	for k, v := range props {
+		switch val := v.(type) {
+		case []any:
+			if len(val) > 0 {
+				stripped[k] = v
+			}
+		case map[string]any:
+			if len(val) > 0 {
+				stripped[k] = v
+			}
+		default:
+			stripped[k] = v
+		}
+	}
+
+	return json.Marshal(stripped)
 }
 
 // ResourceUpdater is the Ergo state machine responsible for executing resource updates in the metastructure.
