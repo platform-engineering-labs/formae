@@ -74,6 +74,13 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
 
+	// Remove spurious patch operations that add empty arrays or maps to
+	// createOnly fields. The 0.83.0 PKL schema renders unset nullable
+	// Listing/Mapping fields as []/{}. These are not real changes — the user
+	// didn't set the field — but they generate "add" operations that trigger
+	// unnecessary resource replacement.
+	patchOps = filterSpuriousCreateOnlyOps(patchOps, schema.CreateOnly())
+
 	if len(patchOps) == 0 {
 		return nil, false, nil
 	}
@@ -347,6 +354,33 @@ func removeNonSchemaFields(patch []byte, schemaFields []string) ([]byte, error) 
 	}
 
 	return serialized, err
+}
+
+// filterSpuriousCreateOnlyOps removes patch operations that add empty arrays
+// or maps to createOnly fields. These arise from the PKL schema rendering
+// unset nullable Listing/Mapping fields as []/{}. Since createOnly fields
+// cannot be modified after creation, an "add" of an empty collection is never
+// a real user intent — it's always PKL rendering noise.
+func filterSpuriousCreateOnlyOps(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) []jsonpatch.JsonPatchOperation {
+	filtered := make([]jsonpatch.JsonPatchOperation, 0, len(patchOps))
+	for _, op := range patchOps {
+		if op.Operation == "add" && slices.Contains(createOnlyFields, cleanPath(op.Path)) && isEmptyCollection(op.Value) {
+			continue
+		}
+		filtered = append(filtered, op)
+	}
+	return filtered
+}
+
+func isEmptyCollection(val any) bool {
+	switch v := val.(type) {
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		return len(v) == 0
+	default:
+		return false
+	}
 }
 
 func containsCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) (bool, error) {
