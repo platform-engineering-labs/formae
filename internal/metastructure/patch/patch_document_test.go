@@ -946,15 +946,16 @@ func TestRemoveProviderDefaultFields_EmptyList(t *testing.T) {
 	assert.Equal(t, string(document), string(result))
 }
 
-func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsEmptyArray(t *testing.T) {
-	// Existing state: resource has an OOB tag added outside of formae
+func TestGeneratePatch_ReconcileEmptyArrayMeansNotSpecified(t *testing.T) {
+	// PKL 0.83.0 renders unset nullable Listing fields as [] instead of null.
+	// An empty array should be treated as "field not specified" (stripped early),
+	// which means NO patch is generated in reconcile mode for EntitySet fields.
+	// Users who want to explicitly clear tags should use Tags = null.
 	document := []byte(`{
 		"Name": "test-resource",
 		"Tags": [{"Key": "OOBTag", "Value": "oob-value"}]
 	}`)
 
-	// Desired state: user's PKL has no tags, which should produce an empty array
-	// (once PKL nullability is fixed; for now we test with explicit empty array)
 	patch := []byte(`{
 		"Name": "test-resource",
 		"Tags": []
@@ -972,17 +973,8 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsEmptyArray(t *testing
 	require.NoError(t, err)
 	assert.False(t, needsReplacement)
 
-	// The patch must not be nil — there IS a difference (OOB tag needs removal)
-	require.NotNil(t, patchDoc, "expected a patch to remove the OOB tag, got nil")
-
-	var patches []jsonpatch.JsonPatchOperation
-	err = json.Unmarshal(patchDoc, &patches)
-	require.NoError(t, err)
-
-	require.NotEmpty(t, patches, "expected at least one patch operation to remove the OOB tag")
-
-	// We expect a remove operation for the OOB tag
-	assert.Equal(t, "remove", patches[0].Operation)
+	// Empty array is stripped → Tags not in desired state → EntitySet produces no patch
+	assert.Empty(t, patchDoc, "Expected no patch when Tags is empty array (treated as not specified)")
 }
 
 func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsNull(t *testing.T) {
@@ -1018,9 +1010,9 @@ func TestHasValue(t *testing.T) {
 		{name: "nil", val: nil, expected: true},
 		{name: "empty string", val: "", expected: false},
 		{name: "non-empty string", val: "hello", expected: true},
-		{name: "empty array", val: []any{}, expected: true},
+		{name: "empty array", val: []any{}, expected: false},
 		{name: "non-empty array", val: []any{"a"}, expected: true},
-		{name: "empty map", val: map[string]any{}, expected: true},
+		{name: "empty map", val: map[string]any{}, expected: false},
 		{name: "non-empty map", val: map[string]any{"k": "v"}, expected: true},
 		{name: "integer", val: 42, expected: true},
 		{name: "boolean false", val: false, expected: true},
@@ -1151,7 +1143,7 @@ func TestGeneratePatch_ProviderDefaultInsideArray_NoPatch(t *testing.T) {
 	assert.Empty(t, patchDoc, "Expected no patch when only difference is provider default Cpu inside array")
 }
 
-func TestRemoveNonSchemaFields_PreservesEmptyArraysAndMaps(t *testing.T) {
+func TestRemoveNonSchemaFields_StripsEmptyArraysAndMaps(t *testing.T) {
 	document := []byte(`{"Name": "test", "Tags": [], "Metadata": {}}`)
 	schemaFields := []string{"Name", "Tags", "Metadata"}
 
@@ -1162,10 +1154,12 @@ func TestRemoveNonSchemaFields_PreservesEmptyArraysAndMaps(t *testing.T) {
 	err = json.Unmarshal(result, &deserialized)
 	require.NoError(t, err)
 
-	assert.Len(t, deserialized, 3)
+	assert.Len(t, deserialized, 1, "Empty arrays and maps should be stripped")
 	assert.Equal(t, "test", deserialized["Name"])
-	assert.Equal(t, []any{}, deserialized["Tags"])
-	assert.Equal(t, map[string]any{}, deserialized["Metadata"])
+	_, hasTags := deserialized["Tags"]
+	assert.False(t, hasTags, "Empty array should be stripped")
+	_, hasMetadata := deserialized["Metadata"]
+	assert.False(t, hasMetadata, "Empty map should be stripped")
 }
 
 func TestGeneratePatch_AtomicField_SingleReplace(t *testing.T) {
