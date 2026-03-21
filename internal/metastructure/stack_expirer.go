@@ -218,7 +218,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		pkgmodel.FormaApplyModeReconcile,
 		resource_update.FormaCommandSourceUser, // Treat expiration as user-initiated
 		existingTargets,
-		s.datastore,
+		ds,
 		nil, nil,
 	)
 	if err != nil {

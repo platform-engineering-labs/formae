@@ -344,7 +344,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		pkgmodel.FormaApplyModeReconcile,
 		resource_update.FormaCommandSourcePolicyAutoReconcile,
 		existingTargets,
-		data.datastore,
+		ds,
 		nil, nil,
 	)
 	if err != nil {
