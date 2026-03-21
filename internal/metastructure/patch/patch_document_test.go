@@ -1215,6 +1215,61 @@ func TestGeneratePatch_AtomicField_NoDiffNoPatch(t *testing.T) {
 	assert.Empty(t, patchDoc, "Expected no patch when atomic field is identical")
 }
 
+func TestGeneratePatch_EmptyArrayOnCreateOnlyField_NoPatch(t *testing.T) {
+	// Simulates the 0.83.0 PKL schema rendering unset nullable Listing fields
+	// as []. For createOnly fields this should not generate a patch operation,
+	// since the user can't modify them after creation.
+	document := []byte(`{
+		"DomainName": "example.com"
+	}`)
+
+	// Desired state has empty arrays for createOnly Listing fields (PKL rendering)
+	patch := []byte(`{
+		"DomainName": "example.com",
+		"DomainNameServers": [],
+		"NtpServers": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"DomainName", "DomainNameServers", "NtpServers"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"DomainNameServers": {CreateOnly: true},
+			"NtpServers":        {CreateOnly: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement, "Empty arrays on createOnly fields should not trigger replacement")
+	assert.Empty(t, patchDoc, "Expected no patch when only difference is empty arrays on createOnly fields")
+}
+
+func TestGeneratePatch_NonEmptyArrayOnCreateOnlyField_TriggersReplacement(t *testing.T) {
+	// A real change to a createOnly field should still trigger replacement.
+	document := []byte(`{
+		"DomainName": "example.com"
+	}`)
+
+	patch := []byte(`{
+		"DomainName": "example.com",
+		"DomainNameServers": ["8.8.8.8"]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"DomainName", "DomainNameServers"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"DomainNameServers": {CreateOnly: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.True(t, needsReplacement, "Non-empty change to createOnly field should trigger replacement")
+	assert.NotEmpty(t, patchDoc)
+}
+
 func TestEntitySetProviderDefaultsFromHints(t *testing.T) {
 	hints := map[string]pkgmodel.FieldHint{
 		"LoadBalancerAttributes": {
