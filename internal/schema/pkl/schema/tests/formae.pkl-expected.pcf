@@ -296,7 +296,7 @@ examples {
       Properties {
         bucketName = "my-bucket-no-tags"
         Region = null
-        Tags {}
+        Tags = null
       }
     }
   }
