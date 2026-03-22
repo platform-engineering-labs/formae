@@ -431,6 +431,16 @@ class Fq {
         (directHints.toMap() + nestedHints.toMap()).toMapping()
 
     function subHints(subResourceClass: reflect.Class): Mapping<String, FieldHint> =
+        subHintsWithVisited(subResourceClass, Set())
+
+    /// Internal recursive helper that tracks visited classes to prevent infinite
+    /// recursion on self-referencing sub-resource types (e.g., GCP schemas).
+    function subHintsWithVisited(subResourceClass: reflect.Class, visited: Set<String>): Mapping<String, FieldHint> =
+        let(className = subResourceClass.name)
+        if (visited.contains(className))
+            new Mapping {}  // cycle detected — stop recursion
+        else
+        let(nextVisited = visited.add(className))
         let(subResourceHint = findSubResourceHint(subResourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
         let(directHints = subResourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
@@ -448,7 +458,7 @@ class Fq {
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(nestedSubResourceClass = getSubResourceClass(v.type))
-            let(nestedSubHints = subHints(nestedSubResourceClass))
+            let(nestedSubHints = subHintsWithVisited(nestedSubResourceClass, nextVisited))
 
             nestedSubHints.toMap().map((subKey, subHint) ->
                 Pair(parentKey + "." + subKey, subHint)
