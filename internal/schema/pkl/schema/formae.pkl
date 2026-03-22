@@ -607,11 +607,7 @@ class Fq {
                     Pair(key, rawValue)
             else
                 let(key = subResourceHint.outputKeyTransformation.apply(k))
-                let(value =
-                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
-                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
-                    else rawValue)
-                Pair(key, value)
+                Pair(key, rawValue)
         ).toDynamic()
 
     function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
@@ -623,11 +619,7 @@ class Fq {
             if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
                 Pair(key, fieldHint.outputTransformation.apply(rawValue))
             else
-                let(value =
-                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
-                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
-                    else rawValue)
-                Pair(key, value)
+                Pair(key, rawValue)
         ).toDynamic()
 
     function configHints(configClass: reflect.Class): Mapping<String, ConfigFieldHint> =
