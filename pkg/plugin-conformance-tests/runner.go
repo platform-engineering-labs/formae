@@ -493,6 +493,12 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 	}
 
 	if len(expectedArr) != len(actualArr) {
+		// If expected is empty and the field has a provider default, the PKL
+		// rendered a null Listing as [] but the provider filled in a default
+		// value. Accept the provider's value.
+		if len(expectedArr) == 0 && isProviderDefault(key, providerDefaults) {
+			return true
+		}
 		t.Errorf("Array %s length mismatch: expected %d, got %d (%s)", key, len(expectedArr), len(actualArr), context)
 		return false
 	}
@@ -622,6 +628,17 @@ func mapSubsetMatch(expected, actual map[string]any) bool {
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
+			// Skip expected keys with null or empty collection values —
+			// these are PKL rendering artifacts, not real field requirements
+			if expectedValue == nil {
+				continue
+			}
+			if arr, ok := expectedValue.([]any); ok && len(arr) == 0 {
+				continue
+			}
+			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
+				continue
+			}
 			return false
 		}
 		expectedValue = normalizeResolvables(expectedValue)
@@ -809,6 +826,17 @@ func compareMap(t *testing.T, name string, expected, actual map[string]any, cont
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
+			// Nullable fields rendered as null or empty arrays by PKL may be
+			// legitimately absent from the provider response.
+			if expectedValue == nil {
+				continue
+			}
+			if arr, isArr := expectedValue.([]any); isArr && len(arr) == 0 {
+				continue
+			}
+			if m, isMap := expectedValue.(map[string]any); isMap && len(m) == 0 {
+				continue
+			}
 			t.Errorf("Property %s.%s should exist (%s)", name, key, context)
 			ok = false
 			continue
@@ -875,14 +903,16 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 	for key, expectedValue := range expectedProperties {
 		actualValue, exists := actualProperties[key]
 		if !exists {
-			// Nullable fields that the user didn't set may render as null or empty
-			// arrays in PKL output. Cloud providers legitimately omit these from
-			// their response, so treat a missing actual value as OK when the
-			// expected value is null or an empty array.
+			// Nullable fields that the user didn't set may render as null, empty
+			// arrays, or empty maps in PKL output. Cloud providers legitimately
+			// omit these from their response.
 			if expectedValue == nil {
 				continue
 			}
 			if arr, ok := expectedValue.([]any); ok && len(arr) == 0 {
+				continue
+			}
+			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
 				continue
 			}
 			t.Errorf("Property %s should exist in actual resource (%s)", key, context)
