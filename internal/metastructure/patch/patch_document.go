@@ -74,6 +74,20 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
 
+	// Remove spurious patch operations that add empty arrays or maps.
+	// The 0.83.0 PKL schema renders unset nullable Listing/Mapping fields as
+	// []/{}. An "add" of an empty collection to a field absent in the actual
+	// state is always PKL rendering noise — a user clearing a field would
+	// produce a "replace" (field exists in actual), not an "add".
+	patchOps = filterSpuriousEmptyAdds(patchOps)
+
+	// Strip empty collections from inside all patch operation values. This
+	// cleans up phantom []/{}  values inside nested objects (e.g., empty
+	// ResponseParameters inside an IntegrationResponse). Without this,
+	// EntitySet array elements may not match their actual counterparts and
+	// produce "array items are not unique" errors.
+	patchOps = stripEmptyCollectionsFromOps(patchOps)
+
 	if len(patchOps) == 0 {
 		return nil, false, nil
 	}
@@ -123,8 +137,22 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 		return nil, err
 	}
 
+	// Strip empty arrays and maps from inside nested objects in both the
+	// desired state and actual state. The 0.83.0 PKL schema renders unset
+	// nullable Listing/Mapping fields as []/{}. Without stripping, EntitySet
+	// element matching fails because elements have different shapes (one has
+	// phantom empty fields, the other doesn't), causing duplicate entries.
+	cleanedDesired, err := stripNestedEmptyCollections(patchWithSchemaFieldsOnly)
+	if err != nil {
+		return nil, err
+	}
+	cleanedDocument, err := stripNestedEmptyCollections(documentFiltered)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create the actual patch document
-	patchDoc, err := jsonpatch.CreatePatch(documentFiltered, patchWithSchemaFieldsOnly, collections, ignoredFields, strategy)
+	patchDoc, err := jsonpatch.CreatePatch(cleanedDocument, cleanedDesired, collections, ignoredFields, strategy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JSON patch: %w", err)
 	}
@@ -347,6 +375,81 @@ func removeNonSchemaFields(patch []byte, schemaFields []string) ([]byte, error) 
 	}
 
 	return serialized, err
+}
+
+// stripNestedEmptyCollections recursively removes empty arrays and maps from
+// inside nested objects in a JSON document. Top-level empty collections are
+// preserved (they may represent intentional "clear" operations).
+func stripNestedEmptyCollections(data []byte) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return data, nil
+	}
+
+	for k, v := range doc {
+		doc[k] = stripEmptyCollectionsFromValue(v)
+	}
+
+	return json.Marshal(doc)
+}
+
+// filterSpuriousEmptyAdds removes "add" operations with empty array or map
+// values. The 0.83.0 PKL schema renders unset nullable Listing/Mapping fields
+// as []/{}. An "add" means the field is absent in the actual state, so adding
+// an empty collection is never user intent — it's PKL rendering noise. A user
+// clearing an existing field produces a "replace" (field exists), not "add".
+func filterSpuriousEmptyAdds(patchOps []jsonpatch.JsonPatchOperation) []jsonpatch.JsonPatchOperation {
+	filtered := make([]jsonpatch.JsonPatchOperation, 0, len(patchOps))
+	for _, op := range patchOps {
+		if op.Operation == "add" && isEmptyCollection(op.Value) {
+			continue
+		}
+		filtered = append(filtered, op)
+	}
+	return filtered
+}
+
+// stripEmptyCollectionsFromOps recursively removes empty arrays and maps from
+// inside all patch operation values. This ensures that EntitySet element
+// matching works correctly when elements contain phantom []/{}  values.
+func stripEmptyCollectionsFromOps(patchOps []jsonpatch.JsonPatchOperation) []jsonpatch.JsonPatchOperation {
+	for i := range patchOps {
+		patchOps[i].Value = stripEmptyCollectionsFromValue(patchOps[i].Value)
+	}
+	return patchOps
+}
+
+func stripEmptyCollectionsFromValue(val any) any {
+	switch v := val.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for k, elem := range v {
+			if isEmptyCollection(elem) {
+				continue
+			}
+			cleaned[k] = stripEmptyCollectionsFromValue(elem)
+		}
+		return cleaned
+	case []any:
+		cleaned := make([]any, 0, len(v))
+		for _, elem := range v {
+			cleaned = append(cleaned, stripEmptyCollectionsFromValue(elem))
+		}
+		return cleaned
+	default:
+		return val
+	}
+}
+
+func isEmptyCollection(val any) bool {
+	switch v := val.(type) {
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		return len(v) == 0
+	default:
+		return false
+	}
 }
 
 func containsCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) (bool, error) {
