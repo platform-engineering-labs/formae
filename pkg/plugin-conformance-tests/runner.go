@@ -622,6 +622,17 @@ func mapSubsetMatch(expected, actual map[string]any) bool {
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
+			// Nullable fields may render as null, empty arrays, or empty maps
+			// in PKL output. Providers legitimately omit these.
+			if expectedValue == nil {
+				continue
+			}
+			if arr, ok := expectedValue.([]any); ok && len(arr) == 0 {
+				continue
+			}
+			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
+				continue
+			}
 			return false
 		}
 		expectedValue = normalizeResolvables(expectedValue)
@@ -809,6 +820,17 @@ func compareMap(t *testing.T, name string, expected, actual map[string]any, cont
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
+			// Nullable fields may render as null, empty arrays, or empty maps
+			// in PKL output. Providers legitimately omit these.
+			if expectedValue == nil {
+				continue
+			}
+			if arr, ok := expectedValue.([]any); ok && len(arr) == 0 {
+				continue
+			}
+			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
+				continue
+			}
 			t.Errorf("Property %s.%s should exist (%s)", name, key, context)
 			ok = false
 			continue
@@ -875,14 +897,17 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 	for key, expectedValue := range expectedProperties {
 		actualValue, exists := actualProperties[key]
 		if !exists {
-			// Nullable fields that the user didn't set may render as null or empty
-			// arrays in PKL output. Cloud providers legitimately omit these from
-			// their response, so treat a missing actual value as OK when the
-			// expected value is null or an empty array.
+			// Nullable fields that the user didn't set may render as null, empty
+			// arrays, or empty maps in PKL output. Cloud providers legitimately
+			// omit these from their response, so treat a missing actual value as
+			// OK when the expected value is null, an empty array, or an empty map.
 			if expectedValue == nil {
 				continue
 			}
 			if arr, ok := expectedValue.([]any); ok && len(arr) == 0 {
+				continue
+			}
+			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
 				continue
 			}
 			t.Errorf("Property %s should exist in actual resource (%s)", key, context)
