@@ -32,13 +32,14 @@ type TagChange struct {
 }
 
 type PropertyChange struct {
-	Path      string
-	Value     string
-	OldValue  string
-	Operation string
-	HasOld    bool
-	IsRef     bool
-	IsOpaque  bool
+	Path             string
+	Value            string
+	OldValue         string
+	Operation        string
+	HasOld           bool
+	IsRef            bool
+	IsOpaque         bool
+	ExistsInPrevious bool
 }
 
 // FormatPatchDocument formats JSON Patch operations for cli display
@@ -201,6 +202,13 @@ func extractPropertyChange(patch patchOperation, props map[string]any, previousP
 	propsBytes, _ := json.Marshal(props)
 	change.IsOpaque = isOpaqueProperty(change.Path, previousProperties) || isOpaqueProperty(change.Path, json.RawMessage(propsBytes))
 
+	// For "add" operations, check if the property already exists in previous state.
+	// This happens for WriteOnly fields that are stripped before patch comparison —
+	// jsonpatch sees them as missing and generates "add", but they're really updates.
+	if patch.Op == "add" && len(previousProperties) > 0 {
+		change.ExistsInPrevious = propertyExistsInPrevious(change.Path, previousProperties)
+	}
+
 	// Try to get a reference value first (for add operations)
 	if patch.Op == "add" {
 		if inferredValue := inferValueFromRef(props, patch.Path, refLabels); inferredValue != "" {
@@ -240,6 +248,21 @@ func formatPropertyChange(change PropertyChange) string {
 
 	switch change.Operation {
 	case "add":
+		if change.IsOpaque {
+			if change.ExistsInPrevious {
+				return display.Gold(fmt.Sprintf(`set property "%s" (opaque value)`, displayPath))
+			}
+			if isArrayProperty(change.Path) {
+				return display.Green(fmt.Sprintf(`add new entry to "%s" (opaque value)`, displayPath))
+			}
+			return display.Green(fmt.Sprintf(`add new property "%s" (opaque value)`, displayPath))
+		}
+		if change.ExistsInPrevious {
+			if isArrayProperty(change.Path) {
+				return display.Gold(fmt.Sprintf(`set entry "%s" in "%s" (write-only)`, change.Value, displayPath))
+			}
+			return display.Gold(fmt.Sprintf(`set property "%s" to "%s" (write-only)`, displayPath, change.Value))
+		}
 		if isArrayProperty(change.Path) {
 			return display.Green(fmt.Sprintf(`add new entry "%s" to "%s"`, change.Value, displayPath))
 		} else {
@@ -483,6 +506,19 @@ func formatValueForDisplay(value any) string {
 	}
 
 	return fmt.Sprintf("%v", value)
+}
+
+// propertyExistsInPrevious checks if a property path exists in previous properties.
+// Used to detect WriteOnly fields that were stripped before patch comparison.
+func propertyExistsInPrevious(path string, previousProperties json.RawMessage) bool {
+	if len(previousProperties) == 0 {
+		return false
+	}
+
+	jsonPath := strings.TrimPrefix(path, "/")
+	jsonPath = strings.ReplaceAll(jsonPath, "/", ".")
+
+	return gjson.GetBytes(previousProperties, jsonPath).Exists()
 }
 
 // isOpaqueProperty checks if a property path points to an opaque value
