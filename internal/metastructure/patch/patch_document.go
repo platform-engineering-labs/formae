@@ -142,11 +142,11 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 	// nullable Listing/Mapping fields as []/{}. Without stripping, EntitySet
 	// element matching fails because elements have different shapes (one has
 	// phantom empty fields, the other doesn't), causing duplicate entries.
-	cleanedDesired, err := stripNestedEmptyCollections(patchWithSchemaFieldsOnly)
+	cleanedDesired, err := StripNestedEmptyCollections(patchWithSchemaFieldsOnly)
 	if err != nil {
 		return nil, err
 	}
-	cleanedDocument, err := stripNestedEmptyCollections(documentFiltered)
+	cleanedDocument, err := StripNestedEmptyCollections(documentFiltered)
 	if err != nil {
 		return nil, err
 	}
@@ -377,10 +377,13 @@ func removeNonSchemaFields(patch []byte, schemaFields []string) ([]byte, error) 
 	return serialized, err
 }
 
-// stripNestedEmptyCollections recursively removes empty arrays and maps from
+// StripNestedEmptyCollections recursively removes empty arrays and maps from
 // inside nested objects in a JSON document. Top-level empty collections are
 // preserved (they may represent intentional "clear" operations).
-func stripNestedEmptyCollections(data []byte) ([]byte, error) {
+// This is used both in the patch pipeline (before diff comparison) and in the
+// resource updater (before sending Properties to plugins for Create/Update)
+// to clean PKL rendering artifacts (null → []/{}  from 0.83.0 schema).
+func StripNestedEmptyCollections(data []byte) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return data, nil

@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -31,6 +32,10 @@ var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 // by extracting $value from opaque value structures (e.g., {"$value": "secret", "$visibility": "Opaque"})
 // becomes just "secret". This must be done before sending to the plugin since the resolver
 // lives in the agent and plugins may be remote.
+//
+// It also strips nested empty collections ([]/{}  artifacts from PKL's null rendering
+// in the 0.83.0 schema) to prevent cloud API rejections for fields like K8S probes
+// that require handler types when non-empty.
 func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) {
 	if res.Properties == nil {
 		return res, nil
@@ -41,9 +46,16 @@ func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) 
 		return res, err
 	}
 
-	// Return a copy with converted properties
+	// Strip nested empty collections from PKL null rendering artifacts.
+	// Top-level empty collections are preserved (may be intentional clears).
+	cleanedProps, err := patch.StripNestedEmptyCollections(convertedProps)
+	if err != nil {
+		return res, err
+	}
+
+	// Return a copy with converted and cleaned properties
 	result := res
-	result.Properties = convertedProps
+	result.Properties = cleanedProps
 	return result, nil
 }
 
