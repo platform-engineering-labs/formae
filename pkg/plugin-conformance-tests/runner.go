@@ -1373,6 +1373,10 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 
 	// === Step 19: Re-apply the resource for OOB delete test ===
+	// Rotate the test run ID so recreated resources get unique names.
+	// This avoids conflicts with resources still being async-deleted
+	// by the cloud provider (e.g., OCI compartments).
+	harness.RotateTestRunID()
 	t.Log("Step 19: Re-applying forma to recreate resource for OOB delete test...")
 	reapplyCommandID, err := harness.Apply(tc.PKLFile)
 	if err != nil {

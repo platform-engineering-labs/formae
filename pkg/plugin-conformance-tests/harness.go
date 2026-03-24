@@ -607,6 +607,19 @@ func (h *TestHarness) setCommandEnv(cmd *exec.Cmd) {
 	cmd.Env = append(os.Environ(), fmt.Sprintf("FORMAE_TEST_RUN_ID=%s", h.testRunID))
 }
 
+// RotateTestRunID generates a new random test run ID. This is used before
+// the OOB re-apply step so that recreated resources get unique names,
+// avoiding conflicts with resources that are still being async-deleted
+// by the cloud provider (e.g., OCI compartments).
+func (h *TestHarness) RotateTestRunID() {
+	newIDBytes := make([]byte, 4)
+	if _, err := rand.Read(newIDBytes); err != nil {
+		h.t.Fatalf("Failed to generate new test run ID: %v", err)
+	}
+	h.testRunID = hex.EncodeToString(newIDBytes)
+	h.t.Logf("Rotated test run ID to: %s", h.testRunID)
+}
+
 // StartAgent starts the formae agent in the background
 func (h *TestHarness) StartAgent() error {
 	if h.agentStarted {
