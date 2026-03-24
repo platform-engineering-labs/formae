@@ -367,7 +367,10 @@ func TestGeneratePatch(t *testing.T) {
 	err = json.Unmarshal(patchDoc, &patches)
 
 	assert.NoError(t, err)
-	assert.Len(t, patches, 4)
+	// val2 is createOnly and changed → needsReplacement is true, but
+	// the createOnly operation is filtered from the patch (can't be sent
+	// to the cloud API). Only val1, label, stack remain.
+	assert.Len(t, patches, 3)
 }
 
 // Test that createPatch will resolve references in json objects amd arrays of json objects

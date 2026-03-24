@@ -7,7 +7,6 @@ package patch
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
@@ -92,7 +91,18 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, nil
 	}
 
-	needsReplacement, _ := containsCreateOnlyFields(patchOps, schema.CreateOnly())
+	// Separate createOnly operations from mutable operations. CreateOnly
+	// fields cannot be updated in-place via the cloud API — if they changed,
+	// the resource needs a full replacement (destroy + create). We detect
+	// this and strip createOnly ops from the patch sent to the plugin.
+	createOnlyFields := schema.CreateOnly()
+	needsReplacement, _ := containsCreateOnlyFields(patchOps, createOnlyFields)
+	patchOps = filterCreateOnlyFields(patchOps, createOnlyFields)
+
+	if len(patchOps) == 0 && !needsReplacement {
+		return nil, false, nil
+	}
+
 	patchJson, err := json.Marshal(patchOps)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to serialize patch document: %w", err)
@@ -458,12 +468,42 @@ func isEmptyCollection(val any) bool {
 func containsCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) (bool, error) {
 	for _, patch := range patchOps {
 		path := cleanPath(patch.Path)
-		if slices.Contains(createOnlyFields, path) {
+		if isCreateOnlyPath(path, createOnlyFields) {
 			return true, nil
 		}
 	}
 
 	return false, nil
+}
+
+// filterCreateOnlyFields removes patch operations that target createOnly fields.
+// These operations cannot be sent to the cloud API — createOnly fields are
+// immutable after creation. If they changed, the caller uses needsReplacement
+// to trigger a full destroy+create cycle instead.
+func filterCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) []jsonpatch.JsonPatchOperation {
+	if len(createOnlyFields) == 0 {
+		return patchOps
+	}
+	filtered := make([]jsonpatch.JsonPatchOperation, 0, len(patchOps))
+	for _, op := range patchOps {
+		path := cleanPath(op.Path)
+		if !isCreateOnlyPath(path, createOnlyFields) {
+			filtered = append(filtered, op)
+		}
+	}
+	return filtered
+}
+
+// isCreateOnlyPath checks if a patch path targets a createOnly field.
+// Matches both the field itself ("/DomainName") and nested paths within
+// it ("/ContainerDefinitions/0/Name").
+func isCreateOnlyPath(path string, createOnlyFields []string) bool {
+	for _, field := range createOnlyFields {
+		if path == field || strings.HasPrefix(path, field+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func hasValue(val any) bool {
