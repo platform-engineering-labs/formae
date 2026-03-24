@@ -177,14 +177,7 @@ func validateRequiredFields(resource pkgmodel.Resource) error {
 					if !parentFound || parentValue == "" {
 						shouldSkip = true
 						break
-					}
-					// If a parent value is an array (Listing), we cannot validate
-					// required fields on individual items via dot-path traversal.
-					// e.g., "rules.verbs" where "rules" is a Listing<PolicyRule>.
-					// Skip validation for paths that cross array boundaries.
-					if strings.HasPrefix(parentValue, "[") {
-						shouldSkip = true
-						break
+
 					}
 				}
 
