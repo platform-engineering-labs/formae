@@ -5,6 +5,7 @@
 package resource_persister
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -165,37 +166,67 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 }
 
 func validateRequiredFields(resource pkgmodel.Resource) error {
+	if resource.Properties == nil {
+		return nil
+	}
+	var props map[string]any
+	if err := json.Unmarshal(resource.Properties, &props); err != nil {
+		return nil
+	}
+
 	var missingFields []string
 	for field, hint := range resource.Schema.Hints {
-		if hint.Required {
-			if strings.Contains(field, ".") {
-				parts := strings.Split(field, ".")
-				shouldSkip := false
-				for i := 0; i < len(parts)-1; i++ {
-					parentField := strings.Join(parts[:i+1], ".")
-					parentValue, parentFound := resource.GetProperty(parentField)
-					if !parentFound || parentValue == "" {
-						shouldSkip = true
-						break
-
-					}
-				}
-
-				if shouldSkip {
-					continue
-				}
-			}
-			value, found := resource.GetProperty(field)
-			if !found || value == "" {
-				missingFields = append(missingFields, field)
-			}
+		if !hint.Required {
+			continue
+		}
+		parts := strings.Split(field, ".")
+		if !validateRequiredFieldPath(props, parts) {
+			missingFields = append(missingFields, field)
 		}
 	}
 	if len(missingFields) > 0 {
 		return fmt.Errorf("resource %s of type %s is missing required fields: %v", resource.Label, resource.Type, missingFields)
 	}
-
 	return nil
+}
+
+// validateRequiredFieldPath checks if a required field exists at the given path.
+// Handles arrays by validating that every element contains the required field.
+// Returns true if the field is present (or the parent is absent/empty, meaning
+// the field is not applicable).
+func validateRequiredFieldPath(current any, parts []string) bool {
+	if len(parts) == 0 {
+		// Reached the leaf — check the value exists and is non-empty
+		return current != nil && current != ""
+	}
+
+	switch v := current.(type) {
+	case map[string]any:
+		child, exists := v[parts[0]]
+		if !exists || child == nil {
+			// Parent doesn't have this field — if we're not at the leaf,
+			// the parent structure is absent so the required field is N/A
+			return len(parts) > 1 || false
+		}
+		return validateRequiredFieldPath(child, parts[1:])
+
+	case []any:
+		if len(v) == 0 {
+			// Empty array — no elements to validate, field is N/A
+			return true
+		}
+		// Validate that every element has the required field
+		for _, elem := range v {
+			if !validateRequiredFieldPath(elem, parts) {
+				return false
+			}
+		}
+		return true
+
+	default:
+		// Primitive value at a non-leaf position — can't traverse further
+		return false
+	}
 }
 
 func (rp *ResourcePersister) persistResourceUpdates(formaCommand *forma_command.FormaCommand) error {
