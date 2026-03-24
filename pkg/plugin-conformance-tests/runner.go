@@ -188,6 +188,18 @@ func getDiscoveryTimeout() time.Duration {
 	return 2 * time.Minute // Default timeout
 }
 
+// getOOBTimeout returns the timeout for OOB delete detection. Cloud providers
+// with async deletion (e.g., OCI) may need longer for resources to fully
+// terminate before sync detects NotFound.
+func getOOBTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_OOB_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return 4 * time.Minute // Default — generous for async providers
+}
+
 // RunCRUDTests discovers test cases from the testdata directory and runs
 // the standard CRUD lifecycle test for each resource type.
 //
@@ -1437,7 +1449,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 
 	// === Step 24: Verify resource is removed from inventory (tombstoned by sync) ===
 	t.Log("Step 24: Waiting for resource to be removed from inventory after OOB delete...")
-	if err := harness.WaitForResourceRemovedFromInventory(actualResourceType, oobNativeID, 2*time.Minute); err != nil {
+	if err := harness.WaitForResourceRemovedFromInventory(actualResourceType, oobNativeID, getOOBTimeout()); err != nil {
 		t.Fatalf("Resource should be removed from inventory after OOB delete + sync: %v", err)
 	}
 	t.Log("OOB delete detection verified - sync correctly tombstoned the resource!")

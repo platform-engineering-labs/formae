@@ -1915,7 +1915,9 @@ func (h *TestHarness) WaitForResourceRemovedFromInventory(resourceType, nativeID
 	h.t.Logf("Waiting for resource to be removed from inventory: type=%s, nativeID=%s", resourceType, nativeID)
 
 	deadline := time.Now().Add(timeout)
-	pollInterval := 2 * time.Second
+	pollInterval := 5 * time.Second
+	syncInterval := 20 * time.Second
+	lastSync := time.Now()
 
 	for time.Now().Before(deadline) {
 		inventory, err := h.Inventory(fmt.Sprintf("type: %s", resourceType))
@@ -1938,6 +1940,18 @@ func (h *TestHarness) WaitForResourceRemovedFromInventory(resourceType, nativeID
 		if !found {
 			h.t.Logf("Resource removed from inventory: NativeID=%s", nativeID)
 			return nil
+		}
+
+		// Re-trigger sync periodically. The initial sync may have seen the
+		// resource in a transitional state (e.g., OCI TERMINATING). A
+		// subsequent sync after the cloud provider finishes deletion will
+		// return NotFound and tombstone the resource.
+		if time.Since(lastSync) >= syncInterval {
+			h.t.Log("Re-triggering sync to detect OOB deletion...")
+			if syncErr := h.Sync(); syncErr != nil {
+				h.t.Logf("Sync failed (will retry): %v", syncErr)
+			}
+			lastSync = time.Now()
 		}
 
 		h.t.Logf("Resource still in inventory, polling...")
