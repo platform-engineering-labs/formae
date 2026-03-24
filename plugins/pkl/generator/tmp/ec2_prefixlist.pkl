@@ -1,0 +1,183 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/prefixlist.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new prefixlist.PrefixList {
+    label = "pl-01234567890abcdef"
+    addressFamily = "IPv4"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "10.0.1.0/29"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.ec2-instance-connect"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-02345678901bcdefg"
+    addressFamily = "IPv4"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "192.168.1.0/26"
+    }; new prefixlist.Entry {
+      cidr = "192.168.2.0/26"
+    }; new prefixlist.Entry {
+      cidr = "192.168.3.0/26"
+    }; new prefixlist.Entry {
+      cidr = "10.1.0.0/24"
+    }; new prefixlist.Entry {
+      cidr = "10.2.0.0/24"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.route53-healthchecks"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-a1b2c3d4"
+    addressFamily = "IPv4"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "172.16.0.0/16"
+    }; new prefixlist.Entry {
+      cidr = "172.17.0.0/16"
+    }; new prefixlist.Entry {
+      cidr = "172.18.0.0/16"
+    }; new prefixlist.Entry {
+      cidr = "10.10.0.0/16"
+    }; new prefixlist.Entry {
+      cidr = "10.11.0.0/16"
+    } }
+    prefixListName = "com.amazonaws.global.cloudfront.origin-facing"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-03456789012cdefgh"
+    addressFamily = "IPv6"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "2001:db8::/64"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.ipv6.vpc-lattice"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-04567890123defghi"
+    addressFamily = "IPv6"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "2001:db8:1000::/36"
+    }; new prefixlist.Entry {
+      cidr = "2001:db8:2000::/40"
+    } }
+    prefixListName = "com.amazonaws.global.ipv6.cloudfront.origin-facing"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-05678901234efghij"
+    addressFamily = "IPv4"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "172.20.0.0/17"
+    }; new prefixlist.Entry {
+      cidr = "169.254.1.0/24"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.vpc-lattice"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-06789012345fghijk"
+    addressFamily = "IPv6"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "2001:db8:3000::/56"
+    }; new prefixlist.Entry {
+      cidr = "2001:db8:4000::/56"
+    }; new prefixlist.Entry {
+      cidr = "2001:db8:5000::/56"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.ipv6.route53-healthchecks"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-07890123456ghijkl"
+    addressFamily = "IPv6"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "2001:db8:6000::/56"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.ipv6.ec2-instance-connect"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-b5c6d7e8"
+    addressFamily = "IPv4"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "10.20.1.0/25"
+    }; new prefixlist.Entry {
+      cidr = "10.20.1.128/26"
+    }; new prefixlist.Entry {
+      cidr = "10.20.2.0/24"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.dynamodb"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-08901234567hijklm"
+    addressFamily = "IPv4"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "10.30.16.0/20"
+    } }
+    prefixListName = "com.amazonaws.global.groundstation"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new prefixlist.PrefixList {
+    label = "pl-c7d8e9f0"
+    addressFamily = "IPv4"
+    entries = new Listing { new prefixlist.Entry {
+      cidr = "10.40.24.0/21"
+    }; new prefixlist.Entry {
+      cidr = "10.40.32.0/22"
+    }; new prefixlist.Entry {
+      cidr = "10.50.20.0/22"
+    }; new prefixlist.Entry {
+      cidr = "172.31.134.0/23"
+    }; new prefixlist.Entry {
+      cidr = "172.31.136.0/22"
+    } }
+    prefixListName = "com.amazonaws.us-west-1.s3"
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

@@ -1,0 +1,108 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/elasticloadbalancingv2/loadbalancer.pkl"
+// Dependency imports
+import "@aws/aws.pkl"
+
+forma {
+    
+local ecsHelloWorld = new formae.Stack {
+          label = "ecs-hello-world"
+  description = "This was generated"
+}
+ecsHelloWorld
+
+    
+local defaultAwsTarget = new formae.Target {
+  label = "default-aws-target"
+  namespace = "AWS"
+  config {
+      Type = "AWS"
+      Region = "eu-central-1"
+    }
+}
+defaultAwsTarget
+
+    new loadbalancer.LoadBalancer {
+    label = "ecs-alb"
+    enablePrefixForIpv6SourceNat = "off"
+    enforceSecurityGroupInboundRulesOnPrivateLinkTraffic = ""
+    ipAddressType = "ipv4"
+    loadBalancerAttributes = new Listing { new loadbalancer.LoadBalancerAttribute {
+      key = "access_logs.s3.prefix"
+      value = ""
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "routing.http.xff_header_processing.mode"
+      value = "append"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "routing.http2.enabled"
+      value = "true"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "waf.fail_open.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "connection_logs.s3.bucket"
+      value = ""
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "access_logs.s3.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "zonal_shift.config.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "routing.http.desync_mitigation_mode"
+      value = "defensive"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "connection_logs.s3.prefix"
+      value = ""
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "routing.http.x_amzn_tls_version_and_cipher_suite.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "routing.http.preserve_host_header.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "load_balancing.cross_zone.enabled"
+      value = "true"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "routing.http.xff_client_port.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "access_logs.s3.bucket"
+      value = ""
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "deletion_protection.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "client_keep_alive.seconds"
+      value = "3600"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "routing.http.drop_invalid_header_fields.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "connection_logs.s3.enabled"
+      value = "false"
+    }; new loadbalancer.LoadBalancerAttribute {
+      key = "idle_timeout.timeout_seconds"
+      value = "60"
+    } }
+    name = "ecs-hello-world-alb"
+    scheme = "internet-facing"
+    securityGroups = new Listing { "sg-0112c6d46427ce2ce" }
+    subnetMappings = new Listing { new loadbalancer.SubnetMapping {
+      subnetId = "subnet-04a84cd141cbc2d6f"
+    }; new loadbalancer.SubnetMapping {
+      subnetId = "subnet-0b823fa58483c82a7"
+    } }
+    subnets = new Listing { "subnet-04a84cd141cbc2d6f"; "subnet-0b823fa58483c82a7" }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "ecs-hello-world-alb"
+    } }
+    type = "application"
+    target = defaultAwsTarget.res
+    stack = ecsHelloWorld.res
+  }
+}

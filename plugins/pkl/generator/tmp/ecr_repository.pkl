@@ -1,0 +1,213 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ecr/repository.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new repository.Repository {
+    label = "example-app"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "IMMUTABLE"
+    repositoryName = "example-app"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "demo-service"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "IMMUTABLE"
+    repositoryName = "demo-service"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "backend-service"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "backend-service"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "web-app"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "web-app"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "api-gateway"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "api-gateway"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "frontend-app"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "IMMUTABLE"
+    repositoryName = "frontend-app"
+    tags = new Listing {}
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "data-processor"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "data-processor"
+    tags = new Listing {}
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "notification-service"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "IMMUTABLE"
+    repositoryName = "notification-service"
+    tags = new Listing {}
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "auth-service"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "auth-service"
+    tags = new Listing {}
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "monitoring-tool"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "monitoring-tool"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "cache-service"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "IMMUTABLE"
+    repositoryName = "cache-service"
+    tags = new Listing {}
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "database-migration"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "database-migration"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new repository.Repository {
+    label = "logging-service"
+    encryptionConfiguration = new repository.EncryptionConfiguration {
+      encryptionType = "AES256"
+    }
+    imageScanningConfiguration = new repository.ImageScanningConfiguration {
+      scanOnPush = false
+    }
+    imageTagMutability = "MUTABLE"
+    repositoryName = "logging-service"
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

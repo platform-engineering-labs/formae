@@ -1,0 +1,103 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/securitygroupegress.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest2 = new formae.Target {
+  label = "us-west-2"
+  namespace = "AWS"
+  config {
+      Region = "us-west-2"
+      Type = "AWS"
+    }
+}
+usWest2
+
+    new securitygroupegress.SecurityGroupEgress {
+    label = "sgr-00ef80a12ef5c0a05"
+    cidrIp = "0.0.0.0/0"
+    fromPort = -1
+    groupId = "sg-0142b04397cdc94f0"
+    ipProtocol = "-1"
+    toPort = -1
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroupegress.SecurityGroupEgress {
+    label = "sgr-0227fe679acb92960"
+    cidrIp = "0.0.0.0/0"
+    fromPort = -1
+    groupId = "sg-036daf0be113dd37d"
+    ipProtocol = "-1"
+    toPort = -1
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroupegress.SecurityGroupEgress {
+    label = "sgr-027717fbe2f6010ee"
+    cidrIp = "0.0.0.0/0"
+    fromPort = -1
+    groupId = "sg-01bbb17b47be77cf1"
+    ipProtocol = "-1"
+    toPort = -1
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroupegress.SecurityGroupEgress {
+    label = "sgr-03731da1f6d553fea"
+    destinationSecurityGroupId = "sg-006290e9f6c33a51b"
+    fromPort = 2049
+    groupId = "sg-09ef298b8de15d4df"
+    ipProtocol = "tcp"
+    toPort = 2049
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroupegress.SecurityGroupEgress {
+    label = "sgr-07b599768b97bd528"
+    destinationSecurityGroupId = "sg-006290e9f6c33a51b"
+    fromPort = 1018
+    groupId = "sg-09ef298b8de15d4df"
+    ipProtocol = "tcp"
+    toPort = 1023
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroupegress.SecurityGroupEgress {
+    label = "sgr-0896bf4792c56760c"
+    destinationSecurityGroupId = "sg-006290e9f6c33a51b"
+    fromPort = 988
+    groupId = "sg-09ef298b8de15d4df"
+    ipProtocol = "tcp"
+    toPort = 988
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroupegress.SecurityGroupEgress {
+    label = "sgr-093d3a948ccb2daf1"
+    cidrIp = "0.0.0.0/0"
+    fromPort = -1
+    groupId = "sg-0b4fd6361045975df"
+    ipProtocol = "-1"
+    toPort = -1
+    target = usWest2.res
+    stack = myStack.res
+  }
+}

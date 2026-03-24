@@ -1,0 +1,90 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/securitygroup.pkl"
+// Dependency imports
+import "@aws/aws.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest2 = new formae.Target {
+  label = "us-west-2"
+  namespace = "AWS"
+  config {
+      Region = "us-west-2"
+      Type = "AWS"
+    }
+}
+usWest2
+
+    new securitygroup.SecurityGroup {
+    label = "sg-006290e9f6c33a51b"
+    groupDescription = "[DO NOT DELETE] Security Group that allows inbound NFS traffic for SageMaker Notebooks Domain [d-qwd24yu2fxfm]"
+    groupName = "security-group-for-inbound-nfs-d-qwd24yu2fxfm"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "ManagedByAmazonSageMakerResource"
+      value = "arn:aws:sagemaker:us-west-2:021891619792:domain/d-qwd24yu2fxfm"
+    } }
+    vpcId = "vpc-0b8acd158b7d588f2"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroup.SecurityGroup {
+    label = "sg-0142b04397cdc94f0"
+    groupDescription = "default VPC security group"
+    groupName = "default"
+    vpcId = "vpc-0b8acd158b7d588f2"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroup.SecurityGroup {
+    label = "sg-01bbb17b47be77cf1"
+    groupDescription = "default VPC security group"
+    groupName = "default"
+    vpcId = "vpc-0a1b225921496c4c4"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroup.SecurityGroup {
+    label = "sg-036daf0be113dd37d"
+    groupDescription = "default VPC security group"
+    groupName = "default"
+    vpcId = "vpc-0b0b9599aff98d83d"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroup.SecurityGroup {
+    label = "sg-09ef298b8de15d4df"
+    groupDescription = "[DO NOT DELETE] Security Group that allows outbound NFS traffic for SageMaker Notebooks Domain [d-qwd24yu2fxfm]"
+    groupName = "security-group-for-outbound-nfs-d-qwd24yu2fxfm"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "ManagedByAmazonSageMakerResource"
+      value = "arn:aws:sagemaker:us-west-2:021891619792:domain/d-qwd24yu2fxfm"
+    } }
+    vpcId = "vpc-0b8acd158b7d588f2"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new securitygroup.SecurityGroup {
+    label = "sg-0b4fd6361045975df"
+    groupDescription = "Test DB security group"
+    groupName = "5wHUCdQLCcInsqIa5mOyasoKa-bklqhJISd4yc"
+    vpcId = "vpc-0a1b225921496c4c4"
+    target = usWest2.res
+    stack = myStack.res
+  }
+}

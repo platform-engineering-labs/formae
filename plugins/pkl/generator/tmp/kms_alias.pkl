@@ -1,0 +1,98 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/kms/kmsalias.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new kmsalias.Alias {
+    label = "alias/aws/acm"
+    aliasName = "alias/aws/acm"
+    targetKeyId = "12345678-1234-1234-1234-123456789012"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/backup"
+    aliasName = "alias/aws/backup"
+    targetKeyId = "45678901-4567-4567-4567-456789012345"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/elasticfilesystem"
+    aliasName = "alias/aws/elasticfilesystem"
+    targetKeyId = "78901234-7890-7890-7890-789012345678"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/lambda"
+    aliasName = "alias/aws/lambda"
+    targetKeyId = "67890123-6789-6789-6789-678901234567"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/lightsail"
+    aliasName = "alias/aws/lightsail"
+    targetKeyId = "89012345-8901-8901-8901-890123456789"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/s3"
+    aliasName = "alias/aws/s3"
+    targetKeyId = "23456789-2345-2345-2345-234567890123"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/secretsmanager"
+    aliasName = "alias/aws/secretsmanager"
+    targetKeyId = "34567890-3456-3456-3456-345678901234"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/sns"
+    aliasName = "alias/aws/sns"
+    targetKeyId = "56789012-5678-5678-5678-567890123456"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new kmsalias.Alias {
+    label = "alias/aws/workspaces"
+    aliasName = "alias/aws/workspaces"
+    targetKeyId = "90123456-9012-9012-9012-901234567890"
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

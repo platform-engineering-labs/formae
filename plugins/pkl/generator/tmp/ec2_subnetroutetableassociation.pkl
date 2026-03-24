@@ -1,0 +1,60 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/subnetroutetableassociation.pkl"
+// Dependency imports
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/subnet.pkl"
+
+forma {
+    
+local eksExample = new formae.Stack {
+          label = "eks-example"
+  description = "This was generated"
+}
+eksExample
+
+    
+local awsTarget = new formae.Target {
+  label = "aws-target"
+  namespace = "AWS"
+  config {
+      Type = "AWS"
+      Region = "us-west-2"
+    }
+}
+awsTarget
+
+    new subnetroutetableassociation.SubnetRouteTableAssociation {
+    label = "eks-public-subnet-assoc-eks-public-subnet-1"
+    routeTableId = new routetable.RouteTableResolvable {
+      // RealValue: rtb-0bbee7cba8a4e1244
+      stack = eksExample.res.label
+      label = "eks-public-rt"
+    }.routeTableId
+    subnetId = new subnet.SubnetResolvable {
+      // RealValue: subnet-082c9464f0815b3a3
+      stack = eksExample.res.label
+      label = "eks-public-subnet-1"
+    }.subnetId
+    target = awsTarget.res
+    stack = eksExample.res
+  }
+
+new subnetroutetableassociation.SubnetRouteTableAssociation {
+    label = "eks-public-subnet-assoc-eks-public-subnet-2"
+    routeTableId = new routetable.RouteTableResolvable {
+      // RealValue: rtb-0bbee7cba8a4e1244
+      stack = eksExample.res.label
+      label = "eks-public-rt"
+    }.routeTableId
+    subnetId = new subnet.SubnetResolvable {
+      // RealValue: subnet-03438ad068b05dda4
+      stack = eksExample.res.label
+      label = "eks-public-subnet-2"
+    }.subnetId
+    target = awsTarget.res
+    stack = eksExample.res
+  }
+}

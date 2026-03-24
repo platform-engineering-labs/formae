@@ -1,0 +1,380 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/s3/bucket.pkl"
+// Dependency imports
+import "@aws/aws.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new bucket.Bucket {
+    label = "example-backend-store-abc123def456"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-backend-store-abc123def456"
+    versioningConfiguration = new bucket.VersioningConfiguration {
+      status = "Enabled"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-ses-forwarder-bucket"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-ses-forwarder-bucket"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-state-store-demo-ghi789jkl012"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-state-store-demo-ghi789jkl012"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    versioningConfiguration = new bucket.VersioningConfiguration {
+      status = "Enabled"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-app-storage"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-app-storage"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-artifacts-demo-mno345pqr678"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-artifacts-demo-mno345pqr678"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    versioningConfiguration = new bucket.VersioningConfiguration {
+      status = "Enabled"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-cdk-staging-bucket-stu901vwx234"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "aws:kms"
+        }
+      } }
+    }
+    bucketName = "example-cdk-staging-bucket-stu901vwx234"
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    tags = new Listing {}
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "amplify-example-app-dev-192005-deployment"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "amplify-example-app-dev-192005-deployment"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "user:Application"
+      value = "example-app"
+    }; new aws.Tag {
+      key = "user:Stack"
+      value = "dev"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-state-store-demo-yza567bcd890"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-state-store-demo-yza567bcd890"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    versioningConfiguration = new bucket.VersioningConfiguration {
+      status = "Enabled"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-state-bucket"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = true
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-state-bucket"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-backup-storage-bucket"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-backup-storage-bucket"
+    objectLockConfiguration = new bucket.ObjectLockConfiguration {
+      objectLockEnabled = "Enabled"
+    }
+    objectLockEnabled = true
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    versioningConfiguration = new bucket.VersioningConfiguration {
+      status = "Enabled"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-artifacts-demo-efg123hij456"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-artifacts-demo-efg123hij456"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    versioningConfiguration = new bucket.VersioningConfiguration {
+      status = "Enabled"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example.com"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example.com"
+    tags = new Listing {}
+    websiteConfiguration = new bucket.WebsiteConfiguration {
+      indexDocument = "index.html"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-file-storage-bucket"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-file-storage-bucket"
+    ownershipControls = new bucket.OwnershipControls {
+      rules = new Listing { new bucket.OwnershipControlsRule {
+        objectOwnership = "BucketOwnerEnforced"
+      } }
+    }
+    websiteConfiguration = new bucket.WebsiteConfiguration {
+      indexDocument = "index.html"
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucket.Bucket {
+    label = "example-user-backup-storage"
+    bucketEncryption = new bucket.BucketEncryption {
+      serverSideEncryptionConfiguration = new Listing { new bucket.ServerSideEncryptionRule {
+        bucketKeyEnabled = false
+        serverSideEncryptionByDefault = new bucket.ServerSideEncryptionByDefault {
+          sseAlgorithm = "AES256"
+        }
+      } }
+    }
+    bucketName = "example-user-backup-storage"
+    publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+      blockPublicAcls = true
+      blockPublicPolicy = true
+      ignorePublicAcls = true
+      restrictPublicBuckets = true
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

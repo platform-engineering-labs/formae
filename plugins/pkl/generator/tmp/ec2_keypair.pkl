@@ -1,0 +1,35 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/keypair.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new keypair.KeyPair {
+    label = "deadpool@platformengineeringlabs.com"
+    keyName = "deadpool@platformengineeringlabs.com"
+    keyType = "rsa"
+    publicKeyMaterial = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDFakePublicKeyDataHereForTestingPurposes1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyz test-key@example.com\n"
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

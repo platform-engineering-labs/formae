@@ -1,0 +1,85 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/eks/ekscluster.pkl"
+// Dependency imports
+import "@aws/iam/role.pkl"
+import "@aws/aws.pkl"
+
+forma {
+    
+local eksExample = new formae.Stack {
+          label = "eks-example"
+  description = "This was generated"
+}
+eksExample
+
+    
+local awsTarget = new formae.Target {
+  label = "aws-target"
+  namespace = "AWS"
+  config {
+      Type = "AWS"
+      Region = "us-west-2"
+    }
+}
+awsTarget
+
+    new ekscluster.Cluster {
+    label = "eks-cluster"
+    accessConfig = new ekscluster.AccessConfig {
+      authenticationMode = "API_AND_CONFIG_MAP"
+    }
+    computeConfig = new ekscluster.ComputeConfig {
+      enabled = true
+      nodePools = new Listing { "general-purpose" }
+      nodeRoleArn = new role.RoleResolvable {
+        // RealValue: arn:aws:iam::021891619792:role/FSDfrTcTom0f4EsD4GQmwfPHN-qKI0AY41J5Sv
+        stack = eksExample.res.label
+        label = "eks-node-role"
+      }.arn
+    }
+    encryptionConfig = new Listing {  }
+    kubernetesNetworkConfig = new ekscluster.KubernetesNetworkConfig {
+      elasticLoadBalancing = new ekscluster.ElasticLoadBalancing {
+        enabled = true
+      }
+      ipFamily = "ipv4"
+      serviceIpv4Cidr = "10.100.0.0/16"
+    }
+    logging = new ekscluster.Logging {
+      clusterLogging = new ekscluster.ClusterLogging {
+        enabledTypes = new Listing {  }
+      }
+    }
+    name = "eks-example"
+    resourcesVpcConfig = new ekscluster.ResourcesVpcConfig {
+      endpointPrivateAccess = false
+      endpointPublicAccess = true
+      publicAccessCidrs = new Listing { "0.0.0.0/0" }
+      securityGroupIds = new Listing { "sg-02dd6ae0deeaeaa7d"; "sg-0dacda22138aa0e05" }
+      subnetIds = new Listing { "subnet-082c9464f0815b3a3"; "subnet-03438ad068b05dda4" }
+    }
+    roleArn = new role.RoleResolvable {
+      // RealValue: arn:aws:iam::021891619792:role/GwEcpwC3TSENOD0iCZK4Ryyvp-bYmioU656Mew
+      stack = eksExample.res.label
+      label = "eks-cluster-role"
+    }.arn
+    storageConfig = new ekscluster.StorageConfig {
+      blockStorage = new ekscluster.BlockStorage {
+        enabled = true
+      }
+    }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "eks-example"
+    } }
+    upgradePolicy = new ekscluster.UpgradePolicy {
+      supportType = "EXTENDED"
+    }
+    version = "1.30"
+    target = awsTarget.res
+    stack = eksExample.res
+  }
+}

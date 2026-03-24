@@ -1,0 +1,148 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/elasticloadbalancingv2/targetgroup.pkl"
+// Dependency imports
+import "@aws/aws.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new targetgroup.TargetGroup {
+    label = "example-app-tg"
+    healthCheckEnabled = true
+    healthCheckIntervalSeconds = 30
+    healthCheckPath = "/health"
+    healthCheckPort = "traffic-port"
+    healthCheckProtocol = "HTTP"
+    healthCheckTimeoutSeconds = 5
+    healthyThresholdCount = 5
+    ipAddressType = "ipv4"
+    matcher = new targetgroup.Matcher {
+      httpCode = "200"
+    }
+    name = "example-app-tg"
+    port = 80
+    protocol = "HTTP"
+    protocolVersion = "HTTP1"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "example-app-tg"
+    } }
+    targetGroupAttributes = new Listing { new targetgroup.TargetGroupAttribute {
+      key = "stickiness.type"
+      value = "lb_cookie"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "stickiness.app_cookie.duration_seconds"
+      value = "86400"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "target_group_health.dns_failover.minimum_healthy_targets.count"
+      value = "1"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "load_balancing.cross_zone.enabled"
+      value = "use_load_balancer_configuration"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "stickiness.lb_cookie.duration_seconds"
+      value = "86400"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "target_group_health.dns_failover.minimum_healthy_targets.percentage"
+      value = "off"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "stickiness.enabled"
+      value = "false"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "target_group_health.unhealthy_state_routing.minimum_healthy_targets.percentage"
+      value = "off"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "slow_start.duration_seconds"
+      value = "0"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "deregistration_delay.timeout_seconds"
+      value = "300"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "target_group_health.unhealthy_state_routing.minimum_healthy_targets.count"
+      value = "1"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "load_balancing.algorithm.anomaly_mitigation"
+      value = "off"
+    }; new targetgroup.TargetGroupAttribute {
+      key = "stickiness.app_cookie.cookie_name"
+      value = ""
+    }; new targetgroup.TargetGroupAttribute {
+      key = "load_balancing.algorithm.type"
+      value = "round_robin"
+    } }
+    targetType = "ip"
+    targets = new Listing {  }
+    unhealthyThresholdCount = 2
+    vpcId = "vpc-01234567"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new targetgroup.TargetGroup {
+    label = "backend-service-tg"
+    healthCheckEnabled = true
+    healthCheckIntervalSeconds = 15
+    healthCheckPath = "/api/health"
+    healthCheckPort = "traffic-port"
+    healthCheckProtocol = "HTTP"
+    healthCheckTimeoutSeconds = 10
+    healthyThresholdCount = 3
+    ipAddressType = "ipv4"
+    matcher = new targetgroup.Matcher {
+      httpCode = "200,202"
+    }
+    name = "backend-service-tg"
+    port = 8080
+    protocol = "HTTP"
+    protocolVersion = "HTTP1"
+    targetType = "ip"
+    unhealthyThresholdCount = 3
+    vpcId = "vpc-01234567"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new targetgroup.TargetGroup {
+    label = "api-gateway-tg"
+    healthCheckEnabled = true
+    healthCheckIntervalSeconds = 30
+    healthCheckPath = "/status"
+    healthCheckPort = "traffic-port"
+    healthCheckProtocol = "HTTPS"
+    healthCheckTimeoutSeconds = 5
+    healthyThresholdCount = 2
+    ipAddressType = "ipv4"
+    matcher = new targetgroup.Matcher {
+      httpCode = "200"
+    }
+    name = "api-gateway-tg"
+    port = 443
+    protocol = "HTTPS"
+    protocolVersion = "HTTP1"
+    targetType = "ip"
+    unhealthyThresholdCount = 5
+    vpcId = "vpc-01234567"
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

@@ -1,0 +1,56 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/iam/user.pkl"
+// Dependency imports
+import "@aws/aws.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new user.User {
+    label = "example-user"
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/AmazonGlacierFullAccess"; "arn:aws:iam::aws:policy/AmazonS3FullAccess" }
+    path = "/"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Department"
+      value = "Engineering"
+    }; new aws.Tag {
+      key = "Project"
+      value = "Example"
+    } }
+    userName = "example-user"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new user.User {
+    label = "deadpool"
+    loginProfile = new user.UserLoginProfile {
+      passwordResetRequired = false
+    }
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/AdministratorAccess" }
+    path = "/"
+    userName = "deadpool"
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

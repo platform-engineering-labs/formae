@@ -1,0 +1,211 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/subnet.pkl"
+// Dependency imports
+import "@aws/aws.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+local usWest2 = new formae.Target {
+  label = "us-west-2"
+  namespace = "AWS"
+  config {
+      Region = "us-west-2"
+      Type = "AWS"
+    }
+}
+usWest2
+
+    new subnet.Subnet {
+    label = "ml-platform-private-subnet-1"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-2a"
+    availabilityZoneId = "usw2-az2"
+    cidrBlock = "10.0.0.0/24"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = false
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "ml-platform-private-subnet-1"
+    } }
+    vpcId = "vpc-0b8acd158b7d588f2"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnet.Subnet {
+    label = "ml-platform-private-subnet-2"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-2b"
+    availabilityZoneId = "usw2-az1"
+    cidrBlock = "10.0.1.0/24"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = false
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "ml-platform-private-subnet-2"
+    } }
+    vpcId = "vpc-0b8acd158b7d588f2"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnet.Subnet {
+    label = "pel-infra-private-b"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-2b"
+    availabilityZoneId = "usw2-az1"
+    cidrBlock = "10.1.96.0/19"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = false
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "pel-infra-private-b"
+    } }
+    vpcId = "vpc-0b0b9599aff98d83d"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnet.Subnet {
+    label = "pel-infra-public-a"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-2a"
+    availabilityZoneId = "usw2-az2"
+    cidrBlock = "10.1.0.0/19"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = true
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "pel-infra-public-a"
+    } }
+    vpcId = "vpc-0b0b9599aff98d83d"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnet.Subnet {
+    label = "pel-infra-public-b"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-2b"
+    availabilityZoneId = "usw2-az1"
+    cidrBlock = "10.1.64.0/19"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = true
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "pel-infra-public-b"
+    } }
+    vpcId = "vpc-0b0b9599aff98d83d"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnet.Subnet {
+    label = "subnet-025c88d82a9e5348c"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-2a"
+    availabilityZoneId = "usw2-az2"
+    cidrBlock = "10.0.1.0/24"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = false
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    vpcId = "vpc-0a1b225921496c4c4"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnet.Subnet {
+    label = "subnet-09960cc04ee35ce46"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-2b"
+    availabilityZoneId = "usw2-az1"
+    cidrBlock = "10.0.2.0/24"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = false
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    vpcId = "vpc-0a1b225921496c4c4"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnet.Subnet {
+    label = "subnet-03456789"
+    assignIpv6AddressOnCreation = false
+    availabilityZone = "us-west-1c"
+    availabilityZoneId = "usw1-az3"
+    cidrBlock = "10.0.32.0/20"
+    enableDns64 = false
+    ipv6Native = false
+    mapPublicIpOnLaunch = true
+    privateDnsNameOptionsOnLaunch = new subnet.PrivateDnsNameOptionsOnLaunch {
+      enableResourceNameDnsAAAARecord = false
+      enableResourceNameDnsARecord = false
+      hostnameType = "ip-name"
+    }
+    tags = new Listing {}
+    vpcId = "vpc-01234567"
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

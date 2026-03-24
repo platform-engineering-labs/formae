@@ -1,0 +1,62 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/lambda/func.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new func.Function {
+    label = "example-lambda-function"
+    architectures = new Listing { "x86_64" }
+    code = new func.Code {
+
+    }
+    description = ""
+    environment = new func.Environment {
+      variables = new Mapping {
+        ["SES_SENDER_EMAIL"] = "example@example.com"
+      }
+    }
+    ephemeralStorage = new func.EphemeralStorage {
+      size = 512
+    }
+    functionName = "example-lambda-function"
+    handler = "handler.exampleFunction"
+    loggingConfig = new func.LoggingConfig {
+      logFormat = "Text"
+      logGroup = "/aws/lambda/example-lambda-function"
+    }
+    memorySize = 1024
+    packageType = "Zip"
+    role = "arn:aws:iam::123456789012:role/example-lambda-role"
+    runtime = "nodejs18.x"
+    timeout = 6
+    tracingConfig = new func.TracingConfig {
+      mode = "PassThrough"
+    }
+    vpcConfig = new func.VPCConfig {
+      ipv6AllowedForDualStack = false
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

@@ -1,0 +1,70 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/s3/bucketpolicy.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new bucketpolicy.BucketPolicy {
+    label = "example-bucket-policy-1"
+    bucket = "example-bucket-policy-1"
+    policyDocument = new Dynamic {
+      Version = "2012-10-17"
+      Id = "AccessControl"
+      Statement = new Listing { new Dynamic {
+        Sid = "AllowSSLRequestsOnly"
+        Effect = "Deny"
+        Principal = "*"
+        Action = "s3:*"
+        Resource = new Listing { "arn:aws:s3:::example-bucket-policy-1"; "arn:aws:s3:::example-bucket-policy-1/*" }
+        Condition = new Dynamic {
+          Bool = new Dynamic {
+            ["aws:SecureTransport"] = "false"
+          }
+        }
+      } }
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new bucketpolicy.BucketPolicy {
+    label = "example-bucket-policy-2"
+    bucket = "example-bucket-policy-2"
+    policyDocument = new Dynamic {
+      Version = "2008-10-17"
+      Statement = new Listing { new Dynamic {
+        Effect = "Deny"
+        Principal = "*"
+        Action = "s3:*"
+        Resource = new Listing { "arn:aws:s3:::example-bucket-policy-2/*"; "arn:aws:s3:::example-bucket-policy-2" }
+        Condition = new Dynamic {
+          Bool = new Dynamic {
+            ["aws:SecureTransport"] = "false"
+          }
+        }
+      } }
+    }
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

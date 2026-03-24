@@ -1,0 +1,82 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/subnetnetworkaclassociation.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest2 = new formae.Target {
+  label = "us-west-2"
+  namespace = "AWS"
+  config {
+      Region = "us-west-2"
+      Type = "AWS"
+    }
+}
+usWest2
+
+    new subnetnetworkaclassociation.SubnetNetworkAclAssociation {
+    label = "aclassoc-04144f519ea275789"
+    networkAclId = "acl-010d1e4509c568d40"
+    subnetId = "subnet-09ae9c8cf9a87f440"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnetnetworkaclassociation.SubnetNetworkAclAssociation {
+    label = "aclassoc-04996b1df3307dfa8"
+    networkAclId = "acl-00586717644ae5358"
+    subnetId = "subnet-0e3748d472e552acc"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnetnetworkaclassociation.SubnetNetworkAclAssociation {
+    label = "aclassoc-05d3e4566ab960933"
+    networkAclId = "acl-0f73dc7eeefbb519b"
+    subnetId = "subnet-025c88d82a9e5348c"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnetnetworkaclassociation.SubnetNetworkAclAssociation {
+    label = "aclassoc-070e664896cfeb8ab"
+    networkAclId = "acl-00586717644ae5358"
+    subnetId = "subnet-071e785c76895db79"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnetnetworkaclassociation.SubnetNetworkAclAssociation {
+    label = "aclassoc-0711a4755f6aa4204"
+    networkAclId = "acl-010d1e4509c568d40"
+    subnetId = "subnet-0372eb6e14fab4b04"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnetnetworkaclassociation.SubnetNetworkAclAssociation {
+    label = "aclassoc-07fc3fd988179296d"
+    networkAclId = "acl-010d1e4509c568d40"
+    subnetId = "subnet-0c3bba9d2e474574b"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new subnetnetworkaclassociation.SubnetNetworkAclAssociation {
+    label = "aclassoc-0f743688b67c0757c"
+    networkAclId = "acl-0f73dc7eeefbb519b"
+    subnetId = "subnet-09960cc04ee35ce46"
+    target = usWest2.res
+    stack = myStack.res
+  }
+}

@@ -1,0 +1,45 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/route.pkl"
+// Dependency imports
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/routetable.pkl"
+
+forma {
+    
+local eksExample = new formae.Stack {
+          label = "eks-example"
+  description = "This was generated"
+}
+eksExample
+
+    
+local awsTarget = new formae.Target {
+  label = "aws-target"
+  namespace = "AWS"
+  config {
+      Type = "AWS"
+      Region = "us-west-2"
+    }
+}
+awsTarget
+
+    new route.Route {
+    label = "eks-public-route"
+    destinationCidrBlock = "0.0.0.0/0"
+    gatewayId = new internetgateway.InternetGatewayResolvable {
+      // RealValue: igw-001d03718238333b5
+      stack = eksExample.res.label
+      label = "eks-igw"
+    }.internetGatewayId
+    routeTableId = new routetable.RouteTableResolvable {
+      // RealValue: rtb-0bbee7cba8a4e1244
+      stack = eksExample.res.label
+      label = "eks-public-rt"
+    }.routeTableId
+    target = awsTarget.res
+    stack = eksExample.res
+  }
+}

@@ -1,0 +1,38 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/securitygroupingress.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new securitygroupingress.SecurityGroupIngress {
+    label = "sgr-01234567890abcdef"
+    fromPort = -1
+    groupId = "sg-01234567"
+    ipProtocol = "-1"
+    sourceSecurityGroupId = "sg-01234567"
+    sourceSecurityGroupOwnerId = "123456789012"
+    toPort = -1
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

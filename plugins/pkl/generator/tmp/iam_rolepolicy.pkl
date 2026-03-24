@@ -1,0 +1,828 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/iam/rolepolicy.pkl"
+// Dependency imports
+import "@aws/iam/role.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest2 = new formae.Target {
+  label = "us-west-2"
+  namespace = "AWS"
+  config {
+      Region = "us-west-2"
+      Type = "AWS"
+    }
+}
+usWest2
+
+    new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-10|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-10"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-11|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-11"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-12|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-12"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-13|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-13"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-14|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-14"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-15|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-15"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-16|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-16"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-17|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-17"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-18|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-18"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-19|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-19"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-1|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-1"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-1|simple-lambda-lambda-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "s3:ListAllMyBuckets"
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-1"
+    roleName = "simple-lambda-lambda-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-20|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-20"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-21|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-21"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-22|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-22"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-23|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-23"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-24|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-24"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-25|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-25"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-26|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-26"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-27|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-27"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-28|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-28"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-29|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-29"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-2|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-2"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-30|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-30"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-31|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-31"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-32|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-32"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-33|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-33"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-34|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-34"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-35|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-35"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-36|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-36"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-37|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-37"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-38|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-38"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-39|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-39"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-3|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-3"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-40|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-40"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-41|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-41"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-42|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-42"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-43|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-43"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-44|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-44"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-45|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-45"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-46|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-46"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-48|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-48"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-49|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-49"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-4|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-4"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-5|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-5"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-6|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-6"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-7|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-7"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-8|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-8"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "TestInlinePolicy-9|pkl-evaluator-execution-role"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "TestInlinePolicy-9"
+    roleName = "pkl-evaluator-execution-role"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new rolepolicy.RolePolicy {
+    label = "SysOpsAdmin|developer"
+    policyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "*"
+        Effect = "Allow"
+        Resource = "*"
+      } }
+      Version = "2012-10-17"
+    }
+    policyName = "SysOpsAdmin"
+    roleName = "developer" // The target resource with the label = "developer" of type = "AWS::IAM::Role" is not managed yet. Bring it under management first to convert this into a Resolvable.
+    target = usWest2.res
+    stack = myStack.res
+  }
+}

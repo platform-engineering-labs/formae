@@ -1,0 +1,15 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+local target: formae.Target = new formae.Target {
+  label = "test-empty-target"
+  namespace = "aws"
+  config {
+    ["region"] = "us-east-1"
+  }
+  discoverable = false
+}
+
+forma {
+  target
+}

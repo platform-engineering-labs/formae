@@ -1,0 +1,70 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/networkinterface.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest2 = new formae.Target {
+  label = "us-west-2"
+  namespace = "AWS"
+  config {
+      Region = "us-west-2"
+      Type = "AWS"
+    }
+}
+usWest2
+
+    new networkinterface.NetworkInterface {
+    label = "eni-08f5e9bb193629832"
+    description = "EFS mount target for fs-0b7a3b44276e507f0 (fsmt-0be74004996d0e6ed)"
+    groupSet = new Listing { "sg-006290e9f6c33a51b" }
+    interfaceType = "null"
+    ipv4PrefixCount = 0
+    ipv4Prefixes = new Listing {  }
+    ipv6PrefixCount = 0
+    ipv6Prefixes = new Listing {  }
+    privateIpAddress = "10.0.1.65"
+    privateIpAddresses = new Listing { new networkinterface.PrivateIpAddressSpecification {
+      primary = true
+      privateIpAddress = "10.0.1.65"
+    } }
+    secondaryPrivateIpAddressCount = 0
+    sourceDestCheck = true
+    subnetId = "subnet-071e785c76895db79"
+    tags = new Listing {}
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new networkinterface.NetworkInterface {
+    label = "eni-09fcee5fe58fe577f"
+    description = "EFS mount target for fs-0b7a3b44276e507f0 (fsmt-04865550b141fedd3)"
+    groupSet = new Listing { "sg-006290e9f6c33a51b" }
+    interfaceType = "null"
+    ipv4PrefixCount = 0
+    ipv4Prefixes = new Listing {  }
+    ipv6PrefixCount = 0
+    ipv6Prefixes = new Listing {  }
+    privateIpAddress = "10.0.0.25"
+    privateIpAddresses = new Listing { new networkinterface.PrivateIpAddressSpecification {
+      primary = true
+      privateIpAddress = "10.0.0.25"
+    } }
+    secondaryPrivateIpAddressCount = 0
+    sourceDestCheck = true
+    subnetId = "subnet-0e3748d472e552acc"
+    tags = new Listing {}
+    target = usWest2.res
+    stack = myStack.res
+  }
+}

@@ -1,0 +1,33 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/rds/dbsubnetgroup.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new dbsubnetgroup.DBSubnetGroup {
+    label = "default"
+    subnetIds = new Listing {  }
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

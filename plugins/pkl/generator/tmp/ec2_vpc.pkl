@@ -1,0 +1,35 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/ec2/vpc.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new vpc.VPC {
+    label = "vpc-01234567"
+    cidrBlock = "10.0.0.0/16"
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

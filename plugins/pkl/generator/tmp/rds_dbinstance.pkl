@@ -1,0 +1,92 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/rds/dbinstance.pkl"
+// Dependency imports
+import "@aws/rds/dbsubnetgroup.pkl"
+import "@aws/secretsmanager/secret.pkl"
+import "@aws/aws.pkl"
+
+forma {
+    
+local secretResolution = new formae.Stack {
+          label = "secret-resolution"
+  description = "This was generated"
+}
+secretResolution
+
+    
+local awsTarget = new formae.Target {
+  label = "aws-target"
+  namespace = "AWS"
+  config {
+      Type = "AWS"
+      Region = "us-west-2"
+    }
+}
+awsTarget
+
+    new dbinstance.DBInstance {
+    label = "Database"
+    allocatedStorage = 20
+    associatedRoles = new Listing {  }
+    autoMinorVersionUpgrade = true
+    availabilityZone = "us-west-2a"
+    backupRetentionPeriod = 1
+    caCertificateIdentifier = "rds-ca-rsa2048-g1"
+    certificateDetails = new dbinstance.CertificateDetails {
+      caIdentifier = "rds-ca-rsa2048-g1"
+      validTill = "2026-10-08T13:27:35Z"
+    }
+    copyTagsToSnapshot = false
+    dbInstanceClass = "db.t3.micro"
+    dbInstanceIdentifier = "rds-h3un6zvbswwsn255dc4qkj6qj-m5l60xaow5zm"
+    dbParameterGroupName = "default.postgres13"
+    dbSubnetGroupName = new dbsubnetgroup.DBSubnetGroupResolvable {
+      // RealValue: secret-resolution-db-subnet-group
+      stack = secretResolution.res.label
+      label = "DBSubnetGroup"
+    }.dbSubnetGroupName
+    dedicatedLogVolume = false
+    deletionProtection = false
+    enableCloudwatchLogsExports = new Listing {  }
+    enableIAMDatabaseAuthentication = false
+    enablePerformanceInsights = false
+    endpoint = new dbinstance.Endpoint {
+      address = "rds-h3un6zvbswwsn255dc4qkj6qj-m5l60xaow5zm.cvkk4e0kuaqo.us-west-2.rds.amazonaws.com"
+      hostedZoneId = "Z1PVIF0B656C1W"
+      port = "5432"
+    }
+    engine = "postgres"
+    engineLifecycleSupport = "open-source-rds-extended-support"
+    engineVersion = "13.20"
+    kmsKeyId = "arn:aws:kms:us-west-2:021891619792:key/d18124f0-c4bf-4b7e-8e20-8c574916f009"
+    licenseModel = "postgresql-license"
+    manageMasterUserPassword = false
+    masterUserPassword = new secret.SecretResolvable {
+      // RealValue: 47efbe0559f4c486c94b7c0b4594caf099a8dd061ec4dbad708006025f537f89
+      stack = secretResolution.res.label
+      label = "DBSecret"
+    }.secretString
+    masterUserSecret = new dbinstance.MasterUserSecret {
+
+    }
+    masterUsername = "testuser"
+    monitoringInterval = 0
+    multiAZ = false
+    networkType = "IPV4"
+    optionGroupName = "default:postgres-13"
+    port = "5432"
+    preferredBackupWindow = "09:31-10:01"
+    preferredMaintenanceWindow = "mon:11:39-mon:12:09"
+    processorFeatures = new Listing {  }
+    publiclyAccessible = false
+    storageEncrypted = true
+    storageThroughput = 0
+    storageType = "gp2"
+    vpcSecurityGroups = new Listing { "sg-090a90bbbf5d6c1af" }
+    target = awsTarget.res
+    stack = secretResolution.res
+  }
+}

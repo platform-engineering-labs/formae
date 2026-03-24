@@ -1,0 +1,46 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/efs/mounttarget.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest2 = new formae.Target {
+  label = "us-west-2"
+  namespace = "AWS"
+  config {
+      Region = "us-west-2"
+      Type = "AWS"
+    }
+}
+usWest2
+
+    new mounttarget.MountTarget {
+    label = "fsmt-04865550b141fedd3"
+    fileSystemId = "fs-0b7a3b44276e507f0"
+    ipAddress = "10.0.0.25"
+    securityGroups = new Listing { "sg-006290e9f6c33a51b" }
+    subnetId = "subnet-0e3748d472e552acc"
+    target = usWest2.res
+    stack = myStack.res
+  }
+
+new mounttarget.MountTarget {
+    label = "fsmt-0be74004996d0e6ed"
+    fileSystemId = "fs-0b7a3b44276e507f0"
+    ipAddress = "10.0.1.65"
+    securityGroups = new Listing { "sg-006290e9f6c33a51b" }
+    subnetId = "subnet-071e785c76895db79"
+    target = usWest2.res
+    stack = myStack.res
+  }
+}

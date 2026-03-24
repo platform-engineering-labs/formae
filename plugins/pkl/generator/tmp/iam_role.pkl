@@ -1,0 +1,507 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+// Resource imports
+import "@aws/iam/role.pkl"
+// Dependency imports
+import "@aws/aws.pkl"
+
+forma {
+    
+local myStack = new formae.Stack {
+  // Please provide a stack to bring the resources in this Forma under management
+label = "test"
+  description = "This was generated"
+}
+myStack
+
+    
+local usWest1 = new formae.Target {
+  label = "us-west-1"
+  namespace = "AWS"
+  config {
+      Region = "us-west-1"
+      Type = "AWS"
+    }
+}
+usWest1
+
+    new role.Role {
+    label = "AWSServiceRoleForGlobalAccelerator"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "globalaccelerator.amazonaws.com"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    description = "Allows Global Accelerator to call AWS services on customer's behalf"
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/aws-service-role/AWSGlobalAcceleratorSLRPolicy" }
+    maxSessionDuration = 3600
+    path = "/aws-service-role/globalaccelerator.amazonaws.com/"
+    roleName = "AWSServiceRoleForGlobalAccelerator"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-cluster-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "sts:TagSession"; "sts:AssumeRole" }
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "eks.amazonaws.com"
+        }
+        Sid = "EKSClusterAssumeRole"
+      } }
+      Version = "2012-10-17"
+    }
+    managedPolicyArns = new Listing { "arn:aws:iam::123456789012:policy/example-cluster-encryption-policy"; "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"; "arn:aws:iam::123456789012:policy/example-cluster-policy"; "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController" }
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "example-cluster-role"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Environment"
+      value = "development"
+    }; new aws.Tag {
+      key = "Terraform"
+      value = "true"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "AWSReservedSSO_SecurityAudit_12345678901abcdef"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "sts:AssumeRoleWithSAML"; "sts:TagSession" }
+        Condition = new Dynamic {
+          StringEquals = new Dynamic {
+            ["SAML:aud"] = "https://signin.aws.amazon.com/saml"
+          }
+        }
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Federated = "arn:aws:iam::123456789012:saml-provider/AWSSSO_example12345678_DO_NOT_DELETE"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    description = "Read only access to perform security audits"
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/SecurityAudit" }
+    maxSessionDuration = 43200
+    path = "/aws-reserved/sso.amazonaws.com/us-west-1/"
+    roleName = "AWSReservedSSO_SecurityAudit_12345678901abcdef"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-lambda-deployment-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "lambda.amazonaws.com"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    description = ""
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" }
+    maxSessionDuration = 3600
+    path = "/"
+    policies = new Listing { new role.RolePolicy {
+      policyDocument = new Dynamic {
+        Statement = new Listing { new Dynamic {
+          Action = new Listing { "s3:GetObject*"; "s3:GetBucket*"; "s3:List*" }
+          Effect = "Allow"
+          Resource = new Listing { "arn:aws:s3:::example-cdk-staging-bucket"; "arn:aws:s3:::example-cdk-staging-bucket/*" }
+        }; new Dynamic {
+          Action = new Listing { "s3:GetObject*"; "s3:GetBucket*"; "s3:List*"; "s3:DeleteObject*"; "s3:PutObject"; "s3:Abort*" }
+          Effect = "Allow"
+          Resource = new Listing { "arn:aws:s3:::example.com"; "arn:aws:s3:::example.com/*" }
+        } }
+        Version = "2012-10-17"
+      }
+      policyName = "ExampleBucketDeploymentServiceRoleDefaultPolicy"
+    } }
+    roleName = "example-lambda-deployment-role"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-node-group-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "ec2.amazonaws.com"
+        }
+        Sid = "EKSNodeAssumeRole"
+      } }
+      Version = "2012-10-17"
+    }
+    description = "EKS managed node group IAM role"
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"; "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"; "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly" }
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "example-node-group-role"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Environment"
+      value = "development"
+    }; new aws.Tag {
+      key = "Terraform"
+      value = "true"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-app-dev-us-west-1-lambdaRole"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "lambda.amazonaws.com"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    description = ""
+    maxSessionDuration = 3600
+    path = "/"
+    policies = new Listing { new role.RolePolicy {
+      policyDocument = new Dynamic {
+        Statement = new Listing { new Dynamic {
+          Action = new Listing { "logs:CreateLogStream"; "logs:CreateLogGroup"; "logs:TagResource" }
+          Effect = "Allow"
+          Resource = new Listing { "arn:aws:logs:us-west-1:123456789012:log-group:/aws/lambda/example-app-dev*:*" }
+        }; new Dynamic {
+          Action = new Listing { "logs:PutLogEvents" }
+          Effect = "Allow"
+          Resource = new Listing { "arn:aws:logs:us-west-1:123456789012:log-group:/aws/lambda/example-app-dev*:*:*" }
+        }; new Dynamic {
+          Action = "ses:SendEmail"
+          Effect = "Allow"
+          Resource = "*"
+        } }
+        Version = "2012-10-17"
+      }
+      policyName = "example-app-dev-lambda"
+    } }
+    roleName = "example-app-dev-us-west-1-lambdaRole"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "STAGE"
+      value = "dev"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-skill-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "lambda.amazonaws.com"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    managedPolicyArns = new Listing { "arn:aws:iam::123456789012:policy/service-role/AWSLambdaBasicExecutionRole-example-lambda-role" }
+    maxSessionDuration = 3600
+    path = "/service-role/"
+    roleName = "example-skill-role"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-task-exec-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    description = ""
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" }
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "example-task-exec-role"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "Name"
+      value = "example-task-exec-role"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-route53-management-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          AWS = "arn:aws:iam::123456789012:root"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    description = ""
+    maxSessionDuration = 3600
+    path = "/"
+    policies = new Listing { new role.RolePolicy {
+      policyDocument = new Dynamic {
+        Statement = new Listing { new Dynamic {
+          Action = new Listing { "route53:Get*"; "route53:List*"; "route53:TestDNSAnswer" }
+          Effect = "Allow"
+          Resource = new Listing { "*" }
+        }; new Dynamic {
+          Action = new Listing { "route53domains:Get*"; "route53domains:List*" }
+          Effect = "Allow"
+          Resource = new Listing { "*" }
+        } }
+        Version = "2012-10-17"
+      }
+      policyName = "Route53Read"
+    } }
+    roleName = "example-route53-management-role"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-app-development-modules-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = new Listing { "sts:TagSession"; "sts:AssumeRole" }
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "pods.eks.amazonaws.com"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    managedPolicyArns = new Listing { "arn:aws:iam::123456789012:policy/example-modules.example-ecr-create-repository" }
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "example-app-development-modules-role"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "app"
+      value = "example-app"
+    }; new aws.Tag {
+      key = "env"
+      value = "development"
+    }; new aws.Tag {
+      key = "resource"
+      value = "modules.example-app"
+    }; new aws.Tag {
+      key = "managed_by"
+      value = "terraform"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-lambda-ses-forwarder-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "lambda.amazonaws.com"
+        }
+        Sid = ""
+      }; new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "ses.amazonaws.com"
+        }
+        Sid = ""
+      }; new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "s3.amazonaws.com"
+        }
+        Sid = ""
+      } }
+      Version = "2012-10-17"
+    }
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "example-lambda-ses-forwarder-role"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "OrganizationAccountAccessRole"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          AWS = "arn:aws:iam::987654321098:root"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    maxSessionDuration = 3600
+    path = "/"
+    policies = new Listing { new role.RolePolicy {
+      policyDocument = new Dynamic {
+        Statement = new Listing { new Dynamic {
+          Action = "*"
+          Effect = "Allow"
+          Resource = "*"
+        } }
+        Version = "2012-10-17"
+      }
+      policyName = "AdministratorAccess"
+    } }
+    roleName = "OrganizationAccountAccessRole"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "example-certificate-lambda-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          Service = "lambda.amazonaws.com"
+        }
+      } }
+      Version = "2012-10-17"
+    }
+    description = ""
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" }
+    maxSessionDuration = 3600
+    path = "/"
+    policies = new Listing { new role.RolePolicy {
+      policyDocument = new Dynamic {
+        Statement = new Listing { new Dynamic {
+          Action = new Listing { "acm:RequestCertificate"; "acm:DescribeCertificate"; "acm:DeleteCertificate"; "acm:AddTagsToCertificate" }
+          Effect = "Allow"
+          Resource = "*"
+        }; new Dynamic {
+          Action = "route53:GetChange"
+          Effect = "Allow"
+          Resource = "*"
+        }; new Dynamic {
+          Action = "route53:changeResourceRecordSets"
+          Effect = "Allow"
+          Resource = "arn:aws:route53:::hostedzone/Z12345678901234567890"
+        } }
+        Version = "2012-10-17"
+      }
+      policyName = "exampleCertificateRequestorFunctionServiceRoleDefaultPolicy"
+    } }
+    roleName = "example-certificate-lambda-role"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "stacksets-exec-example12345678901234567890"
+    assumeRolePolicyDocument = new Dynamic {
+      Id = "stacksets-exec-example12345678901234567890-assume-role-policy"
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = new Dynamic {
+          AWS = "arn:aws:iam::987654321098:role/aws-service-role/stacksets.cloudformation.amazonaws.com/AWSServiceRoleForCloudFormationStackSetsOrgAdmin"
+        }
+        Sid = "1"
+      } }
+      Version = "2012-10-17"
+    }
+    description = "Role created by AWSCloudFormation StackSets"
+    managedPolicyArns = new Listing { "arn:aws:iam::aws:policy/AdministratorAccess" }
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "stacksets-exec-example12345678901234567890"
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "amplify-example-app-dev-192005-authRole"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Deny"
+        Principal = new Dynamic {
+          Federated = "cognito-identity.amazonaws.com"
+        }
+        Sid = ""
+      } }
+      Version = "2012-10-17"
+    }
+    description = ""
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "amplify-example-app-dev-192005-authRole"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "user:Application"
+      value = "example-app"
+    }; new aws.Tag {
+      key = "user:Stack"
+      value = "dev"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+
+new role.Role {
+    label = "amplify-example-app-dev-192005-unauthRole"
+    assumeRolePolicyDocument = new Dynamic {
+      Statement = new Listing { new Dynamic {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Deny"
+        Principal = new Dynamic {
+          Federated = "cognito-identity.amazonaws.com"
+        }
+        Sid = ""
+      } }
+      Version = "2012-10-17"
+    }
+    description = ""
+    maxSessionDuration = 3600
+    path = "/"
+    roleName = "amplify-example-app-dev-192005-unauthRole"
+    tags = new Listing<aws.Tag> { new aws.Tag {
+      key = "user:Application"
+      value = "example-app"
+    }; new aws.Tag {
+      key = "user:Stack"
+      value = "dev"
+    } }
+    target = usWest1.res
+    stack = myStack.res
+  }
+}

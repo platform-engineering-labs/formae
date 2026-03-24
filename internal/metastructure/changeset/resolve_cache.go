@@ -28,19 +28,7 @@ import (
 type ResolveCache struct {
 	act.Actor
 
-	cache   map[pkgmodel.FormaeURI]gjson.Result
-	pending map[string]*pendingResolve
-}
-
-type pendingResolve struct {
-	resource     pkgmodel.Resource
-	targetConfig json.RawMessage
-	requesters   []pendingResolveRequester
-}
-
-type pendingResolveRequester struct {
-	from        gen.PID
-	resourceURI pkgmodel.FormaeURI
+	cache map[pkgmodel.FormaeURI]gjson.Result
 }
 
 type Shutdown struct{}
@@ -51,7 +39,6 @@ func NewResolveCache() gen.ProcessBehavior {
 
 func (r *ResolveCache) Init(args ...any) error {
 	r.cache = make(map[pkgmodel.FormaeURI]gjson.Result)
-	r.pending = make(map[string]*pendingResolve)
 
 	r.Log().Debug("ResolveCache actor initialized")
 
@@ -61,9 +48,18 @@ func (r *ResolveCache) Init(args ...any) error {
 func (r *ResolveCache) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case messages.ResolveValue:
-		return r.handleResolveValue(from, msg)
-	case plugin.TrackedProgress:
-		return r.handleTrackedProgress(msg)
+		value, err := r.resolveValue(msg.ResourceURI)
+		var response any
+		if err != nil {
+			response = messages.FailedToResolveValue(msg)
+		} else {
+			response = messages.ValueResolved{
+				ResourceURI: msg.ResourceURI,
+				Value:       value,
+			}
+		}
+		err = r.Send(from, response)
+		return err
 	case Shutdown:
 		r.Log().Debug("ResolveCache received shutdown request")
 		return gen.TerminateReasonNormal
@@ -73,75 +69,7 @@ func (r *ResolveCache) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
-func (r *ResolveCache) handleResolveValue(from gen.PID, msg messages.ResolveValue) error {
-	if value, err := r.resolveCachedValue(msg.ResourceURI); err == nil {
-		return r.Send(from, messages.ValueResolved{ResourceURI: msg.ResourceURI, Value: value})
-	}
-
-	resourceState, targetConfig, err := r.loadResource(msg.ResourceURI)
-	if err != nil {
-		return r.Send(from, messages.FailedToResolveValue(msg))
-	}
-
-	if pending := r.pending[resourceState.NativeID]; pending != nil {
-		pending.requesters = append(pending.requesters, pendingResolveRequester{from: from, resourceURI: msg.ResourceURI})
-		return nil
-	}
-
-	progress, err := r.startRead(resourceState, targetConfig, msg.ResourceURI)
-	if err != nil {
-		return r.Send(from, messages.FailedToResolveValue(msg))
-	}
-	requesters := []pendingResolveRequester{{from: from, resourceURI: msg.ResourceURI}}
-	if progress.HasFinished() {
-		return r.finishPendingRead(resourceState, progress, requesters)
-	}
-	if progress.NativeID == "" {
-		progress.NativeID = resourceState.NativeID
-	}
-	r.pending[resourceState.NativeID] = &pendingResolve{resource: resourceState, targetConfig: targetConfig, requesters: requesters}
-	return nil
-}
-
-func (r *ResolveCache) handleTrackedProgress(progress plugin.TrackedProgress) error {
-	pending := r.pending[progress.NativeID]
-	if pending == nil || !progress.HasFinished() {
-		return nil
-	}
-	delete(r.pending, progress.NativeID)
-	return r.finishPendingRead(pending.resource, progress, pending.requesters)
-}
-
-func (r *ResolveCache) finishPendingRead(resourceState pkgmodel.Resource, progress plugin.TrackedProgress, requesters []pendingResolveRequester) error {
-	if progress.Failed() {
-		for _, requester := range requesters {
-			if err := r.Send(requester.from, messages.FailedToResolveValue{ResourceURI: requester.resourceURI}); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	parsed := gjson.ParseBytes([]byte(progress.ResourceProperties))
-	enhancedParsed := r.preserveRefMetadata(resourceState, parsed)
-	r.cache[resourceState.URI()] = enhancedParsed
-
-	for _, requester := range requesters {
-		value := enhancedParsed.Get(requester.resourceURI.PropertyPath())
-		if !value.Exists() {
-			if err := r.Send(requester.from, messages.FailedToResolveValue{ResourceURI: requester.resourceURI}); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := r.Send(requester.from, messages.ValueResolved{ResourceURI: requester.resourceURI, Value: value.String()}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *ResolveCache) resolveCachedValue(resourceURI pkgmodel.FormaeURI) (string, error) {
+func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, error) {
 	// Check if the resource is already in the cache
 	if json, ok := r.cache[resourceURI.Stripped()]; ok {
 		r.Log().Debug("Cache hit for resource URI", "uri", resourceURI, "value", json)
@@ -152,10 +80,8 @@ func (r *ResolveCache) resolveCachedValue(resourceURI pkgmodel.FormaeURI) (strin
 		}
 		return value.String(), nil
 	}
-	return "", fmt.Errorf("cache miss")
-}
 
-func (r *ResolveCache) loadResource(resourceURI pkgmodel.FormaeURI) (pkgmodel.Resource, json.RawMessage, error) {
+	// Load the resource from the stack to get the native id
 	r.Log().Debug("Cache miss for resource URI", "uri", resourceURI)
 	stackerResult, err := r.Call(
 		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
@@ -164,26 +90,20 @@ func (r *ResolveCache) loadResource(resourceURI pkgmodel.FormaeURI) (pkgmodel.Re
 		})
 	if err != nil {
 		r.Log().Error("Failed to load resource from resource persister", "resourceURI", resourceURI, "error", err)
-		return pkgmodel.Resource{}, nil, fmt.Errorf("failed to load resource from resource persister: %w", err)
+		return "", fmt.Errorf("failed to load resource from resource persister: %w", err)
 	}
 	loadResourceResult, ok := stackerResult.(messages.LoadResourceResult)
 	if !ok {
 		r.Log().Error("Unexpected result type from resource persister", "resultType", reflect.TypeOf(stackerResult))
-		return pkgmodel.Resource{}, nil, fmt.Errorf("unexpected result type from resource persister: %T", stackerResult)
+		return "", fmt.Errorf("unexpected result type from resource persister: %T", stackerResult)
 	}
-	if !loadResourceResult.Found {
-		return pkgmodel.Resource{}, nil, fmt.Errorf("resource %s not found", resourceURI.KSUID())
-	}
-	return loadResourceResult.Resource, loadResourceResult.Target.Config, nil
-}
 
-func (r *ResolveCache) startRead(resourceState pkgmodel.Resource, targetConfig json.RawMessage, resourceURI pkgmodel.FormaeURI) (plugin.TrackedProgress, error) {
 	// Spawn the plugin operator via PluginCoordinator
 	operationID := uuid.New().String()
 	spawnResult, err := r.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: r.Node().Name()},
 		messages.SpawnPluginOperator{
-			Namespace:   resourceState.Namespace(),
+			Namespace:   loadResourceResult.Resource.Namespace(),
 			ResourceURI: string(resourceURI.Stripped()),
 			Operation:   string(resource.OperationRead),
 			OperationID: operationID,
@@ -191,41 +111,50 @@ func (r *ResolveCache) startRead(resourceState pkgmodel.Resource, targetConfig j
 		})
 	if err != nil {
 		r.Log().Error("Failed to spawn plugin operator for resource", "resourceURI", resourceURI, "error", err)
-		return plugin.TrackedProgress{}, fmt.Errorf("failed to spawn plugin operator for resource: %w", err)
+		return "", fmt.Errorf("failed to spawn plugin operator for resource: %w", err)
 	}
 	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
 	if !ok {
 		r.Log().Error("Unexpected result type from PluginCoordinator", "resultType", reflect.TypeOf(spawnResult))
-		return plugin.TrackedProgress{}, fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
+		return "", fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
 	}
 	if spawnRes.Error != "" {
 		r.Log().Error("Failed to spawn plugin operator", "error", spawnRes.Error)
-		return plugin.TrackedProgress{}, fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
+		return "", fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
 	}
 
 	progressResult, err := r.Call(
 		spawnRes.PID,
 		plugin.ReadResource{
-			Namespace:        resourceState.Namespace(),
-			ExistingResource: resourceState,
-			Resource:         resourceState,
-			NativeID:         resourceState.NativeID,
-			TargetConfig:     targetConfig,
+			Namespace:        loadResourceResult.Resource.Namespace(),
+			ExistingResource: loadResourceResult.Resource,
+			Resource:         loadResourceResult.Resource,
+			NativeID:         loadResourceResult.Resource.NativeID,
+			TargetConfig:     loadResourceResult.Target.Config,
 		})
 
 	if err != nil {
 		r.Log().Error("Failed to read resource", "resourceURI", resourceURI, "error", err)
-		return plugin.TrackedProgress{}, fmt.Errorf("failed to read resource: %w", err)
+		return "", fmt.Errorf("failed to read resource: %w", err)
 	}
 	progress, ok := progressResult.(plugin.TrackedProgress)
 	if !ok {
 		r.Log().Error("Unexpected result type from plugin operator", "resultType", reflect.TypeOf(progressResult))
-		return plugin.TrackedProgress{}, fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
+		return "", fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
 	}
-	if progress.NativeID == "" {
-		progress.NativeID = resourceState.NativeID
+	parsed := gjson.ParseBytes([]byte(progress.ResourceProperties))
+
+	enhancedParsed := r.preserveRefMetadata(loadResourceResult.Resource, parsed)
+
+	r.cache[resourceURI.Stripped()] = enhancedParsed
+	r.Log().Debug("Cache hit for resource URI", "uri", resourceURI, "value", enhancedParsed)
+	value := enhancedParsed.Get(resourceURI.PropertyPath())
+	if !value.Exists() {
+		r.Log().Error("Unable to resolve property %s in cached properties for resource %s", resourceURI.PropertyPath(), resourceURI)
+		return "", fmt.Errorf("property %s not found in cached properties for resource %s", resourceURI.PropertyPath(), resourceURI)
 	}
-	return progress, nil
+
+	return value.String(), nil
 }
 
 func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, pluginResult gjson.Result) gjson.Result {

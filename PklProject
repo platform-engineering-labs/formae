@@ -1,0 +1,5 @@
+amends "pkl:Project"
+
+dependencies {
+  ["formae"] = import("internal/schema/pkl/schema/PklProject")
+}

@@ -284,7 +284,7 @@ func (rp *ResourcePersister) loadResource(resourceURI pkgmodel.FormaeURI) (messa
 	}
 
 	if res == nil {
-		return messages.LoadResourceResult{Found: false}, nil
+		return messages.LoadResourceResult{}, fmt.Errorf("resource %s not found", resourceURI.KSUID())
 	}
 
 	currentTarget, err := rp.datastore.LoadTarget(res.Target)
@@ -298,7 +298,6 @@ func (rp *ResourcePersister) loadResource(resourceURI pkgmodel.FormaeURI) (messa
 	return messages.LoadResourceResult{
 		Resource: *res,
 		Target:   *currentTarget,
-		Found:    true,
 	}, nil
 }
 
