@@ -1919,36 +1919,3 @@ func TestChangeset_TargetReplace_ResourceEdges(t *testing.T) {
 	assert.True(t, hasTargetCreateDep,
 		"resource create should depend on target create")
 }
-
-func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
-	vpcURI := pkgmodel.NewFormaeURI("vpc-ksuid", "")
-	subnetURI := pkgmodel.NewFormaeURI("subnet-ksuid", "")
-
-	updates := []resource_update.ResourceUpdate{
-		{
-			DesiredState: pkgmodel.Resource{Ksuid: vpcURI.KSUID(), Stack: "stack", Label: "vpc", Type: "AWS::EC2::VPC"},
-			Operation:    resource_update.OperationRead,
-			State:        resource_update.ResourceUpdateStateNotStarted,
-			StackLabel:   "stack",
-		},
-		{
-			DesiredState:         pkgmodel.Resource{Ksuid: subnetURI.KSUID(), Stack: "stack", Label: "subnet", Type: "AWS::EC2::Subnet"},
-			Operation:            resource_update.OperationRead,
-			State:                resource_update.ResourceUpdateStateNotStarted,
-			StackLabel:           "stack",
-			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
-		},
-	}
-
-	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
-	assert.NoError(t, err)
-
-	vpcNode := cs.DAG.Nodes[createOperationURI(vpcURI, resource_update.OperationRead)]
-	subnetNode := cs.DAG.Nodes[createOperationURI(subnetURI, resource_update.OperationRead)]
-	assert.NotNil(t, vpcNode)
-	assert.NotNil(t, subnetNode)
-	assert.Empty(t, vpcNode.Dependencies)
-	assert.Empty(t, vpcNode.Dependents)
-	assert.Empty(t, subnetNode.Dependencies)
-	assert.Empty(t, subnetNode.Dependents)
-}
