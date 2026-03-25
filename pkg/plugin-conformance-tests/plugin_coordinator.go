@@ -406,14 +406,18 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 	}
 
 	// Step 2: Send Delete request to PluginOperator
+	compRes, err := plugin.CompressResource(model.Resource{
+		Type:     req.ResourceType,
+		NativeID: req.NativeID,
+	})
+	if err != nil {
+		return DeleteResourceResult{Error: fmt.Sprintf("failed to compress resource: %v", err)}
+	}
 	deleteReq := plugin.DeleteResource{
 		Namespace:    req.Namespace,
 		NativeID:     req.NativeID,
 		ResourceType: req.ResourceType,
-		Resource: model.Resource{
-			Type:     req.ResourceType,
-			NativeID: req.NativeID,
-		},
+		Resource:     compRes,
 		TargetConfig: req.Target.Config,
 	}
 

@@ -334,14 +334,29 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		return StateFinishedWithError, data, nil, nil
 	}
 
+	compResource, err := plugin.CompressResource(convertedResource)
+	if err != nil {
+		proc.Log().Error("failed to compress resource for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	compExisting, err := plugin.CompressResource(convertedExisting)
+	if err != nil {
+		proc.Log().Error("failed to compress existing resource for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
 	progress, err := doPluginOperation(data.resourceUpdate.DesiredState.URI(), plugin.ReadResource{
-		Namespace:        convertedExisting.Namespace(),
-		ExistingResource: convertedExisting,
-		Resource:         convertedResource,
-		TargetConfig:     data.resourceUpdate.ResourceTarget.Config,
-		NativeID:         data.resourceUpdate.DesiredState.NativeID,
-		IsSync:           data.resourceUpdate.IsSync(),
-		IsDelete:         data.resourceUpdate.IsDelete(),
+		Namespace:         convertedExisting.Namespace(),
+		ResourceType:      convertedResource.Type,
+		ResourceNamespace: convertedResource.Namespace(),
+		ExistingResource:  compExisting,
+		Resource:          compResource,
+		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,
+		NativeID:          data.resourceUpdate.DesiredState.NativeID,
+		IsSync:            data.resourceUpdate.IsSync(),
+		IsDelete:          data.resourceUpdate.IsDelete(),
 
 		// If the source is discovery, remove sensitive information from the resource update.
 		RedactSensitive: data.commandSource == FormaCommandSourceDiscovery,
@@ -363,10 +378,16 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
+	compDeleteResource, err := plugin.CompressResource(convertedResource)
+	if err != nil {
+		proc.Log().Error("failed to compress resource for delete: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
 	deleteOperation := plugin.DeleteResource{
 		Namespace:    convertedResource.Namespace(),
 		NativeID:     convertedResource.NativeID,
-		Resource:     convertedResource,
+		Resource:     compDeleteResource,
 		ResourceType: convertedResource.Type,
 		TargetConfig: data.resourceUpdate.ResourceTarget.Config,
 	}

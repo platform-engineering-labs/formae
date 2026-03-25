@@ -123,14 +123,22 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 		return "", fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
 	}
 
+	compRes, err := plugin.CompressResource(loadResourceResult.Resource)
+	if err != nil {
+		r.Log().Error("Failed to compress resource", "resourceURI", resourceURI, "error", err)
+		return "", fmt.Errorf("failed to compress resource: %w", err)
+	}
+
 	progressResult, err := r.Call(
 		spawnRes.PID,
 		plugin.ReadResource{
-			Namespace:        loadResourceResult.Resource.Namespace(),
-			ExistingResource: loadResourceResult.Resource,
-			Resource:         loadResourceResult.Resource,
-			NativeID:         loadResourceResult.Resource.NativeID,
-			TargetConfig:     loadResourceResult.Target.Config,
+			Namespace:         loadResourceResult.Resource.Namespace(),
+			ResourceType:      loadResourceResult.Resource.Type,
+			ResourceNamespace: loadResourceResult.Resource.Namespace(),
+			ExistingResource:  compRes,
+			Resource:          compRes,
+			NativeID:          loadResourceResult.Resource.NativeID,
+			TargetConfig:      loadResourceResult.Target.Config,
 		})
 
 	if err != nil {
