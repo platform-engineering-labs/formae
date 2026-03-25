@@ -297,6 +297,7 @@ test-integration:
 	go test -tags=integration -failfast ./...
 
 test-e2e: build install-external-plugins
+	echo '${VERSION}' > ./version.semver
 	echo "Setting up e2e PKL dependencies..."
 	bash ./tests/e2e/go/setup_pkl.sh
 	echo "Running e2e tests..."
