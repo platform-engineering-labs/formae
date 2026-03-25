@@ -5,7 +5,6 @@
 package ppm
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/masterminds/semver"
-	"github.com/mholt/archives"
 )
 
 const Hist = "hist"
@@ -120,34 +118,7 @@ func (m *Manager) Install(entry *PkgEntry) error {
 		}
 	}
 
-	format := archives.CompressedArchive{
-		Compression: archives.Gz{},
-		Extraction:  archives.Tar{},
-	}
-
-	err = format.Extract(context.Background(), pkg, func(ctx context.Context, f archives.FileInfo) error {
-		dstPath := filepath.Join(m.installPrefix, f.NameInArchive)
-
-		if f.IsDir() {
-			err := os.MkdirAll(dstPath, f.Mode())
-
-			return err
-		}
-
-		dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			return err
-		}
-
-		src, err := f.Open()
-		if err != nil {
-			return err
-		}
-
-		_, err = io.Copy(dst, src)
-
-		return err
-	})
+	err = extractArchive(pkg, m.installPrefix)
 	if err != nil {
 		return err
 	}

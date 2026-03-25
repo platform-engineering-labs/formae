@@ -97,9 +97,15 @@ func (pkg) EntryFromFilePath(filePath string) (entry *PkgEntry, err error) {
 
 	fileName := filepath.Base(filePath)
 	parts := strings.Split(fileName, "@")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid package filename: %s", fileName)
+	}
 	entry.Name = parts[0]
 
 	versionParts := strings.Split(parts[1], "_")
+	if len(versionParts) != 2 {
+		return nil, fmt.Errorf("invalid package filename: %s", fileName)
+	}
 	entry.Version, err = semver.NewVersion(versionParts[0])
 	if err != nil {
 		return nil, err
@@ -107,6 +113,9 @@ func (pkg) EntryFromFilePath(filePath string) (entry *PkgEntry, err error) {
 
 	oaParts := strings.Split(versionParts[1], ".")
 	oaComps := strings.Split(oaParts[0], "-")
+	if len(oaComps) != 2 {
+		return nil, fmt.Errorf("invalid package filename: %s", fileName)
+	}
 	entry.OsArch = &OSArch{oaComps[0], oaComps[1]}
 
 	return entry, nil

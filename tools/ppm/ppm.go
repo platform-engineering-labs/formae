@@ -5,3 +5,5 @@
 package ppm
 
 const BinaryRepository = "s3://hub.platform.engineering/binaries"
+
+const HTTPSRepository = "https://hub.platform.engineering/binaries"

@@ -21,6 +21,7 @@ func RootCmd() *cobra.Command {
 
 	cmd.AddCommand(PkgCmd())
 	cmd.AddCommand(RepoCmd())
+	cmd.AddCommand(InstallCmd())
 
 	return cmd
 }
