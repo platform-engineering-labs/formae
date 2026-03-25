@@ -1219,7 +1219,7 @@ func TestGeneratePatch_AtomicField_NoDiffNoPatch(t *testing.T) {
 }
 
 func TestGeneratePatch_EmptyArrayOnCreateOnlyField_NoPatch(t *testing.T) {
-	// Simulates the 0.83.0 PKL schema rendering unset nullable Listing fields
+	// Simulates PKL schema rendering unset nullable Listing fields
 	// as []. For createOnly fields this should not generate a patch operation,
 	// since the user can't modify them after creation.
 	document := []byte(`{

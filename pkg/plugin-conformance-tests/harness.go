@@ -1840,8 +1840,9 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 	for time.Now().Before(deadline) {
 		status, err := h.GetStatus(commandID)
 		if err != nil {
-			// Retry on transient errors — the command may not be visible yet
-			// (e.g., the agent is still processing the apply request)
+			// Retry on all errors — the command may not be visible yet (e.g.,
+			// the agent is still processing the apply request). Permanent
+			// failures (wrong URL, auth) are bounded by the poll timeout.
 			h.t.Logf("Status query error (retrying): %v", err)
 			time.Sleep(pollInterval)
 			continue

@@ -34,7 +34,7 @@ var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 // lives in the agent and plugins may be remote.
 //
 // It also strips nested empty collections ([]/{}  artifacts from PKL's null rendering
-// in the 0.83.0 schema) to prevent cloud API rejections for fields like K8S probes
+// of nullable Listing/Mapping fields) to prevent cloud API rejections for fields like K8S probes
 // that require handler types when non-empty.
 func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) {
 	if res.Properties == nil {

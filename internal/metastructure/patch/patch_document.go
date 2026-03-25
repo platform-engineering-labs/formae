@@ -74,7 +74,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	}
 
 	// Remove spurious patch operations that add empty arrays or maps.
-	// The 0.83.0 PKL schema renders unset nullable Listing/Mapping fields as
+	// The PKL schema renders unset nullable Listing/Mapping fields as
 	// []/{}. An "add" of an empty collection to a field absent in the actual
 	// state is always PKL rendering noise — a user clearing a field would
 	// produce a "replace" (field exists in actual), not an "add".
@@ -148,7 +148,7 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 	}
 
 	// Strip empty arrays and maps from inside nested objects in both the
-	// desired state and actual state. The 0.83.0 PKL schema renders unset
+	// desired state and actual state. The PKL schema renders unset
 	// nullable Listing/Mapping fields as []/{}. Without stripping, EntitySet
 	// element matching fails because elements have different shapes (one has
 	// phantom empty fields, the other doesn't), causing duplicate entries.
@@ -392,11 +392,11 @@ func removeNonSchemaFields(patch []byte, schemaFields []string) ([]byte, error) 
 // preserved (they may represent intentional "clear" operations).
 // This is used both in the patch pipeline (before diff comparison) and in the
 // resource updater (before sending Properties to plugins for Create/Update)
-// to clean PKL rendering artifacts (null → []/{}  from 0.83.0 schema).
+// to clean PKL rendering artifacts (null → []/{}  from nullable Listing/Mapping fields).
 func StripNestedEmptyCollections(data []byte) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return data, nil
+		return nil, fmt.Errorf("StripNestedEmptyCollections: invalid JSON: %w", err)
 	}
 
 	for k, v := range doc {
@@ -407,7 +407,7 @@ func StripNestedEmptyCollections(data []byte) ([]byte, error) {
 }
 
 // filterSpuriousEmptyAdds removes "add" operations with empty array or map
-// values. The 0.83.0 PKL schema renders unset nullable Listing/Mapping fields
+// values. The PKL schema renders unset nullable Listing/Mapping fields
 // as []/{}. An "add" means the field is absent in the actual state, so adding
 // an empty collection is never user intent — it's PKL rendering noise. A user
 // clearing an existing field produces a "replace" (field exists), not "add".

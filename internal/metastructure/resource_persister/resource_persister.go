@@ -206,7 +206,7 @@ func validateRequiredFieldPath(current any, parts []string) bool {
 		if !exists || child == nil {
 			// Parent doesn't have this field — if we're not at the leaf,
 			// the parent structure is absent so the required field is N/A
-			return len(parts) > 1 || false
+			return len(parts) > 1
 		}
 		return validateRequiredFieldPath(child, parts[1:])
 
