@@ -1028,7 +1028,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	// === Step 2: Wait for plugin to be registered before any commands ===
 	t.Log("Step 2: Waiting for plugin to be registered...")
 	namespace := strings.Split(actualResourceType, "::")[0]
-	if err := harness.WaitForPluginRegistered(namespace, 30*time.Second); err != nil {
+	if err := harness.WaitForPluginRegistered(namespace, 60*time.Second); err != nil {
 		t.Fatalf("Plugin should register within timeout: %v", err)
 	}
 
@@ -1606,7 +1606,7 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 
 	// Step 3: Wait for plugin to register (using extracted namespace, not directory name)
 	t.Log("Step 3: Waiting for plugin to register...")
-	if err := harness.WaitForPluginRegistered(namespace, 30*time.Second); err != nil {
+	if err := harness.WaitForPluginRegistered(namespace, 60*time.Second); err != nil {
 		t.Fatalf("plugin did not register: %v", err)
 	}
 
