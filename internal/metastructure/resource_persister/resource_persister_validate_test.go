@@ -14,8 +14,8 @@ import (
 
 func TestValidateRequiredFields_TopLevel(t *testing.T) {
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{"name": "foo"}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -28,8 +28,8 @@ func TestValidateRequiredFields_TopLevel(t *testing.T) {
 
 func TestValidateRequiredFields_TopLevel_Missing(t *testing.T) {
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -44,8 +44,8 @@ func TestValidateRequiredFields_TopLevel_Missing(t *testing.T) {
 
 func TestValidateRequiredFields_NestedObject(t *testing.T) {
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{"integration": {"type": "AWS"}}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -59,8 +59,8 @@ func TestValidateRequiredFields_NestedObject(t *testing.T) {
 func TestValidateRequiredFields_NestedObject_ParentAbsent(t *testing.T) {
 	// If parent doesn't exist, nested required field is N/A
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -74,8 +74,8 @@ func TestValidateRequiredFields_NestedObject_ParentAbsent(t *testing.T) {
 func TestValidateRequiredFields_ArrayWithRequiredField(t *testing.T) {
 	// All array elements have the required field
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{"traffic": [{"percent": 100}, {"percent": 0}]}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -89,8 +89,8 @@ func TestValidateRequiredFields_ArrayWithRequiredField(t *testing.T) {
 func TestValidateRequiredFields_ArrayWithMissingRequiredField(t *testing.T) {
 	// One element is missing the required field
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{"traffic": [{"percent": 100}, {"type": "LATEST"}]}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -106,8 +106,8 @@ func TestValidateRequiredFields_ArrayWithMissingRequiredField(t *testing.T) {
 func TestValidateRequiredFields_EmptyArray(t *testing.T) {
 	// Empty array — no elements to validate, should pass
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{"traffic": []}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -121,8 +121,8 @@ func TestValidateRequiredFields_EmptyArray(t *testing.T) {
 func TestValidateRequiredFields_ArrayParentAbsent(t *testing.T) {
 	// Parent array doesn't exist — field is N/A
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -136,8 +136,8 @@ func TestValidateRequiredFields_ArrayParentAbsent(t *testing.T) {
 func TestValidateRequiredFields_DeeplyNestedArray(t *testing.T) {
 	// template.containers.image — containers is an array inside template object
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{"template": {"containers": [{"image": "nginx", "name": "app"}]}}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
@@ -150,8 +150,8 @@ func TestValidateRequiredFields_DeeplyNestedArray(t *testing.T) {
 
 func TestValidateRequiredFields_DeeplyNestedArray_Missing(t *testing.T) {
 	resource := pkgmodel.Resource{
-		Label: "test",
-		Type:  "Test::Resource",
+		Label:      "test",
+		Type:       "Test::Resource",
 		Properties: json.RawMessage(`{"template": {"containers": [{"name": "app"}]}}`),
 		Schema: pkgmodel.Schema{
 			Hints: map[string]pkgmodel.FieldHint{
