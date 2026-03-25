@@ -151,6 +151,135 @@ func TestIsOpaqueProperty(t *testing.T) {
 	})
 }
 
+func TestFormatPropertyChange_OpaqueAdd(t *testing.T) {
+	t.Run("opaque add on existing resource shows set with opaque value", func(t *testing.T) {
+		change := PropertyChange{
+			Path:             "SecretString",
+			Value:            "L4clqcm50IFl",
+			Operation:        "add",
+			IsOpaque:         true,
+			ExistsInPrevious: true,
+		}
+
+		result := formatPropertyChange(change)
+
+		assert.Contains(t, result, `set property "SecretString" (opaque value)`)
+		assert.NotContains(t, result, "L4clqcm50IFl")
+	})
+
+	t.Run("opaque add on new resource shows add with opaque value", func(t *testing.T) {
+		change := PropertyChange{
+			Path:      "SecretString",
+			Value:     "L4clqcm50IFl",
+			Operation: "add",
+			IsOpaque:  true,
+		}
+
+		result := formatPropertyChange(change)
+
+		assert.Contains(t, result, `add new property "SecretString" (opaque value)`)
+		assert.NotContains(t, result, "L4clqcm50IFl")
+	})
+
+	t.Run("opaque add array entry shows opaque value", func(t *testing.T) {
+		change := PropertyChange{
+			Path:      "Secrets[0]",
+			Value:     "secret123",
+			Operation: "add",
+			IsOpaque:  true,
+		}
+
+		result := formatPropertyChange(change)
+
+		assert.Contains(t, result, `add new entry to "Secrets" (opaque value)`)
+		assert.NotContains(t, result, "secret123")
+	})
+}
+
+func TestFormatPropertyChange_WriteOnlyAdd(t *testing.T) {
+	t.Run("write-only add on existing resource shows set with write-only", func(t *testing.T) {
+		change := PropertyChange{
+			Path:             "LoginProfile.Password",
+			Value:            "newpass",
+			Operation:        "add",
+			ExistsInPrevious: true,
+		}
+
+		result := formatPropertyChange(change)
+
+		assert.Contains(t, result, `set property "LoginProfile.Password" to "newpass" (write-only)`)
+		assert.NotContains(t, result, "add new property")
+	})
+
+	t.Run("write-only add array entry on existing resource shows set with write-only", func(t *testing.T) {
+		change := PropertyChange{
+			Path:             "Tokens[0]",
+			Value:            "tok-123",
+			Operation:        "add",
+			ExistsInPrevious: true,
+		}
+
+		result := formatPropertyChange(change)
+
+		assert.Contains(t, result, `set entry "tok-123" in "Tokens" (write-only)`)
+	})
+}
+
+func TestPropertyExistsInPrevious(t *testing.T) {
+	t.Run("property exists", func(t *testing.T) {
+		prev := json.RawMessage(`{"SecretString": {"$value": "hash", "$visibility": "Opaque"}}`)
+
+		assert.True(t, propertyExistsInPrevious("SecretString", prev))
+	})
+
+	t.Run("property does not exist", func(t *testing.T) {
+		prev := json.RawMessage(`{"OtherProp": "value"}`)
+
+		assert.False(t, propertyExistsInPrevious("SecretString", prev))
+	})
+
+	t.Run("nested property exists", func(t *testing.T) {
+		prev := json.RawMessage(`{"LoginProfile": {"Password": "hash"}}`)
+
+		assert.True(t, propertyExistsInPrevious("LoginProfile/Password", prev))
+	})
+
+	t.Run("empty previous properties", func(t *testing.T) {
+		assert.False(t, propertyExistsInPrevious("SecretString", nil))
+	})
+}
+
+func TestFormatPatchDocument_OpaqueWriteOnlyField(t *testing.T) {
+	t.Run("opaque write-only field on update shows set with opaque value", func(t *testing.T) {
+		node := gtree.NewRoot("")
+		patchDoc := []map[string]any{
+			{
+				"op":    "add",
+				"path":  "/SecretString",
+				"value": "L4clqcm50IFl",
+			},
+		}
+		serialized, err := json.Marshal(patchDoc)
+		assert.NoError(t, err)
+
+		// Properties (desired) contain the opaque Value wrapper
+		properties := json.RawMessage(`{"SecretString": {"$value": "L4clqcm50IFl", "$visibility": "Opaque", "$strategy": "Update"}}`)
+		// Previous properties (from DB) also have the opaque marker
+		previousProperties := json.RawMessage(`{"SecretString": {"$value": "oldhash", "$visibility": "Opaque", "$strategy": "Update"}}`)
+
+		refLabels := make(map[string]string)
+		FormatPatchDocument(node, serialized, properties, previousProperties, refLabels, "")
+
+		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
+		assert.NoError(t, err)
+
+		assert.Len(t, nodes, 2)
+		assert.Contains(t, nodes[1].Name(), "opaque value")
+		assert.Contains(t, nodes[1].Name(), `set property "SecretString"`)
+		assert.NotContains(t, nodes[1].Name(), "L4clqcm50IFl")
+	})
+}
+
 func TestFormatReferenceValue(t *testing.T) {
 	t.Run("formats KSUID reference with label mapping", func(t *testing.T) {
 		ref := "formae://ksuid-12345#/SubnetId"
