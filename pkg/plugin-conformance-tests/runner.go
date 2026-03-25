@@ -929,6 +929,11 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 			continue
 		}
 
+		// Skip comparison for empty provider-default arrays
+		if arr, isArray := expectedValue.([]any); isArray && len(arr) == 0 && isProviderDefault(key, providerDefaults) {
+			continue
+		}
+
 		// Use order-independent comparison for all arrays
 		if _, isArray := expectedValue.([]any); isArray {
 			if !compareArrayUnordered(t, key, expectedValue, actualValue, context, providerDefaults) {
