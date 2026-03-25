@@ -1233,6 +1233,11 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 		// Strip Formae metadata tags from the resource properties
 		h.stripFormaeTags(res)
 
+		// Strip nested empty collections ({}/[]) that PKL renders for unset
+		// nullable Listing/Mapping fields. Without this, K8S rejects resources
+		// with empty probe objects (e.g. livenessProbe: {}).
+		h.stripNestedEmptyCollections(res)
+
 		// Resolve any resolvable references using previously created resources
 		resolvedProps, err := h.resolveResolvablesInProperties(res.Properties, createdResources)
 		if err != nil {
@@ -1698,6 +1703,65 @@ func (h *TestHarness) stripFormaeTags(resource *pkgmodel.Resource) {
 	}
 
 	resource.Properties = modifiedProperties
+}
+
+// stripNestedEmptyCollections removes empty objects ({}) and arrays ([]) from
+// nested positions in resource properties. PKL renders unset nullable
+// Listing/Mapping fields as empty collections. The agent does this in
+// convertResourceForPlugin; the discovery test path bypasses the agent so we
+// must replicate it here.
+func (h *TestHarness) stripNestedEmptyCollections(resource *pkgmodel.Resource) {
+	if len(resource.Properties) == 0 {
+		return
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(resource.Properties, &doc); err != nil {
+		return
+	}
+
+	for k, v := range doc {
+		doc[k] = stripEmptyNested(v)
+	}
+
+	cleaned, err := json.Marshal(doc)
+	if err != nil {
+		return
+	}
+	resource.Properties = cleaned
+}
+
+func stripEmptyNested(val any) any {
+	switch v := val.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for k, elem := range v {
+			if isEmptyCollection(elem) {
+				continue
+			}
+			cleaned[k] = stripEmptyNested(elem)
+		}
+		return cleaned
+	case []any:
+		cleaned := make([]any, 0, len(v))
+		for _, elem := range v {
+			cleaned = append(cleaned, stripEmptyNested(elem))
+		}
+		return cleaned
+	default:
+		return val
+	}
+}
+
+func isEmptyCollection(val any) bool {
+	switch v := val.(type) {
+	case map[string]any:
+		return len(v) == 0
+	case []any:
+		return len(v) == 0
+	default:
+		return false
+	}
 }
 
 // submitForma is a helper to submit forma JSON to the API

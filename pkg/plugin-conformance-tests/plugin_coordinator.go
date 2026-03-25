@@ -369,11 +369,12 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 
 	c.Log().Info("Sending CreateResource to PluginOperator",
 		"resourceType", req.ResourceType,
+		"propsLen", len(req.Properties),
 		"operatorPID", spawnResult.PID)
 
 	result, err := c.CallWithTimeout(spawnResult.PID, createReq, 120) // 2 minute timeout
 	if err != nil {
-		return CreateResourceResult{Error: fmt.Sprintf("CreateResource call failed: %v", err)}
+		return CreateResourceResult{Error: fmt.Sprintf("CreateResource call failed (type=%s, propsLen=%d): %v", req.ResourceType, len(req.Properties), err)}
 	}
 
 	trackedProgress, ok := result.(plugin.TrackedProgress)
@@ -384,6 +385,8 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 	c.Log().Info("CreateResource initial response",
 		"resourceType", req.ResourceType,
 		"status", trackedProgress.OperationStatus,
+		"errorCode", trackedProgress.ErrorCode,
+		"statusMessage", trackedProgress.StatusMessage,
 		"nativeID", trackedProgress.NativeID)
 
 	// Return immediately with the operator PID and initial progress

@@ -644,8 +644,10 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
-		proc.Log().Error("PluginOperator: failed to create resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		proc.Log().Error("PluginOperator: failed to create resource %s: %v", operation.ResourceType, err)
+		errProgress := data.newUnforeseenError()
+		errProgress.StatusMessage = err.Error()
+		return StateFinishedWithError, data, errProgress, nil, nil
 	}
 
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
