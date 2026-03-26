@@ -977,3 +977,109 @@ func TestGetTestType(t *testing.T) {
 		})
 	}
 }
+func TestCompareArrayOfMaps_EmptyArraysInExpectedMissingInActual(t *testing.T) {
+	// PKL renders nullable Listing fields as empty arrays [].
+	// When matching array elements, an expected element with empty arrays
+	// in some fields should match an actual element that omits those fields.
+	expected := []any{
+		map[string]any{
+			"apiGroups":       []any{""},
+			"resources":       []any{"nodes"},
+			"verbs":           []any{"get", "list"},
+			"nonResourceURLs": []any{},
+			"resourceNames":   []any{},
+		},
+	}
+	actual := []any{
+		map[string]any{
+			"apiGroups": []any{""},
+			"resources": []any{"nodes"},
+			"verbs":     []any{"get", "list"},
+		},
+	}
+	providerDefaults := map[string]providerDefault{}
+	result := compareArrayUnordered(t, "rules", expected, actual, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when expected element has empty arrays that actual omits")
+	}
+}
+
+func TestCompareProperties_EmptyMapInExpectedMissingInActual(t *testing.T) {
+	// PKL renders nullable Mapping fields as empty maps {}.
+	// When the provider omits these entirely, the test should pass
+	// since an empty map and absent are semantically equivalent.
+	expectedProperties := map[string]any{
+		"metadata": map[string]any{
+			"name":        "my-resource",
+			"labels":      map[string]any{},
+			"annotations": map[string]any{},
+		},
+	}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"metadata": map[string]any{
+				"name": "my-resource",
+			},
+		},
+	}
+	providerDefaults := map[string]providerDefault{}
+	result := compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when expected has empty map but actual omits the key")
+	}
+}
+
+func TestCompareMap_EmptyMapInExpectedMissingInActual(t *testing.T) {
+	// Same scenario at the nested compareMap level: expected has empty labels/annotations
+	// maps but actual omits them entirely.
+	expected := map[string]any{
+		"name":        "my-resource",
+		"labels":      map[string]any{},
+		"annotations": map[string]any{},
+	}
+	actual := map[string]any{
+		"name": "my-resource",
+	}
+	providerDefaults := map[string]providerDefault{}
+	result := compareMap(t, "metadata", expected, actual, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when expected has empty map but actual omits the key")
+	}
+}
+
+func TestCompareMap_NonEmptyMapInExpectedMissingInActual(t *testing.T) {
+	// When expected has a non-empty map but actual omits it, that's a real failure.
+	expected := map[string]any{
+		"name":   "my-resource",
+		"labels": map[string]any{"env": "prod"},
+	}
+	actual := map[string]any{
+		"name": "my-resource",
+	}
+	providerDefaults := map[string]providerDefault{}
+	inner := &testing.T{}
+	result := compareMap(inner, "metadata", expected, actual, "after create", providerDefaults)
+	if result {
+		t.Error("should fail when expected has non-empty map but actual omits the key")
+	}
+}
+
+func TestCompareProperties_NullInExpectedMissingInActual(t *testing.T) {
+	// Existing behavior: null expected values are tolerated when missing in actual.
+	expectedProperties := map[string]any{
+		"metadata": map[string]any{"name": "my-resource"},
+		"tags":     nil,
+	}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"metadata": map[string]any{"name": "my-resource"},
+		},
+	}
+	providerDefaults := map[string]providerDefault{}
+	result := compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults)
+	if !result {
+		t.Error("should pass when expected has null but actual omits the key")
+	}
+}
+
+
