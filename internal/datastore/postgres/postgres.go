@@ -53,10 +53,19 @@ type DatastorePostgres struct {
 	ctx     context.Context
 }
 
+// BuildConnStr constructs a PostgreSQL connection string from config fields.
+// Unix socket hosts (starting with /) use DSN key-value format to avoid
+// URI parsing issues with colons in paths like /cloudsql/project:region:instance.
+func BuildConnStr(host string, port int, user, password, database string) string {
+	if strings.HasPrefix(host, "/") {
+		return fmt.Sprintf("host=%s user=%s password=%s dbname=%s", host, user, password, database)
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", user, password, host, port, database)
+}
+
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func ensureDatabaseExists(ctx context.Context, cfg *pkgmodel.DatastoreConfig) error {
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/postgres",
-		cfg.Postgres.User, cfg.Postgres.Password, cfg.Postgres.Host, cfg.Postgres.Port)
+	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, "postgres")
 
 	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
@@ -97,8 +106,7 @@ func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.Datas
 }
 
 func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
-		cfg.Postgres.User, cfg.Postgres.Password, cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.Database)
+	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, cfg.Postgres.Database)
 
 	// Append connection parameters if provided
 	if cfg.Postgres.ConnectionParams != "" {
@@ -3506,8 +3514,7 @@ func (d DatastorePostgres) Close() {
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func (d DatastorePostgres) CleanUp() error {
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
-		d.cfg.Postgres.User, d.cfg.Postgres.Password, d.cfg.Postgres.Host, d.cfg.Postgres.Port, d.cfg.Postgres.Database)
+	connStr := BuildConnStr(d.cfg.Postgres.Host, d.cfg.Postgres.Port, d.cfg.Postgres.User, d.cfg.Postgres.Password, d.cfg.Postgres.Database)
 
 	conn, err := pgx.Connect(d.ctx, connStr)
 	if err != nil {
