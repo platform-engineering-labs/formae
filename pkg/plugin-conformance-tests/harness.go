@@ -607,6 +607,19 @@ func (h *TestHarness) setCommandEnv(cmd *exec.Cmd) {
 	cmd.Env = append(os.Environ(), fmt.Sprintf("FORMAE_TEST_RUN_ID=%s", h.testRunID))
 }
 
+// RotateTestRunID generates a new random test run ID. This is used before
+// the OOB re-apply step so that recreated resources get unique names,
+// avoiding conflicts with resources that are still being async-deleted
+// by the cloud provider (e.g., OCI compartments).
+func (h *TestHarness) RotateTestRunID() {
+	newIDBytes := make([]byte, 4)
+	if _, err := rand.Read(newIDBytes); err != nil {
+		h.t.Fatalf("Failed to generate new test run ID: %v", err)
+	}
+	h.testRunID = hex.EncodeToString(newIDBytes)
+	h.t.Logf("Rotated test run ID to: %s", h.testRunID)
+}
+
 // StartAgent starts the formae agent in the background
 func (h *TestHarness) StartAgent() error {
 	if h.agentStarted {
@@ -1220,6 +1233,11 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 		// Strip Formae metadata tags from the resource properties
 		h.stripFormaeTags(res)
 
+		// Strip nested empty collections ({}/[]) that PKL renders for unset
+		// nullable Listing/Mapping fields. Without this, K8S rejects resources
+		// with empty probe objects (e.g. livenessProbe: {}).
+		h.stripNestedEmptyCollections(res)
+
 		// Resolve any resolvable references using previously created resources
 		resolvedProps, err := h.resolveResolvablesInProperties(res.Properties, createdResources)
 		if err != nil {
@@ -1687,6 +1705,65 @@ func (h *TestHarness) stripFormaeTags(resource *pkgmodel.Resource) {
 	resource.Properties = modifiedProperties
 }
 
+// stripNestedEmptyCollections removes empty objects ({}) and arrays ([]) from
+// nested positions in resource properties. PKL renders unset nullable
+// Listing/Mapping fields as empty collections. The agent does this in
+// convertResourceForPlugin; the discovery test path bypasses the agent so we
+// must replicate it here.
+func (h *TestHarness) stripNestedEmptyCollections(resource *pkgmodel.Resource) {
+	if len(resource.Properties) == 0 {
+		return
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(resource.Properties, &doc); err != nil {
+		return
+	}
+
+	for k, v := range doc {
+		doc[k] = stripEmptyNested(v)
+	}
+
+	cleaned, err := json.Marshal(doc)
+	if err != nil {
+		return
+	}
+	resource.Properties = cleaned
+}
+
+func stripEmptyNested(val any) any {
+	switch v := val.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for k, elem := range v {
+			if isEmptyCollection(elem) {
+				continue
+			}
+			cleaned[k] = stripEmptyNested(elem)
+		}
+		return cleaned
+	case []any:
+		cleaned := make([]any, 0, len(v))
+		for _, elem := range v {
+			cleaned = append(cleaned, stripEmptyNested(elem))
+		}
+		return cleaned
+	default:
+		return val
+	}
+}
+
+func isEmptyCollection(val any) bool {
+	switch v := val.(type) {
+	case map[string]any:
+		return len(v) == 0
+	case []any:
+		return len(v) == 0
+	default:
+		return false
+	}
+}
+
 // submitForma is a helper to submit forma JSON to the API
 func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, error) {
 	commandsURL := fmt.Sprintf("http://localhost:%d/api/v1/commands", h.agentPort)
@@ -1827,7 +1904,12 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 	for time.Now().Before(deadline) {
 		status, err := h.GetStatus(commandID)
 		if err != nil {
-			return "", fmt.Errorf("failed to get status: %w", err)
+			// Retry on all errors — the command may not be visible yet (e.g.,
+			// the agent is still processing the apply request). Permanent
+			// failures (wrong URL, auth) are bounded by the poll timeout.
+			h.t.Logf("Status query error (retrying): %v", err)
+			time.Sleep(pollInterval)
+			continue
 		}
 
 		h.t.Logf("Command %s state: %s", commandID, status)

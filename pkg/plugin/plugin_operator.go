@@ -131,13 +131,15 @@ func (tp *TrackedProgress) HasFinished() bool {
 }
 
 type ReadResource struct {
-	Namespace        string
-	NativeID         string
-	TargetConfig     json.RawMessage
-	Resource         model.Resource
-	ExistingResource model.Resource // The existing resource to read
-	IsSync           bool
-	IsDelete         bool
+	Namespace         string
+	NativeID          string
+	ResourceType      string // Extracted from Resource.Type to avoid decompression for common access
+	ResourceNamespace string // Extracted from Resource.Namespace() to avoid decompression for common access
+	TargetConfig      json.RawMessage
+	Resource          []byte // gzip-compressed JSON of model.Resource (use CompressResource/DecompressResource)
+	ExistingResource  []byte // gzip-compressed JSON of model.Resource
+	IsSync            bool
+	IsDelete          bool
 
 	// RedactSensitive declares intent to remove sensitive properties
 	RedactSensitive bool
@@ -169,7 +171,7 @@ type UpdateResource struct {
 type DeleteResource struct {
 	Namespace    string
 	NativeID     string
-	Resource     model.Resource
+	Resource     []byte // gzip-compressed JSON of model.Resource (use CompressResource/DecompressResource)
 	ResourceType string
 	TargetConfig json.RawMessage
 }
@@ -253,6 +255,54 @@ func DecompressListedResources(data []byte) ([]ListedResource, error) {
 	return resources, nil
 }
 
+// CompressResource compresses a model.Resource to gzip-compressed JSON.
+// This is required because Ergo has a hardcoded 64KB buffer limit in its
+// network receive path (ReadDataFrom with math.MaxUint16 limit). Resources
+// with complex schemas (e.g. K8S Pod with 469 field hints) can serialize
+// to ~100KB via EDF, exceeding this limit and causing silent message drops.
+func CompressResource(r model.Resource) ([]byte, error) {
+	jsonData, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal resource: %w", err)
+	}
+
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
+	}
+
+	if _, err := gz.Write(jsonData); err != nil {
+		return nil, fmt.Errorf("failed to write compressed data: %w", err)
+	}
+
+	if err := gz.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecompressResource decompresses gzip-compressed JSON to a model.Resource.
+func DecompressResource(data []byte) (model.Resource, error) {
+	if len(data) == 0 {
+		return model.Resource{}, nil
+	}
+
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return model.Resource{}, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	var r model.Resource
+	if err := json.NewDecoder(gz).Decode(&r); err != nil {
+		return model.Resource{}, fmt.Errorf("failed to decode resource: %w", err)
+	}
+
+	return r, nil
+}
+
 type PluginOperatorCheckStatus struct {
 	Namespace         string
 	RequestID         string
@@ -274,9 +324,9 @@ type StatusCheck interface {
 // StatusCheck implementations - properties are expected to be pre-resolved by ResourceUpdater
 func (r ReadResource) StatusCheck(progress *resource.ProgressResult) PluginOperatorCheckStatus {
 	return PluginOperatorCheckStatus{
-		Namespace:         r.Resource.Namespace(),
+		Namespace:         r.ResourceNamespace,
 		RequestID:         r.NativeID,
-		ResourceType:      r.Resource.Type,
+		ResourceType:      r.ResourceType,
 		TargetConfig:      r.TargetConfig,
 		ResourceOperation: resource.OperationRead,
 		Request:           r,
@@ -339,7 +389,7 @@ func (r ReadResource) PluginNamespace() string {
 }
 
 func (r ReadResource) GetResourceType() string {
-	return r.Resource.Type
+	return r.ResourceType
 }
 
 func (c CreateResource) Operation() resource.Operation {
@@ -553,7 +603,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 
 	result, err := data.plugin.Read(data.context, &resource.ReadRequest{
 		NativeID:        operation.NativeID,
-		ResourceType:    operation.Resource.Type,
+		ResourceType:    operation.ResourceType,
 		TargetConfig:    operation.TargetConfig,
 		RedactSensitive: operation.RedactSensitive,
 	})
@@ -594,8 +644,10 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
-		proc.Log().Error("PluginOperator: failed to create resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		proc.Log().Error("PluginOperator: failed to create resource %s: %v", operation.ResourceType, err)
+		errProgress := data.newUnforeseenError()
+		errProgress.StatusMessage = err.Error()
+		return StateFinishedWithError, data, errProgress, nil, nil
 	}
 
 	return handlePluginResult(data, operation, proc, result.ProgressResult)

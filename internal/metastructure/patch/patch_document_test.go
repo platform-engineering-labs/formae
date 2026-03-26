@@ -367,7 +367,10 @@ func TestGeneratePatch(t *testing.T) {
 	err = json.Unmarshal(patchDoc, &patches)
 
 	assert.NoError(t, err)
-	assert.Len(t, patches, 4)
+	// val2 is createOnly and changed → needsReplacement is true, but
+	// the createOnly operation is filtered from the patch (can't be sent
+	// to the cloud API). Only val1, label, stack remain.
+	assert.Len(t, patches, 3)
 }
 
 // Test that createPatch will resolve references in json objects amd arrays of json objects
@@ -1213,6 +1216,110 @@ func TestGeneratePatch_AtomicField_NoDiffNoPatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, needsReplacement)
 	assert.Empty(t, patchDoc, "Expected no patch when atomic field is identical")
+}
+
+func TestGeneratePatch_EmptyArrayOnCreateOnlyField_NoPatch(t *testing.T) {
+	// Simulates PKL schema rendering unset nullable Listing fields
+	// as []. For createOnly fields this should not generate a patch operation,
+	// since the user can't modify them after creation.
+	document := []byte(`{
+		"DomainName": "example.com"
+	}`)
+
+	// Desired state has empty arrays for createOnly Listing fields (PKL rendering)
+	patch := []byte(`{
+		"DomainName": "example.com",
+		"DomainNameServers": [],
+		"NtpServers": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"DomainName", "DomainNameServers", "NtpServers"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"DomainNameServers": {CreateOnly: true},
+			"NtpServers":        {CreateOnly: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement, "Empty arrays on createOnly fields should not trigger replacement")
+	assert.Empty(t, patchDoc, "Expected no patch when only difference is empty arrays on createOnly fields")
+}
+
+func TestGeneratePatch_NonEmptyArrayOnCreateOnlyField_TriggersReplacement(t *testing.T) {
+	// A real change to a createOnly field should still trigger replacement.
+	document := []byte(`{
+		"DomainName": "example.com"
+	}`)
+
+	patch := []byte(`{
+		"DomainName": "example.com",
+		"DomainNameServers": ["8.8.8.8"]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"DomainName", "DomainNameServers"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"DomainNameServers": {CreateOnly: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.True(t, needsReplacement, "Non-empty change to createOnly field should trigger replacement")
+	assert.NotEmpty(t, patchDoc)
+}
+
+func TestGeneratePatch_EmptyArrayOnNonCreateOnlyField_NoPatch(t *testing.T) {
+	// Empty arrays on non-createOnly fields should also be filtered. The PKL
+	// schema renders unset nullable Listings as []. An "add" of [] is never
+	// user intent — it's PKL rendering noise.
+	document := []byte(`{
+		"GroupName": "my-group"
+	}`)
+
+	patch := []byte(`{
+		"GroupName": "my-group",
+		"ManagedPolicyArns": [],
+		"Policies": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"GroupName", "ManagedPolicyArns", "Policies"},
+		Hints:  map[string]pkgmodel.FieldHint{},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "Expected no patch when only difference is empty arrays on non-createOnly fields")
+}
+
+func TestGeneratePatch_ReplaceNonEmptyArrayPreserved(t *testing.T) {
+	// A "replace" of an existing field with [] should be preserved (user
+	// clearing a collection).
+	document := []byte(`{
+		"Name": "test",
+		"Tags": [{"Key": "a", "Value": "1"}]
+	}`)
+
+	patch := []byte(`{
+		"Name": "test",
+		"Tags": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints:  map[string]pkgmodel.FieldHint{},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotEmpty(t, patchDoc, "Expected patch when user clears a collection via replace")
 }
 
 func TestEntitySetProviderDefaultsFromHints(t *testing.T) {

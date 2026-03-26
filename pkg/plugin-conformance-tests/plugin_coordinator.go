@@ -369,11 +369,12 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 
 	c.Log().Info("Sending CreateResource to PluginOperator",
 		"resourceType", req.ResourceType,
+		"propsLen", len(req.Properties),
 		"operatorPID", spawnResult.PID)
 
 	result, err := c.CallWithTimeout(spawnResult.PID, createReq, 120) // 2 minute timeout
 	if err != nil {
-		return CreateResourceResult{Error: fmt.Sprintf("CreateResource call failed: %v", err)}
+		return CreateResourceResult{Error: fmt.Sprintf("CreateResource call failed (type=%s, propsLen=%d): %v", req.ResourceType, len(req.Properties), err)}
 	}
 
 	trackedProgress, ok := result.(plugin.TrackedProgress)
@@ -384,6 +385,8 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 	c.Log().Info("CreateResource initial response",
 		"resourceType", req.ResourceType,
 		"status", trackedProgress.OperationStatus,
+		"errorCode", trackedProgress.ErrorCode,
+		"statusMessage", trackedProgress.StatusMessage,
 		"nativeID", trackedProgress.NativeID)
 
 	// Return immediately with the operator PID and initial progress
@@ -406,14 +409,18 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 	}
 
 	// Step 2: Send Delete request to PluginOperator
+	compRes, err := plugin.CompressResource(model.Resource{
+		Type:     req.ResourceType,
+		NativeID: req.NativeID,
+	})
+	if err != nil {
+		return DeleteResourceResult{Error: fmt.Sprintf("failed to compress resource: %v", err)}
+	}
 	deleteReq := plugin.DeleteResource{
 		Namespace:    req.Namespace,
 		NativeID:     req.NativeID,
 		ResourceType: req.ResourceType,
-		Resource: model.Resource{
-			Type:     req.ResourceType,
-			NativeID: req.NativeID,
-		},
+		Resource:     compRes,
 		TargetConfig: req.Target.Config,
 	}
 

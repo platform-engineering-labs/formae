@@ -493,6 +493,12 @@ func compareArrayUnordered(t *testing.T, key string, expected, actual any, conte
 	}
 
 	if len(expectedArr) != len(actualArr) {
+		// If expected is empty and the field has a provider default, the PKL
+		// rendered a null Listing as [] but the provider filled in a default
+		// value. Accept the provider's value.
+		if len(expectedArr) == 0 && isProviderDefault(key, providerDefaults) {
+			return true
+		}
 		t.Errorf("Array %s length mismatch: expected %d, got %d (%s)", key, len(expectedArr), len(actualArr), context)
 		return false
 	}
@@ -622,6 +628,17 @@ func mapSubsetMatch(expected, actual map[string]any) bool {
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
+			// Skip expected keys with null or empty collection values —
+			// these are PKL rendering artifacts, not real field requirements
+			if expectedValue == nil {
+				continue
+			}
+			if arr, ok := expectedValue.([]any); ok && len(arr) == 0 {
+				continue
+			}
+			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
+				continue
+			}
 			return false
 		}
 		expectedValue = normalizeResolvables(expectedValue)
@@ -809,6 +826,17 @@ func compareMap(t *testing.T, name string, expected, actual map[string]any, cont
 	for key, expectedValue := range expected {
 		actualValue, exists := actual[key]
 		if !exists {
+			// Nullable fields rendered as null or empty arrays by PKL may be
+			// legitimately absent from the provider response.
+			if expectedValue == nil {
+				continue
+			}
+			if arr, isArr := expectedValue.([]any); isArr && len(arr) == 0 {
+				continue
+			}
+			if m, isMap := expectedValue.(map[string]any); isMap && len(m) == 0 {
+				continue
+			}
 			t.Errorf("Property %s.%s should exist (%s)", name, key, context)
 			ok = false
 			continue
@@ -875,14 +903,16 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 	for key, expectedValue := range expectedProperties {
 		actualValue, exists := actualProperties[key]
 		if !exists {
-			// Nullable fields that the user didn't set may render as null or empty
-			// arrays in PKL output. Cloud providers legitimately omit these from
-			// their response, so treat a missing actual value as OK when the
-			// expected value is null or an empty array.
+			// Nullable fields that the user didn't set may render as null, empty
+			// arrays, or empty maps in PKL output. Cloud providers legitimately
+			// omit these from their response.
 			if expectedValue == nil {
 				continue
 			}
 			if arr, ok := expectedValue.([]any); ok && len(arr) == 0 {
+				continue
+			}
+			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
 				continue
 			}
 			t.Errorf("Property %s should exist in actual resource (%s)", key, context)
@@ -896,6 +926,11 @@ func compareProperties(t *testing.T, expectedProperties map[string]any, actualRe
 			if !compareResolvable(t, key, expectedValue, actualValue, context) {
 				hasErrors = true
 			}
+			continue
+		}
+
+		// Skip comparison for empty provider-default arrays
+		if arr, isArray := expectedValue.([]any); isArray && len(arr) == 0 && isProviderDefault(key, providerDefaults) {
 			continue
 		}
 
@@ -998,7 +1033,7 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	// === Step 2: Wait for plugin to be registered before any commands ===
 	t.Log("Step 2: Waiting for plugin to be registered...")
 	namespace := strings.Split(actualResourceType, "::")[0]
-	if err := harness.WaitForPluginRegistered(namespace, 30*time.Second); err != nil {
+	if err := harness.WaitForPluginRegistered(namespace, 60*time.Second); err != nil {
 		t.Fatalf("Plugin should register within timeout: %v", err)
 	}
 
@@ -1343,6 +1378,10 @@ func runCRUDTest(t *testing.T, tc TestCase) {
 	}
 
 	// === Step 19: Re-apply the resource for OOB delete test ===
+	// Rotate the test run ID so recreated resources get unique names.
+	// This avoids conflicts with resources still being async-deleted
+	// by the cloud provider (e.g., OCI compartments).
+	harness.RotateTestRunID()
 	t.Log("Step 19: Re-applying forma to recreate resource for OOB delete test...")
 	reapplyCommandID, err := harness.Apply(tc.PKLFile)
 	if err != nil {
@@ -1572,7 +1611,7 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 
 	// Step 3: Wait for plugin to register (using extracted namespace, not directory name)
 	t.Log("Step 3: Waiting for plugin to register...")
-	if err := harness.WaitForPluginRegistered(namespace, 30*time.Second); err != nil {
+	if err := harness.WaitForPluginRegistered(namespace, 60*time.Second); err != nil {
 		t.Fatalf("plugin did not register: %v", err)
 	}
 

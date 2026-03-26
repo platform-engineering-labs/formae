@@ -15,7 +15,6 @@ type LoadResource struct {
 type LoadResourceResult struct {
 	Resource pkgmodel.Resource
 	Target   pkgmodel.Target
-	Found    bool
 }
 
 // CleanupEmptyStacks is sent to ResourcePersister after a changeset completes

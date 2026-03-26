@@ -568,10 +568,7 @@ func TestResourcePersister_MissingRequiredFields(t *testing.T) {
 	loadResult := persister.Call(sender, messages.LoadResource{
 		ResourceURI: resourceUpdate.URI(),
 	})
-	assert.NoError(t, loadResult.Error)
-	loaded, ok := loadResult.Response.(messages.LoadResourceResult)
-	assert.True(t, ok)
-	assert.False(t, loaded.Found)
+	assert.Error(t, loadResult.Error)
 }
 
 func TestResourcePersister_IdempotentCreate(t *testing.T) {
