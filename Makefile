@@ -59,6 +59,7 @@ fetch-external-plugins:
 		else \
 			echo "Cloning $$name..."; \
 			git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
+			. ./scripts/ci/track-event.sh && formae_track_event "ci_repo_clone" "cloned_repo=$$name"; \
 		fi \
 	done
 	@if [ -n "$(AZURE_PLUGIN_REF)" ]; then \
