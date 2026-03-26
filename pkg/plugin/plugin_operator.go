@@ -704,13 +704,40 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 
 	proc.Log().Debug("PluginOperator: checking status of resource %s", operation.RequestID)
 
-	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
+	// Use a timeout for the status check to prevent blocking indefinitely.
+	// Cloud provider APIs (e.g. CloudControl GetResourceRequestStatus for RDS)
+	// can occasionally hang for >20s. Without a timeout, the PluginOperator
+	// blocks and never sends progress back to the ResourceUpdater, which then
+	// times out with "missing in action".
+	statusCtx, cancel := context.WithTimeout(data.context, data.config.StatusCheckInterval)
+	defer cancel()
+
+	result, err := data.plugin.Status(statusCtx, &resource.StatusRequest{
 		RequestID:    operation.RequestID,
 		NativeID:     operation.NativeID,
 		ResourceType: operation.ResourceType,
 		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
+		if statusCtx.Err() == context.DeadlineExceeded {
+			proc.Log().Warning("PluginOperator: status check timed out after %v, rescheduling", data.config.StatusCheckInterval)
+			reschedule := statemachine.GenericTimeout{
+				Name:     "CheckStatus",
+				Duration: data.config.StatusCheckInterval,
+				Message:  operation,
+			}
+			// Send a progress update to reset the ResourceUpdater's state timeout
+			progress := TrackedProgress{
+				ProgressResult: resource.ProgressResult{
+					Operation:     operation.Operation(),
+					StatusMessage: "status check timed out, retrying",
+				},
+			}
+			if sendErr := proc.Send(data.requestedBy, progress); sendErr != nil {
+				proc.Log().Error("PluginOperator: failed to send timeout progress: %v", sendErr)
+			}
+			return StateWaitingForResource, data, []statemachine.Action{reschedule}, nil
+		}
 		proc.Log().Error("PluginOperator: failed to get status of resource: %v", err)
 		return StateFinishedWithError, data, nil, nil
 	}
