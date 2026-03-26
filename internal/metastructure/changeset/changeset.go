@@ -312,18 +312,27 @@ func (p *ExecutionDAG) connectDeleteToCreate(allOps []resource_update.ResourceUp
 }
 
 // buildTargetResolvableEdges links target nodes that have resolvables to the
-// resource nodes they depend on. A target whose config contains $ref to
-// formae://KSUID#/Property must wait for that resource's create/update to finish.
+// resource nodes they depend on.
+//
+// For create/update: target waits for the resource it depends on (normal order).
+// For delete: the resource delete waits for the target delete (reversed order),
+// ensuring resources on a dependent target are destroyed before the resource
+// that provides the target's config (e.g., Grafana dashboards deleted before
+// the Compose stack that hosts Grafana).
 func (p *ExecutionDAG) buildTargetResolvableEdges() {
-	// Build a map of resource KSUID → DAG node for create/update operations
-	resourceNodes := make(map[string]*DAGNode)
+	// Build maps of resource KSUID → DAG node by operation type
+	createUpdateNodes := make(map[string]*DAGNode)
+	deleteNodes := make(map[string]*DAGNode)
 	for _, node := range p.Nodes {
 		ru, ok := node.Update.(*resource_update.ResourceUpdate)
 		if !ok {
 			continue
 		}
-		if ru.Operation == resource_update.OperationCreate || ru.Operation == resource_update.OperationUpdate {
-			resourceNodes[ru.DesiredState.Ksuid] = node
+		switch ru.Operation {
+		case resource_update.OperationCreate, resource_update.OperationUpdate:
+			createUpdateNodes[ru.DesiredState.Ksuid] = node
+		case resource_update.OperationDelete:
+			deleteNodes[ru.DesiredState.Ksuid] = node
 		}
 	}
 
@@ -334,8 +343,19 @@ func (p *ExecutionDAG) buildTargetResolvableEdges() {
 		}
 		for _, uri := range tu.RemainingResolvables {
 			ksuid := uri.KSUID()
-			if depNode, exists := resourceNodes[ksuid]; exists {
-				node.LinkWith(depNode)
+			if tu.Operation == target_update.TargetOperationDelete {
+				// REVERSED: resource delete waits for target delete
+				// (target delete already waits for its own resource deletes
+				// via buildTargetResourceEdges, so this creates the full chain:
+				// compose stack delete ← grafana target delete ← dashboard deletes)
+				if depNode, exists := deleteNodes[ksuid]; exists {
+					depNode.LinkWith(node)
+				}
+			} else {
+				// NORMAL: target create/update waits for resource create/update
+				if depNode, exists := createUpdateNodes[ksuid]; exists {
+					node.LinkWith(depNode)
+				}
 			}
 		}
 	}

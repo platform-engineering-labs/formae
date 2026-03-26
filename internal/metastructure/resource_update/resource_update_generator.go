@@ -61,24 +61,29 @@ func GenerateResourceUpdates(
 		existingTargetMap[target.Label] = target
 	}
 
-	// desiredTargetMap starts as a copy of existingTargetMap, then is overridden
-	// with forma targets only for NEW targets (not in DB). For existing targets,
-	// the DB config is preferred because it contains resolved $value from target
-	// resolvables. The forma config may have unresolved $ref objects.
-	// For replaced targets, the replacement is handled separately in the DAG.
+	// desiredTargetMap starts as a copy of existingTargetMap with configs converted
+	// to plugin format (stripping $ref/$value metadata from target resolvables).
+	// Then overridden with forma targets for new targets only. For existing targets,
+	// the DB config is preferred because it contains resolved values; but we must
+	// convert it because Ergo Framework cannot serialize json.RawMessage with nested
+	// $ref/$value objects (ETF encoding silently drops the message).
 	var desiredTargetMap = make(map[string]*pkgmodel.Target)
 	for _, target := range existingTargets {
-		desiredTargetMap[target.Label] = target
+		t := *target
+		if converted, err := resolver.ConvertToPluginFormat(t.Config); err == nil {
+			t.Config = converted
+		}
+		tCopy := t
+		desiredTargetMap[target.Label] = &tCopy
 	}
 	for _, target := range forma.Targets {
 		t := target
 		if _, exists := existingTargetMap[target.Label]; !exists {
-			// New target: use forma config
 			desiredTargetMap[target.Label] = &t
 			slog.Debug("Target does not exist in existing targets - adding it", "target", target.Label)
 			existingTargetMap[target.Label] = &t
 		}
-		// Existing targets: keep the DB config (which has resolved $value)
+		// Existing targets: keep the DB config (already converted above)
 	}
 
 	// Validate stack references for commands that modify resources, sync commands are triggered from the agent

@@ -85,13 +85,17 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		// Target is being destroyed without explicit resources in the forma.
 		// The DAG will cascade-delete all resources in this target before
 		// deleting the target itself.
+		// Extract resolvables so the DAG can create reversed cross-target
+		// dependencies (e.g., compose stack delete waits for grafana target delete).
+		resolvables := resolver.ExtractResolvableURIsFromJSON(existing.Config)
 		return TargetUpdate{
-			Target:         target,
-			ExistingTarget: existing,
-			Operation:      TargetOperationDelete,
-			State:          TargetUpdateStateNotStarted,
-			StartTs:        now,
-			ModifiedTs:     now,
+			Target:               target,
+			ExistingTarget:       existing,
+			Operation:            TargetOperationDelete,
+			State:                TargetUpdateStateNotStarted,
+			StartTs:              now,
+			ModifiedTs:           now,
+			RemainingResolvables: resolvables,
 		}, true, nil
 	}
 
