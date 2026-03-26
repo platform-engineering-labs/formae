@@ -645,6 +645,16 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
 }
 
+// callStatusWithTimeout calls the plugin's Status method with a per-call timeout
+// derived from the retry config's StatusCheckInterval. This prevents the PluginOperator
+// from blocking indefinitely when a cloud provider's status API hangs (e.g. CloudControl
+// GetResourceRequestStatus for RDS during long CREATE operations).
+func callStatusWithTimeout(parentCtx context.Context, plugin ResourcePlugin, cfg model.RetryConfig, req *resource.StatusRequest) (*resource.StatusResult, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, cfg.StatusCheckInterval)
+	defer cancel()
+	return plugin.Status(ctx, req)
+}
+
 func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation PluginOperatorCheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, nil, nil
@@ -652,15 +662,35 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 
 	proc.Log().Debug("PluginOperator: checking status of resource %s", operation.RequestID)
 
-	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
+	result, err := callStatusWithTimeout(data.context, data.plugin, data.config, &resource.StatusRequest{
 		RequestID:    operation.RequestID,
 		NativeID:     operation.NativeID,
 		ResourceType: operation.ResourceType,
 		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
-		proc.Log().Error("PluginOperator: failed to get status of resource: %v", err)
-		return StateFinishedWithError, data, nil, nil
+		if data.context.Err() != nil {
+			// Parent context cancelled — propagate
+			proc.Log().Error("PluginOperator: context cancelled during status check: %v", err)
+			return StateFinishedWithError, data, nil, nil
+		}
+		// Status call timed out — reschedule and send keepalive to ResourceUpdater
+		proc.Log().Warning("PluginOperator: status check timed out after %v, rescheduling", data.config.StatusCheckInterval)
+		reschedule := statemachine.GenericTimeout{
+			Name:     "CheckStatus",
+			Duration: data.config.StatusCheckInterval,
+			Message:  operation,
+		}
+		progress := TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:     operation.Operation(),
+				StatusMessage: "status check timed out, retrying",
+			},
+		}
+		if sendErr := proc.Send(data.requestedBy, progress); sendErr != nil {
+			proc.Log().Error("PluginOperator: failed to send timeout progress: %v", sendErr)
+		}
+		return StateWaitingForResource, data, []statemachine.Action{reschedule}, nil
 	}
 
 	nextState, data, progress, actions, pluginErr := handlePluginResult(data, operation, proc, result.ProgressResult)
