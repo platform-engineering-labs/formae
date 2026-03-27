@@ -184,6 +184,25 @@ func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
 			}
 		}
 
+		hasCascadeTargets := false
+		for _, tu := range res.Simulation.Command.TargetUpdates {
+			if tu.IsCascade {
+				hasCascadeTargets = true
+				break
+			}
+		}
+		if hasCascadeTargets {
+			fmt.Printf("\n%s\n\n", display.Grey("The following targets will be cascade-deleted:"))
+			for _, tu := range res.Simulation.Command.TargetUpdates {
+				if tu.IsCascade {
+					fmt.Printf("  %s %s (depends on %s)\n",
+						display.Red("•"),
+						display.LightBlue(tu.TargetLabel),
+						display.Grey(tu.CascadeSource))
+				}
+			}
+		}
+
 		fmt.Printf("\n%s\n", display.Grey("To proceed with cascade deletes, use --on-dependents=cascade"))
 		return fmt.Errorf("cascade deletes detected, aborting (use --on-dependents=cascade to proceed)")
 	}
@@ -259,10 +278,15 @@ func runDestroyForMachines(app *app.App, opts *DestroyOptions) error {
 	return printer.Print(&apimodel.CommandID{CommandID: res.CommandID})
 }
 
-// hasCascadeDeletes checks if any resource updates in the command are cascade deletes
+// hasCascadeDeletes checks if any resource or target updates in the command are cascade deletes
 func hasCascadeDeletes(cmd *apimodel.Command) bool {
 	for _, ru := range cmd.ResourceUpdates {
 		if ru.IsCascade {
+			return true
+		}
+	}
+	for _, tu := range cmd.TargetUpdates {
+		if tu.IsCascade {
 			return true
 		}
 	}

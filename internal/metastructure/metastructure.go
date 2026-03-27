@@ -573,14 +573,16 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		}
 
 		apiCommand.TargetUpdates = append(apiCommand.TargetUpdates, apimodel.TargetUpdate{
-			TargetLabel:  tu.Target.Label,
-			Operation:    string(tu.Operation),
-			State:        string(tu.State),
-			Duration:     dur.Milliseconds(),
-			ErrorMessage: tu.ErrorMessage,
-			Discoverable: tu.Target.Discoverable,
-			StartTs:      tu.StartTs,
-			ModifiedTs:   tu.ModifiedTs,
+			TargetLabel:   tu.Target.Label,
+			Operation:     string(tu.Operation),
+			State:         string(tu.State),
+			Duration:      dur.Milliseconds(),
+			ErrorMessage:  tu.ErrorMessage,
+			Discoverable:  tu.Target.Discoverable,
+			StartTs:       tu.StartTs,
+			ModifiedTs:    tu.ModifiedTs,
+			IsCascade:     tu.IsCascade,
+			CascadeSource: tu.CascadeSource,
 		})
 	}
 

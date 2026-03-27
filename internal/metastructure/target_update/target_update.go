@@ -43,6 +43,8 @@ type TargetUpdate struct {
 	Version              string               `json:"Version"`
 	ErrorMessage         string               `json:"ErrorMessage,omitempty"`
 	RemainingResolvables []pkgmodel.FormaeURI `json:"RemainingResolvables,omitempty"`
+	IsCascade            bool                 `json:"IsCascade,omitempty"`     // True if this delete is triggered by cascade
+	CascadeSource        string               `json:"CascadeSource,omitempty"` // Label of resource that triggered the cascade
 }
 
 // HasChange returns true if the discoverable field changed
