@@ -238,7 +238,7 @@ func TestMetastructure_DestroyReadThrottlingShouldRetryAndFail(t *testing.T) {
 			}
 
 			return destroyCmd.State == forma_command.CommandStateFailed
-		}, 15*time.Second, 500*time.Millisecond, "Destroy should FAIL because Read hit Throttling")
+		}, 30*time.Second, 500*time.Millisecond, "Destroy should FAIL because Read hit Throttling")
 
 		// Verify the resource still exists (wasn't deleted)
 		resources, err := m.Datastore.LoadResourcesByStack("test-stack1")

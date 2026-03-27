@@ -208,7 +208,25 @@ func generateResourceUpdatesForDestroy(
 		}
 	}
 
-	// Generate cascade deletes for all managed resources in deleted targets
+	// Find cascade deletes - resources that reference the resources being deleted
+	cascadeDeletes, err := findCascadeDeletes(explicitDeleteKSUIDs, existingTargetMap, source, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find cascade deletes: %w", err)
+	}
+
+	resourceDestroys = append(resourceDestroys, cascadeDeletes...)
+
+	// Collect all KSUIDs that are already being deleted (explicit + cascade)
+	allDeleteKSUIDs := make(map[string]bool)
+	for ksuid := range explicitDeleteKSUIDs {
+		allDeleteKSUIDs[ksuid] = true
+	}
+	for _, cd := range cascadeDeletes {
+		allDeleteKSUIDs[cd.DesiredState.Ksuid] = true
+	}
+
+	// Generate deletes for remaining managed resources in deleted targets.
+	// Resources already covered by explicit or cascade deletes are skipped.
 	if len(deletedTargets) > 0 {
 		allResourcesByStack, err := ds.LoadAllResourcesByStack()
 		if err != nil {
@@ -220,8 +238,8 @@ func generateResourceUpdatesForDestroy(
 				if !res.Managed || !deletedTargets[res.Target] {
 					continue
 				}
-				if explicitDeleteKSUIDs[res.Ksuid] {
-					continue // Already being deleted explicitly
+				if allDeleteKSUIDs[res.Ksuid] {
+					continue // Already being deleted (explicit or cascade)
 				}
 
 				target, ok := existingTargetMap[res.Target]
@@ -231,22 +249,15 @@ func generateResourceUpdatesForDestroy(
 
 				resourceDestroy, err := NewResourceUpdateForDestroy(*res, *target, source)
 				if err != nil {
-					return nil, fmt.Errorf("failed to create cascade resource destroy for %s: %w", res.Label, err)
+					return nil, fmt.Errorf("failed to create target-cascade resource destroy for %s: %w", res.Label, err)
 				}
+				resourceDestroy.IsCascade = true
+				resourceDestroy.CascadeSource = res.Target
 
-				explicitDeleteKSUIDs[res.Ksuid] = true
 				resourceDestroys = append(resourceDestroys, resourceDestroy)
 			}
 		}
 	}
-
-	// Find cascade deletes - resources that reference the resources being deleted
-	cascadeDeletes, err := findCascadeDeletes(explicitDeleteKSUIDs, existingTargetMap, source, ds)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find cascade deletes: %w", err)
-	}
-
-	resourceDestroys = append(resourceDestroys, cascadeDeletes...)
 
 	return resourceDestroys, nil
 }

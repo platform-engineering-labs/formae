@@ -1852,6 +1852,8 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 		return make(map[string][]*pkgmodel.Target), nil
 	}
 
+	// Build OR conditions for each KSUID pattern with named parameters.
+	// Use regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
 	var conditions []string
 	var params []types.SqlParameter
 	for i, ksuid := range ksuids {
@@ -1865,9 +1867,15 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, namespace, config, discoverable
-	FROM targets
+	SELECT label, version, namespace, config, discoverable
+	FROM targets t1
 	WHERE (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
 	`, strings.Join(conditions, " OR "))
 
 	output, err := d.executeStatement(ctx, query, params)
@@ -1875,9 +1883,10 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 		return nil, err
 	}
 
+	// Build a map of KSUID -> targets that depend on it
 	result := make(map[string][]*pkgmodel.Target)
 	for _, record := range output.Records {
-		if len(record) < 4 {
+		if len(record) < 5 {
 			return nil, fmt.Errorf("unexpected record length: %d", len(record))
 		}
 
@@ -1885,15 +1894,23 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse label: %w", err)
 		}
-		namespace, err := getStringField(record[1])
+
+		version, err := getIntField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse version: %w", err)
+		}
+
+		namespace, err := getStringField(record[2])
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse namespace: %w", err)
 		}
-		configStr, err := getStringField(record[2])
+
+		config, err := getRawJSONField(record[3])
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse config: %w", err)
 		}
-		discoverable, err := getBoolField(record[3])
+
+		discoverable, err := getBoolField(record[4])
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse discoverable: %w", err)
 		}
@@ -1901,10 +1918,14 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 		target := &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
-			Config:       json.RawMessage(configStr),
+			Config:       config,
 			Discoverable: discoverable,
+			Version:      version,
 		}
 
+		// Find which of the input KSUIDs this target depends on.
+		// jsonb::text output has spaces after colons, so check both forms.
+		configStr := string(config)
 		for _, ksuid := range ksuids {
 			withSpace := fmt.Sprintf("\"$ref\": \"formae://%s#", ksuid)
 			withoutSpace := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)

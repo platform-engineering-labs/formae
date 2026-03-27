@@ -1375,6 +1375,129 @@ func (m *Metastructure) findCascadeStackLabels(forma *pkgmodel.Forma) ([]string,
 	return cascadeStacks, nil
 }
 
+// findCascadeTargetDeletes discovers targets whose config contains $ref references to
+// resources being deleted. It returns cascade TargetUpdates and cascade ResourceUpdates
+// for all managed resources in those targets.
+//
+// The function uses BFS to handle transitive cascades: if deleting resource A causes
+// target T to be cascade-deleted, and T has resources that are referenced by target U,
+// then U is also cascade-deleted.
+func findCascadeTargetDeletes(
+	resourceUpdates []resource_update.ResourceUpdate,
+	existingTargetUpdates []target_update.TargetUpdate,
+	existingTargets []*pkgmodel.Target,
+	source resource_update.FormaCommandSource,
+	ds datastore.Datastore,
+) ([]target_update.TargetUpdate, []resource_update.ResourceUpdate, error) {
+
+	// Collect KSUIDs of all resources being deleted
+	deletingKSUIDs := make([]string, 0)
+	deletingSet := make(map[string]bool)
+	for _, ru := range resourceUpdates {
+		if ru.Operation == resource_update.OperationDelete && ru.DesiredState.Ksuid != "" {
+			if !deletingSet[ru.DesiredState.Ksuid] {
+				deletingSet[ru.DesiredState.Ksuid] = true
+				deletingKSUIDs = append(deletingKSUIDs, ru.DesiredState.Ksuid)
+			}
+		}
+	}
+
+	if len(deletingKSUIDs) == 0 {
+		return nil, nil, nil
+	}
+
+	// Build set of targets already being deleted (from explicit target updates)
+	alreadyDeleting := make(map[string]bool)
+	for _, tu := range existingTargetUpdates {
+		if tu.Operation == target_update.TargetOperationDelete {
+			alreadyDeleting[tu.Target.Label] = true
+		}
+	}
+
+	// Build target map for resource update factory
+	existingTargetMap := make(map[string]*pkgmodel.Target)
+	for _, t := range existingTargets {
+		existingTargetMap[t.Label] = t
+	}
+
+	var cascadeTargetUpdates []target_update.TargetUpdate
+	var cascadeResourceUpdates []resource_update.ResourceUpdate
+
+	// BFS: find targets depending on deleted resources, then find resources
+	// in those targets (which may trigger further target cascades)
+	currentLevel := deletingKSUIDs
+	for len(currentLevel) > 0 {
+		dependentTargetsMap, err := ds.FindTargetsDependingOnMany(currentLevel)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to find targets depending on resources: %w", err)
+		}
+
+		var newDeletedTargetLabels []string
+		for sourceKSUID, targets := range dependentTargetsMap {
+			for _, target := range targets {
+				if alreadyDeleting[target.Label] {
+					continue
+				}
+				alreadyDeleting[target.Label] = true
+
+				slog.Debug("Cascade target delete detected",
+					"target", target.Label,
+					"cascadeSource", sourceKSUID)
+
+				cascadeTargetUpdates = append(cascadeTargetUpdates,
+					target_update.NewTargetUpdateForCascadeDelete(target, sourceKSUID))
+				newDeletedTargetLabels = append(newDeletedTargetLabels, target.Label)
+			}
+		}
+
+		// Generate resource deletes for managed resources in cascade-deleted targets
+		// and collect their KSUIDs for the next BFS level
+		var nextLevel []string
+		if len(newDeletedTargetLabels) > 0 {
+			allResourcesByStack, err := ds.LoadAllResourcesByStack()
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to load resources for cascade target delete: %w", err)
+			}
+
+			newDeletedSet := make(map[string]bool, len(newDeletedTargetLabels))
+			for _, label := range newDeletedTargetLabels {
+				newDeletedSet[label] = true
+			}
+
+			for _, resources := range allResourcesByStack {
+				for _, res := range resources {
+					if !res.Managed || !newDeletedSet[res.Target] {
+						continue
+					}
+					if deletingSet[res.Ksuid] {
+						continue // Already being deleted
+					}
+
+					target, ok := existingTargetMap[res.Target]
+					if !ok {
+						continue
+					}
+
+					resourceDestroy, err := resource_update.NewResourceUpdateForDestroy(*res, *target, source)
+					if err != nil {
+						return nil, nil, fmt.Errorf("failed to create cascade resource destroy for %s: %w", res.Label, err)
+					}
+					resourceDestroy.IsCascade = true
+					resourceDestroy.CascadeSource = res.Target // cascade source is the target being deleted
+
+					cascadeResourceUpdates = append(cascadeResourceUpdates, resourceDestroy)
+					deletingSet[res.Ksuid] = true
+					nextLevel = append(nextLevel, res.Ksuid)
+				}
+			}
+		}
+
+		currentLevel = nextLevel
+	}
+
+	return cascadeTargetUpdates, cascadeResourceUpdates, nil
+}
+
 // filterUnabsorbedModifications returns only those modifications that have NOT been
 // absorbed into the provided forma. A modification is considered absorbed when:
 //   - The forma contains a resource with matching stack, type, and label
@@ -1551,6 +1674,20 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 			return nil, targetExistsErr
 		}
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
+	}
+
+	// For destroy commands, find cascade target deletes: targets whose config
+	// references resources being deleted. Also generate resource deletes for
+	// all managed resources in those cascade-deleted targets.
+	if command == pkgmodel.CommandDestroy {
+		cascadeTargetUpdates, cascadeResourceUpdates, err := findCascadeTargetDeletes(
+			resourceUpdates, targetUpdates, existingTargets, source, ds,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find cascade target deletes: %w", err)
+		}
+		targetUpdates = append(targetUpdates, cascadeTargetUpdates...)
+		resourceUpdates = append(resourceUpdates, cascadeResourceUpdates...)
 	}
 
 	stackUpdates, err := stack_update.NewStackUpdateGenerator(ds).GenerateStackUpdates(forma.Stacks, command)
