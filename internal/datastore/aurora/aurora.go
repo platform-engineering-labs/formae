@@ -1845,6 +1845,78 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 	return result, nil
 }
 
+func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error) {
+	ctx := context.Background()
+
+	if len(ksuids) == 0 {
+		return make(map[string][]*pkgmodel.Target), nil
+	}
+
+	var conditions []string
+	var params []types.SqlParameter
+	for i, ksuid := range ksuids {
+		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
+		paramName := fmt.Sprintf("pattern%d", i)
+		conditions = append(conditions, fmt.Sprintf("config::text ~ :%s", paramName))
+		params = append(params, types.SqlParameter{
+			Name:  aws.String(paramName),
+			Value: &types.FieldMemberStringValue{Value: pattern},
+		})
+	}
+
+	query := fmt.Sprintf(`
+	SELECT label, namespace, config, discoverable
+	FROM targets
+	WHERE (%s)
+	`, strings.Join(conditions, " OR "))
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]*pkgmodel.Target)
+	for _, record := range output.Records {
+		if len(record) < 4 {
+			return nil, fmt.Errorf("unexpected record length: %d", len(record))
+		}
+
+		label, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse label: %w", err)
+		}
+		namespace, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse namespace: %w", err)
+		}
+		configStr, err := getStringField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse config: %w", err)
+		}
+		discoverable, err := getBoolField(record[3])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse discoverable: %w", err)
+		}
+
+		target := &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       json.RawMessage(configStr),
+			Discoverable: discoverable,
+		}
+
+		for _, ksuid := range ksuids {
+			withSpace := fmt.Sprintf("\"$ref\": \"formae://%s#", ksuid)
+			withoutSpace := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(configStr, withSpace) || strings.Contains(configStr, withoutSpace) {
+				result[ksuid] = append(result[ksuid], target)
+			}
+		}
+	}
+
+	return result, nil
+}
+
 func (d *DatastoreAuroraDataAPI) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
 	var lastVersionID string
 	for _, resource := range stack.Resources {

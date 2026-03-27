@@ -153,6 +153,9 @@ type Datastore interface {
 	// FindResourcesDependingOnMany returns all resources that reference any of the given resources via $ref.
 	// Returns a map from referenced KSUID to the resources that depend on it.
 	FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error)
+	// FindTargetsDependingOnMany returns all targets whose config references any of the given resources via $ref.
+	// Returns a map from source KSUID to the list of dependent targets.
+	FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error)
 
 	// Resource-by-stack operations - query resources grouped by stack
 

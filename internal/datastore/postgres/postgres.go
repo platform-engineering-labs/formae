@@ -1174,6 +1174,76 @@ func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[st
 	return result, nil
 }
 
+func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "FindTargetsDependingOnMany")
+	defer span.End()
+
+	if len(ksuids) == 0 {
+		return make(map[string][]*pkgmodel.Target), nil
+	}
+
+	// Build OR conditions for each KSUID pattern with numbered placeholders
+	// Use regex to handle Postgres JSONB text formatting which adds spaces after colons
+	var conditions []string
+	var args []any
+	for i, ksuid := range ksuids {
+		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
+		conditions = append(conditions, fmt.Sprintf("config::text ~ $%d", i+1))
+		args = append(args, pattern)
+	}
+
+	query := fmt.Sprintf(`
+	SELECT label, version, namespace, config, discoverable
+	FROM targets t1
+	WHERE (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	`, strings.Join(conditions, " OR "))
+
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Build a map of KSUID -> targets that depend on it
+	result := make(map[string][]*pkgmodel.Target)
+	for rows.Next() {
+		var label, namespace string
+		var version int
+		var config json.RawMessage
+		var discoverable bool
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+			return nil, err
+		}
+
+		target := &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable,
+			Version:      version,
+		}
+
+		// Find which of the input KSUIDs this target depends on
+		// jsonb::text output has spaces after colons, so check both forms.
+		configStr := string(config)
+		for _, ksuid := range ksuids {
+			withSpace := fmt.Sprintf("\"$ref\": \"formae://%s#", ksuid)
+			withoutSpace := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(configStr, withSpace) || strings.Contains(configStr, withoutSpace) {
+				result[ksuid] = append(result[ksuid], target)
+			}
+		}
+	}
+
+	return result, nil
+}
+
 func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "LoadResourceByNativeID")
 	defer span.End()
