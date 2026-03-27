@@ -1651,7 +1651,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command)
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
 	if err != nil {
 		return nil, err
 	}

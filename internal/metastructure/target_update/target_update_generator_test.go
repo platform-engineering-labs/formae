@@ -24,7 +24,7 @@ func TestNewTargetUpdateGenerator(t *testing.T) {
 	assert.Equal(t, mockDS, generator.datastore)
 }
 
-func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTarget(t *testing.T) {
+func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWhenFormaHasResources(t *testing.T) {
 	existingTarget := &pkgmodel.Target{
 		Label:        "plain-target",
 		Namespace:    "default",
@@ -47,10 +47,11 @@ func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTarget(t *testing.T) {
 		{Label: "plain-target", Namespace: "default", Discoverable: false},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	// formaHasResources=true: plain targets survive destroy of application formae
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, true)
 
 	require.NoError(t, err)
-	assert.Empty(t, updates, "plain targets without $ref dependencies should survive destroy")
+	assert.Empty(t, updates, "plain targets without $ref dependencies should survive destroy of application formae")
 }
 
 func TestGenerateTargetUpdates_DestroyCommand_DeletesDependentTarget(t *testing.T) {
@@ -73,7 +74,8 @@ func TestGenerateTargetUpdates_DestroyCommand_DeletesDependentTarget(t *testing.
 		{Label: "grafana", Namespace: "GRAFANA"},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	// formaHasResources=true: targets with $ref are deleted even in application formae
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, true)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -97,16 +99,16 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetNotFound(t *testing.T) {
 		{Label: "non-existent-target", Namespace: "default", Discoverable: true},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, false)
 
 	assert.NoError(t, err)
 	assert.Empty(t, updates) // No update for non-existent target
 }
 
-// TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWithResources verifies
-// that a plain target (no $ref) with resources in the DB is NOT marked for deletion.
-// Plain targets survive destroy — only targets with $ref dependencies are deleted.
-func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWithResources(t *testing.T) {
+// TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWithResourcesWhenFormaHasResources verifies
+// that a plain target (no $ref) with resources in the DB is NOT marked for deletion
+// when the forma also has resources (application forma).
+func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWithResourcesWhenFormaHasResources(t *testing.T) {
 	existingTarget := &pkgmodel.Target{
 		Label:        "target-with-resources",
 		Namespace:    "default",
@@ -129,10 +131,11 @@ func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWithResources(t *t
 		{Label: "target-with-resources", Namespace: "default", Discoverable: false},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	// formaHasResources=true: plain targets survive destroy of application formae
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, true)
 
 	assert.NoError(t, err)
-	assert.Empty(t, updates, "plain targets without $ref dependencies should survive destroy")
+	assert.Empty(t, updates, "plain targets without $ref dependencies should survive destroy of application formae")
 }
 
 func TestGenerateTargetUpdates_CreateNewTarget(t *testing.T) {
@@ -152,7 +155,7 @@ func TestGenerateTargetUpdates_CreateNewTarget(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -191,7 +194,7 @@ func TestGenerateTargetUpdates_UpdateExistingTarget_DiscoverableChanged(t *testi
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -231,7 +234,7 @@ func TestGenerateTargetUpdates_NoChange_DiscoverableSame(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	require.NoError(t, err)
 	assert.Empty(t, updates) // No updates should be generated
@@ -263,7 +266,7 @@ func TestGenerateTargetUpdates_ValidationError_NamespaceMismatch(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "target-with-error")
@@ -280,7 +283,7 @@ func TestGenerateTargetUpdates_DatastoreError(t *testing.T) {
 		{Label: "error-target", Namespace: "default", Discoverable: true},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to determine target update")
@@ -320,7 +323,7 @@ func TestGenerateTargetUpdates_MultipleTargets_MixedScenarios(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
@@ -428,7 +431,8 @@ func TestGenerateTargetUpdates_DestroyDeletesDependentTargetWithResources(t *tes
 		{Label: "test-target", Namespace: "default", Discoverable: false},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+	// formaHasResources=true: targets with $ref are deleted even in application formae
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, true)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1, "should generate a delete for targets with $ref dependencies")
@@ -454,7 +458,7 @@ func TestGenerateTargetUpdates_ExtractsResolvablesForCreate(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 	assert.Equal(t, TargetOperationCreate, updates[0].Operation)
@@ -490,7 +494,7 @@ func TestGenerateTargetUpdates_ReapplyWithSameResolvedValue_NoReplace(t *testing
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.NoError(t, err)
 	// Same resolved value → no change needed, but still need resolvables for execution
 	assert.Empty(t, updates)
@@ -524,7 +528,7 @@ func TestGenerateTargetUpdates_ReapplyWithDifferentResolvedValue_Replace(t *test
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
@@ -554,7 +558,7 @@ func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)

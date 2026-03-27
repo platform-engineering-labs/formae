@@ -33,13 +33,15 @@ func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
 }
 
 // GenerateTargetUpdates determines what target changes are needed.
-// On destroy, every target in the forma is deleted. The DAG handles
-// cascade-deleting all resources in the target before the target itself.
-func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command) ([]TargetUpdate, error) {
+// formaHasResources indicates whether the forma also declares resources;
+// on destroy, plain targets (no $ref) are only preserved when the forma
+// has resources (i.e., it's an application forma). Target-only formae
+// always delete their targets — this is how users explicitly remove targets.
+func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command, formaHasResources bool) ([]TargetUpdate, error) {
 	var updates []TargetUpdate
 
 	for _, target := range targets {
-		update, hasUpdate, err := tp.determineTargetUpdate(target, command)
+		update, hasUpdate, err := tp.determineTargetUpdate(target, command, formaHasResources)
 		if err != nil {
 			return nil, fmt.Errorf("failed to determine target update for %s: %w", target.Label, err)
 		}
@@ -58,7 +60,7 @@ func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target
 	return updates, nil
 }
 
-func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command) (TargetUpdate, bool, error) {
+func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command, formaHasResources bool) (TargetUpdate, bool, error) {
 	now := util.TimeNow()
 
 	existing, err := tp.datastore.LoadTarget(target.Label)
@@ -66,21 +68,22 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		return TargetUpdate{}, false, fmt.Errorf("failed to load target: %w", err)
 	}
 
-	// Handle destroy command — only delete targets whose config has $ref
-	// dependencies on resources being destroyed. Plain targets (e.g., docker,
-	// us-east-1) survive destroy and must be explicitly removed by the user.
-	// Targets with $ref dependencies (e.g., grafana depending on compose
-	// endpoints) cannot exist without their referenced resources.
+	// Handle destroy command. When the forma also has resources, only delete
+	// targets with $ref dependencies — plain targets (docker, us-east-1)
+	// survive because they exist independently. When the forma is target-only,
+	// always delete: the user is explicitly removing the target.
 	if command == pkgmodel.CommandDestroy {
 		if existing == nil {
 			slog.Debug("Target does not exist, nothing to delete", "label", target.Label)
 			return TargetUpdate{}, false, nil
 		}
 
-		resolvables := resolver.ExtractResolvableURIsFromJSON(existing.Config)
-		if len(resolvables) == 0 {
-			slog.Debug("Target has no $ref dependencies, skipping delete", "label", target.Label)
-			return TargetUpdate{}, false, nil
+		if formaHasResources {
+			resolvables := resolver.ExtractResolvableURIsFromJSON(existing.Config)
+			if len(resolvables) == 0 {
+				slog.Debug("Target has no $ref dependencies, skipping delete", "label", target.Label)
+				return TargetUpdate{}, false, nil
+			}
 		}
 
 		// Cross-target DAG dependencies are built from ExistingTarget.Config
