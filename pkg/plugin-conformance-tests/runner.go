@@ -1553,9 +1553,8 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 		t.Fatal("no resources were created")
 	}
 
-	// The main resource is the last one (after dependencies)
-	nativeID := createdResources[len(createdResources)-1].NativeID
-	t.Logf("Created %d resource(s), main resource NativeID: %s", len(createdResources), nativeID)
+	nativeID := findMainResourceNativeID(createdResources, resourceType)
+	t.Logf("Created %d resource(s), main resource NativeID: %s (type: %s)", len(createdResources), nativeID, resourceType)
 
 	// Parse target from eval output for cleanup
 	var forma pkgmodel.Forma
@@ -1672,6 +1671,22 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 	}
 
 	t.Log("Discovery test passed!")
+}
+
+// findMainResourceNativeID returns the NativeID of the last created resource matching
+// the given resource type. Creation order (dependency-first) may differ from PKL output
+// order, so we search backwards for a type match rather than taking the last resource.
+// Falls back to the last resource if no type match is found (single-resource tests).
+func findMainResourceNativeID(createdResources []CreatedResourceInfo, resourceType string) string {
+	for i := len(createdResources) - 1; i >= 0; i-- {
+		if createdResources[i].ResourceType == resourceType {
+			return createdResources[i].NativeID
+		}
+	}
+	if len(createdResources) > 0 {
+		return createdResources[len(createdResources)-1].NativeID
+	}
+	return ""
 }
 
 // extractNamespaceFromEvalOutput parses the evaluated JSON to extract the plugin namespace

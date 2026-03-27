@@ -1082,4 +1082,79 @@ func TestCompareProperties_NullInExpectedMissingInActual(t *testing.T) {
 	}
 }
 
+func TestFindMainResourceNativeID(t *testing.T) {
+	tests := []struct {
+		name             string
+		createdResources []CreatedResourceInfo
+		resourceType     string
+		expectedNativeID string
+	}{
+		{
+			name: "single resource matches type",
+			createdResources: []CreatedResourceInfo{
+				{ResourceType: "NS::Compute::Instance", NativeID: "inst-123"},
+			},
+			resourceType:     "NS::Compute::Instance",
+			expectedNativeID: "inst-123",
+		},
+		{
+			name: "last resource matches type",
+			createdResources: []CreatedResourceInfo{
+				{ResourceType: "NS::Network::VPC", NativeID: "vpc-1"},
+				{ResourceType: "NS::Network::Subnet", NativeID: "subnet-1"},
+			},
+			resourceType:     "NS::Network::Subnet",
+			expectedNativeID: "subnet-1",
+		},
+		{
+			name: "chart with mixed types - type match is not last created",
+			createdResources: []CreatedResourceInfo{
+				{ResourceType: "NS::Core::Group", NativeID: "test-group"},
+				{ResourceType: "NS::IAM::Role", NativeID: "test-role"},
+				{ResourceType: "NS::IAM::Account", NativeID: "test-account"},
+				{ResourceType: "NS::Network::LB", NativeID: "test-lb"},
+				{ResourceType: "NS::Compute::Instance", NativeID: "test-controller"},
+				{ResourceType: "NS::Compute::Instance", NativeID: "test-worker-1"},
+				{ResourceType: "NS::Compute::Instance", NativeID: "test-worker-2"},
+			},
+			resourceType:     "NS::Network::LB",
+			expectedNativeID: "test-lb",
+		},
+		{
+			name: "multiple resources of target type - picks last",
+			createdResources: []CreatedResourceInfo{
+				{ResourceType: "NS::Core::Group", NativeID: "test-group"},
+				{ResourceType: "NS::Compute::Instance", NativeID: "inst-1"},
+				{ResourceType: "NS::Compute::Instance", NativeID: "inst-2"},
+			},
+			resourceType:     "NS::Compute::Instance",
+			expectedNativeID: "inst-2",
+		},
+		{
+			name: "no type match falls back to last resource",
+			createdResources: []CreatedResourceInfo{
+				{ResourceType: "NS::Core::Group", NativeID: "test-group"},
+				{ResourceType: "NS::Storage::Bucket", NativeID: "my-bucket"},
+			},
+			resourceType:     "NS::Network::LB",
+			expectedNativeID: "my-bucket",
+		},
+		{
+			name:             "empty resources returns empty string",
+			createdResources: []CreatedResourceInfo{},
+			resourceType:     "NS::Compute::Instance",
+			expectedNativeID: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findMainResourceNativeID(tt.createdResources, tt.resourceType)
+			if got != tt.expectedNativeID {
+				t.Errorf("findMainResourceNativeID() = %q, want %q", got, tt.expectedNativeID)
+			}
+		})
+	}
+}
+
 
