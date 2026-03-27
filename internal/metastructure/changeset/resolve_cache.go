@@ -24,18 +24,15 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-const (
-	maxResolveRetries = 10
-	resolveRetryDelay = 2 * time.Second
-)
-
 // The ResolveCache is a transient cache that lives for the duration of a changeset execution. In a changeset
 // multiple resources often resolve the same value. We do not want to do a read for each of these resolvables,
 // therefore we cache these values.
 type ResolveCache struct {
 	act.Actor
 
-	cache map[pkgmodel.FormaeURI]gjson.Result
+	cache      map[pkgmodel.FormaeURI]gjson.Result
+	maxRetries int
+	retryDelay time.Duration
 }
 
 // resolveRetry is an internal message scheduled via SendAfter to retry a
@@ -59,7 +56,22 @@ func NewResolveCache() gen.ProcessBehavior {
 func (r *ResolveCache) Init(args ...any) error {
 	r.cache = make(map[pkgmodel.FormaeURI]gjson.Result)
 
-	r.Log().Debug("ResolveCache actor initialized")
+	// Read retry config from node environment (set by metastructure).
+	if cfg, ok := r.Env("RetryConfig"); ok {
+		if retryCfg, ok := cfg.(pkgmodel.RetryConfig); ok {
+			r.maxRetries = retryCfg.MaxRetries
+			r.retryDelay = retryCfg.RetryDelay
+		}
+	}
+	if r.maxRetries == 0 {
+		r.maxRetries = 3
+	}
+	if r.retryDelay == 0 {
+		r.retryDelay = 2 * time.Second
+	}
+
+	r.Log().Debug("ResolveCache actor initialized",
+		"maxRetries", r.maxRetries, "retryDelay", r.retryDelay)
 
 	return nil
 }
@@ -157,12 +169,12 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 
 	// Retry on recoverable errors via SendAfter (non-blocking).
 	if progress.OperationStatus == resource.OperationStatusFailure && resource.IsRecoverable(progress.ErrorCode) {
-		if retry.Attempt < maxResolveRetries {
+		if retry.Attempt < r.maxRetries {
 			r.Log().Info("ResolveCache: recoverable error, retrying",
 				"errorCode", progress.ErrorCode, "resourceURI", resourceURI,
-				"attempt", retry.Attempt, "maxRetries", maxResolveRetries)
+				"attempt", retry.Attempt, "maxRetries", r.maxRetries)
 			retry.Attempt++
-			if _, err := r.SendAfter(r.PID(), retry, resolveRetryDelay); err != nil {
+			if _, err := r.SendAfter(r.PID(), retry, r.retryDelay); err != nil {
 				r.Log().Error("Failed to schedule resolve retry", "error", err)
 				_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 			}
