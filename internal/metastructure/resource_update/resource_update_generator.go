@@ -208,8 +208,14 @@ func generateResourceUpdatesForDestroy(
 		}
 	}
 
+	// Build KSUID→label lookup for human-readable cascade sources
+	ksuidToLabel := make(map[string]string, len(resourceDestroys))
+	for _, rd := range resourceDestroys {
+		ksuidToLabel[rd.DesiredState.Ksuid] = rd.DesiredState.Label
+	}
+
 	// Find cascade deletes - resources that reference the resources being deleted
-	cascadeDeletes, err := findCascadeDeletes(explicitDeleteKSUIDs, existingTargetMap, source, ds)
+	cascadeDeletes, err := findCascadeDeletes(explicitDeleteKSUIDs, ksuidToLabel, existingTargetMap, source, ds)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find cascade deletes: %w", err)
 	}
@@ -266,6 +272,7 @@ func generateResourceUpdatesForDestroy(
 // resources being deleted. Uses level-by-level BFS with batched queries to find the full cascade chain.
 func findCascadeDeletes(
 	toDelete map[string]bool,
+	ksuidToLabel map[string]string,
 	existingTargetMap map[string]*pkgmodel.Target,
 	source FormaCommandSource,
 	ds ResourceDataLookup) ([]ResourceUpdate, error) {
@@ -313,9 +320,9 @@ func findCascadeDeletes(
 					continue
 				}
 
-				// Use the source KSUID for the cascade message
-				sourceLabel := sourceKSUID
-				if _, isExplicit := toDelete[sourceKSUID]; isExplicit {
+				// Use human-readable label for the cascade source
+				sourceLabel := ksuidToLabel[sourceKSUID]
+				if sourceLabel == "" {
 					sourceLabel = sourceKSUID
 				}
 
@@ -339,8 +346,9 @@ func findCascadeDeletes(
 
 				cascadeDeletes = append(cascadeDeletes, resourceDestroy)
 
-				// Add to next level for further cascade detection
+				// Add to next level for further cascade detection and update label lookup
 				nextLevel = append(nextLevel, dependent.Ksuid)
+				ksuidToLabel[dependent.Ksuid] = dependent.Label
 			}
 		}
 

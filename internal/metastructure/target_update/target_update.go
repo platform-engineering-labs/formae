@@ -48,13 +48,13 @@ type TargetUpdate struct {
 }
 
 // NewTargetUpdateForCascadeDelete creates a cascade delete TargetUpdate for a target
-// that depends on a resource being deleted. The cascadeSourceKSUID is the KSUID of
-// the resource that triggered the cascade.
+// that depends on a resource being deleted. cascadeSource is the label of the
+// resource that triggered the cascade.
 //
 // Unlike regular target deletes, cascade deletes do NOT set RemainingResolvables
 // because the referenced resources are themselves being deleted. Attempting to
 // resolve those references during execution would fail.
-func NewTargetUpdateForCascadeDelete(target *pkgmodel.Target, cascadeSourceKSUID string) TargetUpdate {
+func NewTargetUpdateForCascadeDelete(target *pkgmodel.Target, cascadeSource string) TargetUpdate {
 	now := util.TimeNow()
 	return TargetUpdate{
 		Target:         *target,
@@ -64,7 +64,7 @@ func NewTargetUpdateForCascadeDelete(target *pkgmodel.Target, cascadeSourceKSUID
 		StartTs:        now,
 		ModifiedTs:     now,
 		IsCascade:      true,
-		CascadeSource:  cascadeSourceKSUID,
+		CascadeSource:  cascadeSource,
 	}
 }
 

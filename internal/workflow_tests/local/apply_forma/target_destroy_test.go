@@ -189,7 +189,8 @@ func TestDestroyForma_TargetWithResourcesInSameTarget(t *testing.T) {
 		waitForCommands(t, m, 1)
 
 		// Step 2: Destroy the same forma (target + resources in that target).
-		// Both the resources and the target should be deleted.
+		// The resource is deleted but the plain target (no $ref) survives
+		// because the forma has resources — plain targets persist independently.
 		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
 		require.NoError(t, err)
 		waitForCommands(t, m, 2)
@@ -202,19 +203,17 @@ func TestDestroyForma_TargetWithResourcesInSameTarget(t *testing.T) {
 		assert.Equal(t, resource_update.OperationDelete, destroyCmd.ResourceUpdates[0].Operation)
 		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, destroyCmd.ResourceUpdates[0].State)
 
-		// Verify target was also deleted
-		require.Len(t, destroyCmd.TargetUpdates, 1, "target should be deleted")
-		assert.Equal(t, target_update.TargetOperationDelete, destroyCmd.TargetUpdates[0].Operation)
-		assert.Equal(t, target_update.TargetUpdateStateSuccess, destroyCmd.TargetUpdates[0].State)
+		// Verify plain target survives (no $ref dependencies)
+		assert.Empty(t, destroyCmd.TargetUpdates, "plain target should survive destroy of application forma")
 
-		// Verify both are gone from the datastore
+		// Verify resource is gone but target persists
 		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
 		require.NoError(t, err)
 		assert.Empty(t, resources, "resources should be deleted")
 
 		target, err := m.Datastore.LoadTarget("test-target")
 		require.NoError(t, err)
-		assert.Nil(t, target, "target should be deleted")
+		assert.NotNil(t, target, "plain target should survive")
 	})
 }
 
@@ -268,8 +267,9 @@ func TestDestroyForma_TargetWithResourcesInDifferentTarget(t *testing.T) {
 		require.NoError(t, err)
 		waitForCommands(t, m, 1)
 
-		// Step 2: Destroy a forma with target-a (no resources in it) + a resource in target-b.
-		// Expected: target-a cascade-deleted (target + bucket-a), bucket-b deleted, target-b stays.
+		// Step 2: Destroy a forma with target-a (plain, no $ref) + a resource in target-b.
+		// Since the forma has resources, plain target-a survives. Only bucket-b is deleted.
+		// bucket-a stays because target-a isn't deleted and bucket-a isn't in the destroy forma.
 		destroyForma := &pkgmodel.Forma{
 			Stacks: []pkgmodel.Stack{
 				{Label: "stack-b"},
@@ -299,22 +299,18 @@ func TestDestroyForma_TargetWithResourcesInDifferentTarget(t *testing.T) {
 		destroyCmd := findDestroyCommand(t, m)
 		assert.Equal(t, forma_command.CommandStateSuccess, destroyCmd.State)
 
-		// Verify: bucket-a (cascade from target-a) and bucket-b (explicit) both deleted
-		assert.Len(t, destroyCmd.ResourceUpdates, 2, "should delete both resources")
-		for _, ru := range destroyCmd.ResourceUpdates {
-			assert.Equal(t, resource_update.OperationDelete, ru.Operation)
-			assert.Equal(t, resource_update.ResourceUpdateStateSuccess, ru.State)
-		}
+		// Verify: only bucket-b (explicit) deleted; bucket-a stays (target-a not deleted)
+		require.Len(t, destroyCmd.ResourceUpdates, 1, "should only delete bucket-b")
+		assert.Equal(t, resource_update.OperationDelete, destroyCmd.ResourceUpdates[0].Operation)
+		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, destroyCmd.ResourceUpdates[0].State)
 
-		// Verify: target-a deleted, target-b preserved
-		require.Len(t, destroyCmd.TargetUpdates, 1, "should only delete target-a")
-		assert.Equal(t, target_update.TargetOperationDelete, destroyCmd.TargetUpdates[0].Operation)
-		assert.Equal(t, target_update.TargetUpdateStateSuccess, destroyCmd.TargetUpdates[0].State)
+		// Verify: plain target-a survives (no $ref), target-b preserved
+		assert.Empty(t, destroyCmd.TargetUpdates, "plain target should survive destroy of application forma")
 
 		// Verify datastore state
 		targetA, err := m.Datastore.LoadTarget("target-a")
 		require.NoError(t, err)
-		assert.Nil(t, targetA, "target-a should be deleted")
+		assert.NotNil(t, targetA, "plain target-a should survive")
 
 		targetB, err := m.Datastore.LoadTarget("target-b")
 		require.NoError(t, err)
@@ -322,7 +318,7 @@ func TestDestroyForma_TargetWithResourcesInDifferentTarget(t *testing.T) {
 
 		resourcesA, err := m.Datastore.LoadResourcesByStack("stack-a")
 		require.NoError(t, err)
-		assert.Empty(t, resourcesA, "resources in stack-a should be deleted")
+		assert.Len(t, resourcesA, 1, "bucket-a should still exist (target-a not deleted)")
 
 		resourcesB, err := m.Datastore.LoadResourcesByStack("stack-b")
 		require.NoError(t, err)

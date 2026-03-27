@@ -12,6 +12,7 @@ import (
 
 	"log/slog"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -341,7 +342,17 @@ func (p *ExecutionDAG) buildTargetResolvableEdges() {
 		if !ok {
 			continue
 		}
-		for _, uri := range tu.RemainingResolvables {
+
+		// For delete operations, extract resolvable URIs from the existing
+		// target config rather than RemainingResolvables. Delete target updates
+		// intentionally don't set RemainingResolvables to avoid the target
+		// updater attempting resolution during destroy.
+		resolvables := tu.RemainingResolvables
+		if tu.Operation == target_update.TargetOperationDelete && tu.ExistingTarget != nil {
+			resolvables = resolver.ExtractResolvableURIsFromJSON(tu.ExistingTarget.Config)
+		}
+
+		for _, uri := range resolvables {
 			ksuid := uri.KSUID()
 			if tu.Operation == target_update.TargetOperationDelete {
 				// REVERSED: resource delete waits for target delete

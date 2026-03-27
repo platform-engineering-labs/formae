@@ -1390,14 +1390,17 @@ func findCascadeTargetDeletes(
 	ds datastore.Datastore,
 ) ([]target_update.TargetUpdate, []resource_update.ResourceUpdate, error) {
 
-	// Collect KSUIDs of all resources being deleted
+	// Collect KSUIDs of all resources being deleted and build a KSUID→label
+	// lookup so cascade sources can be displayed as human-readable labels.
 	deletingKSUIDs := make([]string, 0)
 	deletingSet := make(map[string]bool)
+	ksuidToLabel := make(map[string]string)
 	for _, ru := range resourceUpdates {
 		if ru.Operation == resource_update.OperationDelete && ru.DesiredState.Ksuid != "" {
 			if !deletingSet[ru.DesiredState.Ksuid] {
 				deletingSet[ru.DesiredState.Ksuid] = true
 				deletingKSUIDs = append(deletingKSUIDs, ru.DesiredState.Ksuid)
+				ksuidToLabel[ru.DesiredState.Ksuid] = ru.DesiredState.Label
 			}
 		}
 	}
@@ -1447,12 +1450,16 @@ func findCascadeTargetDeletes(
 				}
 				alreadyDeleting[target.Label] = true
 
+				cascadeSourceLabel := ksuidToLabel[sourceKSUID]
+				if cascadeSourceLabel == "" {
+					cascadeSourceLabel = sourceKSUID
+				}
 				slog.Debug("Cascade target delete detected",
 					"target", target.Label,
-					"cascadeSource", sourceKSUID)
+					"cascadeSource", cascadeSourceLabel)
 
 				cascadeTargetUpdates = append(cascadeTargetUpdates,
-					target_update.NewTargetUpdateForCascadeDelete(target, sourceKSUID))
+					target_update.NewTargetUpdateForCascadeDelete(target, cascadeSourceLabel))
 				newDeletedTargetLabels = append(newDeletedTargetLabels, target.Label)
 			}
 		}
@@ -1644,7 +1651,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command)
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
 	if err != nil {
 		return nil, err
 	}
