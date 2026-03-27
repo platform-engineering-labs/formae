@@ -72,12 +72,14 @@ definitions:
     - Array
     - EntitySet
     - Set
+    - Atomic
     - ""
     type: string
     x-enum-varnames:
     - FieldUpdateMethodArray
     - FieldUpdateMethodEntitySet
     - FieldUpdateMethodSet
+    - FieldUpdateMethodAtomic
     - FieldUpdateMethodNone
   model.Forma:
     properties:

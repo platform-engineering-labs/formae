@@ -690,12 +690,14 @@ const docTemplate = `{
                 "Array",
                 "EntitySet",
                 "Set",
+                "Atomic",
                 ""
             ],
             "x-enum-varnames": [
                 "FieldUpdateMethodArray",
                 "FieldUpdateMethodEntitySet",
                 "FieldUpdateMethodSet",
+                "FieldUpdateMethodAtomic",
                 "FieldUpdateMethodNone"
             ]
         },
