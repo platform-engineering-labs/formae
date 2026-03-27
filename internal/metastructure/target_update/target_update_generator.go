@@ -66,26 +66,33 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		return TargetUpdate{}, false, fmt.Errorf("failed to load target: %w", err)
 	}
 
-	// Handle destroy command
+	// Handle destroy command — only delete targets whose config has $ref
+	// dependencies on resources being destroyed. Plain targets (e.g., docker,
+	// us-east-1) survive destroy and must be explicitly removed by the user.
+	// Targets with $ref dependencies (e.g., grafana depending on compose
+	// endpoints) cannot exist without their referenced resources.
 	if command == pkgmodel.CommandDestroy {
 		if existing == nil {
 			slog.Debug("Target does not exist, nothing to delete", "label", target.Label)
 			return TargetUpdate{}, false, nil
 		}
 
-		// The DAG will cascade-delete all resources in this target before
-		// deleting the target itself.
-		// Extract resolvables so the DAG can create reversed cross-target
-		// dependencies (e.g., compose stack delete waits for grafana target delete).
 		resolvables := resolver.ExtractResolvableURIsFromJSON(existing.Config)
+		if len(resolvables) == 0 {
+			slog.Debug("Target has no $ref dependencies, skipping delete", "label", target.Label)
+			return TargetUpdate{}, false, nil
+		}
+
+		// Cross-target DAG dependencies are built from ExistingTarget.Config
+		// by the DAG — not from RemainingResolvables, which would cause the
+		// target updater to attempt resolution during delete.
 		return TargetUpdate{
-			Target:               target,
-			ExistingTarget:       existing,
-			Operation:            TargetOperationDelete,
-			State:                TargetUpdateStateNotStarted,
-			StartTs:              now,
-			ModifiedTs:           now,
-			RemainingResolvables: resolvables,
+			Target:         target,
+			ExistingTarget: existing,
+			Operation:      TargetOperationDelete,
+			State:          TargetUpdateStateNotStarted,
+			StartTs:        now,
+			ModifiedTs:     now,
 		}, true, nil
 	}
 

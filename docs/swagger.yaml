@@ -436,6 +436,8 @@ definitions:
     type: object
   model.TargetUpdate:
     properties:
+      CascadeSource:
+        type: string
       Discoverable:
         type: boolean
       Duration:
@@ -443,6 +445,8 @@ definitions:
         type: integer
       ErrorMessage:
         type: string
+      IsCascade:
+        type: boolean
       ModifiedTs:
         type: string
       Operation:

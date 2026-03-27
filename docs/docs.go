@@ -1233,6 +1233,9 @@ const docTemplate = `{
         "model.TargetUpdate": {
             "type": "object",
             "properties": {
+                "CascadeSource": {
+                    "type": "string"
+                },
                 "Discoverable": {
                     "type": "boolean"
                 },
@@ -1242,6 +1245,9 @@ const docTemplate = `{
                 },
                 "ErrorMessage": {
                     "type": "string"
+                },
+                "IsCascade": {
+                    "type": "boolean"
                 },
                 "ModifiedTs": {
                     "type": "string"

@@ -24,9 +24,9 @@ func TestNewTargetUpdateGenerator(t *testing.T) {
 	assert.Equal(t, mockDS, generator.datastore)
 }
 
-func TestGenerateTargetUpdates_DestroyCommand_DeletesEmptyTarget(t *testing.T) {
+func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTarget(t *testing.T) {
 	existingTarget := &pkgmodel.Target{
-		Label:        "empty-target",
+		Label:        "plain-target",
 		Namespace:    "default",
 		Config:       json.RawMessage(`{"region": "us-east-1"}`),
 		Discoverable: false,
@@ -35,16 +35,42 @@ func TestGenerateTargetUpdates_DestroyCommand_DeletesEmptyTarget(t *testing.T) {
 
 	mockDS := &mockTargetDatastore{
 		targets: map[string]*pkgmodel.Target{
-			"empty-target": existingTarget,
+			"plain-target": existingTarget,
 		},
 		resourceCounts: map[string]int{
-			"empty-target": 0, // No resources
+			"plain-target": 0,
 		},
 	}
 	generator := NewTargetUpdateGenerator(mockDS)
 
 	targets := []pkgmodel.Target{
-		{Label: "empty-target", Namespace: "default", Discoverable: false},
+		{Label: "plain-target", Namespace: "default", Discoverable: false},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+
+	require.NoError(t, err)
+	assert.Empty(t, updates, "plain targets without $ref dependencies should survive destroy")
+}
+
+func TestGenerateTargetUpdates_DestroyCommand_DeletesDependentTarget(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:     "grafana",
+		Namespace: "GRAFANA",
+		Config:    json.RawMessage(`{"Endpoints": {"$ref": "formae://abc123#/endpoints"}}`),
+		Version:   1,
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"grafana": existingTarget,
+		},
+		resourceCounts: map[string]int{},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "grafana", Namespace: "GRAFANA"},
 	}
 
 	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
@@ -53,10 +79,11 @@ func TestGenerateTargetUpdates_DestroyCommand_DeletesEmptyTarget(t *testing.T) {
 	require.Len(t, updates, 1)
 
 	update := updates[0]
-	assert.Equal(t, "empty-target", update.Target.Label)
+	assert.Equal(t, "grafana", update.Target.Label)
 	assert.Equal(t, TargetOperationDelete, update.Operation)
 	assert.Equal(t, TargetUpdateStateNotStarted, update.State)
 	assert.NotNil(t, update.ExistingTarget)
+	assert.Empty(t, update.RemainingResolvables, "delete target updates should not set RemainingResolvables")
 }
 
 func TestGenerateTargetUpdates_DestroyCommand_TargetNotFound(t *testing.T) {
@@ -76,10 +103,10 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetNotFound(t *testing.T) {
 	assert.Empty(t, updates) // No update for non-existent target
 }
 
-// TestGenerateTargetUpdates_DestroyCommand_TargetHasResources verifies that a target
-// with resources in the DB is still marked for deletion when the forma has no resources
-// in that target. The DAG handles cascade-deleting the resources before the target.
-func TestGenerateTargetUpdates_DestroyCommand_TargetHasResources(t *testing.T) {
+// TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWithResources verifies
+// that a plain target (no $ref) with resources in the DB is NOT marked for deletion.
+// Plain targets survive destroy — only targets with $ref dependencies are deleted.
+func TestGenerateTargetUpdates_DestroyCommand_SkipsPlainTargetWithResources(t *testing.T) {
 	existingTarget := &pkgmodel.Target{
 		Label:        "target-with-resources",
 		Namespace:    "default",
@@ -93,7 +120,7 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetHasResources(t *testing.T) {
 			"target-with-resources": existingTarget,
 		},
 		resourceCounts: map[string]int{
-			"target-with-resources": 3, // Has resources in DB
+			"target-with-resources": 3,
 		},
 	}
 	generator := NewTargetUpdateGenerator(mockDS)
@@ -102,13 +129,10 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetHasResources(t *testing.T) {
 		{Label: "target-with-resources", Namespace: "default", Discoverable: false},
 	}
 
-	// No resources in the forma for this target → target should be deleted
 	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
 
 	assert.NoError(t, err)
-	require.Len(t, updates, 1)
-	assert.Equal(t, TargetOperationDelete, updates[0].Operation)
-	assert.Equal(t, "target-with-resources", updates[0].Target.Label)
+	assert.Empty(t, updates, "plain targets without $ref dependencies should survive destroy")
 }
 
 func TestGenerateTargetUpdates_CreateNewTarget(t *testing.T) {
@@ -378,15 +402,14 @@ func (m *mockTargetDatastore) CountResourcesInTarget(targetLabel string) (int, e
 	return count, nil
 }
 
-// TestGenerateTargetUpdates_DestroyDeletesTargetEvenWithResources verifies that
-// a destroy command generates a TargetOperationDelete even when the forma also
-// has resources in that target (hasResourcesInTarget=true). Previously, this
-// combination was silently skipped, leaving stale targets in the DB.
-func TestGenerateTargetUpdates_DestroyDeletesTargetEvenWithResources(t *testing.T) {
+// TestGenerateTargetUpdates_DestroyDeletesDependentTargetWithResources verifies that
+// a target with $ref dependencies is deleted during destroy even when it has resources.
+// The DAG handles cascade-deleting the resources before the target.
+func TestGenerateTargetUpdates_DestroyDeletesDependentTargetWithResources(t *testing.T) {
 	existingTarget := &pkgmodel.Target{
 		Label:        "test-target",
 		Namespace:    "default",
-		Config:       json.RawMessage(`{"region": "us-east-1"}`),
+		Config:       json.RawMessage(`{"endpoint": {"$ref": "formae://abc123#/Endpoint"}}`),
 		Discoverable: false,
 		Version:      1,
 	}
@@ -408,7 +431,7 @@ func TestGenerateTargetUpdates_DestroyDeletesTargetEvenWithResources(t *testing.
 	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
 
 	require.NoError(t, err)
-	require.Len(t, updates, 1, "should generate a delete update even when forma has resources in the target")
+	require.Len(t, updates, 1, "should generate a delete for targets with $ref dependencies")
 
 	update := updates[0]
 	assert.Equal(t, "test-target", update.Target.Label)
