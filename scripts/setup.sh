@@ -159,12 +159,4 @@ echo ""
 echo "IMPORTANT: ensure you add ${INSTALLPREFIX}/formae/bin to your PATH, and reload your shell configuration"
 echo ""
 
-if [ "$(basename "$SHELL")" = "zsh" ]; then
-  mkdir -p ~/.zsh/completions
-  ${INSTALLPREFIX}/formae/bin/formae completion zsh > ~/.zsh/completions/_formae
-  echo "Zsh completions installed to ~/.zsh/completions/_formae"
-elif [ "$(basename "$SHELL")" = "bash" ]; then
-  mkdir -p ~/.local/share/bash-completion/completions
-  ${INSTALLPREFIX}/formae/bin/formae completion bash > ~/.local/share/bash-completion/completions/formae
-  echo "Bash completions installed to ~/.local/share/bash-completion/completions/formae"
-fi
+echo "For shell completions, run: formae completion --help"
