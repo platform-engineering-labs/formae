@@ -254,6 +254,14 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 	if !ok {
 		return nil, fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
 	}
+	// Decompress resource properties if sent compressed over Ergo (64KB limit)
+	if len(progress.CompressedResourceProperties) > 0 && len(progress.ResourceProperties) == 0 {
+		decompressed, err := plugin.DecompressJSON(progress.CompressedResourceProperties)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decompress resource properties: %w", err)
+		}
+		progress.ResourceProperties = decompressed
+	}
 	return &progress, nil
 }
 
