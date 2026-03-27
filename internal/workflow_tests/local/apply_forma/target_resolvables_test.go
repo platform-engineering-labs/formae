@@ -226,6 +226,120 @@ func TestApplyForma_TargetWithResolvables_FromTripletURI(t *testing.T) {
 	})
 }
 
+// TestApplyForma_DestroyThenReapplyTargetWithResolvables exercises the full
+// apply → destroy → re-apply cycle for a target whose config references a
+// resource property via $ref. Destroy deletes both the resource and all targets
+// in the forma. Re-apply recreates them from scratch.
+func TestApplyForma_DestroyThenReapplyTargetWithResolvables(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		clusterProps := `{"BucketName":"my-cluster","Endpoint":"https://my-cluster.example.com"}`
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "1234",
+					NativeID:           "native-" + request.Label,
+					ResourceProperties: request.Properties,
+				}}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   clusterProps,
+				}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return &resource.DeleteResult{ProgressResult: &resource.ProgressResult{
+					Operation:       resource.OperationDelete,
+					OperationStatus: resource.OperationStatusSuccess,
+					NativeID:        request.NativeID,
+				}}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		clusterKsuid := "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
+		makeForma := func() *pkgmodel.Forma {
+			return &pkgmodel.Forma{
+				Stacks: []pkgmodel.Stack{{Label: "infra"}},
+				Resources: []pkgmodel.Resource{
+					{
+						Label: "cluster", Type: "FakeAWS::S3::Bucket", Stack: "infra", Target: "provider",
+						Managed: true, Ksuid: clusterKsuid,
+						Schema:     pkgmodel.Schema{Identifier: "BucketName", Portable: true},
+						Properties: json.RawMessage(clusterProps),
+					},
+				},
+				Targets: []pkgmodel.Target{
+					{Label: "provider", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+					{Label: "consumer", Namespace: "FakeAWS", Config: json.RawMessage(fmt.Sprintf(`{
+						"endpoint": {"$ref": "formae://%s#/Endpoint"}
+					}`, clusterKsuid))},
+				},
+			}
+		}
+
+		// Step 1: Apply
+		_, err = m.ApplyForma(makeForma(),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+		assert.Eventually(t, func() bool {
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			return len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "apply should complete")
+
+		// Verify consumer target exists with resolved config
+		consumerTarget, err := m.Datastore.LoadTarget("consumer")
+		require.NoError(t, err)
+		require.NotNil(t, consumerTarget)
+
+		// Step 2: Destroy — both the resource and the targets are deleted.
+		_, err = m.DestroyForma(makeForma(),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client-id")
+		require.NoError(t, err)
+		assert.Eventually(t, func() bool {
+			cmds, _ := m.Datastore.LoadFormaCommands()
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			return len(cmds) == 2 && len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "destroy should complete")
+
+		// Verify resource was deleted and targets are also gone
+		resources, err := m.Datastore.LoadResourcesByStack("infra")
+		require.NoError(t, err)
+		assert.Empty(t, resources, "resources should be deleted")
+
+		consumerTarget, err = m.Datastore.LoadTarget("consumer")
+		require.NoError(t, err)
+		assert.Nil(t, consumerTarget, "consumer target should be deleted after destroy")
+
+		// Step 3: Re-apply — both targets are re-created from scratch.
+		_, err = m.ApplyForma(makeForma(),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+		assert.Eventually(t, func() bool {
+			cmds, _ := m.Datastore.LoadFormaCommands()
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			return len(cmds) == 3 && len(incomplete) == 0
+		}, 15*time.Second, 100*time.Millisecond, "re-apply should complete")
+
+		// Verify everything is back
+		consumerTarget, err = m.Datastore.LoadTarget("consumer")
+		require.NoError(t, err)
+		require.NotNil(t, consumerTarget)
+
+		resources, err = m.Datastore.LoadResourcesByStack("infra")
+		require.NoError(t, err)
+		assert.Len(t, resources, 1, "cluster resource should be re-created")
+	})
+}
+
 func TestApplyForma_ReapplyTargetResolvablesSameValue_NoReplace(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		clusterProps := `{"BucketName":"my-cluster","Endpoint":"https://my-cluster.example.com"}`

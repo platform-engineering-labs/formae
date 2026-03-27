@@ -33,15 +33,13 @@ func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
 }
 
 // GenerateTargetUpdates determines what target changes are needed.
-// resourceTargetLabels is the set of target labels that have resources in the forma.
-// On destroy, a target is only deleted if it has no resources in the forma (i.e., the
-// user is not managing individual resources in it). The DAG handles cascade-deleting
-// all resources in the target before the target itself.
-func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command, resourceTargetLabels map[string]bool) ([]TargetUpdate, error) {
+// On destroy, every target in the forma is deleted. The DAG handles
+// cascade-deleting all resources in the target before the target itself.
+func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command) ([]TargetUpdate, error) {
 	var updates []TargetUpdate
 
 	for _, target := range targets {
-		update, hasUpdate, err := tp.determineTargetUpdate(target, command, resourceTargetLabels[target.Label])
+		update, hasUpdate, err := tp.determineTargetUpdate(target, command)
 		if err != nil {
 			return nil, fmt.Errorf("failed to determine target update for %s: %w", target.Label, err)
 		}
@@ -60,7 +58,7 @@ func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target
 	return updates, nil
 }
 
-func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command, hasResourcesInTarget bool) (TargetUpdate, bool, error) {
+func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command) (TargetUpdate, bool, error) {
 	now := util.TimeNow()
 
 	existing, err := tp.datastore.LoadTarget(target.Label)
@@ -70,19 +68,11 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 
 	// Handle destroy command
 	if command == pkgmodel.CommandDestroy {
-		// If the forma has resources in this target, only those resources are
-		// destroyed — the target itself is preserved.
-		if hasResourcesInTarget {
-			slog.Debug("Destroy command has resources in target, skipping target deletion", "label", target.Label)
-			return TargetUpdate{}, false, nil
-		}
-
 		if existing == nil {
 			slog.Debug("Target does not exist, nothing to delete", "label", target.Label)
 			return TargetUpdate{}, false, nil
 		}
 
-		// Target is being destroyed without explicit resources in the forma.
 		// The DAG will cascade-delete all resources in this target before
 		// deleting the target itself.
 		// Extract resolvables so the DAG can create reversed cross-target

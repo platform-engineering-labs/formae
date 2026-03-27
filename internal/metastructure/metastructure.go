@@ -1517,14 +1517,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	// Build per-target resource presence map for destroy semantics:
-	// targets with resources in the forma are preserved on destroy.
-	resourceTargetLabels := make(map[string]bool)
-	for _, r := range forma.Resources {
-		resourceTargetLabels[r.Target] = true
-	}
-
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, resourceTargetLabels)
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command)
 	if err != nil {
 		return nil, err
 	}
