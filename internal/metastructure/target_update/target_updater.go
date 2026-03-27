@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	StateNotStarted           = gen.Atom("not_started")
 	StateResolving            = gen.Atom("resolving")
 	StatePersisting           = gen.Atom("persisting")
 	StateFinishedSuccessfully = gen.Atom("finished_successfully")
@@ -67,17 +68,17 @@ func (t *TargetUpdater) Init(args ...any) (statemachine.StateMachineSpec[TargetU
 
 	t.Log().Debug("TargetUpdater %s initialized", t.Name())
 
-	return statemachine.NewStateMachineSpec(StateResolving,
+	return statemachine.NewStateMachineSpec(StateNotStarted,
 		statemachine.WithData(data),
 		statemachine.WithStateEnterCallback(onTargetUpdaterStateChange),
+		// Not started — waiting for StartTargetUpdate message
+		statemachine.WithStateMessageHandler(StateNotStarted, handleStartTargetUpdate),
+		statemachine.WithStateMessageHandler(StateNotStarted, shutdownTargetUpdater),
 		// Resolving state handlers
-		statemachine.WithStateMessageHandler(StateResolving, handleStartTargetUpdate),
 		statemachine.WithStateMessageHandler(StateResolving, targetValueResolved),
 		statemachine.WithStateMessageHandler(StateResolving, targetFailedToResolve),
 		statemachine.WithStateMessageHandler(StateResolving, targetResolveCacheTimeout),
 		statemachine.WithStateMessageHandler(StateResolving, shutdownTargetUpdater),
-		// Persisting state handlers
-		statemachine.WithStateMessageHandler(StatePersisting, shutdownTargetUpdater),
 		// Terminal state handlers
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdownTargetUpdater),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdownTargetUpdater),
