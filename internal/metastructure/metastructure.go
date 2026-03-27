@@ -1423,6 +1423,13 @@ func findCascadeTargetDeletes(
 	var cascadeTargetUpdates []target_update.TargetUpdate
 	var cascadeResourceUpdates []resource_update.ResourceUpdate
 
+	// Load all resources once before the BFS loop — the result doesn't
+	// change between iterations.
+	allResourcesByStack, err := ds.LoadAllResourcesByStack()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load resources for cascade target delete: %w", err)
+	}
+
 	// BFS: find targets depending on deleted resources, then find resources
 	// in those targets (which may trigger further target cascades)
 	currentLevel := deletingKSUIDs
@@ -1454,11 +1461,6 @@ func findCascadeTargetDeletes(
 		// and collect their KSUIDs for the next BFS level
 		var nextLevel []string
 		if len(newDeletedTargetLabels) > 0 {
-			allResourcesByStack, err := ds.LoadAllResourcesByStack()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to load resources for cascade target delete: %w", err)
-			}
-
 			newDeletedSet := make(map[string]bool, len(newDeletedTargetLabels))
 			for _, label := range newDeletedTargetLabels {
 				newDeletedSet[label] = true
