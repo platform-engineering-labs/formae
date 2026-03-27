@@ -487,40 +487,57 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	// Persist cascading resource failures via FormaCommandPersister.
-	// Only resource updates need persister notification — target updates are local
-	// datastore operations that were never started.
+	// Persist cascading failures via FormaCommandPersister.
 	if len(cascadingFailures) > 0 {
 		proc.Log().Warning("Cascading failures detected: %d for command %s", len(cascadingFailures), data.changeset.CommandID)
 
 		var failedResources []forma_persister.ResourceUpdateRef
+		var failedTargets []forma_persister.TargetUpdateRef
 		for _, failedUpdate := range cascadingFailures {
-			ru, ok := failedUpdate.(*resource_update.ResourceUpdate)
-			if !ok {
-				continue
-			}
 			// Skip the original failure — its updater actor already persisted it.
 			if failedUpdate.NodeURI() == event.nodeURI {
 				continue
 			}
-			proc.Log().Debug("Resource marked as failed due to cascade",
-				"uri", ru.URI(), "operation", ru.Operation, "originalFailure", event.nodeURI)
-			failedResources = append(failedResources, forma_persister.ResourceUpdateRef{
-				URI:       ru.URI(),
-				Operation: ru.Operation,
-			})
+			switch u := failedUpdate.(type) {
+			case *resource_update.ResourceUpdate:
+				proc.Log().Debug("Resource marked as failed due to cascade",
+					"uri", u.URI(), "operation", u.Operation, "originalFailure", event.nodeURI)
+				failedResources = append(failedResources, forma_persister.ResourceUpdateRef{
+					URI:       u.URI(),
+					Operation: u.Operation,
+				})
+			case *target_update.TargetUpdate:
+				proc.Log().Debug("Target marked as failed due to cascade",
+					"label", u.Target.Label, "operation", u.Operation, "originalFailure", event.nodeURI)
+				failedTargets = append(failedTargets, forma_persister.TargetUpdateRef{
+					Label:     u.Target.Label,
+					Operation: u.Operation,
+				})
+			}
 		}
 
+		persisterPID := gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")}
+		now := util.TimeNow()
+
 		if len(failedResources) > 0 {
-			_, err = proc.Call(
-				gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
-				forma_persister.MarkResourcesAsFailed{
-					CommandID:          data.changeset.CommandID,
-					Resources:          failedResources,
-					ResourceModifiedTs: util.TimeNow(),
-				})
+			_, err = proc.Call(persisterPID, forma_persister.MarkResourcesAsFailed{
+				CommandID:          data.changeset.CommandID,
+				Resources:          failedResources,
+				ResourceModifiedTs: now,
+			})
 			if err != nil {
 				proc.Log().Error("Failed to mark resources as failed in persister", "error", err, "commandID", data.changeset.CommandID)
+			}
+		}
+
+		if len(failedTargets) > 0 {
+			_, err = proc.Call(persisterPID, forma_persister.MarkTargetsAsFailed{
+				CommandID:        data.changeset.CommandID,
+				Targets:          failedTargets,
+				TargetModifiedTs: now,
+			})
+			if err != nil {
+				proc.Log().Error("Failed to mark targets as failed in persister", "error", err, "commandID", data.changeset.CommandID)
 			}
 		}
 	}

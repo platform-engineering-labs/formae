@@ -233,6 +233,20 @@ type MarkResourcesAsCanceled struct {
 	Resources []ResourceUpdateRef
 }
 
+// TargetUpdateRef identifies a specific TargetUpdate by label and operation.
+type TargetUpdateRef struct {
+	Label     string
+	Operation types.OperationType
+}
+
+// MarkTargetsAsFailed is sent by the changeset executor when target updates
+// are cascade-failed due to a dependency failure in the DAG.
+type MarkTargetsAsFailed struct {
+	CommandID        string
+	Targets          []TargetUpdateRef
+	TargetModifiedTs time.Time
+}
+
 // FinalizeIncompleteCommand is sent during crash recovery when all resource
 // updates in a command have already reached a terminal state but the command
 // itself was never marked complete (the agent crashed between the last
@@ -263,6 +277,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markResourcesAsRejected(&msg)
 	case MarkResourcesAsFailed:
 		return f.markResourcesAsFailed(&msg)
+	case MarkTargetsAsFailed:
+		return f.markTargetsAsFailed(&msg)
 	case MarkResourcesAsCanceled:
 		return f.markResourcesAsCanceled(&msg)
 	case messages.MarkResourceUpdateAsComplete:
@@ -534,6 +550,42 @@ func (f *FormaCommandPersister) markResourcesAsRejected(msg *MarkResourcesAsReje
 
 func (f *FormaCommandPersister) markResourcesAsFailed(msg *MarkResourcesAsFailed) (bool, error) {
 	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateFailed, msg.ResourceModifiedTs)
+}
+
+func (f *FormaCommandPersister) markTargetsAsFailed(msg *MarkTargetsAsFailed) (bool, error) {
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		f.Log().Error("Failed to load Forma command for target cascade failure", "commandID", msg.CommandID, "error", err)
+		return false, fmt.Errorf("failed to load Forma command for target cascade failure: %w", err)
+	}
+
+	command := cached.command
+	for _, ref := range msg.Targets {
+		for i := range command.TargetUpdates {
+			tu := &command.TargetUpdates[i]
+			if tu.Target.Label == ref.Label && tu.Operation == ref.Operation {
+				tu.State = types.TargetUpdateStateFailed
+				tu.ModifiedTs = msg.TargetModifiedTs
+				break
+			}
+		}
+	}
+
+	command.ModifiedTs = msg.TargetModifiedTs
+	command.State = overallCommandState(command)
+
+	if command.IsInFinalState() {
+		if err := f.finalizeAndPersist(cached); err != nil {
+			return false, err
+		}
+	} else {
+		if err := f.datastore.UpdateFormaCommandProgress(command.ID, command.State, command.ModifiedTs); err != nil {
+			f.Log().Error("Failed to update Forma command meta", "commandID", msg.CommandID, "error", err)
+			return false, fmt.Errorf("failed to update Forma command meta: %w", err)
+		}
+	}
+
+	return true, nil
 }
 
 func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanceled) (bool, error) {
