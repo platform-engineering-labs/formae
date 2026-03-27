@@ -139,7 +139,7 @@ func TestMetastructure_DestroyWithCascade_SimulateShowsCascades(t *testing.T) {
 
 		// Child should be a cascade with parent as source
 		assert.True(t, childUpdate.IsCascade, "Child should be marked as cascade")
-		assert.Equal(t, parentKsuid, childUpdate.CascadeSource, "Child cascade source should be parent KSUID")
+		assert.Equal(t, "parent-vpc", childUpdate.CascadeSource, "Child cascade source should be parent resource label")
 
 		// Both should be delete operations
 		assert.Equal(t, apimodel.OperationDelete, parentUpdate.Operation)
@@ -222,7 +222,7 @@ func TestDestroyWithCascade_SimulateShowsCascadeTargets(t *testing.T) {
 
 		require.NotNil(t, consumerTargetUpdate, "Should have a target update for 'consumer'")
 		assert.True(t, consumerTargetUpdate.IsCascade, "Consumer target should be marked as cascade")
-		assert.Equal(t, clusterKsuid, consumerTargetUpdate.CascadeSource, "Consumer cascade source should be cluster KSUID")
+		assert.Equal(t, "cluster", consumerTargetUpdate.CascadeSource, "Consumer cascade source should be cluster resource label")
 		assert.Equal(t, apimodel.OperationDelete, consumerTargetUpdate.Operation, "Consumer target should be deleted")
 	})
 }

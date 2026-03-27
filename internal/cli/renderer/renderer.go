@@ -553,7 +553,15 @@ func formatSimulatedTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
 	}
 
-	root.Add(line)
+	if tu.IsCascade {
+		line = line + display.Gold(" (cascade)")
+	}
+
+	node := root.Add(line)
+
+	if tu.IsCascade && tu.CascadeSource != "" {
+		node.Add(display.Grey("because it depends on ") + display.LightBlue(tu.CascadeSource))
+	}
 }
 
 // formatTargetUpdate formats a target update for status view
