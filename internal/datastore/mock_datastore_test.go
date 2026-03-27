@@ -71,6 +71,9 @@ func (m *mockDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.Resource
 func (m *mockDatastore) FindResourcesDependingOnMany(_ []string) (map[string][]*pkgmodel.Resource, error) {
 	return nil, nil
 }
+func (m *mockDatastore) FindTargetsDependingOnMany(_ []string) (map[string][]*pkgmodel.Target, error) {
+	return make(map[string][]*pkgmodel.Target), nil
+}
 func (m *mockDatastore) BulkStoreResources(_ []pkgmodel.Resource, _ string) (string, error) {
 	return "", nil
 }

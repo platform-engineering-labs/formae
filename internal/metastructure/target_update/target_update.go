@@ -5,8 +5,10 @@
 package target_update
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -32,14 +34,38 @@ const (
 
 // TargetUpdate represents an update to a target in the system
 type TargetUpdate struct {
-	Target         pkgmodel.Target   `json:"Target"`
-	ExistingTarget *pkgmodel.Target  `json:"ExistingTarget,omitempty"`
-	Operation      TargetOperation   `json:"Operation"`
-	State          TargetUpdateState `json:"State"`
-	StartTs        time.Time         `json:"StartTs"`
-	ModifiedTs     time.Time         `json:"ModifiedTs"`
-	Version        string            `json:"Version"`
-	ErrorMessage   string            `json:"ErrorMessage,omitempty"`
+	Target               pkgmodel.Target      `json:"Target"`
+	ExistingTarget       *pkgmodel.Target     `json:"ExistingTarget,omitempty"`
+	Operation            TargetOperation      `json:"Operation"`
+	State                TargetUpdateState    `json:"State"`
+	StartTs              time.Time            `json:"StartTs"`
+	ModifiedTs           time.Time            `json:"ModifiedTs"`
+	Version              string               `json:"Version"`
+	ErrorMessage         string               `json:"ErrorMessage,omitempty"`
+	RemainingResolvables []pkgmodel.FormaeURI `json:"RemainingResolvables,omitempty"`
+	IsCascade            bool                 `json:"IsCascade,omitempty"`     // True if this delete is triggered by cascade
+	CascadeSource        string               `json:"CascadeSource,omitempty"` // Label of resource that triggered the cascade
+}
+
+// NewTargetUpdateForCascadeDelete creates a cascade delete TargetUpdate for a target
+// that depends on a resource being deleted. The cascadeSourceKSUID is the KSUID of
+// the resource that triggered the cascade.
+//
+// Unlike regular target deletes, cascade deletes do NOT set RemainingResolvables
+// because the referenced resources are themselves being deleted. Attempting to
+// resolve those references during execution would fail.
+func NewTargetUpdateForCascadeDelete(target *pkgmodel.Target, cascadeSourceKSUID string) TargetUpdate {
+	now := util.TimeNow()
+	return TargetUpdate{
+		Target:         *target,
+		ExistingTarget: target,
+		Operation:      TargetOperationDelete,
+		State:          TargetUpdateStateNotStarted,
+		StartTs:        now,
+		ModifiedTs:     now,
+		IsCascade:      true,
+		CascadeSource:  cascadeSourceKSUID,
+	}
 }
 
 // HasChange returns true if the discoverable field changed
@@ -55,8 +81,18 @@ func (tu *TargetUpdate) NodeURI() pkgmodel.FormaeURI {
 	return pkgmodel.FormaeURI("target://" + tu.Target.Label + "/" + string(tu.Operation))
 }
 
-// Resolvables returns nil because target updates have no resolvable references.
-func (tu *TargetUpdate) Resolvables() []pkgmodel.FormaeURI { return nil }
+// Resolvables returns the remaining resolvable URIs for this target update.
+func (tu *TargetUpdate) Resolvables() []pkgmodel.FormaeURI { return tu.RemainingResolvables }
+
+// ResolveValue substitutes a resolved value into the target's Config for the given URI.
+func (tu *TargetUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string) error {
+	config, err := resolver.ResolvePropertyReferences(formaeUri, tu.Target.Config, value)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target config: %w", err)
+	}
+	tu.Target.Config = config
+	return nil
+}
 
 // Namespace returns the target's namespace.
 func (tu *TargetUpdate) Namespace() string { return tu.Target.Namespace }
@@ -111,6 +147,13 @@ func ValidateImmutableFields(existing, new *pkgmodel.Target) error {
 type PersistTargetUpdates struct {
 	TargetUpdates []TargetUpdate
 	CommandID     string
+}
+
+// UpdateTargetStates is sent to the FormaCommandPersister to update the
+// target update states in the command record.
+type UpdateTargetStates struct {
+	CommandID     string
+	TargetUpdates []TargetUpdate
 }
 
 // ShouldTriggerDiscovery determines if discovery should be triggered

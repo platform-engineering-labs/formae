@@ -3117,6 +3117,79 @@ func (d DatastoreSQLite) FindResourcesDependingOnMany(ksuids []string) (map[stri
 	return result, nil
 }
 
+func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error) {
+	slog.Debug("SQLite START", "method", "FindTargetsDependingOnMany", "ksuids", len(ksuids))
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "FindTargetsDependingOnMany", "ksuids", len(ksuids), "duration", time.Since(start))
+	}()
+	_, span := sqliteTracer.Start(context.Background(), "FindTargetsDependingOnMany")
+	defer span.End()
+
+	if len(ksuids) == 0 {
+		return make(map[string][]*pkgmodel.Target), nil
+	}
+
+	// Build OR conditions for each KSUID pattern
+	// The format is: "$ref":"formae://KSUID#/..."
+	var conditions []string
+	var args []any
+	for _, ksuid := range ksuids {
+		pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
+		conditions = append(conditions, "config LIKE ?")
+		args = append(args, pattern)
+	}
+
+	query := fmt.Sprintf(`
+	SELECT label, version, namespace, config, discoverable
+	FROM targets t1
+	WHERE (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	`, strings.Join(conditions, " OR "))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	// Build a map of KSUID -> targets that depend on it
+	result := make(map[string][]*pkgmodel.Target)
+	for rows.Next() {
+		var label, namespace string
+		var version int
+		var config json.RawMessage
+		var discoverable int
+		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+			return nil, err
+		}
+
+		target := &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable == 1,
+			Version:      version,
+		}
+
+		// Find which of the input KSUIDs this target depends on
+		configStr := string(config)
+		for _, ksuid := range ksuids {
+			pattern := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(configStr, pattern) {
+				result[ksuid] = append(result[ksuid], target)
+			}
+		}
+	}
+
+	return result, nil
+}
+
 func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "GetKSUIDByTriplet")
 	defer span.End()

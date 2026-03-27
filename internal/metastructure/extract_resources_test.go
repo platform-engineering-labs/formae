@@ -118,6 +118,9 @@ func (m *mockExtractDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.R
 func (m *mockExtractDatastore) FindResourcesDependingOnMany(_ []string) (map[string][]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) FindTargetsDependingOnMany(_ []string) (map[string][]*pkgmodel.Target, error) {
+	panic("not implemented")
+}
 func (m *mockExtractDatastore) BulkStoreResources(_ []pkgmodel.Resource, _ string) (string, error) {
 	panic("not implemented")
 }

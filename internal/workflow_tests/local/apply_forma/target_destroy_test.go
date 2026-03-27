@@ -152,9 +152,9 @@ func TestDestroyForma_TargetOnly(t *testing.T) {
 }
 
 // TestDestroyForma_TargetWithResourcesInSameTarget verifies that when a forma
-// contains both a target and resources in that same target, only the resources
-// are deleted — the target is preserved because the user is managing resources
-// in it explicitly.
+// contains both a target and resources in that same target, both the resources
+// and the target are deleted. The target delete is ordered after the resource
+// deletes in the DAG.
 func TestDestroyForma_TargetWithResourcesInSameTarget(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, def, err := test_helpers.NewTestMetastructure(t, successfulCreateDelete())
@@ -189,7 +189,7 @@ func TestDestroyForma_TargetWithResourcesInSameTarget(t *testing.T) {
 		waitForCommands(t, m, 1)
 
 		// Step 2: Destroy the same forma (target + resources in that target).
-		// Only the resources should be deleted; the target should remain.
+		// Both the resources and the target should be deleted.
 		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
 		require.NoError(t, err)
 		waitForCommands(t, m, 2)
@@ -202,13 +202,19 @@ func TestDestroyForma_TargetWithResourcesInSameTarget(t *testing.T) {
 		assert.Equal(t, resource_update.OperationDelete, destroyCmd.ResourceUpdates[0].Operation)
 		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, destroyCmd.ResourceUpdates[0].State)
 
-		// Verify target was NOT deleted
-		assert.Empty(t, destroyCmd.TargetUpdates, "target should not be deleted when forma has resources in it")
+		// Verify target was also deleted
+		require.Len(t, destroyCmd.TargetUpdates, 1, "target should be deleted")
+		assert.Equal(t, target_update.TargetOperationDelete, destroyCmd.TargetUpdates[0].Operation)
+		assert.Equal(t, target_update.TargetUpdateStateSuccess, destroyCmd.TargetUpdates[0].State)
 
-		// Verify target still exists in datastore
+		// Verify both are gone from the datastore
+		resources, err := m.Datastore.LoadResourcesByStack("test-stack")
+		require.NoError(t, err)
+		assert.Empty(t, resources, "resources should be deleted")
+
 		target, err := m.Datastore.LoadTarget("test-target")
 		require.NoError(t, err)
-		assert.NotNil(t, target, "target should still exist")
+		assert.Nil(t, target, "target should be deleted")
 	})
 }
 

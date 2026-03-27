@@ -209,6 +209,43 @@ func TestResolvePropertyReferences(t *testing.T) {
 		assert.Equal(t, int64(8080), result.Get("Port.$value").Int())
 	})
 
+	t.Run("resolves JSON object value without double-encoding", func(t *testing.T) {
+		// When a resource property is a JSON object (like an endpoints mapping),
+		// the resolved $value should be a proper JSON object, not a double-encoded string.
+		endpointsRef := newTestRef("Endpoints")
+		properties := fmt.Appendf(nil, `{
+			"Endpoints": {
+				"$ref": "%s"
+			}
+		}`, endpointsRef)
+
+		// The ResolveCache extracts the property value first (gjson.Get + .String()),
+		// so the resolved value IS the object itself, not wrapped in {"Endpoints": ...}.
+		resolved, err := ResolvePropertyReferences(
+			pkgmodel.FormaeURI(endpointsRef),
+			properties,
+			`{"grafana": "http://localhost:3000", "prometheus": "http://localhost:9090"}`,
+		)
+
+		require.NoError(t, err)
+
+		result := gjson.Parse(string(resolved))
+		// $value should be a proper JSON object, not a string
+		endpointsValue := result.Get("Endpoints.$value")
+		assert.True(t, endpointsValue.IsObject(), "resolved $value should be a JSON object, got: %s", endpointsValue.Raw)
+		assert.Equal(t, "http://localhost:3000", endpointsValue.Get("grafana").String())
+		assert.Equal(t, "http://localhost:9090", endpointsValue.Get("prometheus").String())
+
+		// After conversion to plugin format, the object should be preserved
+		pluginFormat, err := ConvertToPluginFormat(resolved)
+		require.NoError(t, err)
+
+		pluginResult := gjson.Parse(string(pluginFormat))
+		assert.True(t, pluginResult.Get("Endpoints").IsObject(), "plugin format should preserve object structure")
+		assert.Equal(t, "http://localhost:3000", pluginResult.Get("Endpoints.grafana").String())
+		assert.Equal(t, "http://localhost:9090", pluginResult.Get("Endpoints.prometheus").String())
+	})
+
 	t.Run("handles deeply nested objects", func(t *testing.T) {
 		dbEndpointRef := newTestRef("Endpoint")
 		properties := fmt.Appendf(nil, `{
@@ -869,6 +906,33 @@ func TestExtractResolvableURIs(t *testing.T) {
 		assert.Contains(t, uris, pkgmodel.FormaeURI(subnet1Ref))
 		assert.Contains(t, uris, pkgmodel.FormaeURI(subnet2Ref))
 		assert.Contains(t, uris, pkgmodel.FormaeURI(vpcRef))
+	})
+}
+
+func TestExtractResolvableURIsFromJSON(t *testing.T) {
+	t.Run("extracts refs from raw JSON", func(t *testing.T) {
+		config := json.RawMessage(fmt.Sprintf(`{
+			"endpoint": {"$ref": "%s", "$strategy": "SetOnce", "$visibility": "Clear"},
+			"region": "us-east-1",
+			"nested": {
+				"cert": {"$ref": "%s"}
+			}
+		}`, newTestRef("Endpoint"), newTestRef("CertificateArn")))
+
+		uris := ExtractResolvableURIsFromJSON(config)
+
+		assert.Len(t, uris, 2)
+	})
+
+	t.Run("returns empty for no refs", func(t *testing.T) {
+		config := json.RawMessage(`{"region": "us-east-1"}`)
+		uris := ExtractResolvableURIsFromJSON(config)
+		assert.Empty(t, uris)
+	})
+
+	t.Run("returns nil for nil input", func(t *testing.T) {
+		uris := ExtractResolvableURIsFromJSON(nil)
+		assert.Nil(t, uris)
 	})
 }
 

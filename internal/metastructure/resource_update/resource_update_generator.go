@@ -35,9 +35,13 @@ func GenerateResourceUpdates(
 	var referenceLabels map[string]string
 	var err error
 
-	// Only translate references for commands that contain new/modified resources with triplet URIs
-	// Skip for synchronization (database reads), discovery (pre-assigned KSUIDs), and destroy (database resources)
-	doTranslateFormaeReferencesToKsuid := source != FormaCommandSourceSynchronize &&
+	// Only translate references for commands that contain new/modified resources with triplet URIs.
+	// Skip for synchronization (database reads), discovery (pre-assigned KSUIDs), and destroy (database resources).
+	// Also skip if TranslateFormaeReferencesToKsuid was already called upstream (e.g., from FormaCommandFromForma)
+	// — detected by checking if resources already have KSUIDs assigned.
+	alreadyTranslated := len(forma.Resources) > 0 && forma.Resources[0].Ksuid != ""
+	doTranslateFormaeReferencesToKsuid := !alreadyTranslated &&
+		source != FormaCommandSourceSynchronize &&
 		source != FormaCommandSourceDiscovery &&
 		command != pkgmodel.CommandDestroy
 
@@ -57,21 +61,29 @@ func GenerateResourceUpdates(
 		existingTargetMap[target.Label] = target
 	}
 
-	// desiredTargetMap starts as a copy of existingTargetMap, then is overridden
-	// with forma targets. For replaced targets this gives the new config; for
-	// non-replaced targets the config is identical so the override is a no-op.
-	// Used for create/update operations.
+	// desiredTargetMap starts as a copy of existingTargetMap with configs converted
+	// to plugin format (stripping $ref/$value metadata from target resolvables).
+	// Then overridden with forma targets for new targets only. For existing targets,
+	// the DB config is preferred because it contains resolved values; but we must
+	// convert it because Ergo Framework cannot serialize json.RawMessage with nested
+	// $ref/$value objects (ETF encoding silently drops the message).
 	var desiredTargetMap = make(map[string]*pkgmodel.Target)
 	for _, target := range existingTargets {
-		desiredTargetMap[target.Label] = target
+		t := *target
+		if converted, err := resolver.ConvertToPluginFormat(t.Config); err == nil {
+			t.Config = converted
+		}
+		tCopy := t
+		desiredTargetMap[target.Label] = &tCopy
 	}
 	for _, target := range forma.Targets {
 		t := target
-		desiredTargetMap[target.Label] = &t
 		if _, exists := existingTargetMap[target.Label]; !exists {
+			desiredTargetMap[target.Label] = &t
 			slog.Debug("Target does not exist in existing targets - adding it", "target", target.Label)
 			existingTargetMap[target.Label] = &t
 		}
+		// Existing targets: keep the DB config (already converted above)
 	}
 
 	// Validate stack references for commands that modify resources, sync commands are triggered from the agent
@@ -196,7 +208,25 @@ func generateResourceUpdatesForDestroy(
 		}
 	}
 
-	// Generate cascade deletes for all managed resources in deleted targets
+	// Find cascade deletes - resources that reference the resources being deleted
+	cascadeDeletes, err := findCascadeDeletes(explicitDeleteKSUIDs, existingTargetMap, source, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find cascade deletes: %w", err)
+	}
+
+	resourceDestroys = append(resourceDestroys, cascadeDeletes...)
+
+	// Collect all KSUIDs that are already being deleted (explicit + cascade)
+	allDeleteKSUIDs := make(map[string]bool)
+	for ksuid := range explicitDeleteKSUIDs {
+		allDeleteKSUIDs[ksuid] = true
+	}
+	for _, cd := range cascadeDeletes {
+		allDeleteKSUIDs[cd.DesiredState.Ksuid] = true
+	}
+
+	// Generate deletes for remaining managed resources in deleted targets.
+	// Resources already covered by explicit or cascade deletes are skipped.
 	if len(deletedTargets) > 0 {
 		allResourcesByStack, err := ds.LoadAllResourcesByStack()
 		if err != nil {
@@ -208,8 +238,8 @@ func generateResourceUpdatesForDestroy(
 				if !res.Managed || !deletedTargets[res.Target] {
 					continue
 				}
-				if explicitDeleteKSUIDs[res.Ksuid] {
-					continue // Already being deleted explicitly
+				if allDeleteKSUIDs[res.Ksuid] {
+					continue // Already being deleted (explicit or cascade)
 				}
 
 				target, ok := existingTargetMap[res.Target]
@@ -219,22 +249,15 @@ func generateResourceUpdatesForDestroy(
 
 				resourceDestroy, err := NewResourceUpdateForDestroy(*res, *target, source)
 				if err != nil {
-					return nil, fmt.Errorf("failed to create cascade resource destroy for %s: %w", res.Label, err)
+					return nil, fmt.Errorf("failed to create target-cascade resource destroy for %s: %w", res.Label, err)
 				}
+				resourceDestroy.IsCascade = true
+				resourceDestroy.CascadeSource = res.Target
 
-				explicitDeleteKSUIDs[res.Ksuid] = true
 				resourceDestroys = append(resourceDestroys, resourceDestroy)
 			}
 		}
 	}
-
-	// Find cascade deletes - resources that reference the resources being deleted
-	cascadeDeletes, err := findCascadeDeletes(explicitDeleteKSUIDs, existingTargetMap, source, ds)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find cascade deletes: %w", err)
-	}
-
-	resourceDestroys = append(resourceDestroys, cascadeDeletes...)
 
 	return resourceDestroys, nil
 }
@@ -352,7 +375,10 @@ func generateResourceUpdatesForApply(
 				}
 			}
 
-			if !util.JsonEqualRaw(existingTarget.Config, target.Config) {
+			// Skip raw config comparison when config contains resolvables ($ref).
+			// The TargetUpdateGenerator handles resolvable-aware comparison.
+			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 &&
+				!util.JsonEqualRaw(existingTarget.Config, target.Config) {
 				return nil, apimodel.TargetAlreadyExistsError{
 					TargetLabel:    target.Label,
 					MismatchType:   "config",
@@ -1308,6 +1334,13 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 	return resources, ksuidToLabel
 }
 
+// TranslateFormaeReferencesToKsuid translates resolvables values to KSUID refs in both
+// resource properties and target configs. Must be called before GenerateTargetUpdates
+// so that target config resolvables are translated to $ref URIs for extraction.
+func TranslateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLookup) (map[string]string, error) {
+	return translateFormaeReferencesToKsuid(forma, ds)
+}
+
 // translateFormaeReferencesToKsuid translates resolvables values to KSUID refs
 func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLookup) (map[string]string, error) {
 	resources, ksuidToLabel := assignKSUIDs(forma.Resources, ds)
@@ -1339,6 +1372,17 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 				return nil, fmt.Errorf("failed to translate read-only properties for resource %s: %w", resource.Label, err)
 			}
 			forma.Resources[i].ReadOnlyProperties = translatedReadOnlyProperties
+			maps.Copy(ksuidToLabel, externalLabels)
+		}
+	}
+
+	for i, target := range forma.Targets {
+		if target.Config != nil {
+			translatedConfig, externalLabels, err := translatePropertiesJSON(target.Config, tupleToKsuid, ds)
+			if err != nil {
+				return nil, fmt.Errorf("failed to translate target config for %s: %w", target.Label, err)
+			}
+			forma.Targets[i].Config = translatedConfig
 			maps.Copy(ksuidToLabel, externalLabels)
 		}
 	}

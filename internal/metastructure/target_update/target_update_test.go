@@ -246,6 +246,40 @@ func TestValidateImmutableFields_Success_EmptyObjectVsNil(t *testing.T) {
 	assert.NoError(t, err) // {} and nil should be treated as equivalent
 }
 
+func TestTargetUpdate_ResolvablesReturnsRemainingResolvables(t *testing.T) {
+	tu := TargetUpdate{
+		RemainingResolvables: []pkgmodel.FormaeURI{
+			"formae://abc123#/Endpoint",
+			"formae://def456#/CertArn",
+		},
+	}
+	assert.Equal(t, tu.RemainingResolvables, tu.Resolvables())
+}
+
+func TestTargetUpdate_ResolvablesEmptyByDefault(t *testing.T) {
+	tu := TargetUpdate{}
+	assert.Empty(t, tu.Resolvables())
+}
+
+func TestTargetUpdate_ResolveValue(t *testing.T) {
+	config := json.RawMessage(`{
+		"endpoint": {"$ref": "formae://abc123#/Endpoint", "$strategy": "SetOnce", "$visibility": "Clear"},
+		"region": "us-east-1"
+	}`)
+
+	tu := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:  "k8s",
+			Config: config,
+		},
+	}
+
+	err := tu.ResolveValue("formae://abc123#/Endpoint", "https://my-cluster.eks.amazonaws.com")
+	require.NoError(t, err)
+
+	assert.Contains(t, string(tu.Target.Config), "https://my-cluster.eks.amazonaws.com")
+}
+
 func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
 	update := TargetUpdate{
 		Target: pkgmodel.Target{

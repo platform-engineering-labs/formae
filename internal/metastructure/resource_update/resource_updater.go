@@ -305,6 +305,16 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 	data.resourceUpdate.ModifiedTs = data.resourceUpdate.StartTs
 	data.originalResourceKsuidURI = data.resourceUpdate.DesiredState.URI()
 
+	// Convert target config to plugin format: strip $ref/$value metadata so plugins
+	// receive plain values. This is needed when the target config was resolved via
+	// target resolvables and the stored config still contains $ref/$value objects.
+	if data.resourceUpdate.ResourceTarget.Config != nil {
+		pluginConfig, err := resolver.ConvertToPluginFormat(data.resourceUpdate.ResourceTarget.Config)
+		if err == nil {
+			data.resourceUpdate.ResourceTarget.Config = pluginConfig
+		}
+	}
+
 	// Get LabelConfig from PluginCoordinator (handles both external and local plugins)
 	namespace := data.resourceUpdate.DesiredState.Namespace()
 	result, err := proc.Call(

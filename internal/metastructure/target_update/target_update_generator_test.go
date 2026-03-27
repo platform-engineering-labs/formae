@@ -47,7 +47,7 @@ func TestGenerateTargetUpdates_DestroyCommand_DeletesEmptyTarget(t *testing.T) {
 		{Label: "empty-target", Namespace: "default", Discoverable: false},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -70,7 +70,7 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetNotFound(t *testing.T) {
 		{Label: "non-existent-target", Namespace: "default", Discoverable: true},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
 
 	assert.NoError(t, err)
 	assert.Empty(t, updates) // No update for non-existent target
@@ -103,7 +103,7 @@ func TestGenerateTargetUpdates_DestroyCommand_TargetHasResources(t *testing.T) {
 	}
 
 	// No resources in the forma for this target → target should be deleted
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
 
 	assert.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -128,7 +128,7 @@ func TestGenerateTargetUpdates_CreateNewTarget(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -167,7 +167,7 @@ func TestGenerateTargetUpdates_UpdateExistingTarget_DiscoverableChanged(t *testi
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -207,7 +207,7 @@ func TestGenerateTargetUpdates_NoChange_DiscoverableSame(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
 
 	require.NoError(t, err)
 	assert.Empty(t, updates) // No updates should be generated
@@ -239,7 +239,7 @@ func TestGenerateTargetUpdates_ValidationError_NamespaceMismatch(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "target-with-error")
@@ -256,7 +256,7 @@ func TestGenerateTargetUpdates_DatastoreError(t *testing.T) {
 		{Label: "error-target", Namespace: "default", Discoverable: true},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to determine target update")
@@ -296,7 +296,7 @@ func TestGenerateTargetUpdates_MultipleTargets_MixedScenarios(t *testing.T) {
 		},
 	}
 
-	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, nil)
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
 
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
@@ -322,6 +322,7 @@ func TestGenerateTargetUpdates_MultipleTargets_MixedScenarios(t *testing.T) {
 
 type mockTargetDatastore struct {
 	targets        map[string]*pkgmodel.Target
+	resources      map[string]*pkgmodel.Resource
 	resourceCounts map[string]int
 	shouldError    bool
 }
@@ -343,6 +344,23 @@ func (m *mockTargetDatastore) LoadTarget(label string) (*pkgmodel.Target, error)
 	return target, nil
 }
 
+func (m *mockTargetDatastore) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	if m.shouldError {
+		return nil, assert.AnError
+	}
+
+	if m.resources == nil {
+		return nil, nil
+	}
+
+	resource, exists := m.resources[ksuid]
+	if !exists {
+		return nil, nil
+	}
+
+	return resource, nil
+}
+
 func (m *mockTargetDatastore) CountResourcesInTarget(targetLabel string) (int, error) {
 	if m.shouldError {
 		return 0, assert.AnError
@@ -358,4 +376,163 @@ func (m *mockTargetDatastore) CountResourcesInTarget(targetLabel string) (int, e
 	}
 
 	return count, nil
+}
+
+// TestGenerateTargetUpdates_DestroyDeletesTargetEvenWithResources verifies that
+// a destroy command generates a TargetOperationDelete even when the forma also
+// has resources in that target (hasResourcesInTarget=true). Previously, this
+// combination was silently skipped, leaving stale targets in the DB.
+func TestGenerateTargetUpdates_DestroyDeletesTargetEvenWithResources(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:        "test-target",
+		Namespace:    "default",
+		Config:       json.RawMessage(`{"region": "us-east-1"}`),
+		Discoverable: false,
+		Version:      1,
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"test-target": existingTarget,
+		},
+		resourceCounts: map[string]int{
+			"test-target": 2,
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "test-target", Namespace: "default", Discoverable: false},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandDestroy)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "should generate a delete update even when forma has resources in the target")
+
+	update := updates[0]
+	assert.Equal(t, "test-target", update.Target.Label)
+	assert.Equal(t, TargetOperationDelete, update.Operation)
+	assert.Equal(t, TargetUpdateStateNotStarted, update.State)
+	assert.NotNil(t, update.ExistingTarget)
+}
+
+func TestGenerateTargetUpdates_ExtractsResolvablesForCreate(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationCreate, updates[0].Operation)
+	assert.Len(t, updates[0].RemainingResolvables, 1)
+	assert.Equal(t, pkgmodel.FormaeURI("formae://abc123#/Endpoint"), updates[0].RemainingResolvables[0])
+}
+
+func TestGenerateTargetUpdates_ReapplyWithSameResolvedValue_NoReplace(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	require.NoError(t, err)
+	// Same resolved value → no change needed, but still need resolvables for execution
+	assert.Empty(t, updates)
+}
+
+func TestGenerateTargetUpdates_ReapplyWithDifferentResolvedValue_Replace(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint": "https://old-cluster.eks.amazonaws.com"}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://new-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
+	assert.Len(t, updates[0].RemainingResolvables, 1)
+}
+
+func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint": "https://old.eks.amazonaws.com"}`),
+			},
+		},
+		// No resources — ref can't be resolved
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://nonexistent#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
 }
