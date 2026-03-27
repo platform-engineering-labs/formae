@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -98,29 +100,12 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 		return "", fmt.Errorf("unexpected result type from resource persister: %T", stackerResult)
 	}
 
-	// Spawn the plugin operator via PluginCoordinator
-	operationID := uuid.New().String()
-	spawnResult, err := r.Call(
-		gen.ProcessID{Name: actornames.PluginCoordinator, Node: r.Node().Name()},
-		messages.SpawnPluginOperator{
-			Namespace:   loadResourceResult.Resource.Namespace(),
-			ResourceURI: string(resourceURI.Stripped()),
-			Operation:   string(resource.OperationRead),
-			OperationID: operationID,
-			RequestedBy: r.PID(),
-		})
-	if err != nil {
-		r.Log().Error("Failed to spawn plugin operator for resource", "resourceURI", resourceURI, "error", err)
-		return "", fmt.Errorf("failed to spawn plugin operator for resource: %w", err)
-	}
-	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
-	if !ok {
-		r.Log().Error("Unexpected result type from PluginCoordinator", "resultType", reflect.TypeOf(spawnResult))
-		return "", fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
-	}
-	if spawnRes.Error != "" {
-		r.Log().Error("Failed to spawn plugin operator", "error", spawnRes.Error)
-		return "", fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
+	// The persisted target config may contain resolvable metadata ($ref/$value
+	// wrappers) that plugins cannot parse.  Strip these to produce clean JSON
+	// the plugin can unmarshal.
+	targetConfig := loadResourceResult.Target.Config
+	if cleanConfig, err := resolver.ConvertToPluginFormat(targetConfig); err == nil {
+		targetConfig = cleanConfig
 	}
 
 	compRes, err := plugin.CompressResource(loadResourceResult.Resource)
@@ -129,27 +114,81 @@ func (r *ResolveCache) resolveValue(resourceURI pkgmodel.FormaeURI) (string, err
 		return "", fmt.Errorf("failed to compress resource: %w", err)
 	}
 
-	progressResult, err := r.Call(
-		spawnRes.PID,
-		plugin.ReadResource{
-			Namespace:         loadResourceResult.Resource.Namespace(),
-			ResourceType:      loadResourceResult.Resource.Type,
-			ResourceNamespace: loadResourceResult.Resource.Namespace(),
-			ExistingResource:  compRes,
-			Resource:          compRes,
-			NativeID:          loadResourceResult.Resource.NativeID,
-			TargetConfig:      loadResourceResult.Target.Config,
-		})
+	// Read the resource via a PluginOperator, retrying on recoverable errors.
+	// The PluginOperator's state machine uses Call handlers which return the
+	// intermediate failure immediately (before retries fire via SendAfter).
+	// We therefore retry at this level, spawning a fresh PluginOperator per
+	// attempt.
+	const maxResolveRetries = 10
+	const resolveRetryDelay = 2 * time.Second
 
-	if err != nil {
-		r.Log().Error("Failed to read resource", "resourceURI", resourceURI, "error", err)
-		return "", fmt.Errorf("failed to read resource: %w", err)
+	var progress plugin.TrackedProgress
+	for attempt := 1; attempt <= maxResolveRetries; attempt++ {
+		operationID := uuid.New().String()
+		spawnResult, err := r.Call(
+			gen.ProcessID{Name: actornames.PluginCoordinator, Node: r.Node().Name()},
+			messages.SpawnPluginOperator{
+				Namespace:   loadResourceResult.Resource.Namespace(),
+				ResourceURI: string(resourceURI.Stripped()),
+				Operation:   string(resource.OperationRead),
+				OperationID: operationID,
+				RequestedBy: r.PID(),
+			})
+		if err != nil {
+			r.Log().Error("Failed to spawn plugin operator for resource", "resourceURI", resourceURI, "error", err)
+			return "", fmt.Errorf("failed to spawn plugin operator for resource: %w", err)
+		}
+		spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
+		if !ok {
+			r.Log().Error("Unexpected result type from PluginCoordinator", "resultType", reflect.TypeOf(spawnResult))
+			return "", fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
+		}
+		if spawnRes.Error != "" {
+			r.Log().Error("Failed to spawn plugin operator", "error", spawnRes.Error)
+			return "", fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
+		}
+
+		progressResult, callErr := r.Call(
+			spawnRes.PID,
+			plugin.ReadResource{
+				Namespace:         loadResourceResult.Resource.Namespace(),
+				ResourceType:      loadResourceResult.Resource.Type,
+				ResourceNamespace: loadResourceResult.Resource.Namespace(),
+				ExistingResource:  compRes,
+				Resource:          compRes,
+				NativeID:          loadResourceResult.Resource.NativeID,
+				TargetConfig:      targetConfig,
+			})
+		if callErr != nil {
+			r.Log().Error("Failed to read resource", "resourceURI", resourceURI, "error", callErr)
+			return "", fmt.Errorf("failed to read resource: %w", callErr)
+		}
+
+		p, ok := progressResult.(plugin.TrackedProgress)
+		if !ok {
+			r.Log().Error("Unexpected result type from plugin operator", "resultType", reflect.TypeOf(progressResult))
+			return "", fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
+		}
+		progress = p
+
+		if progress.OperationStatus != resource.OperationStatusFailure || !resource.IsRecoverable(progress.ErrorCode) {
+			break // success or non-recoverable error — stop retrying
+		}
+
+		r.Log().Info("ResolveCache: recoverable error %s reading %s, retrying (%d/%d)",
+			progress.ErrorCode, resourceURI, attempt, maxResolveRetries)
+
+		if attempt < maxResolveRetries {
+			time.Sleep(resolveRetryDelay)
+		}
 	}
-	progress, ok := progressResult.(plugin.TrackedProgress)
-	if !ok {
-		r.Log().Error("Unexpected result type from plugin operator", "resultType", reflect.TypeOf(progressResult))
-		return "", fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
+
+	// Do not cache failed/empty results — a subsequent request for the same
+	// resource should retry instead of hitting a poisoned cache entry.
+	if progress.OperationStatus == resource.OperationStatusFailure {
+		return "", fmt.Errorf("failed to read resource %s: %s (%s)", resourceURI, progress.ErrorCode, progress.StatusMessage)
 	}
+
 	parsed := gjson.ParseBytes([]byte(progress.ResourceProperties))
 
 	enhancedParsed := r.preserveRefMetadata(loadResourceResult.Resource, parsed)
