@@ -14,7 +14,9 @@ PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSI
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-aws.git \
     https://github.com/platform-engineering-labs/formae-plugin-azure.git \
+    https://github.com/platform-engineering-labs/formae-plugin-compose.git \
     https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
+    https://github.com/platform-engineering-labs/formae-plugin-grafana.git \
     https://github.com/platform-engineering-labs/formae-plugin-oci.git \
     https://github.com/platform-engineering-labs/formae-plugin-ovh.git
 
