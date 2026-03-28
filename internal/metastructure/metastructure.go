@@ -563,6 +563,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			MaxAttempts:    ru.MostRecentProgressResult.MaxAttempts,
 			ErrorMessage:   ru.MostRecentFailureMessage(),
 			StatusMessage:  ru.MostRecentStatusMessage(),
+			NativeID:       ru.DesiredState.NativeID,
 			GroupID:        ru.GroupID,
 			IsCascade:      ru.IsCascade,
 			CascadeSource:  ru.CascadeSource,
