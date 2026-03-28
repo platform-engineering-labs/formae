@@ -268,6 +268,14 @@ func (c *TestPluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			"status", msg.OperationStatus,
 			"nativeID", msg.NativeID)
 
+		// Decompress ResourceProperties if compressed for Ergo transport
+		if len(msg.ResourceProperties) == 0 && len(msg.CompressedResourceProperties) > 0 {
+			decompressed, err := plugin.DecompressJSON(msg.CompressedResourceProperties)
+			if err == nil {
+				msg.ResourceProperties = decompressed
+			}
+		}
+
 		// Store the latest progress for this operator (extract embedded ProgressResult)
 		c.latestProgress[from] = msg.ProgressResult
 
