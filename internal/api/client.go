@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,9 +37,20 @@ func NewClient(cfg pkgmodel.APIConfig, auth http.Header, net *http.Client) *Clie
 	}
 
 	return &Client{
-		endpoint: fmt.Sprintf("%s:%d", cfg.URL, cfg.Port),
+		endpoint: formatEndpoint(cfg.URL, cfg.Port),
 		resty:    client,
 	}
+}
+
+// formatEndpoint builds the API endpoint string. It omits the port when it
+// matches the scheme default (443 for HTTPS, 80 for HTTP) so that Go's HTTP
+// client does not include a redundant port in the Host header.
+func formatEndpoint(url string, port int) string {
+	if (port == 443 && strings.HasPrefix(url, "https://")) ||
+		(port == 80 && strings.HasPrefix(url, "http://")) {
+		return url
+	}
+	return fmt.Sprintf("%s:%d", url, port)
 }
 
 func (c *Client) Stats() (*apimodel.Stats, error) {
