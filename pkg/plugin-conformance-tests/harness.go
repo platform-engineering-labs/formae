@@ -1233,17 +1233,22 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 		// Strip Formae metadata tags from the resource properties
 		h.stripFormaeTags(res)
 
-		// Strip nested empty collections ({}/[]) that PKL renders for unset
-		// nullable Listing/Mapping fields. Without this, K8S rejects resources
-		// with empty probe objects (e.g. livenessProbe: {}).
-		h.stripNestedEmptyCollections(res)
-
-		// Resolve any resolvable references using previously created resources
+		// Resolve any resolvable references using previously created resources.
+		// This must happen BEFORE stripNestedEmptyCollections to match the
+		// agent's order of operations (resolver.ConvertToPluginFormat then
+		// patch.StripNestedEmptyCollections). The resolvable markers ($res,
+		// $label, etc.) must be intact when the resolver runs; stripping first
+		// can corrupt the resolvable objects through the json round-trip.
 		resolvedProps, err := h.resolveResolvablesInProperties(res.Properties, createdResources)
 		if err != nil {
 			return createdResources, fmt.Errorf("failed to resolve resolvables for %s: %w", res.Label, err)
 		}
 		res.Properties = resolvedProps
+
+		// Strip nested empty collections ({}/[]) that PKL renders for unset
+		// nullable Listing/Mapping fields. Without this, K8S rejects resources
+		// with empty probe objects (e.g. livenessProbe: {}).
+		h.stripNestedEmptyCollections(res)
 
 		// Create the resource with retry on recoverable errors
 		label := fmt.Sprintf("create %s", res.Label)
