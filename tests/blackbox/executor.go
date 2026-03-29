@@ -1884,52 +1884,32 @@ func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, mod
 		if ru.State != "Success" {
 			continue
 		}
-		key := ru.StackName + "/" + ru.ResourceLabel
-		invRes, ok := h.waitForManagedResourceInventory(key, ru.Operation, 2*time.Second)
 		if ru.Operation == "delete" {
-			if ok && invRes.NativeID != "" {
-				if err := h.TryDeleteCloudState(invRes.NativeID); err != nil {
-					t.Logf("reconcileManagedDriftOverriddenByCommand: skipping DeleteCloudState for %s: %v", invRes.NativeID, err)
+			// Use the drift entry's NativeID (or the command response NativeID)
+			// to clean up cloud state.
+			nativeID := ru.NativeID
+			if nativeID == "" {
+				// Fall back to drift entry if command response doesn't have it.
+				if _, drift, ok := model.managedDriftForResource(ru.StackName, ru.ResourceLabel); ok {
+					nativeID = drift.NativeID
+				}
+			}
+			if nativeID != "" {
+				if err := h.TryDeleteCloudState(nativeID); err != nil {
+					t.Logf("reconcileManagedDriftOverriddenByCommand: skipping DeleteCloudState for %s: %v", nativeID, err)
 				}
 			}
 			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
 			continue
 		}
-		if ok {
-			if err := h.TryPutCloudState(invRes.NativeID, invRes.Type, flattenPropertiesForCloud(invRes.Properties)); err != nil {
-				t.Logf("reconcileManagedDriftOverriddenByCommand: skipping PutCloudState for %s: %v", invRes.NativeID, err)
+		// Create/Update: sync cloud state from command response.
+		nativeID := ru.NativeID
+		if nativeID != "" && ru.Properties != nil {
+			if err := h.TryPutCloudState(nativeID, ru.ResourceType, flattenPropertiesForCloud(ru.Properties)); err != nil {
+				t.Logf("reconcileManagedDriftOverriddenByCommand: skipping PutCloudState for %s: %v", nativeID, err)
 			}
 		}
 		model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
-	}
-}
-
-func (h *TestHarness) waitForManagedResourceInventory(key, operation string, timeout time.Duration) (pkgmodel.Resource, bool) {
-	deadline := time.Now().Add(timeout)
-	for {
-		managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
-		if err == nil {
-			var current *pkgmodel.Resource
-			for _, res := range managedInventory {
-				if res.Stack+"/"+res.Label == key {
-					current = &res
-					break
-				}
-			}
-			if operation != "delete" && current != nil {
-				return *current, true
-			}
-			// Deletes stay in the poll loop while the resource is still present in
-			// inventory. Once it disappears, the delete drift has been fully
-			// ingested and the caller can treat it as reconciled.
-			if operation == "delete" && current == nil {
-				return pkgmodel.Resource{}, true
-			}
-		}
-		if time.Now().After(deadline) {
-			return pkgmodel.Resource{}, false
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
