@@ -422,13 +422,19 @@ func (h *TestHarness) SetNativeIDCounter(t *testing.T, value int64) {
 }
 
 // callTestController sends a synchronous Ergo call to the TestController
-// actor on the test plugin's node.
+// actor on the test plugin's node. Retries once on timeout to handle
+// transient unresponsiveness (e.g. GC pauses in the plugin process).
 func (h *TestHarness) callTestController(request any) (any, error) {
 	target := gen.ProcessID{
 		Name: testcontrol.TestControllerName,
 		Node: h.pluginNodeName,
 	}
-	return callRemote(h.ergoNode, target, request, 5)
+	res, err := callRemote(h.ergoNode, target, request, 10)
+	if err != nil && err.Error() == "timed out" {
+		// Retry once — the plugin process may have been in a GC pause.
+		res, err = callRemote(h.ergoNode, target, request, 10)
+	}
+	return res, err
 }
 
 // KillAgent sends SIGKILL to the agent process, killing it and its child
