@@ -331,7 +331,6 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", ac.CommandID, cmd.State)
 		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool))
 		h.reconcileManagedDriftOverriddenByCommand(t, model, &cmd)
-		h.reconcileCrossStackSlotsToInventory(t, model)
 	}
 
 	model.AcceptedCommands = remaining
@@ -359,7 +358,6 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	// ResourceUpdaters asynchronously. Poll until inventory stabilises.
 	h.waitForInventoryStabilization(t, 5*time.Second)
 	if len(model) > 0 && model[0] != nil {
-		h.reconcileCrossStackSlotsToInventory(t, model[0])
 		h.waitForUnmanagedInventoryExpectations(t, model[0], 5*time.Second)
 	}
 
@@ -958,9 +956,6 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				continue
 			}
 			if model.IsAuthoritativeSlot(key.stackIdx, key.slotIdx) {
-				continue
-			}
-			if pool != nil && pool.IsCrossStack(key.slotIdx) {
 				continue
 			}
 			res := model.Resource(key.stackIdx, key.slotIdx)
@@ -1871,7 +1866,6 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// before reconciling the model. Poll until ForceCheckTTL processes the
 	// expired stack or inventory confirms the resources are gone.
 	h.drainExpiredTTLStacks(t, model)
-	h.reconcileCrossStackSlotsToInventory(t, model)
 }
 
 func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, model *StateModel, cmd *apimodel.Command) {
@@ -1917,7 +1911,6 @@ func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *Stat
 	opLog, err := h.TryGetOperationLog()
 	if err != nil {
 		t.Logf("reconcileAmbiguousFailedCommands: skipping operation-log inspection: %v", err)
-		h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
 		return
 	}
 	activitySeen := false
@@ -1932,96 +1925,6 @@ func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *Stat
 	}
 	if activitySeen {
 		t.Logf("reconcileAmbiguousFailedCommands: observed plugin activity for ambiguous failed commands; relying on command-response reconciliation for non-cross-stack resources")
-	}
-
-	h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
-}
-
-func (h *TestHarness) reconcileCrossStackAmbiguousFailedCommandsToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
-	t.Helper()
-	if model == nil || model.Pool == nil {
-		return
-	}
-
-	forma, err := h.client.ExtractResources("managed:true")
-	if err != nil {
-		return
-	}
-
-	inventoryByKey := make(map[string]pkgmodel.Resource)
-	if forma != nil {
-		for _, res := range forma.Resources {
-			inventoryByKey[res.Stack+"/"+res.Label] = res
-		}
-	}
-
-	for _, dc := range drained {
-		if dc.cmd == nil || dc.cmd.State == "Success" {
-			continue
-		}
-		for _, snap := range dc.ac.Snapshots {
-			if !model.Pool.IsCrossStack(snap.SlotIndex) {
-				continue
-			}
-			res := model.Resource(snap.StackIndex, snap.SlotIndex)
-			if res == nil {
-				continue
-			}
-			key := model.Stack(snap.StackIndex).Label + "/" + model.LabelForResource(snap.StackIndex, snap.SlotIndex)
-			if invRes, ok := inventoryByKey[key]; ok {
-				props := model.NormalizePropertiesForResource(snap.StackIndex, snap.SlotIndex, string(invRes.Properties))
-				model.ApplyCreated(snap.StackIndex, []int{snap.SlotIndex}, props)
-			} else {
-				model.ApplyDestroyed(snap.StackIndex, []int{snap.SlotIndex})
-			}
-		}
-		for _, ru := range dc.cmd.ResourceUpdates {
-			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
-			if stackIdx == -1 || slotIdx == -1 || !model.Pool.IsCrossStack(slotIdx) {
-				continue
-			}
-			key := ru.StackName + "/" + ru.ResourceLabel
-			if invRes, ok := inventoryByKey[key]; ok {
-				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(invRes.Properties))
-				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
-			} else {
-				model.ApplyDestroyed(stackIdx, []int{slotIdx})
-			}
-		}
-	}
-}
-
-func (h *TestHarness) reconcileCrossStackSlotsToInventory(t *testing.T, model *StateModel) {
-	t.Helper()
-	if model == nil || model.Pool == nil {
-		return
-	}
-
-	forma, err := h.client.ExtractResources("managed:true")
-	if err != nil {
-		return
-	}
-
-	inventoryByKey := make(map[string]pkgmodel.Resource)
-	if forma != nil {
-		for _, res := range forma.Resources {
-			inventoryByKey[res.Stack+"/"+res.Label] = res
-		}
-	}
-
-	for stackIdx := range model.Stacks {
-		for slotIdx := range model.Stack(stackIdx).Resources {
-			if !model.Pool.IsCrossStack(slotIdx) {
-				continue
-			}
-			key := model.Stack(stackIdx).Label + "/" + model.LabelForResource(stackIdx, slotIdx)
-			if invRes, ok := inventoryByKey[key]; ok {
-				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(invRes.Properties))
-				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
-			} else {
-				model.ApplyDestroyed(stackIdx, []int{slotIdx})
-			}
-		}
 	}
 }
 
