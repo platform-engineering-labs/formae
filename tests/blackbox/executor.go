@@ -331,7 +331,6 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", ac.CommandID, cmd.State)
 		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool))
 		h.reconcileManagedDriftOverriddenByCommand(t, model, &cmd)
-		h.reconcileExplicitCommandResourcesToInventory(t, model, []drainedCommand{{ac: ac, cmd: &cmd}})
 		h.reconcileCrossStackSlotsToInventory(t, model)
 	}
 
@@ -1913,31 +1912,11 @@ func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, mod
 	}
 }
 
-func (h *TestHarness) waitForManagedResourceSnapshot(key string, timeout time.Duration) (pkgmodel.Resource, bool) {
-	deadline := time.Now().Add(timeout)
-	for {
-		managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
-		if err == nil {
-			for _, res := range managedInventory {
-				if res.Stack+"/"+res.Label == key {
-					return res, true
-				}
-			}
-			return pkgmodel.Resource{}, false
-		}
-		if time.Now().After(deadline) {
-			return pkgmodel.Resource{}, false
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
 func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *StateModel, drained []drainedCommand) {
 	t.Helper()
 	opLog, err := h.TryGetOperationLog()
 	if err != nil {
 		t.Logf("reconcileAmbiguousFailedCommands: skipping operation-log inspection: %v", err)
-		h.reconcileExplicitCommandResourcesToInventory(t, model, drained)
 		h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
 		return
 	}
@@ -1952,86 +1931,10 @@ func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *Stat
 		}
 	}
 	if activitySeen {
-		// This is currently a debugging signal only. We use it to confirm that at
-		// least one ambiguous failed command actually reached the plugin, which is
-		// helpful when deciding whether a future refinement can rely purely on
-		// command responses or should branch on operation-log evidence.
 		t.Logf("reconcileAmbiguousFailedCommands: observed plugin activity for ambiguous failed commands; relying on command-response reconciliation for non-cross-stack resources")
 	}
 
-	h.reconcileExplicitCommandResourcesToInventory(t, model, drained)
 	h.reconcileCrossStackAmbiguousFailedCommandsToInventory(t, model, drained)
-}
-
-func (h *TestHarness) reconcileExplicitCommandResourcesToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
-	t.Helper()
-	if model == nil {
-		return
-	}
-
-	for _, dc := range drained {
-		if dc.cmd == nil {
-			continue
-		}
-		explicitSlots := make(map[struct{ stackIdx, slotIdx int }]bool)
-		for _, ru := range dc.cmd.ResourceUpdates {
-			// Final inventory is authoritative for explicit command resources once a
-			// command has reached a terminal state. We still do optimistic and
-			// command-response-based reconciliation first, but this pass aligns the
-			// model with what was actually persisted for the resources the command
-			// explicitly mentioned.
-			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
-			if stackIdx == -1 || slotIdx == -1 {
-				continue
-			}
-			explicitSlots[struct{ stackIdx, slotIdx int }{stackIdx: stackIdx, slotIdx: slotIdx}] = true
-			if model.Pool != nil && model.Pool.IsCrossStack(slotIdx) {
-				continue
-			}
-			key := ru.StackName + "/" + ru.ResourceLabel
-			if invRes, ok := h.waitForManagedResourceSnapshot(key, 2*time.Second); ok {
-				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(invRes.Properties))
-				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
-			} else {
-				model.ApplyDestroyed(stackIdx, []int{slotIdx})
-			}
-		}
-		for _, snap := range dc.ac.Snapshots {
-			key := struct{ stackIdx, slotIdx int }{stackIdx: snap.StackIndex, slotIdx: snap.SlotIndex}
-			if explicitSlots[key] {
-				continue
-			}
-			if !snapshotAffectedByRequestedSlot(model, snap, dc.ac.RequestedSlots) {
-				continue
-			}
-			invKey := model.Stack(snap.StackIndex).Label + "/" + model.LabelForResource(snap.StackIndex, snap.SlotIndex)
-			if invRes, ok := h.waitForManagedResourceSnapshot(invKey, 2*time.Second); ok {
-				props := model.NormalizePropertiesForResource(snap.StackIndex, snap.SlotIndex, string(invRes.Properties))
-				model.ApplyCreated(snap.StackIndex, []int{snap.SlotIndex}, props)
-			} else {
-				model.ApplyDestroyed(snap.StackIndex, []int{snap.SlotIndex})
-			}
-		}
-	}
-}
-
-func snapshotAffectedByRequestedSlot(model *StateModel, snap ResourceSnapshot, requested []ResourceSlotRef) bool {
-	if model == nil || model.Pool == nil {
-		return false
-	}
-	for _, key := range requested {
-		if key.StackIndex != snap.StackIndex {
-			continue
-		}
-		current := snap.SlotIndex
-		for current >= 0 {
-			if current == key.SlotIndex {
-				return true
-			}
-			current = model.Pool.Slots[current].ParentIndex
-		}
-	}
-	return false
 }
 
 func (h *TestHarness) reconcileCrossStackAmbiguousFailedCommandsToInventory(t *testing.T, model *StateModel, drained []drainedCommand) {
