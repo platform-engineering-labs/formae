@@ -90,6 +90,10 @@ type StateModel struct {
 	// deleted out-of-band so sync behavior can be asserted explicitly.
 	ManagedDriftedResources map[string]*ExpectedManagedDrift
 	AuthoritativeSlots      map[string]bool
+	// NativeIDs maps "stackIdx:slotIdx" → cloud native ID (e.g. "test-42").
+	// Populated from command response ResourceUpdate.NativeID on successful
+	// creates/updates. Cleared on successful deletes.
+	NativeIDs map[string]string
 }
 
 // NewStateModel creates a state model with the given number of stacks,
@@ -145,11 +149,30 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		UnmanagedResources:      make(map[string]*ExpectedUnmanagedResource),
 		ManagedDriftedResources: make(map[string]*ExpectedManagedDrift),
 		AuthoritativeSlots:      make(map[string]bool),
+		NativeIDs:               make(map[string]string),
 	}
 }
 
 func slotKeyString(stackIdx, slotIdx int) string {
 	return fmt.Sprintf("%d/%d", stackIdx, slotIdx)
+}
+
+func nativeIDKey(stackIdx, slotIdx int) string {
+	return fmt.Sprintf("%d:%d", stackIdx, slotIdx)
+}
+
+func (m *StateModel) SetNativeID(stackIdx, slotIdx int, nativeID string) {
+	if nativeID != "" {
+		m.NativeIDs[nativeIDKey(stackIdx, slotIdx)] = nativeID
+	}
+}
+
+func (m *StateModel) GetNativeID(stackIdx, slotIdx int) string {
+	return m.NativeIDs[nativeIDKey(stackIdx, slotIdx)]
+}
+
+func (m *StateModel) ClearNativeID(stackIdx, slotIdx int) {
+	delete(m.NativeIDs, nativeIDKey(stackIdx, slotIdx))
 }
 
 func (m *StateModel) MarkAuthoritativeSlot(stackIdx, slotIdx int) {

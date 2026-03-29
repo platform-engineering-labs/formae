@@ -799,8 +799,10 @@ func applyCommandOutcomeToModel(t *testing.T, cmd *apimodel.Command, model *Stat
 				props = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
 			}
 			model.ApplyCreated(stackIdx, []int{slotIdx}, props)
+			model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
 		case "delete":
 			model.ApplyDestroyed(stackIdx, []int{slotIdx})
+			model.ClearNativeID(stackIdx, slotIdx)
 		case "update":
 			// Resource still exists; properties may have been updated.
 			// ApplyCreated with new properties serves the same purpose
@@ -809,6 +811,7 @@ func applyCommandOutcomeToModel(t *testing.T, cmd *apimodel.Command, model *Stat
 				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
 			}
+			model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
 		case "read":
 			// Sync reads don't change model state.
 		}
@@ -992,14 +995,17 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 					props = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
 				}
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
+				model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
 			case "delete":
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 				model.MarkAuthoritativeSlot(stackIdx, slotIdx)
+				model.ClearNativeID(stackIdx, slotIdx)
 			case "update":
 				if ru.Properties != nil {
 					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
 					model.ApplyCreated(stackIdx, []int{slotIdx}, props)
 				}
+				model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
 			}
 		} else {
 			// Failed/Canceled — revert to pre-command snapshot state.
