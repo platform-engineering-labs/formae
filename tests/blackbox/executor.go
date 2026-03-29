@@ -265,7 +265,6 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 	t.Helper()
 	h.reconcileCompletedAcceptedCommands(t, model)
 	h.drainExpiredTTLStacks(t, model)
-	h.reconcileTTLStacksToInventory(t, model)
 
 	switch op.Kind {
 	case OpApply:
@@ -333,61 +332,10 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool))
 		h.reconcileManagedDriftOverriddenByCommand(t, model, &cmd)
 		h.reconcileExplicitCommandResourcesToInventory(t, model, []drainedCommand{{ac: ac, cmd: &cmd}})
-		h.reconcileTTLStacksToInventory(t, model)
 		h.reconcileCrossStackSlotsToInventory(t, model)
 	}
 
 	model.AcceptedCommands = remaining
-}
-
-func (h *TestHarness) reconcileTTLStacksToInventory(t *testing.T, model *StateModel) {
-	t.Helper()
-	if model == nil {
-		return
-	}
-
-	needsCheck := false
-	for _, stack := range model.Stacks {
-		if stack.TTL {
-			needsCheck = true
-			break
-		}
-	}
-	if !needsCheck {
-		return
-	}
-
-	forma, err := h.client.ExtractResources("managed:true")
-	if err != nil {
-		return
-	}
-
-	inventoryByKey := make(map[string]pkgmodel.Resource)
-	if forma != nil {
-		for _, res := range forma.Resources {
-			inventoryByKey[res.Stack+"/"+res.Label] = res
-		}
-	}
-
-	for stackIdx, stack := range model.Stacks {
-		if !stack.TTL {
-			continue
-		}
-		stackHasAnyInventory := false
-		for slotIdx := range stack.Resources {
-			key := stack.Label + "/" + model.LabelForResource(stackIdx, slotIdx)
-			if _, ok := inventoryByKey[key]; ok {
-				stackHasAnyInventory = true
-				continue
-			}
-			model.ApplyDestroyed(stackIdx, []int{slotIdx})
-			model.MarkAuthoritativeSlot(stackIdx, slotIdx)
-		}
-		if !stackHasAnyInventory {
-			model.Stacks[stackIdx].TTLExpired = false
-			model.Stacks[stackIdx].TTL = false
-		}
-	}
 }
 
 // AssertAllInvariants queries the agent inventory and cloud state, then checks
@@ -412,7 +360,6 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	// ResourceUpdaters asynchronously. Poll until inventory stabilises.
 	h.waitForInventoryStabilization(t, 5*time.Second)
 	if len(model) > 0 && model[0] != nil {
-		h.reconcileTTLStacksToInventory(t, model[0])
 		h.reconcileCrossStackSlotsToInventory(t, model[0])
 		h.waitForUnmanagedInventoryExpectations(t, model[0], 5*time.Second)
 	}
@@ -2336,9 +2283,10 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 }
 
 // drainExpiredTTLStacks ensures that any stacks with expired TTL policies are
-// fully destroyed before returning. The background StackExpirer may not have
-// fired yet, so we poll ForceCheckTTL until the expired stacks are processed
-// or the resources disappear from inventory.
+// fully destroyed before returning. Polls ForceCheckTTL until the expired
+// stacks are processed. If ForceCheckTTL returns empty (the StackExpirer
+// already handled it in the background), trust the agent and mark all slots
+// on expired stacks as destroyed in the model.
 func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 	t.Helper()
 
@@ -2355,10 +2303,8 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		// Try to trigger the TTL check via the API.
 		h.ForceCheckTTLAndWait(t, model)
 
-		// Check if any stacks still have TTLExpired=true.
 		stillExpired := false
 		for _, stack := range model.Stacks {
 			if stack.TTLExpired {
@@ -2370,43 +2316,22 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 			return
 		}
 
-		// ForceCheckTTL returned "no expired stacks" but the model still
-		// has TTLExpired=true. The StackExpirer may be in-flight or hasn't
-		// detected the expiry yet. Check if the resources are already gone
-		// from inventory (StackExpirer completed without our knowledge).
-		forma, err := h.client.ExtractResources("managed:true")
-		if err != nil {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		inventorySet := make(map[string]bool)
-		if forma != nil {
-			for _, res := range forma.Resources {
-				inventorySet[res.Stack] = true
-			}
-		}
-
-		allGone := true
+		// ForceCheckTTL returned "no expired stacks" but model still has
+		// TTLExpired=true. The StackExpirer already handled it in the
+		// background. Trust the agent and mark all slots destroyed.
 		for i, stack := range model.Stacks {
-			if stack.TTLExpired && inventorySet[stack.Label] {
-				allGone = false
-			} else if stack.TTLExpired && !inventorySet[stack.Label] {
-				// Stack's resources are gone from inventory — the StackExpirer
-				// already handled it. Update the model.
+			if stack.TTLExpired {
 				for slotIdx := range stack.Resources {
 					if stack.Resources[slotIdx] != nil {
 						model.ApplyDestroyed(i, []int{slotIdx})
+						model.ClearNativeID(i, slotIdx)
 					}
 				}
 				model.Stacks[i].TTLExpired = false
-				t.Logf("drainExpiredTTLStacks: stack %s resources gone from inventory, model updated", stack.Label)
+				t.Logf("drainExpiredTTLStacks: stack %s marked destroyed (agent already handled expiry)", stack.Label)
 			}
 		}
-		if allGone {
-			return
-		}
-
-		time.Sleep(250 * time.Millisecond)
+		return
 	}
 
 	t.Logf("drainExpiredTTLStacks: timed out waiting for expired TTL stacks to be processed")
