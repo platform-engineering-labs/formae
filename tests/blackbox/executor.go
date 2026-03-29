@@ -1119,7 +1119,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		nativeIDs := model.NativeIDsByLabel()
 		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, op.ResourceIDs, model, nativeIDs, false, model.Pool)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
@@ -1235,7 +1235,7 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		nativeIDs := model.NativeIDsByLabel()
 		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
@@ -1316,7 +1316,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		nativeIDs := model.NativeIDsByLabel()
 		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
@@ -1368,7 +1368,7 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := h.getNativeIDsForStack(t, stackLabel)
+		nativeIDs := model.NativeIDsByLabel()
 		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
@@ -2645,23 +2645,6 @@ func containsInt(slice []int, val int) bool {
 }
 
 // --- Response queue programming helpers ---
-
-// getNativeIDsForStack queries the inventory API for resources on a stack
-// and returns a map of "stackLabel:resourceLabel" -> NativeID.
-func (h *TestHarness) getNativeIDsForStack(t *testing.T, stackLabel string) map[string]string {
-	t.Helper()
-
-	forma, err := h.client.ExtractResources("managed:true stack:" + stackLabel)
-	if err != nil || forma == nil {
-		return nil
-	}
-
-	result := make(map[string]string)
-	for _, res := range forma.Resources {
-		result[res.Stack+":"+res.Label] = res.NativeID
-	}
-	return result
-}
 
 // buildPluginOpSequences converts DrawnOutcomes to PluginOpSequences that can
 // be programmed into the test plugin's response queue.

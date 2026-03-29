@@ -175,6 +175,26 @@ func (m *StateModel) ClearNativeID(stackIdx, slotIdx int) {
 	delete(m.NativeIDs, nativeIDKey(stackIdx, slotIdx))
 }
 
+// NativeIDsByLabel returns a map of "stackLabel:resourceLabel" → NativeID for
+// all tracked native IDs. This matches the format expected by
+// buildPluginOpSequences and resolveReadMatchKey.
+func (m *StateModel) NativeIDsByLabel() map[string]string {
+	result := make(map[string]string, len(m.NativeIDs))
+	for key, nativeID := range m.NativeIDs {
+		var stackIdx, slotIdx int
+		fmt.Sscanf(key, "%d:%d", &stackIdx, &slotIdx)
+		stackLabel := m.Stacks[stackIdx].Label
+		var label string
+		if m.Pool != nil {
+			label = m.Pool.LabelForStack(stackLabel, slotIdx)
+		} else {
+			label = resourceLabelForStack(stackLabel, slotIdx)
+		}
+		result[stackLabel+":"+label] = nativeID
+	}
+	return result
+}
+
 func (m *StateModel) MarkAuthoritativeSlot(stackIdx, slotIdx int) {
 	m.AuthoritativeSlots[slotKeyString(stackIdx, slotIdx)] = true
 }
