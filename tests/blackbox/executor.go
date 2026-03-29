@@ -1529,68 +1529,32 @@ func (h *TestHarness) executeCloudDelete(t *testing.T, op *Operation, model *Sta
 
 func (h *TestHarness) executeManagedCloudModify(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
-	managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
-	if err != nil || len(managedInventory) == 0 {
-		t.Logf("[op %d] CloudModify managed → skipped (no managed inventory)", op.SequenceNum)
-		return
-	}
-	target, ok := h.selectManagedDriftTarget(managedInventory, model, op.SequenceNum)
+	stackIdx, slotIdx, stackLabel, resLabel, resType, nativeID, ok := model.FindExistingResourceWithNativeID(op.SequenceNum)
 	if !ok {
-		t.Logf("[op %d] CloudModify managed → skipped (no model-backed managed resource)", op.SequenceNum)
+		t.Logf("[op %d] CloudModify managed → skipped (no eligible resource in model)", op.SequenceNum)
 		return
 	}
-	if target.NativeID == "" {
-		t.Logf("[op %d] CloudModify managed → skipped (missing native ID)", op.SequenceNum)
-		return
-	}
-	h.putCloudStateWithRetry(t, target.NativeID, target.Type, op.Properties)
-	model.ApplyManagedCloudModify(target.Stack, target.Label, target.Type, target.NativeID, op.Properties)
+	_ = stackIdx
+	_ = slotIdx
+	h.putCloudStateWithRetry(t, nativeID, resType, op.Properties)
+	model.ApplyManagedCloudModify(stackLabel, resLabel, resType, nativeID, op.Properties)
 	h.reconcileManagedDriftBeforeNextCommands(t, model)
-	t.Logf("[op %d] CloudModify managed: %s (%s)", op.SequenceNum, target.Label, target.NativeID)
+	t.Logf("[op %d] CloudModify managed: %s (%s)", op.SequenceNum, resLabel, nativeID)
 }
 
 func (h *TestHarness) executeManagedCloudDelete(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
-	managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
-	if err != nil || len(managedInventory) == 0 {
-		t.Logf("[op %d] CloudDelete managed → skipped (no managed inventory)", op.SequenceNum)
-		return
-	}
-	target, ok := h.selectManagedDriftTarget(managedInventory, model, op.SequenceNum)
+	stackIdx, slotIdx, stackLabel, resLabel, resType, nativeID, ok := model.FindExistingResourceWithNativeID(op.SequenceNum)
 	if !ok {
-		t.Logf("[op %d] CloudDelete managed → skipped (no model-backed managed resource)", op.SequenceNum)
+		t.Logf("[op %d] CloudDelete managed → skipped (no eligible resource in model)", op.SequenceNum)
 		return
 	}
-	if target.NativeID == "" {
-		t.Logf("[op %d] CloudDelete managed → skipped (missing native ID)", op.SequenceNum)
-		return
-	}
-	h.deleteCloudStateWithRetry(t, target.NativeID)
-	model.ApplyManagedCloudDelete(target.Stack, target.Label, target.Type, target.NativeID)
+	_ = stackIdx
+	_ = slotIdx
+	h.deleteCloudStateWithRetry(t, nativeID)
+	model.ApplyManagedCloudDelete(stackLabel, resLabel, resType, nativeID)
 	h.reconcileManagedDriftBeforeNextCommands(t, model)
-	t.Logf("[op %d] CloudDelete managed: %s (%s)", op.SequenceNum, target.Label, target.NativeID)
-}
-
-func (h *TestHarness) selectManagedDriftTarget(inventory []pkgmodel.Resource, model *StateModel, sequenceNum int) (pkgmodel.Resource, bool) {
-	if model == nil {
-		return pkgmodel.Resource{}, false
-	}
-	eligible := make([]pkgmodel.Resource, 0, len(inventory))
-	for _, res := range inventory {
-		stackIdx, slotIdx, ok := model.findResourceSlot(res.Stack, res.Label)
-		if !ok {
-			continue
-		}
-		expected := model.Resource(stackIdx, slotIdx)
-		if expected == nil || expected.State != StateExists {
-			continue
-		}
-		eligible = append(eligible, res)
-	}
-	if len(eligible) == 0 {
-		return pkgmodel.Resource{}, false
-	}
-	return eligible[sequenceNum%len(eligible)], true
+	t.Logf("[op %d] CloudDelete managed: %s (%s)", op.SequenceNum, resLabel, nativeID)
 }
 
 func (h *TestHarness) reconcileManagedDriftBeforeNextCommands(t *testing.T, model *StateModel) {

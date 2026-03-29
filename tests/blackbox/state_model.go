@@ -175,6 +175,47 @@ func (m *StateModel) ClearNativeID(stackIdx, slotIdx int) {
 	delete(m.NativeIDs, nativeIDKey(stackIdx, slotIdx))
 }
 
+// FindExistingResourceWithNativeID finds a managed resource that exists in the
+// model and has a tracked NativeID. Used for selecting OOB drift targets.
+// The sequenceNum is used for deterministic selection (modulo eligible count).
+func (m *StateModel) FindExistingResourceWithNativeID(sequenceNum int) (stackIdx, slotIdx int, stackLabel, resourceLabel, resourceType, nativeID string, ok bool) {
+	type candidate struct {
+		stackIdx, slotIdx         int
+		stackLabel, label, rType  string
+		nativeID                  string
+	}
+	var eligible []candidate
+	for si, stack := range m.Stacks {
+		for idx, res := range stack.Resources {
+			if res == nil || res.State != StateExists {
+				continue
+			}
+			nid := m.GetNativeID(si, idx)
+			if nid == "" {
+				continue
+			}
+			var label string
+			if m.Pool != nil {
+				label = m.Pool.LabelForStack(stack.Label, idx)
+			} else {
+				label = resourceLabelForStack(stack.Label, idx)
+			}
+			var rType string
+			if m.Pool != nil {
+				rType = m.Pool.Slots[idx].Type
+			} else {
+				rType = "Test::Generic::Resource"
+			}
+			eligible = append(eligible, candidate{si, idx, stack.Label, label, rType, nid})
+		}
+	}
+	if len(eligible) == 0 {
+		return 0, 0, "", "", "", "", false
+	}
+	c := eligible[sequenceNum%len(eligible)]
+	return c.stackIdx, c.slotIdx, c.stackLabel, c.label, c.rType, c.nativeID, true
+}
+
 // NativeIDsByLabel returns a map of "stackLabel:resourceLabel" → NativeID for
 // all tracked native IDs. This matches the format expected by
 // buildPluginOpSequences and resolveReadMatchKey.
