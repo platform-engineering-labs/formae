@@ -310,14 +310,8 @@ func TestStateModel_ManagedDriftLifecycle(t *testing.T) {
 	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1"}`)
 	model.ApplyManagedCloudModify("stack-0", "res-stack-0-a", "Test::Generic::Resource", "test-1", `{"Name":"res-stack-0-a","Value":"drift"}`)
 
-	model.ReconcileManagedDriftInventory([]pkgmodel.Resource{{
-		Stack:      "stack-0",
-		Label:      "res-stack-0-a",
-		Type:       "Test::Generic::Resource",
-		NativeID:   "test-1",
-		Managed:    true,
-		Properties: []byte(`{"Name":"res-stack-0-a","Value":"drift"}`),
-	}})
+	// Sync picks up the drift and applies it to the model.
+	model.ApplySyncToManagedDrift()
 
 	res := model.Resource(0, 0)
 	assert.Equal(t, StateExists, res.State)
@@ -325,7 +319,7 @@ func TestStateModel_ManagedDriftLifecycle(t *testing.T) {
 	assert.Empty(t, model.ManagedDriftedResources)
 
 	model.ApplyManagedCloudDelete("stack-0", "res-stack-0-a", "Test::Generic::Resource", "test-1")
-	model.ReconcileManagedDriftInventory(nil)
+	model.ApplySyncToManagedDrift()
 	assert.Equal(t, StateNotExist, model.Resource(0, 0).State)
 	assert.Empty(t, model.ManagedDriftedResources)
 }

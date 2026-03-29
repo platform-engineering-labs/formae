@@ -645,50 +645,6 @@ func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model 
 	t.Logf("waitForUnmanagedInventoryExpectations: timed out after %v", timeout)
 }
 
-func (h *TestHarness) observeUnmanagedInventory(t *testing.T, model *StateModel, timeout time.Duration) {
-	t.Helper()
-	if model == nil || len(model.UnmanagedResources) == 0 {
-		return
-	}
-
-	deadline := time.Now().Add(timeout)
-	for {
-		_, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
-		if err == nil {
-			model.ReconcileUnmanagedInventoryFromActual(unmanagedInventory)
-		}
-		if time.Now().After(deadline) {
-			return
-		}
-		if err == nil {
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-}
-
-func (h *TestHarness) observeManagedDriftInventory(t *testing.T, model *StateModel, timeout time.Duration) {
-	t.Helper()
-	if model == nil || len(model.ManagedDriftedResources) == 0 {
-		return
-	}
-
-	deadline := time.Now().Add(timeout)
-	for {
-		managedInventory, _, err := h.extractManagedAndUnmanagedInventory()
-		if err == nil {
-			model.ReconcileManagedDriftInventory(managedInventory)
-		}
-		if time.Now().After(deadline) {
-			return
-		}
-		if err == nil {
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-}
-
 // applyCommandOutcomeToModel uses per-resource-update status from a completed
 // command to apply exact state changes to the model.
 //

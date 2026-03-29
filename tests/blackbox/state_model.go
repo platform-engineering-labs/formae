@@ -265,46 +265,6 @@ func (m *StateModel) ApplyManagedCloudDelete(stackLabel, resourceLabel, resource
 	res.PendingSync = true
 }
 
-func (m *StateModel) ReconcileManagedDriftInventory(inventory []pkgmodel.Resource) {
-	actualByNativeID := make(map[string]pkgmodel.Resource, len(inventory))
-	for _, res := range inventory {
-		if res.NativeID == "" {
-			continue
-		}
-		actualByNativeID[res.NativeID] = res
-	}
-
-	for nativeID, expected := range m.ManagedDriftedResources {
-		actual, ok := actualByNativeID[nativeID]
-		if !ok {
-			if !expected.PresentInCloud {
-				expected.PresentInInventory = false
-				expected.InventoryProperties = ""
-				expected.PendingSync = false
-				m.applyManagedDriftToResource(expected, nil)
-				delete(m.ManagedDriftedResources, nativeID)
-			}
-			continue
-		}
-		if expected.PresentInCloud && !jsonContainsSubset(string(actual.Properties), expected.CloudProperties) {
-			// Sync has not ingested the drift yet; leave the resource pending.
-			continue
-		}
-		if !expected.PresentInCloud {
-			// Managed delete drift is still pending until sync removes it from inventory.
-			continue
-		}
-		expected.PresentInInventory = true
-		expected.InventoryProperties = string(actual.Properties)
-		if expected.ResourceType == "" {
-			expected.ResourceType = actual.Type
-		}
-		m.applyManagedDriftToResource(expected, &actual)
-		expected.PendingSync = false
-		delete(m.ManagedDriftedResources, nativeID)
-	}
-}
-
 func (m *StateModel) ApplySyncToManagedDrift() {
 	for nativeID, expected := range m.ManagedDriftedResources {
 		expected.PendingSync = false
@@ -585,30 +545,6 @@ func (m *StateModel) ApplySyncToUnmanaged() {
 		} else {
 			res.PresentInInventory = false
 			res.InventoryProperties = ""
-		}
-	}
-}
-
-func (m *StateModel) ReconcileUnmanagedInventoryFromActual(inventory []pkgmodel.Resource) {
-	actualByNativeID := make(map[string]pkgmodel.Resource, len(inventory))
-	for _, res := range inventory {
-		if res.NativeID == "" {
-			continue
-		}
-		actualByNativeID[res.NativeID] = res
-	}
-
-	for nativeID, res := range m.UnmanagedResources {
-		actual, ok := actualByNativeID[nativeID]
-		if !ok {
-			res.PresentInInventory = false
-			res.InventoryProperties = ""
-			continue
-		}
-		res.PresentInInventory = true
-		res.InventoryProperties = string(actual.Properties)
-		if res.ResourceType == "" {
-			res.ResourceType = actual.Type
 		}
 	}
 }
