@@ -1207,3 +1207,56 @@ func TestTargetReplace_Destroy_IgnoresPortability(t *testing.T) {
 	assert.Equal(t, OperationDelete, updates[0].Operation)
 	assert.Equal(t, "my-subnet", updates[0].DesiredState.Label)
 }
+
+func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{},
+		Targets: []pkgmodel.Target{
+			{
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config: json.RawMessage(`{
+					"endpoint": {
+						"$res": true,
+						"$label": "cluster",
+						"$type": "AWS::EKS::Cluster",
+						"$stack": "infra",
+						"$property": "Endpoint"
+					},
+					"region": "us-east-1"
+				}`),
+			},
+		},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:  "cluster",
+				Type:   "AWS::EKS::Cluster",
+				Stack:  "infra",
+				Target: "aws-target",
+				Properties: json.RawMessage(`{
+					"ClusterName": "my-cluster"
+				}`),
+			},
+		},
+	}
+
+	_, err := translateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	var config map[string]any
+	err = json.Unmarshal(forma.Targets[0].Config, &config)
+	require.NoError(t, err)
+
+	endpointRef := config["endpoint"].(map[string]any)
+	assert.Contains(t, endpointRef, "$ref")
+
+	refValue := endpointRef["$ref"].(string)
+	assert.True(t, strings.HasPrefix(refValue, "formae://"))
+	assert.Contains(t, refValue, "#/Endpoint")
+	assert.Contains(t, refValue, forma.Resources[0].Ksuid)
+
+	// Plain values should be unchanged
+	assert.Equal(t, "us-east-1", config["region"])
+}

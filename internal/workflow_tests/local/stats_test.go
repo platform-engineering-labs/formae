@@ -148,7 +148,7 @@ func TestMetastructure_Stats(t *testing.T) {
 		assert.Equal(t, 0, stats.ManagedResources["FakeAWS"])
 		assert.Equal(t, 0, stats.UnmanagedResources["FakeAWS"])
 
-		assert.Equal(t, 1, stats.Targets["FakeAWS"])
+		assert.Equal(t, 1, stats.Targets["FakeAWS"]) // plain targets (no $ref) survive destroy
 
 		// ResourceErrors are now keyed by resource type, not error message
 		assert.Equal(t, 1, len(stats.ResourceErrors))

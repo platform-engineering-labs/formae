@@ -305,6 +305,16 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 	data.resourceUpdate.ModifiedTs = data.resourceUpdate.StartTs
 	data.originalResourceKsuidURI = data.resourceUpdate.DesiredState.URI()
 
+	// Convert target config to plugin format: strip $ref/$value metadata so plugins
+	// receive plain values. This is needed when the target config was resolved via
+	// target resolvables and the stored config still contains $ref/$value objects.
+	if data.resourceUpdate.ResourceTarget.Config != nil {
+		pluginConfig, err := resolver.ConvertToPluginFormat(data.resourceUpdate.ResourceTarget.Config)
+		if err == nil {
+			data.resourceUpdate.ResourceTarget.Config = pluginConfig
+		}
+	}
+
 	// Get LabelConfig from PluginCoordinator (handles both external and local plugins)
 	namespace := data.resourceUpdate.DesiredState.Namespace()
 	result, err := proc.Call(
@@ -460,12 +470,19 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
+	compressedProps, err := plugin.CompressJSON(convertedResource.Properties)
+	if err != nil {
+		proc.Log().Error("failed to compress resource properties: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
 	createOperation := plugin.CreateResource{
-		Namespace:    convertedResource.Namespace(),
-		ResourceType: convertedResource.Type,
-		Label:        convertedResource.Label,
-		Properties:   convertedResource.Properties,
-		TargetConfig: data.resourceUpdate.ResourceTarget.Config,
+		Namespace:            convertedResource.Namespace(),
+		ResourceType:         convertedResource.Type,
+		Label:                convertedResource.Label,
+		CompressedProperties: compressedProps,
+		TargetConfig:         data.resourceUpdate.ResourceTarget.Config,
 	}
 
 	// First we check if progress already was made on the create operation. This can happen for example if the node crashed while the
@@ -546,15 +563,28 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
+	compressedDesired, err := plugin.CompressJSON(convertedResource.Properties)
+	if err != nil {
+		proc.Log().Error("failed to compress desired properties: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	compressedPrior, err := plugin.CompressJSON(convertedExisting.Properties)
+	if err != nil {
+		proc.Log().Error("failed to compress prior properties: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
 	updateOperation := plugin.UpdateResource{
-		Namespace:         convertedResource.Namespace(),
-		NativeID:          convertedResource.NativeID,
-		ResourceType:      convertedResource.Type,
-		Label:             convertedResource.Label,
-		PriorProperties:   convertedExisting.Properties,
-		DesiredProperties: convertedResource.Properties,
-		PatchDocument:     string(data.resourceUpdate.DesiredState.PatchDocument),
-		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,
+		Namespace:                   convertedResource.Namespace(),
+		NativeID:                    convertedResource.NativeID,
+		ResourceType:                convertedResource.Type,
+		Label:                       convertedResource.Label,
+		CompressedPriorProperties:   compressedPrior,
+		CompressedDesiredProperties: compressedDesired,
+		PatchDocument:               string(data.resourceUpdate.DesiredState.PatchDocument),
+		TargetConfig:                data.resourceUpdate.ResourceTarget.Config,
 	}
 
 	// First we check if progress already was made on the update operation. This can happen for example if the node crashed while the
@@ -625,6 +655,17 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 // state machine to the next state when the plugin operation finished successfully. After the last plugin operation, or
 // after the first error, it reports the final state to the stack updater and exits.
 func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData, message plugin.TrackedProgress, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	// Decompress resource properties if sent compressed over Ergo
+	if len(message.CompressedResourceProperties) > 0 && len(message.ResourceProperties) == 0 {
+		decompressed, err := plugin.DecompressJSON(message.CompressedResourceProperties)
+		if err != nil {
+			proc.Log().Error("failed to decompress resource properties", "error", err)
+			data.resourceUpdate.MarkAsFailed()
+			return StateFinishedWithError, data, nil, nil
+		}
+		message.ResourceProperties = decompressed
+	}
+
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
 		proc.Log().Error("failed to record progress for resource update", "error", err)
@@ -833,6 +874,15 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 	progressResult, ok := response.(plugin.TrackedProgress)
 	if !ok {
 		return nil, fmt.Errorf("expected TrackedProgress, got %T", response)
+	}
+
+	// Decompress resource properties if sent compressed over Ergo (64KB limit)
+	if len(progressResult.CompressedResourceProperties) > 0 && len(progressResult.ResourceProperties) == 0 {
+		decompressed, err := plugin.DecompressJSON(progressResult.CompressedResourceProperties)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decompress resource properties: %w", err)
+		}
+		progressResult.ResourceProperties = decompressed
 	}
 
 	return &progressResult, nil

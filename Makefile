@@ -14,7 +14,9 @@ PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSI
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-aws.git \
     https://github.com/platform-engineering-labs/formae-plugin-azure.git \
+    https://github.com/platform-engineering-labs/formae-plugin-compose.git \
     https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
+    https://github.com/platform-engineering-labs/formae-plugin-grafana.git \
     https://github.com/platform-engineering-labs/formae-plugin-oci.git \
     https://github.com/platform-engineering-labs/formae-plugin-ovh.git
 
@@ -74,16 +76,10 @@ fetch-external-plugins:
 	fi
 
 ## build-external-plugins: Build all external plugins
-## Uses a go.mod replace directive so plugins build against the local pkg/plugin.
-## This ensures plugins stay compatible when plugin message types change.
 build-external-plugins: fetch-external-plugins
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
-		echo "Building $$name (with local pkg/plugin)..."; \
-		cd "$(PLUGINS_CACHE)/$$name" \
-			&& go mod edit -replace github.com/platform-engineering-labs/formae/pkg/plugin=$(CURDIR)/pkg/plugin \
-			&& go mod tidy \
-			&& cd "$(CURDIR)"; \
+		echo "Building $$name..."; \
 		$(MAKE) -C "$(PLUGINS_CACHE)/$$name" build; \
 	done
 

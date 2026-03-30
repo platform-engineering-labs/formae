@@ -1553,7 +1553,10 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 		t.Fatal("no resources were created")
 	}
 
-	nativeID := findMainResourceNativeID(createdResources, resourceType)
+	nativeID, err := findMainResourceNativeID(createdResources, resourceType)
+	if err != nil {
+		t.Fatalf("failed to find main resource: %v", err)
+	}
 	t.Logf("Created %d resource(s), main resource NativeID: %s (type: %s)", len(createdResources), nativeID, resourceType)
 
 	// Parse target from eval output for cleanup
@@ -1676,17 +1679,14 @@ func runDiscoveryTest(t *testing.T, tc TestCase) {
 // findMainResourceNativeID returns the NativeID of the last created resource matching
 // the given resource type. Creation order (dependency-first) may differ from PKL output
 // order, so we search backwards for a type match rather than taking the last resource.
-// Falls back to the last resource if no type match is found (single-resource tests).
-func findMainResourceNativeID(createdResources []CreatedResourceInfo, resourceType string) string {
+// Returns an error if no created resource matches the expected type.
+func findMainResourceNativeID(createdResources []CreatedResourceInfo, resourceType string) (string, error) {
 	for i := len(createdResources) - 1; i >= 0; i-- {
 		if createdResources[i].ResourceType == resourceType {
-			return createdResources[i].NativeID
+			return createdResources[i].NativeID, nil
 		}
 	}
-	if len(createdResources) > 0 {
-		return createdResources[len(createdResources)-1].NativeID
-	}
-	return ""
+	return "", fmt.Errorf("no created resource matches type %s", resourceType)
 }
 
 // extractNamespaceFromEvalOutput parses the evaluated JSON to extract the plugin namespace

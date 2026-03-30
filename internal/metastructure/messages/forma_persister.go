@@ -10,7 +10,6 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -39,11 +38,6 @@ type UpdateResourceProgress struct {
 	ResourceProperties         json.RawMessage
 	ResourceReadOnlyProperties json.RawMessage
 	Version                    string
-}
-
-type UpdateTargetStates struct {
-	CommandID     string
-	TargetUpdates []target_update.TargetUpdate
 }
 
 type MarkTargetUpdateAsComplete struct {

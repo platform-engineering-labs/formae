@@ -5,9 +5,13 @@
 package target_update
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
+	"github.com/tidwall/gjson"
+
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -16,6 +20,7 @@ import (
 type TargetDatastore interface {
 	LoadTarget(label string) (*pkgmodel.Target, error)
 	CountResourcesInTarget(targetLabel string) (int, error)
+	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
 }
 
 type TargetUpdateGenerator struct {
@@ -28,15 +33,15 @@ func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
 }
 
 // GenerateTargetUpdates determines what target changes are needed.
-// resourceTargetLabels is the set of target labels that have resources in the forma.
-// On destroy, a target is only deleted if it has no resources in the forma (i.e., the
-// user is not managing individual resources in it). The DAG handles cascade-deleting
-// all resources in the target before the target itself.
-func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command, resourceTargetLabels map[string]bool) ([]TargetUpdate, error) {
+// formaHasResources indicates whether the forma also declares resources;
+// on destroy, plain targets (no $ref) are only preserved when the forma
+// has resources (i.e., it's an application forma). Target-only formae
+// always delete their targets — this is how users explicitly remove targets.
+func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target, command pkgmodel.Command, formaHasResources bool) ([]TargetUpdate, error) {
 	var updates []TargetUpdate
 
 	for _, target := range targets {
-		update, hasUpdate, err := tp.determineTargetUpdate(target, command, resourceTargetLabels[target.Label])
+		update, hasUpdate, err := tp.determineTargetUpdate(target, command, formaHasResources)
 		if err != nil {
 			return nil, fmt.Errorf("failed to determine target update for %s: %w", target.Label, err)
 		}
@@ -55,7 +60,7 @@ func (tp *TargetUpdateGenerator) GenerateTargetUpdates(targets []pkgmodel.Target
 	return updates, nil
 }
 
-func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command, hasResourcesInTarget bool) (TargetUpdate, bool, error) {
+func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, command pkgmodel.Command, formaHasResources bool) (TargetUpdate, bool, error) {
 	now := util.TimeNow()
 
 	existing, err := tp.datastore.LoadTarget(target.Label)
@@ -63,23 +68,27 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		return TargetUpdate{}, false, fmt.Errorf("failed to load target: %w", err)
 	}
 
-	// Handle destroy command
+	// Handle destroy command. When the forma also has resources, only delete
+	// targets with $ref dependencies — plain targets (docker, us-east-1)
+	// survive because they exist independently. When the forma is target-only,
+	// always delete: the user is explicitly removing the target.
 	if command == pkgmodel.CommandDestroy {
-		// If the forma has resources in this target, only those resources are
-		// destroyed — the target itself is preserved.
-		if hasResourcesInTarget {
-			slog.Debug("Destroy command has resources in target, skipping target deletion", "label", target.Label)
-			return TargetUpdate{}, false, nil
-		}
-
 		if existing == nil {
 			slog.Debug("Target does not exist, nothing to delete", "label", target.Label)
 			return TargetUpdate{}, false, nil
 		}
 
-		// Target is being destroyed without explicit resources in the forma.
-		// The DAG will cascade-delete all resources in this target before
-		// deleting the target itself.
+		if formaHasResources {
+			resolvables := resolver.ExtractResolvableURIsFromJSON(existing.Config)
+			if len(resolvables) == 0 {
+				slog.Debug("Target has no $ref dependencies, skipping delete", "label", target.Label)
+				return TargetUpdate{}, false, nil
+			}
+		}
+
+		// Cross-target DAG dependencies are built from ExistingTarget.Config
+		// by the DAG — not from RemainingResolvables, which would cause the
+		// target updater to attempt resolution during delete.
 		return TargetUpdate{
 			Target:         target,
 			ExistingTarget: existing,
@@ -89,6 +98,10 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			ModifiedTs:     now,
 		}, true, nil
 	}
+
+	// Extract resolvables from target config
+	resolvables := resolver.ExtractResolvableURIsFromJSON(target.Config)
+	slog.Debug("Target resolvables extracted", "label", target.Label, "count", len(resolvables), "uris", resolvables)
 
 	// Handle apply command (create or update)
 	var operation TargetOperation
@@ -105,7 +118,12 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			}
 		}
 
-		if !util.JsonEqualRaw(existing.Config, target.Config) {
+		configChanged, err := tp.configChanged(existing.Config, target.Config, resolvables)
+		if err != nil {
+			return TargetUpdate{}, false, fmt.Errorf("failed to compare target configs: %w", err)
+		}
+
+		if configChanged {
 			operation = TargetOperationReplace
 		} else if existing.Discoverable != target.Discoverable {
 			operation = TargetOperationUpdate
@@ -115,11 +133,64 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	}
 
 	return TargetUpdate{
-		Target:         target,
-		ExistingTarget: existing,
-		Operation:      operation,
-		State:          TargetUpdateStateNotStarted,
-		StartTs:        now,
-		ModifiedTs:     now,
+		Target:               target,
+		ExistingTarget:       existing,
+		Operation:            operation,
+		State:                TargetUpdateStateNotStarted,
+		StartTs:              now,
+		ModifiedTs:           now,
+		RemainingResolvables: resolvables,
 	}, true, nil
+}
+
+// configChanged compares the existing stored config with the new config.
+// When the new config contains $ref objects, we resolve them from the DB
+// to get actual values for comparison.
+func (tp *TargetUpdateGenerator) configChanged(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (bool, error) {
+	if len(resolvables) == 0 {
+		return !util.JsonEqualRaw(existingConfig, newConfig), nil
+	}
+
+	// Resolve $ref values from DB for comparison
+	resolvedConfig := make([]byte, len(newConfig))
+	copy(resolvedConfig, newConfig)
+
+	for _, uri := range resolvables {
+		ksuid := uri.KSUID()
+		propertyPath := uri.PropertyPath()
+
+		resource, err := tp.datastore.LoadResourceById(ksuid)
+		if err != nil || resource == nil {
+			// Can't resolve — treat as a config change
+			slog.Debug("Cannot resolve $ref from DB, treating as config change",
+				"uri", uri, "error", err)
+			return true, nil
+		}
+
+		// Extract the property value from the resource
+		value := gjson.GetBytes(resource.Properties, propertyPath)
+		if !value.Exists() {
+			slog.Debug("Referenced property not found in resource, treating as config change",
+				"uri", uri, "propertyPath", propertyPath)
+			return true, nil
+		}
+
+		// Substitute the resolved value into the config
+		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, value.String())
+		if err != nil {
+			return true, nil
+		}
+	}
+
+	// Compare resolved values: strip $ref metadata from both sides
+	existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
+	if err != nil {
+		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+	}
+	newValues, err := resolver.ConvertToPluginFormat(resolvedConfig)
+	if err != nil {
+		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+	}
+
+	return !util.JsonEqualRaw(existingValues, newValues), nil
 }

@@ -690,12 +690,14 @@ const docTemplate = `{
                 "Array",
                 "EntitySet",
                 "Set",
+                "Atomic",
                 ""
             ],
             "x-enum-varnames": [
                 "FieldUpdateMethodArray",
                 "FieldUpdateMethodEntitySet",
                 "FieldUpdateMethodSet",
+                "FieldUpdateMethodAtomic",
                 "FieldUpdateMethodNone"
             ]
         },
@@ -1231,6 +1233,9 @@ const docTemplate = `{
         "model.TargetUpdate": {
             "type": "object",
             "properties": {
+                "CascadeSource": {
+                    "type": "string"
+                },
                 "Discoverable": {
                     "type": "boolean"
                 },
@@ -1240,6 +1245,9 @@ const docTemplate = `{
                 },
                 "ErrorMessage": {
                     "type": "string"
+                },
+                "IsCascade": {
+                    "type": "boolean"
                 },
                 "ModifiedTs": {
                     "type": "string"

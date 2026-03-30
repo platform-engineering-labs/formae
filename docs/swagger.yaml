@@ -72,12 +72,14 @@ definitions:
     - Array
     - EntitySet
     - Set
+    - Atomic
     - ""
     type: string
     x-enum-varnames:
     - FieldUpdateMethodArray
     - FieldUpdateMethodEntitySet
     - FieldUpdateMethodSet
+    - FieldUpdateMethodAtomic
     - FieldUpdateMethodNone
   model.Forma:
     properties:
@@ -434,6 +436,8 @@ definitions:
     type: object
   model.TargetUpdate:
     properties:
+      CascadeSource:
+        type: string
       Discoverable:
         type: boolean
       Duration:
@@ -441,6 +445,8 @@ definitions:
         type: integer
       ErrorMessage:
         type: string
+      IsCascade:
+        type: boolean
       ModifiedTs:
         type: string
       Operation:

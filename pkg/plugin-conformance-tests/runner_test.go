@@ -1130,31 +1130,28 @@ func TestFindMainResourceNativeID(t *testing.T) {
 			resourceType:     "NS::Compute::Instance",
 			expectedNativeID: "inst-2",
 		},
-		{
-			name: "no type match falls back to last resource",
-			createdResources: []CreatedResourceInfo{
-				{ResourceType: "NS::Core::Group", NativeID: "test-group"},
-				{ResourceType: "NS::Storage::Bucket", NativeID: "my-bucket"},
-			},
-			resourceType:     "NS::Network::LB",
-			expectedNativeID: "my-bucket",
-		},
-		{
-			name:             "empty resources returns empty string",
-			createdResources: []CreatedResourceInfo{},
-			resourceType:     "NS::Compute::Instance",
-			expectedNativeID: "",
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findMainResourceNativeID(tt.createdResources, tt.resourceType)
+			got, err := findMainResourceNativeID(tt.createdResources, tt.resourceType)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if got != tt.expectedNativeID {
 				t.Errorf("findMainResourceNativeID() = %q, want %q", got, tt.expectedNativeID)
 			}
 		})
 	}
+
+	t.Run("returns error when no resource matches type", func(t *testing.T) {
+		resources := []CreatedResourceInfo{
+			{ResourceType: "NS::Core::Group", NativeID: "test-group"},
+			{ResourceType: "NS::Storage::Bucket", NativeID: "my-bucket"},
+		}
+		_, err := findMainResourceNativeID(resources, "NS::Network::LB")
+		if err == nil {
+			t.Fatal("expected error when no resource matches type")
+		}
+	})
 }
-
-

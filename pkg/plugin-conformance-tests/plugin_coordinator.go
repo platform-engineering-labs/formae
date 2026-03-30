@@ -268,6 +268,14 @@ func (c *TestPluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			"status", msg.OperationStatus,
 			"nativeID", msg.NativeID)
 
+		// Decompress ResourceProperties if compressed for Ergo transport
+		if len(msg.ResourceProperties) == 0 && len(msg.CompressedResourceProperties) > 0 {
+			decompressed, err := plugin.DecompressJSON(msg.CompressedResourceProperties)
+			if err == nil {
+				msg.ResourceProperties = decompressed
+			}
+		}
+
 		// Store the latest progress for this operator (extract embedded ProgressResult)
 		c.latestProgress[from] = msg.ProgressResult
 
@@ -389,6 +397,16 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 		"statusMessage", trackedProgress.StatusMessage,
 		"nativeID", trackedProgress.NativeID)
 
+	// Decompress ResourceProperties if compressed for Ergo transport.
+	// TrackedProgress compresses and nils ResourceProperties, but callers
+	// expect it on the embedded ProgressResult.
+	if len(trackedProgress.ResourceProperties) == 0 && len(trackedProgress.CompressedResourceProperties) > 0 {
+		decompressed, err := plugin.DecompressJSON(trackedProgress.CompressedResourceProperties)
+		if err == nil {
+			trackedProgress.ResourceProperties = decompressed
+		}
+	}
+
 	// Return immediately with the operator PID and initial progress
 	// The caller is responsible for polling via GetLatestProgressRequest if needed
 	return CreateResourceResult{
@@ -443,6 +461,14 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 		"resourceType", req.ResourceType,
 		"nativeID", req.NativeID,
 		"status", trackedProgress.OperationStatus)
+
+	// Decompress ResourceProperties if compressed for Ergo transport
+	if len(trackedProgress.ResourceProperties) == 0 && len(trackedProgress.CompressedResourceProperties) > 0 {
+		decompressed, err := plugin.DecompressJSON(trackedProgress.CompressedResourceProperties)
+		if err == nil {
+			trackedProgress.ResourceProperties = decompressed
+		}
+	}
 
 	// Return immediately with the operator PID and initial progress
 	// The caller is responsible for polling via GetLatestProgressRequest if needed

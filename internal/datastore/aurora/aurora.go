@@ -1845,6 +1845,99 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 	return result, nil
 }
 
+func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error) {
+	ctx := context.Background()
+
+	if len(ksuids) == 0 {
+		return make(map[string][]*pkgmodel.Target), nil
+	}
+
+	// Build OR conditions for each KSUID pattern with named parameters.
+	// Use regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
+	var conditions []string
+	var params []types.SqlParameter
+	for i, ksuid := range ksuids {
+		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
+		paramName := fmt.Sprintf("pattern%d", i)
+		conditions = append(conditions, fmt.Sprintf("config::text ~ :%s", paramName))
+		params = append(params, types.SqlParameter{
+			Name:  aws.String(paramName),
+			Value: &types.FieldMemberStringValue{Value: pattern},
+		})
+	}
+
+	query := fmt.Sprintf(`
+	SELECT label, version, namespace, config, discoverable
+	FROM targets t1
+	WHERE (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	`, strings.Join(conditions, " OR "))
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build a map of KSUID -> targets that depend on it
+	result := make(map[string][]*pkgmodel.Target)
+	for _, record := range output.Records {
+		if len(record) < 5 {
+			return nil, fmt.Errorf("unexpected record length: %d", len(record))
+		}
+
+		label, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse label: %w", err)
+		}
+
+		version, err := getIntField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse version: %w", err)
+		}
+
+		namespace, err := getStringField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse namespace: %w", err)
+		}
+
+		config, err := getRawJSONField(record[3])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse config: %w", err)
+		}
+
+		discoverable, err := getBoolField(record[4])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse discoverable: %w", err)
+		}
+
+		target := &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			Discoverable: discoverable,
+			Version:      version,
+		}
+
+		// Find which of the input KSUIDs this target depends on.
+		// jsonb::text output has spaces after colons, so check both forms.
+		configStr := string(config)
+		for _, ksuid := range ksuids {
+			withSpace := fmt.Sprintf("\"$ref\": \"formae://%s#", ksuid)
+			withoutSpace := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
+			if strings.Contains(configStr, withSpace) || strings.Contains(configStr, withoutSpace) {
+				result[ksuid] = append(result[ksuid], target)
+			}
+		}
+	}
+
+	return result, nil
+}
+
 func (d *DatastoreAuroraDataAPI) StoreStack(stack *pkgmodel.Forma, commandID string) (string, error) {
 	var lastVersionID string
 	for _, resource := range stack.Resources {

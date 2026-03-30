@@ -46,6 +46,16 @@ func ExtractResolvableURIs(resource pkgmodel.Resource) []pkgmodel.FormaeURI {
 	return resolver.getResolvableURIs()
 }
 
+// ExtractResolvableURIsFromJSON extracts all resolvable URIs from raw JSON.
+// Used for target Config fields.
+func ExtractResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.FormaeURI {
+	if data == nil {
+		return nil
+	}
+	resolver := newPropertyResolver(data)
+	return resolver.getResolvableURIs()
+}
+
 // propertyParser parses JSON properties to identify references and values
 type propertyParser struct {
 	HasRef    bool
@@ -219,12 +229,25 @@ func (pr *propertyResolver) extractResolvedValue(ref pkgmodel.Ref) any {
 		resolvedData := gjson.Parse(resolvedJSON)
 
 		if resolvedData.Get("$value").Exists() {
-			return resolvedData.Get("$value").Value()
+			extracted := resolvedData.Get("$value")
+			if extracted.IsObject() || extracted.IsArray() {
+				return json.RawMessage(extracted.Raw)
+			}
+			return extracted.Value()
 		}
 
 		specificProperty := resolvedData.Get(ref.SourcePropertyName)
 		if specificProperty.Exists() {
+			if specificProperty.IsObject() || specificProperty.IsArray() {
+				return json.RawMessage(specificProperty.Raw)
+			}
 			return specificProperty.Value()
+		}
+
+		// Value is itself a JSON object/array (e.g., an endpoints mapping).
+		// Return as json.RawMessage to prevent double-encoding by json.Marshal.
+		if resolvedData.IsObject() || resolvedData.IsArray() {
+			return json.RawMessage(resolvedJSON)
 		}
 	}
 

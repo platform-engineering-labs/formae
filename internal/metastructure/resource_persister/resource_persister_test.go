@@ -15,11 +15,13 @@ import (
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -1158,6 +1160,78 @@ func TestResourcePersister_CleanupEmptyStacks(t *testing.T) {
 		stack, err = ds.GetStackByLabel("test-stack")
 		return err == nil && stack == nil
 	}, 5*time.Second, 100*time.Millisecond, "Stack should be deleted because it's empty")
+}
+
+func TestResourcePersister_IdempotentTargetCreate_IdenticalConfig(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	assert.NoError(t, err)
+
+	targetConfig := json.RawMessage(`{"region":"us-east-1"}`)
+
+	// Pre-seed the target in the DB (simulates crash recovery: target persisted but command didn't complete)
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "aws-us-east-1",
+		Namespace: "FakeAWS",
+		Config:    targetConfig,
+	})
+	require.NoError(t, err)
+
+	// Now try to "create" the same target via the persister — should succeed via idempotent fallback
+	result := persister.Call(sender, target_update.PersistTargetUpdates{
+		CommandID: "cmd-1",
+		TargetUpdates: []target_update.TargetUpdate{
+			{
+				Target: pkgmodel.Target{
+					Label:     "aws-us-east-1",
+					Namespace: "FakeAWS",
+					Config:    targetConfig,
+				},
+				Operation: target_update.TargetOperationCreate,
+			},
+		},
+	})
+	assert.NotNil(t, result)
+
+	// Verify target still exists with original config
+	stored, loadErr := ds.LoadTarget("aws-us-east-1")
+	require.NoError(t, loadErr)
+	assert.Equal(t, "FakeAWS", stored.Namespace)
+	assert.JSONEq(t, `{"region":"us-east-1"}`, string(stored.Config))
+}
+
+func TestResourcePersister_IdempotentTargetCreate_DifferentConfig(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Pre-seed the target with old config
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "aws-us-east-1",
+		Namespace: "FakeAWS",
+		Config:    json.RawMessage(`{"region":"us-east-1"}`),
+	})
+	require.NoError(t, err)
+
+	// Try to "create" with a different config — should update via idempotent fallback
+	newConfig := json.RawMessage(`{"region":"us-west-2"}`)
+	result := persister.Call(sender, target_update.PersistTargetUpdates{
+		CommandID: "cmd-1",
+		TargetUpdates: []target_update.TargetUpdate{
+			{
+				Target: pkgmodel.Target{
+					Label:     "aws-us-east-1",
+					Namespace: "FakeAWS",
+					Config:    newConfig,
+				},
+				Operation: target_update.TargetOperationCreate,
+			},
+		},
+	})
+	assert.NotNil(t, result)
+
+	// Verify config was updated to the new value
+	stored, loadErr := ds.LoadTarget("aws-us-east-1")
+	require.NoError(t, loadErr)
+	assert.JSONEq(t, `{"region":"us-west-2"}`, string(stored.Config))
 }
 
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.

@@ -93,14 +93,16 @@ const (
 )
 
 type TargetUpdate struct {
-	TargetLabel  string    `json:"TargetLabel"`
-	Operation    string    `json:"Operation"`
-	State        string    `json:"State"`
-	Duration     int64     `json:"Duration,omitempty"` // milliseconds
-	ErrorMessage string    `json:"ErrorMessage,omitempty"`
-	Discoverable bool      `json:"Discoverable"`
-	StartTs      time.Time `json:"StartTs,omitempty"`
-	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
+	TargetLabel   string    `json:"TargetLabel"`
+	Operation     string    `json:"Operation"`
+	State         string    `json:"State"`
+	Duration      int64     `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage  string    `json:"ErrorMessage,omitempty"`
+	Discoverable  bool      `json:"Discoverable"`
+	StartTs       time.Time `json:"StartTs,omitempty"`
+	ModifiedTs    time.Time `json:"ModifiedTs,omitempty"`
+	IsCascade     bool      `json:"IsCascade,omitempty"`
+	CascadeSource string    `json:"CascadeSource,omitempty"`
 }
 
 type StackUpdate struct {

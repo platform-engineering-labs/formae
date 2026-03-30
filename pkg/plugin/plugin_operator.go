@@ -102,11 +102,12 @@ type PluginOperatorRetry struct {
 // pkg/plugin into public SDK types and internal infrastructure types.
 type TrackedProgress struct {
 	resource.ProgressResult
-	ResourceType string    `json:"ResourceType,omitempty"`
-	StartTs      time.Time `json:"StartTs,omitempty"`
-	ModifiedTs   time.Time `json:"ModifiedTs,omitempty"`
-	Attempts     int       `json:"Attempts,omitempty"`
-	MaxAttempts  int       `json:"MaxAttempts,omitempty"`
+	ResourceType                 string    `json:"ResourceType,omitempty"`
+	StartTs                      time.Time `json:"StartTs,omitempty"`
+	ModifiedTs                   time.Time `json:"ModifiedTs,omitempty"`
+	Attempts                     int       `json:"Attempts,omitempty"`
+	MaxAttempts                  int       `json:"MaxAttempts,omitempty"`
+	CompressedResourceProperties []byte    // gzip-compressed JSON, replaces ResourceProperties for Ergo transport
 }
 
 // Failed returns true if the operation has failed and no more retries are available.
@@ -150,22 +151,25 @@ func (r *ReadResource) TreatNotFoundAsSuccess() bool {
 }
 
 type CreateResource struct {
-	Namespace    string
-	ResourceType string
-	Label        string
-	Properties   json.RawMessage
-	TargetConfig json.RawMessage
+	Namespace            string
+	ResourceType         string
+	Label                string
+	Properties           json.RawMessage
+	TargetConfig         json.RawMessage
+	CompressedProperties []byte // gzip-compressed JSON, replaces Properties for Ergo transport
 }
 
 type UpdateResource struct {
-	Namespace         string
-	NativeID          string
-	ResourceType      string
-	Label             string
-	PriorProperties   json.RawMessage
-	DesiredProperties json.RawMessage
-	PatchDocument     string
-	TargetConfig      json.RawMessage
+	Namespace                    string
+	NativeID                     string
+	ResourceType                 string
+	Label                        string
+	PriorProperties              json.RawMessage
+	DesiredProperties            json.RawMessage
+	PatchDocument                string
+	TargetConfig                 json.RawMessage
+	CompressedPriorProperties    []byte // gzip-compressed JSON, replaces PriorProperties for Ergo transport
+	CompressedDesiredProperties  []byte // gzip-compressed JSON, replaces DesiredProperties for Ergo transport
 }
 
 type DeleteResource struct {
@@ -301,6 +305,52 @@ func DecompressResource(data []byte) (model.Resource, error) {
 	}
 
 	return r, nil
+}
+
+// CompressJSON compresses a json.RawMessage to gzip-compressed bytes.
+// This is required because Ergo has a hardcoded 64KB buffer limit.
+// Returns nil for nil/empty input.
+func CompressJSON(data json.RawMessage) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
+	}
+
+	if _, err := gz.Write(data); err != nil {
+		return nil, fmt.Errorf("failed to write compressed data: %w", err)
+	}
+
+	if err := gz.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecompressJSON decompresses gzip-compressed bytes to a json.RawMessage.
+// Returns nil for nil/empty input.
+func DecompressJSON(data []byte) (json.RawMessage, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(gz); err != nil {
+		return nil, fmt.Errorf("failed to decompress data: %w", err)
+	}
+
+	return json.RawMessage(buf.Bytes()), nil
 }
 
 type PluginOperatorCheckStatus struct {
@@ -636,11 +686,24 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 
 	proc.Log().Debug("PluginOperator: starting create operation for %s", operation.ResourceType)
 
+	// Decompress properties if sent compressed over Ergo (64KB limit)
+	properties := operation.Properties
+	if len(operation.CompressedProperties) > 0 && len(properties) == 0 {
+		var err error
+		properties, err = DecompressJSON(operation.CompressedProperties)
+		if err != nil {
+			proc.Log().Error("PluginOperator: failed to decompress create properties: %v", err)
+			errProgress := data.newUnforeseenError()
+			errProgress.StatusMessage = fmt.Sprintf("failed to decompress properties: %v", err)
+			return StateFinishedWithError, data, errProgress, nil, nil
+		}
+	}
+
 	// Properties are expected to be pre-resolved by ResourceUpdater
 	result, err := data.plugin.Create(data.context, &resource.CreateRequest{
 		ResourceType: operation.ResourceType,
 		Label:        operation.Label,
-		Properties:   operation.Properties,
+		Properties:   properties,
 		TargetConfig: operation.TargetConfig,
 	})
 	if err != nil {
@@ -660,12 +723,32 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
+	// Decompress properties if sent compressed over Ergo (64KB limit)
+	priorProps := operation.PriorProperties
+	if len(operation.CompressedPriorProperties) > 0 && len(priorProps) == 0 {
+		var err error
+		priorProps, err = DecompressJSON(operation.CompressedPriorProperties)
+		if err != nil {
+			proc.Log().Error("PluginOperator: failed to decompress prior properties: %v", err)
+			return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		}
+	}
+	desiredProps := operation.DesiredProperties
+	if len(operation.CompressedDesiredProperties) > 0 && len(desiredProps) == 0 {
+		var err error
+		desiredProps, err = DecompressJSON(operation.CompressedDesiredProperties)
+		if err != nil {
+			proc.Log().Error("PluginOperator: failed to decompress desired properties: %v", err)
+			return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		}
+	}
+
 	result, err := data.plugin.Update(data.context, &resource.UpdateRequest{
 		NativeID:          operation.NativeID,
 		ResourceType:      operation.ResourceType,
 		Label:             operation.Label,
-		PriorProperties:   operation.PriorProperties,
-		DesiredProperties: operation.DesiredProperties,
+		PriorProperties:   priorProps,
+		DesiredProperties: desiredProps,
 		PatchDocument:     &operation.PatchDocument,
 		TargetConfig:      operation.TargetConfig,
 	})
@@ -829,6 +912,17 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 
 	if data.attempts > 1 {
 		progress.StatusMessage = data.LastStatusMessage
+	}
+
+	// Compress ResourceProperties for Ergo transport (64KB limit)
+	if len(progress.ResourceProperties) > 0 {
+		compressed, err := CompressJSON(progress.ResourceProperties)
+		if err != nil {
+			proc.Log().Error("PluginOperator: failed to compress resource properties: %v", err)
+		} else {
+			progress.CompressedResourceProperties = compressed
+			progress.ResourceProperties = nil // Clear uncompressed to save Ergo bandwidth
+		}
 	}
 
 	// Record metrics when operation finishes (success or final failure)

@@ -12,6 +12,7 @@ import (
 
 	"log/slog"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -139,7 +140,35 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 // buildTargetResourceEdges creates implicit ordering edges between target and resource nodes:
 //   - Replace: resource deletes → target delete → target create → resource creates
 //   - Delete:  resource deletes → target delete
+//   - Resolvables: target create/update → depends on resource creates it references
 func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
+	// Build resolvable-based dependency edges for target create/update operations.
+	// When a target config contains $ref to a resource property, the target node
+	// must wait for that resource's create/update to complete first.
+	p.buildTargetResolvableEdges()
+
+	// Build implicit edges: every resource depends on its target's create/update node.
+	// This ensures the target is persisted (and resolved, if it has resolvables) before
+	// any resource on that target starts executing.
+	for _, tu := range targetUpdates {
+		if tu.Operation == target_update.TargetOperationCreate || tu.Operation == target_update.TargetOperationUpdate {
+			targetNode := p.Nodes[tu.NodeURI()]
+			if targetNode == nil {
+				continue
+			}
+			for _, node := range p.Nodes {
+				ru, ok := node.Update.(*resource_update.ResourceUpdate)
+				if !ok {
+					continue
+				}
+				if ru.DesiredState.Target == tu.Target.Label &&
+					(ru.Operation == resource_update.OperationCreate || ru.Operation == resource_update.OperationUpdate) {
+					node.LinkWith(targetNode)
+				}
+			}
+		}
+	}
+
 	for _, tu := range targetUpdates {
 		switch tu.Operation {
 		case target_update.TargetOperationReplace:
@@ -278,6 +307,66 @@ func (p *ExecutionDAG) connectDeleteToCreate(allOps []resource_update.ResourceUp
 			if deleteGroup != nil && createGroup != nil {
 				// Create waits for delete to complete (replacement order)
 				createGroup.LinkWith(deleteGroup)
+			}
+		}
+	}
+}
+
+// buildTargetResolvableEdges links target nodes that have resolvables to the
+// resource nodes they depend on.
+//
+// For create/update: target waits for the resource it depends on (normal order).
+// For delete: the resource delete waits for the target delete (reversed order),
+// ensuring resources on a dependent target are destroyed before the resource
+// that provides the target's config (e.g., Grafana dashboards deleted before
+// the Compose stack that hosts Grafana).
+func (p *ExecutionDAG) buildTargetResolvableEdges() {
+	// Build maps of resource KSUID → DAG node by operation type
+	createUpdateNodes := make(map[string]*DAGNode)
+	deleteNodes := make(map[string]*DAGNode)
+	for _, node := range p.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		switch ru.Operation {
+		case resource_update.OperationCreate, resource_update.OperationUpdate:
+			createUpdateNodes[ru.DesiredState.Ksuid] = node
+		case resource_update.OperationDelete:
+			deleteNodes[ru.DesiredState.Ksuid] = node
+		}
+	}
+
+	for _, node := range p.Nodes {
+		tu, ok := node.Update.(*target_update.TargetUpdate)
+		if !ok {
+			continue
+		}
+
+		// For delete operations, extract resolvable URIs from the existing
+		// target config rather than RemainingResolvables. Delete target updates
+		// intentionally don't set RemainingResolvables to avoid the target
+		// updater attempting resolution during destroy.
+		resolvables := tu.RemainingResolvables
+		if tu.Operation == target_update.TargetOperationDelete && tu.ExistingTarget != nil {
+			resolvables = resolver.ExtractResolvableURIsFromJSON(tu.ExistingTarget.Config)
+		}
+
+		for _, uri := range resolvables {
+			ksuid := uri.KSUID()
+			if tu.Operation == target_update.TargetOperationDelete {
+				// REVERSED: resource delete waits for target delete
+				// (target delete already waits for its own resource deletes
+				// via buildTargetResourceEdges, so this creates the full chain:
+				// compose stack delete ← grafana target delete ← dashboard deletes)
+				if depNode, exists := deleteNodes[ksuid]; exists {
+					depNode.LinkWith(node)
+				}
+			} else {
+				// NORMAL: target create/update waits for resource create/update
+				if depNode, exists := createUpdateNodes[ksuid]; exists {
+					node.LinkWith(depNode)
+				}
 			}
 		}
 	}
