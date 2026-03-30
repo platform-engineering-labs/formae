@@ -1859,13 +1859,10 @@ func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, mod
 			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
 			continue
 		}
-		// Create/Update: sync cloud state from command response.
-		nativeID := ru.NativeID
-		if nativeID != "" && ru.Properties != nil {
-			if err := h.TryPutCloudState(nativeID, ru.ResourceType, flattenPropertiesForCloud(ru.Properties)); err != nil {
-				t.Logf("reconcileManagedDriftOverriddenByCommand: skipping PutCloudState for %s: %v", nativeID, err)
-			}
-		}
+		// Create/Update: the plugin's CRUD methods already update cloud state
+		// with the correct resolved properties. We only need to clear the
+		// drift tracking in the model. We don't PutCloudState from ru.Properties
+		// because command response properties contain unresolved resolvables.
 		model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
 	}
 }
@@ -1990,9 +1987,8 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 
 // drainExpiredTTLStacks ensures that any stacks with expired TTL policies are
 // fully destroyed before returning. Polls ForceCheckTTL until the expired
-// stacks are processed. If ForceCheckTTL returns empty (the StackExpirer
-// already handled it in the background), trust the agent and mark all slots
-// on expired stacks as destroyed in the model.
+// stacks are processed via command responses, which update the model through
+// ForceCheckTTLAndWait → applyCommandOutcomeToModel.
 func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 	t.Helper()
 
@@ -2007,7 +2003,7 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 		return
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		h.ForceCheckTTLAndWait(t, model)
 
@@ -2023,24 +2019,25 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 		}
 
 		// ForceCheckTTL returned "no expired stacks" but model still has
-		// TTLExpired=true. The StackExpirer already handled it in the
-		// background. Trust the agent and mark all slots destroyed.
-		for i, stack := range model.Stacks {
-			if stack.TTLExpired {
-				for slotIdx := range stack.Resources {
-					if stack.Resources[slotIdx] != nil {
-						model.ApplyDestroyed(i, []int{slotIdx})
-						model.ClearNativeID(i, slotIdx)
-					}
-				}
-				model.Stacks[i].TTLExpired = false
-				t.Logf("drainExpiredTTLStacks: stack %s marked destroyed (agent already handled expiry)", stack.Label)
-			}
-		}
-		return
+		// TTLExpired=true. The StackExpirer may not have detected the expiry
+		// yet. Keep polling — the agent will eventually process it.
+		time.Sleep(250 * time.Millisecond)
 	}
 
-	t.Logf("drainExpiredTTLStacks: timed out waiting for expired TTL stacks to be processed")
+	// After exhausting retries, the StackExpirer has had ample time to
+	// process the expiry. Mark remaining expired stacks as destroyed.
+	for i, stack := range model.Stacks {
+		if stack.TTLExpired {
+			for slotIdx := range stack.Resources {
+				if stack.Resources[slotIdx] != nil {
+					model.ApplyDestroyed(i, []int{slotIdx})
+					model.ClearNativeID(i, slotIdx)
+				}
+			}
+			model.Stacks[i].TTLExpired = false
+			t.Logf("drainExpiredTTLStacks: stack %s marked destroyed after polling timeout", stack.Label)
+		}
+	}
 }
 
 // dumpRawResourceRows queries the raw SQLite database to show all rows for
