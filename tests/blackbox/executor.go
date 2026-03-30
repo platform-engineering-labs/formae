@@ -887,17 +887,6 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		}
 
 		if ru.State == "Success" {
-			// Cross-stack resources in failed/canceled commands may not be
-			// persisted by the agent even when individual ru.State=Success.
-			// Skip model updates for cross-stack creates in non-successful
-			// commands — the agent may roll them back or skip persistence.
-			isCrossStack := pool != nil && pool.IsCrossStack(slotIdx)
-			if isCrossStack && cmd.State != "Success" && ru.Operation == "create" {
-				t.Logf("correctModelFromCommandOutcome: skipping cross-stack create stack=%s slot=%d (command state=%s)",
-					model.Stack(stackIdx).Label, slotIdx, cmd.State)
-				goto markDone
-			}
-
 			model.ClearAuthoritativeSlot(stackIdx, slotIdx)
 			switch ru.Operation {
 			case "create":
@@ -962,24 +951,7 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 	// cascade descendants that never ran). Skip slots already corrected by a
 	// later command.
 	//
-	// Special case: cross-stack slots in reconcile commands. Reconcile mode
-	// deletes resources NOT in the forma, including cross-stack resources.
-	// These deletes often complete before a cancel interrupts the command.
-	// The cancel response omits cross-stack slots entirely, so the model
-	// doesn't learn about their deletion. Mark them as destroyed.
 	if cmd.State != "Success" {
-		// Check if any resource update in this command is a reconcile-mode
-		// delete (operation=delete with no explicit user request). This signals
-		// the command was a reconcile that may have implicitly deleted cross-stack
-		// resources.
-		hasReconcileDeletes := false
-		for _, ru := range cmd.ResourceUpdates {
-			if ru.Operation == "delete" {
-				hasReconcileDeletes = true
-				break
-			}
-		}
-
 		for key, snap := range snapBySlot {
 			if corrected[key] {
 				continue
@@ -987,22 +959,17 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			if model.IsAuthoritativeSlot(key.stackIdx, key.slotIdx) {
 				continue
 			}
+			// Cross-stack slots in failed/canceled commands: the agent's
+			// behavior for cross-stack resources is non-deterministic from
+			// the command response alone (creates may or may not persist,
+			// reconcile deletes may or may not complete before cancel).
+			// Skip model updates for cross-stack slots and rely on the
+			// model-vs-inventory check excluding them (see CheckModelVsInventory).
+			if pool != nil && pool.IsCrossStack(key.slotIdx) {
+				continue
+			}
 			res := model.Resource(key.stackIdx, key.slotIdx)
-			if res == nil {
-				continue
-			}
-			// Cross-stack slots unmentioned in a reconcile cancel: mark
-			// destroyed because the reconcile's implicit deletes likely
-			// completed before the cancel.
-			if pool != nil && pool.IsCrossStack(key.slotIdx) && hasReconcileDeletes &&
-				snap.State == StateExists && res.State == StateExists {
-				t.Logf("correctModelFromCommandOutcome: marking unmentioned cross-stack slot stack=%s slot=%d as destroyed (reconcile cancel)",
-					model.Stack(key.stackIdx).Label, key.slotIdx)
-				model.ApplyDestroyed(key.stackIdx, []int{key.slotIdx})
-				model.ClearNativeID(key.stackIdx, key.slotIdx)
-				continue
-			}
-			if res.State == snap.State {
+			if res == nil || res.State == snap.State {
 				continue
 			}
 			t.Logf("correctModelFromCommandOutcome: reverting unmentioned slot stack=%s slot=%d from %v to %v (command state=%s)",
