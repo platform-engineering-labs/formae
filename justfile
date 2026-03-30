@@ -20,7 +20,7 @@ build:
 setup:
    {{ if GITHUB != "false" { "dist/bin/ops setup" } else {""} }}
 
-pkg: build setup
+pkg: clean build setup
     ops opkg build --secure --target-path dist/pel
 
 publish: pkg
