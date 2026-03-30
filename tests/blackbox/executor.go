@@ -1874,10 +1874,25 @@ func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, mod
 			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
 			continue
 		}
-		// Create/Update: the plugin's CRUD methods already update cloud state
-		// with the correct resolved properties. We only need to clear the
-		// drift tracking in the model. We don't PutCloudState from ru.Properties
-		// because command response properties contain unresolved resolvables.
+		// Create/Update: sync cloud state if this resource had a managed drift
+		// entry. The OOB drift operation may have deleted/modified cloud state,
+		// and the command restored the resource. The plugin's CRUD methods update
+		// cloud state with resolved properties, but for delete-drifted resources
+		// the NativeID may have changed. Use the model's NativeID tracking.
+		nativeID := ru.NativeID
+		if nativeID != "" {
+			if _, drift, ok := model.managedDriftForResource(ru.StackName, ru.ResourceLabel); ok {
+				// Restore cloud state: use command response properties flattened.
+				// This may contain partially resolved values but it's better than
+				// leaving the cloud state empty after an OOB delete.
+				if ru.Properties != nil {
+					if err := h.TryPutCloudState(nativeID, ru.ResourceType, flattenPropertiesForCloud(ru.Properties)); err != nil {
+						t.Logf("reconcileManagedDriftOverriddenByCommand: skipping PutCloudState for %s: %v", nativeID, err)
+					}
+				}
+				_ = drift // used for lookup only
+			}
+		}
 		model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
 	}
 }
