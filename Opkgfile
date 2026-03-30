@@ -1,0 +1,19 @@
+amends "orbital:/opkg.pkl"
+
+import "orbital:/requirement.pkl"
+import "pkl:semver"
+
+name = "formae"
+version =  semver.Version(read("env:VERSION"))
+publisher = "platform.engineering"
+license = "Apache 2.0"
+summary = "formae - infrastructure as code for humans in the AI era"
+description = "formae - infrastructure as code for humans in the AI era"
+
+requirements = new Listing<requirement.Requirement> {
+  new {
+    name = "pkl"
+    method = "depends"
+    operator = "ANY"
+  }
+}
