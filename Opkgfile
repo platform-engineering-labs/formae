@@ -1,0 +1,25 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "orbital:/opkg.pkl"
+
+import "orbital:/requirement.pkl"
+import "pkl:semver"
+
+name = "formae"
+version =  semver.Version(read("env:VERSION"))
+publisher = "platform.engineering"
+license = "FLS 1.1-ALv2"
+summary = "formae - infrastructure as code for humans in the AI era"
+description = "formae - infrastructure as code for humans in the AI era"
+
+requirements = new Listing<requirement.Requirement> {
+  new {
+    name = "pkl"
+    method = "depends"
+    operator = "ANY"
+  }
+}
