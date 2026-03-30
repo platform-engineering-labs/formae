@@ -887,6 +887,17 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		}
 
 		if ru.State == "Success" {
+			// Cross-stack resources in failed/canceled commands may not be
+			// persisted by the agent even when individual ru.State=Success.
+			// Skip model updates for cross-stack creates in non-successful
+			// commands — the agent may roll them back or skip persistence.
+			isCrossStack := pool != nil && pool.IsCrossStack(slotIdx)
+			if isCrossStack && cmd.State != "Success" && ru.Operation == "create" {
+				t.Logf("correctModelFromCommandOutcome: skipping cross-stack create stack=%s slot=%d (command state=%s)",
+					model.Stack(stackIdx).Label, slotIdx, cmd.State)
+				goto markDone
+			}
+
 			model.ClearAuthoritativeSlot(stackIdx, slotIdx)
 			switch ru.Operation {
 			case "create":
