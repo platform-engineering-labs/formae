@@ -1,3 +1,7 @@
+# © 2025 Platform Engineering Labs Inc.
+#
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
 export VERSION := `git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*"`
 GITHUB := env("GITHUB_ACTIONS", "false")
 CHANNEL := env("OPS_CHANNEL", "dev")
