@@ -25,6 +25,7 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/handshake"
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/api"
@@ -422,19 +423,13 @@ func (h *TestHarness) SetNativeIDCounter(t *testing.T, value int64) {
 }
 
 // callTestController sends a synchronous Ergo call to the TestController
-// actor on the test plugin's node. Retries once on timeout to handle
-// transient unresponsiveness (e.g. GC pauses in the plugin process).
+// actor on the test plugin's node.
 func (h *TestHarness) callTestController(request any) (any, error) {
 	target := gen.ProcessID{
 		Name: testcontrol.TestControllerName,
 		Node: h.pluginNodeName,
 	}
-	res, err := callRemote(h.ergoNode, target, request, 10)
-	if err != nil && err.Error() == "timed out" {
-		// Retry once — the plugin process may have been in a GC pause.
-		res, err = callRemote(h.ergoNode, target, request, 10)
-	}
-	return res, err
+	return callRemote(h.ergoNode, target, request, 5)
 }
 
 // KillAgent sends SIGKILL to the agent process, killing it and its child
@@ -772,6 +767,10 @@ func (h *TestHarness) startErgoNode(t *testing.T) {
 	options := gen.NodeOptions{}
 	options.Network.Mode = gen.NetworkModeEnabled
 	options.Network.Cookie = h.cookie
+	// Disable TCP connection pooling. Ergo's default pool of 3 TCP connections
+	// per node pair has no keepalive on secondary connections. When a secondary
+	// connection dies silently, ~1/3 of messages are lost until the pool recovers.
+	options.Network.Handshake = handshake.Create(handshake.Options{PoolSize: 1})
 	options.Log.Level = gen.LogLevelWarning
 
 	node, err := ergo.StartNode(nodeName, options)

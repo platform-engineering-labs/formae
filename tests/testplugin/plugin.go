@@ -77,7 +77,11 @@ func (p *TestPlugin) SupportedResources() []plugin.ResourceDescriptor {
 func (p *TestPlugin) RateLimit() plugin.RateLimitConfig {
 	return plugin.RateLimitConfig{
 		Scope:                            plugin.RateLimitScopeNamespace,
-		MaxRequestsPerSecondForNamespace: 100,
+		// Keep rate limit realistic. Higher values (e.g. 100) cause bursts of
+		// 60+ concurrent PluginOperator CRUD calls on the plugin Ergo node,
+		// which delays cross-node message delivery to the TestController and
+		// causes test harness call timeouts.
+		MaxRequestsPerSecondForNamespace: 20,
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/ergo/net/handshake"
 	"ergo.services/ergo/net/registrar"
 
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -64,8 +65,11 @@ func main() {
 	options := gen.NodeOptions{}
 	options.Network.Mode = gen.NetworkModeEnabled
 	options.Network.Cookie = cookie
+	// Disable TCP connection pooling. Ergo's default pool of 3 TCP connections
+	// has no keepalive on secondary connections — silent failures cause message loss.
+	options.Network.Handshake = handshake.Create(handshake.Options{PoolSize: 1})
 	options.Security.ExposeEnvRemoteSpawn = true
-	options.Log.Level = gen.LogLevelDebug
+	options.Log.Level = gen.LogLevelWarning
 
 	options.Network.Acceptors = []gen.AcceptorOptions{
 		{
