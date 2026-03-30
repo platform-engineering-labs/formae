@@ -18,7 +18,7 @@ build:
     rm -rf dist/pel/formae/bin
 
 setup:
-   {{ if GITHUB != "false" { "dist/bin/ops setup" } else {""} }}
+   {{ if GITHUB != "false" { "ops setup" } else {""} }}
 
 pkg: clean build setup
     ops opkg build --secure --target-path dist/pel
