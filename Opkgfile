@@ -12,7 +12,7 @@ import "pkl:semver"
 name = "formae"
 version =  semver.Version(read("env:VERSION"))
 publisher = "platform.engineering"
-license = "Apache 2.0"
+license = "FLS 1.1-ALv2"
 summary = "formae - infrastructure as code for humans in the AI era"
 description = "formae - infrastructure as code for humans in the AI era"
 
