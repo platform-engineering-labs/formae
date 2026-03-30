@@ -887,7 +887,12 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		}
 
 		if ru.State == "Success" {
-			model.ClearAuthoritativeSlot(stackIdx, slotIdx)
+			// Skip authoritative slots — they were set by a TTL destroy or
+			// similar definitive operation. Don't let earlier commands
+			// (e.g. SetTTLPolicy update) override the authoritative state.
+			if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
+				goto markDone
+			}
 			switch ru.Operation {
 			case "create":
 				props := ""
