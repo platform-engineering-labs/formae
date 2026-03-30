@@ -946,11 +946,29 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 	}
 
 	// Step 2: Handle snapshotted slots not mentioned in the command response.
-	// If the command failed, unmentioned slots whose state changed from the
-	// snapshot must be reverted (implicit reconcile deletes or cascade
-	// descendants that never ran). Skip slots already corrected by a later
-	// command.
+	// If the command failed/canceled, unmentioned slots whose state changed
+	// from the snapshot must be reverted (implicit reconcile deletes or
+	// cascade descendants that never ran). Skip slots already corrected by a
+	// later command.
+	//
+	// Special case: cross-stack slots in reconcile commands. Reconcile mode
+	// deletes resources NOT in the forma, including cross-stack resources.
+	// These deletes often complete before a cancel interrupts the command.
+	// The cancel response omits cross-stack slots entirely, so the model
+	// doesn't learn about their deletion. Mark them as destroyed.
 	if cmd.State != "Success" {
+		// Check if any resource update in this command is a reconcile-mode
+		// delete (operation=delete with no explicit user request). This signals
+		// the command was a reconcile that may have implicitly deleted cross-stack
+		// resources.
+		hasReconcileDeletes := false
+		for _, ru := range cmd.ResourceUpdates {
+			if ru.Operation == "delete" {
+				hasReconcileDeletes = true
+				break
+			}
+		}
+
 		for key, snap := range snapBySlot {
 			if corrected[key] {
 				continue
@@ -959,7 +977,21 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				continue
 			}
 			res := model.Resource(key.stackIdx, key.slotIdx)
-			if res == nil || res.State == snap.State {
+			if res == nil {
+				continue
+			}
+			// Cross-stack slots unmentioned in a reconcile cancel: mark
+			// destroyed because the reconcile's implicit deletes likely
+			// completed before the cancel.
+			if pool != nil && pool.IsCrossStack(key.slotIdx) && hasReconcileDeletes &&
+				snap.State == StateExists && res.State == StateExists {
+				t.Logf("correctModelFromCommandOutcome: marking unmentioned cross-stack slot stack=%s slot=%d as destroyed (reconcile cancel)",
+					model.Stack(key.stackIdx).Label, key.slotIdx)
+				model.ApplyDestroyed(key.stackIdx, []int{key.slotIdx})
+				model.ClearNativeID(key.stackIdx, key.slotIdx)
+				continue
+			}
+			if res.State == snap.State {
 				continue
 			}
 			t.Logf("correctModelFromCommandOutcome: reverting unmentioned slot stack=%s slot=%d from %v to %v (command state=%s)",
