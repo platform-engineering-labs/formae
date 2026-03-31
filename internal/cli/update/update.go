@@ -11,16 +11,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/agent"
+	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/opsmgr"
 	"github.com/platform-engineering-labs/orbital/mgr"
 	"github.com/platform-engineering-labs/orbital/opm/records"
 	"github.com/platform-engineering-labs/orbital/ops"
 	"github.com/spf13/cobra"
-
-	"github.com/platform-engineering-labs/formae/internal/agent"
-	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/logging"
 )
 
 func UpdateCmd() *cobra.Command {
@@ -126,6 +125,7 @@ func UpdateCmd() *cobra.Command {
 			}
 
 			fmt.Printf("installing formae version %s\n", candidate.Version.Short())
+
 			err = orb.Install(candidate.Id().String())
 			if err != nil {
 				return err
