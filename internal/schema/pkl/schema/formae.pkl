@@ -619,6 +619,16 @@ class Fq {
         (directMapping.toMap() + nestedMapping.toMap()).toMapping()
 
     function reverseSubResourceFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
+        reverseSubResourceFieldMappingWithVisited(resourceClass, Set())
+
+    /// Internal recursive helper that tracks visited classes to prevent infinite
+    /// recursion on self-referencing sub-resource types (e.g., BigQuery SchemaField).
+    function reverseSubResourceFieldMappingWithVisited(resourceClass: reflect.Class, visited: Set<String>): Mapping<String, String> =
+        let(className = resourceClass.name)
+        if (visited.contains(className))
+            new Mapping {}  // cycle detected — stop recursion
+        else
+        let(nextVisited = visited.add(className))
         let(subResourceHint = findSubResourceHint(resourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
         // Include ALL properties, not just those with @FieldHint
@@ -644,7 +654,7 @@ class Fq {
                     outputKeyTransformation.apply(k)
             )
             let(nestedSubResourceClass = getSubResourceClass(v.type))
-            let(nestedSubMapping = reverseSubResourceFieldMapping(nestedSubResourceClass))
+            let(nestedSubMapping = reverseSubResourceFieldMappingWithVisited(nestedSubResourceClass, nextVisited))
 
             nestedSubMapping.toMap().map((outputKey, pklKey) ->
                 Pair(parentKey + "." + outputKey, k + "." + pklKey)
