@@ -1007,9 +1007,95 @@ func (h *TestHarness) executeCrashAgent(t *testing.T, model *StateModel) {
 	// Use a longer timeout than normal: after a crash, the agent may need
 	// to re-run commands from multiple previous iterations via
 	// ReRunIncompleteCommands, and these compete for rate limiter tokens.
+	// Capture the earliest ops log position before draining — DrainPendingCommands
+	// clears AcceptedCommands, so we'd lose the position.
+	var crashOpsLogStart int
+	for _, ac := range model.AcceptedCommands {
+		if crashOpsLogStart == 0 || ac.OpLogSize < crashOpsLogStart {
+			crashOpsLogStart = ac.OpLogSize
+		}
+	}
+
 	if len(model.AcceptedCommands) > 0 {
 		t.Logf(">>> OpCrashAgent: draining %d pending commands after crash", len(model.AcceptedCommands))
 		h.DrainPendingCommands(t, model, 60*time.Second)
+	}
+
+	// After crash recovery, command responses may not accurately reflect the
+	// final cloud state due to re-run ordering and async persistence. Use the
+	// operation log to identify which resources were touched during the crash
+	// window, then reconcile the model against cloud state for those resources.
+	h.reconcileModelFromOpsLogAfterCrash(t, model, crashOpsLogStart)
+}
+
+// reconcileModelFromOpsLogAfterCrash uses the operation log to identify
+// resources that were touched during the crash window, then compares the
+// model's state against the plugin's cloud state for those resources.
+// This resolves discrepancies caused by ReRunIncompleteCommands executing
+// operations that the model didn't track.
+func (h *TestHarness) reconcileModelFromOpsLogAfterCrash(t *testing.T, model *StateModel, opsLogStart int) {
+	t.Helper()
+
+	if opsLogStart == 0 {
+		return
+	}
+
+	opLog, err := h.TryGetOperationLog()
+	if err != nil {
+		t.Logf("reconcileModelFromOpsLogAfterCrash: skipping (ops log unavailable: %v)", err)
+		return
+	}
+
+	window := operationLogWindow(opLog, opsLogStart)
+	if len(window) == 0 {
+		return
+	}
+
+	// Collect NativeIDs that had Create or Delete operations in the crash window.
+	touchedNativeIDs := make(map[string]bool)
+	for _, entry := range window {
+		if entry.NativeID != "" && (entry.Operation == "Create" || entry.Operation == "Delete") {
+			touchedNativeIDs[entry.NativeID] = true
+		}
+	}
+	if len(touchedNativeIDs) == 0 {
+		return
+	}
+
+	// Get cloud state snapshot — this is the ground truth for what exists.
+	cloudState, err := h.TryGetCloudStateSnapshot()
+	if err != nil {
+		t.Logf("reconcileModelFromOpsLogAfterCrash: skipping (cloud state unavailable: %v)", err)
+		return
+	}
+	cloudNativeIDs := make(map[string]bool, len(cloudState))
+	for nid := range cloudState {
+		cloudNativeIDs[nid] = true
+	}
+
+	// Reconcile: for each model slot with a tracked NativeID that was touched,
+	// verify the model matches cloud state.
+	for stackIdx, stack := range model.Stacks {
+		for slotIdx, res := range stack.Resources {
+			nid := model.GetNativeID(stackIdx, slotIdx)
+			if nid == "" || !touchedNativeIDs[nid] {
+				continue
+			}
+			existsInCloud := cloudNativeIDs[nid]
+
+			if res != nil && res.State == StateExists && !existsInCloud {
+				t.Logf("reconcileModelFromOpsLogAfterCrash: stack=%s slot=%d nativeID=%s model=Exists but cloud=NotExist → correcting",
+					stack.Label, slotIdx, nid)
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+				model.ClearNativeID(stackIdx, slotIdx)
+			} else if (res == nil || res.State == StateNotExist) && existsInCloud {
+				t.Logf("reconcileModelFromOpsLogAfterCrash: stack=%s slot=%d nativeID=%s model=NotExist but cloud=Exists → correcting",
+					stack.Label, slotIdx, nid)
+				entry := cloudState[nid]
+				model.ApplyCreated(stackIdx, []int{slotIdx}, entry.Properties)
+				model.SetNativeID(stackIdx, slotIdx, nid)
+			}
+		}
 	}
 }
 
@@ -2007,6 +2093,26 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 				if model.Stack(stackIdx).Resources[slotIdx] != nil {
 					model.ApplyDestroyed(stackIdx, []int{slotIdx})
 					model.MarkAuthoritativeSlot(stackIdx, slotIdx)
+				}
+			}
+
+			// The TTL policy uses OnDependents:"cascade", so cross-stack
+			// children on OTHER stacks that reference the expired stack's
+			// resources are also destroyed by the agent. Mark them in the model.
+			if model.Pool != nil && expiredLabel == model.ProviderStackLabel {
+				for otherStackIdx := range model.Stacks {
+					if otherStackIdx == stackIdx {
+						continue
+					}
+					for slotIdx := range model.Stack(otherStackIdx).Resources {
+						if model.Pool.IsCrossStack(slotIdx) && model.Stack(otherStackIdx).Resources[slotIdx] != nil {
+							model.ApplyDestroyed(otherStackIdx, []int{slotIdx})
+							model.MarkAuthoritativeSlot(otherStackIdx, slotIdx)
+							model.ClearNativeID(otherStackIdx, slotIdx)
+							t.Logf("ForceCheckTTLAndWait: cascade-destroyed cross-stack slot stack=%s slot=%d (provider %s expired)",
+								model.Stack(otherStackIdx).Label, slotIdx, expiredLabel)
+						}
+					}
 				}
 			}
 		}
