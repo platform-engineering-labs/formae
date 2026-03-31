@@ -28,6 +28,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -481,11 +482,18 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 		return fmt.Errorf("failed to spawn PluginOperator: %s", spawnRes.Error)
 	}
 
+	// Strip resolvable metadata ($ref/$value wrappers) from target config before
+	// sending to plugin — plugins expect plain JSON values, not resolvable objects.
+	pluginConfig := target.Config
+	if cleanConfig, err := resolver.ConvertToPluginFormat(target.Config); err == nil {
+		pluginConfig = cleanConfig
+	}
+
 	err = proc.Send(spawnRes.PID, plugin.ListResources{
 		Namespace:      target.Namespace,
 		TargetLabel:    target.Label,
 		ResourceType:   op.ResourceType,
-		TargetConfig:   target.Config,
+		TargetConfig:   pluginConfig,
 		ListParameters: listParameters,
 	})
 	if err != nil {

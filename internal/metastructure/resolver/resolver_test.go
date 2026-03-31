@@ -1341,6 +1341,46 @@ func TestSameURIMultiplePaths(t *testing.T) {
 	})
 }
 
+func TestConvertToPluginFormat_TargetConfig(t *testing.T) {
+	t.Run("strips resolvable wrappers from target config with endpoint and CA", func(t *testing.T) {
+		endpointRef := newTestRef("Endpoint")
+		caRef := newTestRef("CertificateAuthorityData")
+		nameRef := newTestRef("Name")
+
+		targetConfig := json.RawMessage(fmt.Sprintf(`{
+			"Type": "K8S",
+			"Endpoint": {
+				"$ref": "%s",
+				"$value": "https://ABC123.gr7.us-west-2.eks.amazonaws.com"
+			},
+			"CertificateAuthority": {
+				"$ref": "%s",
+				"$value": "LS0tLS1CRUdJTi..."
+			},
+			"ClusterName": {
+				"$ref": "%s",
+				"$value": "my-cluster"
+			},
+			"WaitForLoadBalancer": false
+		}`, endpointRef, caRef, nameRef))
+
+		result, err := ConvertToPluginFormat(targetConfig)
+		require.NoError(t, err)
+
+		parsed := gjson.Parse(string(result))
+		assert.Equal(t, "K8S", parsed.Get("Type").String())
+		assert.Equal(t, "https://ABC123.gr7.us-west-2.eks.amazonaws.com", parsed.Get("Endpoint").String())
+		assert.Equal(t, "LS0tLS1CRUdJTi...", parsed.Get("CertificateAuthority").String())
+		assert.Equal(t, "my-cluster", parsed.Get("ClusterName").String())
+		assert.Equal(t, false, parsed.Get("WaitForLoadBalancer").Bool())
+
+		// Verify no $ref or $value wrappers remain
+		assert.False(t, parsed.Get("Endpoint.$ref").Exists())
+		assert.False(t, parsed.Get("Endpoint.$value").Exists())
+		assert.False(t, parsed.Get("ClusterName.$ref").Exists())
+	})
+}
+
 // newTestRef creates a test reference with a real KSUID for the given property
 func newTestRef(property string) string {
 	ksuid := util.NewID()
