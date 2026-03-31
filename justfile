@@ -13,8 +13,6 @@ clean:
 
 build:
     make pkg-bin
-    mkdir -p dist/pel/bin
-    mv dist/pel/formae/bin/formae dist/pel/bin
     rm -rf dist/pel/formae/bin
 
 setup:

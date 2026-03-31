@@ -7,9 +7,6 @@
 DEBUG_GOFLAGS := -gcflags="all=-N -l"
 VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
 
-PKL_BUNDLE_VERSION := 0.30.0
-PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSION}/pkl-$(shell ./scripts/baduname.sh)
-
 # External plugin Git repositories to bundle.
 # Append @branch or @tag to pin a specific ref (e.g., ...aws.git@feat/msgpack).
 # Without @ref, the default branch (main) is used.
@@ -31,7 +28,6 @@ clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
-	rm -rf ppm
 	rm -rf version.semver
 	rm -rf $(PLUGINS_CACHE)
 
@@ -40,9 +36,6 @@ clean-pel:
 
 build:
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
-
-build-tools:
-	go build -C ./tools/ppm/cmd -o ../../../ppm
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
@@ -142,7 +135,7 @@ install-external-plugins: build-external-plugins
 build-debug:
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
-pkg-bin: clean build build-tools build-external-plugins
+pkg-bin: clean build build-external-plugins
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
@@ -184,12 +177,6 @@ pkg-bin: clean build build-tools build-external-plugins
 			cp -r "$$plugin_dir/examples/"* "./dist/pel/formae/examples/$$plugin_name/" 2>/dev/null || true; \
 		fi; \
 	done
-	curl -L -o ./dist/pel/formae/bin/pkl ${PKL_BIN_URL}
-	chmod 755 ./dist/pel/formae/bin/pkl
-	./ppm pkg build --name formae --version ${VERSION} ./dist/pel/formae
-
-publish-bin: pkg-bin
-	./ppm repo publish ./dist/packages/*.tgz
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
@@ -405,11 +392,9 @@ test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 
 tidy-all:
 	go mod tidy
-	cd ./tools/ppm && go mod tidy
 	cd ./pkg/auth && go mod tidy
 	cd ./pkg/model && go mod tidy
 	cd ./pkg/plugin && go mod tidy
-	cd ./pkg/ppm && go mod tidy
 
 version:
 	@echo ${VERSION}
@@ -430,6 +415,6 @@ lint-reuse:
 add-license:
 	./scripts/add_license.sh
 
-all: clean build build-tools gen-pkl api-docs
+all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools install-gremlins build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all

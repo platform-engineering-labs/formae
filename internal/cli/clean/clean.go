@@ -6,12 +6,14 @@ package clean
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 
-	"github.com/spf13/cobra"
-
-	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/pkg/ppm"
+	"github.com/platform-engineering-labs/formae/internal/opsmgr"
+	"github.com/platform-engineering-labs/orbital/mgr"
+	"github.com/spf13/cobra"
 )
 
 func CleanCmd() *cobra.Command {
@@ -24,21 +26,21 @@ func CleanCmd() *cobra.Command {
 		},
 		SilenceErrors: true,
 		RunE: func(command *cobra.Command, args []string) error {
-			if !ppm.Sys.IsPrivilegedUser() {
-				fmt.Println("this command requires a privileged user: authentication may be required")
-
-				err := ppm.Sys.InvokeSelfWithSudo(command.Name())
-				if err != nil {
-					return fmt.Errorf("could not escalate to privileged user: %w", err)
-				}
+			binPath, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("could not determine binary path: %w", err)
 			}
+			root := filepath.Dir(filepath.Dir(binPath))
 
-			manager, err := ppm.NewManager(&ppm.Config{Repo: &ppm.RepoConfig{}}, formae.DefaultInstallPrefix)
+			orb, err := mgr.New(slog.Default(), root, opsmgr.TreeConfig)
 			if err != nil {
 				return err
 			}
 
-			manager.Clean()
+			// init root if needed
+			if orb.Ready() != true {
+				fmt.Println(fmt.Sprintf("no managed installation root detected at: %s", root))
+			}
 
 			fmt.Println("done.")
 
