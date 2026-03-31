@@ -55,6 +55,7 @@ log/*
 
 # No packages
 *.tgz
+*.opkg
 
 # PKL ignores
 PklProject.deps.json

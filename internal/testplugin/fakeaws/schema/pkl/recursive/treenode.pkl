@@ -1,0 +1,46 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS TreeNode - test resource with recursive sub-resource type.
+ * Used to verify that schema extraction handles self-referencing types
+ * without stack overflow (e.g., BigQuery SchemaField.fields).
+ */
+module fakeaws.recursive.treenode
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::Recursive::TreeNode"
+
+/// A node that can contain child nodes of the same type
+@fakeaws.SubResourceHint
+open class NodeEntry extends formae.SubResource {
+    @fakeaws.FieldHint
+    name: String
+
+    @fakeaws.FieldHint
+    value: String?
+
+    /// Recursive self-reference — children are the same type
+    @fakeaws.FieldHint
+    children: Listing<NodeEntry>?
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "NodeId"
+}
+open class TreeNode extends formae.Resource {
+    @fakeaws.FieldHint
+    nodeId: String
+
+    @fakeaws.FieldHint
+    description: String?
+
+    @fakeaws.FieldHint
+    root: NodeEntry?
+}
