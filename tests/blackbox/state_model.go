@@ -715,12 +715,13 @@ func (m *StateModel) HasExistingDescendants(stackIndex int, idx int) bool {
 
 // TrackAcceptedCommand records a command that was accepted by the agent,
 // along with pre-command resource snapshots for potential cancel revert.
-func (m *StateModel) TrackAcceptedCommand(commandID string, snapshots []ResourceSnapshot, requestedSlots []ResourceSlotRef, opLogSize int) {
+func (m *StateModel) TrackAcceptedCommand(commandID string, snapshots []ResourceSnapshot, requestedSlots []ResourceSlotRef, opLogSize int, isReconcile bool) {
 	m.AcceptedCommands = append(m.AcceptedCommands, AcceptedCommand{
 		CommandID:      commandID,
 		Snapshots:      snapshots,
 		RequestedSlots: requestedSlots,
 		OpLogSize:      opLogSize,
+		IsReconcile:    isReconcile,
 	})
 }
 

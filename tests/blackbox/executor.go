@@ -329,7 +329,7 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 		}
 
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", ac.CommandID, cmd.State)
-		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool))
+		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool), ac.IsReconcile)
 		h.reconcileManagedDriftOverriddenByCommand(t, model, &cmd)
 	}
 
@@ -704,9 +704,8 @@ func applyCommandOutcomeToModel(t *testing.T, cmd *apimodel.Command, model *Stat
 			model.ApplyDestroyed(stackIdx, []int{slotIdx})
 			model.ClearNativeID(stackIdx, slotIdx)
 		case "update":
-			// Resource still exists; properties may have been updated.
-			// ApplyCreated with new properties serves the same purpose
-			// (marks resource as existing with given properties).
+			// applyCommandOutcomeToModel is used by SetupStacks and
+			// ForceCheckTTLAndWait — both use reconcile mode.
 			if ru.Properties != nil {
 				props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
@@ -846,7 +845,7 @@ func applyReconcileGuarantee(model *StateModel, stackIdx int, reconcileIDs []int
 // first) by DrainPendingCommands. The corrected map tracks which resources
 // have already been corrected by a later command — earlier commands skip
 // those resources so the latest outcome wins.
-func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool, snapshots []ResourceSnapshot, corrected map[struct{ stackIdx, slotIdx int }]bool) {
+func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool, snapshots []ResourceSnapshot, corrected map[struct{ stackIdx, slotIdx int }]bool, isReconcile bool) {
 	t.Helper()
 
 	if cmd == nil {
@@ -887,14 +886,9 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		}
 
 		if ru.State == "Success" {
-			// Skip authoritative slots — they were set by a TTL destroy or
-			// similar definitive operation. Don't let earlier commands
-			// (e.g. SetTTLPolicy update) override the authoritative state.
-			if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
-				goto markDone
-			}
 			switch ru.Operation {
 			case "create":
+				model.ClearAuthoritativeSlot(stackIdx, slotIdx)
 				props := ""
 				if ru.Properties != nil {
 					props = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
@@ -906,7 +900,12 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				model.MarkAuthoritativeSlot(stackIdx, slotIdx)
 				model.ClearNativeID(stackIdx, slotIdx)
 			case "update":
-				if ru.Properties != nil {
+				// Don't let updates override authoritative slots (e.g. TTL destroy).
+				// Only creates can clear authoritative status.
+				if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
+					goto markDone
+				}
+				if isReconcile && ru.Properties != nil {
 					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
 					model.ApplyCreated(stackIdx, []int{slotIdx}, props)
 				}
@@ -914,6 +913,10 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			}
 		} else {
 			// Failed/Canceled — revert to pre-command snapshot state.
+			// Don't revert authoritative slots (set by TTL destroy etc.)
+			if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
+				goto markDone
+			}
 			if snap, ok := snapBySlot[key]; ok {
 				res := model.Resource(stackIdx, slotIdx)
 				if res != nil && res.State != snap.State {
@@ -1191,7 +1194,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		resolvedProps := model.ResolvePropertiesForResources(op.StackIndex, op.ResourceIDs, op.Properties, op.ChildProperties)
 		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, resolvedProps)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, op.ResourceIDs), h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, op.ResourceIDs), h.currentOperationLogSize(t), mode == pkgmodel.FormaApplyModeReconcile)
 	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
 }
 
@@ -1268,7 +1271,7 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
 	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1351,7 +1354,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	if len(successIDs) > 0 {
 		model.ApplyDestroyed(op.StackIndex, successIDs)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
 	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1411,7 +1414,7 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	for _, idx := range successIDs {
 		model.ApplyCascadeDestroyed(op.StackIndex, idx)
 	}
-	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
 }
 
@@ -1472,7 +1475,7 @@ func (h *TestHarness) executeForceReconcile(t *testing.T, op *Operation, model *
 	// it in reconcile mode. Our model tracks this set via SaveLastReconcile.
 	model.ApplyCreatedResolved(op.StackIndex, stack.LastReconcileResourceProperties)
 	applyReconcileGuarantee(model, op.StackIndex, reconcileIDs)
-	model.TrackAcceptedCommand(resp.CommandID, snapshots, requestedSlotRefs(op.StackIndex, reconcileIDs), h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(resp.CommandID, snapshots, requestedSlotRefs(op.StackIndex, reconcileIDs), h.currentOperationLogSize(t), true)
 	t.Logf("[op %d] ForceReconcile stack=%s → accepted, model updated (restore %v)", op.SequenceNum, stackLabel, reconcileIDs)
 }
 
@@ -1915,11 +1918,12 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// Track which resources have been corrected so earlier commands don't
 	// override later ones. This handles concurrent commands on the same
 	// resource: the latest command's outcome wins.
+	//
 	corrected := make(map[struct{ stackIdx, slotIdx int }]bool)
 	for i := len(drained) - 1; i >= 0; i-- {
 		dc := drained[i]
 		if dc.cmd != nil {
-			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected)
+			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected, dc.ac.IsReconcile)
 			h.reconcileManagedDriftOverriddenByCommand(t, model, dc.cmd)
 		}
 	}
@@ -2139,7 +2143,7 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 		return
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		h.ForceCheckTTLAndWait(t, model)
 
@@ -2160,19 +2164,43 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 		time.Sleep(250 * time.Millisecond)
 	}
 
-	// After exhausting retries, the StackExpirer has had ample time to
-	// process the expiry. Mark remaining expired stacks as destroyed.
+	// Polling exhausted but stacks are still marked expired. The StackExpirer
+	// may have fired in the background (destroying resources) or may be
+	// blocked by active commands. Check inventory to determine actual state.
 	for i, stack := range model.Stacks {
-		if stack.TTLExpired {
+		if !stack.TTLExpired {
+			continue
+		}
+		forma, err := h.client.ExtractResources("managed:true stack:" + stack.Label)
+		if err != nil || forma == nil || len(forma.Resources) == 0 {
+			// Stack is empty in inventory — expired and destroyed.
 			for slotIdx := range stack.Resources {
 				if stack.Resources[slotIdx] != nil {
 					model.ApplyDestroyed(i, []int{slotIdx})
 					model.ClearNativeID(i, slotIdx)
+					model.MarkAuthoritativeSlot(i, slotIdx)
 				}
 			}
-			model.Stacks[i].TTLExpired = false
-			t.Logf("drainExpiredTTLStacks: stack %s marked destroyed after polling timeout", stack.Label)
+			// Also cascade cross-stack children if this is the provider stack.
+			if model.Pool != nil && stack.Label == model.ProviderStackLabel {
+				for otherIdx := range model.Stacks {
+					if otherIdx == i {
+						continue
+					}
+					for slotIdx := range model.Stack(otherIdx).Resources {
+						if model.Pool.IsCrossStack(slotIdx) && model.Stack(otherIdx).Resources[slotIdx] != nil {
+							model.ApplyDestroyed(otherIdx, []int{slotIdx})
+							model.ClearNativeID(otherIdx, slotIdx)
+							model.MarkAuthoritativeSlot(otherIdx, slotIdx)
+						}
+					}
+				}
+			}
+			t.Logf("drainExpiredTTLStacks: stack %s confirmed destroyed via inventory", stack.Label)
+		} else {
+			t.Logf("drainExpiredTTLStacks: stack %s still has %d resources in inventory after TTL polling timeout", stack.Label, len(forma.Resources))
 		}
+		model.Stacks[i].TTLExpired = false
 	}
 }
 
@@ -2691,7 +2719,7 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	model.SaveLastReconcile(op.StackIndex, existingIDs, model.CurrentProperties(op.StackIndex, existingIDs))
 	model.Stacks[op.StackIndex].TTLExpired = op.TTLExpired
 	model.Stacks[op.StackIndex].TTL = true
-	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t))
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), true)
 	t.Logf("[op %d] SetTTLPolicy stack=%s ttlExpired=%v → accepted, model updated", op.SequenceNum, stackLabel, op.TTLExpired)
 }
 
@@ -2745,7 +2773,7 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 			model.ApplyCascadeDestroyed(stackIdx, idx)
 		}
 		model.Stacks[stackIdx].TTLExpired = false
-		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, resourceIDs), h.currentOperationLogSize(t))
+		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, resourceIDs), h.currentOperationLogSize(t), false)
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }

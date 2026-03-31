@@ -141,6 +141,7 @@ type AcceptedCommand struct {
 	Snapshots      []ResourceSnapshot // pre-command state for revert on cancel
 	OpLogSize      int                // operation log length immediately after acceptance
 	RequestedSlots []ResourceSlotRef
+	IsReconcile    bool // true if the command was reconcile mode (properties = full desired state)
 	// Resolved is true when the cancel handler has already processed this
 	// command. The command remains in AcceptedCommands so that
 	// DrainPendingCommands can include its outcome when resolving conflicts
