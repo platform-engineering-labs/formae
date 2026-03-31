@@ -35,10 +35,11 @@ const (
 	PhaseReplace
 	PhaseDestroy
 	PhaseOOBDelete
+	crudPhaseCount // sentinel — must remain last; updates automatically when phases are added/removed
 )
 
-// crudPhaseCount is the total number of CRUD phases.
-const crudPhaseCount = 8
+// numCRUDPhases is the total number of CRUD phases, derived from the sentinel.
+const numCRUDPhases = int(crudPhaseCount)
 
 // String returns the human-readable name of a CRUDPhase.
 func (p CRUDPhase) String() string {
@@ -123,8 +124,8 @@ func NewResultCollector() *ResultCollector {
 func (rc *ResultCollector) NewCRUDResult(name string) int {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	phases := make(map[int]StepStatus, crudPhaseCount)
-	for i := 0; i < crudPhaseCount; i++ {
+	phases := make(map[int]StepStatus, numCRUDPhases)
+	for i := 0; i < numCRUDPhases; i++ {
 		phases[i] = StepNotRun
 	}
 	rc.crudResults = append(rc.crudResults, TestResult{
@@ -249,7 +250,7 @@ func (rc *ResultCollector) SetDiscoveryDuration(idx int, d time.Duration) {
 func (rc *ResultCollector) MarkRemainingCRUDSkipped(idx int) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	for i := 0; i < crudPhaseCount; i++ {
+	for i := 0; i < numCRUDPhases; i++ {
 		if rc.crudResults[idx].Phases[i] == StepNotRun {
 			rc.crudResults[idx].Phases[i] = StepSkipped
 		}
@@ -298,7 +299,7 @@ func countResults(results []TestResult, phaseCount int) (passed, failed, skipped
 func (rc *ResultCollector) crudCounts() (passed, failed, skipped int) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	return countResults(rc.crudResults, crudPhaseCount)
+	return countResults(rc.crudResults, numCRUDPhases)
 }
 
 // discoveryCounts returns resource-level counts: passed, failed, skipped.
@@ -352,7 +353,7 @@ func (rc *ResultCollector) renderSummary(w io.Writer) {
 
 		for _, r := range rc.crudResults {
 			fmt.Fprintf(w, "%-*s", nameWidth+2, r.Name)
-			for i := 0; i < crudPhaseCount; i++ {
+			for i := 0; i < numCRUDPhases; i++ {
 				fmt.Fprintf(w, "  %-8s", statusMarker(r.Phases[i]))
 			}
 			fmt.Fprintf(w, "  %s\n", formatDuration(r.Duration))
@@ -424,7 +425,7 @@ func (rc *ResultCollector) renderSummary(w io.Writer) {
 	for _, r := range allResults {
 		totalDuration += r.Duration
 	}
-	cp, cf, cs := countResults(rc.crudResults, crudPhaseCount)
+	cp, cf, cs := countResults(rc.crudResults, numCRUDPhases)
 	dp, df, ds := countResults(rc.discoveryResults, discoveryPhaseCount)
 	totalPassed := cp + dp
 	totalFailed := cf + df
