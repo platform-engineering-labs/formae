@@ -636,6 +636,8 @@ func (m *StateModel) ApplyCreated(stackIndex int, resourceIDs []int, properties 
 		if res, ok := stack.Resources[id]; ok {
 			res.State = StateExists
 			res.Properties = properties
+			// Creating a resource supersedes any prior authoritative destroy.
+			m.ClearAuthoritativeSlot(stackIndex, id)
 		}
 	}
 }

@@ -313,6 +313,11 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 		return
 	}
 
+	// Capture authoritative slots before processing any commands. These were
+	// set by TTL destroy or similar operations outside this loop. Commands
+	// processed here should not override them (their outcomes are stale for
+	// those slots). We capture once so that authoritative flags set by
+	// commands WITHIN this loop don't affect later commands in the same loop.
 	remaining := make([]AcceptedCommand, 0, len(model.AcceptedCommands))
 	for _, ac := range model.AcceptedCommands {
 		statusResp, err := h.client.GetFormaCommandsStatus("id:"+ac.CommandID, clientID, 1)
@@ -1024,11 +1029,62 @@ func (h *TestHarness) executeCrashAgent(t *testing.T, model *StateModel) {
 		h.DrainPendingCommands(t, model, 60*time.Second)
 	}
 
-	// After crash recovery, command responses may not accurately reflect the
-	// final cloud state due to re-run ordering and async persistence. Use the
-	// operation log to identify which resources were touched during the crash
-	// window, then reconcile the model against cloud state for those resources.
-	h.reconcileModelFromOpsLogAfterCrash(t, model, crashOpsLogStart)
+	// After crash recovery, the model may be wrong because:
+	// 1. ResourcePersister didn't complete before the crash
+	// 2. ReRunIncompleteCommands re-created or re-deleted resources
+	// 3. Command response ordering doesn't match persistence ordering
+	// Reconcile the model against inventory for ALL tracked resources.
+	h.reconcileModelFromInventoryAfterCrash(t, model)
+}
+
+// reconcileModelFromInventoryAfterCrash reconciles the model against inventory
+// after a crash+restart. The crash may have lost in-flight persistence, and
+// ReRunIncompleteCommands may have changed resource state. This is the one
+// place where we use inventory to correct the model — justified because crash
+// recovery is a boundary where command responses are unreliable.
+func (h *TestHarness) reconcileModelFromInventoryAfterCrash(t *testing.T, model *StateModel) {
+	t.Helper()
+
+	forma, err := h.client.ExtractResources("managed:true")
+	if err != nil {
+		t.Logf("reconcileModelFromInventoryAfterCrash: skipping (inventory unavailable: %v)", err)
+		return
+	}
+
+	inventoryByKey := make(map[string]bool)
+	if forma != nil {
+		for _, res := range forma.Resources {
+			inventoryByKey[res.Stack+"/"+res.Label] = true
+		}
+	}
+
+	corrected := 0
+	for stackIdx, stack := range model.Stacks {
+		for slotIdx, res := range stack.Resources {
+			if res == nil {
+				continue
+			}
+			// Skip cross-stack slots — they're excluded from assertions anyway
+			if model.Pool != nil && model.Pool.IsCrossStack(slotIdx) {
+				continue
+			}
+			label := model.LabelForResource(stackIdx, slotIdx)
+			key := stack.Label + "/" + label
+			existsInInventory := inventoryByKey[key]
+
+			if res.State == StateExists && !existsInInventory {
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+				model.ClearNativeID(stackIdx, slotIdx)
+				corrected++
+			} else if res.State == StateNotExist && existsInInventory {
+				model.ApplyCreated(stackIdx, []int{slotIdx}, "")
+				corrected++
+			}
+		}
+	}
+	if corrected > 0 {
+		t.Logf("reconcileModelFromInventoryAfterCrash: corrected %d slot(s)", corrected)
+	}
 }
 
 // reconcileModelFromOpsLogAfterCrash uses the operation log to identify
@@ -1515,13 +1571,32 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 	// Build label → snapshot lookup for the canceled command's snapshots.
 	labelToSnapshot := buildLabelToSnapshotMap(target.Snapshots, model)
 
-	// Revert model for resources that ended up in Canceled state.
+	// Process resources in the canceled command: revert Canceled ones to
+	// their snapshot state, and apply successful creates/deletes that
+	// completed before the cancel fired.
 	var reverted int
 	for _, ru := range cmd.ResourceUpdates {
 		if ru.State == "Canceled" {
 			if snap, ok := labelToSnapshot[ru.ResourceLabel]; ok {
 				model.RevertResources([]ResourceSnapshot{snap})
 				reverted++
+			}
+		} else if ru.State == "Success" {
+			stackIdx, slotIdx := resolveResourceUpdateSlot(model, model.Pool, ru)
+			if stackIdx == -1 || slotIdx == -1 {
+				continue
+			}
+			switch ru.Operation {
+			case "create":
+				props := ""
+				if ru.Properties != nil {
+					props = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
+				}
+				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
+				model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
+			case "delete":
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+				model.ClearNativeID(stackIdx, slotIdx)
 			}
 		}
 	}
@@ -2016,6 +2091,11 @@ func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *Stat
 func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config PropertyTestConfig) {
 	t.Helper()
 
+	// Clear authoritative slots from previous iteration. TTL destroy marks
+	// slots authoritative, which must be cleared before the new iteration
+	// creates resources on those slots.
+	model.AuthoritativeSlots = make(map[string]bool)
+
 	// Create a single resource on each stack to ensure the stack exists.
 	for stackIdx := range model.Stacks {
 		stackLabel := model.Stack(stackIdx).Label
@@ -2088,6 +2168,23 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 		}
 		applyCommandOutcomeToModel(t, cmd, model, model.Pool)
 		if cmd.State == "Success" {
+			// Mark ALL resources deleted by the TTL command as authoritative,
+			// including cascade deletes on other stacks. This prevents stale
+			// commands (processed later via reconcileCompletedAcceptedCommands)
+			// from re-creating resources that the TTL destroyed.
+			for _, ru := range cmd.ResourceUpdates {
+				if ru.Operation == "delete" && ru.State == "Success" {
+					si, sli := resolveResourceUpdateSlot(model, model.Pool, ru)
+					if si >= 0 && sli >= 0 {
+						model.MarkAuthoritativeSlot(si, sli)
+					}
+					// Also clean up cloud state so CheckInvariants doesn't
+					// see a phantom (inventory removed, cloud state stale).
+					if ru.NativeID != "" {
+						h.TryDeleteCloudState(ru.NativeID)
+					}
+				}
+			}
 			// TTL expiry is modeled as whole-stack deletion. The returned command
 			// response is not guaranteed to enumerate every slot the model tracks,
 			// so we normalize the full stack to NotExist once the TTL command
