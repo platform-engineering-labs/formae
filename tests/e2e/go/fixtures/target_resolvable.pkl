@@ -1,0 +1,59 @@
+/// E2E test for target resolvables: a Grafana target resolves its
+/// endpoint from a Docker Compose stack's published ports.
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@compose/compose.pkl"
+import "@grafana/grafana.pkl"
+import "@grafana/core/folder.pkl"
+
+local lgtmStack = new compose.Stack {
+  label = "e2e-lgtm"
+  projectName = "formae-e2e-resolvable"
+  composeFile = #"""
+    services:
+      lgtm:
+        image: grafana/otel-lgtm:latest
+        ports:
+          - "3000"
+        healthcheck:
+          test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+          interval: 2s
+          timeout: 5s
+          retries: 30
+          start_period: 10s
+    """#
+}
+
+forma {
+  new formae.Stack {
+    label = "e2e-target-resolvable"
+    description = "E2E test: target resolvable from compose endpoints"
+  }
+
+  new formae.Target {
+    label = "e2e-docker"
+    namespace = "DOCKER"
+    config = new compose.Config {}
+  }
+
+  local grafanaTarget = new formae.Target {
+    label = "e2e-grafana"
+    namespace = "GRAFANA"
+    config = new Mapping {
+      ["Type"] = "Grafana"
+      ["Endpoints"] = lgtmStack.res.endpoints
+      ["EndpointKey"] = "lgtm:3000"
+    }
+  }
+  grafanaTarget
+
+  lgtmStack
+
+  new folder.Folder {
+    label = "e2e-resolvable-folder"
+    target = grafanaTarget.res
+    uid = "e2e-resolvable-folder"
+    title = "E2E Target Resolvable Test"
+  }
+}

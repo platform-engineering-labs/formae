@@ -98,6 +98,7 @@ jobs:
           - TestTTL
           - TestCancelCommand
           - TestCascadeDelete
+          - TestTargetResolvable
           - TestProjectInit
           - TestSimulateApply
           - TestExtractAndReapply

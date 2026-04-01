@@ -61,7 +61,9 @@ fi
 AZURE_VERSION=$(pkl eval -x 'version' "$AZURE_PLUGIN_DIR/formae-plugin.pkl")
 echo "Using Azure plugin v$AZURE_VERSION from $AZURE_SCHEMA_DIR"
 
-# Generate PklProject with correct paths
+# Generate PklProject with correct paths.
+# AWS and Azure use local paths (they're always installed for E2E).
+# Compose and Grafana use published hub URIs (they're bundled plugins).
 cat > "$PKLPROJECT_PATH" << EOF
 amends "pkl:Project"
 
@@ -69,6 +71,12 @@ dependencies {
   ["formae"] = import("../../../../internal/schema/pkl/schema/PklProject")
   ["aws"] = import("$AWS_SCHEMA_DIR/PklProject")
   ["azure"] = import("$AZURE_SCHEMA_DIR/PklProject")
+  ["compose"] {
+    uri = "package://hub.platform.engineering/plugins/compose/schema/pkl/compose/compose@0.1.0"
+  }
+  ["grafana"] {
+    uri = "package://hub.platform.engineering/plugins/grafana/schema/pkl/grafana/grafana@0.1.0"
+  }
 }
 EOF
 
