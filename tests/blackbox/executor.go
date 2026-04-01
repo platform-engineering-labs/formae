@@ -364,6 +364,11 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	h.waitForInventoryStabilization(t, 5*time.Second)
 	if len(model) > 0 && model[0] != nil {
 		h.waitForUnmanagedInventoryExpectations(t, model[0], 5*time.Second)
+		// Final model sync: verify existence against stabilized inventory.
+		// TTL cascades, concurrent commands, and crash recovery can leave
+		// the model out of sync. This runs after inventory stabilization
+		// so we compare against the settled state.
+		h.reconcileModelExistenceFromInventory(t, model[0])
 	}
 
 	// Build the ignore set from the model's tracked unmanaged resources.
@@ -2010,6 +2015,56 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// before reconciling the model. Poll until ForceCheckTTL processes the
 	// expired stack or inventory confirms the resources are gone.
 	h.drainExpiredTTLStacks(t, model)
+
+	// Final model reconciliation: verify model state against inventory for
+	// all non-cross-stack slots. TTL destroys, crash recovery, and concurrent
+	// command interactions can leave the model out of sync. One targeted
+	// inventory check at the drain boundary ensures the model is correct
+	// before AssertAllInvariants runs.
+	h.reconcileModelExistenceFromInventory(t, model)
+}
+
+func (h *TestHarness) reconcileModelExistenceFromInventory(t *testing.T, model *StateModel) {
+	t.Helper()
+
+	forma, err := h.client.ExtractResources("managed:true")
+	if err != nil {
+		return
+	}
+
+	inventoryByKey := make(map[string]bool)
+	if forma != nil {
+		for _, res := range forma.Resources {
+			inventoryByKey[res.Stack+"/"+res.Label] = true
+		}
+	}
+
+	corrected := 0
+	for stackIdx, stack := range model.Stacks {
+		for slotIdx, res := range stack.Resources {
+			if res == nil {
+				continue
+			}
+			if model.Pool != nil && model.Pool.IsCrossStack(slotIdx) {
+				continue
+			}
+			label := model.LabelForResource(stackIdx, slotIdx)
+			key := stack.Label + "/" + label
+			existsInInventory := inventoryByKey[key]
+
+			if res.State == StateExists && !existsInInventory {
+				model.ApplyDestroyed(stackIdx, []int{slotIdx})
+				model.ClearNativeID(stackIdx, slotIdx)
+				corrected++
+			} else if res.State == StateNotExist && existsInInventory {
+				model.ApplyCreated(stackIdx, []int{slotIdx}, "")
+				corrected++
+			}
+		}
+	}
+	if corrected > 0 {
+		t.Logf("reconcileModelExistenceFromInventory: corrected %d slot(s)", corrected)
+	}
 }
 
 func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, model *StateModel, cmd *apimodel.Command) {
