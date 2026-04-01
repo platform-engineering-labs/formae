@@ -44,6 +44,7 @@ type agentOptions struct {
 	discoveryEnabled        bool
 	discoveryInterval       string   // PKL duration, e.g. "30.s"
 	discoveryResourceTypes  []string // resource types to discover (empty = all)
+	extraEnv                []string // additional KEY=VALUE env vars for the agent process
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -52,6 +53,13 @@ func WithDiscovery(interval string, resourceTypes ...string) AgentOption {
 		o.discoveryEnabled = true
 		o.discoveryInterval = interval
 		o.discoveryResourceTypes = resourceTypes
+	}
+}
+
+// WithEnv adds environment variables to the agent process.
+func WithEnv(envVars ...string) AgentOption {
+	return func(o *agentOptions) {
+		o.extraEnv = append(o.extraEnv, envVars...)
 	}
 }
 
@@ -141,6 +149,9 @@ cli {
 	// Use a unique PID file to allow parallel test execution.
 	pidFile := filepath.Join(dataDir, "formae.pid")
 	cmd.Env = append(cmd.Env, fmt.Sprintf("FORMAE_PID_FILE=%s", pidFile))
+
+	// Add any extra env vars (e.g. GRAFANA_AUTH for plugin credentials).
+	cmd.Env = append(cmd.Env, options.extraEnv...)
 
 	// Log agent output to a file for debugging on failure.
 	logFile, err := os.Create(filepath.Join(dataDir, "agent-stdout.log"))
