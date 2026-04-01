@@ -12,11 +12,6 @@ on:
         required: false
         default: "main"
         type: string
-      dry_run:
-        description: "Dry run (package only, don't publish to S3)"
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   publish_schema:
@@ -61,7 +56,6 @@ jobs:
         run: ls -la .out/formae@${{ inputs.version }}/
 
       - name: Configure AWS Credentials
-        if: ${{ !inputs.dry_run }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-west-2
@@ -69,7 +63,6 @@ jobs:
           role-session-name: SchemaPrerelease
 
       - name: Publish schema to S3
-        if: ${{ !inputs.dry_run }}
         run: aws s3 sync .out/formae@${{ inputs.version }} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
 
       - name: Summary
@@ -78,9 +71,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Source branch:** ${{ inputs.source_branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Dry run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "- **Status:** Packaged only (not published)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- **Status:** Published to \`package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "- **Status:** Published to \`package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
