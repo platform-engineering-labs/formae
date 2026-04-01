@@ -73,7 +73,10 @@ const (
 	PhaseRegister
 	PhaseDiscover
 	PhaseDiscoveryVerify
-	discoveryPhaseSentinel // used to count the number of discovery phases
+	discoveryPhaseSentinel 
+)	
+
+// used to count the number of discovery phases
 // discoveryPhaseCount is the total number of discovery phases, derived from the sentinel
 const discoveryPhaseCount = int(discoveryPhaseSentinel)
 
