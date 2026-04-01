@@ -14,7 +14,11 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/modules/tfvars"
 )
 
-type tfvarsReader struct{}
+// tfvarsReader is a PKL resource reader for the "tfvars:" scheme.
+// It resolves relative paths against baseDir (typically the project directory).
+type tfvarsReader struct {
+	baseDir string
+}
 
 var _ pklgo.ResourceReader = tfvarsReader{}
 
@@ -34,7 +38,7 @@ func (tfvarsReader) ListElements(_ url.URL) ([]pklgo.PathElement, error) {
 	return nil, nil
 }
 
-func (tfvarsReader) Read(uri url.URL) ([]byte, error) {
+func (r tfvarsReader) Read(uri url.URL) ([]byte, error) {
 	path := uri.Opaque
 	if path == "" {
 		path = filepath.Join(uri.Host, uri.Path)
@@ -42,6 +46,11 @@ func (tfvarsReader) Read(uri url.URL) ([]byte, error) {
 
 	if filepath.Ext(path) != ".tfvars" {
 		return nil, fmt.Errorf("only .tfvars files are supported: %s", path)
+	}
+
+	// Resolve relative paths against the base directory
+	if !filepath.IsAbs(path) && r.baseDir != "" {
+		path = filepath.Join(r.baseDir, path)
 	}
 
 	result, err := tfvars.ParseTFVarsFile(path)

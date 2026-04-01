@@ -10,7 +10,7 @@ import "@formae/ext/terraform.pkl"
 import "@fakeaws/fakeaws.pkl"
 import "@fakeaws/sqs/queue.pkl"
 
-local tfvars = Terraform.readTFVars("example.tfvars")
+local tfvars = terraform.readTFVars("example.tfvars")
 
 properties {
   name = new formae.Prop {
