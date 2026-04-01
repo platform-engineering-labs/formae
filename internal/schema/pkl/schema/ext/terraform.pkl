@@ -16,17 +16,12 @@
 module Terraform
 
 import "pkl:json"
-import "URI.pkl"
 
 /// Read a .tfvars file and return its values as a Dynamic.
 ///
-/// The path is relative to the project root (where formae is invoked).
+/// The path is relative to the calling PKL module.
 /// Only HCL-format .tfvars files are supported (not .tfvars.json).
 /// Only literal values are supported (no variable references or function calls).
 function readTFVars(path: String): Dynamic =
-  let (uri = "libext:///tfvars/read?path=\(URI.encodeComponent(path))")
-    let (result = new json.Parser{}.parse(read(uri)))
-      if (result.hasProperty("Error"))
-        throw("Terraform.readTFVars error: \(result.getProperty("Error"))")
-      else
-        result.getProperty("Body")
+  let (result = new json.Parser{}.parse(read("tfvars:\(path)")))
+    result

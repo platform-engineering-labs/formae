@@ -87,6 +87,7 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 			&url.URL{Scheme: "file", Path: projectDir},
 			pklgo.WithFs(formaeFs, "formae"),
 			pklgo.WithResourceReader(libExtension{}),
+			pklgo.WithResourceReader(tfvarsReader{}),
 			pklgo.PreconfiguredOptions,
 		)
 	} else {
@@ -94,6 +95,7 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 			context.Background(),
 			pklgo.WithFs(formaeFs, "formae"),
 			pklgo.WithResourceReader(libExtension{}),
+			pklgo.WithResourceReader(tfvarsReader{}),
 			pklgo.PreconfiguredOptions,
 		)
 		cleanup = func() { _ = evaluator.Close() }
@@ -221,6 +223,7 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 			&url.URL{Scheme: "file", Path: projectDir},
 			pklgo.PreconfiguredOptions,
 			pklgo.WithResourceReader(libExtension{}),
+			pklgo.WithResourceReader(tfvarsReader{}),
 			func(opts *pklgo.EvaluatorOptions) {
 				opts.Properties = props
 				opts.OutputFormat = "json"
@@ -234,6 +237,7 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 			context.Background(),
 			pklgo.PreconfiguredOptions,
 			pklgo.WithResourceReader(libExtension{}),
+			pklgo.WithResourceReader(tfvarsReader{}),
 			func(opts *pklgo.EvaluatorOptions) {
 				opts.Properties = props
 				opts.OutputFormat = "json"

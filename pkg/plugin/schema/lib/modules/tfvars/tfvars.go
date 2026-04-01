@@ -5,69 +5,16 @@
 package tfvars
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"sort"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/extension"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/registry"
 	"github.com/zclconf/go-cty/cty"
 )
 
-type tfvarsLib struct{}
-
-var _ extension.Library = tfvarsLib{}
-
-func init() {
-	registry.Register("tfvars", func() extension.Library {
-		return tfvarsLib{}
-	})
-}
-
-func (tfvarsLib) Invoke(uri *url.URL) *extension.Result {
-	call, args := extension.NameArgsFrom(uri)
-
-	switch call {
-	case "read":
-		return read(args)
-	default:
-		return &extension.Result{
-			Error: fmt.Sprintf("unknown function name: %s", call),
-		}
-	}
-}
-
-func read(args url.Values) *extension.Result {
-	path := args.Get("path")
-	if path == "" {
-		return &extension.Result{
-			Error: "path parameter is required",
-		}
-	}
-
-	result, err := ParseTFVarsFile(path)
-	if err != nil {
-		return &extension.Result{
-			Error: fmt.Sprintf("failed to parse tfvars file: %v", err),
-		}
-	}
-
-	body, err := json.Marshal(result)
-	if err != nil {
-		return &extension.Result{
-			Error: fmt.Sprintf("failed to serialize result: %v", err),
-		}
-	}
-
-	return &extension.Result{
-		Body: body,
-	}
-}
-
 // ParseTFVarsFile parses a .tfvars file and returns a map of its values.
+// Only literal values are supported (no variable references or function calls).
 func ParseTFVarsFile(path string) (map[string]any, error) {
 	parser := hclparse.NewParser()
 	file, diags := parser.ParseHCLFile(path)
