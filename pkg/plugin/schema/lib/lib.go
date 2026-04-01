@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/modules/bcrypt"
 	_ "github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/modules/random"
+	_ "github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/modules/tfvars"
 )
 
 func Call(uri *url.URL) *extension.Result {
