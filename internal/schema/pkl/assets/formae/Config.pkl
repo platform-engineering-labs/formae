@@ -237,7 +237,7 @@ class ApiConfig {
 }
 
 class ArtifactConfig {
-  url: String = "https://hub.platform.engineering/binaries"
+  url: Uri = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
 
   username: String?
 

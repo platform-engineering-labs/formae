@@ -4,7 +4,11 @@
 
 package model
 
-import "github.com/apple/pkl-go/pkl"
+import (
+	"net/url"
+
+	"github.com/apple/pkl-go/pkl"
+)
 
 func init() {
 	pkl.RegisterMapping("formae.Config#User", User{})
@@ -171,9 +175,9 @@ type APIConfig struct {
 }
 
 type ArtifactConfig struct {
-	URL      string `pkl:"url"`
-	Username string `pkl:"username"`
-	Password string `pkl:"password"`
+	URL      url.URL `pkl:"url"`
+	Username string  `pkl:"username"`
+	Password string  `pkl:"password"`
 }
 
 type CliConfig struct {

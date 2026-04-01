@@ -7,8 +7,6 @@ package update
 import (
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/agent"
@@ -16,7 +14,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/opsmgr"
-	"github.com/platform-engineering-labs/orbital/mgr"
 	"github.com/platform-engineering-labs/orbital/opm/records"
 	"github.com/platform-engineering-labs/orbital/ops"
 	"github.com/spf13/cobra"
@@ -35,31 +32,23 @@ func UpdateCmd() *cobra.Command {
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			channel, _ := cmd.Flags().GetString("channel")
+			configFile, _ := cmd.Flags().GetString("config")
 			version := cmd.Flags().Arg(0)
 
-			configFile, _ := cmd.Flags().GetString("config")
-			_, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
+			app, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
 			if err != nil {
 				return err
 			}
 
-			binPath, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("could not determine binary path: %w", err)
-			}
-			root := filepath.Dir(filepath.Dir(binPath))
-
-			//TODO add configuration to config
-			cfg := opsmgr.TreeConfig
-			cfg.Repositories[0].Uri.Fragment = "dev"
-			orb, err := mgr.New(slog.Default(), root, opsmgr.TreeConfig)
+			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
 			if err != nil {
 				return err
 			}
 
 			// init root if needed
 			if !orb.Ready() {
-				fmt.Printf("no managed installation root detected at: %s\n", root)
+				fmt.Printf("no managed installation root detected at: %s\n", orb.Path)
 				fmt.Print("initialize? [y/n]: ")
 				var response string
 
@@ -79,7 +68,7 @@ func UpdateCmd() *cobra.Command {
 				return err
 			}
 
-			available, err := orb.Available()
+			available, err := orb.AvailableFor("formae")
 			if err != nil {
 				return err
 			}
@@ -89,7 +78,7 @@ func UpdateCmd() *cobra.Command {
 			var hasVersion bool
 
 			if version == "" {
-				if hasUpdate, candidate = available["formae"].HasUpdate(); !hasUpdate {
+				if hasUpdate, candidate = available.HasUpdate(); !hasUpdate {
 					fmt.Println("no updates available")
 					return nil
 				}
@@ -100,7 +89,7 @@ func UpdateCmd() *cobra.Command {
 					return fmt.Errorf("could not parse version: %w", err)
 				}
 
-				if hasVersion, candidate = available["formae"].HasVersion(v); !hasVersion {
+				if hasVersion, candidate = available.HasVersion(v); !hasVersion {
 					return fmt.Errorf("could not find formae version: %s", version)
 				}
 			}
@@ -146,38 +135,30 @@ func UpdateListCmd() *cobra.Command {
 		},
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			channel, _ := cmd.Flags().GetString("channel")
 			configFile, _ := cmd.Flags().GetString("config")
-			_, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
+
+			app, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
 			if err != nil {
 				return err
 			}
 
-			binPath, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("could not determine binary path: %w", err)
-			}
-			root := filepath.Dir(filepath.Dir(binPath))
-
-			//TODO add configuration to config
-			cfg := opsmgr.TreeConfig
-			cfg.Repositories[0].Uri.Fragment = "dev"
-			orb, err := mgr.New(slog.Default(), root, opsmgr.TreeConfig)
+			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
 			if err != nil {
 				return err
 			}
-			fmt.Println(orb.Ready())
-			// init root if needed
+
 			if !orb.Ready() {
-				return fmt.Errorf("no managed installation root detected at: %s\n", root)
+				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path)
 			}
 
-			available, err := orb.Available()
+			available, err := orb.AvailableFor("formae")
 			if err != nil {
 				return err
 			}
 
 			fmt.Print("available formae versions:\n\n")
-			for _, entry := range available["formae"].Available {
+			for _, entry := range available.Available {
 				fmt.Printf("  %s\n", entry.Version.String())
 			}
 
