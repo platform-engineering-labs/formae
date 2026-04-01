@@ -165,10 +165,10 @@ func UpdateListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
+			fmt.Println(orb.Ready())
 			// init root if needed
 			if !orb.Ready() {
-				fmt.Printf("no managed installation root detected at: %s\n", root)
+				return fmt.Errorf("no managed installation root detected at: %s\n", root)
 			}
 
 			available, err := orb.Available()
