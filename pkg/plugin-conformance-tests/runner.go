@@ -1637,9 +1637,11 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "no resources were created")
 	}
 
-	// The main resource is the last one (after dependencies)
-	nativeID := createdResources[len(createdResources)-1].NativeID
-	t.Logf("Created %d resource(s), main resource NativeID: %s", len(createdResources), nativeID)
+	nativeID, err := findMainResourceNativeID(createdResources, resourceType)
+	if err != nil {
+		t.Fatalf("failed to find main resource: %v", err)
+	}
+	t.Logf("Created %d resource(s), main resource NativeID: %s (type: %s)", len(createdResources), nativeID, resourceType)
 
 	// Parse target from eval output for cleanup
 	var forma pkgmodel.Forma
@@ -1760,6 +1762,19 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 
 	t.Log("Discovery test passed!")
 	rc.SetDiscoveryPhase(idx, PhaseDiscoveryVerify, StepPassed)
+}
+
+// findMainResourceNativeID returns the NativeID of the last created resource matching
+// the given resource type. Creation order (dependency-first) may differ from PKL output
+// order, so we search backwards for a type match rather than taking the last resource.
+// Returns an error if no created resource matches the expected type.
+func findMainResourceNativeID(createdResources []CreatedResourceInfo, resourceType string) (string, error) {
+	for i := len(createdResources) - 1; i >= 0; i-- {
+		if createdResources[i].ResourceType == resourceType {
+			return createdResources[i].NativeID, nil
+		}
+	}
+	return "", fmt.Errorf("no created resource matches type %s", resourceType)
 }
 
 // extractNamespaceFromEvalOutput parses the evaluated JSON to extract the plugin namespace
