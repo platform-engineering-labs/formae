@@ -73,10 +73,9 @@ const (
 	PhaseRegister
 	PhaseDiscover
 	PhaseDiscoveryVerify
-)
-
-// discoveryPhaseCount is the total number of discovery phases.
-const discoveryPhaseCount = 4
+	discoveryPhaseSentinel // used to count the number of discovery phases
+// discoveryPhaseCount is the total number of discovery phases, derived from the sentinel
+const discoveryPhaseCount = int(discoveryPhaseSentinel)
 
 // String returns the human-readable name of a DiscoveryPhase.
 func (p DiscoveryPhase) String() string {
@@ -151,16 +150,26 @@ func (rc *ResultCollector) NewDiscoveryResult(name string) int {
 }
 
 // SetCRUDPhase sets the status of a specific CRUD phase for the given resource.
+// It will not overwrite StepFailed with StepPassed, since t.Errorf does not stop
+// execution and a subsequent pass marker would hide the failure.
 func (rc *ResultCollector) SetCRUDPhase(idx int, phase CRUDPhase, status StepStatus) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
+	if status == StepPassed && rc.crudResults[idx].Phases[int(phase)] == StepFailed {
+		return
+	}
 	rc.crudResults[idx].Phases[int(phase)] = status
 }
 
 // SetDiscoveryPhase sets the status of a specific discovery phase for the given resource.
+// It will not overwrite StepFailed with StepPassed, since t.Errorf does not stop
+// execution and a subsequent pass marker would hide the failure.
 func (rc *ResultCollector) SetDiscoveryPhase(idx int, phase DiscoveryPhase, status StepStatus) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
+	if status == StepPassed && rc.discoveryResults[idx].Phases[int(phase)] == StepFailed {
+		return
+	}
 	rc.discoveryResults[idx].Phases[int(phase)] = status
 }
 
