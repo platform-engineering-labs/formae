@@ -4,8 +4,10 @@
 #
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
-# Sets up PKL dependencies for Go e2e tests by generating PklProject
-# with the correct paths to installed AWS and Azure plugin schemas.
+# Sets up PKL dependencies for Go e2e tests by generating PklProject.
+# Plugin schemas are resolved from the hub. The formae core schema uses
+# the local build (since E2E tests run against the built-from-source agent).
+# Versions are read from installed plugin manifests.
 
 set -euo pipefail
 
@@ -23,61 +25,55 @@ if [[ ! -f "$VERSION_FILE" ]]; then
     echo "Generated $VERSION_FILE with version $VERSION"
 fi
 
-# Find installed AWS plugin version directory
-AWS_PLUGIN_DIR=$(find "$PLUGINS_DIR/aws" -mindepth 1 -maxdepth 1 -type d -name "v*" 2>/dev/null | sort -V | tail -n 1)
+# hub_uri reads the baseUri and version from an installed plugin's schema
+# PklProject and emits a PklProject dependency line using the hub URI.
+#
+# Args: <namespace_dir> <pkl_alias> <required: true|false>
+hub_uri() {
+    local ns_dir="$1"
+    local alias="$2"
+    local required="${3:-true}"
 
-if [[ -z "$AWS_PLUGIN_DIR" ]]; then
-    echo "ERROR: AWS plugin not found at $PLUGINS_DIR/aws/"
-    echo "Run 'make install-external-plugins' first."
-    exit 1
-fi
+    local plugin_dir
+    plugin_dir=$(find "$PLUGINS_DIR/$ns_dir" -mindepth 1 -maxdepth 1 -type d -name "v*" 2>/dev/null | sort -V | tail -n 1 || true)
 
-AWS_SCHEMA_DIR="$AWS_PLUGIN_DIR/schema/pkl"
+    if [[ -z "$plugin_dir" ]] || [[ ! -f "$plugin_dir/schema/pkl/PklProject" ]]; then
+        if [[ "$required" == "true" ]]; then
+            echo "ERROR: $alias plugin not found at $PLUGINS_DIR/$ns_dir/"
+            echo "Run 'make install-external-plugins' first."
+            exit 1
+        else
+            echo "WARN: $alias plugin not found at $PLUGINS_DIR/$ns_dir/ — related E2E tests will be skipped" >&2
+            return
+        fi
+    fi
 
-if [[ ! -f "$AWS_SCHEMA_DIR/PklProject" ]]; then
-    echo "ERROR: AWS schema PklProject not found at $AWS_SCHEMA_DIR/PklProject"
-    exit 1
-fi
+    local base_uri version
+    base_uri=$(pkl eval -x 'package.baseUri' "$plugin_dir/schema/pkl/PklProject")
+    version=$(pkl eval -x 'version' "$plugin_dir/formae-plugin.pkl")
+    echo "Using $alias plugin v$version from hub ($base_uri)" >&2
+    echo "  [\"$alias\"] { uri = \"$base_uri@$version\" }"
+}
 
-AWS_VERSION=$(pkl eval -x 'version' "$AWS_PLUGIN_DIR/formae-plugin.pkl")
-echo "Using AWS plugin v$AWS_VERSION from $AWS_SCHEMA_DIR"
+# Resolve plugin schemas from the hub. AWS and Azure are required;
+# compose and grafana are optional (needed for target resolvable tests).
+AWS_DEP=$(hub_uri "aws" "aws" true)
+AZURE_DEP=$(hub_uri "azure" "azure" true)
+COMPOSE_DEP=$(hub_uri "docker" "compose" false)
+GRAFANA_DEP=$(hub_uri "grafana" "grafana" false)
 
-# Find installed Azure plugin version directory
-AZURE_PLUGIN_DIR=$(find "$PLUGINS_DIR/azure" -mindepth 1 -maxdepth 1 -type d -name "v*" 2>/dev/null | sort -V | tail -n 1)
-
-if [[ -z "$AZURE_PLUGIN_DIR" ]]; then
-    echo "ERROR: Azure plugin not found at $PLUGINS_DIR/azure/"
-    echo "Run 'make install-external-plugins' first."
-    exit 1
-fi
-
-AZURE_SCHEMA_DIR="$AZURE_PLUGIN_DIR/schema/pkl"
-
-if [[ ! -f "$AZURE_SCHEMA_DIR/PklProject" ]]; then
-    echo "ERROR: Azure schema PklProject not found at $AZURE_SCHEMA_DIR/PklProject"
-    exit 1
-fi
-
-AZURE_VERSION=$(pkl eval -x 'version' "$AZURE_PLUGIN_DIR/formae-plugin.pkl")
-echo "Using Azure plugin v$AZURE_VERSION from $AZURE_SCHEMA_DIR"
-
-# Generate PklProject with correct paths.
-# AWS and Azure use local paths (they're always installed for E2E).
-# Compose and Grafana use published hub URIs (they're bundled plugins).
+# Generate PklProject. Formae core uses local schema (testing from source);
+# all plugins use published hub URIs.
 cat > "$PKLPROJECT_PATH" << EOF
 amends "pkl:Project"
 
 dependencies {
   ["formae"] = import("../../../../internal/schema/pkl/schema/PklProject")
-  ["aws"] = import("$AWS_SCHEMA_DIR/PklProject")
-  ["azure"] = import("$AZURE_SCHEMA_DIR/PklProject")
-  ["compose"] {
-    uri = "package://hub.platform.engineering/plugins/compose/schema/pkl/compose/compose@0.1.0"
-  }
-  ["grafana"] {
-    uri = "package://hub.platform.engineering/plugins/grafana/schema/pkl/grafana/grafana@0.1.0"
-  }
-}
+$AWS_DEP
+$AZURE_DEP
+${COMPOSE_DEP:+$COMPOSE_DEP
+}${GRAFANA_DEP:+$GRAFANA_DEP
+}}
 EOF
 
 echo "Generated $PKLPROJECT_PATH"
