@@ -535,6 +535,103 @@ func TestGenerateTargetUpdates_ReapplyWithDifferentResolvedValue_Replace(t *test
 	assert.Len(t, updates[0].RemainingResolvables, 1)
 }
 
+func TestDetermineTargetUpdate_MutableConfigChange_GeneratesUpdate(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:     "my-target",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1","Profile":"prod"}`),
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"Region":  {CreateOnly: true},
+				"Profile": {CreateOnly: false},
+			},
+		},
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"my-target": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:     "my-target",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{"Region":"us-east-1","Profile":"staging"}`),
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+}
+
+func TestDetermineTargetUpdate_ImmutableConfigChange_WithSchema_GeneratesReplace(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:     "my-target",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1","Profile":"prod"}`),
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"Region":  {CreateOnly: true},
+				"Profile": {CreateOnly: false},
+			},
+		},
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"my-target": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:     "my-target",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{"Region":"us-west-2","Profile":"prod"}`),
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
+}
+
+func TestDetermineTargetUpdate_ConfigChange_NoSchema_GeneratesReplace(t *testing.T) {
+	existingTarget := &pkgmodel.Target{
+		Label:     "my-target",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+		// No ConfigSchema — backwards compatible: all changes are immutable
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"my-target": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:     "my-target",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{"Region":"us-west-2"}`),
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
+}
+
 func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
 	mockDS := &mockTargetDatastore{
 		targets: map[string]*pkgmodel.Target{

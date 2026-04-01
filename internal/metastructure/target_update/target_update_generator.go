@@ -118,17 +118,35 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			}
 		}
 
-		configChanged, err := tp.configChanged(existing.Config, target.Config, resolvables)
-		if err != nil {
-			return TargetUpdate{}, false, fmt.Errorf("failed to compare target configs: %w", err)
-		}
-
-		if configChanged {
-			operation = TargetOperationReplace
-		} else if existing.Discoverable != target.Discoverable {
-			operation = TargetOperationUpdate
+		if len(resolvables) > 0 {
+			// Configs with $ref resolvables: resolve and compare.
+			// Any change to a resolvable field is treated as immutable (replace).
+			configChanged, err := tp.configChanged(existing.Config, target.Config, resolvables)
+			if err != nil {
+				return TargetUpdate{}, false, fmt.Errorf("failed to compare target configs: %w", err)
+			}
+			if configChanged {
+				operation = TargetOperationReplace
+			} else if existing.Discoverable != target.Discoverable {
+				operation = TargetOperationUpdate
+			} else {
+				return TargetUpdate{}, false, nil
+			}
 		} else {
-			return TargetUpdate{}, false, nil
+			// No resolvables: use per-field config mutability classification.
+			configChange := ClassifyConfigChange(existing.Config, target.Config, existing.ConfigSchema)
+			switch configChange {
+			case ConfigImmutableChange:
+				operation = TargetOperationReplace
+			case ConfigMutableChange:
+				operation = TargetOperationUpdate
+			case ConfigNoChange:
+				if existing.Discoverable != target.Discoverable {
+					operation = TargetOperationUpdate
+				} else {
+					return TargetUpdate{}, false, nil
+				}
+			}
 		}
 	}
 

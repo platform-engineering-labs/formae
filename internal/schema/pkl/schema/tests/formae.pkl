@@ -204,6 +204,60 @@ local testTaskDefNoContainers = new TestTaskDef {
     family = "my-family"
 }
 
+// Test config class with ConfigFieldHint annotations
+local class TestConfig {
+    hidden fixed type: String = "TestProvider"
+
+    @formae.ConfigFieldHint { createOnly = true }
+    hidden region: String
+
+    @formae.ConfigFieldHint { createOnly = false }
+    hidden profile: String?
+
+    // No annotation — should not appear in hints
+    hidden accountId: String?
+
+    fixed Type: String = type
+    fixed Region: String = region
+    fixed Profile: String? = profile
+    fixed AccountId: String? = accountId
+}
+
+// Config class with no ConfigFieldHint annotations
+local class PlainConfig {
+    hidden fixed type: String = "Plain"
+    hidden region: String
+
+    fixed Type: String = type
+    fixed Region: String = region
+}
+
+local testTargetWithSchema = new formae.Target {
+    label = "annotated-target"
+    namespace = "TEST"
+    discoverable = true
+    config = new TestConfig {
+        region = "us-east-1"
+        profile = "prod"
+        accountId = "123456"
+    }
+}
+
+local testTargetPlainConfig = new formae.Target {
+    label = "plain-target"
+    namespace = "PLAIN"
+    discoverable = true
+    config = new PlainConfig {
+        region = "us-east-1"
+    }
+}
+
+local testTargetNoConfig = new formae.Target {
+    label = "no-config-target"
+    namespace = "NONE"
+    discoverable = false
+}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -408,6 +462,42 @@ facts {
         let (props = rendered.Properties)
         props.ContainerDefinitions != null &&
         props.ContainerDefinitions.length == 0
+    }
+
+    ["ConfigSchema generated for annotated config"] {
+        testTargetWithSchema.ConfigSchema != null &&
+        testTargetWithSchema.ConfigSchema.Hints != null &&
+        testTargetWithSchema.ConfigSchema.Hints.length == 2
+    }
+
+    ["ConfigSchema includes immutable field hint"] {
+        testTargetWithSchema.ConfigSchema.Hints.containsKey("Region") &&
+        testTargetWithSchema.ConfigSchema.Hints["Region"].CreateOnly == true
+    }
+
+    ["ConfigSchema includes mutable field hint"] {
+        testTargetWithSchema.ConfigSchema.Hints.containsKey("Profile") &&
+        testTargetWithSchema.ConfigSchema.Hints["Profile"].CreateOnly == false
+    }
+
+    ["ConfigSchema excludes unannotated fields"] {
+        !testTargetWithSchema.ConfigSchema.Hints.containsKey("AccountId") &&
+        !testTargetWithSchema.ConfigSchema.Hints.containsKey("Type")
+    }
+
+    ["ConfigSchema is null for config without annotations"] {
+        testTargetPlainConfig.ConfigSchema == null
+    }
+
+    ["ConfigSchema is null when config is null"] {
+        testTargetNoConfig.ConfigSchema == null
+    }
+
+    ["configHints extracts only annotated fields"] {
+        let (hints = formae.fq.configHints(reflect.Class(TestConfig)))
+        hints.length == 2 &&
+        hints.containsKey("Region") &&
+        hints.containsKey("Profile")
     }
 
     ["Fq functions work at module level"] {

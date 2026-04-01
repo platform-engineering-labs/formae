@@ -6,10 +6,22 @@ package model
 
 import "encoding/json"
 
+// ConfigFieldHint describes mutability characteristics of a target config field.
+// Mirrors FieldHint but scoped to target configuration.
+type ConfigFieldHint struct {
+	CreateOnly bool `json:"CreateOnly" pkl:"CreateOnly"`
+}
+
+// ConfigSchema describes the structure and mutability of a target's config fields.
+type ConfigSchema struct {
+	Hints map[string]ConfigFieldHint `json:"Hints,omitempty" pkl:"Hints,omitempty"`
+}
+
 type Target struct {
 	Label        string          `json:"Label" pkl:"Label"`
 	Namespace    string          `json:"Namespace" pkl:"Namespace"`
 	Config       json.RawMessage `json:"Config,omitempty" pkl:"Config,omitempty"`
+	ConfigSchema ConfigSchema    `json:"ConfigSchema,omitempty" pkl:"ConfigSchema,omitempty"`
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
 }

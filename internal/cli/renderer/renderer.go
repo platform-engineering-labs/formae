@@ -543,12 +543,19 @@ func formatSimulatedTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	var line string
 	if tu.Operation == "create" {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
-	} else if tu.Operation == "update" {
-		discoverableText := "discoverable"
-		if !tu.Discoverable {
-			discoverableText = "not discoverable"
+	} else if tu.Operation == "update" || tu.Operation == "replace" {
+		configDiffs := diffConfigs(tu.ExistingConfig, tu.DesiredConfig)
+		if len(configDiffs) > 0 {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
+		} else if tu.Operation == "update" {
+			discoverableText := "discoverable"
+			if !tu.Discoverable {
+				discoverableText = "not discoverable"
+			}
+			line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
+		} else {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
 		}
-		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
 	} else {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
 	}
@@ -562,6 +569,13 @@ func formatSimulatedTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	if tu.IsCascade && tu.CascadeSource != "" {
 		node.Add(display.Grey("because it depends on ") + display.LightBlue(tu.CascadeSource))
 	}
+
+	// Show config field diffs for update and replace operations
+	if tu.Operation == "update" || tu.Operation == "replace" {
+		for _, diff := range diffConfigs(tu.ExistingConfig, tu.DesiredConfig) {
+			node.Add(display.Grey(diff))
+		}
+	}
 }
 
 // formatTargetUpdate formats a target update for status view
@@ -571,12 +585,19 @@ func formatTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	var line string
 	if tu.Operation == "create" {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
-	} else if tu.Operation == "update" {
-		discoverableText := "discoverable"
-		if !tu.Discoverable {
-			discoverableText = "not discoverable"
+	} else if tu.Operation == "update" || tu.Operation == "replace" {
+		configDiffs := diffConfigs(tu.ExistingConfig, tu.DesiredConfig)
+		if len(configDiffs) > 0 {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
+		} else if tu.Operation == "update" {
+			discoverableText := "discoverable"
+			if !tu.Discoverable {
+				discoverableText = "not discoverable"
+			}
+			line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
+		} else {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
 		}
-		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
 	} else {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
 	}
@@ -584,6 +605,13 @@ func formatTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	line = line + fmt.Sprintf(": %s", coloredUpdateState(tu.State))
 
 	node := root.Add(line)
+
+	// Show config field diffs for update and replace operations
+	if tu.Operation == "update" || tu.Operation == "replace" {
+		for _, diff := range diffConfigs(tu.ExistingConfig, tu.DesiredConfig) {
+			node.Add(display.Grey(diff))
+		}
+	}
 
 	// Use unified status details function (targets don't have attempt counts or status messages currently)
 	addUpdateStatusDetails(node, tu.State, tu.ErrorMessage, "", 0, 0)
@@ -972,6 +1000,60 @@ func RenderInventoryResources(resources []pkgmodel.Resource, maxRows int) (strin
 }
 
 // RenderInventoryTargets renders a list of targets in a table format
+// diffConfigs compares two JSON config objects and returns human-readable
+// lines describing the field-level differences (e.g. "Profile: (none) → staging").
+func diffConfigs(existing, desired json.RawMessage) []string {
+	if len(existing) == 0 || len(desired) == 0 {
+		return nil
+	}
+
+	var existingMap, desiredMap map[string]json.RawMessage
+	if err := json.Unmarshal(existing, &existingMap); err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(desired, &desiredMap); err != nil {
+		return nil
+	}
+
+	allKeys := make(map[string]bool)
+	for k := range existingMap {
+		allKeys[k] = true
+	}
+	for k := range desiredMap {
+		allKeys[k] = true
+	}
+
+	var diffs []string
+	for key := range allKeys {
+		oldVal, oldOK := existingMap[key]
+		newVal, newOK := desiredMap[key]
+
+		oldStr := formatConfigValue(oldVal, oldOK)
+		newStr := formatConfigValue(newVal, newOK)
+
+		if oldStr != newStr {
+			diffs = append(diffs, fmt.Sprintf("%s: %s → %s", key, oldStr, newStr))
+		}
+	}
+
+	sort.Strings(diffs)
+	return diffs
+}
+
+func formatConfigValue(raw json.RawMessage, exists bool) string {
+	if !exists {
+		return "(none)"
+	}
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return string(raw)
+	}
+	if s, ok := val.(string); ok {
+		return s
+	}
+	return string(raw)
+}
+
 func RenderInventoryTargets(targets []*pkgmodel.Target, maxRows int) (string, error) {
 	var buf strings.Builder
 	table := tablewriter.NewTable(&buf,

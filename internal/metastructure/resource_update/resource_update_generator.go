@@ -15,6 +15,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -385,13 +386,15 @@ func generateResourceUpdatesForApply(
 
 			// Skip raw config comparison when config contains resolvables ($ref).
 			// The TargetUpdateGenerator handles resolvable-aware comparison.
-			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 &&
-				!util.JsonEqualRaw(existingTarget.Config, target.Config) {
-				return nil, apimodel.TargetAlreadyExistsError{
-					TargetLabel:    target.Label,
-					MismatchType:   "config",
-					ExistingConfig: existingTarget.Config,
-					FormaConfig:    target.Config,
+			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 {
+				configChange := target_update.ClassifyConfigChange(existingTarget.Config, target.Config, existingTarget.ConfigSchema)
+				if configChange == target_update.ConfigImmutableChange {
+					return nil, apimodel.TargetAlreadyExistsError{
+						TargetLabel:    target.Label,
+						MismatchType:   "config",
+						ExistingConfig: existingTarget.Config,
+						FormaConfig:    target.Config,
+					}
 				}
 			}
 		}

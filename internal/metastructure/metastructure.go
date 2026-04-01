@@ -576,17 +576,24 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			dur = tu.ModifiedTs.Sub(tu.StartTs)
 		}
 
+		var existingConfig json.RawMessage
+		if tu.ExistingTarget != nil {
+			existingConfig = tu.ExistingTarget.Config
+		}
+
 		apiCommand.TargetUpdates = append(apiCommand.TargetUpdates, apimodel.TargetUpdate{
-			TargetLabel:   tu.Target.Label,
-			Operation:     string(tu.Operation),
-			State:         string(tu.State),
-			Duration:      dur.Milliseconds(),
-			ErrorMessage:  tu.ErrorMessage,
-			Discoverable:  tu.Target.Discoverable,
-			StartTs:       tu.StartTs,
-			ModifiedTs:    tu.ModifiedTs,
-			IsCascade:     tu.IsCascade,
-			CascadeSource: tu.CascadeSource,
+			TargetLabel:    tu.Target.Label,
+			Operation:      string(tu.Operation),
+			State:          string(tu.State),
+			Duration:       dur.Milliseconds(),
+			ErrorMessage:   tu.ErrorMessage,
+			Discoverable:   tu.Target.Discoverable,
+			ExistingConfig: existingConfig,
+			DesiredConfig:  tu.Target.Config,
+			StartTs:        tu.StartTs,
+			ModifiedTs:     tu.ModifiedTs,
+			IsCascade:      tu.IsCascade,
+			CascadeSource:  tu.CascadeSource,
 		})
 	}
 

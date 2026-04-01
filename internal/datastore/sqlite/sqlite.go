@@ -2370,8 +2370,16 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 		return "", err
 	}
 
-	query := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES (?, 1, ?, ?, ?)`
-	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, datastore.BoolToInt(target.Discoverable))
+	var configSchemaJSON []byte
+	if len(target.ConfigSchema.Hints) > 0 {
+		configSchemaJSON, err = json.Marshal(target.ConfigSchema)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (?, 1, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable))
 	if err != nil {
 		slog.Error("Failed to create target", "error", err, "label", target.Label)
 		return "", err
@@ -2403,8 +2411,16 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 		return "", err
 	}
 
-	insertQuery := `INSERT INTO targets (label, version, namespace, config, discoverable) VALUES (?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, datastore.BoolToInt(target.Discoverable))
+	var configSchemaJSON []byte
+	if len(target.ConfigSchema.Hints) > 0 {
+		configSchemaJSON, err = json.Marshal(target.ConfigSchema)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	insertQuery := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable))
 	if err != nil {
 		slog.Error("Failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -2466,24 +2482,33 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	_, span := sqliteTracer.Start(context.Background(), "LoadTarget")
 	defer span.End()
 
-	query := `SELECT version, namespace, config, discoverable FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
+	query := `SELECT version, namespace, config, config_schema, discoverable FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, label)
 
 	var version int
 	var namespace string
 	var config json.RawMessage
+	var configSchemaStr sql.NullString
 	var discoverable int
-	if err := row.Scan(&version, &namespace, &config, &discoverable); err != nil {
+	if err := row.Scan(&version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Target not found, return nil without error
 		}
 		return nil, err
 	}
 
+	var configSchema pkgmodel.ConfigSchema
+	if configSchemaStr.Valid {
+		if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+		}
+	}
+
 	return &pkgmodel.Target{
 		Label:        label,
 		Namespace:    namespace,
 		Config:       config,
+		ConfigSchema: configSchema,
 		Discoverable: discoverable == 1,
 		Version:      version,
 	}, nil
@@ -2499,7 +2524,7 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	var targets []*pkgmodel.Target
 
 	query := `
-		SELECT label, version, namespace, config, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2518,15 +2543,24 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		var label, namespace string
 		var version int
 		var config json.RawMessage
+		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
 			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if configSchemaStr.Valid {
+			if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
 		}
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
 		})
@@ -2552,7 +2586,7 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	}
 
 	query := fmt.Sprintf(`
-		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable
+		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable
 		FROM targets t1
 		WHERE t1.label IN (%s)
 		AND NOT EXISTS (
@@ -2573,15 +2607,24 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 		var label, namespace string
 		var version int
 		var config json.RawMessage
+		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
 			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if configSchemaStr.Valid {
+			if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
 		}
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
 		})
@@ -2598,7 +2641,7 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 	// Deduplicate by config across all namespaces
 	query := `
 		WITH latest_targets AS (
-			SELECT label, version, namespace, config, discoverable
+			SELECT label, version, namespace, config, config_schema, discoverable
 			FROM targets t1
 			WHERE discoverable = 1
 			AND NOT EXISTS (
@@ -2608,7 +2651,7 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 				AND t2.version > t1.version
 			)
 		)
-		SELECT label, version, namespace, config, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable
 		FROM latest_targets
 		GROUP BY config
 		HAVING version = MAX(version)`
@@ -2624,15 +2667,24 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		var label, ns string
 		var version int
 		var config json.RawMessage
+		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &ns, &config, &discoverable); err != nil {
+		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaStr, &discoverable); err != nil {
 			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if configSchemaStr.Valid {
+			if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
 		}
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    ns,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
 		})
@@ -2646,7 +2698,7 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 	defer span.End()
 
 	queryStr := `
-		SELECT label, version, namespace, config, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2675,15 +2727,24 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 		var label, namespace string
 		var version int
 		var config json.RawMessage
+		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
 			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if configSchemaStr.Valid {
+			if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
 		}
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
 		})
@@ -3141,7 +3202,7 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, version, namespace, config, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -3164,15 +3225,24 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 		var label, namespace string
 		var version int
 		var config json.RawMessage
+		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &discoverable); err != nil {
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
 			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if configSchemaStr.Valid {
+			if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
 		}
 
 		target := &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
 		}
