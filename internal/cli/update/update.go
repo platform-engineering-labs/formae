@@ -58,13 +58,13 @@ func UpdateCmd() *cobra.Command {
 			}
 
 			// init root if needed
-			if orb.Ready() != true {
-				fmt.Println(fmt.Sprintf("no managed installation root detected at: %s", root))
+			if !orb.Ready() {
+				fmt.Printf("no managed installation root detected at: %s\n", root)
 				fmt.Print("initialize? [y/n]: ")
 				var response string
 
-				fmt.Scanln(&response)
-				if strings.ToLower(response) != "y" {
+				_, err := fmt.Scanln(&response)
+				if strings.ToLower(response) != "y" || err != nil {
 					return nil
 				}
 
@@ -111,7 +111,7 @@ func UpdateCmd() *cobra.Command {
 				}
 
 				if candidate == nil {
-					return fmt.Errorf(fmt.Sprintf("could not find formae version: %s", version))
+					return fmt.Errorf("could not find formae version: %s", version)
 				}
 			}
 
@@ -176,8 +176,8 @@ func UpdateListCmd() *cobra.Command {
 			}
 
 			// init root if needed
-			if orb.Ready() != true {
-				fmt.Println(fmt.Sprintf("no managed installation root detected at: %s", root))
+			if !orb.Ready() {
+				fmt.Printf("no managed installation root detected at: %s\n", root)
 			}
 
 			available, err := orb.Available()
@@ -187,7 +187,7 @@ func UpdateListCmd() *cobra.Command {
 
 			fmt.Print("available formae versions:\n\n")
 			for _, entry := range available["formae"].Available {
-				fmt.Println(fmt.Sprintf("  %s", entry.Version.String()))
+				fmt.Printf("  %s\n", entry.Version.String())
 			}
 
 			return nil

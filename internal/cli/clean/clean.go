@@ -38,8 +38,8 @@ func CleanCmd() *cobra.Command {
 			}
 
 			// init root if needed
-			if orb.Ready() != true {
-				fmt.Println(fmt.Sprintf("no managed installation root detected at: %s", root))
+			if !orb.Ready() {
+				fmt.Printf("no managed installation root detected at: %s\n", root)
 			}
 
 			fmt.Println("done.")
