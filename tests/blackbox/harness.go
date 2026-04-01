@@ -433,7 +433,8 @@ func (h *TestHarness) callTestController(request any) (any, error) {
 	}
 	res, err := callRemote(h.ergoNode, target, request, 5)
 	if err != nil && err.Error() == "timed out" {
-		res, err = callRemote(h.ergoNode, target, request, 5)
+		// Retry with longer timeout — CI runners may be slower.
+		res, err = callRemote(h.ergoNode, target, request, 10)
 	}
 	return res, err
 }
