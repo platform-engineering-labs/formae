@@ -86,6 +86,7 @@ func UpdateCmd() *cobra.Command {
 
 			var candidate *records.Package
 			var hasUpdate bool
+			var hasVersion bool
 
 			if version == "" {
 				if hasUpdate, candidate = available["formae"].HasUpdate(); !hasUpdate {
@@ -99,18 +100,7 @@ func UpdateCmd() *cobra.Command {
 					return fmt.Errorf("could not parse version: %w", err)
 				}
 
-				for _, pkg := range available["formae"].Available {
-					if pkg.Version.EXQ(v) {
-						candidate = pkg
-						break
-					}
-					if pkg.Version.EQ(v) {
-						candidate = pkg
-						break
-					}
-				}
-
-				if candidate == nil {
+				if hasVersion, candidate = available["formae"].HasVersion(v); !hasVersion {
 					return fmt.Errorf("could not find formae version: %s", version)
 				}
 			}
@@ -140,6 +130,7 @@ func UpdateCmd() *cobra.Command {
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	command.AddCommand(UpdateListCmd())
 
+	command.Flags().String("channel", "", "Override update channel")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
@@ -195,6 +186,7 @@ func UpdateListCmd() *cobra.Command {
 	}
 
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
+	command.Flags().String("channel", "", "Override update channel")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
