@@ -1,0 +1,86 @@
+name: schema-prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Schema version to publish (e.g., 0.83.1)"
+        required: true
+        type: string
+      source_branch:
+        description: "Branch to build schema from (default: main)"
+        required: false
+        default: "main"
+        type: string
+      dry_run:
+        description: "Dry run (package only, don't publish to S3)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  publish_schema:
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: package_pkl
+      cancel-in-progress: false
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: version must be semver format (e.g., 0.83.1)"
+            exit 1
+          fi
+
+      - name: Install pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Set version and resolve
+        run: |
+          echo '${{ inputs.version }}' > ./version.semver
+          pkl project resolve internal/schema/pkl/schema
+
+      - name: Package schema
+        run: pkl project package ./internal/schema/pkl/schema --skip-publish-check
+
+      - name: Show package contents
+        run: ls -la .out/formae@${{ inputs.version }}/
+
+      - name: Configure AWS Credentials
+        if: ${{ !inputs.dry_run }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::897722706215:role/github-pel
+          role-session-name: SchemaPrerelease
+
+      - name: Publish schema to S3
+        if: ${{ !inputs.dry_run }}
+        run: aws s3 sync .out/formae@${{ inputs.version }} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
+
+      - name: Summary
+        run: |
+          echo "## Schema Pre-release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source branch:** ${{ inputs.source_branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "- **Status:** Packaged only (not published)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Status:** Published to \`package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
