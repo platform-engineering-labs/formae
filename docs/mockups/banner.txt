@@ -20,9 +20,12 @@ VIEW 1: Full banner (non-TUI commands, e.g., start of apply/destroy)
   ⣿⣿⣿⣿⣿⣿⣿⣿
 
   Notes:
-  - Propeller icon in orange (SecondaryAccent)
-  - "formae" text + version to the right
-  - Braille art to be crafted from the actual logo in terminal prototype
+  - Propeller icon in orange #FF8201
+  - "form" text in navy #02024B (light bg) / blue #60A5FA (dark bg)
+    Uses lipgloss.AdaptiveColor for automatic switching via termenv
+  - "ae" is the propeller icon — not text
+  - Version number to the right
+  - Braille art rendered from the actual logo PNG in terminal prototype
   - Sixel/Kitty: renders the actual PNG at appropriate size
   - Shown before simulation output, status output, etc.
 
