@@ -13,42 +13,53 @@
 VIEW 1: Multi-command summary (default when viewing multiple commands)
 ================================================================================
 
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  formae status command                                            ↻ live   │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  ID            Type              Mode        Progress        Duration State │
-  │  ─────────────────────────────────────────────────────────────────────────  │
-  │  cmd-abc123    apply             reconcile   ██████▓▓░░ 12/15  00:42       │
-  │  cmd-def456    destroy                       ██████████  8/8   00:15  Done  │
-  │  cmd-ghi789    apply             patch       ▓▓░░░░░░░░  0/3   00:02       │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  enter: drill in  /: search  q: quit                               ?: help │
-  └─────────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  formae status command                                             ↻ live   │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │                                                                              │
+  │       ID            Type     Mode       Progress              ✓  ✗  ◐  ·  Time│
+  │  ─────────────────────────────────────────────────────────────────────────── │
+  │  ✗   cmd-ghi789    apply    patch      █░░░░░░░░░░░░░░░░░░   1  1  0  1  00:33│
+  │  ✗   cmd-jkl012    apply    reconcile  █████████░░▓▓░░░░░░   5  2  2  3  01:58│
+  │      cmd-abc123    apply    reconcile  █████████████▓▓░░░░  10  0  2  3  00:42│
+  │  ✓   cmd-def456    destroy             ████████████████████   8  0  0  0  00:15│
+  │                                                                              │
+  │                                                                              │
+  │                                                                              │
+  │                                                                              │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │  enter: drill in  s: sort  ↑↓/j/k: navigate  q: quit              ?: help   │
+  └──────────────────────────────────────────────────────────────────────────────┘
 
   Notes:
-  - "↻ live" indicator when actively polling
+  - Status column on far left — failed (✗ red) and done (✓ green) visible
+    immediately. In-progress commands have no status symbol (the bar speaks)
+  - Default sort by status urgency: failed → in-progress → done
+  - s: cycle sort column. Active sort column shows indicator (e.g. Time▼)
+    Default sort (by status) has no indicator
+  - Sortable columns: Status, Time, Progress, ID
   - Progress bar is segmented by status:
     █ = done, █ (red) = failed, ▓ = in-progress, ░ = pending
   - Bar color shifts based on aggregate health:
     Neutral (orange) = all in-progress, nothing done or failed yet
     Green = some done, no failures
     Red = any failed (stays red for rest of command lifecycle)
-  - N/M count: N takes the bar's color (green/red/neutral), M stays neutral
-  - "Done" state in bright white, active commands in dim white
-  - No state label shown for in-progress commands (the bar speaks)
-  - Pending commands show empty progress bar + dark gray text
+  - Per-status count columns: ✓ (done), ✗ (failed), ◐ (in-progress), · (pending)
+    Each column header and its numbers inherit the status color
+    Zeros rendered in subtle/gray
+  - Bar is elastic — fills remaining space after fixed columns
+  - "↻ live" indicator when actively polling
   - Press enter to drill into a command's single detail view
+
+  Responsive column priority (what drops as terminal narrows):
+  - Always visible: Status, ID, Progress bar (min ~10 chars), ✓, ✗, Time
+  - Medium drops: Mode, ◐, ·
+  - Narrow drops: Type — just Status + ID + bar + ✓ + ✗ + Time
+
+  ASCII fallback (TERM=dumb):
+  - Column headers: OK  FL  IP  PD instead of ✓  ✗  ◐  ·
+  - Bar: [====---....] instead of █████▓▓░░░
+  - Status: OK / FL instead of ✓ / ✗
 
 
 ================================================================================
@@ -336,19 +347,19 @@ When auto-follow is disabled (user scrolled manually):
 VIEW 8: Command complete state
 ================================================================================
 
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  formae status command                                          ✓ complete │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  ID            Type              Mode        Progress        Duration State │
-  │  ─────────────────────────────────────────────────────────────────────────  │
-  │  cmd-abc123    apply             reconcile   ██████████ 15/15  01:23  Done  │
-  │  cmd-def456    destroy                       ██████████   8/8  00:15  Done  │
-  │  cmd-ghi789    apply             patch       ██████████   3/3  00:08  Done  │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  All commands completed. Press q to exit.                                   │
-  └─────────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  formae status command                                         ✓ complete   │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │                                                                              │
+  │       ID            Type     Mode       Progress             ✓  ✗  ◐  ·  Time│
+  │  ─────────────────────────────────────────────────────────────────────────── │
+  │  ✓   cmd-abc123    apply    reconcile  ████████████████████  15  0  0  0  01:23│
+  │  ✓   cmd-def456    destroy             ████████████████████   8  0  0  0  00:15│
+  │  ✓   cmd-ghi789    apply    patch      ████████████████████   3  0  0  0  00:08│
+  │                                                                              │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │  All commands completed. Press q to exit.                                    │
+  └──────────────────────────────────────────────────────────────────────────────┘
 
 
 ================================================================================
@@ -426,7 +437,7 @@ COLOR KEY
   Progress bar empty         #555555 (dark gray)  #808080 (gray)
   Progress bar in-progress   #AAAAAA (dim)        #ADD8E6 (light blue)
   N in N/M count             matches bar color    matches bar color
-  Done text                 #E8E8E8 (bright)     #00FF00 (green)
+  Done text/symbol          #4ADE80 (green)      #00FF00 (green)
   In-progress text/spinner  #AAAAAA (dim)        #ADD8E6 (light blue)
   Pending text              #555555 (dark gray)  #808080 (gray)
   Failed text               #F87171 (red)        #FF6666 (red)

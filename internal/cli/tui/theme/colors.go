@@ -26,8 +26,8 @@ type Palette struct {
 	Error   lipgloss.AdaptiveColor // red — failures
 	Warning lipgloss.AdaptiveColor // yellow/gold — drift, warnings
 
-	// State colors (brightness-based, not hue-based)
-	Done       lipgloss.AdaptiveColor // bright white
+	// State colors
+	Done       lipgloss.AdaptiveColor // green — success
 	InProgress lipgloss.AdaptiveColor // dim/medium white
 	Pending    lipgloss.AdaptiveColor // dark gray
 }
@@ -46,7 +46,7 @@ func FormaePalette() Palette {
 		SecondaryAccent: lipgloss.AdaptiveColor{Light: "#FF6B00", Dark: "#FF8533"},
 		Error:           lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"},
 		Warning:         lipgloss.AdaptiveColor{Light: "#B5B55B", Dark: "#B5B55B"},
-		Done:            lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#E8E8E8"},
+		Done:            lipgloss.AdaptiveColor{Light: "#16A34A", Dark: "#4ADE80"},
 		InProgress:      lipgloss.AdaptiveColor{Light: "#444444", Dark: "#AAAAAA"},
 		Pending:         lipgloss.AdaptiveColor{Light: "#999999", Dark: "#555555"},
 	}

@@ -6,12 +6,14 @@
 // Run: go run ./docs/mockups/prototypes/status/
 //
 // Multi-command summary + single command drill-in views with hardcoded data.
-// enter: drill in, esc: back, d: toggle detail/summary, ↑↓/j/k: scroll, q: quit
+// enter: drill in, esc: back, d: toggle detail/summary, s: cycle sort,
+// ↑↓/j/k: scroll, q: quit
 package main
 
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,6 +74,56 @@ func isTerminalState(s updateState) bool {
 	return s == stateDone || s == stateFailed || s == stateSkipped
 }
 
+// -- Sort --
+
+type sortColumn int
+
+const (
+	sortByStatus sortColumn = iota
+	sortByTime
+	sortByProgress
+	sortByID
+	sortColumnCount // sentinel for cycling
+)
+
+func sortCommands(cmds []fakeCommand, col sortColumn) {
+	sort.SliceStable(cmds, func(i, j int) bool {
+		switch col {
+		case sortByStatus:
+			return statusPriority(cmds[i]) < statusPriority(cmds[j])
+		case sortByTime:
+			return cmds[i].Duration > cmds[j].Duration
+		case sortByProgress:
+			pi := progressPct(cmds[i])
+			pj := progressPct(cmds[j])
+			return pi < pj
+		case sortByID:
+			return cmds[i].ID < cmds[j].ID
+		}
+		return false
+	})
+}
+
+func statusPriority(cmd fakeCommand) int {
+	switch cmd.State {
+	case "Failed":
+		return 0
+	case "InProgress":
+		return 1
+	case "Done":
+		return 2
+	}
+	return 3
+}
+
+func progressPct(cmd fakeCommand) float64 {
+	completed, total := countCompleted(cmd.Updates)
+	if total == 0 {
+		return 0
+	}
+	return float64(completed) / float64(total)
+}
+
 // -- Model --
 
 type viewMode int
@@ -89,6 +141,7 @@ type model struct {
 	cursor   int
 	selected int
 	detail   bool
+	sortCol  sortColumn
 	spinner  spinner.Model
 	vp       viewport.Model
 	width    int
@@ -103,9 +156,13 @@ func newModel() *model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
 
+	cmds := fakeCommands()
+	sortCommands(cmds, sortByStatus)
+
 	return &model{
 		theme:    th,
-		commands: fakeCommands(),
+		commands: cmds,
+		sortCol:  sortByStatus,
 		spinner:  s,
 		width:    80,
 		height:   24,
@@ -157,6 +214,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
 			m.detail = !m.detail
+			return m, nil
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
+			if m.view == viewMultiCommand {
+				m.sortCol = (m.sortCol + 1) % sortColumnCount
+				sortCommands(m.commands, m.sortCol)
+			}
 			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("j", "down"))):
@@ -211,6 +275,44 @@ func (m *model) View() string {
 	return ""
 }
 
+// -- Status counts for a command --
+
+type statusCounts struct {
+	done       int
+	failed     int
+	inProgress int
+	pending    int
+}
+
+func countStatuses(updates []fakeUpdate) statusCounts {
+	var c statusCounts
+	for _, u := range updates {
+		switch u.State {
+		case stateDone:
+			c.done++
+		case stateFailed, stateSkipped:
+			c.failed++
+		case stateInProgress:
+			c.inProgress++
+		case statePending:
+			c.pending++
+		}
+	}
+	return c
+}
+
+// -- Bar color based on health --
+
+func barHealthColor(sc statusCounts, p theme.Palette) lipgloss.AdaptiveColor {
+	if sc.failed > 0 {
+		return p.Error
+	}
+	if sc.done > 0 {
+		return p.Done
+	}
+	return p.SecondaryAccent
+}
+
 // -- Multi-command view --
 
 func (m *model) viewMultiCommand() string {
@@ -220,10 +322,38 @@ func (m *model) viewMultiCommand() string {
 	// Header
 	header := renderHeaderBar("formae status command", "↻ live", p, w)
 
-	// Column headers — leading space matches the ▌ marker in rows
-	colLine := lipgloss.NewStyle().Foreground(p.TextSecondary).Render(
-		fmt.Sprintf(" %-15s%-10s%-10s%-14s %-6s %-6s %s",
-			"ID", "Type", "Mode", "Progress", "", "Time", "State"))
+	// Column headers
+	// Fixed columns: status(3) + ID(14) + Type(9) + Mode(11) + bar(elastic) + ✓(4) + ✗(4) + ◐(4) + ·(4) + Time(6)
+	sortIndicator := ""
+	if m.sortCol != sortByStatus {
+		switch m.sortCol {
+		case sortByTime:
+			sortIndicator = " Time▼"
+		case sortByProgress:
+			sortIndicator = " Progress▼"
+		case sortByID:
+			sortIndicator = " ID▼"
+		}
+	}
+
+	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	bw := barWidth(w)
+
+	// Build column header with manual padding to avoid ANSI width issues
+	colLine := "     " +
+		padRight(dimStyle.Render("ID"), 14) +
+		padRight(dimStyle.Render("Type"), 9) +
+		padRight(dimStyle.Render("Mode"), 11) +
+		padRight(dimStyle.Render("Progress"), bw) +
+		" " +
+		padRight(lipgloss.NewStyle().Foreground(p.Done).Render("✓"), 4) +
+		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
+		padRight(lipgloss.NewStyle().Foreground(p.InProgress).Render("◐"), 4) +
+		padRight(lipgloss.NewStyle().Foreground(p.Pending).Render("·"), 4) +
+		"  " + dimStyle.Render("Time")
+	if sortIndicator != "" {
+		colLine += lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(sortIndicator)
+	}
 
 	// Rows
 	var rows []string
@@ -234,6 +364,7 @@ func (m *model) viewMultiCommand() string {
 	// Footer
 	footer := m.renderFooter(w, []keyHint{
 		{"enter", "drill in"},
+		{"s", "sort"},
 		{"↑↓/j/k", "navigate"},
 		{"q", "quit"},
 	}, "")
@@ -253,17 +384,27 @@ func (m *model) viewMultiCommand() string {
 	return b.String()
 }
 
+func barWidth(termWidth int) int {
+	// Fixed columns take ~60 chars; bar gets the rest
+	// status(3) + ID(14) + Type(9) + Mode(11) + counts(4*4=16) + Time(6) + spacing(~5)
+	fixed := 64
+	bw := termWidth - fixed
+	if bw < 10 {
+		bw = 10
+	}
+	return bw
+}
+
 func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	p := m.theme.Palette
 
-	completed, total := countCompleted(cmd.Updates)
-	barWidth := 14
+	sc := countStatuses(cmd.Updates)
+	total := sc.done + sc.failed + sc.inProgress + sc.pending
+	bw := barWidth(w)
 
-	// For highlighted rows, every styled element needs the background color set
-	// so the highlight is continuous across the entire row
 	bg := lipgloss.Color("")
 	if isCursor {
-		bg = lipgloss.Color("237") // ANSI 256 dark gray
+		bg = lipgloss.Color("237")
 	}
 
 	withBg := func(s lipgloss.Style) lipgloss.Style {
@@ -273,41 +414,92 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 		return s
 	}
 
-	idStyle := withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent)).Width(15)
-	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
-	plainStyle := withBg(lipgloss.NewStyle())
-
-	id := idStyle.Render(cmd.ID)
-	cmdType := plainStyle.Width(10).Render(cmd.CmdType)
-	mode := plainStyle.Width(10).Render(cmd.Mode)
-	bar := renderProgressBarWithBg(completed, total, barWidth, p, bg, isCursor)
-	count := plainStyle.Width(6).Render(fmt.Sprintf("%d/%d", completed, total))
-	dur := dimStyle.Width(6).Render(formatDuration(cmd.Duration))
-
-	// State
-	var stateStr string
+	// Status symbol (far left)
+	var statusSym string
 	switch cmd.State {
-	case "Done":
-		stateStr = withBg(lipgloss.NewStyle().Foreground(p.Done)).Render("Done")
 	case "Failed":
-		stateStr = withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("Failed")
-	case "InProgress":
-		stateStr = withBg(lipgloss.NewStyle().Foreground(p.InProgress)).Render("in-progress")
+		statusSym = withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗")
+	case "Done":
+		statusSym = withBg(lipgloss.NewStyle().Foreground(p.Done)).Render("✓")
+	default:
+		statusSym = " "
 	}
 
-	marker := plainStyle.Render(" ")
+	idStyle := withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent))
+	plainStyle := withBg(lipgloss.NewStyle())
+	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+	subtleStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
 
-	sp := plainStyle.Render(" ")
+	id := padRight(idStyle.Render(cmd.ID), 14)
+	cmdType := padRight(plainStyle.Render(cmd.CmdType), 9)
+	mode := padRight(plainStyle.Render(cmd.Mode), 11)
+	bar := renderSegmentedBar(sc, total, bw, p, bg, isCursor)
+	dur := padRight(dimStyle.Render(formatDuration(cmd.Duration)), 6)
 
-	row := marker + id + cmdType + mode + bar + sp + count + sp + dur + sp + stateStr
+	// Per-status count columns, colored
+	healthColor := barHealthColor(sc, p)
+	renderCount := func(n int, color lipgloss.AdaptiveColor) string {
+		s := withBg(lipgloss.NewStyle())
+		if n == 0 {
+			return padRight(s.Foreground(p.TextSubtle).Render("0"), 4)
+		}
+		return padRight(s.Foreground(color).Render(fmt.Sprintf("%d", n)), 4)
+	}
 
-	// Pad the rest of the row with background color
+	doneCol := renderCount(sc.done, healthColor)
+	failCol := renderCount(sc.failed, p.Error)
+	ipCol := renderCount(sc.inProgress, p.InProgress)
+	pendCol := renderCount(sc.pending, p.Pending)
+
+	row := "  " + statusSym + "  " + id + cmdType + mode + bar + " " + doneCol + failCol + ipCol + pendCol + "  " + dur
+
+	// Pad the rest with background
 	rowWidth := lipgloss.Width(row)
 	if rowWidth < w {
-		row += plainStyle.Render(strings.Repeat(" ", w-rowWidth))
+		row += subtleStyle.Render(strings.Repeat(" ", w-rowWidth))
 	}
 
 	return row
+}
+
+// -- Segmented progress bar --
+
+func renderSegmentedBar(sc statusCounts, total, width int, p theme.Palette, bg lipgloss.Color, hasBg bool) string {
+	if total == 0 {
+		emptyStyle := lipgloss.NewStyle().Foreground(p.Pending)
+		if hasBg {
+			emptyStyle = emptyStyle.Background(bg)
+		}
+		return emptyStyle.Render(strings.Repeat("░", width))
+	}
+
+	healthColor := barHealthColor(sc, p)
+
+	// Calculate segment widths proportionally
+	doneW := width * sc.done / total
+	failW := width * sc.failed / total
+	ipW := width * sc.inProgress / total
+	pendW := width - doneW - failW - ipW
+	if pendW < 0 {
+		pendW = 0
+	}
+
+	doneStyle := lipgloss.NewStyle().Foreground(healthColor)
+	failStyle := lipgloss.NewStyle().Foreground(p.Error)
+	ipStyle := lipgloss.NewStyle().Foreground(p.InProgress)
+	pendStyle := lipgloss.NewStyle().Foreground(p.Pending)
+
+	if hasBg {
+		doneStyle = doneStyle.Background(bg)
+		failStyle = failStyle.Background(bg)
+		ipStyle = ipStyle.Background(bg)
+		pendStyle = pendStyle.Background(bg)
+	}
+
+	return doneStyle.Render(strings.Repeat("█", doneW)) +
+		failStyle.Render(strings.Repeat("█", failW)) +
+		ipStyle.Render(strings.Repeat("▓", ipW)) +
+		pendStyle.Render(strings.Repeat("░", pendW))
 }
 
 // -- Single command view --
@@ -318,7 +510,9 @@ func (m *model) viewSingleCommand() string {
 	w := m.width
 
 	cmd := m.commands[m.selected]
-	completed, total := countCompleted(cmd.Updates)
+	sc := countStatuses(cmd.Updates)
+	total := sc.done + sc.failed + sc.inProgress + sc.pending
+	completed := sc.done + sc.failed
 
 	// Header
 	header := renderHeaderBar("← esc", "↻ live", p, w)
@@ -332,17 +526,15 @@ func (m *model) viewSingleCommand() string {
 		padBetween(w, "  "+cmdTitle+"  "+cmdID, elapsed+"  ") + elapsed + "  "
 
 	// Progress bar
-	barWidth := w - 22
-	if barWidth < 10 {
-		barWidth = 10
+	singleBarWidth := w - 22
+	if singleBarWidth < 10 {
+		singleBarWidth = 10
 	}
-	bar := renderProgressBar(completed, total, barWidth, p)
-	progressLine := fmt.Sprintf("  %s  %s", bar,
-		lipgloss.NewStyle().Foreground(p.TextSecondary).Render(
-			fmt.Sprintf("%d/%d updates", completed, total)))
-
-	// State counts
-	countsLine := "  " + renderStateCounts(cmd.Updates, p)
+	bar := renderSegmentedBar(sc, total, singleBarWidth, p, lipgloss.Color(""), false)
+	healthColor := barHealthColor(sc, p)
+	countStr := lipgloss.NewStyle().Foreground(healthColor).Render(fmt.Sprintf("%d", completed)) +
+		lipgloss.NewStyle().Foreground(p.TextSecondary).Render(fmt.Sprintf("/%d updates", total))
+	progressLine := fmt.Sprintf("  %s  %s", bar, countStr)
 
 	// Build scrollable body
 	var body strings.Builder
@@ -394,7 +586,6 @@ func (m *model) viewSingleCommand() string {
 	return header + "\n" +
 		infoLine + "\n" +
 		progressLine + "\n" +
-		countsLine + "\n" +
 		m.vp.View() + "\n" +
 		footer
 }
@@ -471,16 +662,16 @@ func (m *model) renderStateIndicator(u fakeUpdate) string {
 	p := m.theme.Palette
 	switch u.State {
 	case stateDone:
-		return lipgloss.NewStyle().Foreground(p.Done).Render("Done")
+		return lipgloss.NewStyle().Foreground(p.Done).Render("✓")
 	case stateInProgress:
 		return lipgloss.NewStyle().Foreground(p.InProgress).Render(
 			m.spinner.View() + " " + formatDuration(u.Duration))
 	case statePending:
 		return lipgloss.NewStyle().Foreground(p.Pending).Render("·")
 	case stateFailed:
-		return lipgloss.NewStyle().Foreground(p.Error).Bold(true).Render("FAILED")
+		return lipgloss.NewStyle().Foreground(p.Error).Bold(true).Render("✗")
 	case stateSkipped:
-		return lipgloss.NewStyle().Foreground(p.TextSecondary).Render("Skipped")
+		return lipgloss.NewStyle().Foreground(p.TextSecondary).Render("⊘")
 	}
 	return ""
 }
@@ -499,60 +690,6 @@ func renderHeaderBar(left, right string, p theme.Palette, w int) string {
 		BorderBottom(true).
 		BorderForeground(p.Border).
 		Render(content)
-}
-
-func renderProgressBar(completed, total, width int, p theme.Palette) string {
-	return renderProgressBarWithBg(completed, total, width, p, lipgloss.Color(""), false)
-}
-
-func renderProgressBarWithBg(completed, total, width int, p theme.Palette, bg lipgloss.Color, hasBg bool) string {
-	fillChar := "━"
-	emptyChar := "─"
-
-	fillStyle := lipgloss.NewStyle().Foreground(p.SecondaryAccent)
-	emptyStyle := lipgloss.NewStyle().Foreground(p.Pending)
-	if hasBg {
-		fillStyle = fillStyle.Background(bg)
-		emptyStyle = emptyStyle.Background(bg)
-	}
-
-	if total == 0 {
-		return emptyStyle.Render(strings.Repeat(emptyChar, width))
-	}
-
-	filled := width * completed / total
-	if filled > width {
-		filled = width
-	}
-	empty := width - filled
-
-	return fillStyle.Render(strings.Repeat(fillChar, filled)) +
-		emptyStyle.Render(strings.Repeat(emptyChar, empty))
-}
-
-func renderStateCounts(updates []fakeUpdate, p theme.Palette) string {
-	counts := map[updateState]int{}
-	for _, u := range updates {
-		counts[u.State]++
-	}
-	sep := lipgloss.NewStyle().Foreground(p.TextSubtle).Render(" · ")
-	var parts []string
-	if n := counts[stateDone]; n > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(p.Done).Render(fmt.Sprintf("%d done", n)))
-	}
-	if n := counts[stateInProgress]; n > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(p.InProgress).Render(fmt.Sprintf("%d in-progress", n)))
-	}
-	if n := counts[statePending]; n > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(p.Pending).Render(fmt.Sprintf("%d pending", n)))
-	}
-	if n := counts[stateFailed]; n > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(p.Error).Bold(true).Render(fmt.Sprintf("%d failed", n)))
-	}
-	if n := counts[stateSkipped]; n > 0 {
-		parts = append(parts, lipgloss.NewStyle().Foreground(p.TextSecondary).Render(fmt.Sprintf("%d skipped", n)))
-	}
-	return strings.Join(parts, sep)
 }
 
 func formatLabel(u fakeUpdate, p theme.Palette) string {
@@ -603,8 +740,8 @@ func (m *model) renderFooter(w int, hints []keyHint, scrollInfo string) string {
 
 // -- Helpers --
 
-// fixedWidth pads or truncates a string (ANSI-aware) to exactly w visible chars.
-func fixedWidth(s string, w int) string {
+// padRight pads a (possibly styled) string to exactly w visible characters.
+func padRight(s string, w int) string {
 	visible := lipgloss.Width(s)
 	if visible >= w {
 		return s
@@ -685,6 +822,24 @@ func fakeCommands() []fakeCommand {
 				{Kind: kindResource, Operation: "update", Label: "api-config", TypeName: "AWS::SSM::Parameter", Stack: "production", State: stateDone, Duration: 2 * time.Second},
 				{Kind: kindResource, Operation: "delete", Label: "old-data", TypeName: "AWS::S3::Bucket", Stack: "production", State: stateFailed, Duration: 4 * time.Second, Attempt: 9, MaxAttempts: 9, ErrorMessage: "BucketNotEmpty: The bucket is not empty"},
 				{Kind: kindResource, Operation: "delete", Label: "old-logs", TypeName: "AWS::S3::Bucket", Stack: "production", State: stateSkipped, CascadeSrc: "old-data"},
+			},
+		},
+		{
+			ID: "cmd-jkl012", CmdType: "apply", Mode: "reconcile",
+			State: "InProgress", Duration: 118 * time.Second,
+			Updates: []fakeUpdate{
+				{Kind: kindTarget, Operation: "create", Label: "aws-eu-west-1", State: stateDone, Duration: 3 * time.Second},
+				{Kind: kindStack, Operation: "create", Label: "staging", State: stateDone, Duration: 1 * time.Second},
+				{Kind: kindResource, Operation: "create", Label: "vpc", TypeName: "AWS::EC2::VPC", Stack: "staging", State: stateDone, Duration: 10 * time.Second},
+				{Kind: kindResource, Operation: "create", Label: "subnet-a", TypeName: "AWS::EC2::Subnet", Stack: "staging", State: stateDone, Duration: 8 * time.Second},
+				{Kind: kindResource, Operation: "create", Label: "subnet-b", TypeName: "AWS::EC2::Subnet", Stack: "staging", State: stateDone, Duration: 7 * time.Second},
+				{Kind: kindResource, Operation: "create", Label: "rds-primary", TypeName: "AWS::RDS::DBInstance", Stack: "staging", State: stateFailed, Duration: 45 * time.Second, Attempt: 9, MaxAttempts: 9, ErrorMessage: "InsufficientDBInstanceCapacity"},
+				{Kind: kindResource, Operation: "create", Label: "rds-replica", TypeName: "AWS::RDS::DBInstance", Stack: "staging", State: stateSkipped, CascadeSrc: "rds-primary"},
+				{Kind: kindResource, Operation: "create", Label: "cache", TypeName: "AWS::ElastiCache::CacheCluster", Stack: "staging", State: stateInProgress, Duration: 30 * time.Second, Attempt: 1, MaxAttempts: 9, StatusMsg: "Creating cache cluster..."},
+				{Kind: kindResource, Operation: "create", Label: "api-gw", TypeName: "AWS::ApiGateway::RestApi", Stack: "staging", State: stateInProgress, Duration: 15 * time.Second, Attempt: 1, MaxAttempts: 9, StatusMsg: "Creating API..."},
+				{Kind: kindResource, Operation: "create", Label: "lambda-auth", TypeName: "AWS::Lambda::Function", Stack: "staging", State: statePending},
+				{Kind: kindResource, Operation: "create", Label: "lambda-api", TypeName: "AWS::Lambda::Function", Stack: "staging", State: statePending},
+				{Kind: kindResource, Operation: "create", Label: "dns", TypeName: "AWS::Route53::RecordSet", Stack: "staging", State: statePending},
 			},
 		},
 	}
