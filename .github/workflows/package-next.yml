@@ -29,7 +29,7 @@ env:
   OPS_PKG_CRT: ${{ secrets.OPS_PKG_CRT }}
   OPS_PKG_KEY: ${{ secrets.OPS_PKG_KEY }}
   OPS_TREE_CONF: ${{ secrets.OPS_TREE_CONF }}
-  OPS_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'dev' }}
+  OPS_CHANNEL: ${{ (github.event.repository.name == 'formae-internal' && 'internal') || (startsWith(github.ref, 'refs/tags/') && 'stable') || 'dev' }}
 
 jobs:
   pkg_linux_arm64:
