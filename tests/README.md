@@ -59,14 +59,13 @@ behavior. Supports:
 - Plugin gate (blocks all CRUD until the harness signals readiness)
 
 **State model** (`state_model.go`): A deterministic model that tracks expected
-resource states. Updated from:
+resource states. Updated exclusively from:
 1. Optimistic predictions at command submission time
-2. Command response corrections from the agent API
-3. Inventory existence checks at assertion boundaries (crash recovery, TTL)
+2. Command response corrections from the agent API (per-resource-update outcomes)
 
-The model explicitly does NOT use inventory to drive state updates during
-normal operation — it relies on command responses to maintain an independent
-view that can be compared against reality at assertion time.
+The model never reads inventory to update its state — it relies entirely on
+command responses to maintain an independent view that can be compared against
+inventory at assertion time.
 
 ### Resource Topology
 
@@ -137,21 +136,23 @@ go test -C tests/blackbox -tags=integration -run TestSmoke -v
 
 ### Deterministic Model Design
 
-The state model tracks resource existence and properties without relying on
-inventory polling during normal operation. This makes the model deterministic
-and fast, but requires careful handling of edge cases:
+The state model tracks resource existence and properties without ever reading
+inventory. This makes the model fully deterministic and independently
+verifiable, but requires careful handling of edge cases:
 
 **Command response corrections**: After each command completes, the model
-processes per-resource states from the response. For failed commands, resources
-are reverted to their pre-command snapshot state.
+processes per-resource-update outcomes. Successful creates/deletes update the
+model; failed/canceled resources revert to their pre-command snapshot state.
+Commands are processed in reverse order (newest first) so the latest outcome
+wins when multiple commands target the same resource.
 
 **Authoritative slots**: TTL destroy marks slots as authoritative — subsequent
 stale commands cannot override the destroyed state. Only explicit creates
 (from new commands or SetupStacks) clear the authoritative flag.
 
-**Crash recovery**: After a crash+restart, the model reconciles against
-inventory because command responses during crash recovery are unreliable
-(ReRunIncompleteCommands may re-execute operations the model didn't track).
+**Crash recovery**: After a crash+restart, the model processes
+ReRunIncompleteCommands responses the same way as normal commands. The crash
+window operations are tracked via command response corrections, not inventory.
 
 **Cross-stack resources**: The model skips cross-stack slots in model-vs-
 inventory assertions because their persistence behavior in failed commands
