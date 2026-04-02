@@ -301,18 +301,6 @@ func countStatuses(updates []fakeUpdate) statusCounts {
 	return c
 }
 
-// -- Bar color based on health --
-
-func barHealthColor(sc statusCounts, p theme.Palette) lipgloss.AdaptiveColor {
-	if sc.failed > 0 {
-		return p.Error
-	}
-	if sc.done > 0 {
-		return p.Done
-	}
-	return p.SecondaryAccent
-}
-
 // -- Multi-command view --
 
 func (m *model) viewMultiCommand() string {
@@ -437,7 +425,6 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	dur := padRight(dimStyle.Render(formatDuration(cmd.Duration)), 6)
 
 	// Per-status count columns, colored
-	healthColor := barHealthColor(sc, p)
 	renderCount := func(n int, color lipgloss.AdaptiveColor) string {
 		s := withBg(lipgloss.NewStyle())
 		if n == 0 {
@@ -446,7 +433,7 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 		return padRight(s.Foreground(color).Render(fmt.Sprintf("%d", n)), 4)
 	}
 
-	doneCol := renderCount(sc.done, healthColor)
+	doneCol := renderCount(sc.done, p.Done)
 	failCol := renderCount(sc.failed, p.Error)
 	ipCol := renderCount(sc.inProgress, p.InProgress)
 	pendCol := renderCount(sc.pending, p.Pending)
@@ -473,8 +460,6 @@ func renderSegmentedBar(sc statusCounts, total, width int, p theme.Palette, bg l
 		return emptyStyle.Render(strings.Repeat("░", width))
 	}
 
-	healthColor := barHealthColor(sc, p)
-
 	// Calculate segment widths proportionally
 	doneW := width * sc.done / total
 	failW := width * sc.failed / total
@@ -484,7 +469,9 @@ func renderSegmentedBar(sc statusCounts, total, width int, p theme.Palette, bg l
 		pendW = 0
 	}
 
-	doneStyle := lipgloss.NewStyle().Foreground(healthColor)
+	// Distinct characters per state — colorblind-safe by density:
+	// █ (solid) > ▒ (hatched) > ░ (light) > ⋅ (dots)
+	doneStyle := lipgloss.NewStyle().Foreground(p.Done)
 	failStyle := lipgloss.NewStyle().Foreground(p.Error)
 	ipStyle := lipgloss.NewStyle().Foreground(p.InProgress)
 	pendStyle := lipgloss.NewStyle().Foreground(p.Pending)
@@ -497,9 +484,9 @@ func renderSegmentedBar(sc statusCounts, total, width int, p theme.Palette, bg l
 	}
 
 	return doneStyle.Render(strings.Repeat("█", doneW)) +
-		failStyle.Render(strings.Repeat("█", failW)) +
-		ipStyle.Render(strings.Repeat("▓", ipW)) +
-		pendStyle.Render(strings.Repeat("░", pendW))
+		failStyle.Render(strings.Repeat("▒", failW)) +
+		ipStyle.Render(strings.Repeat("░", ipW)) +
+		pendStyle.Render(strings.Repeat("⋅", pendW))
 }
 
 // -- Single command view --
@@ -531,9 +518,8 @@ func (m *model) viewSingleCommand() string {
 		singleBarWidth = 10
 	}
 	bar := renderSegmentedBar(sc, total, singleBarWidth, p, lipgloss.Color(""), false)
-	healthColor := barHealthColor(sc, p)
-	countStr := lipgloss.NewStyle().Foreground(healthColor).Render(fmt.Sprintf("%d", completed)) +
-		lipgloss.NewStyle().Foreground(p.TextSecondary).Render(fmt.Sprintf("/%d updates", total))
+	countStr := lipgloss.NewStyle().Foreground(p.TextSecondary).Render(
+		fmt.Sprintf("%d/%d updates", completed, total))
 	progressLine := fmt.Sprintf("  %s  %s", bar, countStr)
 
 	// Build scrollable body

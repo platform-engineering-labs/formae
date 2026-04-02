@@ -282,3 +282,26 @@ Fields not relevant for simulation:
     ErrorMessage: all pending, not yet executed
   - ResourceID: internal
   - StartTs/ModifiedTs: not started yet
+
+
+================================================================================
+TODO: Non-interactive single-shot mode (from RFC PR review)
+================================================================================
+
+  All commands must still work as non-interactive single shots with improved
+  rendering. A single apply without --watch in non-interactive mode needs to
+  output reasonable collapsed or expanded detail like we do right now.
+
+  For apply/destroy non-interactive (--yes, no --watch):
+  - Show simulation preview as styled print-and-exit (lipgloss, no bubbletea)
+  - Auto-confirm with --yes
+  - Submit command, print command ID and summary
+  - No live watch — just "Command submitted: cmd-abc123"
+  - Smart collapse for large simulations (same logic, just printed once)
+
+  For status non-interactive (no --watch):
+  - Print current state as a styled table (lipgloss), then exit
+  - Same column layout as TUI (status, ID, type, mode, bar, counts, time)
+  - Progress bars rendered as static text
+
+  Needs mockup views showing the non-interactive output for each command.

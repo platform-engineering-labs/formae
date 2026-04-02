@@ -96,7 +96,16 @@ VIEW 2: Extract output
   - If no PklProject found in directory tree: prompt to create one
     (see simulation-preview.txt View 0)
   - Summary lists what was extracted
-  - Future: smarter distribution across project structure
+
+  TODO: Extract needs a major redesign (from RFC PR review):
+  - Extract needs a full TUI mode, not just "improved formatting"
+  - Remove the side-effect of writing the target file directly — the current
+    behavior creates a side effect that should change
+  - Support a discover/extract loop to help users build up an external code
+    repository according to some template / structure we suggest
+  - Allow extracting into existing formas, not just new files
+  - This will likely need its own dedicated mockup file (extract-tui.txt)
+    with multiple views covering the full interactive workflow
 
 
 ================================================================================
@@ -133,10 +142,12 @@ VIEW 3: Status agent output
   - Row 1: Structure, Commands, Resources
   - Row 2: Resource Types, Resource Errors (only shown if errors exist)
   - Color coding preserved from current implementation:
-    Successes in green (classic) or bright white (formae theme)
-    Failures in red
-    In Progress in gray
-    Managed/Unmanaged % colored by threshold (0% green, ≤75% gold, >75% red)
+    Successes: ✓ green (classic) or bright white (formae theme)
+    Failures: ✗ red
+    In Progress: ◐ gray
+    Managed/Unmanaged % with threshold label:
+      ✓ 0% (green), ⚠ ≤75% (gold), ✗ >75% (red)
+      Symbol + color ensures colorblind accessibility
   - Responsive: on narrow terminals, tables stack vertically instead of
     side-by-side
   - Data from Stats struct: Version, AgentID, Clients, Commands, States,
@@ -151,3 +162,25 @@ VIEW 3: Status agent output
   - Resource Types and Resource Errors can be long lists — need to figure
     out truncation, scrolling, or collapsing for these panels
   - Overall layout may need restructuring once we see it rendered
+
+
+================================================================================
+TODO: Nags (from RFC PR review)
+================================================================================
+
+  Nags are informational/warning messages shown alongside command output
+  (e.g., "you have unmanaged resources", "new version available").
+
+  Current behavior: nags are printed as plain text lines. They need to be
+  preserved and improved in the new TUI:
+
+  - Nags should be clickable/interactive in TUI mode:
+    e.g., the "unmanaged resources" nag should expand/collapse a list
+    of those resources when clicked/selected
+  - Output blocks with links: existing ticket to add pics to link lines
+    and make them "clickable" in TUI mode
+  - Non-interactive mode: nags still print as styled text (lipgloss)
+  - This is a cross-cutting concern — nags can appear in status output,
+    apply output, and other commands
+  - Needs its own mockup views showing: collapsed nag, expanded nag,
+    nag with clickable links, non-interactive nag rendering

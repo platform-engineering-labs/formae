@@ -17,7 +17,7 @@ VIEW 1: Cancel submitted — without --watch
 
   Canceling 1 command:
 
-    cmd-abc123  apply reconcile  ██████▓▓░░ 12/15  00:42
+    cmd-abc123  apply reconcile  ██████░░⋅⋅ 12/15  00:42
 
   What to expect:
     ·  8 updates already completed — these will not be rolled back
@@ -45,10 +45,10 @@ VIEW 2: Cancel submitted — multiple commands, without --watch
 
   Canceling 2 commands:
 
-    cmd-abc123  apply reconcile  ██████▓▓░░ 12/15  00:42
+    cmd-abc123  apply reconcile  ██████░░⋅⋅ 12/15  00:42
       · 8 completed · 2 in progress (will finish) · 5 pending (will cancel)
 
-    cmd-def456  apply patch      ██▓░░░░░░░  2/6   00:08
+    cmd-def456  apply patch      ██░⋅⋅⋅⋅⋅⋅⋅  2/6   00:08
       · 2 completed · 1 in progress (will finish) · 3 pending (will cancel)
 
   To watch the cancellation progress:
@@ -71,18 +71,18 @@ difference is how cancellation states render in the watch view:
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123  (canceling)                 elapsed: 00:45   │
-  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
+  │  ██████████████████████████████████░░░░░⋅⋅⋅⋅⋅  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Resources                                                                  │
-  │    create  my-bucket (AWS::S3::Bucket)                                Done  │
-  │    create  web-1 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-2 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-3 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-4 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-5 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-6 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-7 (AWS::EC2::Instance)                                 Done  │
+  │    create  my-bucket (AWS::S3::Bucket)                                ✓  │
+  │    create  web-1 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-2 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-3 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-4 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-5 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-6 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-7 (AWS::EC2::Instance)                                 ✓  │
   │    update  primary (AWS::RDS::DBInstance)                       ◐ finishing │
   │    create  cdn (AWS::CloudFront::Distribution)                  ◐ finishing │
   │    create  web-8 (AWS::EC2::Instance)                             Canceled  │
@@ -102,7 +102,7 @@ difference is how cancellation states render in the watch view:
     "finishing" = in-progress, will complete then stop
     "canceling" = pending updates that won't execute
   - Status indicators:
-    Done = bright white (completed before cancel)
+    ✓ = green (completed before cancel)
     ◐ finishing = dim white (in-progress, completing)
     Canceled = gray (will not execute)
   - Once all "finishing" updates complete, the command transitions to
@@ -120,7 +120,7 @@ VIEW 4: Cancel complete (final state in watch view)
   │  ██████████████████████████████████████████████  10/15 updates             │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
-  │  (same resource list, all "finishing" now "Done", "canceling" now           │
+  │  (same resource list, all "finishing" now "✓", "canceling" now           │
   │   "Canceled")                                                               │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤

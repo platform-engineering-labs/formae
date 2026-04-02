@@ -19,9 +19,9 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
   │                                                                              │
   │       ID            Type     Mode       Progress              ✓  ✗  ◐  ·  Time│
   │  ─────────────────────────────────────────────────────────────────────────── │
-  │  ✗   cmd-ghi789    apply    patch      █░░░░░░░░░░░░░░░░░░   1  1  0  1  00:33│
-  │  ✗   cmd-jkl012    apply    reconcile  █████████░░▓▓░░░░░░   5  2  2  3  01:58│
-  │      cmd-abc123    apply    reconcile  █████████████▓▓░░░░  10  0  2  3  00:42│
+  │  ✗   cmd-ghi789    apply    patch      █▒⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅   1  1  0  1  00:33│
+  │  ✗   cmd-jkl012    apply    reconcile  █████████▒▒░░⋅⋅⋅⋅⋅   5  2  2  3  01:58│
+  │      cmd-abc123    apply    reconcile  █████████████░░⋅⋅⋅⋅  10  0  2  3  00:42│
   │  ✓   cmd-def456    destroy             ████████████████████   8  0  0  0  00:15│
   │                                                                              │
   │                                                                              │
@@ -38,12 +38,13 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
   - s: cycle sort column. Active sort column shows indicator (e.g. Time▼)
     Default sort (by status) has no indicator
   - Sortable columns: Status, Time, Progress, ID
-  - Progress bar is segmented by status:
-    █ = done, █ (red) = failed, ▓ = in-progress, ░ = pending
-  - Bar color shifts based on aggregate health:
-    Neutral (orange) = all in-progress, nothing done or failed yet
-    Green = some done, no failures
-    Red = any failed (stays red for rest of command lifecycle)
+  - Progress bar is segmented by status, using distinct characters AND colors:
+    █ (green) = done/skipped, ▒ (red) = failed, ░ (light gray) = in-progress,
+    ⋅ (dark gray) = pending
+  - Characters provide density hierarchy (solid → hatched → light → dots)
+    so the bar is readable without color — colorblind-safe by default
+  - Colors reinforce but don't carry the meaning alone:
+    Green = done, Red = failed, Light gray = in-progress, Dark gray = pending
   - Per-status count columns: ✓ (done), ✗ (failed), ◐ (in-progress), · (pending)
     Each column header and its numbers inherit the status color
     Zeros rendered in subtle/gray
@@ -58,7 +59,8 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
 
   ASCII fallback (TERM=dumb):
   - Column headers: OK  FL  IP  PD instead of ✓  ✗  ◐  ·
-  - Bar: [====---....] instead of █████▓▓░░░
+  - Bar: [====XX--....] instead of ████▒▒░░⋅⋅⋅⋅
+    = done, X failed, - in-progress, . pending
   - Status: OK / FL instead of ✓ / ✗
 
 
@@ -70,29 +72,29 @@ VIEW 2: Single command detail — summary mode (after pressing 'enter')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
-  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
+  │  ██████████████████████████████████░░░░░⋅⋅⋅⋅⋅  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Targets                                                                    │
-  │    create  aws-us-east-1                                              Done  │
+  │    create  aws-us-east-1                                              ✓  │
   │                                                                             │
   │  Stacks                                                                     │
-  │    create  production                                                 Done  │
+  │    create  production                                                 ✓  │
   │                                                                             │
   │  Policies                                                                   │
-  │    update  auto-reconcile (ttl, production)                           Done  │
+  │    update  auto-reconcile (ttl, production)                           ✓  │
   │                                                                             │
   │  Resources                                                                  │
   │    create  my-bucket (AWS::S3::Bucket)                           ◐ 00:05  │
-  │    create  web-1 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-2 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-1 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-2 (AWS::EC2::Instance)                                 ✓  │
   │    update  primary (AWS::RDS::DBInstance)                        ◐ 00:12  │
-  │    create  web-3 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-4 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-5 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-6 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-7 (AWS::EC2::Instance)                                 Done  │
-  │    create  web-8 (AWS::EC2::Instance)                                 Done  │
+  │    create  web-3 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-4 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-5 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-6 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-7 (AWS::EC2::Instance)                                 ✓  │
+  │    create  web-8 (AWS::EC2::Instance)                                 ✓  │
   │    create  cdn (AWS::CloudFront::Distribution)                        ·     │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤
@@ -101,15 +103,17 @@ VIEW 2: Single command detail — summary mode (after pressing 'enter')
 
   Notes:
   - Header shows command type, mode, ID, elapsed time
-  - Segmented progress bar: █ done (green), ▓ in-progress (neutral), ░ pending
-    N/M where N is colored by bar health (green/red/neutral)
+  - Segmented progress bar with colorblind-safe characters:
+    █ (green) = done, ▒ (red) = failed, ░ (light gray) = in-progress,
+    ⋅ (dark gray) = pending
   - No separate status count line — bar segments encode the breakdown
     Exact counts available via enter to drill into detail view
   - Updates grouped by type: Targets, Stacks, Resources, Policies
   - Resources: operation + label (type) — stack omitted in summary (usually one stack)
   - Policies: operation + label (policyType, stackLabel)
-  - Status indicators: Done (bright white), ◐ (in-progress, dim white),
-    · (pending, dark gray), ✗ (failed, red), ⊘ (skipped, secondary)
+  - Status indicators (symbol + color, colorblind-safe):
+    ✓ (done, green), ◐ (in-progress, dim), · (pending, dark gray),
+    ✗ (failed, red), ⊘ (skipped, gray)
   - ← esc returns to multi-command list
 
 
@@ -121,23 +125,23 @@ VIEW 3: Single command — expanded detail mode (after pressing 'd')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
-  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
+  │  ██████████████████████████████████░░░░░⋅⋅⋅⋅⋅  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Targets                                                                    │
-  │  ┌─ create aws-us-east-1 ─────────────────────────────────────── Done ──┐  │
+  │  ┌─ create aws-us-east-1 ─────────────────────────────────────── ✓ ──┐  │
   │  │  Discoverable: yes                                                    │  │
   │  │  Duration:     3s                                                     │  │
   │  └───────────────────────────────────────────────────────────────────────┘  │
   │                                                                             │
   │  Stacks                                                                     │
-  │  ┌─ create production ────────────────────────────────────────── Done ──┐  │
+  │  ┌─ create production ────────────────────────────────────────── ✓ ──┐  │
   │  │  Description:  Production environment                                 │  │
   │  │  Duration:     1s                                                     │  │
   │  └───────────────────────────────────────────────────────────────────────┘  │
   │                                                                             │
   │  Policies                                                                   │
-  │  ┌─ update auto-reconcile (ttl, production) ──────────────── Done ─────┐  │
+  │  ┌─ update auto-reconcile (ttl, production) ──────────────── ✓ ─────┐  │
   │  │  Type:     ttl                                                        │  │
   │  │  Stack:    production                                                 │  │
   │  │  Duration: 1s                                                         │  │
@@ -152,7 +156,7 @@ VIEW 3: Single command — expanded detail mode (after pressing 'd')
   │  │  Status:   Creating resource...                                       │  │
   │  └───────────────────────────────────────────────────────────────────────┘  │
   │                                                                             │
-  │  ┌─ create web-1 (AWS::EC2::Instance) ─────────────────────── Done ────┐  │
+  │  ┌─ create web-1 (AWS::EC2::Instance) ─────────────────────── ✓ ────┐  │
   │  │  Type:     AWS::EC2::Instance                                         │  │
   │  │  Stack:    production                                                 │  │
   │  │  Duration: 8s                                                         │  │
@@ -240,11 +244,11 @@ When a command has more updates than fit in the viewport, groups are collapsed:
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  █████████████████████████████░██░░░░░░░░░░░░░  142/200 updates            │
+  │  █████████████████████████████▒▒▒⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅  142/200 updates            │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
-  │  ▸ Targets (2)                                                  2/2 Done   │
-  │  ▸ Stacks (3)                                                   3/3 Done   │
+  │  ▸ Targets (2)                                                  2/2 ✓      │
+  │  ▸ Stacks (3)                                                   3/3 ✓      │
   │  ▾ Resources (192)                                                          │
   │    ▸ Creates (150)                                          140/150        │
   │    ▸ Updates (35)                                             0/35         │
@@ -257,9 +261,9 @@ When a command has more updates than fit in the viewport, groups are collapsed:
   │        Depends on: legacy-2 (failed)                                       │
   │      delete  old-role (AWS::IAM::Role)                        ◐ 00:03     │
   │      delete  old-policy (AWS::IAM::Policy)                          ·      │
-  │      delete  deprecated (AWS::Lambda::Function)                     Done   │
-  │      delete  old-alarm (AWS::CloudWatch::Alarm)                     Done   │
-  │  ▸ Policies (3)                                                 2/3 Done   │
+  │      delete  deprecated (AWS::Lambda::Function)                     ✓      │
+  │      delete  old-alarm (AWS::CloudWatch::Alarm)                     ✓      │
+  │  ▸ Policies (3)                                                 2/3 ✓      │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │  d: detail  f: filter  /: search  F: auto-follow                  ?: help  │
@@ -282,7 +286,7 @@ VIEW 5: Filter active (after pressing 'f')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  █████████████████████████████░██░░░░░░░░░░░░░  142/200 updates            │
+  │  █████████████████████████████▒▒▒⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅  142/200 updates            │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Filter: [failed]  ▸done ▸in-progress ▸pending ●failed ▸skipped            │
@@ -311,7 +315,7 @@ VIEW 6: Search active (after pressing '/')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
-  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
+  │  ██████████████████████████████████░░░░░⋅⋅⋅⋅⋅  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  /: S3█                                                                     │
@@ -370,7 +374,7 @@ VIEW 9: Failed command final state
   │  ← esc                                                          ✓ complete │
   │                                                                             │
   │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  █████████████████████████████░██░░░░░░░░░░░░░  142/200 updates            │
+  │  █████████████████████████████▒▒▒⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅  142/200 updates            │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Resources                                                                  │
@@ -431,12 +435,10 @@ COLOR KEY
   ────────────────────────────────────────────────────────────
   Panel borders             #333355 (dark blue)  #444444 (gray)
   Command ID                #60A5FA (blue)       #ADD8E6 (light blue)
-  Progress bar — neutral     #F59E0B (orange)     #B5B55B (gold)
-  Progress bar — healthy     #4ADE80 (green)      #00FF00 (green)
-  Progress bar — failed      #F87171 (red)        #FF6666 (red)
-  Progress bar empty         #555555 (dark gray)  #808080 (gray)
-  Progress bar in-progress   #AAAAAA (dim)        #ADD8E6 (light blue)
-  N in N/M count             matches bar color    matches bar color
+  Progress bar █ done        #4ADE80 (green)      #00FF00 (green)
+  Progress bar ▒ failed      #F87171 (red)        #FF6666 (red)
+  Progress bar ░ in-progress #AAAAAA (dim)        #ADD8E6 (light blue)
+  Progress bar ⋅ pending     #555555 (dark gray)  #808080 (gray)
   Done text/symbol          #4ADE80 (green)      #00FF00 (green)
   In-progress text/spinner  #AAAAAA (dim)        #ADD8E6 (light blue)
   Pending text              #555555 (dark gray)  #808080 (gray)
@@ -447,3 +449,15 @@ COLOR KEY
   Keybinding keys           #60A5FA (blue)       #ADD8E6 (light blue)
   Keybinding descriptions   #555555 (subtle)     #555555 (gray)
   Failed card border        #F87171 (red)        #FF6666 (red)
+
+
+================================================================================
+TODO: Keybindings review (from RFC PR review)
+================================================================================
+
+  Most keybindings are cryptic — arrows and esc are fine, the rest is
+  questionable. Review all keybindings for discoverability:
+  - Arrows + esc: universally understood, keep as-is
+  - Single-letter shortcuts (d, f, s, F): not obvious without the footer
+  - Consider: are the footer hints sufficient, or do we need a ? help overlay?
+  - Review if any shortcuts conflict or are surprising
