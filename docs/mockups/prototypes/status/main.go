@@ -154,7 +154,7 @@ func newModel() *model {
 	th := theme.New("formae")
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
+	s.Style = lipgloss.NewStyle().Foreground(th.Palette.InProgress)
 
 	cmds := fakeCommands()
 	sortCommands(cmds, sortByStatus)
@@ -205,7 +205,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+		case key.Matches(msg, key.NewBinding(key.WithKeys("esc", "backspace"))):
 			if m.view == viewSingleCommand {
 				m.view = viewMultiCommand
 				m.cursor = m.selected
@@ -330,14 +330,14 @@ func (m *model) viewMultiCommand() string {
 	// Build column header with manual padding to avoid ANSI width issues
 	colLine := "     " +
 		padRight(dimStyle.Render("ID"), 14) +
-		padRight(dimStyle.Render("Type"), 9) +
+		padRight(dimStyle.Render("Command"), 9) +
 		padRight(dimStyle.Render("Mode"), 11) +
 		padRight(dimStyle.Render("Progress"), bw) +
 		" " +
 		padRight(lipgloss.NewStyle().Foreground(p.Done).Render("✓"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.InProgress).Render("◐"), 4) +
-		padRight(lipgloss.NewStyle().Foreground(p.Pending).Render("·"), 4) +
+		padRight(lipgloss.NewStyle().Foreground(p.Pending).Render("○"), 4) +
 		"  " + dimStyle.Render("Time")
 	if sortIndicator != "" {
 		colLine += lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(sortIndicator)
@@ -392,7 +392,7 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 
 	bg := lipgloss.Color("")
 	if isCursor {
-		bg = lipgloss.Color("237")
+		bg = lipgloss.Color("239") // visible but not overpowering
 	}
 
 	withBg := func(s lipgloss.Style) lipgloss.Style {
@@ -402,15 +402,29 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 		return s
 	}
 
-	// Status symbol (far left)
+	// Status symbol (far left) — fixed width column
+	padSym := func(s string, w int) string {
+		if isCursor {
+			return padRightBg(s, w, bg)
+		}
+		return padRight(s, w)
+	}
 	var statusSym string
 	switch cmd.State {
 	case "Failed":
-		statusSym = withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗")
+		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗"), 2)
 	case "Done":
-		statusSym = withBg(lipgloss.NewStyle().Foreground(p.Done)).Render("✓")
+		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Done)).Render("✓"), 2)
+	case "InProgress":
+		// Get spinner view, then wrap it with background if cursor
+		spinView := m.spinner.View()
+		if isCursor {
+			// Strip existing style and re-wrap with background
+			spinView = lipgloss.NewStyle().Background(bg).Render(spinView)
+		}
+		statusSym = padSym(spinView, 2)
 	default:
-		statusSym = " "
+		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Pending)).Render("○"), 2)
 	}
 
 	idStyle := withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent))
@@ -418,19 +432,38 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	subtleStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
 
-	id := padRight(idStyle.Render(cmd.ID), 14)
-	cmdType := padRight(plainStyle.Render(cmd.CmdType), 9)
-	mode := padRight(plainStyle.Render(cmd.Mode), 11)
-	bar := renderSegmentedBar(sc, total, bw, p, bg, isCursor)
-	dur := padRight(dimStyle.Render(formatDuration(cmd.Duration)), 6)
+	pad := func(s string, w int) string {
+		if isCursor {
+			return padRightBg(s, w, bg)
+		}
+		return padRight(s, w)
+	}
+
+	id := pad(idStyle.Render(cmd.ID), 14)
+	cmdType := pad(plainStyle.Render(cmd.CmdType), 9)
+	mode := pad(plainStyle.Render(cmd.Mode), 11)
+	dur := pad(dimStyle.Render(formatDuration(cmd.Duration)), 6)
+
+	// Progress area: bar + N/total for in-progress, "completed N/N" for terminal
+	isTerminal := cmd.State == "Done" || cmd.State == "Failed"
+	var progressArea string
+	if isTerminal {
+		completedText := fmt.Sprintf("completed %d/%d", total, total)
+		progressArea = pad(subtleStyle.Render(completedText), bw+7)
+	} else {
+		bar := renderSegmentedBar(sc, total, bw, p, bg, isCursor)
+		done := sc.done + sc.failed
+		countStr := dimStyle.Render(fmt.Sprintf("%d/%d", done, total))
+		progressArea = bar + pad("", 1) + pad(countStr, 6)
+	}
 
 	// Per-status count columns, colored
 	renderCount := func(n int, color lipgloss.AdaptiveColor) string {
 		s := withBg(lipgloss.NewStyle())
 		if n == 0 {
-			return padRight(s.Foreground(p.TextSubtle).Render("0"), 4)
+			return pad(s.Foreground(p.TextSubtle).Render("0"), 4)
 		}
-		return padRight(s.Foreground(color).Render(fmt.Sprintf("%d", n)), 4)
+		return pad(s.Foreground(color).Render(fmt.Sprintf("%d", n)), 4)
 	}
 
 	doneCol := renderCount(sc.done, p.Done)
@@ -438,12 +471,25 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	ipCol := renderCount(sc.inProgress, p.InProgress)
 	pendCol := renderCount(sc.pending, p.Pending)
 
-	row := "  " + statusSym + "  " + id + cmdType + mode + bar + " " + doneCol + failCol + ipCol + pendCol + "  " + dur
+	// Build row — use bg-colored spaces for cursor rows
+	sp := " "
+	sp2 := "  "
+	if isCursor {
+		bgStyle := lipgloss.NewStyle().Background(bg)
+		sp = bgStyle.Render(" ")
+		sp2 = bgStyle.Render("  ")
+	}
 
-	// Pad the rest with background
+	row := sp2 + statusSym + sp2 + id + cmdType + mode + progressArea + sp + doneCol + failCol + ipCol + pendCol + sp2 + dur
+
+	// Pad the rest to full width
 	rowWidth := lipgloss.Width(row)
 	if rowWidth < w {
-		row += subtleStyle.Render(strings.Repeat(" ", w-rowWidth))
+		if isCursor {
+			row += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", w-rowWidth))
+		} else {
+			row += strings.Repeat(" ", w-rowWidth)
+		}
 	}
 
 	return row
@@ -493,57 +539,75 @@ func renderSegmentedBar(sc statusCounts, total, width int, p theme.Palette, bg l
 
 func (m *model) viewSingleCommand() string {
 	p := m.theme.Palette
-	s := m.theme.Styles
 	w := m.width
 
 	cmd := m.commands[m.selected]
-	sc := countStatuses(cmd.Updates)
-	total := sc.done + sc.failed + sc.inProgress + sc.pending
-	completed := sc.done + sc.failed
+	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
 
 	// Header
-	header := renderHeaderBar("← esc", "↻ live", p, w)
+	header := renderHeaderBar("← esc/backspace", "↻ live", p, w)
 
-	// Command info line
-	cmdTitle := s.Title.Render(fmt.Sprintf("%s %s", cmd.CmdType, cmd.Mode))
-	cmdID := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(cmd.ID)
-	elapsed := lipgloss.NewStyle().Foreground(p.TextSecondary).Render(
-		fmt.Sprintf("elapsed: %s", formatDuration(cmd.Duration)))
-	infoLine := "  " + cmdTitle + "  " + cmdID +
-		padBetween(w, "  "+cmdTitle+"  "+cmdID, elapsed+"  ") + elapsed + "  "
+	// Reuse the same command row from the multi-command view
+	bw := barWidth(w)
+	cmdColHeader := "     " +
+		padRight(dimStyle.Render("ID"), 14) +
+		padRight(dimStyle.Render("Command"), 9) +
+		padRight(dimStyle.Render("Mode"), 11) +
+		padRight(dimStyle.Render("Progress"), bw) +
+		" " +
+		padRight(lipgloss.NewStyle().Foreground(p.Done).Render("✓"), 4) +
+		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
+		padRight(lipgloss.NewStyle().Foreground(p.InProgress).Render("◐"), 4) +
+		padRight(lipgloss.NewStyle().Foreground(p.Pending).Render("○"), 4) +
+		"  " + dimStyle.Render("Time")
 
-	// Progress bar
-	singleBarWidth := w - 22
-	if singleBarWidth < 10 {
-		singleBarWidth = 10
-	}
-	bar := renderSegmentedBar(sc, total, singleBarWidth, p, lipgloss.Color(""), false)
-	countStr := lipgloss.NewStyle().Foreground(p.TextSecondary).Render(
-		fmt.Sprintf("%d/%d updates", completed, total))
-	progressLine := fmt.Sprintf("  %s  %s", bar, countStr)
+	cmdRow := m.renderCommandRow(cmd, w, false)
 
-	// Build scrollable body
+	// Separator
+	sep := lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", w))
+
+	// Build scrollable body: resource table
 	var body strings.Builder
+
+	// Group by kind, render as table rows with per-group column headers
 	groups := []struct {
-		kind  updateKind
-		label string
+		kind    updateKind
+		label   string
+		hasType bool
 	}{
-		{kindTarget, "Targets"},
-		{kindStack, "Stacks"},
-		{kindPolicy, "Policies"},
-		{kindResource, "Resources"},
+		{kindTarget, "Targets", false},
+		{kindStack, "Stacks", false},
+		{kindPolicy, "Policies", true},
+		{kindResource, "Resources", true},
 	}
 	for _, g := range groups {
 		updates := filterByKind(cmd.Updates, g.kind)
 		if len(updates) == 0 {
 			continue
 		}
-		body.WriteString("\n  " + s.Subtitle.Render(g.label) + "\n")
+		// Section title — bold + underline to distinguish from data rows
+		titleStyle := lipgloss.NewStyle().
+			Foreground(p.SecondaryAccent).
+			Bold(true)
+		body.WriteString("\n  " + titleStyle.Render("▌ "+g.label) + "\n")
+		// Column header per group — aligned with data rows (3 char status col + 2 space)
+		if g.hasType {
+			body.WriteString("       " +
+				padRight(dimStyle.Render("Label"), 24) +
+				padRight(dimStyle.Render("Type"), 30) +
+				padRight(dimStyle.Render("Operation"), 10) +
+				dimStyle.Render("Time") + "\n")
+		} else {
+			body.WriteString("       " +
+				padRight(dimStyle.Render("Label"), 54) +
+				padRight(dimStyle.Render("Operation"), 10) +
+				dimStyle.Render("Time") + "\n")
+		}
 		for _, u := range updates {
 			if m.detail {
 				body.WriteString(m.renderDetailEntry(u, w))
 			} else {
-				body.WriteString(m.renderSummaryLine(u, w))
+				body.WriteString(m.renderUpdateRow(u, w))
 			}
 		}
 	}
@@ -570,13 +634,69 @@ func (m *model) viewSingleCommand() string {
 	}, scrollInfo)
 
 	return header + "\n" +
-		infoLine + "\n" +
-		progressLine + "\n" +
+		cmdColHeader + "\n" +
+		cmdRow + "\n" +
+		sep + "\n" +
 		m.vp.View() + "\n" +
 		footer
 }
 
 // -- Rendering helpers --
+
+func (m *model) renderUpdateRow(u fakeUpdate, w int) string {
+	p := m.theme.Palette
+
+	// Status symbol (far left) — fixed width, no duration bleed
+	stateStr := m.renderStateSymbol(u)
+
+	labelStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent)
+	typeStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	opStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	dimStyle := lipgloss.NewStyle().Foreground(p.TextSubtle)
+
+	label := u.Label
+	hasType := u.Kind == kindResource || u.Kind == kindPolicy
+	typeName := u.TypeName
+	if u.Kind == kindPolicy {
+		typeName = u.TypeName + ", " + u.Stack
+	}
+
+	// Time column
+	var timeStr string
+	switch u.State {
+	case stateDone, stateInProgress, stateFailed:
+		timeStr = formatDuration(u.Duration)
+	default:
+		timeStr = "—"
+	}
+
+	var row string
+	if hasType {
+		row = "  " + padRight(stateStr, 3) + "  " +
+			padRight(labelStyle.Render(label), 24) +
+			padRight(typeStyle.Render(typeName), 30) +
+			padRight(opStyle.Render(u.Operation), 10) +
+			dimStyle.Render(timeStr)
+	} else {
+		row = "  " + padRight(stateStr, 3) + "  " +
+			padRight(labelStyle.Render(label), 54) +
+			padRight(opStyle.Render(u.Operation), 10) +
+			dimStyle.Render(timeStr)
+	}
+
+	// If failed, show error on next line
+	if u.State == stateFailed && u.ErrorMessage != "" {
+		errLine := "       " + lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage)
+		return row + "\n" + errLine + "\n"
+	}
+	// If skipped with cascade, show dependency
+	if u.State == stateSkipped && u.CascadeSrc != "" {
+		depLine := "       " + dimStyle.Render("Depends on: "+u.CascadeSrc+" (failed)")
+		return row + "\n" + depLine + "\n"
+	}
+
+	return row + "\n"
+}
 
 func (m *model) renderSummaryLine(u fakeUpdate, w int) string {
 	p := m.theme.Palette
@@ -591,59 +711,117 @@ func (m *model) renderSummaryLine(u fakeUpdate, w int) string {
 func (m *model) renderDetailEntry(u fakeUpdate, w int) string {
 	p := m.theme.Palette
 
-	label := formatLabel(u, p)
-	stateStr := m.renderStateIndicator(u)
-
-	headerLine := fmt.Sprintf("    %s %s",
-		lipgloss.NewStyle().Foreground(p.TextSecondary).Render(u.Operation),
-		label)
-	headerLine += padBetween(w, headerLine, stateStr+"  ") + stateStr + "  "
-
-	var lines []string
-	lines = append(lines, headerLine)
-
 	field := lipgloss.NewStyle().Foreground(p.TextSubtle)
 	value := lipgloss.NewStyle().Foreground(p.TextSecondary)
 
+	// Build card content lines
+	var contentLines []string
+
 	if u.Kind == kindResource {
-		lines = append(lines, "      "+field.Render("Type:")+"     "+value.Render(u.TypeName))
-		lines = append(lines, "      "+field.Render("Stack:")+"    "+value.Render(u.Stack))
+		contentLines = append(contentLines, field.Render("Type:")+"     "+value.Render(u.TypeName))
+		contentLines = append(contentLines, field.Render("Stack:")+"    "+value.Render(u.Stack))
 	}
 
 	switch u.State {
 	case stateInProgress:
-		lines = append(lines, "      "+field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
+		contentLines = append(contentLines, field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
 		if u.MaxAttempts > 0 {
-			lines = append(lines, "      "+field.Render("Attempt:")+"  "+
+			contentLines = append(contentLines, field.Render("Attempt:")+"  "+
 				value.Render(fmt.Sprintf("%d/%d", u.Attempt, u.MaxAttempts)))
 		}
 		if u.StatusMsg != "" {
-			lines = append(lines, "      "+field.Render("Status:")+"   "+
+			contentLines = append(contentLines, field.Render("Status:")+"   "+
 				lipgloss.NewStyle().Foreground(p.InProgress).Render(u.StatusMsg))
 		}
 	case stateDone:
-		lines = append(lines, "      "+field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
+		contentLines = append(contentLines, field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
 	case stateFailed:
-		lines = append(lines, "      "+field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
+		contentLines = append(contentLines, field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
 		if u.MaxAttempts > 0 {
-			lines = append(lines, "      "+field.Render("Attempt:")+"  "+
+			contentLines = append(contentLines, field.Render("Attempt:")+"  "+
 				value.Render(fmt.Sprintf("%d/%d", u.Attempt, u.MaxAttempts)))
 		}
 		if u.ErrorMessage != "" {
-			lines = append(lines, "      "+field.Render("Error:")+"    "+
+			contentLines = append(contentLines, field.Render("Error:")+"    "+
 				lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage))
 		}
 	case stateSkipped:
 		if u.CascadeSrc != "" {
-			lines = append(lines, "      "+field.Render("Depends on:")+" "+
+			contentLines = append(contentLines, field.Render("Depends on:")+" "+
 				value.Render(u.CascadeSrc+" (failed)"))
 		}
 	}
 
-	sep := lipgloss.NewStyle().Foreground(p.Border).Render("    " + strings.Repeat("─", w-8))
-	return strings.Join(lines, "\n") + "\n" + sep + "\n"
+	content := strings.Join(contentLines, "\n")
+
+	// Border color: red for failed, default for others
+	borderColor := p.Border
+	if u.State == stateFailed {
+		borderColor = p.Error
+	}
+
+	// Build card title
+	stateStr := m.renderStateIndicator(u)
+	title := lipgloss.NewStyle().Foreground(p.TextSecondary).Render(u.Operation) +
+		" " + formatLabel(u, p)
+
+	cardWidth := w - 8
+	if cardWidth < 20 {
+		cardWidth = 20
+	}
+
+	// Render bordered card
+	card := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(cardWidth).
+		Padding(0, 1).
+		Render(content)
+
+	// Build header line: ─ title ──── state ─
+	titleRendered := " " + title + " "
+	stateRendered := " " + stateStr + " "
+	titleW := lipgloss.Width(titleRendered)
+	stateW := lipgloss.Width(stateRendered)
+	dashW := cardWidth + 2 - titleW - stateW - 2 // -2 for corners
+	if dashW < 1 {
+		dashW = 1
+	}
+	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+	headerLine := borderStyle.Render("  ╭") + borderStyle.Render("─") +
+		titleRendered +
+		borderStyle.Render(strings.Repeat("─", dashW)) +
+		stateRendered +
+		borderStyle.Render("─╮")
+
+	// Replace the top border of the card with our custom header
+	cardLines := strings.Split(card, "\n")
+	if len(cardLines) > 0 {
+		cardLines[0] = headerLine
+	}
+
+	return "  " + strings.Join(cardLines, "\n  ") + "\n"
 }
 
+// renderStateSymbol returns just the status symbol (fixed width, no duration).
+func (m *model) renderStateSymbol(u fakeUpdate) string {
+	p := m.theme.Palette
+	switch u.State {
+	case stateDone:
+		return lipgloss.NewStyle().Foreground(p.Done).Render("✓")
+	case stateInProgress:
+		return lipgloss.NewStyle().Foreground(p.InProgress).Render(m.spinner.View())
+	case statePending:
+		return lipgloss.NewStyle().Foreground(p.Pending).Render("○")
+	case stateFailed:
+		return lipgloss.NewStyle().Foreground(p.Error).Bold(true).Render("✗")
+	case stateSkipped:
+		return lipgloss.NewStyle().Foreground(p.TextSecondary).Render("⊘")
+	}
+	return " "
+}
+
+// renderStateIndicator returns symbol + duration (for detail cards and old summary lines).
 func (m *model) renderStateIndicator(u fakeUpdate) string {
 	p := m.theme.Palette
 	switch u.State {
@@ -653,7 +831,7 @@ func (m *model) renderStateIndicator(u fakeUpdate) string {
 		return lipgloss.NewStyle().Foreground(p.InProgress).Render(
 			m.spinner.View() + " " + formatDuration(u.Duration))
 	case statePending:
-		return lipgloss.NewStyle().Foreground(p.Pending).Render("·")
+		return lipgloss.NewStyle().Foreground(p.Pending).Render("○")
 	case stateFailed:
 		return lipgloss.NewStyle().Foreground(p.Error).Bold(true).Render("✗")
 	case stateSkipped:
@@ -733,6 +911,15 @@ func padRight(s string, w int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", w-visible)
+}
+
+// padRightBg pads with background-colored spaces.
+func padRightBg(s string, w int, bg lipgloss.Color) string {
+	visible := lipgloss.Width(s)
+	if visible >= w {
+		return s
+	}
+	return s + lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", w-visible))
 }
 
 func padBetween(totalWidth int, left, right string) string {
