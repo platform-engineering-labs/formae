@@ -935,6 +935,8 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			// Failed/Canceled — revert to pre-command snapshot state.
 			// Don't revert authoritative slots (set by TTL destroy etc.)
 			if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
+				t.Logf("correctModelFromCommandOutcome: skipping authoritative stack=%s slot=%d (ru.State=%s, op=%s)",
+					model.Stack(stackIdx).Label, slotIdx, ru.State, ru.Operation)
 				goto markDone
 			}
 			if snap, ok := snapBySlot[key]; ok {
@@ -944,6 +946,9 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 						model.Stack(stackIdx).Label, slotIdx, res.State, snap.State, ru.State, ru.Operation)
 					res.State = snap.State
 					res.Properties = snap.Properties
+				} else if res != nil {
+					t.Logf("correctModelFromCommandOutcome: no-op revert stack=%s slot=%d state=%v snap=%v (ru.State=%s, op=%s)",
+						model.Stack(stackIdx).Label, slotIdx, res.State, snap.State, ru.State, ru.Operation)
 				}
 			} else {
 				// No snapshot — derive from operation semantics.
