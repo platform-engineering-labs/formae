@@ -27,6 +27,7 @@ const (
 	InvalidQuery                 APIError = "InvalidQueryError"
 	StackDeletedDuringApply      APIError = "StackDeletedDuringApply"
 	ReconcilePolicyRequired      APIError = "ReconcilePolicyRequired"
+	NonPortableResources         APIError = "NonPortableResources"
 )
 
 type ErrorResponse[T any] struct {
@@ -171,6 +172,16 @@ type ReconcilePolicyRequiredError struct {
 
 func (e ReconcilePolicyRequiredError) Error() string {
 	return fmt.Sprintf("stack '%s' does not have an auto-reconcile policy attached; force-reconcile is not allowed without one", e.StackLabel)
+}
+
+type NonPortableResourcesError struct {
+	TargetLabel string   `json:"TargetLabel"`
+	Resources   []string `json:"Resources"` // e.g. "test-stack/AWS::S3::Bucket/test-bucket"
+}
+
+func (e NonPortableResourcesError) Error() string {
+	return fmt.Sprintf("cannot replace target %q: %d non-portable resource(s) cannot be recreated on a different target",
+		e.TargetLabel, len(e.Resources))
 }
 
 type TargetHasResourcesError struct {

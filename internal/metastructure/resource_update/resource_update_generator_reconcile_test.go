@@ -12,9 +12,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -1641,9 +1643,11 @@ func TestTargetReplace_Reconcile_NonPortableInForma_Rejected(t *testing.T) {
 		replacedTargets,
 	)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not portable")
-	assert.Contains(t, err.Error(), "AWS::EC2::Subnet")
+	require.Error(t, err)
+	var nonPortableErr apimodel.NonPortableResourcesError
+	require.ErrorAs(t, err, &nonPortableErr)
+	assert.Equal(t, "aws-prod", nonPortableErr.TargetLabel)
+	assert.NotEmpty(t, nonPortableErr.Resources)
 }
 
 func TestTargetReplace_Reconcile_NonPortableNotInForma_Succeeds(t *testing.T) {

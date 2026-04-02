@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"strings"
 
 	"github.com/tidwall/sjson"
 
@@ -520,8 +519,15 @@ func generateResourceUpdatesForReconcile(
 			}
 		}
 		if len(nonPortable) > 0 {
-			return nil, fmt.Errorf("cannot replace target: the following resources are not portable across targets and cannot be recreated:\n  - %s\nUse 'formae destroy' to remove these resources first, then apply with the new target",
-				strings.Join(nonPortable, "\n  - "))
+			var targetLabel string
+			for label := range replacedTargets {
+				targetLabel = label
+				break
+			}
+			return nil, apimodel.NonPortableResourcesError{
+				TargetLabel: targetLabel,
+				Resources:   nonPortable,
+			}
 		}
 	}
 
@@ -858,8 +864,15 @@ func generateResourceUpdatesForPatch(
 			}
 		}
 		if len(nonPortable) > 0 {
-			return nil, fmt.Errorf("cannot replace target: the following resources are not portable across targets and cannot be recreated:\n  - %s\nUse 'formae destroy' to remove these resources first, then apply with the new target",
-				strings.Join(nonPortable, "\n  - "))
+			var targetLabel string
+			for label := range replacedTargets {
+				targetLabel = label
+				break
+			}
+			return nil, apimodel.NonPortableResourcesError{
+				TargetLabel: targetLabel,
+				Resources:   nonPortable,
+			}
 		}
 	}
 
