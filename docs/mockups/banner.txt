@@ -1,7 +1,7 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                      BANNER / LOGO — TUI MOCKUPS                            ║
 ║                                                                              ║
-║  The formae flower icon rendered in the terminal.                            ║
+║  The formae propeller icon rendered in the terminal.                            ║
 ║  Primary: Sixel/Kitty graphics. Fallback: braille characters.                ║
 ║  Actual rendering will be validated in terminal prototypes.                   ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -20,7 +20,7 @@ VIEW 1: Full banner (non-TUI commands, e.g., start of apply/destroy)
   ⣿⣿⣿⣿⣿⣿⣿⣿
 
   Notes:
-  - Flower icon in orange (SecondaryAccent)
+  - Propeller icon in orange (SecondaryAccent)
   - "formae" text + version to the right
   - Braille art to be crafted from the actual logo in terminal prototype
   - Sixel/Kitty: renders the actual PNG at appropriate size
@@ -44,14 +44,14 @@ VIEW 2: Compact banner (TUI header element)
 
 
 ================================================================================
-VIEW 3: No-graphics fallback (ASCII-only terminal)
+VIEW 3: No-graphics fallback (plain text)
 ================================================================================
 
-  formae v0.82.2
+  formae v0.82.3
 
   Notes:
-  - Plain text, no icon
-  - For terminals that don't support braille or graphics
+  - Plain text only — no icon, no ASCII art
+  - For terminals that don't support braille or graphics (TERM=dumb)
   - termenv profile detection: if Ascii profile, use this
 
 
@@ -62,8 +62,8 @@ DETECTION LOGIC
 At startup:
   1. Check Sixel support (query terminal with escape sequence, short timeout)
   2. Check Kitty graphics protocol support
-  3. If neither: check if terminal supports braille (Unicode block 0x2800-0x28FF)
-  4. Fallback: plain text
+  3. If neither: use braille (Unicode block 0x2800-0x28FF)
+  4. Fallback: plain text "formae v{version}" (no icon)
 
 The logo rendering is encapsulated in a function that returns a string,
 so components just call RenderLogo(size) and get the right version.

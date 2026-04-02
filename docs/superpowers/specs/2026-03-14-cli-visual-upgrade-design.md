@@ -115,11 +115,11 @@ anywhere.
 
 ### Logo / Banner
 
-The formae flower icon rendered in the terminal:
+The formae propeller icon rendered in the terminal:
 
 - **Primary**: Sixel or Kitty graphics protocol for terminals that support it
   (actual pixel rendering)
-- **Fallback**: Braille character art approximation of the flower icon
+- **Fallback**: Braille character art approximation of the propeller icon
 
 Terminal capabilities are detected at startup to pick the appropriate renderer.
 The banner is shown on non-TUI commands and as a compact header in TUI views.

@@ -1628,13 +1628,13 @@ git commit -m "docs: add formatted output and error panel mockups"
 - Create: `docs/mockups/banner.txt`
 
 **Context:** See spec section "Logo / Banner". Braille character art
-approximation of the formae flower icon. The actual Sixel/Kitty rendering
+approximation of the formae propeller icon. The actual Sixel/Kitty rendering
 can't be mocked in ASCII — this mockup is for the braille fallback.
 
 - [ ] **Step 1: Create banner mockup**
 
 Show:
-- Braille art flower icon (approximate)
+- Braille art propeller icon (approximate)
 - Version number placement
 - Compact variant for TUI headers
 - Full variant for non-TUI commands

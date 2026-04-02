@@ -24,7 +24,7 @@ import (
 const (
 	defaultLogoPath = "/mnt/c/Users/wfhso/Downloads/Formae_Logo_dark.png"
 
-	// Crop region for the flower icon (right side of the 2134x556 image)
+	// Crop region for the propeller icon (right side of the 2134x556 image)
 	cropX = 1550
 	cropY = 0
 	cropW = 584
@@ -35,7 +35,7 @@ func main() {
 	th := theme.New("formae")
 	p := th.Palette
 
-	img, err := loadAndCropFlower()
+	img, err := loadAndCropPropeller()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading image: %v\n", err)
 		os.Exit(1)
@@ -176,7 +176,7 @@ func getLogoPath() string {
 	return defaultLogoPath
 }
 
-func loadAndCropFlower() (image.Image, error) {
+func loadAndCropPropeller() (image.Image, error) {
 	path := getLogoPath()
 	f, err := os.Open(path)
 	if err != nil {
