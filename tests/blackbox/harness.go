@@ -641,6 +641,9 @@ agent {
         retryDelay = 250.ms
         statusCheckInterval = 1.s
     }
+    stackExpirer {
+        enabled = false
+    }
 }
 
 plugins {

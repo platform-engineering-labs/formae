@@ -58,6 +58,10 @@ func (s *StackExpirer) Init(args ...any) error {
 
 	if cfg, ok := s.Env("StackExpirerConfig"); ok {
 		expirerCfg := cfg.(pkgmodel.StackExpirerConfig)
+		if expirerCfg.Disabled {
+			s.Log().Info("Stack expirer disabled via config")
+			return nil
+		}
 		if expirerCfg.Interval > 0 {
 			s.interval = expirerCfg.Interval
 		}

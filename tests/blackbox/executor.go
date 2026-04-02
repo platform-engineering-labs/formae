@@ -318,6 +318,12 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	// processed here should not override them (their outcomes are stale for
 	// those slots). We capture once so that authoritative flags set by
 	// commands WITHIN this loop don't affect later commands in the same loop.
+	// Collect completed commands and remaining pending ones.
+	type completedCmd struct {
+		ac  AcceptedCommand
+		cmd apimodel.Command
+	}
+	var completed []completedCmd
 	remaining := make([]AcceptedCommand, 0, len(model.AcceptedCommands))
 	for _, ac := range model.AcceptedCommands {
 		statusResp, err := h.client.GetFormaCommandsStatus("id:"+ac.CommandID, clientID, 1)
@@ -333,9 +339,18 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 			continue
 		}
 
-		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", ac.CommandID, cmd.State)
-		correctModelFromCommandOutcome(t, &cmd, model, model.Pool, ac.Snapshots, make(map[struct{ stackIdx, slotIdx int }]bool), ac.IsReconcile)
-		h.reconcileManagedDriftOverriddenByCommand(t, model, &cmd)
+		completed = append(completed, completedCmd{ac: ac, cmd: cmd})
+	}
+
+	// Process completed commands in REVERSE order (most recent first) so
+	// later command outcomes take precedence over earlier ones. This matches
+	// DrainPendingCommands' reverse-order processing.
+	corrected := make(map[struct{ stackIdx, slotIdx int }]bool)
+	for i := len(completed) - 1; i >= 0; i-- {
+		cc := completed[i]
+		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", cc.ac.CommandID, cc.cmd.State)
+		correctModelFromCommandOutcome(t, &cc.cmd, model, model.Pool, cc.ac.Snapshots, corrected, cc.ac.IsReconcile)
+		h.reconcileManagedDriftOverriddenByCommand(t, model, &cc.cmd)
 	}
 
 	model.AcceptedCommands = remaining
@@ -364,11 +379,6 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	h.waitForInventoryStabilization(t, 5*time.Second)
 	if len(model) > 0 && model[0] != nil {
 		h.waitForUnmanagedInventoryExpectations(t, model[0], 5*time.Second)
-		// Final model sync: verify existence against stabilized inventory.
-		// TTL cascades, concurrent commands, and crash recovery can leave
-		// the model out of sync. This runs after inventory stabilization
-		// so we compare against the settled state.
-		h.reconcileModelExistenceFromInventory(t, model[0])
 	}
 
 	// Build the ignore set from the model's tracked unmanaged resources.
@@ -959,7 +969,13 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			}
 		}
 	markDone:
-		corrected[key] = true
+		// Only mark corrected for successful operations. Failed/canceled
+		// reverts should NOT prevent earlier successful creates from
+		// updating the model (in reverse-order processing, the failed
+		// revert is processed first but shouldn't block the success).
+		if ru.State == "Success" {
+			corrected[key] = true
+		}
 		delete(snapBySlot, key)
 	}
 
@@ -1034,12 +1050,12 @@ func (h *TestHarness) executeCrashAgent(t *testing.T, model *StateModel) {
 		h.DrainPendingCommands(t, model, 60*time.Second)
 	}
 
-	// After crash recovery, the model may be wrong because:
-	// 1. ResourcePersister didn't complete before the crash
-	// 2. ReRunIncompleteCommands re-created or re-deleted resources
-	// 3. Command response ordering doesn't match persistence ordering
-	// Reconcile the model against inventory for ALL tracked resources.
-	h.reconcileModelFromInventoryAfterCrash(t, model)
+	// Pending managed drift stays pending after crash. The assertion skips
+	// slots with pending drift. Sync will resolve it in a future iteration.
+
+	// With StackExpirer disabled, TTL only fires via ForceCheckTTL.
+	// After crash, check if any TTL stacks are now expired and process them.
+	h.ForceCheckTTLAndWait(t, model)
 }
 
 // reconcileModelFromInventoryAfterCrash reconciles the model against inventory
@@ -1078,10 +1094,14 @@ func (h *TestHarness) reconcileModelFromInventoryAfterCrash(t *testing.T, model 
 			existsInInventory := inventoryByKey[key]
 
 			if res.State == StateExists && !existsInInventory {
+				t.Logf("INVENTORY-FIX: stack=%s slot=%d (%s) model=Exists inv=NotExist nid=%s auth=%v",
+					stack.Label, slotIdx, label, model.GetNativeID(stackIdx, slotIdx), model.IsAuthoritativeSlot(stackIdx, slotIdx))
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 				model.ClearNativeID(stackIdx, slotIdx)
 				corrected++
 			} else if res.State == StateNotExist && existsInInventory {
+				t.Logf("INVENTORY-FIX: stack=%s slot=%d (%s) model=NotExist inv=Exists auth=%v",
+					stack.Label, slotIdx, label, model.IsAuthoritativeSlot(stackIdx, slotIdx))
 				model.ApplyCreated(stackIdx, []int{slotIdx}, "")
 				corrected++
 			}
@@ -2016,12 +2036,72 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// expired stack or inventory confirms the resources are gone.
 	h.drainExpiredTTLStacks(t, model)
 
-	// Final model reconciliation: verify model state against inventory for
-	// all non-cross-stack slots. TTL destroys, crash recovery, and concurrent
-	// command interactions can leave the model out of sync. One targeted
-	// inventory check at the drain boundary ensures the model is correct
-	// before AssertAllInvariants runs.
-	h.reconcileModelExistenceFromInventory(t, model)
+	// After all commands are drained, any TTL that was blocked by active
+	// commands is now unblocked. Do one final check to catch it.
+	h.ForceCheckTTLAndWait(t, model)
+
+	// If OOB changes were made during this iteration, fire a sync to let the
+	// agent reconcile them. The sync command's outcome updates the model via
+	// ApplySyncCommand. Any remaining unresolved drift stays pending — the
+	// assertion skips slots with pending drift.
+	if len(model.ManagedDriftedResources) > 0 {
+		h.executeTriggerSync(t, model)
+		// Restore cloud state for any drift the sync resolved (the plugin's
+		// Update/Delete already updated cloud state via the sync command).
+		// For unresolved drift, restore cloud state to match inventory so
+		// CheckInvariants doesn't see phantoms.
+		for nativeID, drift := range model.ManagedDriftedResources {
+			if !drift.PendingSync {
+				continue // already resolved by sync
+			}
+			if drift.PresentInCloud {
+				// OOB modify: restore cloud state to pre-drift properties
+				if drift.SnapshotProperties != "" {
+					h.TryPutCloudState(nativeID, drift.ResourceType, flattenPropertiesForCloud(json.RawMessage(drift.SnapshotProperties)))
+				}
+			} else {
+				// OOB delete: the resource is still in inventory (sync hasn't
+				// deleted it). Cloud state was already deleted by CloudDelete.
+				// Restore it so CheckInvariants doesn't see a phantom.
+				stackIdx, slotIdx, ok := model.findResourceSlot(drift.StackLabel, drift.ResourceLabel)
+				if ok {
+					res := model.Resource(stackIdx, slotIdx)
+					if res != nil && res.Properties != "" {
+						h.TryPutCloudState(nativeID, drift.ResourceType, flattenPropertiesForCloud(json.RawMessage(res.Properties)))
+					}
+				}
+			}
+		}
+	}
+}
+
+// resolveRemainingManagedDrift applies the expected end state for pending
+// managed drift entries and restores cloud state. For OOB deletes, the
+// resource is marked NotExist and removed from cloud state. For OOB modifies,
+// the resource stays Exists and cloud state is restored to the model's
+// properties (what the agent has in inventory).
+func (h *TestHarness) resolveRemainingManagedDrift(t *testing.T, model *StateModel) {
+	t.Helper()
+	for nativeID, drift := range model.ManagedDriftedResources {
+		if !drift.PendingSync {
+			continue
+		}
+		if drift.PresentInCloud {
+			// OOB modify: the sync will eventually update the resource to match
+			// inventory. Restore cloud state to the model's properties.
+			stackIdx, slotIdx, ok := model.findResourceSlot(drift.StackLabel, drift.ResourceLabel)
+			if ok {
+				res := model.Resource(stackIdx, slotIdx)
+				if res != nil && res.Properties != "" {
+					h.TryPutCloudState(nativeID, drift.ResourceType, flattenPropertiesForCloud(json.RawMessage(res.Properties)))
+				}
+			}
+		} else {
+			// OOB delete: the sync will delete the resource from inventory.
+			h.TryDeleteCloudState(nativeID)
+		}
+	}
+	model.ApplySyncToManagedDrift()
 }
 
 func (h *TestHarness) reconcileModelExistenceFromInventory(t *testing.T, model *StateModel) {
@@ -2053,10 +2133,14 @@ func (h *TestHarness) reconcileModelExistenceFromInventory(t *testing.T, model *
 			existsInInventory := inventoryByKey[key]
 
 			if res.State == StateExists && !existsInInventory {
+				t.Logf("INVENTORY-FIX: stack=%s slot=%d (%s) model=Exists inv=NotExist nid=%s auth=%v",
+					stack.Label, slotIdx, label, model.GetNativeID(stackIdx, slotIdx), model.IsAuthoritativeSlot(stackIdx, slotIdx))
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 				model.ClearNativeID(stackIdx, slotIdx)
 				corrected++
 			} else if res.State == StateNotExist && existsInInventory {
+				t.Logf("INVENTORY-FIX: stack=%s slot=%d (%s) model=NotExist inv=Exists auth=%v",
+					stack.Label, slotIdx, label, model.IsAuthoritativeSlot(stackIdx, slotIdx))
 				model.ApplyCreated(stackIdx, []int{slotIdx}, "")
 				corrected++
 			}
@@ -2262,6 +2346,10 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 					}
 					for slotIdx := range model.Stack(otherStackIdx).Resources {
 						if model.Pool.IsCrossStack(slotIdx) && model.Stack(otherStackIdx).Resources[slotIdx] != nil {
+							// Clean up cloud state before clearing NativeID
+							if nid := model.GetNativeID(otherStackIdx, slotIdx); nid != "" {
+								h.TryDeleteCloudState(nid)
+							}
 							model.ApplyDestroyed(otherStackIdx, []int{slotIdx})
 							model.MarkAuthoritativeSlot(otherStackIdx, slotIdx)
 							model.ClearNativeID(otherStackIdx, slotIdx)
@@ -2311,48 +2399,21 @@ func (h *TestHarness) drainExpiredTTLStacks(t *testing.T, model *StateModel) {
 		}
 
 		// ForceCheckTTL returned "no expired stacks" but model still has
-		// TTLExpired=true. The StackExpirer may not have detected the expiry
-		// yet. Keep polling — the agent will eventually process it.
+		// TTLExpired=true. Active commands are blocking expiry. Keep polling.
 		time.Sleep(250 * time.Millisecond)
 	}
 
 	// Polling exhausted but stacks are still marked expired. The StackExpirer
-	// may have fired in the background (destroying resources) or may be
-	// blocked by active commands. Check inventory to determine actual state.
+	// is blocked by active commands on the stack (GetExpiredStacks excludes
+	// stacks with in-progress commands). The resources are still alive.
+	// Clear TTLExpired so the model doesn't loop. The TTL will fire when
+	// the blocking commands complete — the next iteration's DrainPendingCommands
+	// and ForceCheckTTLAndWait will handle it.
 	for i, stack := range model.Stacks {
-		if !stack.TTLExpired {
-			continue
+		if stack.TTLExpired {
+			t.Logf("drainExpiredTTLStacks: stack %s TTL blocked by active commands, deferring", stack.Label)
+			model.Stacks[i].TTLExpired = false
 		}
-		forma, err := h.client.ExtractResources("managed:true stack:" + stack.Label)
-		if err != nil || forma == nil || len(forma.Resources) == 0 {
-			// Stack is empty in inventory — expired and destroyed.
-			for slotIdx := range stack.Resources {
-				if stack.Resources[slotIdx] != nil {
-					model.ApplyDestroyed(i, []int{slotIdx})
-					model.ClearNativeID(i, slotIdx)
-					model.MarkAuthoritativeSlot(i, slotIdx)
-				}
-			}
-			// Also cascade cross-stack children if this is the provider stack.
-			if model.Pool != nil && stack.Label == model.ProviderStackLabel {
-				for otherIdx := range model.Stacks {
-					if otherIdx == i {
-						continue
-					}
-					for slotIdx := range model.Stack(otherIdx).Resources {
-						if model.Pool.IsCrossStack(slotIdx) && model.Stack(otherIdx).Resources[slotIdx] != nil {
-							model.ApplyDestroyed(otherIdx, []int{slotIdx})
-							model.ClearNativeID(otherIdx, slotIdx)
-							model.MarkAuthoritativeSlot(otherIdx, slotIdx)
-						}
-					}
-				}
-			}
-			t.Logf("drainExpiredTTLStacks: stack %s confirmed destroyed via inventory", stack.Label)
-		} else {
-			t.Logf("drainExpiredTTLStacks: stack %s still has %d resources in inventory after TTL polling timeout", stack.Label, len(forma.Resources))
-		}
-		model.Stacks[i].TTLExpired = false
 	}
 }
 

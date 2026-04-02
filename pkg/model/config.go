@@ -102,6 +102,7 @@ type OTelConfig struct {
 
 type StackExpirerConfig struct {
 	Interval time.Duration
+	Disabled bool
 }
 
 type AgentConfig struct {
