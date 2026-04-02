@@ -135,19 +135,20 @@ const (
 
 // Use pointer receiver throughout so viewport mutations persist
 type model struct {
-	theme    *theme.Theme
-	commands []fakeCommand
-	view     viewMode
-	cursor   int
-	selected int
-	detail   bool
-	sortCol  sortColumn
-	spinner  spinner.Model
-	vp       viewport.Model
-	width    int
-	height   int
-	ready    bool
-	quitting bool
+	theme      *theme.Theme
+	commands   []fakeCommand
+	view       viewMode
+	cursor     int            // command list cursor
+	selected   int            // which command is drilled into
+	updateCur  int            // resource list cursor in single command view
+	expanded   map[int]bool   // set of expanded update indices
+	sortCol    sortColumn
+	spinner    spinner.Model
+	vp         viewport.Model
+	width      int
+	height     int
+	ready      bool
+	quitting   bool
 }
 
 func newModel() *model {
@@ -163,9 +164,10 @@ func newModel() *model {
 		theme:    th,
 		commands: cmds,
 		sortCol:  sortByStatus,
+		expanded: make(map[int]bool),
 		spinner:  s,
-		width:    80,
-		height:   24,
+		width:      80,
+		height:     24,
 	}
 }
 
@@ -197,11 +199,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+		case key.Matches(msg, key.NewBinding(key.WithKeys("enter", " "))):
 			if m.view == viewMultiCommand {
 				m.view = viewSingleCommand
 				m.selected = m.cursor
+				m.updateCur = 0
+				m.expanded = make(map[int]bool)
 				m.vp.GotoTop()
+			} else {
+				// Toggle expand on current update
+				if m.expanded[m.updateCur] {
+					delete(m.expanded, m.updateCur)
+				} else {
+					m.expanded[m.updateCur] = true
+				}
 			}
 			return m, nil
 
@@ -210,10 +221,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.view = viewMultiCommand
 				m.cursor = m.selected
 			}
-			return m, nil
-
-		case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
-			m.detail = !m.detail
 			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
@@ -229,7 +236,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor++
 				}
 			} else {
-				m.vp.LineDown(1)
+				totalUpdates := len(m.commands[m.selected].Updates)
+				if m.updateCur < totalUpdates-1 {
+					m.updateCur++
+				}
 			}
 			return m, nil
 
@@ -239,19 +249,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor--
 				}
 			} else {
-				m.vp.LineUp(1)
-			}
-			return m, nil
-
-		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d", "pgdown"))):
-			if m.view == viewSingleCommand {
-				m.vp.HalfViewDown()
-			}
-			return m, nil
-
-		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+u", "pgup"))):
-			if m.view == viewSingleCommand {
-				m.vp.HalfViewUp()
+				if m.updateCur > 0 {
+					m.updateCur--
+				}
 			}
 			return m, nil
 		}
@@ -566,10 +566,16 @@ func (m *model) viewSingleCommand() string {
 	// Separator
 	sep := lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", w))
 
-	// Build scrollable body: resource table
-	var body strings.Builder
+	// Build flat sorted list of all updates for cursor tracking
+	allUpdates := sortedUpdates(cmd.Updates)
 
-	// Group by kind, render as table rows with per-group column headers
+	// Section title style
+	titleStyle := lipgloss.NewStyle().
+		Foreground(p.SecondaryAccent).
+		Bold(true)
+
+	// Build scrollable body with per-row expand
+	var body strings.Builder
 	groups := []struct {
 		kind    updateKind
 		label   string
@@ -580,17 +586,20 @@ func (m *model) viewSingleCommand() string {
 		{kindPolicy, "Policies", true},
 		{kindResource, "Resources", true},
 	}
+
+	idx := 0
 	for _, g := range groups {
-		updates := filterByKind(cmd.Updates, g.kind)
-		if len(updates) == 0 {
+		var groupUpdates []fakeUpdate
+		for _, u := range allUpdates {
+			if u.Kind == g.kind {
+				groupUpdates = append(groupUpdates, u)
+			}
+		}
+		if len(groupUpdates) == 0 {
 			continue
 		}
-		// Section title — bold + underline to distinguish from data rows
-		titleStyle := lipgloss.NewStyle().
-			Foreground(p.SecondaryAccent).
-			Bold(true)
+
 		body.WriteString("\n  " + titleStyle.Render("▌ "+g.label) + "\n")
-		// Column header per group — aligned with data rows (3 char status col + 2 space)
 		if g.hasType {
 			body.WriteString("       " +
 				padRight(dimStyle.Render("Label"), 24) +
@@ -603,35 +612,28 @@ func (m *model) viewSingleCommand() string {
 				padRight(dimStyle.Render("Operation"), 10) +
 				dimStyle.Render("Time") + "\n")
 		}
-		for _, u := range updates {
-			if m.detail {
-				body.WriteString(m.renderDetailEntry(u, w))
+
+		for _, u := range groupUpdates {
+			isCur := idx == m.updateCur
+			isExpanded := m.expanded[idx]
+
+			if isExpanded {
+				body.WriteString(m.renderDetailEntryWithHighlight(u, w, isCur))
 			} else {
-				body.WriteString(m.renderUpdateRow(u, w))
+				body.WriteString(m.renderUpdateRowHighlight(u, w, isCur))
 			}
+			idx++
 		}
 	}
 
 	m.vp.SetContent(body.String())
 
-	// Scroll indicator
-	scrollInfo := ""
-	if m.vp.TotalLineCount() > m.vp.VisibleLineCount() {
-		pct := int(m.vp.ScrollPercent() * 100)
-		scrollInfo = lipgloss.NewStyle().Foreground(p.TextSubtle).Render(fmt.Sprintf("%d%%", pct))
-	}
-
 	// Footer
-	modeLabel := "detail"
-	if m.detail {
-		modeLabel = "summary"
-	}
 	footer := m.renderFooter(w, []keyHint{
-		{"d", modeLabel},
-		{"f", "filter"},
-		{"/", "search"},
-		{"↑↓/j/k", "scroll"},
-	}, scrollInfo)
+		{"enter/space", "expand"},
+		{"↑↓/j/k", "navigate"},
+		{"esc", "back"},
+	}, "")
 
 	return header + "\n" +
 		cmdColHeader + "\n" +
@@ -642,6 +644,97 @@ func (m *model) viewSingleCommand() string {
 }
 
 // -- Rendering helpers --
+
+func (m *model) renderUpdateRowHighlight(u fakeUpdate, w int, isCursor bool) string {
+	p := m.theme.Palette
+
+	bg := lipgloss.Color("")
+	if isCursor {
+		bg = lipgloss.Color("239")
+	}
+
+	withBg := func(s lipgloss.Style) lipgloss.Style {
+		if isCursor {
+			return s.Background(bg)
+		}
+		return s
+	}
+
+	pad := func(s string, w int) string {
+		if isCursor {
+			return padRightBg(s, w, bg)
+		}
+		return padRight(s, w)
+	}
+
+	// Status symbol
+	stateStr := m.renderStateSymbol(u)
+	if isCursor {
+		if u.State == stateInProgress {
+			stateStr = lipgloss.NewStyle().Background(bg).Render(m.spinner.View())
+		}
+		stateStr = padRightBg(stateStr, 2, bg)
+	} else {
+		stateStr = padRight(stateStr, 2)
+	}
+
+	labelStyle := withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent))
+	typeStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+	opStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+
+	label := u.Label
+	hasType := u.Kind == kindResource || u.Kind == kindPolicy
+	typeName := u.TypeName
+	if u.Kind == kindPolicy {
+		typeName = u.TypeName + ", " + u.Stack
+	}
+
+	var timeStr string
+	switch u.State {
+	case stateDone, stateInProgress, stateFailed:
+		timeStr = formatDuration(u.Duration)
+	default:
+		timeStr = "—"
+	}
+
+	sp2 := "  "
+	if isCursor {
+		sp2 = lipgloss.NewStyle().Background(bg).Render("  ")
+	}
+
+	var row string
+	if hasType {
+		row = sp2 + stateStr + sp2 +
+			pad(labelStyle.Render(label), 24) +
+			pad(typeStyle.Render(typeName), 30) +
+			pad(opStyle.Render(u.Operation), 10) +
+			dimStyle.Render(timeStr)
+	} else {
+		row = sp2 + stateStr + sp2 +
+			pad(labelStyle.Render(label), 54) +
+			pad(opStyle.Render(u.Operation), 10) +
+			dimStyle.Render(timeStr)
+	}
+
+	// Pad to full width
+	rowWidth := lipgloss.Width(row)
+	if rowWidth < w && isCursor {
+		row += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", w-rowWidth))
+	}
+
+	// If failed, show error on next line
+	if u.State == stateFailed && u.ErrorMessage != "" {
+		errLine := "       " + lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage)
+		return row + "\n" + errLine + "\n"
+	}
+	if u.State == stateSkipped && u.CascadeSrc != "" {
+		depLine := "       " + withBg(lipgloss.NewStyle().Foreground(p.TextSubtle)).Render("Depends on: "+u.CascadeSrc+" (failed)")
+		return row + "\n" + depLine + "\n"
+	}
+
+	return row + "\n"
+}
 
 func (m *model) renderUpdateRow(u fakeUpdate, w int) string {
 	p := m.theme.Palette
@@ -708,41 +801,56 @@ func (m *model) renderSummaryLine(u fakeUpdate, w int) string {
 	return left + padBetween(w, left, stateStr+"  ") + stateStr + "  \n"
 }
 
+func (m *model) renderDetailEntryHighlighted(u fakeUpdate, w int) string {
+	return m.renderDetailEntryWithHighlight(u, w, true)
+}
+
 func (m *model) renderDetailEntry(u fakeUpdate, w int) string {
+	return m.renderDetailEntryWithHighlight(u, w, false)
+}
+
+func (m *model) renderDetailEntryWithHighlight(u fakeUpdate, w int, highlighted bool) string {
 	p := m.theme.Palette
 
 	field := lipgloss.NewStyle().Foreground(p.TextSubtle)
 	value := lipgloss.NewStyle().Foreground(p.TextSecondary)
 
-	// Build card content lines
+	// Build card content as key-value pairs
 	var contentLines []string
 
+	// Always show operation
+	contentLines = append(contentLines, field.Render("Operation:")+" "+value.Render(u.Operation))
+
 	if u.Kind == kindResource {
-		contentLines = append(contentLines, field.Render("Type:")+"     "+value.Render(u.TypeName))
-		contentLines = append(contentLines, field.Render("Stack:")+"    "+value.Render(u.Stack))
+		contentLines = append(contentLines, field.Render("Type:")+"      "+value.Render(u.TypeName))
+		contentLines = append(contentLines, field.Render("Stack:")+"     "+value.Render(u.Stack))
+	}
+	if u.Kind == kindPolicy {
+		contentLines = append(contentLines, field.Render("Policy:")+"    "+value.Render(u.TypeName))
+		contentLines = append(contentLines, field.Render("Stack:")+"     "+value.Render(u.Stack))
 	}
 
 	switch u.State {
 	case stateInProgress:
-		contentLines = append(contentLines, field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
+		contentLines = append(contentLines, field.Render("Time:")+"      "+value.Render(formatDuration(u.Duration)))
 		if u.MaxAttempts > 0 {
-			contentLines = append(contentLines, field.Render("Attempt:")+"  "+
+			contentLines = append(contentLines, field.Render("Attempt:")+"   "+
 				value.Render(fmt.Sprintf("%d/%d", u.Attempt, u.MaxAttempts)))
 		}
 		if u.StatusMsg != "" {
-			contentLines = append(contentLines, field.Render("Status:")+"   "+
+			contentLines = append(contentLines, field.Render("Status:")+"    "+
 				lipgloss.NewStyle().Foreground(p.InProgress).Render(u.StatusMsg))
 		}
 	case stateDone:
-		contentLines = append(contentLines, field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
+		contentLines = append(contentLines, field.Render("Time:")+"      "+value.Render(formatDuration(u.Duration)))
 	case stateFailed:
-		contentLines = append(contentLines, field.Render("Time:")+"     "+value.Render(formatDuration(u.Duration)))
+		contentLines = append(contentLines, field.Render("Time:")+"      "+value.Render(formatDuration(u.Duration)))
 		if u.MaxAttempts > 0 {
-			contentLines = append(contentLines, field.Render("Attempt:")+"  "+
+			contentLines = append(contentLines, field.Render("Attempt:")+"   "+
 				value.Render(fmt.Sprintf("%d/%d", u.Attempt, u.MaxAttempts)))
 		}
 		if u.ErrorMessage != "" {
-			contentLines = append(contentLines, field.Render("Error:")+"    "+
+			contentLines = append(contentLines, field.Render("Error:")+"     "+
 				lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage))
 		}
 	case stateSkipped:
@@ -754,23 +862,25 @@ func (m *model) renderDetailEntry(u fakeUpdate, w int) string {
 
 	content := strings.Join(contentLines, "\n")
 
-	// Border color: red for failed, default for others
+	// Border color: highlighted = accent, failed = red, default = border
 	borderColor := p.Border
 	if u.State == stateFailed {
 		borderColor = p.Error
 	}
-
-	// Build card title
-	stateStr := m.renderStateIndicator(u)
-	title := lipgloss.NewStyle().Foreground(p.TextSecondary).Render(u.Operation) +
-		" " + formatLabel(u, p)
-
-	cardWidth := w - 8
-	if cardWidth < 20 {
-		cardWidth = 20
+	if highlighted {
+		borderColor = p.PrimaryAccent
 	}
 
-	// Render bordered card
+	// Card title: status symbol + label
+	stateStr := m.renderStateSymbol(u)
+	labelStr := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(u.Label)
+
+	cardWidth := w - 8
+	if cardWidth < 30 {
+		cardWidth = 30
+	}
+
+	// Render bordered card body
 	card := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
@@ -778,29 +888,34 @@ func (m *model) renderDetailEntry(u fakeUpdate, w int) string {
 		Padding(0, 1).
 		Render(content)
 
-	// Build header line: ─ title ──── state ─
-	titleRendered := " " + title + " "
-	stateRendered := " " + stateStr + " "
-	titleW := lipgloss.Width(titleRendered)
-	stateW := lipgloss.Width(stateRendered)
-	dashW := cardWidth + 2 - titleW - stateW - 2 // -2 for corners
+	// Replace the top border with custom header: ╭─ symbol label ─────╮
+	// Measure the actual rendered bottom border to get the true card width
+	cardLines := strings.Split(card, "\n")
+	actualWidth := 0
+	if len(cardLines) > 1 {
+		actualWidth = lipgloss.Width(cardLines[len(cardLines)-1])
+	}
+	if actualWidth == 0 {
+		actualWidth = cardWidth + 2
+	}
+
+	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+	titleContent := " " + stateStr + " " + labelStr + " "
+	titleW := lipgloss.Width(titleContent)
+	// Total = ╭ + ─ + titleContent + dashes + ╮ = actualWidth
+	dashW := actualWidth - titleW - 3 // 3 = ╭ + ─ + ╮
 	if dashW < 1 {
 		dashW = 1
 	}
-	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
-	headerLine := borderStyle.Render("  ╭") + borderStyle.Render("─") +
-		titleRendered +
-		borderStyle.Render(strings.Repeat("─", dashW)) +
-		stateRendered +
-		borderStyle.Render("─╮")
+	headerLine := borderStyle.Render("╭─") +
+		titleContent +
+		borderStyle.Render(strings.Repeat("─", dashW) + "╮")
 
-	// Replace the top border of the card with our custom header
-	cardLines := strings.Split(card, "\n")
 	if len(cardLines) > 0 {
 		cardLines[0] = headerLine
 	}
 
-	return "  " + strings.Join(cardLines, "\n  ") + "\n"
+	return "    " + strings.Join(cardLines, "\n    ") + "\n"
 }
 
 // renderStateSymbol returns just the status symbol (fixed width, no duration).
@@ -947,7 +1062,37 @@ func filterByKind(updates []fakeUpdate, kind updateKind) []fakeUpdate {
 			result = append(result, u)
 		}
 	}
+	// Sort by status urgency: failed → in-progress → pending → done/skipped
+	sort.SliceStable(result, func(i, j int) bool {
+		return updateStatePriority(result[i].State) < updateStatePriority(result[j].State)
+	})
 	return result
+}
+
+// sortedUpdates returns all updates sorted by status urgency within each kind.
+func sortedUpdates(updates []fakeUpdate) []fakeUpdate {
+	result := make([]fakeUpdate, len(updates))
+	copy(result, updates)
+	sort.SliceStable(result, func(i, j int) bool {
+		return updateStatePriority(result[i].State) < updateStatePriority(result[j].State)
+	})
+	return result
+}
+
+func updateStatePriority(s updateState) int {
+	switch s {
+	case stateFailed:
+		return 0
+	case stateInProgress:
+		return 1
+	case statePending:
+		return 2
+	case stateDone:
+		return 3
+	case stateSkipped:
+		return 4
+	}
+	return 5
 }
 
 func formatDuration(d time.Duration) string {
