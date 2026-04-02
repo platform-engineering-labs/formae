@@ -19,9 +19,9 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
   │                                                                             │
   │  ID            Type              Mode        Progress        Duration State │
   │  ─────────────────────────────────────────────────────────────────────────  │
-  │  cmd-abc123    apply             reconcile   ████████░░ 12/15  00:42       │
+  │  cmd-abc123    apply             reconcile   ██████▓▓░░ 12/15  00:42       │
   │  cmd-def456    destroy                       ██████████  8/8   00:15  Done  │
-  │  cmd-ghi789    apply             patch       ░░░░░░░░░░  0/3   00:02       │
+  │  cmd-ghi789    apply             patch       ▓▓░░░░░░░░  0/3   00:02       │
   │                                                                             │
   │                                                                             │
   │                                                                             │
@@ -38,7 +38,13 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
 
   Notes:
   - "↻ live" indicator when actively polling
-  - Progress bar uses orange fill (SecondaryAccent)
+  - Progress bar is segmented by status:
+    █ = done, █ (red) = failed, ▓ = in-progress, ░ = pending
+  - Bar color shifts based on aggregate health:
+    Neutral (orange) = all in-progress, nothing done or failed yet
+    Green = some done, no failures
+    Red = any failed (stays red for rest of command lifecycle)
+  - N/M count: N takes the bar's color (green/red/neutral), M stays neutral
   - "Done" state in bright white, active commands in dim white
   - No state label shown for in-progress commands (the bar speaks)
   - Pending commands show empty progress bar + dark gray text
@@ -53,9 +59,7 @@ VIEW 2: Single command detail — summary mode (after pressing 'enter')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
-  │  ████████████████████████████████████████░░░░░  12/15 updates              │
-  │                                                                             │
-  │  12 done · 2 in-progress · 1 pending · 0 failed                            │
+  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Targets                                                                    │
@@ -86,8 +90,10 @@ VIEW 2: Single command detail — summary mode (after pressing 'enter')
 
   Notes:
   - Header shows command type, mode, ID, elapsed time
-  - Full-width progress bar with counts
-  - Summary line: counts by state
+  - Segmented progress bar: █ done (green), ▓ in-progress (neutral), ░ pending
+    N/M where N is colored by bar health (green/red/neutral)
+  - No separate status count line — bar segments encode the breakdown
+    Exact counts available via enter to drill into detail view
   - Updates grouped by type: Targets, Stacks, Resources, Policies
   - Resources: operation + label (type) — stack omitted in summary (usually one stack)
   - Policies: operation + label (policyType, stackLabel)
@@ -104,9 +110,7 @@ VIEW 3: Single command — expanded detail mode (after pressing 'd')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
-  │  ████████████████████████████████████████░░░░░  12/15 updates              │
-  │                                                                             │
-  │  12 done · 2 in-progress · 1 pending · 0 failed                            │
+  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Targets                                                                    │
@@ -225,9 +229,7 @@ When a command has more updates than fit in the viewport, groups are collapsed:
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  ████████████████████████████████░░░░░░░░░░░░░  142/200 updates            │
-  │                                                                             │
-  │  142 done · 0 in-progress · 50 pending · 3 failed · 5 skipped             │
+  │  █████████████████████████████░██░░░░░░░░░░░░░  142/200 updates            │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  ▸ Targets (2)                                                  2/2 Done   │
@@ -269,9 +271,7 @@ VIEW 5: Filter active (after pressing 'f')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  ████████████████████████████████░░░░░░░░░░░░░  142/200 updates            │
-  │                                                                             │
-  │  142 done · 0 in-progress · 50 pending · 3 failed · 5 skipped             │
+  │  █████████████████████████████░██░░░░░░░░░░░░░  142/200 updates            │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Filter: [failed]  ▸done ▸in-progress ▸pending ●failed ▸skipped            │
@@ -300,9 +300,7 @@ VIEW 6: Search active (after pressing '/')
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
-  │  ████████████████████████████████████████░░░░░  12/15 updates              │
-  │                                                                             │
-  │  12 done · 2 in-progress · 1 pending · 0 failed                            │
+  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  /: S3█                                                                     │
@@ -345,8 +343,8 @@ VIEW 8: Command complete state
   │  ID            Type              Mode        Progress        Duration State │
   │  ─────────────────────────────────────────────────────────────────────────  │
   │  cmd-abc123    apply             reconcile   ██████████ 15/15  01:23  Done  │
-  │  cmd-def456    destroy                       ██████████  8/8   00:15  Done  │
-  │  cmd-ghi789    apply             patch       ██████████  3/3   00:08  Done  │
+  │  cmd-def456    destroy                       ██████████   8/8  00:15  Done  │
+  │  cmd-ghi789    apply             patch       ██████████   3/3  00:08  Done  │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │  All commands completed. Press q to exit.                                   │
@@ -361,9 +359,7 @@ VIEW 9: Failed command final state
   │  ← esc                                                          ✓ complete │
   │                                                                             │
   │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  ████████████████████████████████░░░░░░░░░░░░░  142/200 updates            │
-  │                                                                             │
-  │  142 done · 0 in-progress · 50 pending · 3 failed · 5 skipped             │
+  │  █████████████████████████████░██░░░░░░░░░░░░░  142/200 updates            │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Resources                                                                  │
@@ -424,8 +420,12 @@ COLOR KEY
   ────────────────────────────────────────────────────────────
   Panel borders             #333355 (dark blue)  #444444 (gray)
   Command ID                #60A5FA (blue)       #ADD8E6 (light blue)
-  Progress bar fill         #F59E0B (orange)     #B5B55B (gold)
-  Progress bar empty        #555555 (dark gray)  #808080 (gray)
+  Progress bar — neutral     #F59E0B (orange)     #B5B55B (gold)
+  Progress bar — healthy     #4ADE80 (green)      #00FF00 (green)
+  Progress bar — failed      #F87171 (red)        #FF6666 (red)
+  Progress bar empty         #555555 (dark gray)  #808080 (gray)
+  Progress bar in-progress   #AAAAAA (dim)        #ADD8E6 (light blue)
+  N in N/M count             matches bar color    matches bar color
   Done text                 #E8E8E8 (bright)     #00FF00 (green)
   In-progress text/spinner  #AAAAAA (dim)        #ADD8E6 (light blue)
   Pending text              #555555 (dark gray)  #808080 (gray)

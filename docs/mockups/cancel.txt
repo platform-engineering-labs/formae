@@ -17,7 +17,7 @@ VIEW 1: Cancel submitted — without --watch
 
   Canceling 1 command:
 
-    cmd-abc123  apply reconcile  ████████░░ 12/15  00:42
+    cmd-abc123  apply reconcile  ██████▓▓░░ 12/15  00:42
 
   What to expect:
     ·  8 updates already completed — these will not be rolled back
@@ -45,10 +45,10 @@ VIEW 2: Cancel submitted — multiple commands, without --watch
 
   Canceling 2 commands:
 
-    cmd-abc123  apply reconcile  ████████░░ 12/15  00:42
+    cmd-abc123  apply reconcile  ██████▓▓░░ 12/15  00:42
       · 8 completed · 2 in progress (will finish) · 5 pending (will cancel)
 
-    cmd-def456  apply patch      ████░░░░░░  2/6   00:08
+    cmd-def456  apply patch      ██▓░░░░░░░  2/6   00:08
       · 2 completed · 1 in progress (will finish) · 3 pending (will cancel)
 
   To watch the cancellation progress:
@@ -71,9 +71,7 @@ difference is how cancellation states render in the watch view:
   │  ← esc                                                            ↻ live   │
   │                                                                             │
   │  apply reconcile  cmd-abc123  (canceling)                 elapsed: 00:45   │
-  │  ████████████████████████████████████████░░░░░  12/15 updates              │
-  │                                                                             │
-  │  8 done · 2 finishing · 5 canceling                                        │
+  │  ██████████████████████████████████▓▓▓▓▓░░░░░  12/15 updates              │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Resources                                                                  │
@@ -120,8 +118,6 @@ VIEW 4: Cancel complete (final state in watch view)
   │                                                                             │
   │  apply reconcile  cmd-abc123  (canceled)                  elapsed: 00:52   │
   │  ██████████████████████████████████████████████  10/15 updates             │
-  │                                                                             │
-  │  10 done · 5 canceled                                                      │
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  (same resource list, all "finishing" now "Done", "canceling" now           │
