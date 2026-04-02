@@ -2381,7 +2381,7 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (?, 1, ?, ?, ?, ?)`
 	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable))
 	if err != nil {
-		slog.Error("Failed to create target", "error", err, "label", target.Label)
+		slog.Debug("Failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
 	}
 

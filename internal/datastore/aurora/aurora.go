@@ -2115,7 +2115,7 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 
 	_, err = d.executeStatement(ctx, query, params)
 	if err != nil {
-		slog.Error("failed to create target", "error", err, "label", target.Label)
+		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
 	}
 

@@ -3179,7 +3179,7 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 	`
 	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, configSchemaJSON, target.Discoverable)
 	if err != nil {
-		slog.Error("failed to create target", "error", err, "label", target.Label)
+		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
 	}
 
