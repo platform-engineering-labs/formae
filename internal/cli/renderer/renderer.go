@@ -1000,8 +1000,8 @@ func RenderInventoryResources(resources []pkgmodel.Resource, maxRows int) (strin
 }
 
 // RenderInventoryTargets renders a list of targets in a table format
-// diffConfigs compares two JSON config objects and returns human-readable
-// lines describing the field-level differences (e.g. "Profile: (none) → staging").
+// diffConfigs compares two JSON config objects and returns formatted lines
+// describing the field-level differences, consistent with resource property formatting.
 func diffConfigs(existing, desired json.RawMessage) []string {
 	if len(existing) == 0 || len(desired) == 0 {
 		return nil
@@ -1028,11 +1028,19 @@ func diffConfigs(existing, desired json.RawMessage) []string {
 		oldVal, oldOK := existingMap[key]
 		newVal, newOK := desiredMap[key]
 
-		oldStr := formatConfigValue(oldVal, oldOK)
-		newStr := formatConfigValue(newVal, newOK)
+		oldStr := formatConfigFieldValue(oldVal, oldOK)
+		newStr := formatConfigFieldValue(newVal, newOK)
 
-		if oldStr != newStr {
-			diffs = append(diffs, fmt.Sprintf("%s: %s → %s", key, oldStr, newStr))
+		if oldStr == newStr {
+			continue
+		}
+
+		if !oldOK {
+			diffs = append(diffs, display.Green(fmt.Sprintf(`add config field "%s" with the value "%s"`, key, newStr)))
+		} else if !newOK {
+			diffs = append(diffs, display.Red(fmt.Sprintf(`remove config field "%s"`, key)))
+		} else {
+			diffs = append(diffs, display.Gold(fmt.Sprintf(`change config field "%s" from "%s" to "%s"`, key, oldStr, newStr)))
 		}
 	}
 
@@ -1040,9 +1048,9 @@ func diffConfigs(existing, desired json.RawMessage) []string {
 	return diffs
 }
 
-func formatConfigValue(raw json.RawMessage, exists bool) string {
+func formatConfigFieldValue(raw json.RawMessage, exists bool) string {
 	if !exists {
-		return "(none)"
+		return ""
 	}
 	var val any
 	if err := json.Unmarshal(raw, &val); err != nil {
