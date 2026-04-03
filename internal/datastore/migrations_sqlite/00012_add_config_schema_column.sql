@@ -19,3 +19,5 @@ CREATE TABLE targets (
 );
 INSERT INTO targets SELECT * FROM targets_backup;
 DROP TABLE targets_backup;
+CREATE INDEX IF NOT EXISTS idx_namespace ON targets (namespace);
+CREATE INDEX IF NOT EXISTS idx_discoverable ON targets (discoverable);

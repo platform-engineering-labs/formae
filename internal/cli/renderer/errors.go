@@ -238,12 +238,12 @@ func renderRequiredFieldMissingOnCreateError(errResp *apimodel.RequiredFieldMiss
 }
 
 func renderNonPortableResourcesError(errResp *apimodel.NonPortableResourcesError) string {
-	message := display.Redf("cannot replace target '%s'\n\n", errResp.TargetLabel) +
-		display.Gold("The following resources are not portable and cannot be recreated on a different target:\n\n")
+	message := display.Redf("Cannot replace target '%s'\n\n", errResp.TargetLabel) +
+		display.Gold("The following resources are bound to the current target configuration and\ncannot be automatically moved to the new target:\n\n")
 	for _, r := range errResp.Resources {
 		message += fmt.Sprintf("  - %s\n", r)
 	}
-	message += "\n" + display.Gold("Use 'formae destroy' to remove these resources first, then apply with the new target.\n")
+	message += "\n" + display.Gold("To proceed, manually remove these resources first with 'formae destroy',\nthen reapply to recreate them with the new target configuration.\n")
 	return message
 }
 

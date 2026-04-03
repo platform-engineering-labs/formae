@@ -278,6 +278,9 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		if targetExistsErr, ok := err.(apimodel.TargetAlreadyExistsError); ok {
 			return nil, targetExistsErr
 		}
+		if nonPortableErr, ok := err.(apimodel.NonPortableResourcesError); ok {
+			return nil, nonPortableErr
+		}
 		slog.Error("Failed to create apply from forma", "error", err)
 		return nil, err
 	}
