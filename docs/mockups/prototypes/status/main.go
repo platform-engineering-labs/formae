@@ -145,6 +145,33 @@ var sortableUpdateColumns = []sortableUpdateColumn{
 	{"Time", func(a, b fakeUpdate) bool { return a.Duration < b.Duration }},
 }
 
+// validSortIndices returns the sortable column indices for each kind.
+// 0=Status, 1=Label, 2=Type, 3=Stack, 4=Operation, 5=Time
+func validSortIndices(kind updateKind) []int {
+	switch kind {
+	case kindPolicy:
+		return []int{0, 1, 2, 3, 4, 5} // all columns
+	case kindResource:
+		return []int{0, 1, 2, 4, 5} // no stack
+	default:
+		return []int{0, 1, 4, 5} // no type, no stack
+	}
+}
+
+func nextSortHighlight(kind updateKind, current int, delta int) int {
+	valid := validSortIndices(kind)
+	// Find current position in valid list
+	pos := 0
+	for i, v := range valid {
+		if v == current {
+			pos = i
+			break
+		}
+	}
+	pos = (pos + delta + len(valid)) % len(valid)
+	return valid[pos]
+}
+
 func sortUpdates(updates []fakeUpdate, colIdx int, dir sortDir) {
 	if dir == sortOff || colIdx < 0 || colIdx >= len(sortableUpdateColumns) {
 		return
@@ -166,22 +193,97 @@ func cursorGroup(updates []fakeUpdate, flatIdx int) updateKind {
 	return kindResource
 }
 
-// currentSubGroup returns the group the cursor is in, using the same flat order as rendering.
+// isShowMoreRow returns true if the flat index is a "show more" pagination row, and which group.
+func (m *model) isShowMoreRow(flatIdx int) (bool, updateKind) {
+	cmd := m.commands[m.selected]
+	kinds := []updateKind{kindTarget, kindStack, kindPolicy, kindResource}
+	idx := 0
+	for _, k := range kinds {
+		var count int
+		for _, u := range cmd.Updates {
+			if u.Kind == k {
+				count++
+			}
+		}
+		if count == 0 {
+			continue
+		}
+		vis := m.groupVisibleCount[k]
+		shown := count
+		hasMore := false
+		if shown > vis {
+			shown = vis
+			hasMore = true
+		}
+		idx += shown
+		if hasMore {
+			if flatIdx == idx {
+				return true, k
+			}
+			idx++ // the "show more" row itself
+		}
+	}
+	return false, kindResource
+}
+
+// totalFlatRows returns the total number of navigable rows in the subview.
+func (m *model) totalFlatRows() int {
+	cmd := m.commands[m.selected]
+	kinds := []updateKind{kindTarget, kindStack, kindPolicy, kindResource}
+	idx := 0
+	for _, k := range kinds {
+		var count int
+		for _, u := range cmd.Updates {
+			if u.Kind == k {
+				count++
+			}
+		}
+		if count == 0 {
+			continue
+		}
+		vis := m.groupVisibleCount[k]
+		shown := count
+		if shown > vis {
+			shown = vis
+			idx++ // "show more" row
+		}
+		idx += shown
+	}
+	return idx
+}
+
+// currentSubGroup returns the group the cursor is in, accounting for pagination.
 func (m *model) currentSubGroup() updateKind {
 	cmd := m.commands[m.selected]
 	kinds := []updateKind{kindTarget, kindStack, kindPolicy, kindResource}
-	var flat []fakeUpdate
+	idx := 0
 	for _, k := range kinds {
-		var gu []fakeUpdate
+		var count int
 		for _, u := range cmd.Updates {
 			if u.Kind == k {
-				gu = append(gu, u)
+				count++
 			}
 		}
-		sortUpdates(gu, m.groupSortActiveCol[k], m.groupSortDir[k])
-		flat = append(flat, gu...)
+		if count == 0 {
+			continue
+		}
+		vis := m.groupVisibleCount[k]
+		shown := count
+		hasMore := false
+		if shown > vis {
+			shown = vis
+			hasMore = true
+		}
+		endIdx := idx + shown
+		if hasMore {
+			endIdx++ // include "show more" row
+		}
+		if m.updateCur >= idx && m.updateCur < endIdx {
+			return k
+		}
+		idx = endIdx
 	}
-	return cursorGroup(flat, m.updateCur)
+	return kindResource
 }
 
 // -- Model --
@@ -209,6 +311,7 @@ type model struct {
 	groupSortHighlight map[updateKind]int
 	groupSortActiveCol map[updateKind]int
 	groupSortDir       map[updateKind]sortDir
+	groupVisibleCount  map[updateKind]int // how many rows visible per group (pagination)
 	spinner    spinner.Model
 	vp         viewport.Model
 	width      int
@@ -234,7 +337,8 @@ func newModel() *model {
 		sortDir:            sortDesc,
 		groupSortHighlight: map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
 		groupSortActiveCol: map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
-		groupSortDir:       map[updateKind]sortDir{kindTarget: sortDesc, kindStack: sortDesc, kindPolicy: sortDesc, kindResource: sortDesc},
+		groupSortDir:       map[updateKind]sortDir{kindTarget: sortAsc, kindStack: sortAsc, kindPolicy: sortAsc, kindResource: sortAsc},
+		groupVisibleCount:  map[updateKind]int{kindTarget: 10, kindStack: 10, kindPolicy: 10, kindResource: 10},
 		expanded:           make(map[int]bool),
 		spinner:  s,
 		width:      80,
@@ -276,10 +380,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = m.cursor
 				m.updateCur = 0
 				m.expanded = make(map[int]bool)
+				m.groupVisibleCount = map[updateKind]int{kindTarget: 10, kindStack: 10, kindPolicy: 10, kindResource: 10}
+				m.groupSortDir = map[updateKind]sortDir{kindTarget: sortAsc, kindStack: sortAsc, kindPolicy: sortAsc, kindResource: sortAsc}
+				m.groupSortActiveCol = map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0}
 				m.vp.GotoTop()
 			} else {
-				// Toggle expand on current update
-				if m.expanded[m.updateCur] {
+				if isMore, grp := m.isShowMoreRow(m.updateCur); isMore {
+					m.groupVisibleCount[grp] += 10
+				} else if m.expanded[m.updateCur] {
 					delete(m.expanded, m.updateCur)
 				} else {
 					m.expanded[m.updateCur] = true
@@ -289,7 +397,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys(" "))):
 			if m.view == viewSingleCommand {
-				if m.expanded[m.updateCur] {
+				if isMore, grp := m.isShowMoreRow(m.updateCur); isMore {
+					m.groupVisibleCount[grp] += 10
+				} else if m.expanded[m.updateCur] {
 					delete(m.expanded, m.updateCur)
 				} else {
 					m.expanded[m.updateCur] = true
@@ -332,6 +442,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.groupSortActiveCol[grp] = h
 					m.groupSortDir[grp] = sortDesc
 				}
+				// Reset pagination — new sort means new top 10
+				m.groupVisibleCount[grp] = 10
+				m.expanded = make(map[int]bool)
 			}
 			return m, nil
 
@@ -340,7 +453,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sortHighlight = (m.sortHighlight + 1) % len(sortableColumns)
 			} else {
 				grp := m.currentSubGroup()
-				m.groupSortHighlight[grp] = (m.groupSortHighlight[grp] + 1) % len(sortableUpdateColumns)
+				m.groupSortHighlight[grp] = nextSortHighlight(grp, m.groupSortHighlight[grp], 1)
 			}
 			return m, nil
 
@@ -349,8 +462,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sortHighlight = (m.sortHighlight - 1 + len(sortableColumns)) % len(sortableColumns)
 			} else {
 				grp := m.currentSubGroup()
-				n := len(sortableUpdateColumns)
-				m.groupSortHighlight[grp] = (m.groupSortHighlight[grp] - 1 + n) % n
+				m.groupSortHighlight[grp] = nextSortHighlight(grp, m.groupSortHighlight[grp], -1)
 			}
 			return m, nil
 
@@ -360,8 +472,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor++
 				}
 			} else {
-				totalUpdates := len(m.commands[m.selected].Updates)
-				if m.updateCur < totalUpdates-1 {
+				if m.updateCur < m.totalFlatRows()-1 {
 					m.updateCur++
 				}
 			}
@@ -767,19 +878,7 @@ func (m *model) viewSingleCommand() string {
 		{kindResource, "Resources", layoutType},
 	}
 
-	// Build flat ordered list matching rendering order, to map cursor → group
-	var flatUpdates []fakeUpdate
-	for _, g := range groups {
-		var gu []fakeUpdate
-		for _, u := range cmd.Updates {
-			if u.Kind == g.kind {
-				gu = append(gu, u)
-			}
-		}
-		sortUpdates(gu, m.groupSortActiveCol[g.kind], m.groupSortDir[g.kind])
-		flatUpdates = append(flatUpdates, gu...)
-	}
-	curGrp := cursorGroup(flatUpdates, m.updateCur)
+	curGrp := m.currentSubGroup()
 
 	idx := 0
 	for _, g := range groups {
@@ -907,7 +1006,17 @@ func (m *model) viewSingleCommand() string {
 		}
 
 		colWidths := [4]int{labelW, typeW, stackW, 12} // label, type, stack, op
-		for _, u := range groupUpdates {
+		visCount := m.groupVisibleCount[g.kind]
+		showCount := len(groupUpdates)
+		hasMore := false
+		if showCount > visCount {
+			showCount = visCount
+			hasMore = true
+		}
+		remaining := len(groupUpdates) - showCount
+
+		for i := 0; i < showCount; i++ {
+			u := groupUpdates[i]
 			isCur := idx == m.updateCur
 			isExpanded := m.expanded[idx]
 
@@ -915,6 +1024,24 @@ func (m *model) viewSingleCommand() string {
 				body.WriteString(m.renderDetailEntryWithHighlight(u, w, isCur))
 			} else {
 				body.WriteString(m.renderUpdateRowHighlightElastic(u, w, isCur, colWidths))
+			}
+			idx++
+		}
+
+		if hasMore {
+			// "show more" row — navigable, enter/space expands by 10
+			isCur := idx == m.updateCur
+			moreStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent)
+			moreText := fmt.Sprintf("      ↓ show 10 more (%d remaining)", remaining)
+			if isCur {
+				body.WriteString(lipgloss.NewStyle().
+					Background(lipgloss.Color("239")).
+					Foreground(p.PrimaryAccent).
+					Bold(true).
+					Width(w).
+					Render(moreText) + "\n")
+			} else {
+				body.WriteString(moreStyle.Render(moreText) + "\n")
 			}
 			idx++
 		}
