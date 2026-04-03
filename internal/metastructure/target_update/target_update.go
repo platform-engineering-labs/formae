@@ -146,10 +146,16 @@ func ShouldTriggerDiscovery(update *TargetUpdate) bool {
 	}
 
 	if update.Operation == TargetOperationUpdate {
-		// Trigger discovery for any update on a discoverable target. This covers
-		// both discoverable-change updates and mutable config changes (e.g., a
-		// profile/endpoint switch) that may affect which resources are visible.
-		return true
+		// Only trigger discovery when something discovery cares about changed:
+		// the target becoming newly discoverable, or the config values changing.
+		// Skip for schema-only backfills or $ref format changes.
+		if update.ExistingTarget == nil || !update.ExistingTarget.Discoverable {
+			return true // newly discoverable
+		}
+		if !util.JsonEqualRaw(update.ExistingTarget.Config, update.Target.Config) {
+			return true // config values changed
+		}
+		return false
 	}
 
 	return false

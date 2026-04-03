@@ -153,9 +153,9 @@ func TestShouldTriggerDiscovery_Update_BecomesDiscoverable(t *testing.T) {
 	assert.True(t, ShouldTriggerDiscovery(&update))
 }
 
-func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable(t *testing.T) {
-	// Any update to a discoverable target should trigger discovery,
-	// including mutable config changes that may affect visible resources.
+func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable_NoConfigChange(t *testing.T) {
+	// Schema-only or format-only update on an already-discoverable target
+	// should NOT trigger discovery — nothing discovery cares about changed.
 	update := TargetUpdate{
 		Target: pkgmodel.Target{
 			Label:        "test",
@@ -164,6 +164,26 @@ func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable(t *testing.T) {
 		ExistingTarget: &pkgmodel.Target{
 			Label:        "test",
 			Discoverable: true,
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable_ConfigChanged(t *testing.T) {
+	// Mutable config change on an already-discoverable target SHOULD trigger
+	// discovery — the config change may affect which resources are visible.
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Profile":"staging"}`),
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Profile":"dev"}`),
 		},
 		Operation: TargetOperationUpdate,
 	}

@@ -386,7 +386,12 @@ func generateResourceUpdatesForApply(
 			// Skip raw config comparison when config contains resolvables ($ref).
 			// The TargetUpdateGenerator handles resolvable-aware comparison.
 			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 {
-				configChange := target_update.ClassifyConfigChange(existingTarget.Config, target.Config, existingTarget.ConfigSchema)
+				// Use the incoming schema when existing has none (legacy target).
+				schema := existingTarget.ConfigSchema
+				if len(schema.Hints) == 0 {
+					schema = target.ConfigSchema
+				}
+				configChange := target_update.ClassifyConfigChange(existingTarget.Config, target.Config, schema)
 				if configChange == target_update.ConfigImmutableChange {
 					return nil, apimodel.TargetAlreadyExistsError{
 						TargetLabel:    target.Label,
