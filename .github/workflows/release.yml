@@ -30,11 +30,11 @@ permissions:
 
 jobs:
   verify:
-    if: github.repository == 'platform-engineering-labs/formae'
     runs-on: ubuntu-latest
 
     steps:
       - name: Generate peldroid app token
+        if: github.repository == 'platform-engineering-labs/formae'
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
@@ -44,6 +44,7 @@ jobs:
           repositories: formae,formae-plugin-azure,formae-plugin-aws,formae-plugin-gcp,formae-plugin-oci,formae-plugin-ovh
 
       - name: Verify core CI checks
+        if: github.repository == 'platform-engineering-labs/formae'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -70,7 +71,7 @@ jobs:
           echo "All core CI checks passed."
 
       - name: Verify plugin nightlies
-        if: ${{ inputs.skip_plugin_checks != true }}
+        if: ${{ github.repository == 'platform-engineering-labs/formae' && inputs.skip_plugin_checks != true }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
