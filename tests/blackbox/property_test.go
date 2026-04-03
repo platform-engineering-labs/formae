@@ -168,6 +168,11 @@ func TestProperty_FullChaos(t *testing.T) {
 			// Wind down: drain pending commands
 			h.DrainPendingCommands(t, model, 30*time.Second)
 
+			// Sync cloud state with inventory. Chaos operations (cancel, crash,
+			// TTL cascade) can leave cloud entries that the ResourcePersister
+			// hasn't cleaned up yet, causing phantom violations.
+			h.TriggerSyncAndWait(t)
+
 			h.AssertAllInvariants(t, model)
 		})
 	})

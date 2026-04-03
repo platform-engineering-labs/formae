@@ -1585,6 +1585,21 @@ func (h *TestHarness) executeTriggerSync(t *testing.T, model *StateModel) {
 	t.Logf("TriggerSync: fired")
 }
 
+// TriggerSyncAndWait fires a sync and waits for it to complete. Used before
+// final invariant checks to ensure inventory reflects cloud state after chaos
+// operations (cancel, crash, TTL) that can leave stale inventory entries.
+func (h *TestHarness) TriggerSyncAndWait(t *testing.T) {
+	t.Helper()
+	err := h.client.ForceSync()
+	if err != nil {
+		t.Logf("TriggerSyncAndWait: error: %v", err)
+		return
+	}
+	if _, ok := h.WaitForNextSyncCommand(10 * time.Second); !ok {
+		t.Logf("TriggerSyncAndWait: no sync command observed")
+	}
+}
+
 func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 	t.Helper()
 	err := h.client.ForceDiscover()
