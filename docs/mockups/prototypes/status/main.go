@@ -76,31 +76,45 @@ func isTerminalState(s updateState) bool {
 
 // -- Sort --
 
-type sortColumn int
+type sortDir int
 
 const (
-	sortByStatus sortColumn = iota
-	sortByTime
-	sortByProgress
-	sortByID
-	sortColumnCount // sentinel for cycling
+	sortDesc sortDir = iota // ▼
+	sortAsc                 // ▲
+	sortOff                 // no sort on this column
 )
 
-func sortCommands(cmds []fakeCommand, col sortColumn) {
+type sortableColumn struct {
+	name    string // column header name
+	sortFn  func(a, b fakeCommand) bool // ascending comparator
+}
+
+var sortableColumns = []sortableColumn{
+	{"", func(a, b fakeCommand) bool { return statusPriority(a) < statusPriority(b) }},          // status column (no label)
+	{"Command", func(a, b fakeCommand) bool { return a.CmdType < b.CmdType }},
+	{"Mode", func(a, b fakeCommand) bool { return a.Mode < b.Mode }},
+	{"Progress", func(a, b fakeCommand) bool { return progressPct(a) < progressPct(b) }},
+	{"Time", func(a, b fakeCommand) bool { return a.Duration < b.Duration }},
+}
+
+func progressPct(cmd fakeCommand) float64 {
+	completed, total := countCompleted(cmd.Updates)
+	if total == 0 {
+		return 0
+	}
+	return float64(completed) / float64(total)
+}
+
+func sortCommands(cmds []fakeCommand, colIdx int, dir sortDir) {
+	if dir == sortOff || colIdx < 0 || colIdx >= len(sortableColumns) {
+		return
+	}
+	asc := sortableColumns[colIdx].sortFn
 	sort.SliceStable(cmds, func(i, j int) bool {
-		switch col {
-		case sortByStatus:
-			return statusPriority(cmds[i]) < statusPriority(cmds[j])
-		case sortByTime:
-			return cmds[i].Duration > cmds[j].Duration
-		case sortByProgress:
-			pi := progressPct(cmds[i])
-			pj := progressPct(cmds[j])
-			return pi < pj
-		case sortByID:
-			return cmds[i].ID < cmds[j].ID
+		if dir == sortAsc {
+			return asc(cmds[i], cmds[j])
 		}
-		return false
+		return asc(cmds[j], cmds[i]) // reverse for desc
 	})
 }
 
@@ -114,14 +128,6 @@ func statusPriority(cmd fakeCommand) int {
 		return 2
 	}
 	return 3
-}
-
-func progressPct(cmd fakeCommand) float64 {
-	completed, total := countCompleted(cmd.Updates)
-	if total == 0 {
-		return 0
-	}
-	return float64(completed) / float64(total)
 }
 
 // -- Model --
@@ -142,7 +148,9 @@ type model struct {
 	selected   int            // which command is drilled into
 	updateCur  int            // resource list cursor in single command view
 	expanded   map[int]bool   // set of expanded update indices
-	sortCol    sortColumn
+	sortHighlight int         // which sortable column is highlighted
+	sortActiveCol int         // which column is actively sorted (-1 = none custom)
+	sortDir    sortDir        // current sort direction
 	spinner    spinner.Model
 	vp         viewport.Model
 	width      int
@@ -158,13 +166,15 @@ func newModel() *model {
 	s.Style = lipgloss.NewStyle().Foreground(th.Palette.InProgress)
 
 	cmds := fakeCommands()
-	sortCommands(cmds, sortByStatus)
+	sortCommands(cmds, 0, sortDesc) // default: status descending (failed first)
 
 	return &model{
-		theme:    th,
-		commands: cmds,
-		sortCol:  sortByStatus,
-		expanded: make(map[int]bool),
+		theme:         th,
+		commands:      cmds,
+		sortHighlight: 0,
+		sortActiveCol: 0,
+		sortDir:       sortDesc,
+		expanded:      make(map[int]bool),
 		spinner:  s,
 		width:      80,
 		height:     24,
@@ -235,8 +245,39 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
 			if m.view == viewMultiCommand {
-				m.sortCol = (m.sortCol + 1) % sortColumnCount
-				sortCommands(m.commands, m.sortCol)
+				if m.sortActiveCol == m.sortHighlight {
+					// Same column: flip direction
+					if m.sortDir == sortDesc {
+						m.sortDir = sortAsc
+					} else {
+						m.sortDir = sortDesc
+					}
+				} else {
+					// New column: start descending
+					m.sortActiveCol = m.sortHighlight
+					m.sortDir = sortDesc
+				}
+				sortCommands(m.commands, m.sortActiveCol, m.sortDir)
+			}
+			return m, nil
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("right", "l"))):
+			if m.view == viewMultiCommand {
+				if m.sortHighlight < len(sortableColumns)-1 {
+					m.sortHighlight++
+				} else {
+					m.sortHighlight = 0
+				}
+			}
+			return m, nil
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("left", "h"))):
+			if m.view == viewMultiCommand {
+				if m.sortHighlight > 0 {
+					m.sortHighlight--
+				} else {
+					m.sortHighlight = len(sortableColumns) - 1
+				}
 			}
 			return m, nil
 
@@ -321,38 +362,76 @@ func (m *model) viewMultiCommand() string {
 	header := renderHeaderBar("formae status command", "↻ live", p, w)
 
 	// Column headers
-	// Fixed columns: status(3) + ID(14) + Type(9) + Mode(11) + bar(elastic) + ✓(4) + ✗(4) + ◐(4) + ·(4) + Time(6)
-	sortIndicator := ""
-	if m.sortCol != sortByStatus {
-		switch m.sortCol {
-		case sortByTime:
-			sortIndicator = " Time▼"
-		case sortByProgress:
-			sortIndicator = " Progress▼"
-		case sortByID:
-			sortIndicator = " ID▼"
+	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	highlightStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	bw := barWidth(w)
+
+	// Render a column header name with sort indicator if applicable
+	renderColName := func(name string, sortIdx int) string {
+		isHighlighted := sortIdx == m.sortHighlight
+		isActive := sortIdx == m.sortActiveCol
+		arrow := ""
+		if isActive {
+			if m.sortDir == sortDesc {
+				arrow = "▼"
+			} else if m.sortDir == sortAsc {
+				arrow = "▲"
+			}
 		}
+		text := name + arrow
+		if isHighlighted {
+			return lipgloss.NewStyle().
+				Foreground(p.TextPrimary).
+				Background(lipgloss.Color("237")).
+				Bold(true).
+				Render(text)
+		}
+		if isActive && !isHighlighted {
+			return highlightStyle.Render(text)
+		}
+		return dimStyle.Render(text)
 	}
 
-	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
-	bw := barWidth(w)
+	// Status column: just the arrow, no label — pad with spaces for visibility
+	renderStatusCol := func() string {
+		sortIdx := 0
+		isHighlighted := sortIdx == m.sortHighlight
+		isActive := sortIdx == m.sortActiveCol
+		arrow := " "
+		if isActive {
+			if m.sortDir == sortDesc {
+				arrow = "▼"
+			} else {
+				arrow = "▲"
+			}
+		}
+		text := "  " + arrow + " "
+		if isHighlighted {
+			return lipgloss.NewStyle().
+				Foreground(p.TextPrimary).
+				Background(lipgloss.Color("237")).
+				Bold(true).
+				Render(text)
+		}
+		if isActive {
+			return highlightStyle.Render(text)
+		}
+		return dimStyle.Render(text)
+	}
 
 	// Build column header — must match row layout:
 	// row = sp2(2) + statusSym(2) + sp2(2) + id(14) + cmdType(9) + mode(11) + progressArea(bw+7) + sp(1) + counts(4*4) + sp2(2) + dur(6)
-	colLine := "      " + // 2+2+2 = 6 to match sp2+statusSym+sp2
+	colLine := padRight(renderStatusCol(), 6) + // status col: " ▼ " padded to 6
 		padRight(dimStyle.Render("ID"), 14) +
-		padRight(dimStyle.Render("Command"), 9) +
-		padRight(dimStyle.Render("Mode"), 11) +
-		padRight(dimStyle.Render("Progress"), bw+7) + // bar + " " + "NN/NN" space
+		padRight(renderColName("Command", 1), 9) +
+		padRight(renderColName("Mode", 2), 11) +
+		padRight(renderColName("Progress", 3), bw+7) +
 		" " +
 		padRight(lipgloss.NewStyle().Foreground(p.Done).Render("✓"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.InProgress).Render("◐"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Pending).Render("○"), 4) +
-		"  " + dimStyle.Render("Time")
-	if sortIndicator != "" {
-		colLine += lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(sortIndicator)
-	}
+		"  " + renderColName("Time", 4)
 
 	// Rows
 	var rows []string
@@ -362,7 +441,10 @@ func (m *model) viewMultiCommand() string {
 
 	// Footer
 	footer := m.renderFooter(w, []keyHint{
+		{"↑↓", "select"},
 		{"enter", "details"},
+		{"→←", "column"},
+		{"s", "toggle sort"},
 		{"/", "query"},
 		{"q", "quit"},
 	}, "")
