@@ -119,15 +119,26 @@ func sortCommands(cmds []fakeCommand, colIdx int, dir sortDir) {
 }
 
 func statusPriority(cmd fakeCommand) int {
-	switch cmd.State {
-	case "Failed":
-		return 0
-	case "InProgress":
-		return 1
-	case "Done":
-		return 2
+	// Check if any updates have failed (command might still be InProgress)
+	hasFails := false
+	for _, u := range cmd.Updates {
+		if u.State == stateFailed || u.State == stateSkipped {
+			hasFails = true
+			break
+		}
 	}
-	return 3
+	switch cmd.State {
+	case "InProgress":
+		if hasFails {
+			return 0 // still running and failing — needs attention NOW
+		}
+		return 2 // healthy in-progress
+	case "Failed":
+		return 1 // terminal failed — bad but settled
+	case "Done":
+		return 3
+	}
+	return 4
 }
 
 // Sortable columns for subview (update rows)
@@ -327,14 +338,14 @@ func newModel() *model {
 	s.Style = lipgloss.NewStyle().Foreground(th.Palette.InProgress)
 
 	cmds := fakeCommands()
-	sortCommands(cmds, 0, sortDesc) // default: status descending (failed first)
+	sortCommands(cmds, 0, sortAsc) // default: status ascending (failed first, done last)
 
 	return &model{
 		theme:         th,
 		commands:      cmds,
 		sortHighlight:      0,
 		sortActiveCol:      0,
-		sortDir:            sortDesc,
+		sortDir:            sortAsc,
 		groupSortHighlight: map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
 		groupSortActiveCol: map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
 		groupSortDir:       map[updateKind]sortDir{kindTarget: sortAsc, kindStack: sortAsc, kindPolicy: sortAsc, kindResource: sortAsc},
@@ -677,6 +688,9 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 		return s
 	}
 
+	// Determine if this command is failing
+	isFailing := sc.failed > 0
+
 	// Status symbol (far left) — fixed width column
 	padSym := func(s string, w int) string {
 		if isCursor {
@@ -689,15 +703,48 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	case "Failed":
 		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗"), 2)
 	case "Done":
-		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Done)).Render("✓"), 2)
-	case "InProgress":
-		// Get spinner view, then wrap it with background if cursor
-		spinView := m.spinner.View()
-		if isCursor {
-			// Strip existing style and re-wrap with background
-			spinView = lipgloss.NewStyle().Background(bg).Render(spinView)
+		if isFailing {
+			statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗"), 2)
+		} else if isCursor {
+			statusSym = padSym(lipgloss.NewStyle().Foreground(p.Done).Background(bg).Render("✓"), 2)
+		} else {
+			statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.TextSecondary)).Render("✓"), 2)
 		}
-		statusSym = padSym(spinView, 2)
+	case "InProgress":
+		// Get the raw frame character from the spinner
+		frames := m.spinner.Spinner.Frames
+		frameIdx := int(m.spinner.Style.GetWidth()) // hack: just use View and strip
+		_ = frameIdx
+		// Extract the visible character from the spinner view
+		spinView := m.spinner.View()
+		// Strip all ANSI escapes to get the raw character
+		raw := lipgloss.NewStyle().Render(spinView)
+		rawRunes := []rune{}
+		for _, r := range raw {
+			if r != '\033' {
+				rawRunes = append(rawRunes, r)
+			}
+		}
+		// Just use the frames directly based on a simple counter
+		frame := frames[0]
+		if len(frames) > 0 {
+			// The spinner view contains the styled frame - we need to find which frame
+			// Just render fresh with our own style
+			for _, f := range frames {
+				if strings.Contains(spinView, f) {
+					frame = f
+					break
+				}
+			}
+		}
+		style := lipgloss.NewStyle().Foreground(p.InProgress)
+		if isFailing {
+			style = lipgloss.NewStyle().Foreground(p.Error)
+		}
+		if isCursor {
+			style = style.Background(bg)
+		}
+		statusSym = padSym(style.Render(frame), 2)
 	default:
 		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Pending)).Render("○"), 2)
 	}
@@ -707,12 +754,43 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	subtleStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
 
+	// Dim finished successful commands — one single color
+	isDoneOk := cmd.State == "Done" && !isFailing
+	if isDoneOk {
+		dim := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+		idStyle = dim
+		plainStyle = dim
+		dimStyle = dim
+		subtleStyle = dim
+	}
+
+	// Red text for failing/failed commands
+	if isFailing {
+		idStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
+		plainStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
+		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
+		subtleStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
+	}
+
 	// Brighten all text on selected row
 	if isCursor {
-		idStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD"))) // brighter blue
-		plainStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
-		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
-		subtleStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		if isFailing {
+			idStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#FCA5A5"))) // brighter red
+			plainStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#FCA5A5")))
+			dimStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#FCA5A5")))
+			subtleStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#FCA5A5")))
+		} else if isDoneOk {
+			bright := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+			idStyle = bright
+			plainStyle = bright
+			dimStyle = bright
+			subtleStyle = bright
+		} else {
+			idStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD"))) // brighter blue
+			plainStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+			dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+			subtleStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		}
 	}
 
 	pad := func(s string, w int) string {
@@ -740,9 +818,21 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 		progressArea = bar + pad("", 1) + pad(countStr, 6)
 	}
 
-	// Per-status count columns, colored
+	// Per-status count columns, colored — dimmed for finished ok commands
 	renderCount := func(n int, color lipgloss.AdaptiveColor) string {
 		s := withBg(lipgloss.NewStyle())
+		if isDoneOk {
+			if isCursor {
+				return pad(s.Foreground(p.TextSecondary).Render(fmt.Sprintf("%d", n)), 4)
+			}
+			return pad(s.Foreground(p.TextSubtle).Render(fmt.Sprintf("%d", n)), 4)
+		}
+		if isCursor {
+			if n == 0 {
+				return pad(s.Foreground(p.TextSecondary).Render("0"), 4)
+			}
+			return pad(s.Foreground(p.TextPrimary).Render(fmt.Sprintf("%d", n)), 4)
+		}
 		if n == 0 {
 			return pad(s.Foreground(p.TextSubtle).Render("0"), 4)
 		}
@@ -1090,25 +1180,89 @@ func (m *model) renderUpdateRowHighlightElastic(u fakeUpdate, w int, isCursor bo
 		return padRight(s, w)
 	}
 
-	stateStr := m.renderStateSymbol(u)
+	isFailed := u.State == stateFailed || u.State == stateSkipped
+	isDone := u.State == stateDone
+
+	// Status symbol
+	var stateStr string
 	if isCursor {
-		if u.State == stateInProgress {
-			stateStr = lipgloss.NewStyle().Background(bg).Render(m.spinner.View())
+		switch u.State {
+		case stateDone:
+			stateStr = lipgloss.NewStyle().Foreground(p.Done).Background(bg).Render("✓")
+		case stateInProgress:
+			// Extract spinner frame and render with proper color
+			spinView := m.spinner.View()
+			frames := m.spinner.Spinner.Frames
+			frame := frames[0]
+			for _, f := range frames {
+				if strings.Contains(spinView, f) {
+					frame = f
+					break
+				}
+			}
+			stateStr = lipgloss.NewStyle().Foreground(p.InProgress).Background(bg).Render(frame)
+		case statePending:
+			stateStr = lipgloss.NewStyle().Foreground(p.Pending).Background(bg).Render("○")
+		case stateFailed:
+			stateStr = lipgloss.NewStyle().Foreground(p.Error).Background(bg).Bold(true).Render("✗")
+		case stateSkipped:
+			stateStr = lipgloss.NewStyle().Foreground(p.TextSecondary).Background(bg).Render("⊘")
+		default:
+			stateStr = lipgloss.NewStyle().Background(bg).Render(" ")
 		}
 		stateStr = padRightBg(stateStr, 2, bg)
 	} else {
-		stateStr = padRight(stateStr, 2)
+		// Non-cursor: dim done items
+		if isDone {
+			stateStr = padRight(lipgloss.NewStyle().Foreground(p.TextSubtle).Render("✓"), 2)
+		} else {
+			stateStr = padRight(m.renderStateSymbol(u), 2)
+		}
 	}
 
 	labelStyle := withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent))
 	typeStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	opStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+
+	// Done items: dim everything to one color
+	if isDone && !isCursor {
+		dim := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+		labelStyle = dim
+		typeStyle = dim
+		opStyle = dim
+		dimStyle = dim
+	}
+
+	// Failed/skipped items: red everything
+	if isFailed && !isCursor {
+		red := withBg(lipgloss.NewStyle().Foreground(p.Error))
+		labelStyle = red
+		typeStyle = red
+		opStyle = red
+		dimStyle = red
+	}
+
+	// Cursor highlights
 	if isCursor {
-		labelStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD")))
-		typeStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
-		opStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
-		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		if isFailed {
+			bright := withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#FCA5A5")))
+			labelStyle = bright
+			typeStyle = bright
+			opStyle = bright
+			dimStyle = bright
+		} else if isDone {
+			med := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+			labelStyle = med
+			typeStyle = med
+			opStyle = med
+			dimStyle = med
+		} else {
+			labelStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD")))
+			typeStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+			opStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+			dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		}
 	}
 
 	trunc := func(s string, maxW int) string {
