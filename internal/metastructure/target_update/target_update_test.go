@@ -154,6 +154,8 @@ func TestShouldTriggerDiscovery_Update_BecomesDiscoverable(t *testing.T) {
 }
 
 func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable(t *testing.T) {
+	// Any update to a discoverable target should trigger discovery,
+	// including mutable config changes that may affect visible resources.
 	update := TargetUpdate{
 		Target: pkgmodel.Target{
 			Label:        "test",
@@ -166,7 +168,7 @@ func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable(t *testing.T) {
 		Operation: TargetOperationUpdate,
 	}
 
-	assert.False(t, ShouldTriggerDiscovery(&update))
+	assert.True(t, ShouldTriggerDiscovery(&update))
 }
 
 func TestShouldTriggerDiscovery_Update_BecomesNotDiscoverable(t *testing.T) {

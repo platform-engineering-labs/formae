@@ -883,6 +883,85 @@ func TestDetermineTargetUpdate_ConfigChange_NoSchema_GeneratesReplace(t *testing
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
 }
 
+func TestGenerateTargetUpdates_ConfigSchemaChanged_GeneratesUpdate(t *testing.T) {
+	// Existing target has no ConfigSchema (pre-migration or old plugin version).
+	// New forma provides a ConfigSchema. Even though config values and discoverable
+	// are unchanged, the schema difference should trigger an Update to backfill it.
+	existingTarget := &pkgmodel.Target{
+		Label:        "aws-test",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+		Discoverable: true,
+		// No ConfigSchema — legacy target
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"aws-test": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:        "aws-test",
+			Namespace:    "AWS",
+			Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+			Discoverable: true,
+			ConfigSchema: pkgmodel.ConfigSchema{
+				Hints: map[string]pkgmodel.ConfigFieldHint{
+					"Region": {CreateOnly: true},
+				},
+			},
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "ConfigSchema change should trigger Update to backfill schema")
+}
+
+func TestGenerateTargetUpdates_ConfigSchemaUnchanged_NoUpdate(t *testing.T) {
+	// Same config, same discoverable, same ConfigSchema — no update needed.
+	existingTarget := &pkgmodel.Target{
+		Label:        "aws-test",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+		Discoverable: true,
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"Region": {CreateOnly: true},
+			},
+		},
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"aws-test": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:        "aws-test",
+			Namespace:    "AWS",
+			Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+			Discoverable: true,
+			ConfigSchema: pkgmodel.ConfigSchema{
+				Hints: map[string]pkgmodel.ConfigFieldHint{
+					"Region": {CreateOnly: true},
+				},
+			},
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, updates, "identical config, discoverable, and schema should produce no update")
+}
+
 func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
 	mockDS := &mockTargetDatastore{
 		targets: map[string]*pkgmodel.Target{

@@ -132,12 +132,15 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		case ConfigMutableChange:
 			operation = TargetOperationUpdate
 		case ConfigNoChange:
-			// Resolved values are identical, but the raw config format may have
-			// changed (e.g., a plain value was replaced by a $ref or vice versa).
-			// Persist this as an update so the new format is stored, but never replace.
+			// Resolved values are identical, but we still need to update if:
+			// - The raw config format changed (e.g., plain value ↔ $ref wrapper)
+			// - The discoverable flag changed
+			// - The ConfigSchema changed (e.g., plugin annotations updated)
 			if !util.JsonEqualRaw(existing.Config, target.Config) {
 				operation = TargetOperationUpdate
 			} else if existing.Discoverable != target.Discoverable {
+				operation = TargetOperationUpdate
+			} else if !configSchemasEqual(existing.ConfigSchema, target.ConfigSchema) {
 				operation = TargetOperationUpdate
 			} else {
 				return TargetUpdate{}, false, nil
@@ -154,6 +157,20 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		ModifiedTs:           now,
 		RemainingResolvables: resolvables,
 	}, true, nil
+}
+
+// configSchemasEqual returns true if two ConfigSchemas have identical hints.
+func configSchemasEqual(a, b pkgmodel.ConfigSchema) bool {
+	if len(a.Hints) != len(b.Hints) {
+		return false
+	}
+	for k, hintA := range a.Hints {
+		hintB, ok := b.Hints[k]
+		if !ok || hintA != hintB {
+			return false
+		}
+	}
+	return true
 }
 
 // resolvedConfigs returns the existing and new configs in a form suitable for

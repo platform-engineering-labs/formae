@@ -146,8 +146,10 @@ func ShouldTriggerDiscovery(update *TargetUpdate) bool {
 	}
 
 	if update.Operation == TargetOperationUpdate {
-		// Trigger if target wasn't discoverable before
-		return update.ExistingTarget == nil || !update.ExistingTarget.Discoverable
+		// Trigger discovery for any update on a discoverable target. This covers
+		// both discoverable-change updates and mutable config changes (e.g., a
+		// profile/endpoint switch) that may affect which resources are visible.
+		return true
 	}
 
 	return false
