@@ -3578,6 +3578,23 @@ func (d DatastorePostgres) UpdateFormaCommandProgress(commandID string, state fo
 	return nil
 }
 
+func (d DatastorePostgres) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
+	ctx, span := tracer.Start(context.Background(), "UpdateFormaCommandTargetUpdates")
+	defer span.End()
+
+	query := `UPDATE forma_commands SET target_updates = $1, state = $2, modified_ts = $3 WHERE command_id = $4`
+	result, err := d.pool.Exec(ctx, query, string(targetUpdatesJSON), string(state), modifiedTs.UTC(), commandID)
+	if err != nil {
+		return fmt.Errorf("failed to update forma command target updates: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("forma command not found: %s", commandID)
+	}
+
+	return nil
+}
+
 func (d DatastorePostgres) Close() {
 	d.pool.Close()
 }

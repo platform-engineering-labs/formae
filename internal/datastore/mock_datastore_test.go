@@ -5,6 +5,7 @@
 package datastore
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -157,5 +158,8 @@ func (m *mockDatastore) BatchUpdateResourceUpdateState(_ string, _ []ResourceUpd
 	return nil
 }
 func (m *mockDatastore) UpdateFormaCommandProgress(_ string, _ forma_command.CommandState, _ time.Time) error {
+	return nil
+}
+func (m *mockDatastore) UpdateFormaCommandTargetUpdates(_ string, _ json.RawMessage, _ forma_command.CommandState, _ time.Time) error {
 	return nil
 }
