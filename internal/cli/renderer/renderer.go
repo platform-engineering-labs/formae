@@ -1059,6 +1059,19 @@ func formatConfigFieldValue(raw json.RawMessage, exists bool) string {
 	if s, ok := val.(string); ok {
 		return s
 	}
+	// Handle $ref/$value wrapper objects: extract the resolved $value
+	// so the diff shows the actual value, not the resolvable metadata.
+	if m, ok := val.(map[string]any); ok {
+		if v, hasValue := m["$value"]; hasValue {
+			if s, ok := v.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		if _, hasRef := m["$ref"]; hasRef {
+			return "(unresolved reference)"
+		}
+	}
 	return string(raw)
 }
 
