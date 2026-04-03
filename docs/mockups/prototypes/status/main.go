@@ -6,7 +6,7 @@
 // Run: go run ./docs/mockups/prototypes/status/
 //
 // Multi-command summary + single command drill-in views with hardcoded data.
-// enter: drill in, esc: back, d: toggle detail/summary, s: cycle sort,
+// enter/d: details, esc/backspace: back, enter/space: expand, s: cycle sort,
 // ↑↓/j/k: scroll, q: quit
 package main
 
@@ -199,7 +199,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		case key.Matches(msg, key.NewBinding(key.WithKeys("enter", " "))):
+		case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
 			if m.view == viewMultiCommand {
 				m.view = viewSingleCommand
 				m.selected = m.cursor
@@ -208,6 +208,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.vp.GotoTop()
 			} else {
 				// Toggle expand on current update
+				if m.expanded[m.updateCur] {
+					delete(m.expanded, m.updateCur)
+				} else {
+					m.expanded[m.updateCur] = true
+				}
+			}
+			return m, nil
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys(" "))):
+			if m.view == viewSingleCommand {
 				if m.expanded[m.updateCur] {
 					delete(m.expanded, m.updateCur)
 				} else {
@@ -352,9 +362,8 @@ func (m *model) viewMultiCommand() string {
 
 	// Footer
 	footer := m.renderFooter(w, []keyHint{
-		{"enter", "drill in"},
-		{"s", "sort"},
-		{"↑↓/j/k", "navigate"},
+		{"enter", "details"},
+		{"/", "query"},
 		{"q", "quit"},
 	}, "")
 
@@ -639,8 +648,8 @@ func (m *model) viewSingleCommand() string {
 
 	// Footer
 	footer := m.renderFooter(w, []keyHint{
-		{"enter/space", "expand"},
-		{"↑↓/j/k", "navigate"},
+		{"space", "expand"},
+		{"/", "query"},
 		{"esc", "back"},
 	}, "")
 

@@ -28,7 +28,7 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
   │                                                                              │
   │                                                                              │
   ├──────────────────────────────────────────────────────────────────────────────┤
-  │  enter: drill in  s: sort  ↑↓/j/k: navigate  q: quit              ?: help   │
+  │  enter: details  /: query  q: quit                                ?: help │
   └──────────────────────────────────────────────────────────────────────────────┘
 
   Notes:
@@ -50,7 +50,7 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
     Zeros rendered in subtle/gray
   - Bar is elastic — fills remaining space after fixed columns
   - "↻ live" indicator when actively polling
-  - Press enter to drill into a command's single detail view
+  - Press enter or d to open command details view
 
   Responsive column priority (what drops as terminal narrows):
   - Always visible: Status, ID, Progress bar (min ~10 chars), ✓, ✗, Time
@@ -102,7 +102,7 @@ VIEW 2: Single command detail — summary mode (after pressing 'enter')
   │  ○    cdn                       AWS::CloudFront::Dist…     create       —    │
   │                                                                              │
   ├──────────────────────────────────────────────────────────────────────────────┤
-  │  d: detail/summary  f: filter  /: search  ↑↓/j/k: scroll          ?: help   │
+  │  space: expand  /: query  esc: back                               ?: help │
   └──────────────────────────────────────────────────────────────────────────────┘
 
   Notes:
@@ -170,7 +170,7 @@ VIEW 3: Single command — expanded detail mode (after pressing 'd')
   │  └───────────────────────────────────────────────────────────────────────┘  │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤
-  │  d: detail/summary  f: filter  /: search  F: auto-follow          ?: help  │
+  │  space: expand  /: query  esc: back                                ?: help  │
   └─────────────────────────────────────────────────────────────────────────────┘
 
   Notes:
@@ -265,7 +265,7 @@ When a command has more updates than fit in the viewport, groups are collapsed:
   │  ▸ Policies (3)                                                 2/3 ✓      │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤
-  │  d: detail  f: filter  /: search  F: auto-follow                  ?: help  │
+  │  space: expand  /: query  esc: back                                ?: help  │
   └─────────────────────────────────────────────────────────────────────────────┘
 
   Notes:
@@ -336,13 +336,13 @@ VIEW 7: Auto-follow indicator
 When auto-follow is active:
 
   ├─────────────────────────────────────────────────────────────────────────────┤
-  │  d: detail  f: filter  /: search  ↓ auto-following                ?: help  │
+  │  space: expand  /: query  esc: back                                ?: help  │
   └─────────────────────────────────────────────────────────────────────────────┘
 
 When auto-follow is disabled (user scrolled manually):
 
   ├─────────────────────────────────────────────────────────────────────────────┤
-  │  d: detail  f: filter  /: search  F: re-follow                    ?: help  │
+  │  space: expand  /: query  esc: back                                ?: help  │
   └─────────────────────────────────────────────────────────────────────────────┘
 
 
@@ -389,7 +389,7 @@ VIEW 9: Failed command final state
   │    ...and 47 more pending (skipped due to failures above)                   │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤
-  │  d: detail  f: filter  /: search  q: quit                         ?: help  │
+  │  space: expand  /: query  q: quit                                  ?: help  │
   └─────────────────────────────────────────────────────────────────────────────┘
 
 
