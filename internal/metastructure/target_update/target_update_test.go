@@ -191,6 +191,26 @@ func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable_ConfigChanged(t *test
 	assert.True(t, ShouldTriggerDiscovery(&update))
 }
 
+func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable_RefFormatChange(t *testing.T) {
+	// Format-only change ($ref wrapper vs plain value with same resolved value)
+	// should NOT trigger discovery — the effective config didn't change.
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"endpoint":{"$ref":"formae://abc#/Endpoint","$value":"https://my-cluster"}}`),
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"endpoint":"https://my-cluster"}`),
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
 func TestShouldTriggerDiscovery_Update_BecomesNotDiscoverable(t *testing.T) {
 	update := TargetUpdate{
 		Target: pkgmodel.Target{

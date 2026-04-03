@@ -923,6 +923,51 @@ func TestGenerateTargetUpdates_LegacyTarget_MutableChange_UsesIncomingSchema(t *
 	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "legacy target with mutable-only change should use incoming schema and produce Update")
 }
 
+func TestGenerateTargetUpdates_StaleSchema_NewMutableField_GeneratesUpdate(t *testing.T) {
+	// Existing target has an older schema with only Region. Plugin was upgraded
+	// and now also annotates Profile as mutable. Changing only Profile should
+	// use the incoming schema and produce Update, not Replace.
+	existingTarget := &pkgmodel.Target{
+		Label:        "aws-test",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1","Profile":"dev"}`),
+		Discoverable: true,
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"Region": {CreateOnly: true},
+				// Profile not in old schema
+			},
+		},
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"aws-test": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:        "aws-test",
+			Namespace:    "AWS",
+			Config:       json.RawMessage(`{"Region":"us-east-1","Profile":"staging"}`),
+			Discoverable: true,
+			ConfigSchema: pkgmodel.ConfigSchema{
+				Hints: map[string]pkgmodel.ConfigFieldHint{
+					"Region":  {CreateOnly: true},
+					"Profile": {CreateOnly: false},
+				},
+			},
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "stale schema with new mutable field should use incoming schema and produce Update")
+}
+
 func TestGenerateTargetUpdates_LegacyTarget_ImmutableChange_StillReplace(t *testing.T) {
 	// Legacy target, incoming schema marks Region as immutable. Changing Region
 	// should still produce Replace even when using the incoming schema.

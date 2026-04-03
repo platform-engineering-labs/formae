@@ -152,8 +152,18 @@ func ShouldTriggerDiscovery(update *TargetUpdate) bool {
 		if update.ExistingTarget == nil || !update.ExistingTarget.Discoverable {
 			return true // newly discoverable
 		}
-		if !util.JsonEqualRaw(update.ExistingTarget.Config, update.Target.Config) {
-			return true // config values changed
+		// Compare resolved config values (strip $ref metadata) so that
+		// format-only changes (value ↔ $ref wrapper) don't trigger discovery.
+		existingResolved, err := resolver.ConvertToPluginFormat(update.ExistingTarget.Config)
+		if err != nil {
+			existingResolved = update.ExistingTarget.Config
+		}
+		newResolved, err := resolver.ConvertToPluginFormat(update.Target.Config)
+		if err != nil {
+			newResolved = update.Target.Config
+		}
+		if !util.JsonEqualRaw(existingResolved, newResolved) {
+			return true // effective config values changed
 		}
 		return false
 	}

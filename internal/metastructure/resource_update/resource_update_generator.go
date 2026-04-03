@@ -386,10 +386,12 @@ func generateResourceUpdatesForApply(
 			// Skip raw config comparison when config contains resolvables ($ref).
 			// The TargetUpdateGenerator handles resolvable-aware comparison.
 			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 {
-				// Use the incoming schema when existing has none (legacy target).
-				schema := existingTarget.ConfigSchema
+				// Prefer the incoming schema — it represents the current plugin
+				// version and may have new or updated hints. Fall back to the
+				// existing schema only when the incoming has none.
+				schema := target.ConfigSchema
 				if len(schema.Hints) == 0 {
-					schema = target.ConfigSchema
+					schema = existingTarget.ConfigSchema
 				}
 				configChange := target_update.ClassifyConfigChange(existingTarget.Config, target.Config, schema)
 				if configChange == target_update.ConfigImmutableChange {
