@@ -543,16 +543,7 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 				})
 			}
 
-			// Property comparison is only reliable for simple (non-pool) tests.
-			// With resource pools (parent-child hierarchies), property tracking
-			// is unreliable due to: (1) resolvable ParentId that the model can't
-			// resolve, (2) patch vs reconcile merge semantics, (3) concurrent
-			// commands leaving stale desired-state properties in the model.
-			// The existence check above is the valuable assertion.
-			if model.Pool != nil {
-				continue
-			}
-			expectedProperties := expectedPropertiesForComparison(model, s, idx, res.Properties, inventoryByKey)
+			expectedProperties := expectedPropertiesForComparison(model, s, idx, res.Properties, string(invRes.Properties))
 			actualProperties := string(invRes.Properties)
 			if !jsonEqual(actualProperties, expectedProperties) {
 				violations = append(violations, Violation{
@@ -586,49 +577,38 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 	return violations
 }
 
-func expectedPropertiesForComparison(model *StateModel, stackIdx, slotIdx int, properties string, inventoryByKey map[string]pkgmodel.Resource) string {
-	if properties == "" || model.Pool == nil || model.Pool.IsParent(slotIdx) {
-		return properties
+func expectedPropertiesForComparison(model *StateModel, stackIdx, slotIdx int, modelProperties, inventoryProperties string) string {
+	if modelProperties == "" || model.Pool == nil || model.Pool.IsParent(slotIdx) {
+		return modelProperties
 	}
-	var props map[string]any
-	if err := json.Unmarshal([]byte(properties), &props); err != nil {
-		return properties
+	var modelProps map[string]any
+	if err := json.Unmarshal([]byte(modelProperties), &modelProps); err != nil {
+		return modelProperties
 	}
-	parentStackLabel, parentLabel, ok := expectedParentResourceKey(model, stackIdx, slotIdx)
-	if !ok {
-		return properties
+	// The model's ParentId is a best-effort plain string (from
+	// parentIdentifierForResource or NormalizePropertiesForResource). The
+	// inventory's ParentId contains the agent-resolved $res wrapper with
+	// the authoritative $value. Extract the inventory's resolved ParentId
+	// and use it as ground truth so the comparison focuses on user-specified
+	// fields (Name, Value, SetTags, etc.) rather than reference metadata.
+	var invProps map[string]any
+	if err := json.Unmarshal([]byte(inventoryProperties), &invProps); err != nil {
+		return modelProperties
 	}
-	if invParent, ok := inventoryByKey[parentStackLabel+"/"+parentLabel]; ok {
-		var parentProps map[string]any
-		if err := json.Unmarshal(invParent.Properties, &parentProps); err == nil {
-			if name, ok := parentProps["Name"].(string); ok && name != "" {
-				props["ParentId"] = name
-				bytes, err := json.Marshal(props)
-				if err == nil {
-					return string(bytes)
-				}
+	if invParentID, ok := invProps["ParentId"]; ok {
+		if wrapper, ok := invParentID.(map[string]any); ok && isResolvableWrapper(wrapper) {
+			if val, hasVal := wrapper["$value"]; hasVal {
+				modelProps["ParentId"] = val
 			}
+		} else {
+			modelProps["ParentId"] = invParentID
+		}
+		bytes, err := json.Marshal(modelProps)
+		if err == nil {
+			return string(bytes)
 		}
 	}
-	return properties
-}
-
-func expectedParentResourceKey(model *StateModel, stackIdx, slotIdx int) (string, string, bool) {
-	if model.Pool == nil {
-		return "", "", false
-	}
-	if model.Pool.IsCrossStack(slotIdx) {
-		parentSlot := model.Pool.Slots[slotIdx].CrossStackParentSlot
-		if parentSlot < 0 {
-			return "", "", false
-		}
-		return model.ProviderStackLabel, model.LabelForResource(0, parentSlot), true
-	}
-	parentSlot := model.Pool.Slots[slotIdx].ParentIndex
-	if parentSlot < 0 {
-		return "", "", false
-	}
-	return model.Stack(stackIdx).Label, model.LabelForResource(stackIdx, parentSlot), true
+	return modelProperties
 }
 
 func stripPropertyKey(properties, key string) string {

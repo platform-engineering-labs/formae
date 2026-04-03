@@ -89,7 +89,7 @@ type StateModel struct {
 	// ManagedDriftedResources tracks managed resources that have been mutated or
 	// deleted out-of-band so sync behavior can be asserted explicitly.
 	ManagedDriftedResources map[string]*ExpectedManagedDrift
-	AuthoritativeSlots      map[string]bool
+	AuthoritativeSlots map[string]bool
 	// NativeIDs maps "stackIdx:slotIdx" → cloud native ID (e.g. "test-42").
 	// Populated from command response ResourceUpdate.NativeID on successful
 	// creates/updates. Cleared on successful deletes.

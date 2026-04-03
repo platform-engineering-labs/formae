@@ -158,9 +158,11 @@ window operations are tracked via command response corrections, not inventory.
 inventory assertions because their persistence behavior in failed commands
 is non-deterministic from the command response alone.
 
-**Property tracking**: Model-vs-inventory property comparison is only done
-for simple (non-pool) tests. With resource pools, property tracking through
-concurrent patch/reconcile commands is unreliable without inventory reads.
+**Property tracking**: Model-vs-inventory property comparison covers all
+tests including FullChaos. Properties are updated from command responses
+for both creates and updates, and reverted to snapshot on failure
+(including when existence state is unchanged but properties diverged).
+Resolvable `$res` wrappers are normalized via `flattenResolvables`.
 
 ### Ergo Cross-Node Communication
 

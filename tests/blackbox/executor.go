@@ -925,9 +925,14 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
 					goto markDone
 				}
-				if isReconcile && ru.Properties != nil {
+				if ru.Properties != nil {
 					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
-					model.ApplyCreated(stackIdx, []int{slotIdx}, props)
+					// Update properties without touching existence state or
+					// authoritative flags. Unlike creates, updates don't
+					// change whether a resource exists.
+					if res := model.Resource(stackIdx, slotIdx); res != nil {
+						res.Properties = props
+					}
 				}
 				model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
 			}
@@ -941,14 +946,11 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			}
 			if snap, ok := snapBySlot[key]; ok {
 				res := model.Resource(stackIdx, slotIdx)
-				if res != nil && res.State != snap.State {
+				if res != nil && (res.State != snap.State || res.Properties != snap.Properties) {
 					t.Logf("correctModelFromCommandOutcome: reverting stack=%s slot=%d from %v to %v (ru.State=%s, op=%s)",
 						model.Stack(stackIdx).Label, slotIdx, res.State, snap.State, ru.State, ru.Operation)
 					res.State = snap.State
 					res.Properties = snap.Properties
-				} else if res != nil {
-					t.Logf("correctModelFromCommandOutcome: no-op revert stack=%s slot=%d state=%v snap=%v (ru.State=%s, op=%s)",
-						model.Stack(stackIdx).Label, slotIdx, res.State, snap.State, ru.State, ru.Operation)
 				}
 			} else {
 				// No snapshot — derive from operation semantics.
