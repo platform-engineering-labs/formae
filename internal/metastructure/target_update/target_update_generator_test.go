@@ -883,6 +883,85 @@ func TestDetermineTargetUpdate_ConfigChange_NoSchema_GeneratesReplace(t *testing
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
 }
 
+func TestGenerateTargetUpdates_LegacyTarget_MutableChange_UsesIncomingSchema(t *testing.T) {
+	// Legacy target has no ConfigSchema (created before migration). The forma
+	// provides a schema with Profile as mutable. Changing only Profile should
+	// produce Update (using the incoming schema), not Replace.
+	existingTarget := &pkgmodel.Target{
+		Label:        "aws-test",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1","Profile":"dev"}`),
+		Discoverable: true,
+		// No ConfigSchema — legacy target
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"aws-test": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:        "aws-test",
+			Namespace:    "AWS",
+			Config:       json.RawMessage(`{"Region":"us-east-1","Profile":"staging"}`),
+			Discoverable: true,
+			ConfigSchema: pkgmodel.ConfigSchema{
+				Hints: map[string]pkgmodel.ConfigFieldHint{
+					"Region":  {CreateOnly: true},
+					"Profile": {CreateOnly: false},
+				},
+			},
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "legacy target with mutable-only change should use incoming schema and produce Update")
+}
+
+func TestGenerateTargetUpdates_LegacyTarget_ImmutableChange_StillReplace(t *testing.T) {
+	// Legacy target, incoming schema marks Region as immutable. Changing Region
+	// should still produce Replace even when using the incoming schema.
+	existingTarget := &pkgmodel.Target{
+		Label:        "aws-test",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1","Profile":"dev"}`),
+		Discoverable: true,
+		// No ConfigSchema
+	}
+
+	ds := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"aws-test": existingTarget,
+		},
+	}
+	gen := NewTargetUpdateGenerator(ds)
+	updates, err := gen.GenerateTargetUpdates(
+		[]pkgmodel.Target{{
+			Label:        "aws-test",
+			Namespace:    "AWS",
+			Config:       json.RawMessage(`{"Region":"eu-west-1","Profile":"dev"}`),
+			Discoverable: true,
+			ConfigSchema: pkgmodel.ConfigSchema{
+				Hints: map[string]pkgmodel.ConfigFieldHint{
+					"Region":  {CreateOnly: true},
+					"Profile": {CreateOnly: false},
+				},
+			},
+		}},
+		pkgmodel.CommandApply,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation, "legacy target with immutable change should still Replace")
+}
+
 func TestGenerateTargetUpdates_ConfigSchemaChanged_GeneratesUpdate(t *testing.T) {
 	// Existing target has no ConfigSchema (pre-migration or old plugin version).
 	// New forma provides a ConfigSchema. Even though config values and discoverable

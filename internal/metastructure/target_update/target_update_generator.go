@@ -125,7 +125,14 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			return TargetUpdate{}, false, fmt.Errorf("failed to resolve target configs: %w", err)
 		}
 
-		configChange := ClassifyConfigChange(existingResolved, newResolved, existing.ConfigSchema)
+		// Use the incoming schema when the existing target has none (legacy target
+		// created before ConfigSchema was introduced, or plugin just added hints).
+		// This avoids forcing a replace on the first apply after a plugin upgrade.
+		schema := existing.ConfigSchema
+		if len(schema.Hints) == 0 {
+			schema = target.ConfigSchema
+		}
+		configChange := ClassifyConfigChange(existingResolved, newResolved, schema)
 		switch configChange {
 		case ConfigImmutableChange:
 			operation = TargetOperationReplace
