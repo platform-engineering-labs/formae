@@ -10,7 +10,8 @@ RUN apt-get update &&  \
     HOME=/home/pel /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes formae@${VERSION} && \
     apt-get remove -y jq curl && \
     apt-get autoremove -y --purge && \
-    apt-get clean
+    apt-get clean && \
+    /opt/pel/bin/formae clean --all
 
 # Temp Fix: Trigger plugin migration so resource plugins are baked into the image.
 RUN PATH=/opt/pel/bin:$PATH HOME=/home/pel \

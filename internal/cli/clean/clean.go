@@ -23,6 +23,7 @@ func CleanCmd() *cobra.Command {
 		},
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			all, _ := cmd.Flags().GetBool("all")
 			configFile, _ := cmd.Flags().GetString("config")
 
 			app, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
@@ -39,6 +40,18 @@ func CleanCmd() *cobra.Command {
 				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path)
 			}
 
+			if all {
+				err := orb.Clear()
+				if err != nil {
+					return err
+				}
+			} else {
+				err := orb.Clean()
+				if err != nil {
+					return err
+				}
+			}
+
 			fmt.Println("done.")
 
 			return nil
@@ -46,6 +59,7 @@ func CleanCmd() *cobra.Command {
 	}
 
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
+	command.Flags().Bool("all", false, "Also remove update metadata")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
