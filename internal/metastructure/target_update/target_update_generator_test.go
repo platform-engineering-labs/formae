@@ -466,7 +466,11 @@ func TestGenerateTargetUpdates_ExtractsResolvablesForCreate(t *testing.T) {
 	assert.Equal(t, pkgmodel.FormaeURI("formae://abc123#/Endpoint"), updates[0].RemainingResolvables[0])
 }
 
-func TestGenerateTargetUpdates_ReapplyWithSameResolvedValue_NoReplace(t *testing.T) {
+func TestGenerateTargetUpdates_ValueToRef_SameResolved_GeneratesUpdate(t *testing.T) {
+	// Existing config has a plain value. New config wraps it in a $ref that
+	// resolves to the same value. The resolved values are equal, but the raw
+	// config format changed — this should produce an Update (to persist the
+	// new $ref format), never a Replace.
 	mockDS := &mockTargetDatastore{
 		targets: map[string]*pkgmodel.Target{
 			"k8s-target": {
@@ -496,8 +500,116 @@ func TestGenerateTargetUpdates_ReapplyWithSameResolvedValue_NoReplace(t *testing
 
 	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.NoError(t, err)
-	// Same resolved value → no change needed, but still need resolvables for execution
-	assert.Empty(t, updates)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "value→$ref format change should produce Update, not Replace")
+}
+
+func TestGenerateTargetUpdates_RefToValue_SameResolved_GeneratesUpdate(t *testing.T) {
+	// Existing config has a $ref wrapper (stored with metadata). New config
+	// has the same value as a plain literal. Should produce Update to persist
+	// the simplified format, never Replace.
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint": {"$ref": "formae://abc123#/Endpoint", "$value": "https://my-cluster.eks.amazonaws.com"}}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config:    json.RawMessage(`{"endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "$ref→value format change should produce Update, not Replace")
+}
+
+func TestGenerateTargetUpdates_ValueToRef_SameResolved_ImmutableField_GeneratesUpdate(t *testing.T) {
+	// Even when the field is immutable (createOnly=true), switching from a plain
+	// value to a $ref that resolves to the same value should produce Update (format
+	// change), never Replace. The resolved value didn't change.
+	existingTarget := &pkgmodel.Target{
+		Label:     "k8s-target",
+		Namespace: "k8s",
+		Config:    json.RawMessage(`{"endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"endpoint": {CreateOnly: true},
+			},
+		},
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": existingTarget,
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"}
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "value→$ref on immutable field with same resolved value should produce Update, not Replace")
+}
+
+func TestGenerateTargetUpdates_RefToValue_SameResolved_ImmutableField_GeneratesUpdate(t *testing.T) {
+	// Same as above but in reverse: $ref→value on an immutable field with same
+	// resolved value should produce Update, not Replace.
+	existingTarget := &pkgmodel.Target{
+		Label:     "k8s-target",
+		Namespace: "k8s",
+		Config:    json.RawMessage(`{"endpoint": {"$ref": "formae://abc123#/Endpoint", "$value": "https://my-cluster.eks.amazonaws.com"}}`),
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"endpoint": {CreateOnly: true},
+			},
+		},
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": existingTarget,
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config:    json.RawMessage(`{"endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "$ref→value on immutable field with same resolved value should produce Update, not Replace")
 }
 
 func TestGenerateTargetUpdates_ReapplyWithDifferentResolvedValue_Replace(t *testing.T) {
@@ -533,6 +645,145 @@ func TestGenerateTargetUpdates_ReapplyWithDifferentResolvedValue_Replace(t *test
 	require.Len(t, updates, 1)
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
 	assert.Len(t, updates[0].RemainingResolvables, 1)
+}
+
+// Tests for $ref configs with ConfigSchema (per-field mutability must work even when resolvables are present)
+
+func TestGenerateTargetUpdates_RefConfig_MutableFieldChange_GeneratesUpdate(t *testing.T) {
+	// Existing target has a resolved $ref for endpoint and a plain profile field.
+	// Changing only profile (mutable) should produce Update, not Replace.
+	existingTarget := &pkgmodel.Target{
+		Label:     "k8s-target",
+		Namespace: "k8s",
+		Config:    json.RawMessage(`{"endpoint": "https://my-cluster.eks.amazonaws.com", "profile": "dev"}`),
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"endpoint": {CreateOnly: true},
+				"profile":  {CreateOnly: false},
+			},
+		},
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": existingTarget,
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"},
+				"profile": "staging"
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "changing only a mutable field should produce Update even when config has $ref")
+}
+
+func TestGenerateTargetUpdates_RefConfig_ImmutableRefChange_GeneratesReplace(t *testing.T) {
+	// Existing target has a resolved $ref for endpoint. The $ref now resolves
+	// to a different value (endpoint changed). Since endpoint is immutable,
+	// this should produce Replace.
+	existingTarget := &pkgmodel.Target{
+		Label:     "k8s-target",
+		Namespace: "k8s",
+		Config:    json.RawMessage(`{"endpoint": "https://old-cluster.eks.amazonaws.com", "profile": "dev"}`),
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"endpoint": {CreateOnly: true},
+				"profile":  {CreateOnly: false},
+			},
+		},
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": existingTarget,
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://new-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"},
+				"profile": "dev"
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationReplace, updates[0].Operation, "changing an immutable $ref field should produce Replace")
+}
+
+func TestGenerateTargetUpdates_RefConfig_SameResolvedValue_FormatChange_GeneratesUpdate(t *testing.T) {
+	// Resolved values are identical but the raw config format changed
+	// (existing has plain value, new has $ref). This should produce Update
+	// to persist the new format, never Replace.
+	existingTarget := &pkgmodel.Target{
+		Label:     "k8s-target",
+		Namespace: "k8s",
+		Config:    json.RawMessage(`{"endpoint": "https://my-cluster.eks.amazonaws.com", "profile": "dev"}`),
+		ConfigSchema: pkgmodel.ConfigSchema{
+			Hints: map[string]pkgmodel.ConfigFieldHint{
+				"endpoint": {CreateOnly: true},
+				"profile":  {CreateOnly: false},
+			},
+		},
+	}
+
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": existingTarget,
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint": "https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config: json.RawMessage(`{
+				"endpoint": {"$ref": "formae://abc123#/Endpoint"},
+				"profile": "dev"
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation, "value→$ref format change should produce Update, not Replace")
 }
 
 func TestDetermineTargetUpdate_MutableConfigChange_GeneratesUpdate(t *testing.T) {

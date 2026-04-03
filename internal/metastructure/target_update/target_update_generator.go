@@ -118,34 +118,29 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			}
 		}
 
-		if len(resolvables) > 0 {
-			// Configs with $ref resolvables: resolve and compare.
-			// Any change to a resolvable field is treated as immutable (replace).
-			configChanged, err := tp.configChanged(existing.Config, target.Config, resolvables)
-			if err != nil {
-				return TargetUpdate{}, false, fmt.Errorf("failed to compare target configs: %w", err)
-			}
-			if configChanged {
-				operation = TargetOperationReplace
+		// Determine which configs to compare. When the new config contains
+		// $ref resolvables, resolve them first so we compare actual values.
+		existingResolved, newResolved, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
+		if err != nil {
+			return TargetUpdate{}, false, fmt.Errorf("failed to resolve target configs: %w", err)
+		}
+
+		configChange := ClassifyConfigChange(existingResolved, newResolved, existing.ConfigSchema)
+		switch configChange {
+		case ConfigImmutableChange:
+			operation = TargetOperationReplace
+		case ConfigMutableChange:
+			operation = TargetOperationUpdate
+		case ConfigNoChange:
+			// Resolved values are identical, but the raw config format may have
+			// changed (e.g., a plain value was replaced by a $ref or vice versa).
+			// Persist this as an update so the new format is stored, but never replace.
+			if !util.JsonEqualRaw(existing.Config, target.Config) {
+				operation = TargetOperationUpdate
 			} else if existing.Discoverable != target.Discoverable {
 				operation = TargetOperationUpdate
 			} else {
 				return TargetUpdate{}, false, nil
-			}
-		} else {
-			// No resolvables: use per-field config mutability classification.
-			configChange := ClassifyConfigChange(existing.Config, target.Config, existing.ConfigSchema)
-			switch configChange {
-			case ConfigImmutableChange:
-				operation = TargetOperationReplace
-			case ConfigMutableChange:
-				operation = TargetOperationUpdate
-			case ConfigNoChange:
-				if existing.Discoverable != target.Discoverable {
-					operation = TargetOperationUpdate
-				} else {
-					return TargetUpdate{}, false, nil
-				}
 			}
 		}
 	}
@@ -161,12 +156,19 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	}, true, nil
 }
 
-// configChanged compares the existing stored config with the new config.
-// When the new config contains $ref objects, we resolve them from the DB
-// to get actual values for comparison.
-func (tp *TargetUpdateGenerator) configChanged(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (bool, error) {
+// resolvedConfigs returns the existing and new configs in a form suitable for
+// field-level comparison. Both configs are stripped of $ref metadata so that
+// ClassifyConfigChange compares plain values. When the new config contains
+// $ref resolvables, they are resolved from the DB first.
+func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, error) {
 	if len(resolvables) == 0 {
-		return !util.JsonEqualRaw(existingConfig, newConfig), nil
+		// No resolvables in new config, but existing config may still have
+		// $ref metadata from a previous apply. Strip it for comparison.
+		existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
+		if err != nil {
+			return existingConfig, newConfig, nil
+		}
+		return existingValues, newConfig, nil
 	}
 
 	// Resolve $ref values from DB for comparison
@@ -179,36 +181,33 @@ func (tp *TargetUpdateGenerator) configChanged(existingConfig, newConfig json.Ra
 
 		resource, err := tp.datastore.LoadResourceById(ksuid)
 		if err != nil || resource == nil {
-			// Can't resolve — treat as a config change
 			slog.Debug("Cannot resolve $ref from DB, treating as config change",
 				"uri", uri, "error", err)
-			return true, nil
+			return existingConfig, newConfig, nil
 		}
 
-		// Extract the property value from the resource
 		value := gjson.GetBytes(resource.Properties, propertyPath)
 		if !value.Exists() {
 			slog.Debug("Referenced property not found in resource, treating as config change",
 				"uri", uri, "propertyPath", propertyPath)
-			return true, nil
+			return existingConfig, newConfig, nil
 		}
 
-		// Substitute the resolved value into the config
 		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, value.String())
 		if err != nil {
-			return true, nil
+			return existingConfig, newConfig, nil
 		}
 	}
 
-	// Compare resolved values: strip $ref metadata from both sides
+	// Strip $ref metadata from both sides so ClassifyConfigChange sees plain values
 	existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 	if err != nil {
-		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+		return existingConfig, json.RawMessage(resolvedConfig), nil
 	}
 	newValues, err := resolver.ConvertToPluginFormat(resolvedConfig)
 	if err != nil {
-		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+		return existingConfig, json.RawMessage(resolvedConfig), nil
 	}
 
-	return !util.JsonEqualRaw(existingValues, newValues), nil
+	return existingValues, newValues, nil
 }
