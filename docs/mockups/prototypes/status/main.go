@@ -130,6 +130,60 @@ func statusPriority(cmd fakeCommand) int {
 	return 3
 }
 
+// Sortable columns for subview (update rows)
+type sortableUpdateColumn struct {
+	name   string
+	sortFn func(a, b fakeUpdate) bool // ascending comparator
+}
+
+var sortableUpdateColumns = []sortableUpdateColumn{
+	{"", func(a, b fakeUpdate) bool { return updateStatePriority(a.State) < updateStatePriority(b.State) }},
+	{"Label", func(a, b fakeUpdate) bool { return a.Label < b.Label }},
+	{"Type", func(a, b fakeUpdate) bool { return a.TypeName < b.TypeName }},
+	{"Stack", func(a, b fakeUpdate) bool { return a.Stack < b.Stack }},
+	{"Operation", func(a, b fakeUpdate) bool { return a.Operation < b.Operation }},
+	{"Time", func(a, b fakeUpdate) bool { return a.Duration < b.Duration }},
+}
+
+func sortUpdates(updates []fakeUpdate, colIdx int, dir sortDir) {
+	if dir == sortOff || colIdx < 0 || colIdx >= len(sortableUpdateColumns) {
+		return
+	}
+	asc := sortableUpdateColumns[colIdx].sortFn
+	sort.SliceStable(updates, func(i, j int) bool {
+		if dir == sortAsc {
+			return asc(updates[i], updates[j])
+		}
+		return asc(updates[j], updates[i])
+	})
+}
+
+// cursorGroup returns the updateKind of the group containing the given flat index.
+func cursorGroup(updates []fakeUpdate, flatIdx int) updateKind {
+	if flatIdx >= 0 && flatIdx < len(updates) {
+		return updates[flatIdx].Kind
+	}
+	return kindResource
+}
+
+// currentSubGroup returns the group the cursor is in, using the same flat order as rendering.
+func (m *model) currentSubGroup() updateKind {
+	cmd := m.commands[m.selected]
+	kinds := []updateKind{kindTarget, kindStack, kindPolicy, kindResource}
+	var flat []fakeUpdate
+	for _, k := range kinds {
+		var gu []fakeUpdate
+		for _, u := range cmd.Updates {
+			if u.Kind == k {
+				gu = append(gu, u)
+			}
+		}
+		sortUpdates(gu, m.groupSortActiveCol[k], m.groupSortDir[k])
+		flat = append(flat, gu...)
+	}
+	return cursorGroup(flat, m.updateCur)
+}
+
 // -- Model --
 
 type viewMode int
@@ -148,9 +202,13 @@ type model struct {
 	selected   int            // which command is drilled into
 	updateCur  int            // resource list cursor in single command view
 	expanded   map[int]bool   // set of expanded update indices
-	sortHighlight int         // which sortable column is highlighted
-	sortActiveCol int         // which column is actively sorted (-1 = none custom)
-	sortDir    sortDir        // current sort direction
+	sortHighlight int         // main view: which sortable column is highlighted
+	sortActiveCol int         // main view: which column is actively sorted
+	sortDir    sortDir        // main view: current sort direction
+	// Per-group sort state in subview, keyed by updateKind
+	groupSortHighlight map[updateKind]int
+	groupSortActiveCol map[updateKind]int
+	groupSortDir       map[updateKind]sortDir
 	spinner    spinner.Model
 	vp         viewport.Model
 	width      int
@@ -171,10 +229,13 @@ func newModel() *model {
 	return &model{
 		theme:         th,
 		commands:      cmds,
-		sortHighlight: 0,
-		sortActiveCol: 0,
-		sortDir:       sortDesc,
-		expanded:      make(map[int]bool),
+		sortHighlight:      0,
+		sortActiveCol:      0,
+		sortDir:            sortDesc,
+		groupSortHighlight: map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
+		groupSortActiveCol: map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
+		groupSortDir:       map[updateKind]sortDir{kindTarget: sortDesc, kindStack: sortDesc, kindPolicy: sortDesc, kindResource: sortDesc},
+		expanded:           make(map[int]bool),
 		spinner:  s,
 		width:      80,
 		height:     24,
@@ -246,38 +307,50 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
 			if m.view == viewMultiCommand {
 				if m.sortActiveCol == m.sortHighlight {
-					// Same column: flip direction
 					if m.sortDir == sortDesc {
 						m.sortDir = sortAsc
 					} else {
 						m.sortDir = sortDesc
 					}
 				} else {
-					// New column: start descending
 					m.sortActiveCol = m.sortHighlight
 					m.sortDir = sortDesc
 				}
 				sortCommands(m.commands, m.sortActiveCol, m.sortDir)
+			} else {
+				grp := m.currentSubGroup()
+				h := m.groupSortHighlight[grp]
+				a := m.groupSortActiveCol[grp]
+				d := m.groupSortDir[grp]
+				if a == h {
+					if d == sortDesc {
+						m.groupSortDir[grp] = sortAsc
+					} else {
+						m.groupSortDir[grp] = sortDesc
+					}
+				} else {
+					m.groupSortActiveCol[grp] = h
+					m.groupSortDir[grp] = sortDesc
+				}
 			}
 			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("right", "l"))):
 			if m.view == viewMultiCommand {
-				if m.sortHighlight < len(sortableColumns)-1 {
-					m.sortHighlight++
-				} else {
-					m.sortHighlight = 0
-				}
+				m.sortHighlight = (m.sortHighlight + 1) % len(sortableColumns)
+			} else {
+				grp := m.currentSubGroup()
+				m.groupSortHighlight[grp] = (m.groupSortHighlight[grp] + 1) % len(sortableUpdateColumns)
 			}
 			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("left", "h"))):
 			if m.view == viewMultiCommand {
-				if m.sortHighlight > 0 {
-					m.sortHighlight--
-				} else {
-					m.sortHighlight = len(sortableColumns) - 1
-				}
+				m.sortHighlight = (m.sortHighlight - 1 + len(sortableColumns)) % len(sortableColumns)
+			} else {
+				grp := m.currentSubGroup()
+				n := len(sortableUpdateColumns)
+				m.groupSortHighlight[grp] = (m.groupSortHighlight[grp] - 1 + n) % n
 			}
 			return m, nil
 
@@ -665,31 +738,53 @@ func (m *model) viewSingleCommand() string {
 	// Separator
 	sep := lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", w))
 
-	// Build flat sorted list of all updates for cursor tracking
-	allUpdates := sortedUpdates(cmd.Updates)
-
 	// Section title style
 	titleStyle := lipgloss.NewStyle().
 		Foreground(p.SecondaryAccent).
 		Bold(true)
+	subHighlightStyle := lipgloss.NewStyle().
+		Foreground(p.TextPrimary).
+		Background(lipgloss.Color("237")).
+		Bold(true)
+	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
 
 	// Build scrollable body with per-row expand
 	var body strings.Builder
+	type colLayout int
+	const (
+		layoutSimple   colLayout = iota // Label, Operation, Time
+		layoutType                      // Label, Type, Operation, Time
+		layoutTypeStack                 // Label, Type, Stack, Operation, Time
+	)
 	groups := []struct {
-		kind    updateKind
-		label   string
-		hasType bool
+		kind   updateKind
+		label  string
+		layout colLayout
 	}{
-		{kindTarget, "Targets", false},
-		{kindStack, "Stacks", false},
-		{kindPolicy, "Policies", true},
-		{kindResource, "Resources", true},
+		{kindTarget, "Targets", layoutSimple},
+		{kindStack, "Stacks", layoutSimple},
+		{kindPolicy, "Policies", layoutTypeStack},
+		{kindResource, "Resources", layoutType},
 	}
+
+	// Build flat ordered list matching rendering order, to map cursor → group
+	var flatUpdates []fakeUpdate
+	for _, g := range groups {
+		var gu []fakeUpdate
+		for _, u := range cmd.Updates {
+			if u.Kind == g.kind {
+				gu = append(gu, u)
+			}
+		}
+		sortUpdates(gu, m.groupSortActiveCol[g.kind], m.groupSortDir[g.kind])
+		flatUpdates = append(flatUpdates, gu...)
+	}
+	curGrp := cursorGroup(flatUpdates, m.updateCur)
 
 	idx := 0
 	for _, g := range groups {
 		var groupUpdates []fakeUpdate
-		for _, u := range allUpdates {
+		for _, u := range cmd.Updates {
 			if u.Kind == g.kind {
 				groupUpdates = append(groupUpdates, u)
 			}
@@ -697,22 +792,121 @@ func (m *model) viewSingleCommand() string {
 		if len(groupUpdates) == 0 {
 			continue
 		}
+		sortUpdates(groupUpdates, m.groupSortActiveCol[g.kind], m.groupSortDir[g.kind])
 
-		body.WriteString("\n  " + titleStyle.Render("▌ "+g.label) + "\n")
-		// Column headers — 6 chars prefix to match sp2(2)+stateStr(2)+sp2(2)
-		if g.hasType {
-			body.WriteString("      " +
-				padRight(dimStyle.Render("Label"), 24) +
-				padRight(dimStyle.Render("Type"), 30) +
-				padRight(dimStyle.Render("Operation"), 10) +
-				dimStyle.Render("Time") + "\n")
-		} else {
-			body.WriteString("      " +
-				padRight(dimStyle.Render("Label"), 54) +
-				padRight(dimStyle.Render("Operation"), 10) +
-				dimStyle.Render("Time") + "\n")
+		// Is this the active group (cursor is here)?
+		isActiveGroup := g.kind == curGrp
+
+		// Per-group column header renderer
+		grpHighlight := m.groupSortHighlight[g.kind]
+		grpActive := m.groupSortActiveCol[g.kind]
+		grpDir := m.groupSortDir[g.kind]
+
+		renderColName := func(name string, sortIdx int) string {
+			isHL := isActiveGroup && sortIdx == grpHighlight
+			isAct := sortIdx == grpActive
+			arrow := ""
+			if isAct {
+				if grpDir == sortDesc {
+					arrow = "▼"
+				} else {
+					arrow = "▲"
+				}
+			}
+			text := name + arrow
+			if isHL {
+				return subHighlightStyle.Render(text)
+			}
+			if isAct {
+				return accentStyle.Render(text)
+			}
+			return dimStyle.Render(text)
 		}
 
+		renderStatusCol := func() string {
+			isHL := isActiveGroup && 0 == grpHighlight
+			isAct := 0 == grpActive
+			arrow := " "
+			if isAct {
+				if grpDir == sortDesc {
+					arrow = "▼"
+				} else {
+					arrow = "▲"
+				}
+			}
+			text := "  " + arrow + " "
+			if isHL {
+				return subHighlightStyle.Render(text)
+			}
+			if isAct {
+				return accentStyle.Render(text)
+			}
+			return dimStyle.Render(text)
+		}
+
+		// Calculate elastic column widths based on terminal width
+		// Fixed: status(6) + operation(12) + time(6) = 24
+		// layoutType adds: type(elastic, shares with label)
+		// layoutTypeStack adds: type(16) + stack(18) = 34
+		var labelW, typeW, stackW int
+		switch g.layout {
+		case layoutTypeStack:
+			// Fixed: 6 + 12 + 6 = 24, split remainder three ways
+			remainder := w - 24
+			labelW = remainder * 2 / 5
+			typeW = remainder * 1 / 5
+			stackW = remainder - labelW - typeW
+			if labelW < 12 {
+				labelW = 12
+			}
+			if typeW < 10 {
+				typeW = 10
+			}
+			if stackW < 10 {
+				stackW = 10
+			}
+		case layoutType:
+			// Fixed: 6 + 12 + 6 = 24, split remainder between label and type
+			remainder := w - 24
+			typeW = remainder * 2 / 5
+			if typeW < 16 {
+				typeW = 16
+			}
+			labelW = remainder - typeW
+			if labelW < 12 {
+				labelW = 12
+			}
+		default:
+			// Fixed: 6 + 12 + 6 = 24
+			labelW = w - 24
+			if labelW < 20 {
+				labelW = 20
+			}
+		}
+
+		body.WriteString("\n  " + titleStyle.Render("▌ "+g.label) + "\n")
+		switch g.layout {
+		case layoutTypeStack:
+			body.WriteString(padRight(renderStatusCol(), 6) +
+				padRight(renderColName("Label", 1), labelW) +
+				padRight(renderColName("Type", 2), typeW) +
+				padRight(renderColName("Stack", 3), stackW) +
+				padRight(renderColName("Operation", 4), 12) +
+				renderColName("Time", 5) + "\n")
+		case layoutType:
+			body.WriteString(padRight(renderStatusCol(), 6) +
+				padRight(renderColName("Label", 1), labelW) +
+				padRight(renderColName("Type", 2), typeW) +
+				padRight(renderColName("Operation", 4), 12) +
+				renderColName("Time", 5) + "\n")
+		default:
+			body.WriteString(padRight(renderStatusCol(), 6) +
+				padRight(renderColName("Label", 1), labelW) +
+				padRight(renderColName("Operation", 4), 12) +
+				renderColName("Time", 5) + "\n")
+		}
+
+		colWidths := [4]int{labelW, typeW, stackW, 12} // label, type, stack, op
 		for _, u := range groupUpdates {
 			isCur := idx == m.updateCur
 			isExpanded := m.expanded[idx]
@@ -720,7 +914,7 @@ func (m *model) viewSingleCommand() string {
 			if isExpanded {
 				body.WriteString(m.renderDetailEntryWithHighlight(u, w, isCur))
 			} else {
-				body.WriteString(m.renderUpdateRowHighlight(u, w, isCur))
+				body.WriteString(m.renderUpdateRowHighlightElastic(u, w, isCur, colWidths))
 			}
 			idx++
 		}
@@ -730,7 +924,10 @@ func (m *model) viewSingleCommand() string {
 
 	// Footer
 	footer := m.renderFooter(w, []keyHint{
+		{"↑↓", "select"},
 		{"space", "expand"},
+		{"→←", "column"},
+		{"s", "toggle sort"},
 		{"/", "query"},
 		{"esc", "back"},
 	}, "")
@@ -744,6 +941,111 @@ func (m *model) viewSingleCommand() string {
 }
 
 // -- Rendering helpers --
+
+func (m *model) renderUpdateRowHighlightElastic(u fakeUpdate, w int, isCursor bool, colWidths [4]int) string {
+	p := m.theme.Palette
+	labelW, typeW, stackW, opW := colWidths[0], colWidths[1], colWidths[2], colWidths[3]
+
+	bg := lipgloss.Color("")
+	if isCursor {
+		bg = lipgloss.Color("239")
+	}
+	withBg := func(s lipgloss.Style) lipgloss.Style {
+		if isCursor {
+			return s.Background(bg)
+		}
+		return s
+	}
+	pad := func(s string, w int) string {
+		if isCursor {
+			return padRightBg(s, w, bg)
+		}
+		return padRight(s, w)
+	}
+
+	stateStr := m.renderStateSymbol(u)
+	if isCursor {
+		if u.State == stateInProgress {
+			stateStr = lipgloss.NewStyle().Background(bg).Render(m.spinner.View())
+		}
+		stateStr = padRightBg(stateStr, 2, bg)
+	} else {
+		stateStr = padRight(stateStr, 2)
+	}
+
+	labelStyle := withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent))
+	typeStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+	opStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+	if isCursor {
+		labelStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD")))
+		typeStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		opStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+	}
+
+	trunc := func(s string, maxW int) string {
+		if maxW < 4 {
+			maxW = 4
+		}
+		if len(s) > maxW-1 {
+			return s[:maxW-2] + "…"
+		}
+		return s
+	}
+
+	var timeStr string
+	switch u.State {
+	case stateDone, stateInProgress, stateFailed:
+		timeStr = formatDuration(u.Duration)
+	default:
+		timeStr = "—"
+	}
+
+	sp2 := "  "
+	if isCursor {
+		sp2 = lipgloss.NewStyle().Background(bg).Render("  ")
+	}
+
+	stackStyle := typeStyle
+	var row string
+	switch u.Kind {
+	case kindPolicy:
+		row = sp2 + stateStr + sp2 +
+			pad(labelStyle.Render(trunc(u.Label, labelW-1)), labelW) +
+			pad(typeStyle.Render(trunc(u.TypeName, typeW-1)), typeW) +
+			pad(stackStyle.Render(trunc(u.Stack, stackW-1)), stackW) +
+			pad(opStyle.Render(u.Operation), opW) +
+			dimStyle.Render(timeStr)
+	case kindResource:
+		row = sp2 + stateStr + sp2 +
+			pad(labelStyle.Render(trunc(u.Label, labelW-1)), labelW) +
+			pad(typeStyle.Render(trunc(u.TypeName, typeW-1)), typeW) +
+			pad(opStyle.Render(u.Operation), opW) +
+			dimStyle.Render(timeStr)
+	default:
+		row = sp2 + stateStr + sp2 +
+			pad(labelStyle.Render(trunc(u.Label, labelW-1)), labelW) +
+			pad(opStyle.Render(u.Operation), opW) +
+			dimStyle.Render(timeStr)
+	}
+
+	rowWidth := lipgloss.Width(row)
+	if rowWidth < w && isCursor {
+		row += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", w-rowWidth))
+	}
+
+	if u.State == stateFailed && u.ErrorMessage != "" {
+		errLine := "      " + lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage)
+		return row + "\n" + errLine + "\n"
+	}
+	if u.State == stateSkipped && u.CascadeSrc != "" {
+		depLine := "      " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render("Depends on: "+u.CascadeSrc+" (failed)")
+		return row + "\n" + depLine + "\n"
+	}
+
+	return row + "\n"
+}
 
 func (m *model) renderUpdateRowHighlight(u fakeUpdate, w int, isCursor bool) string {
 	p := m.theme.Palette
@@ -791,11 +1093,15 @@ func (m *model) renderUpdateRowHighlight(u fakeUpdate, w int, isCursor bool) str
 		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
 	}
 
-	label := u.Label
-	hasType := u.Kind == kindResource || u.Kind == kindPolicy
-	typeName := u.TypeName
-	if u.Kind == kindPolicy {
-		typeName = u.TypeName + ", " + u.Stack
+	// Truncate helper
+	trunc := func(s string, maxW int) string {
+		if maxW < 4 {
+			maxW = 4
+		}
+		if len(s) > maxW-1 {
+			return s[:maxW-2] + "…"
+		}
+		return s
 	}
 
 	var timeStr string
@@ -811,17 +1117,30 @@ func (m *model) renderUpdateRowHighlight(u fakeUpdate, w int, isCursor bool) str
 		sp2 = lipgloss.NewStyle().Background(bg).Render("  ")
 	}
 
+	stackStyle := typeStyle // same style for stack column
+
 	var row string
-	if hasType {
+	switch u.Kind {
+	case kindPolicy:
+		// Type + Stack as separate columns
 		row = sp2 + stateStr + sp2 +
-			pad(labelStyle.Render(label), 24) +
-			pad(typeStyle.Render(typeName), 30) +
-			pad(opStyle.Render(u.Operation), 10) +
+			pad(labelStyle.Render(trunc(u.Label, 19)), 20) +
+			pad(typeStyle.Render(trunc(u.TypeName, 15)), 16) +
+			pad(stackStyle.Render(trunc(u.Stack, 17)), 18) +
+			pad(opStyle.Render(u.Operation), 12) +
 			dimStyle.Render(timeStr)
-	} else {
+	case kindResource:
+		// Type column
 		row = sp2 + stateStr + sp2 +
-			pad(labelStyle.Render(label), 54) +
-			pad(opStyle.Render(u.Operation), 10) +
+			pad(labelStyle.Render(trunc(u.Label, 23)), 24) +
+			pad(typeStyle.Render(trunc(u.TypeName, 29)), 30) +
+			pad(opStyle.Render(u.Operation), 12) +
+			dimStyle.Render(timeStr)
+	default:
+		// Simple: just label
+		row = sp2 + stateStr + sp2 +
+			pad(labelStyle.Render(trunc(u.Label, 53)), 54) +
+			pad(opStyle.Render(u.Operation), 12) +
 			dimStyle.Render(timeStr)
 	}
 
@@ -855,14 +1174,16 @@ func (m *model) renderUpdateRow(u fakeUpdate, w int) string {
 	opStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	dimStyle := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
-	label := u.Label
-	hasType := u.Kind == kindResource || u.Kind == kindPolicy
-	typeName := u.TypeName
-	if u.Kind == kindPolicy {
-		typeName = u.TypeName + ", " + u.Stack
+	trunc := func(s string, maxW int) string {
+		if maxW < 4 {
+			maxW = 4
+		}
+		if len(s) > maxW-1 {
+			return s[:maxW-2] + "…"
+		}
+		return s
 	}
 
-	// Time column
 	var timeStr string
 	switch u.State {
 	case stateDone, stateInProgress, stateFailed:
@@ -872,18 +1193,27 @@ func (m *model) renderUpdateRow(u fakeUpdate, w int) string {
 	}
 
 	stateStr = padRight(stateStr, 2)
+	stackStyle := typeStyle
 
 	var row string
-	if hasType {
+	switch u.Kind {
+	case kindPolicy:
 		row = "  " + stateStr + "  " +
-			padRight(labelStyle.Render(label), 24) +
-			padRight(typeStyle.Render(typeName), 30) +
-			padRight(opStyle.Render(u.Operation), 10) +
+			padRight(labelStyle.Render(trunc(u.Label, 19)), 20) +
+			padRight(typeStyle.Render(trunc(u.TypeName, 15)), 16) +
+			padRight(stackStyle.Render(trunc(u.Stack, 17)), 18) +
+			padRight(opStyle.Render(u.Operation), 12) +
 			dimStyle.Render(timeStr)
-	} else {
+	case kindResource:
 		row = "  " + stateStr + "  " +
-			padRight(labelStyle.Render(label), 54) +
-			padRight(opStyle.Render(u.Operation), 10) +
+			padRight(labelStyle.Render(trunc(u.Label, 23)), 24) +
+			padRight(typeStyle.Render(trunc(u.TypeName, 29)), 30) +
+			padRight(opStyle.Render(u.Operation), 12) +
+			dimStyle.Render(timeStr)
+	default:
+		row = "  " + stateStr + "  " +
+			padRight(labelStyle.Render(trunc(u.Label, 53)), 54) +
+			padRight(opStyle.Render(u.Operation), 12) +
 			dimStyle.Render(timeStr)
 	}
 
@@ -1103,24 +1433,62 @@ func (m *model) renderFooter(w int, hints []keyHint, scrollInfo string) string {
 	p := m.theme.Palette
 	s := m.theme.Styles
 
-	var parts []string
-	for _, h := range hints {
-		parts = append(parts,
-			s.KeybindingKey.Render(h.key)+s.KeybindingDesc.Render(": "+h.desc))
-	}
-	left := "  " + strings.Join(parts, "  ")
-
+	// Right side: "?: help" (+ optional scroll info)
 	rightParts := []string{}
 	if scrollInfo != "" {
 		rightParts = append(rightParts, scrollInfo)
 	}
 	rightParts = append(rightParts, s.KeybindingKey.Render("?")+s.KeybindingDesc.Render(": help"))
 	right := strings.Join(rightParts, "  ") + "  "
+	rightW := lipgloss.Width(right)
 
-	content := left + padBetween(w, left, right) + right
+	// Build all hints
+	var parts []string
+	for _, h := range hints {
+		parts = append(parts, s.KeybindingKey.Render(h.key)+s.KeybindingDesc.Render(": "+h.desc))
+	}
+	left := "  " + strings.Join(parts, "  ")
+	leftW := lipgloss.Width(left)
 
+	// If everything fits, render normally with padding
+	totalMin := leftW + 2 + rightW // 2 = minimum gap
+	if totalMin <= w {
+		content := left + padBetween(w, left, right) + right
+		return lipgloss.NewStyle().
+			Width(w).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderTop(true).
+			BorderForeground(p.Border).
+			Render(content)
+	}
+
+	// Truncate descriptions to fit, keeping keys intact
+	for minDesc := 3; minDesc >= 1; minDesc-- {
+		var truncParts []string
+		for _, h := range hints {
+			desc := h.desc
+			if len(desc) > minDesc {
+				desc = desc[:minDesc] + "…"
+			}
+			truncParts = append(truncParts, s.KeybindingKey.Render(h.key)+s.KeybindingDesc.Render(": "+desc))
+		}
+		left = "  " + strings.Join(truncParts, "  ")
+		leftW = lipgloss.Width(left)
+		if leftW+2+rightW <= w {
+			content := left + padBetween(w, left, right) + right
+			return lipgloss.NewStyle().
+				Width(w).
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderTop(true).
+				BorderForeground(p.Border).
+				Render(content)
+		}
+	}
+
+	// Still too wide — just render at natural width, terminal clips it
+	content := left + "  " + right
 	return lipgloss.NewStyle().
-		Width(w).
+		MaxWidth(w).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderTop(true).
 		BorderForeground(p.Border).
