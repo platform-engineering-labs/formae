@@ -491,9 +491,18 @@ func (f *FormaCommandPersister) markTargetUpdateAsComplete(msg *messages.MarkTar
 			return false, err
 		}
 	} else {
-		if err := f.datastore.UpdateFormaCommandProgress(command.ID, command.State, command.ModifiedTs); err != nil {
-			f.Log().Error("Failed to update Forma command meta", "commandID", msg.CommandID, "error", err)
-			return false, fmt.Errorf("failed to update Forma command meta: %w", err)
+		// Use UpdateFormaCommandTargetUpdates instead of UpdateFormaCommandProgress
+		// because target update states are stored in the target_updates JSON blob, which
+		// UpdateFormaCommandProgress does not write — it only updates state + modified_ts.
+		// Without persisting target_updates, a persister restart loses the target state
+		// from the in-memory cache, causing the command to be stuck at InProgress forever.
+		targetUpdatesJSON, err := json.Marshal(command.TargetUpdates)
+		if err != nil {
+			return false, fmt.Errorf("failed to marshal target updates: %w", err)
+		}
+		if err := f.datastore.UpdateFormaCommandTargetUpdates(command.ID, targetUpdatesJSON, command.State, command.ModifiedTs); err != nil {
+			f.Log().Error("Failed to update Forma command target updates", "commandID", msg.CommandID, "error", err)
+			return false, fmt.Errorf("failed to update Forma command target updates: %w", err)
 		}
 	}
 

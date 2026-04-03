@@ -3758,6 +3758,34 @@ func (d DatastoreSQLite) UpdateFormaCommandProgress(commandID string, state form
 	return nil
 }
 
+func (d DatastoreSQLite) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
+	slog.Debug("SQLite START", "method", "UpdateFormaCommandTargetUpdates", "commandID", commandID, "state", state)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "UpdateFormaCommandTargetUpdates", "commandID", commandID, "duration", time.Since(start))
+	}()
+
+	modifiedTsUTC := modifiedTs.UTC().Format(time.RFC3339Nano)
+
+	result, err := d.conn.Exec(
+		`UPDATE forma_commands SET target_updates = ?, state = ?, modified_ts = ? WHERE command_id = ?`,
+		string(targetUpdatesJSON), string(state), modifiedTsUTC, commandID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update forma command target updates: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("forma command not found: %s", commandID)
+	}
+
+	return nil
+}
+
 func (d DatastoreSQLite) CleanUp() error {
 	// No cleanup needed for SQLite, this is only used in the Postgres integration tests
 	return nil

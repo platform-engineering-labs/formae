@@ -14,11 +14,14 @@ import (
 
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -738,6 +741,107 @@ func TestIsResourceInFinalState_InProgress_ReturnsFalse(t *testing.T) {
 	assert.False(t, isResourceInFinalState(resource_update.ResourceUpdateStateInProgress))
 }
 
+func newFormaCommandWithTargetAndResourceUpdate() *forma_command.FormaCommand {
+	resourceKsuid := util.NewID()
+
+	return &forma_command.FormaCommand{
+		ID:          "test-forma-target-and-resource",
+		State:       forma_command.CommandStateNotStarted,
+		Description: pkgmodel.Description{},
+		Config: config.FormaCommandConfig{
+			Mode:     pkgmodel.FormaApplyModeReconcile,
+			Simulate: false,
+		},
+		Command: pkgmodel.CommandApply,
+		StartTs: util.TimeNow().Add(-1 * time.Hour),
+		TargetUpdates: []target_update.TargetUpdate{
+			{
+				Target: pkgmodel.Target{
+					Label:     "test-target",
+					Namespace: "test-namespace",
+				},
+				Operation: target_update.TargetOperationCreate,
+				State:     target_update.TargetUpdateStateNotStarted,
+			},
+		},
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{
+					Label:      "test-resource",
+					Type:       "test-type",
+					Stack:      "test-stack",
+					Properties: json.RawMessage(`{"foo":"bar"}`),
+					Ksuid:      resourceKsuid,
+				},
+				ResourceTarget: pkgmodel.Target{
+					Label:     "test-target",
+					Namespace: "test-namespace",
+				},
+				Operation:      resource_update.OperationCreate,
+				State:          resource_update.ResourceUpdateStateNotStarted,
+				ProgressResult: []plugin.TrackedProgress{},
+				StackLabel:     "test-stack",
+			},
+		},
+	}
+}
+
+// TestFormaCommandPersister_TargetUpdateState_PersistedToDB verifies that when a
+// target update is marked as complete while the overall command is still in progress
+// (due to pending resource updates), the target's new state is actually written to the
+// database -- not just held in the in-memory cache.
+//
+// This is a regression test: the bug is that markTargetUpdateAsComplete uses
+// UpdateFormaCommandProgress (which only writes state + modified_ts) in the non-final
+// branch, so the target_updates JSON blob is never updated on disk.
+func TestFormaCommandPersister_TargetUpdateState_PersistedToDB(t *testing.T) {
+	// Create a shared datastore so a second persister can read back from the same DB.
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite: pkgmodel.SqliteConfig{
+			FilePath: ":memory:",
+		},
+	}, "test-agent-id")
+	assert.NoError(t, err)
+
+	formaPersister, sender, err := newFormaCommandPersisterWithDatastore(t, ds)
+	assert.NoError(t, err)
+
+	formaCommand := newFormaCommandWithTargetAndResourceUpdate()
+
+	// Store the command (target=NotStarted, resource=NotStarted).
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	// Mark the target update as complete (Success).
+	// The resource update is still NotStarted, so the overall command stays InProgress
+	// and the code takes the non-final branch in markTargetUpdateAsComplete.
+	markTargetComplete := messages.MarkTargetUpdateAsComplete{
+		CommandID:       formaCommand.ID,
+		TargetLabel:     "test-target",
+		TargetOperation: string(target_update.TargetOperationCreate),
+		FinalState:      types.TargetUpdateStateSuccess,
+		ModifiedTs:      util.TimeNow(),
+	}
+	res := formaPersister.Call(sender, markTargetComplete)
+	assert.NoError(t, res.Error)
+	assert.True(t, res.Response.(bool))
+
+	// Spin up a second persister against the same database.
+	// This simulates a cache-miss (e.g. persister restart) and forces a fresh load from DB.
+	secondPersister, sender2, err := newFormaCommandPersisterWithDatastore(t, ds)
+	assert.NoError(t, err)
+
+	loadResult := secondPersister.Call(sender2, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded := loadResult.Response.(*forma_command.FormaCommand)
+
+	// The target update state must be Success, not reverted to NotStarted.
+	assert.Equal(t, types.TargetUpdateStateSuccess, loaded.TargetUpdates[0].State,
+		"target update state should be persisted to DB, not just cached in memory")
+}
+
 func newFormaCommandPersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, error) {
 	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{
 		DatastoreType: pkgmodel.SqliteDatastore,
@@ -749,6 +853,10 @@ func newFormaCommandPersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, er
 		return nil, gen.PID{}, err
 	}
 
+	return newFormaCommandPersisterWithDatastore(t, ds)
+}
+
+func newFormaCommandPersisterWithDatastore(t *testing.T, ds datastore.Datastore) (*unit.TestActor, gen.PID, error) {
 	env := map[gen.Env]any{
 		"Datastore": ds,
 	}

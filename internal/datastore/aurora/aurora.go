@@ -3148,6 +3148,29 @@ func (d *DatastoreAuroraDataAPI) UpdateFormaCommandProgress(commandID string, st
 	return nil
 }
 
+func (d *DatastoreAuroraDataAPI) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
+	ctx := context.Background()
+
+	query := `UPDATE forma_commands SET target_updates = :target_updates, state = :state, modified_ts = :modified_ts::timestamp WHERE command_id = :command_id`
+	params := []types.SqlParameter{
+		{Name: aws.String("target_updates"), Value: &types.FieldMemberStringValue{Value: string(targetUpdatesJSON)}},
+		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(state)}},
+		{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: modifiedTs.UTC().Format(time.RFC3339Nano)}},
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return fmt.Errorf("failed to update forma command target updates: %w", err)
+	}
+
+	if output.NumberOfRecordsUpdated == 0 {
+		return fmt.Errorf("forma command not found: %s", commandID)
+	}
+
+	return nil
+}
+
 func (d *DatastoreAuroraDataAPI) CreateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
 	ctx := context.Background()
 
