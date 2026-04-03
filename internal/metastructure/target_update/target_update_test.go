@@ -125,6 +125,18 @@ func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
 	assert.True(t, ShouldTriggerDiscovery(&update))
 }
 
+func TestShouldTriggerDiscovery_Replace_Discoverable(t *testing.T) {
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+		},
+		Operation: TargetOperationReplace,
+	}
+
+	assert.True(t, ShouldTriggerDiscovery(&update))
+}
+
 func TestShouldTriggerDiscovery_Create_NotDiscoverable(t *testing.T) {
 	update := TargetUpdate{
 		Target: pkgmodel.Target{

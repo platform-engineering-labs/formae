@@ -147,7 +147,10 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 				operation = TargetOperationUpdate
 			} else if existing.Discoverable != target.Discoverable {
 				operation = TargetOperationUpdate
-			} else if !configSchemasEqual(existing.ConfigSchema, target.ConfigSchema) {
+			} else if len(target.ConfigSchema.Hints) > 0 && !configSchemasEqual(existing.ConfigSchema, target.ConfigSchema) {
+				// Only update for schema changes when the incoming schema has hints.
+				// An empty incoming schema means the plugin/agent doesn't emit one —
+				// don't wipe existing metadata.
 				operation = TargetOperationUpdate
 			} else {
 				return TargetUpdate{}, false, nil

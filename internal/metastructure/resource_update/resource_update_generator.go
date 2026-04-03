@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sort"
 
 	"github.com/tidwall/sjson"
 
@@ -526,13 +527,15 @@ func generateResourceUpdatesForReconcile(
 			}
 		}
 		if len(nonPortable) > 0 {
-			var targetLabel string
+			// Use the first replaced target alphabetically for a deterministic
+			// error message regardless of Go map iteration order.
+			targetLabels := make([]string, 0, len(replacedTargets))
 			for label := range replacedTargets {
-				targetLabel = label
-				break
+				targetLabels = append(targetLabels, label)
 			}
+			sort.Strings(targetLabels)
 			return nil, apimodel.NonPortableResourcesError{
-				TargetLabel: targetLabel,
+				TargetLabel: targetLabels[0],
 				Resources:   nonPortable,
 			}
 		}
@@ -871,13 +874,15 @@ func generateResourceUpdatesForPatch(
 			}
 		}
 		if len(nonPortable) > 0 {
-			var targetLabel string
+			// Use the first replaced target alphabetically for a deterministic
+			// error message regardless of Go map iteration order.
+			targetLabels := make([]string, 0, len(replacedTargets))
 			for label := range replacedTargets {
-				targetLabel = label
-				break
+				targetLabels = append(targetLabels, label)
 			}
+			sort.Strings(targetLabels)
 			return nil, apimodel.NonPortableResourcesError{
-				TargetLabel: targetLabel,
+				TargetLabel: targetLabels[0],
 				Resources:   nonPortable,
 			}
 		}

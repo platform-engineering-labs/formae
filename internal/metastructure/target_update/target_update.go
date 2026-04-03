@@ -141,7 +141,7 @@ func ShouldTriggerDiscovery(update *TargetUpdate) bool {
 		return false
 	}
 
-	if update.Operation == TargetOperationCreate {
+	if update.Operation == TargetOperationCreate || update.Operation == TargetOperationReplace {
 		return true
 	}
 
