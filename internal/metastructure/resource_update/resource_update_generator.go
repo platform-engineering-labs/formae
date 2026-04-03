@@ -386,6 +386,13 @@ func generateResourceUpdatesForApply(
 			// Skip raw config comparison when config contains resolvables ($ref).
 			// The TargetUpdateGenerator handles resolvable-aware comparison.
 			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 {
+				// Strip $ref metadata from existing config so that a stored
+				// value with $ref wrappers compares correctly against a plain
+				// value in the new config.
+				existingResolved, err := resolver.ConvertToPluginFormat(existingTarget.Config)
+				if err != nil {
+					existingResolved = existingTarget.Config
+				}
 				// Prefer the incoming schema — it represents the current plugin
 				// version and may have new or updated hints. Fall back to the
 				// existing schema only when the incoming has none.
@@ -393,7 +400,7 @@ func generateResourceUpdatesForApply(
 				if len(schema.Hints) == 0 {
 					schema = existingTarget.ConfigSchema
 				}
-				configChange := target_update.ClassifyConfigChange(existingTarget.Config, target.Config, schema)
+				configChange := target_update.ClassifyConfigChange(existingResolved, target.Config, schema)
 				if configChange == target_update.ConfigImmutableChange {
 					return nil, apimodel.TargetAlreadyExistsError{
 						TargetLabel:    target.Label,
@@ -867,6 +874,9 @@ func generateResourceUpdatesForPatch(
 				}
 				if !resource.Schema.Portable {
 					nonPortable = append(nonPortable, fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label))
+					if nonPortableTarget == "" {
+						nonPortableTarget = resource.Target
+					}
 				}
 			}
 		}

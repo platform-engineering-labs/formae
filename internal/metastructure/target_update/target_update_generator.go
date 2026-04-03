@@ -158,6 +158,13 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		}
 	}
 
+	// Preserve existing ConfigSchema when the incoming target doesn't provide one.
+	// Without this, persistTargetUpdate would write an empty schema, silently
+	// clearing mutability metadata for future applies.
+	if len(target.ConfigSchema.Hints) == 0 && existing != nil && len(existing.ConfigSchema.Hints) > 0 {
+		target.ConfigSchema = existing.ConfigSchema
+	}
+
 	return TargetUpdate{
 		Target:               target,
 		ExistingTarget:       existing,
