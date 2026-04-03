@@ -99,6 +99,19 @@ func TestPkl_FormaeValue(t *testing.T) {
 	assert.Equal(t, props["secret"], gjson.Get(jsonString, "Resources.0.Properties.SecretString.$value").String())
 }
 
+func TestPkl_TFVarsIntegration(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/tfvars_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	assert.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	// The target config region should come from example.tfvars
+	assert.Equal(t, "us-west-2", gjson.Get(jsonString, "Targets.0.Config.Region").String())
+	// The queue name should interpolate the region from tfvars
+	assert.Equal(t, "demo-us-west-2-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
+}
+
 func TestPkl_FormaeConfig(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_config.pkl")
