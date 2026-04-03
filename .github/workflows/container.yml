@@ -55,3 +55,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ github.ref_name }}
+            FORMAE_ARTIFACT_USERNAME=${{ secrets.FORMAE_ARTIFACT_USERNAME }}
+            FORMAE_ARTIFACT_PASSWORD=${{ secrets.FORMAE_ARTIFACT_PASSWORD }}
