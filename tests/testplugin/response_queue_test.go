@@ -122,7 +122,7 @@ func TestResponseQueue_SameKeyDifferentOperationsAreIndependent(t *testing.T) {
 	assert.Equal(t, "NotUpdatable", step.ErrorCode)
 }
 
-func TestResponseQueue_ProgramReplacesExistingQueues(t *testing.T) {
+func TestResponseQueue_ProgramAppendsToExistingQueues(t *testing.T) {
 	rq := NewResponseQueue()
 	rq.Program([]testcontrol.PluginOpSequence{
 		{
@@ -132,7 +132,7 @@ func TestResponseQueue_ProgramReplacesExistingQueues(t *testing.T) {
 		},
 	})
 
-	// Replace with different sequences
+	// Append a different operation for the same key
 	rq.Program([]testcontrol.PluginOpSequence{
 		{
 			MatchKey:  "native-1",
@@ -141,13 +141,45 @@ func TestResponseQueue_ProgramReplacesExistingQueues(t *testing.T) {
 		},
 	})
 
-	// Old queue should be gone
-	assert.Nil(t, rq.CheckRead("native-1"))
+	// Both queues should be present
+	step := rq.CheckRead("native-1")
+	require.NotNil(t, step)
+	assert.Equal(t, "Throttling", step.ErrorCode)
 
-	// New queue should be present
-	step := rq.CheckDelete("native-1")
+	step = rq.CheckDelete("native-1")
 	require.NotNil(t, step)
 	assert.Equal(t, "AccessDenied", step.ErrorCode)
+}
+
+func TestResponseQueue_ProgramAppendsStepsForSameKey(t *testing.T) {
+	rq := NewResponseQueue()
+	rq.Program([]testcontrol.PluginOpSequence{
+		{
+			MatchKey:  "native-1",
+			Operation: "Read",
+			Steps:     []testcontrol.ResponseStep{{ErrorCode: "Throttling"}},
+		},
+	})
+	rq.Program([]testcontrol.PluginOpSequence{
+		{
+			MatchKey:  "native-1",
+			Operation: "Read",
+			Steps:     []testcontrol.ResponseStep{{ErrorCode: "NotFound"}},
+		},
+	})
+
+	// First call returns first programmed step
+	step := rq.CheckRead("native-1")
+	require.NotNil(t, step)
+	assert.Equal(t, "Throttling", step.ErrorCode)
+
+	// Second call returns appended step
+	step = rq.CheckRead("native-1")
+	require.NotNil(t, step)
+	assert.Equal(t, "NotFound", step.ErrorCode)
+
+	// Queue exhausted
+	assert.Nil(t, rq.CheckRead("native-1"))
 }
 
 func TestResponseQueue_CheckCreateExtractsNameFromJSON(t *testing.T) {
