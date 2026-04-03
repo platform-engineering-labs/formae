@@ -327,12 +327,13 @@ func (m *model) viewMultiCommand() string {
 	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	bw := barWidth(w)
 
-	// Build column header with manual padding to avoid ANSI width issues
-	colLine := "     " +
+	// Build column header — must match row layout:
+	// row = sp2(2) + statusSym(2) + sp2(2) + id(14) + cmdType(9) + mode(11) + progressArea(bw+7) + sp(1) + counts(4*4) + sp2(2) + dur(6)
+	colLine := "      " + // 2+2+2 = 6 to match sp2+statusSym+sp2
 		padRight(dimStyle.Render("ID"), 14) +
 		padRight(dimStyle.Render("Command"), 9) +
 		padRight(dimStyle.Render("Mode"), 11) +
-		padRight(dimStyle.Render("Progress"), bw) +
+		padRight(dimStyle.Render("Progress"), bw+7) + // bar + " " + "NN/NN" space
 		" " +
 		padRight(lipgloss.NewStyle().Foreground(p.Done).Render("✓"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
@@ -373,9 +374,8 @@ func (m *model) viewMultiCommand() string {
 }
 
 func barWidth(termWidth int) int {
-	// Fixed columns take ~60 chars; bar gets the rest
-	// status(3) + ID(14) + Type(9) + Mode(11) + counts(4*4=16) + Time(6) + spacing(~5)
-	fixed := 64
+	// Fixed columns: prefix(6) + ID(14) + Command(9) + Mode(11) + N/M(7) + sp(1) + counts(16) + sp2(2) + Time(6) = 72
+	fixed := 72
 	bw := termWidth - fixed
 	if bw < 10 {
 		bw = 10
@@ -431,6 +431,14 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	plainStyle := withBg(lipgloss.NewStyle())
 	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	subtleStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+
+	// Brighten all text on selected row
+	if isCursor {
+		idStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD"))) // brighter blue
+		plainStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		subtleStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+	}
 
 	pad := func(s string, w int) string {
 		if isCursor {
@@ -549,11 +557,11 @@ func (m *model) viewSingleCommand() string {
 
 	// Reuse the same command row from the multi-command view
 	bw := barWidth(w)
-	cmdColHeader := "     " +
+	cmdColHeader := "      " + // 6 chars to match sp2+statusSym+sp2
 		padRight(dimStyle.Render("ID"), 14) +
 		padRight(dimStyle.Render("Command"), 9) +
 		padRight(dimStyle.Render("Mode"), 11) +
-		padRight(dimStyle.Render("Progress"), bw) +
+		padRight(dimStyle.Render("Progress"), bw+7) +
 		" " +
 		padRight(lipgloss.NewStyle().Foreground(p.Done).Render("✓"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
@@ -600,14 +608,15 @@ func (m *model) viewSingleCommand() string {
 		}
 
 		body.WriteString("\n  " + titleStyle.Render("▌ "+g.label) + "\n")
+		// Column headers — 6 chars prefix to match sp2(2)+stateStr(2)+sp2(2)
 		if g.hasType {
-			body.WriteString("       " +
+			body.WriteString("      " +
 				padRight(dimStyle.Render("Label"), 24) +
 				padRight(dimStyle.Render("Type"), 30) +
 				padRight(dimStyle.Render("Operation"), 10) +
 				dimStyle.Render("Time") + "\n")
 		} else {
-			body.WriteString("       " +
+			body.WriteString("      " +
 				padRight(dimStyle.Render("Label"), 54) +
 				padRight(dimStyle.Render("Operation"), 10) +
 				dimStyle.Render("Time") + "\n")
@@ -683,6 +692,14 @@ func (m *model) renderUpdateRowHighlight(u fakeUpdate, w int, isCursor bool) str
 	opStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
 
+	// Brighten all text on selected row — match main view behavior
+	if isCursor {
+		labelStyle = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD"))) // brighter blue
+		typeStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		opStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+	}
+
 	label := u.Label
 	hasType := u.Kind == kindResource || u.Kind == kindPolicy
 	typeName := u.TypeName
@@ -725,11 +742,11 @@ func (m *model) renderUpdateRowHighlight(u fakeUpdate, w int, isCursor bool) str
 
 	// If failed, show error on next line
 	if u.State == stateFailed && u.ErrorMessage != "" {
-		errLine := "       " + lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage)
+		errLine := "      " + lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage)
 		return row + "\n" + errLine + "\n"
 	}
 	if u.State == stateSkipped && u.CascadeSrc != "" {
-		depLine := "       " + withBg(lipgloss.NewStyle().Foreground(p.TextSubtle)).Render("Depends on: "+u.CascadeSrc+" (failed)")
+		depLine := "      " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render("Depends on: "+u.CascadeSrc+" (failed)")
 		return row + "\n" + depLine + "\n"
 	}
 
@@ -763,15 +780,17 @@ func (m *model) renderUpdateRow(u fakeUpdate, w int) string {
 		timeStr = "—"
 	}
 
+	stateStr = padRight(stateStr, 2)
+
 	var row string
 	if hasType {
-		row = "  " + padRight(stateStr, 3) + "  " +
+		row = "  " + stateStr + "  " +
 			padRight(labelStyle.Render(label), 24) +
 			padRight(typeStyle.Render(typeName), 30) +
 			padRight(opStyle.Render(u.Operation), 10) +
 			dimStyle.Render(timeStr)
 	} else {
-		row = "  " + padRight(stateStr, 3) + "  " +
+		row = "  " + stateStr + "  " +
 			padRight(labelStyle.Render(label), 54) +
 			padRight(opStyle.Render(u.Operation), 10) +
 			dimStyle.Render(timeStr)
@@ -779,12 +798,12 @@ func (m *model) renderUpdateRow(u fakeUpdate, w int) string {
 
 	// If failed, show error on next line
 	if u.State == stateFailed && u.ErrorMessage != "" {
-		errLine := "       " + lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage)
+		errLine := "      " + lipgloss.NewStyle().Foreground(p.Error).Render(u.ErrorMessage)
 		return row + "\n" + errLine + "\n"
 	}
 	// If skipped with cascade, show dependency
 	if u.State == stateSkipped && u.CascadeSrc != "" {
-		depLine := "       " + dimStyle.Render("Depends on: "+u.CascadeSrc+" (failed)")
+		depLine := "      " + dimStyle.Render("Depends on: "+u.CascadeSrc+" (failed)")
 		return row + "\n" + depLine + "\n"
 	}
 
