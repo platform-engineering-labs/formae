@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"sort"
 
 	"github.com/tidwall/sjson"
 
@@ -510,6 +509,7 @@ func generateResourceUpdatesForReconcile(
 		checkAllResources := len(formaResourceKeys) == 0
 
 		var nonPortable []string
+		var nonPortableTarget string
 		for stackLabel, resources := range allResourcesByStack {
 			if stackLabel == constants.UnmanagedStack {
 				continue
@@ -522,20 +522,16 @@ func generateResourceUpdatesForReconcile(
 					key := fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label)
 					if checkAllResources || formaResourceKeys[key] {
 						nonPortable = append(nonPortable, fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label))
+						if nonPortableTarget == "" {
+							nonPortableTarget = resource.Target
+						}
 					}
 				}
 			}
 		}
 		if len(nonPortable) > 0 {
-			// Use the first replaced target alphabetically for a deterministic
-			// error message regardless of Go map iteration order.
-			targetLabels := make([]string, 0, len(replacedTargets))
-			for label := range replacedTargets {
-				targetLabels = append(targetLabels, label)
-			}
-			sort.Strings(targetLabels)
 			return nil, apimodel.NonPortableResourcesError{
-				TargetLabel: targetLabels[0],
+				TargetLabel: nonPortableTarget,
 				Resources:   nonPortable,
 			}
 		}
@@ -860,6 +856,7 @@ func generateResourceUpdatesForPatch(
 	// In patch mode, ALL managed resources on replaced targets will be recreated, so check all
 	if len(replacedTargets) > 0 {
 		var nonPortable []string
+		var nonPortableTarget string
 		for stackLabel, resources := range allResourcesByStack {
 			if stackLabel == constants.UnmanagedStack {
 				continue
@@ -874,15 +871,8 @@ func generateResourceUpdatesForPatch(
 			}
 		}
 		if len(nonPortable) > 0 {
-			// Use the first replaced target alphabetically for a deterministic
-			// error message regardless of Go map iteration order.
-			targetLabels := make([]string, 0, len(replacedTargets))
-			for label := range replacedTargets {
-				targetLabels = append(targetLabels, label)
-			}
-			sort.Strings(targetLabels)
 			return nil, apimodel.NonPortableResourcesError{
-				TargetLabel: targetLabels[0],
+				TargetLabel: nonPortableTarget,
 				Resources:   nonPortable,
 			}
 		}

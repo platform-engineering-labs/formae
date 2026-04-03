@@ -125,7 +125,9 @@ func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
 	assert.True(t, ShouldTriggerDiscovery(&update))
 }
 
-func TestShouldTriggerDiscovery_Replace_Discoverable(t *testing.T) {
+func TestShouldTriggerDiscovery_Replace_NotTriggered(t *testing.T) {
+	// Replace is split into delete+create by the DAG. The create phase
+	// triggers discovery, so the replace operation itself should not.
 	update := TargetUpdate{
 		Target: pkgmodel.Target{
 			Label:        "test",
@@ -134,7 +136,7 @@ func TestShouldTriggerDiscovery_Replace_Discoverable(t *testing.T) {
 		Operation: TargetOperationReplace,
 	}
 
-	assert.True(t, ShouldTriggerDiscovery(&update))
+	assert.False(t, ShouldTriggerDiscovery(&update))
 }
 
 func TestShouldTriggerDiscovery_Create_NotDiscoverable(t *testing.T) {

@@ -141,9 +141,14 @@ func ShouldTriggerDiscovery(update *TargetUpdate) bool {
 		return false
 	}
 
-	if update.Operation == TargetOperationCreate || update.Operation == TargetOperationReplace {
+	if update.Operation == TargetOperationCreate {
 		return true
 	}
+
+	// Replace is split into delete+create by the DAG. Discovery is triggered
+	// by the create phase, not here — firing early would run against a
+	// half-applied state where the new target exists but resources haven't
+	// been recreated yet.
 
 	if update.Operation == TargetOperationUpdate {
 		// Only trigger discovery when something discovery cares about changed:
