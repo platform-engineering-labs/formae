@@ -6,6 +6,7 @@ on:
     - 'internal/**'
     - 'pkg/**'
     - 'tests/blackbox/**'
+    - 'tests/testcontrol/**'
     - 'tests/testplugin/**'
   workflow_dispatch:
   # Run 1x a day at midnight UTC
