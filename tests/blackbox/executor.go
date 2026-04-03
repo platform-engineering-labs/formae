@@ -609,17 +609,17 @@ func (h *TestHarness) waitForInventoryStabilization(t *testing.T, timeout time.D
 	time.Sleep(gracePeriod)
 
 	deadline := time.Now().Add(timeout - gracePeriod)
-	lastCount := -1
+	lastFingerprint := ""
 	stableCount := 0
 
 	for time.Now().Before(deadline) {
 		managedInventory, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
-		count := 0
+		fingerprint := ""
 		if err == nil {
-			count = len(managedInventory) + len(unmanagedInventory)
+			fingerprint = inventoryFingerprint(managedInventory, unmanagedInventory)
 		}
 
-		if count == lastCount {
+		if fingerprint == lastFingerprint {
 			stableCount++
 			if stableCount >= requiredStable {
 				return
@@ -627,11 +627,26 @@ func (h *TestHarness) waitForInventoryStabilization(t *testing.T, timeout time.D
 		} else {
 			stableCount = 0
 		}
-		lastCount = count
+		lastFingerprint = fingerprint
 		time.Sleep(pollInterval)
 	}
 
-	t.Logf("waitForInventoryStabilization: timed out after %v (last count: %d)", timeout, lastCount)
+	t.Logf("waitForInventoryStabilization: timed out after %v", timeout)
+}
+
+// inventoryFingerprint creates a stable string fingerprint of the inventory
+// including properties, so stabilization detects property updates (not just
+// count changes).
+func inventoryFingerprint(managed []pkgmodel.Resource, unmanaged []pkgmodel.Resource) string {
+	var b strings.Builder
+	for _, r := range managed {
+		fmt.Fprintf(&b, "%s/%s:%s:%s|", r.Stack, r.Label, r.NativeID, string(r.Properties))
+	}
+	b.WriteString("||")
+	for _, r := range unmanaged {
+		fmt.Fprintf(&b, "%s/%s:%s:%s|", r.Stack, r.Label, r.NativeID, string(r.Properties))
+	}
+	return b.String()
 }
 
 func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model *StateModel, timeout time.Duration) {
