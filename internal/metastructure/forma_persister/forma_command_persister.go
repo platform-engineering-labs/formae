@@ -668,6 +668,10 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 
 		// Calculate new command state
 		cmd.State = overallCommandState(cmd)
+		f.Log().Debug("MarkResourceUpdateAsComplete: computed overallCommandState",
+			"commandID", msg.CommandID,
+			"newState", cmd.State,
+			"pendingCompletions", cached.pendingCompletions)
 
 		// If command is in final state, do full finalization (hash sensitive data, potentially delete, etc.)
 		// Otherwise just update command meta for performance

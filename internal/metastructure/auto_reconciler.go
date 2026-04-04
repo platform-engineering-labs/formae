@@ -266,26 +266,24 @@ func scheduleNextReconcile(proc gen.Process, data *AutoReconcilerData, stackLabe
 	}
 }
 
-func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel string) (string, error) {
-	// Skip if stack has active commands (user-initiated operations take priority)
-	hasActive, err := data.datastore.StackHasActiveCommands(stackLabel)
-	if err != nil {
-		return "", fmt.Errorf("failed to check for active commands: %w", err)
-	}
-	if hasActive {
-		proc.Log().Info("Skipping auto-reconcile, stack has active commands stack=%s", stackLabel)
-		return "", nil // Not an error - just skip and reschedule
-	}
+// reconcileResult holds the prepared reconcile command and changeset, ready for persistence and execution.
+type reconcileResult struct {
+	command   *forma_command.FormaCommand
+	changeset changeset.Changeset
+}
 
+// prepareReconcile builds a reconcile FormaCommand and Changeset from the stack's last-reconcile snapshot.
+// It returns nil (with no error) when no drift is detected. The caller is responsible for persisting
+// the command and starting the changeset execution.
+func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string) (*reconcileResult, error) {
 	// Get resources at last reconcile as full Resource objects
-	snapshots, err := data.datastore.GetResourcesAtLastReconcile(stackLabel)
+	snapshots, err := ds.GetResourcesAtLastReconcile(stackLabel)
 	if err != nil {
-		return "", fmt.Errorf("failed to get resources at last reconcile: %w", err)
+		return nil, fmt.Errorf("failed to get resources at last reconcile: %w", err)
 	}
 
 	if len(snapshots) == 0 {
-		proc.Log().Debug("No resources to reconcile stack=%s", stackLabel)
-		return "", fmt.Errorf("no resources to reconcile")
+		return nil, fmt.Errorf("no resources to reconcile")
 	}
 
 	// Convert snapshots to Resource objects.
@@ -298,7 +296,7 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		ksuid := snapshot.KSUID
 		if ksuid != "" {
 			uri := pkgmodel.NewFormaeURI(ksuid, "")
-			existing, err := data.datastore.LoadResource(uri)
+			existing, err := ds.LoadResource(uri)
 			if err != nil || existing == nil {
 				// KSUID was deleted — clear it so assignKSUIDs() resolves a fresh one
 				ksuid = ""
@@ -322,9 +320,9 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	forma := pkgmodel.FormaFromResources(resources)
 
 	// Load existing targets for resource update generation
-	existingTargets, err := data.datastore.LoadAllTargets()
+	existingTargets, err := ds.LoadAllTargets()
 	if err != nil {
-		return "", fmt.Errorf("failed to load targets: %w", err)
+		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
 	// Replace forma targets with actual existing targets
@@ -346,18 +344,15 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		pkgmodel.FormaApplyModeReconcile,
 		resource_update.FormaCommandSourcePolicyAutoReconcile,
 		existingTargets,
-		data.datastore,
+		ds,
 		nil, nil,
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate resource updates: %w", err)
+		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
 	}
 
-	proc.Log().Debug("Generated %d resource updates for stack=%s", len(resourceUpdates), stackLabel)
-
 	if len(resourceUpdates) == 0 {
-		proc.Log().Debug("No drift detected, nothing to reconcile stack=%s", stackLabel)
-		return "", nil // Not an error - just nothing to do
+		return nil, nil // No drift detected
 	}
 
 	// Create the reconcile command
@@ -372,28 +367,56 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		nil, // No target updates
 		nil, // No stack updates
 		nil, // No policy updates
-		"auto-reconciler",
+		clientID,
 	)
+
+	// Create changeset
+	cs, err := changeset.NewChangeset(resourceUpdates, nil, reconcileCommand.ID, pkgmodel.CommandApply)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create changeset: %w", err)
+	}
+
+	return &reconcileResult{
+		command:   reconcileCommand,
+		changeset: cs,
+	}, nil
+}
+
+func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel string) (string, error) {
+	// Skip if stack has active commands (user-initiated operations take priority)
+	hasActive, err := data.datastore.StackHasActiveCommands(stackLabel)
+	if err != nil {
+		return "", fmt.Errorf("failed to check for active commands: %w", err)
+	}
+	if hasActive {
+		proc.Log().Info("Skipping auto-reconcile, stack has active commands stack=%s", stackLabel)
+		return "", nil // Not an error - just skip and reschedule
+	}
+
+	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler")
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		proc.Log().Debug("No drift detected, nothing to reconcile stack=%s", stackLabel)
+		return "", nil
+	}
+
+	proc.Log().Debug("Generated resource updates for stack=%s, starting reconcile command=%s", stackLabel, result.command.ID)
 
 	// Store the forma command
 	_, err = proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
-		forma_persister.StoreNewFormaCommand{Command: *reconcileCommand},
+		forma_persister.StoreNewFormaCommand{Command: *result.command},
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to store reconcile command: %w", err)
 	}
 
-	// Create changeset
-	cs, err := changeset.NewChangeset(resourceUpdates, nil, reconcileCommand.ID, pkgmodel.CommandApply)
-	if err != nil {
-		return "", fmt.Errorf("failed to create changeset: %w", err)
-	}
-
 	// Ensure ChangesetExecutor exists
 	_, err = proc.Call(
 		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: proc.Node().Name()},
-		changeset.EnsureChangesetExecutor{CommandID: reconcileCommand.ID},
+		changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to ensure changeset executor: %w", err)
@@ -401,12 +424,12 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 
 	// Start the changeset execution with notification so we know when to schedule next
 	err = proc.Send(
-		gen.ProcessID{Name: actornames.ChangesetExecutor(reconcileCommand.ID), Node: proc.Node().Name()},
-		changeset.Start{Changeset: cs, NotifyOnComplete: true},
+		gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: proc.Node().Name()},
+		changeset.Start{Changeset: result.changeset, NotifyOnComplete: true},
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to start changeset executor: %w", err)
 	}
 
-	return reconcileCommand.ID, nil
+	return result.command.ID, nil
 }

@@ -305,8 +305,10 @@ test-e2e: build install-external-plugins
 	echo "Running e2e tests..."
 	E2E_FORMAE_BINARY=$(CURDIR)/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
 
+## test-property: Run property tests (FullChaos 100 iterations, others 50)
 test-property:
-	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
+	go test -C tests/blackbox -tags=property -run 'TestProperty_Sequential|TestProperty_Concurrent' -v -count=1 -rapid.checks=50 -timeout=60m
+	go test -C tests/blackbox -tags=property -run TestProperty_FullChaos -v -count=1 -rapid.checks=100 -timeout=60m
 
 ## mutation-test: Run mutation testing across all unit-tested packages and generate report
 mutation-test: build

@@ -190,7 +190,7 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 		}, 10*time.Second, 100*time.Millisecond, "Expected at least 2 resource updates to be in progress")
 
 		// Cancel the command while resources are still being processed
-		err = m.CancelCommand(commandID, "test-client")
+		_, err = m.CancelCommand(commandID, "test-client")
 		require.NoError(t, err)
 
 		// Verify the command was canceled

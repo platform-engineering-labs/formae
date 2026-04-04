@@ -1952,3 +1952,130 @@ func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
 	assert.Empty(t, subnetNode.Dependencies)
 	assert.Empty(t, subnetNode.Dependents)
 }
+
+// TestChangeset_CrashRecovery_SuccessParentBlocksChildren demonstrates the bug
+// where including already-completed resources in a recovery changeset creates
+// unresolvable dependency links. When a parent resource (VPC) already succeeded
+// before a crash, it must be excluded from the recovery changeset so its
+// children (Subnets) are immediately executable.
+func TestChangeset_CrashRecovery_SuccessParentBlocksChildren(t *testing.T) {
+	var (
+		vpcKsuidURI    = pkgmodel.NewFormaeURI(util.NewID(), "")
+		subnetKsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
+	)
+
+	// Simulate crash recovery: VPC already succeeded, Subnet was interrupted.
+	// If we include both in the changeset, the Subnet's dependency on the
+	// VPC creates a link that can never be resolved (VPC is Success so it's
+	// never returned by GetExecutableUpdates, and thus never processed
+	// through UpdatePipeline to unlink its dependents).
+	allUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "test-vpc",
+				Type:  "AWS::EC2::VPC",
+				Stack: "test-stack",
+				Ksuid: vpcKsuidURI.KSUID(),
+			},
+			Operation:  resource_update.OperationCreate,
+			State:      resource_update.ResourceUpdateStateSuccess,
+			StartTs:    util.TimeNow(),
+			StackLabel: "test-stack",
+		},
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "test-subnet",
+				Type:  "AWS::EC2::Subnet",
+				Stack: "test-stack",
+				Ksuid: subnetKsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StartTs:              util.TimeNow(),
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
+		},
+	}
+
+	cs, err := NewChangeset(allUpdates, nil, "test-crash-bug", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// BUG: Subnet is blocked because VPC (Success) is in the pipeline as an
+	// upstream dependency but will never be processed.
+	updates := cs.GetExecutableUpdates("AWS", 5)
+	assert.Empty(t, updates, "Subnet should be blocked when Success parent is in the changeset")
+}
+
+// TestChangeset_CrashRecovery_FilteredPendingUpdatesOnly verifies the fix:
+// when only pending (non-terminal) resource updates are included in the
+// recovery changeset, dependent resources are immediately executable because
+// their parent's resolved dependency reference points to a resource that
+// doesn't exist in the changeset (so no link is created).
+func TestChangeset_CrashRecovery_FilteredPendingUpdatesOnly(t *testing.T) {
+	var (
+		vpcKsuidURI    = pkgmodel.NewFormaeURI(util.NewID(), "")
+		subnetKsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
+	)
+
+	// Only include the pending Subnet — VPC (Success) is filtered out,
+	// exactly as ReRunIncompleteCommands should do.
+	pendingOnly := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "test-subnet",
+				Type:  "AWS::EC2::Subnet",
+				Stack: "test-stack",
+				Ksuid: subnetKsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StartTs:              util.TimeNow(),
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
+		},
+	}
+
+	cs, err := NewChangeset(pendingOnly, nil, "test-crash-fix", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// VPC URI is in RemainingResolvables but not in the changeset, so no
+	// dependency link is created. Subnet is immediately executable.
+	updates := cs.GetExecutableUpdates("AWS", 5)
+	require.Len(t, updates, 1, "Subnet should be immediately executable")
+	assert.Equal(t, "test-subnet", updates[0].(*resource_update.ResourceUpdate).DesiredState.Label)
+}
+
+func TestChangeset_SyncReadFailureDoesNotCascade(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI("vpc-ksuid", "")
+	subnetURI := pkgmodel.NewFormaeURI("subnet-ksuid", "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Ksuid: vpcURI.KSUID(), Stack: "stack", Label: "vpc", Type: "AWS::EC2::VPC"},
+			Operation:    resource_update.OperationRead,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "stack",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Ksuid: subnetURI.KSUID(), Stack: "stack", Label: "subnet", Type: "AWS::EC2::Subnet"},
+			Operation:            resource_update.OperationRead,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
+		},
+	}
+
+	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
+	require.NoError(t, err)
+
+	opURI := createOperationURI(vpcURI, resource_update.OperationRead)
+	failed := cs.DAG.Nodes[opURI].Update
+	failed.MarkFailed()
+	failedUpdates, err := cs.UpdateDAG(opURI, failed)
+	require.NoError(t, err)
+	assert.Len(t, failedUpdates, 1)
+	assert.Equal(t, failed.NodeURI(), failedUpdates[0].NodeURI())
+	remaining := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, remaining, 1)
+	assert.NotEqual(t, failed.NodeURI(), remaining[0].NodeURI())
+}

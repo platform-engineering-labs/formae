@@ -62,6 +62,11 @@ type SynchronizationConfig struct {
 	Interval *pkl.Duration `pkl:"interval"`
 }
 
+type StackExpirerConfig struct {
+	Enabled  bool          `pkl:"enabled"`
+	Interval *pkl.Duration `pkl:"interval"`
+}
+
 type LoggingConfig struct {
 	FilePath        string `pkl:"filePath"`
 	FileLogLevel    string `pkl:"fileLogLevel"`
@@ -115,6 +120,7 @@ type AgentConfig struct {
 	Discovery       DiscoveryConfig       `pkl:"discovery"`
 	Logging         LoggingConfig         `pkl:"logging"`
 	OTel            OTelConfig            `pkl:"oTel"`
+	StackExpirer    StackExpirerConfig    `pkl:"stackExpirer"`
 }
 
 type APIConfig struct {

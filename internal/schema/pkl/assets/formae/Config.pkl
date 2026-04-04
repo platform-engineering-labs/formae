@@ -95,6 +95,12 @@ class SynchronizationConfig {
     interval: Duration = 5.min
 }
 
+class StackExpirerConfig {
+    enabled: Boolean = true
+
+    interval: Duration = 5.s
+}
+
 class Target {
     label: String
 
@@ -164,6 +170,8 @@ class AgentConfig {
     logging: LoggingConfig = new LoggingConfig{}
 
     oTel: OTelConfig = new OTelConfig{}
+
+    stackExpirer: StackExpirerConfig = new StackExpirerConfig{}
 }
 
 class ApiConfig {

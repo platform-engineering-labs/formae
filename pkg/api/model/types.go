@@ -48,7 +48,13 @@ type CommandID struct {
 }
 
 type CancelCommandResponse struct {
-	CommandIDs []string `json:"CommandIds"`
+	CommandIDs           []string                       `json:"CommandIds"`
+	ResourceUpdateStates map[string]CancelResourceState `json:"ResourceUpdateStates,omitempty"`
+}
+
+// CancelResourceState represents the state of a resource update at cancel time.
+type CancelResourceState struct {
+	State string `json:"State"` // "Canceled", "InProgress", "Success", "Failed"
 }
 
 type ResourceUpdate struct {
@@ -69,6 +75,7 @@ type ResourceUpdate struct {
 	OldProperties   json.RawMessage   `json:"OldProperties,omitempty"`
 	GroupID         string            `json:"GroupId,omitempty"`
 	ReferenceLabels map[string]string `json:"ReferenceLabels,omitempty"`
+	NativeID        string            `json:"NativeId,omitempty"`
 	IsCascade       bool              `json:"IsCascade,omitempty"`
 	CascadeSource   string            `json:"CascadeSource,omitempty"`
 }
@@ -161,4 +168,14 @@ type PluginInfo struct {
 	NodeName             string `json:"NodeName"`
 	MaxRequestsPerSecond int    `json:"MaxRequestsPerSecond"`
 	ResourceCount        int    `json:"ResourceCount"`
+}
+
+type ForceReconcileResponse struct {
+	CommandID string `json:"command_id,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+type ForceCheckTTLResponse struct {
+	ExpiredStacks []string `json:"expired_stacks"`
+	CommandIDs    []string `json:"command_ids,omitempty"`
 }

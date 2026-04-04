@@ -49,7 +49,7 @@ type MetastructureAPI interface {
 	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	CancelCommand(commandID string, clientID string) error
+	CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error)
 	CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
@@ -58,6 +58,8 @@ type MetastructureAPI interface {
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
+	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
+	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
 }
@@ -135,6 +137,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("DiscoveryConfig"):       cfg.Agent.Discovery,
 		gen.Env("LoggingConfig"):         cfg.Agent.Logging,
 		gen.Env("OTelConfig"):            cfg.Agent.OTel,
+		gen.Env("StackExpirerConfig"):    cfg.Agent.StackExpirer,
 		gen.Env("AgentID"):               agentID,
 	}
 
@@ -453,7 +456,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								Operation: ru.Operation,
 							}
 						}
-						_, err = m.callActor(
+						_, markErr := m.callActor(
 							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 							forma_persister.MarkResourcesAsFailed{
 								CommandID:          fa.ID,
@@ -461,9 +464,9 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								ResourceModifiedTs: time.Now(),
 							},
 						)
-						if err != nil {
+						if markErr != nil {
 							slog.Error("Failed to mark resources as failed after stack deletion",
-								"error", err, "commandID", fa.ID)
+								"commandID", fa.ID, "stackLabel", pu.StackLabel, "error", markErr)
 						}
 						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
 					}
@@ -560,6 +563,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			MaxAttempts:    ru.MostRecentProgressResult.MaxAttempts,
 			ErrorMessage:   ru.MostRecentFailureMessage(),
 			StatusMessage:  ru.MostRecentStatusMessage(),
+			NativeID:       ru.DesiredState.NativeID,
 			GroupID:        ru.GroupID,
 			IsCascade:      ru.IsCascade,
 			CascadeSource:  ru.CascadeSource,
@@ -792,24 +796,28 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 	return m.DestroyForma(forma, config, clientID)
 }
 
-func (m *Metastructure) CancelCommand(commandID string, clientID string) error {
+func (m *Metastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
 	slog.Info("Canceling command", "commandID", commandID, "clientID", clientID)
 
-	// Send Cancel message to the ChangesetExecutor for this command
 	changesetExecutorPID := gen.ProcessID{
 		Name: actornames.ChangesetExecutor(commandID),
 		Node: m.Node.Name(),
 	}
 
-	err := m.Node.Send(changesetExecutorPID, changeset.Cancel{
+	result, err := m.callActor(changesetExecutorPID, changeset.Cancel{
 		CommandID: commandID,
 	})
 	if err != nil {
-		slog.Error("Failed to send cancel message to changeset executor", "commandID", commandID, "error", err)
-		return fmt.Errorf("failed to send cancel message: %w", err)
+		slog.Error("Failed to cancel command", "commandID", commandID, "error", err)
+		return nil, fmt.Errorf("failed to cancel command: %w", err)
 	}
 
-	return nil
+	cancelResp, ok := result.(changeset.CancelResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type from changeset executor: %T", result)
+	}
+
+	return &cancelResp, nil
 }
 
 func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
@@ -836,20 +844,27 @@ func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*a
 
 	// Filter to only InProgress commands
 	var canceledCommandIDs []string
+	allResourceStates := make(map[string]apimodel.CancelResourceState)
 	for _, cmd := range commandsToCancel {
 		if cmd.State == forma_command.CommandStateInProgress {
-			err := m.CancelCommand(cmd.ID, clientID)
+			cancelResp, err := m.CancelCommand(cmd.ID, clientID)
 			if err != nil {
 				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
 				// Continue with other commands even if one fails
 				continue
 			}
 			canceledCommandIDs = append(canceledCommandIDs, cmd.ID)
+			if cancelResp != nil {
+				for uri, state := range cancelResp.ResourceStates {
+					allResourceStates[uri] = apimodel.CancelResourceState{State: state}
+				}
+			}
 		}
 	}
 
 	return &apimodel.CancelCommandResponse{
-		CommandIDs: canceledCommandIDs,
+		CommandIDs:           canceledCommandIDs,
+		ResourceUpdateStates: allResourceStates,
 	}, nil
 }
 
@@ -1183,6 +1198,152 @@ func (m *Metastructure) ForceDiscovery() error {
 	return nil
 }
 
+func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
+	// Check if stack has active commands
+	hasActive, err := m.Datastore.StackHasActiveCommands(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check active commands: %w", err)
+	}
+	if hasActive {
+		// Build a conflicting commands error so mapError maps it to 409
+		incompleteCommands, listErr := m.Datastore.LoadIncompleteFormaCommands()
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to load incomplete commands: %w", listErr)
+		}
+		conflicting := make([]apimodel.Command, 0)
+		targetStacks := []string{stackLabel}
+		for _, cmd := range incompleteCommands {
+			if formaTouchesStacks(cmd, targetStacks) {
+				conflicting = append(conflicting, translateToAPICommand(cmd))
+			}
+		}
+		return nil, apimodel.FormaConflictingCommandsError{
+			ConflictingCommands: conflicting,
+		}
+	}
+
+	// Verify the stack has an auto-reconcile policy attached.
+	// Force-reconcile is a destructive operation that reverts all resources to
+	// their last-known desired state. Require explicit opt-in via policy.
+	reconcileInfos, err := m.Datastore.GetStacksWithAutoReconcilePolicy()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check auto-reconcile policies: %w", err)
+	}
+	hasPolicy := false
+	for _, info := range reconcileInfos {
+		if info.StackLabel == stackLabel {
+			hasPolicy = true
+			break
+		}
+	}
+	if !hasPolicy {
+		return nil, apimodel.ReconcilePolicyRequiredError{StackLabel: stackLabel}
+	}
+
+	// Prepare the reconcile command and changeset
+	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile")
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return &apimodel.ForceReconcileResponse{Message: "no drift detected"}, nil
+	}
+
+	// Store the forma command via the FormaCommandPersister actor
+	_, err = m.callActor(
+		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+		forma_persister.StoreNewFormaCommand{Command: *result.command},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store reconcile command: %w", err)
+	}
+
+	// Ensure ChangesetExecutor exists
+	_, err = m.callActor(
+		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
+		changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure changeset executor: %w", err)
+	}
+
+	// Start the changeset execution (no notification needed for force reconcile)
+	err = m.Node.Send(
+		gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: m.Node.Name()},
+		changeset.Start{Changeset: result.changeset},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start changeset executor: %w", err)
+	}
+
+	return &apimodel.ForceReconcileResponse{CommandID: result.command.ID}, nil
+}
+
+func (m *Metastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
+	expiredStacks, err := m.Datastore.GetExpiredStacks()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query expired stacks: %w", err)
+	}
+
+	expiredLabels := make([]string, 0)
+	commandIDs := make([]string, 0)
+
+	for _, stackInfo := range expiredStacks {
+		slog.Info("Force TTL check: expiring stack", "stack", stackInfo.StackLabel, "onDependents", stackInfo.OnDependents)
+
+		result, err := prepareDestroyExpiredStack(m.Datastore, stackInfo, "force-check-ttl", "force-check-ttl-cleanup")
+		if err != nil {
+			slog.Error("Force TTL check: failed to prepare destroy for expired stack", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+		if result == nil {
+			// Stack was empty (and cleaned up), aborted due to dependents, or no updates needed
+			continue
+		}
+
+		// Store the forma command via the FormaCommandPersister actor
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			forma_persister.StoreNewFormaCommand{Command: *result.command},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to store destroy command", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		// Ensure ChangesetExecutor exists
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
+			changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to ensure changeset executor", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		// Start the changeset execution
+		err = m.Node.Send(
+			gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: m.Node.Name()},
+			changeset.Start{Changeset: result.changeset},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to start changeset executor", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		expiredLabels = append(expiredLabels, stackInfo.StackLabel)
+		commandIDs = append(commandIDs, result.command.ID)
+	}
+
+	return &apimodel.ForceCheckTTLResponse{ExpiredStacks: expiredLabels, CommandIDs: commandIDs}, nil
+}
+
 func (m *Metastructure) ReRunIncompleteCommands() error {
 	commands, err := m.Datastore.LoadIncompleteFormaCommands()
 	if err != nil {
@@ -1223,6 +1384,21 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			if ru.State == resource_update.ResourceUpdateStateNotStarted {
 				pendingUpdates = append(pendingUpdates, *ru)
 			}
+		}
+
+		// If all resource updates already reached a terminal state, the command
+		// just needs its own state updated — no changeset execution needed.
+		// This happens when the agent crashed after all CRUD ops completed but
+		// before the command transitioned to a final state.
+		if len(pendingUpdates) == 0 {
+			_, err := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
+			)
+			if err != nil {
+				slog.Error("Failed to finalize incomplete command", "commandID", fa.ID, "error", err)
+			}
+			continue
 		}
 
 		// If all resource updates already reached a terminal state, the command

@@ -169,6 +169,10 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 				FileLogLevel:    parseLogLevel(config.Agent.Logging.FileLogLevel),
 				ConsoleLogLevel: parseLogLevel(config.Agent.Logging.ConsoleLogLevel),
 			},
+			StackExpirer: pkgmodel.StackExpirerConfig{
+				Disabled: !config.Agent.StackExpirer.Enabled,
+				Interval: config.Agent.StackExpirer.Interval.GoDuration(),
+			},
 			OTel: pkgmodel.OTelConfig{
 				Enabled:     config.Agent.OTel.Enabled,
 				ServiceName: config.Agent.OTel.ServiceName,

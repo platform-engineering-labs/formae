@@ -26,6 +26,7 @@ const (
 	TargetReferenceNotFound      APIError = "TargetReferenceNotFound"
 	InvalidQuery                 APIError = "InvalidQueryError"
 	StackDeletedDuringApply      APIError = "StackDeletedDuringApply"
+	ReconcilePolicyRequired      APIError = "ReconcilePolicyRequired"
 )
 
 type ErrorResponse[T any] struct {
@@ -162,6 +163,14 @@ type StackDeletedDuringApplyError struct {
 
 func (e StackDeletedDuringApplyError) Error() string {
 	return fmt.Sprintf("stack %q was deleted during apply setup", e.StackLabel)
+}
+
+type ReconcilePolicyRequiredError struct {
+	StackLabel string `json:"StackLabel"`
+}
+
+func (e ReconcilePolicyRequiredError) Error() string {
+	return fmt.Sprintf("stack '%s' does not have an auto-reconcile policy attached; force-reconcile is not allowed without one", e.StackLabel)
 }
 
 type TargetHasResourcesError struct {
