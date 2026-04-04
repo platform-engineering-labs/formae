@@ -328,188 +328,56 @@ VIEW 3d: Detail mode — policy skip with referencing stacks
 
 
 ================================================================================
-VIEW 4: Single command — large command (auto-collapsed)
+SUPERSEDED VIEWS (replaced by new design)
 ================================================================================
 
-When a command has more updates than fit in the viewport, groups are collapsed:
+  The following original mockup views have been replaced by the new design:
 
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  ← esc/backspace                                                  ↻ live   │
-  │                                                                             │
-  │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  █████████████████████████████▒▒▒⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅  142/200 updates            │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  ▸ Targets (2)                                                  2/2 ✓      │
-  │  ▸ Stacks (3)                                                   3/3 ✓      │
-  │  ▾ Resources (192)                                                          │
-  │    ▸ Creates (150)                                          140/150        │
-  │    ▸ Updates (35)                                             0/35         │
-  │    ▾ Deletes (7)                                                            │
-  │      ✗ delete  old-data (AWS::S3::Bucket)                     ✗            │
-  │        Error: BucketNotEmpty: The bucket is not empty                       │
-  │      ✗ delete  legacy-2 (AWS::EC2::Instance)                  ✗            │
-  │        Error: DependencyViolation: has attached volumes                     │
-  │      ⊘ delete  legacy-3 (AWS::EC2::Instance)                  ⊘            │
-  │        Depends on: legacy-2 (failed)                                       │
-  │      delete  old-role (AWS::IAM::Role)                        ◐ 00:03     │
-  │      delete  old-policy (AWS::IAM::Policy)                          ○      │
-  │      delete  deprecated (AWS::Lambda::Function)                     ✓      │
-  │      delete  old-alarm (AWS::CloudWatch::Alarm)                     ✓      │
-  │  ▸ Policies (3)                                                 2/3 ✓      │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  space: expand  /: query  esc: back                                ?: help  │
-  └─────────────────────────────────────────────────────────────────────────────┘
+  - VIEW 4 (auto-collapsed groups): replaced by per-group tables with
+    pagination ("show 10 more"). Groups are always visible as table sections,
+    not collapsible tree nodes. Pagination shows first 10 rows per group,
+    expand with enter/space on the "show more" row.
 
-  Notes:
-  - Groups collapsed with ▸, expanded with ▾
-  - Each group shows count and progress summary
-  - "Deletes" group auto-expanded because it contains failures
-  - Failed items: ✗ in red, error message below
-  - Skipped items: ⊘ with cascade dependency reason
-  - User can expand/collapse groups with enter
+  - VIEW 5 (filter by state) and VIEW 6 (search): replaced by the query bar.
+    The query bar uses formae query language (same as --query flag) and
+    filters server-side. No separate filter/search modes needed.
 
+  - VIEW 7 (auto-follow): not needed. In a live-updating view with sort,
+    new commands sort into position automatically. The cursor stays where
+    the user put it. No auto-follow toggle required.
 
-================================================================================
-VIEW 5: Filter active (after pressing 'f')
-================================================================================
-
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  ← esc/backspace                                                  ↻ live   │
-  │                                                                             │
-  │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  █████████████████████████████▒▒▒⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅  142/200 updates            │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  Filter: [failed]  ▸done ▸in-progress ▸pending ●failed ▸skipped            │
-  │  ─────────────────────────────────────────────────────────────────────────  │
-  │                                                                             │
-  │    ✗ delete  old-data (AWS::S3::Bucket)                       ✗            │
-  │      Error: BucketNotEmpty: The bucket is not empty                         │
-  │                                                                             │
-  │    ✗ delete  legacy-2 (AWS::EC2::Instance)                    ✗            │
-  │      Error: DependencyViolation: has attached volumes                       │
-  │                                                                             │
-  │    ✗ delete  legacy-3 (AWS::EC2::Instance)                    ✗            │
-  │      Error: DependencyViolation: has attached volumes                       │
-  │                                                                             │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  f: toggle filter  tab: next filter  esc: clear filter             ?: help │
-  └─────────────────────────────────────────────────────────────────────────────┘
-
-
-================================================================================
-VIEW 6: Search active (after pressing '/')
-================================================================================
-
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  ← esc/backspace                                                  ↻ live   │
-  │                                                                             │
-  │  apply reconcile  cmd-abc123                              elapsed: 00:42   │
-  │  ██████████████████████████████████░░░░░⋅⋅⋅⋅⋅  12/15 updates              │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  /: S3█                                                                     │
-  │  ─────────────────────────────────────────────────────────────────────────  │
-  │                                                                             │
-  │    create  my-bucket (AWS::S3::Bucket)                           ◐ 00:05  │
-  │                                                                             │
-  │                                                                             │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  enter: confirm search  esc: cancel search                         ?: help │
-  └─────────────────────────────────────────────────────────────────────────────┘
-
-
-================================================================================
-VIEW 7: Auto-follow indicator
-================================================================================
-
-When auto-follow is active:
-
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  space: expand  /: query  esc: back                                ?: help  │
-  └─────────────────────────────────────────────────────────────────────────────┘
-
-When auto-follow is disabled (user scrolled manually):
-
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  space: expand  /: query  esc: back                                ?: help  │
-  └─────────────────────────────────────────────────────────────────────────────┘
-
-
-================================================================================
-VIEW 8: Command complete state
-================================================================================
-
-  ┌──────────────────────────────────────────────────────────────────────────────┐
-  │  formae status command                                         ✓ complete   │
-  ├──────────────────────────────────────────────────────────────────────────────┤
-  │                                                                              │
-  │       ID            Command  Mode       Progress             ✓  ✗  ◐  ○  Time│
-  │  ─────────────────────────────────────────────────────────────────────────── │
-  │  ✓   cmd-abc123    apply    reconcile  completed 15/15       15  0  0  0  01:23│
-  │  ✓   cmd-def456    destroy             completed 8/8          8  0  0  0  00:15│
-  │  ✓   cmd-ghi789    apply    patch      completed 3/3          3  0  0  0  00:08│
-  │                                                                              │
-  ├──────────────────────────────────────────────────────────────────────────────┤
-  │  All commands completed. Press q to exit.                                    │
-  └──────────────────────────────────────────────────────────────────────────────┘
-
-
-================================================================================
-VIEW 9: Failed command final state
-================================================================================
-
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  ← esc                                                          ✓ complete │
-  │                                                                             │
-  │  apply reconcile  cmd-xyz999                              elapsed: 05:22   │
-  │  █████████████████████████████▒▒▒⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅⋅  142/200 updates            │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  Resources                                                                  │
-  │    ✗ delete  old-data (AWS::S3::Bucket)                       ✗            │
-  │      Error: BucketNotEmpty: The bucket is not empty                         │
-  │                                                                             │
-  │    ✗ delete  legacy-2 (AWS::EC2::Instance)                    ✗            │
-  │      Error: DependencyViolation: has attached volumes                       │
-  │                                                                             │
-  │    ⊘ delete  legacy-3 (AWS::EC2::Instance)                    ⊘            │
-  │      Depends on: legacy-2 (failed)                                         │
-  │                                                                             │
-  │    ...and 47 more pending (skipped due to failures above)                   │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  space: expand  /: query  q: quit                                  ?: help  │
-  └─────────────────────────────────────────────────────────────────────────────┘
+  - VIEW 8 (command complete state) and VIEW 9 (failed final state):
+    replaced by row coloring and sort behavior. Completed commands sort to
+    the bottom (dimmed). Failed commands show in red (dimmed red if finished,
+    bright red if still running). No special "complete" view needed — the
+    main view handles all states through coloring and sort order.
 
 
 ================================================================================
 DATA FIELDS COVERAGE
 ================================================================================
 
-ResourceUpdate fields shown:
-  Summary mode: Operation, ResourceLabel, ResourceType (parenthetical), State,
-                Duration, ErrorMessage, IsCascade/CascadeSource
-  Detail mode:  + Stack, CurrentAttempt/MaxAttempts, StatusMessage,
-                PatchDocument (simulation only, not watch)
+Command fields shown in main view:
+  ID, CmdType (Command), Mode, State (as symbol), Progress (bar or text),
+  Per-status counts (✓ ✗ ◐ ○), Duration (Time), StartedAt (Age)
 
-TargetUpdate fields shown:
-  Summary mode: Operation, TargetLabel, State, Duration
-  Detail mode:  + Discoverable, ErrorMessage
+ResourceUpdate fields shown in subview:
+  Table mode: State (symbol), Label, Type, Operation, Duration (Time)
+              ErrorMessage on second line for failed, CascadeSource for skipped
+  Detail card: + Stack, CurrentAttempt/MaxAttempts, StatusMessage
 
-StackUpdate fields shown:
-  Summary mode: Operation, StackLabel, State, Duration
-  Detail mode:  + Description, ErrorMessage
+TargetUpdate fields shown in subview:
+  Table mode: State (symbol), Label, Operation, Duration
+  Detail card: + Discoverable, ErrorMessage
 
-PolicyUpdate fields shown:
-  Summary mode: Operation, PolicyLabel, PolicyType, StackLabel (parenthetical),
-                State, Duration
-  Detail mode:  + PolicyConfig/OldPolicyConfig (for updates),
-                ReferencingStacks (for skips), ErrorMessage
+StackUpdate fields shown in subview:
+  Table mode: State (symbol), Label, Operation, Duration
+  Detail card: + Description, ErrorMessage
+
+PolicyUpdate fields shown in subview:
+  Table mode: State (symbol), Label, Type, Stack, Operation, Duration
+  Detail card: + PolicyConfig/OldPolicyConfig (for updates),
+               ReferencingStacks (for skips), ErrorMessage
 
 Fields NOT shown (internal/derived):
   - ResourceID (internal ksuid, not user-facing)
@@ -517,40 +385,66 @@ Fields NOT shown (internal/derived):
   - Properties/OldProperties (used for patch rendering in simulation)
   - ReferenceLabels (used for reference resolution display)
   - GroupID (internal grouping)
-  - StartTs/ModifiedTs (we show Duration and relative "started X ago" instead)
 
 
 ================================================================================
 COLOR KEY
 ================================================================================
 
-  Element                   Formae Theme         Classic Theme
-  ────────────────────────────────────────────────────────────
-  Panel borders             #333355 (dark blue)  #444444 (gray)
-  Command ID                #60A5FA (blue)       #ADD8E6 (light blue)
-  Progress bar █ done        #4ADE80 (green)      #00FF00 (green)
-  Progress bar ▒ failed      #F87171 (red)        #FF6666 (red)
-  Progress bar ░ in-progress #AAAAAA (dim)        #ADD8E6 (light blue)
-  Progress bar ⋅ pending     #555555 (dark gray)  #808080 (gray)
-  Done text/symbol          #4ADE80 (green)      #00FF00 (green)
-  In-progress text/spinner  #AAAAAA (dim)        #ADD8E6 (light blue)
-  Pending text              #555555 (dark gray)  #808080 (gray)
-  Failed text               #F87171 (red)        #FF6666 (red)
-  Skipped text              #888888 (secondary)  #808080 (gray)
-  Warning text              #B5B55B (gold)       #B5B55B (gold)
-  Section headers           #888888 (secondary)  #808080 (gray)
-  Keybinding keys           #60A5FA (blue)       #ADD8E6 (light blue)
-  Keybinding descriptions   #555555 (subtle)     #555555 (gray)
-  Failed card border        #F87171 (red)        #FF6666 (red)
+  Element                        Formae Theme         Classic Theme
+  ─────────────────────────────────────────────────────────────────
+  Panel borders                  #333355 (dark blue)  #444444 (gray)
+  Command ID / Label (active)    #60A5FA (blue)       #ADD8E6 (light blue)
+  Command ID / Label (cursor)    #93C5FD (bright blue)
+  Progress bar █ done            #4ADE80 (green)      #00FF00 (green)
+  Progress bar ▒ failed          #F87171 (red)        #FF6666 (red)
+  Progress bar ░ in-progress     #AAAAAA (dim)        #ADD8E6 (light blue)
+  Progress bar ⋅ pending         #555555 (dark gray)  #808080 (gray)
+
+  Row: running healthy           normal colors, spinner in InProgress color
+  Row: running + failing         all text #F87171 (bright red), red spinner
+  Row: finished failed           all text #9B4444 (dimmed red)
+  Row: finished ok               all text TextSubtle (dimmed gray)
+  Row: cursor highlight          bg #4E4E4E (239), all text brightened
+  Row: cursor on finished ok     all text TextSecondary
+  Row: cursor on failed          all text #FCA5A5 (bright red)
+
+  Section headers (▌ Resources)  SecondaryAccent (orange), bold
+  Detail card border             Border (default), PrimaryAccent (selected)
+  Detail card border (failed)    Error (red)
+  Keybinding keys                #60A5FA (blue)       #ADD8E6 (light blue)
+  Keybinding descriptions        #555555 (subtle)     #555555 (gray)
+  Query indicator ●              SecondaryAccent (orange)
 
 
 ================================================================================
-TODO: Keybindings review (from RFC PR review)
+KEYBINDINGS (resolved from RFC PR review)
 ================================================================================
 
-  Most keybindings are cryptic — arrows and esc are fine, the rest is
-  questionable. Review all keybindings for discoverability:
-  - Arrows + esc: universally understood, keep as-is
-  - Single-letter shortcuts (d, f, s, F): not obvious without the footer
-  - Consider: are the footer hints sufficient, or do we need a ? help overlay?
-  - Review if any shortcuts conflict or are surprising
+  Keybindings follow de facto TUI standards (htop, lazygit, k9s):
+
+  Main view:
+    ↑↓          select row (j/k silently supported)
+    PgUp/PgDn   jump one screenful
+    enter        open command details
+    →←           move sort column highlight
+    s            toggle sort on highlighted column (▼/▲)
+    /            edit query (in query bar above footer)
+    q            quit
+    ?            help
+
+  Single command subview:
+    ↑↓          select row (j/k silently supported)
+    PgUp/PgDn   jump one screenful
+    enter/space  expand/collapse resource detail card
+    →←           move sort column highlight (per-group)
+    s            toggle sort on highlighted column (per-group)
+    /            edit query
+    esc/backspace  back to main view
+
+  Design decisions:
+  - Only universally known keys are advertised in footer
+  - vim keys (j/k/h/l) work but aren't shown
+  - Footer hints drop dynamically on narrow terminals
+  - Descriptions truncate before hints disappear entirely
+  - ? help overlay: TODO — not yet designed

@@ -43,63 +43,115 @@ file is found by walking up the directory tree:
 
 
 ================================================================================
-VIEW 1: Simulation preview — fits in viewport (expanded)
+VIEW 1: Simulation preview — interactive table view
 ================================================================================
 
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  formae apply — simulation                                  mode: reconcile│
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  Command will:                                                              │
-  │                                                                             │
-  │  Targets                                                                    │
-  │    create  aws-us-east-1                                                    │
-  │    update  aws-eu-west-1 to discoverable                                    │
-  │    replace aws-ap-south-1 (region changed)                                  │
-  │                                                                             │
-  │  Stacks                                                                     │
-  │    create  production (Production environment)                              │
-  │                                                                             │
-  │  Policies                                                                   │
-  │    create  auto-reconcile (ttl, production)                                 │
-  │    update  staging-reconcile (auto-reconcile, staging)                       │
-  │      ├ set  Interval: "5m" → "10m"                                          │
-  │      └ set  Label: "staging-reconcile"                                      │
-  │    detach  old-policy (ttl, staging)                                         │
-  │    keep  shared-policy (ttl, shared)                                        │
-  │      └ still referenced by: production, development                         │
-  │                                                                             │
-  │  Resources                                                                  │
-  │    create  my-bucket (AWS::S3::Bucket)                                      │
-  │    create  web-1 (AWS::EC2::Instance)                                       │
-  │    update  primary (AWS::RDS::DBInstance)                                   │
-  │      ├ set  InstanceClass: "db.t3.medium" → "db.t3.large"                  │
-  │      ├ set  MultiAZ: false → true                                          │
-  │      ├ add  Tags[backup]: "daily"                                           │
-  │      └ remove Tags[temporary]                                               │
-  │    update  web-config (AWS::SSM::Parameter)                                 │
-  │      └ set  Value: "v1.2.3" → "v1.3.0"                                     │
-  │    replace  web-server (AWS::EC2::Instance)                                 │
-  │    create  cdn (AWS::CloudFront::Distribution)                              │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  This operation will create 1 target(s), replace 1 target(s), create 1     │
-  │  stack(s), create 1 policy(ies), update 1 policy(ies), create 3            │
-  │  resource(s), update 2 resource(s) and replace 1 resource(s).              │
-  │                                                                             │
-  │  Do you want to continue? [y/N]                                             │
-  └─────────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  formae apply — simulation                                  mode: reconcile  │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │  + 8 create  ~ 3 update  - 2 delete  ↻ 1 replace  ⊘ 1 detach  = 1 keep    │
+  │                                                                              │
+  │  ▌ Targets                                                                   │
+  │    Operation    Label                                                        │
+  │    + create     aws-us-east-1                                                │
+  │    ~ update     aws-eu-west-1                                                │
+  │    ↻ replace    aws-ap-south-1                                               │
+  │                                                                              │
+  │  ▌ Stacks                                                                    │
+  │    Operation    Label                                                        │
+  │    + create     production                                                   │
+  │                                                                              │
+  │  ▌ Policies                                                                  │
+  │    Operation    Label                Type             Stack                  │
+  │    + create     auto-reconcile       ttl              production             │
+  │    ~ update     staging-reconcile    auto-reconcile   staging                │
+  │    ⊘ detach     old-policy           ttl              staging                │
+  │    = keep       shared-policy        ttl              shared                 │
+  │                  still referenced by: production, development                │
+  │                                                                              │
+  │  ▌ Resources                                                                 │
+  │    Operation    Label                Type                                    │
+  │    - delete     old-cache            AWS::ElastiCache::CacheCluster          │
+  │    - delete     legacy-queue         AWS::SQS::Queue                         │
+  │                  depends on: old-cache                                       │
+  │    ~ update     primary              AWS::RDS::DBInstance                    │
+  │    ~ update     web-config           AWS::SSM::Parameter                     │
+  │    ↻ replace    web-server           AWS::EC2::Instance                      │
+  │    + create     my-bucket            AWS::S3::Bucket                         │
+  │    + create     web-1                AWS::EC2::Instance                      │
+  │    + create     cdn                  AWS::CloudFront::Distribution           │
+  │       ↓ show 10 more (30 remaining)                                          │
+  │                                                                              │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │  ↑↓: select  space: expand  →←: column  s: sort  y: confirm  q: abort  ?: help│
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  When a row is expanded (space/enter on "primary"):
+
+    ╭─ ~ primary ──────────────────────────────────────────────────────────────╮
+    │ Operation: update                                                        │
+    │ Type:      AWS::RDS::DBInstance                                          │
+    │ Stack:     production                                                    │
+    │                                                                          │
+    │ Changes:                                                                 │
+    │  ├ set  InstanceClass: "db.t3.medium" → "db.t3.large"                   │
+    │  ├ set  MultiAZ: false → true                                           │
+    │  ├ add  Tags[backup]: "daily"                                           │
+    │  └ remove  Tags[temporary]                                              │
+    ╰──────────────────────────────────────────────────────────────────────────╯
 
   Notes:
-  - Header shows command type and mode
-  - "Command will:" as tree root (matches current behavior)
-  - Updates ordered: Targets → Stacks → Policies → Resources
-  - Resources/Policies: label (type) format, same as status summary
-  - Update operations show property changes inline with ├/└ tree connectors
-  - Patch format: set/add/remove + property path + old → new value
-  - References rendered using labels not ksuids
-  - Confirmation prompt at bottom with operation summary
-  - If --simulate: show "simulation only" message instead of prompt
+
+  REUSE WITH STATUS DETAIL VIEW:
+  This view and the status command detail view (single command subview) share
+  the same underlying table component. The differences are:
+  - Simulation: operation symbol column (+, ~, -, ↻, ⊘, =) instead of
+    state column (✓, ✗, ◐, ○)
+  - Simulation: expanded cards show property change diffs (patches)
+  - Simulation: confirmation prompt (y: confirm, q: abort) instead of
+    live updates
+  - Status detail: live state, spinners, duration/age columns
+  The shared table component (internal/cli/tui/components/) should be
+  parameterized for both use cases — same sort, expand, pagination logic.
+
+  Operation column — combined symbol + word, colored (colorblind-safe):
+    + create   (green)  — new resource
+    ~ update   (blue)   — property changes
+    - delete   (yellow) — destructive but intentional (NOT red — red = failure)
+    ↻ replace  (orange) — recreate with different immutable fields
+    ⊘ detach   (gray)   — policy being removed from stack
+    = keep     (dim)    — policy still referenced, not removed
+  Colorblind users read the word; the symbol is a visual shortcut for scanning.
+  Yellow for delete distinguishes "planned destruction" from "error/failure"
+  (which is red in the status watch view).
+
+  Row coloring:
+  - Delete rows: entire row text in yellow/gold (Warning color)
+  - All other operations: normal colors (label blue, type gray, op colored)
+  - Cursor highlight: full-width background, all text brightened
+
+  Table layout:
+  - Same per-group tables as status subview: Targets, Stacks, Policies, Resources
+  - Operation column first (symbol + word), then Label, then Type/Stack
+  - Policies have Type + Stack columns; Resources have Type column
+  - Targets/Stacks have simple Operation + Label layout
+  - Elastic columns, truncation with …, same responsive behavior
+  - Per-group sorting: →← moves column highlight, s toggles sort
+  - Default sort: destructive operations first (delete → replace → update → create)
+  - Pagination: show first 10 per group, "show 10 more"
+
+  Expanded cards show property changes (patches):
+  - set: path, old value → new value (old in red, new in green)
+  - add: path, new value (in green)
+  - remove: path (in red)
+  - Tree connectors ├/└ for visual hierarchy
+
+  Confirmation:
+  - y: confirm and submit the command
+  - q: abort
+  - With --yes: skip the interactive view, auto-confirm
+  - With --simulate: show view but footer says "simulation only" instead of
+    confirm prompt
 
 
 ================================================================================
@@ -181,45 +233,17 @@ When the forma file has a description with confirm=true:
 
 
 ================================================================================
-VIEW 3: Simulation — large command (auto-collapsed)
+VIEW 3: Large command — handled by pagination (supersedes old auto-collapse)
 ================================================================================
 
-  ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  formae apply — simulation                                  mode: reconcile│
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │                                                                             │
-  │  Command will:                                                              │
-  │                                                                             │
-  │  ▸ Targets (2)                                                              │
-  │  ▸ Stacks (3)                                                               │
-  │  ▸ Policies (4)                                                             │
-  │  ▾ Resources (192)                                                          │
-  │    ▸ Creates (150)                                                          │
-  │    ▾ Updates (35)                                                           │
-  │      update  primary (AWS::RDS::DBInstance)                                 │
-  │        ├ set  InstanceClass: "db.t3.medium" → "db.t3.large"                │
-  │        └ set  MultiAZ: false → true                                         │
-  │      update  web-config (AWS::SSM::Parameter)                               │
-  │        └ set  Value: "v1.2.3" → "v1.3.0"                                   │
-  │      ...and 33 more updates                                                 │
-  │    ▸ Deletes (5)                                                            │
-  │    ▸ Replaces (2)                                                           │
-  │                                                                             │
-  │                                                                             │
-  ├─────────────────────────────────────────────────────────────────────────────┤
-  │  ↑↓/j/k: scroll  enter: expand/confirm  /: search  q: abort          ?: help  │
-  └─────────────────────────────────────────────────────────────────────────────┘
+  Large commands (100+ resources) are handled by the same pagination pattern
+  as the status subview: each group shows the first 10 rows, with a
+  "↓ show 10 more (N remaining)" row. Default sort puts destructive
+  operations first, so deletes are always visible at the top of the group.
 
-  Notes:
-  - Same smart auto-collapse as status/watch views
-  - Groups: Targets, Stacks, Policies, Resources (sub-grouped by operation)
-  - Resource sub-groups: Creates, Updates, Deletes, Replaces
-  - Expand groups with enter, collapse with enter again
-  - Updates group shows first few items expanded to show patch changes
-  - "...and N more" for truncated groups
-  - Scrollable with vim keybindings
-  - Confirmation prompt appears after user scrolls through and
-    presses a dedicated confirm key (not overloaded with enter for expand)
+  No collapsible tree nodes. No sub-grouping by operation type. Just a flat
+  table per group with sort and pagination. The user can sort by Operation
+  column to group creates/updates/deletes together if needed.
 
 
 ================================================================================
