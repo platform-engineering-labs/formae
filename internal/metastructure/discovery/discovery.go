@@ -90,7 +90,6 @@ const (
 )
 
 type DiscoveryData struct {
-	pluginManager                 *plugin.Manager
 	ds                            datastore.Datastore
 	serverCfg                     *pkgmodel.ServerConfig
 	discoveryCfg                  *pkgmodel.DiscoveryConfig
@@ -141,12 +140,6 @@ type ListOperation struct {
 }
 
 func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryData], error) {
-	pluginManager, ok := d.Env("PluginManager")
-	if !ok {
-		d.Log().Error("Discovery: missing 'PluginManager' environment variable")
-		return statemachine.StateMachineSpec[DiscoveryData]{}, fmt.Errorf("discovery: missing 'PluginManager' environment variable")
-	}
-
 	dsEnv, ok := d.Env("Datastore")
 	if !ok {
 		d.Log().Error("Discovery: missing 'Datastore' environment variable")
@@ -171,7 +164,6 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 	ds := dsEnv.(datastore.Datastore)
 
 	data := DiscoveryData{
-		pluginManager:                 pluginManager.(*plugin.Manager),
 		ds:                            ds,
 		discoveryCfg:                  &discoveryCfg,
 		serverCfg:                     &serverCfg,

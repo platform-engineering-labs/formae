@@ -40,6 +40,16 @@ func NewClient(binaryPath string, config json.RawMessage) (*Client, error) {
 		return nil, fmt.Errorf("auth client: start: %w", err)
 	}
 
+	// Consume the ready signal the plugin writes before starting its RPC
+	// server. Without this the byte would be interpreted as gob data and
+	// corrupt the RPC stream.
+	var ready [1]byte
+	if _, err := io.ReadFull(stdout, ready[:]); err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return nil, fmt.Errorf("auth client: waiting for ready signal: %w", err)
+	}
+
 	conn := &stdioConn{
 		Reader:      stdout,
 		WriteCloser: stdin,

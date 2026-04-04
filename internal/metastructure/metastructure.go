@@ -69,13 +69,12 @@ type Metastructure struct {
 	nodeName      string
 	options       gen.NodeOptions
 	Node          gen.Node
-	Datastore     datastore.Datastore
-	PluginManager *plugin.Manager
-	Cfg           *pkgmodel.Config
-	AgentID       string
+	Datastore datastore.Datastore
+	Cfg       *pkgmodel.Config
+	AgentID   string
 
 	// TestResourcePlugin is a test-only field for injecting a resource plugin (e.g. FakeAWS)
-	// directly into the actor system, bypassing PluginManager. Must be nil in production.
+	// directly into the actor system. Must be nil in production.
 	TestResourcePlugin plugin.FullResourcePlugin
 
 	// AuthPluginHandle is the pre-created handle for the auth plugin process.
@@ -89,7 +88,7 @@ type Metastructure struct {
 	commandMu sync.Mutex
 }
 
-func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *plugin.Manager, agentID string) (*Metastructure, error) {
+func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, agentID string) (*Metastructure, error) {
 	datastoreType := cfg.Agent.Datastore.DatastoreType
 	if datastoreType == "" {
 		datastoreType = "sqlite"
@@ -100,15 +99,14 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *
 		return nil, err
 	}
 
-	return NewMetastructureWithDataStoreAndContext(ctx, cfg, pluginManager, ds, agentID)
+	return NewMetastructureWithDataStoreAndContext(ctx, cfg, externalResourcePlugins, ds, agentID)
 }
 
-func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, pluginManager *plugin.Manager, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
+func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
 	metastructure := &Metastructure{}
 
 	metastructure.Datastore = datastore
 	metastructure.Cfg = cfg
-	metastructure.PluginManager = pluginManager
 
 	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
@@ -131,28 +129,28 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.options.Applications = apps
 
 	metastructure.options.Env = map[gen.Env]any{
-		gen.Env("PluginManager"):         metastructure.PluginManager,
-		gen.Env("Datastore"):             metastructure.Datastore,
-		gen.Env("Context"):               ctx,
-		gen.Env("disable_metrics"):       true,
-		gen.Env("ServerConfig"):          cfg.Agent.Server,
-		gen.Env("DatastoreConfig"):       cfg.Agent.Datastore,
-		gen.Env("RetryConfig"):           cfg.Agent.Retry,
-		gen.Env("PluginConfig"):          cfg.Plugins,
-		gen.Env("SynchronizationConfig"): cfg.Agent.Synchronization,
-		gen.Env("DiscoveryConfig"):       cfg.Agent.Discovery,
-		gen.Env("LoggingConfig"):         cfg.Agent.Logging,
-		gen.Env("OTelConfig"):            cfg.Agent.OTel,
-		gen.Env("StackExpirerConfig"):    cfg.Agent.StackExpirer,
-		gen.Env("AgentID"):               agentID,
+		gen.Env("ExternalResourcePlugins"): externalResourcePlugins,
+		gen.Env("Datastore"):               metastructure.Datastore,
+		gen.Env("Context"):                 ctx,
+		gen.Env("disable_metrics"):         true,
+		gen.Env("ServerConfig"):            cfg.Agent.Server,
+		gen.Env("DatastoreConfig"):         cfg.Agent.Datastore,
+		gen.Env("RetryConfig"):             cfg.Agent.Retry,
+		gen.Env("PluginConfig"):            cfg.Plugins,
+		gen.Env("SynchronizationConfig"):   cfg.Agent.Synchronization,
+		gen.Env("DiscoveryConfig"):         cfg.Agent.Discovery,
+		gen.Env("LoggingConfig"):           cfg.Agent.Logging,
+		gen.Env("OTelConfig"):              cfg.Agent.OTel,
+		gen.Env("StackExpirerConfig"):      cfg.Agent.StackExpirer,
+		gen.Env("AgentID"):                 agentID,
 	}
 
 	// Enable Ergo networking for distributed plugin architecture
 	metastructure.options.Network.Mode = gen.NetworkModeEnabled
 
 	// Disable environment sharing for RemoteSpawn because the agent's environment contains
-	// non-serializable types (Datastore, PluginManager, Context). We inject the relevant
-	// (serializable) parts of the environment during remote spawn in the PluginCoordinator actor.
+	// non-serializable types (Datastore, Context). We inject the relevant (serializable)
+	// parts of the environment during remote spawn in the PluginCoordinator actor.
 	metastructure.options.Security.ExposeEnvRemoteSpawn = false
 
 	//FIXME(discount-elf): enable real TLS if we want it

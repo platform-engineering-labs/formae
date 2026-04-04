@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/usage"
@@ -26,12 +27,9 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 type App struct {
-	PluginManager *plugin.Manager
-
 	Config *pkgmodel.Config
 
 	Plugins  Plugins
@@ -49,16 +47,11 @@ func (a *App) Close() {
 	}
 }
 
-type Plugins struct {
-	pluginManager *plugin.Manager
-}
+type Plugins struct{}
 
-type Projects struct {
-	pluginManager *plugin.Manager
-}
+type Projects struct{}
 
 func NewApp() *App {
-	mgr := plugin.NewManager(util.ExpandHomePath("~/.pel/formae/plugins"))
 	u, err := usage.NewPostHogSender()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
@@ -66,14 +59,11 @@ func NewApp() *App {
 	}
 
 	app := &App{
-		PluginManager: mgr,
-		Config:        &pkgmodel.Config{},
-		Plugins:       Plugins{mgr},
-		Projects:      Projects{mgr},
-		Usage:         u,
+		Config:   &pkgmodel.Config{},
+		Plugins:  Plugins{},
+		Projects: Projects{},
+		Usage:    u,
 	}
-
-	app.PluginManager.Load()
 
 	err = config.Config.EnsureClientID()
 	if err != nil {
@@ -439,7 +429,7 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	if a.Config.Plugins.Authentication != nil {
 		// Lazily create the auth client (spawns subprocess on first use)
 		if a.authClient == nil {
-			authPlugins := a.PluginManager.ListExternalAuthPlugins()
+			authPlugins := discovery.DiscoverPlugins(util.ExpandHomePath("~/.pel/formae/plugins"), discovery.Auth)
 			if len(authPlugins) == 0 {
 				return nil, nil, fmt.Errorf("authentication configured but no auth plugin binary found")
 			}
@@ -589,10 +579,6 @@ func (a *App) ExtractPolicies() ([]apimodel.PolicyInventoryItem, []string, error
 
 // Plugins
 
-func (p *Plugins) List() []*plugin.Plugin {
-	return p.pluginManager.List()
-}
-
 func (p *Plugins) SupportedSchemas() []string {
 	return schema.DefaultRegistry.SupportedSchemas()
 }
@@ -666,16 +652,8 @@ func (p *Projects) formatIncludes(format string, include []string) ([]string, er
 			}
 
 			// Default: resolve from hub (remote)
-			// Prefer installed version, then plugin manager version
-			var version string
 			if installedVersion != "" {
-				version = installedVersion
-			} else if v := p.pluginManager.PluginVersion(ns); v != nil {
-				version = v.String()
-			}
-
-			if version != "" {
-				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, version))
+				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, installedVersion))
 			} else {
 				// No version info available, add as plain namespace (will fail at resolve time)
 				includes = append(includes, ns)

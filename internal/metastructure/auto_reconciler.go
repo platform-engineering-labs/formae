@@ -20,7 +20,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 // AutoReconciler is the actor responsible for automatically reconciling stacks
@@ -49,8 +48,7 @@ type AutoReconciler struct {
 
 // AutoReconcilerData holds the data associated with the statemachine
 type AutoReconcilerData struct {
-	datastore     datastore.Datastore
-	pluginManager *plugin.Manager
+	datastore datastore.Datastore
 
 	// activeReconciles tracks stacks currently being reconciled: stackLabel -> commandID
 	activeReconciles map[string]string
@@ -76,15 +74,8 @@ func (ar *AutoReconciler) Init(args ...any) (statemachine.StateMachineSpec[AutoR
 		return statemachine.StateMachineSpec[AutoReconcilerData]{}, fmt.Errorf("auto_reconciler: missing 'Datastore' environment variable")
 	}
 
-	pm, ok := ar.Env("PluginManager")
-	if !ok {
-		ar.Log().Error("Missing 'PluginManager' environment variable")
-		return statemachine.StateMachineSpec[AutoReconcilerData]{}, fmt.Errorf("auto_reconciler: missing 'PluginManager' environment variable")
-	}
-
 	data := AutoReconcilerData{
 		datastore:        ds.(datastore.Datastore),
-		pluginManager:    pm.(*plugin.Manager),
 		activeReconciles: make(map[string]string),
 		scheduled:        make(map[string]bool),
 	}

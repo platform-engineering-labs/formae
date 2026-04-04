@@ -26,6 +26,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -99,14 +100,18 @@ func (a *Agent) Start() error {
 			// Non-fatal - continue anyway, plugins might already be in place
 		}
 
-		pluginManager := plugin.NewManager(util.ExpandHomePath(a.cfg.Plugins.PluginDir))
-		pluginManager.Load()
+		pluginDir := util.ExpandHomePath(a.cfg.Plugins.PluginDir)
+		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
+		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
+		for i, p := range resourceInfos {
+			externalResourcePlugins[i] = p.ToResourcePluginInfo()
+		}
 
 		// Create auth plugin handle if auth is configured and a matching
 		// external auth plugin binary was discovered
 		var authHandle *auth.AuthPluginHandle
 		if a.cfg.Plugins.Authentication != nil {
-			authPlugins := pluginManager.ListExternalAuthPlugins()
+			authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
 			if len(authPlugins) > 0 {
 				info := authPlugins[0]
 				authHandle = auth.NewAuthPluginHandle(info.Name, info.BinaryPath, a.cfg.Plugins.Authentication)
@@ -118,7 +123,7 @@ func (a *Agent) Start() error {
 
 		slog.Info("Starting agent", "id", a.id)
 
-		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, pluginManager, a.id)
+		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, externalResourcePlugins, a.id)
 		if err != nil {
 			slog.Error("Failed to create ms", "error", err)
 			return
@@ -152,7 +157,7 @@ func (a *Agent) Start() error {
 
 		slog.Info("Agent started")
 
-		apiServer := api.NewServer(a.ctx, ms, pluginManager, authHandle, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
+		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()

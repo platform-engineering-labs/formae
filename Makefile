@@ -35,7 +35,6 @@ clean:
 	rm -rf ppm
 	rm -rf version.semver
 	rm -rf $(PLUGINS_CACHE)
-	find ./plugins -name '*.so' -delete 2>/dev/null || true
 
 clean-pel:
 	rm -rf ~/.pel/*
@@ -80,6 +79,12 @@ build-external-plugins: fetch-external-plugins
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
 		echo "Building $$name..."; \
+		cd "$(PLUGINS_CACHE)/$$name" && \
+			if grep -q 'formae/pkg/auth' go.mod 2>/dev/null; then \
+				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/auth=$(CURDIR)/pkg/auth; \
+				go mod tidy; \
+			fi && \
+			cd $(CURDIR); \
 		$(MAKE) -C "$(PLUGINS_CACHE)/$$name" build; \
 	done
 
@@ -119,12 +124,6 @@ pkg-bin: clean build build-tools build-external-plugins
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
 	cp -Rp ./formae ./dist/pel/formae/bin
-	for f in ./plugins/*/*.so; do \
-		if [ -f "$$f" ] && file "$$f" | grep -qE "ELF|Mach-O"; then \
-			cp "$$f" ./dist/pel/formae/plugins/; \
-		fi \
-	done
-	rm -f ./dist/pel/formae/plugins/fake-*.so
 	# Package external plugins (resource + auth)
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \

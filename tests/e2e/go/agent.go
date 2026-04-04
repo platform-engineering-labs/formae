@@ -122,10 +122,10 @@ plugins {
         type = "basic"
         username = %q
         password = %q
-        authorizedUsers {
-            new {
-                username = %q
-                password = %q
+        authorizedUsers = new Listing {
+            new Mapping {
+                ["Username"] = %q
+                ["Password"] = %q
             }
         }
     }

@@ -29,7 +29,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 const (
@@ -61,18 +60,16 @@ type Server struct {
 	echo           *echo.Echo
 	metastructure  metastructure.MetastructureAPI
 	ctx            context.Context
-	pluginManager  *plugin.Manager
 	authHandle     *auth.AuthPluginHandle
 	serverConfig   *pkgmodel.ServerConfig
 	pluginConfig   *pkgmodel.PluginConfig
 	metricsHandler http.Handler
 }
 
-func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, pluginManager *plugin.Manager, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, pluginConfig *pkgmodel.PluginConfig, metricsHandler http.Handler) *Server {
+func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, pluginConfig *pkgmodel.PluginConfig, metricsHandler http.Handler) *Server {
 	server := &Server{
 		metastructure:  metastructure,
 		ctx:            ctx,
-		pluginManager:  pluginManager,
 		authHandle:     authHandle,
 		serverConfig:   serverConfig,
 		pluginConfig:   pluginConfig,

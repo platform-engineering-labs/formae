@@ -11,7 +11,6 @@ import (
 	"ergo.services/ergo/gen"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
 	"github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -250,9 +249,7 @@ func TestMetastructure_NetworkingEnabled(t *testing.T) {
 		},
 	}
 
-	pluginManager := plugin.NewManager("")
-
-	m, err := NewMetastructure(context.Background(), cfg, pluginManager, "test")
+	m, err := NewMetastructure(context.Background(), cfg, nil, "test")
 	require.NoError(t, err)
 	require.NotNil(t, m)
 

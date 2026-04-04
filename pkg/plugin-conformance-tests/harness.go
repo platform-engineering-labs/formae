@@ -32,6 +32,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests/testutil"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
@@ -70,7 +71,7 @@ type TestHarness struct {
 	agentPort     int    // Random port for agent API
 	ergoPort      int    // Random port for Ergo actor framework (enables parallel test execution)
 	registrarPort int    // Random port for Ergo registrar (isolates parallel agents)
-	pluginManager *plugin.Manager
+	externalResourcePlugins []plugin.ResourcePluginInfo
 
 	// Ergo actor system for direct plugin communication (discovery tests)
 	ergoNode          gen.Node
@@ -134,9 +135,9 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		t.Fatalf("failed to setup test environment: %v", err)
 	}
 
-	// Initialize plugin manager
-	if err := h.setupPluginManager(); err != nil {
-		t.Fatalf("failed to setup plugin manager: %v", err)
+	// Discover external plugins
+	if err := h.setupPluginDiscovery(); err != nil {
+		t.Fatalf("failed to discover plugins: %v", err)
 	}
 
 	return h
@@ -259,25 +260,20 @@ plugins {
 	return nil
 }
 
-// setupPluginManager initializes the plugin manager and loads plugins
-func (h *TestHarness) setupPluginManager() error {
-	// Find plugin directory similar to how we find the formae binary
-	// Plugins should be at ../../../plugins relative to the test directory
-	pluginPath := filepath.Join("..", "..", "..", "plugins")
-	absPluginPath, err := filepath.Abs(pluginPath)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for plugins: %w", err)
+// setupPluginDiscovery discovers external resource plugins from the user
+// plugin directory (~/.pel/formae/plugins).
+func (h *TestHarness) setupPluginDiscovery() error {
+	pluginDir := ExpandHomePath("~/.pel/formae/plugins")
+	h.t.Logf("Discovering external plugins from: %s", pluginDir)
+
+	for _, p := range plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource) {
+		h.externalResourcePlugins = append(h.externalResourcePlugins, p.ToResourcePluginInfo())
 	}
 
-	h.t.Logf("Loading plugins from: %s", absPluginPath)
-
-	// Create plugin manager with the plugin path
-	h.pluginManager = plugin.NewManager(ExpandHomePath("~/.pel/formae/plugins"), absPluginPath)
-
-	// Load all plugins
-	h.pluginManager.Load()
-
-	h.t.Logf("Plugin manager initialized successfully")
+	h.t.Logf("Discovered %d external resource plugin(s)", len(h.externalResourcePlugins))
+	for _, p := range h.externalResourcePlugins {
+		h.t.Logf("  - %s (namespace=%s, version=%s)", p.Name, p.Namespace, p.Version)
+	}
 	return nil
 }
 
@@ -510,14 +506,9 @@ func (h *TestHarness) waitForOperationProgress(operatorPID gen.PID, initialProgr
 // ConfigureDiscovery updates the config file
 
 // GetPluginBinaryPath returns the path to an external plugin binary.
-// It uses the plugin manager to find installed plugins.
+// It looks up the binary in the discovered external resource plugins.
 func (h *TestHarness) GetPluginBinaryPath(namespace string) (string, error) {
-	if h.pluginManager == nil {
-		return "", fmt.Errorf("plugin manager not initialized")
-	}
-
-	// Look up in external resource plugins
-	for _, p := range h.pluginManager.ListExternalResourcePlugins() {
+	for _, p := range h.externalResourcePlugins {
 		if strings.EqualFold(p.Namespace, namespace) {
 			h.t.Logf("Found plugin binary for %s: %s", namespace, p.BinaryPath)
 			return p.BinaryPath, nil
@@ -1830,33 +1821,6 @@ func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, er
 	return submitResponse.CommandID, nil
 }
 
-// GetResourceDescriptor returns the ResourceDescriptor for a given resource type by querying the plugin
-func (h *TestHarness) GetResourceDescriptor(resourceType string) (*plugin.ResourceDescriptor, error) {
-	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
-	parts := strings.Split(resourceType, "::")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid resource type format: %s", resourceType)
-	}
-	namespace := strings.ToLower(parts[0])
-
-	// Get the resource plugin
-	resourcePlugin, err := h.pluginManager.ResourcePlugin(namespace)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get resource plugin for namespace %s: %w", namespace, err)
-	}
-
-	// Get all supported resources from the plugin
-	supportedResources := (*resourcePlugin).SupportedResources()
-
-	// Find the descriptor for the requested resource type
-	for i := range supportedResources {
-		if supportedResources[i].Type == resourceType {
-			return &supportedResources[i], nil
-		}
-	}
-
-	return nil, fmt.Errorf("resource type %s not found in plugin %s", resourceType, namespace)
-}
 
 // GetResourceDescriptorFromCoordinator returns the ResourceDescriptor for a given resource type
 // by querying the TestPluginCoordinator. This requires the Ergo node to be started and the

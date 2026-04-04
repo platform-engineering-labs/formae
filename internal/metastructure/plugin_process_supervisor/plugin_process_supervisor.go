@@ -37,7 +37,9 @@ type PluginProcessSupervisor struct {
 type authPluginEntry struct {
 	handle        *auth.AuthPluginHandle
 	metaPortAlias gen.Alias
+	conn          *auth.MetaPortConn // held between spawn and init completion
 	healthy       bool
+	initStarted   bool // true once the ready signal has triggered completeAuthPluginInit
 	restartCount  int
 	lastCrashTime time.Time
 }
@@ -62,21 +64,13 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 	p.plugins = make(map[string]*PluginInfo)
 	p.Log().Debug("PluginProcessSupervisor started")
 
-	// Fetch PluginManager from environment
-	pluginManagerVal, ok := p.Env("PluginManager")
-	if !ok {
-		p.Log().Error("PluginProcessSupervisor: missing 'PluginManager' in environment")
-		return fmt.Errorf("plugin_process_supervisor: missing 'PluginManager' in environment")
+	// Get external resource plugins from environment
+	var externalPlugins []plugin.ResourcePluginInfo
+	if val, ok := p.Env("ExternalResourcePlugins"); ok {
+		if plugins, ok := val.([]plugin.ResourcePluginInfo); ok {
+			externalPlugins = plugins
+		}
 	}
-
-	pluginManager, ok := pluginManagerVal.(*plugin.Manager)
-	if !ok {
-		p.Log().Error("PluginProcessSupervisor: PluginManager has wrong type")
-		return fmt.Errorf("plugin_process_supervisor: PluginManager has wrong type")
-	}
-
-	// Get external resource plugins from PluginManager
-	externalPlugins := pluginManager.ListExternalResourcePlugins()
 	p.Log().Debug("Discovered %d resource plugins", len(externalPlugins))
 
 	// Store plugin info and spawn each plugin
@@ -113,9 +107,12 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 
 			p.Log().Debug("Spawning auth plugin", "name", handle.Name(), "tag", tag)
 
-			if err := p.spawnAuthPlugin(tag, entry); err != nil {
-				p.Log().Error("Failed to spawn auth plugin", "name", handle.Name(), "error", err)
+			if err := p.spawnAuthPluginProcess(tag, entry); err != nil {
+				p.Log().Error("Failed to spawn auth plugin process", "name", handle.Name(), "error", err)
 			}
+			// RPC Init is deferred: the plugin writes a ready signal to stdout
+			// when it starts, which arrives as MessagePortData in HandleMessage.
+			// That triggers completeAuthPluginInit() in a goroutine.
 		}
 	}
 
@@ -183,12 +180,23 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 		}
 
 	case meta.MessagePortData:
-		if auth.IsAuthTag(msg.Tag) {
-			// Auth plugin binary data → feed to MetaPortConn for RPC
-			if p.authPlugin != nil {
-				p.authPlugin.handle.Feed(msg.Data)
+		if auth.IsAuthTag(msg.Tag) && p.authPlugin != nil {
+			if !p.authPlugin.initStarted {
+				// First binary data from the auth plugin is the ready signal.
+				// Discard it (not RPC data) and start the RPC handshake in a
+				// goroutine. By the time HandleMessage runs, the actor and
+				// meta.Port are fully operational, so SendAlias works.
+				p.authPlugin.initStarted = true
+				go p.completeAuthPluginInit()
+				return nil
 			}
-		} else {
+			// Subsequent binary data is RPC traffic — feed to MetaPortConn.
+			// Use entry.conn directly because handle.conn is nil until
+			// Connect() is called after the RPC handshake completes.
+			if p.authPlugin.conn != nil {
+				p.authPlugin.conn.Feed(msg.Data)
+			}
+		} else if !auth.IsAuthTag(msg.Tag) {
 			// Resource plugin binary data - log it
 			output := strings.TrimSpace(string(msg.Data))
 			pluginName := p.getPluginName(msg.Tag)
@@ -205,6 +213,7 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 		} else {
 			p.handleResourcePluginTerminate(msg.Tag)
 		}
+
 	}
 
 	return nil
@@ -292,13 +301,17 @@ func (p *PluginProcessSupervisor) handleAuthPluginTerminate(tag string) {
 		"restartCount", entry.restartCount,
 		"maxRestarts", MaxPluginRestarts)
 
-	err := p.spawnAuthPlugin(tag, entry)
+	// Reset so the next ready signal triggers completeAuthPluginInit again.
+	entry.initStarted = false
+
+	err := p.spawnAuthPluginProcess(tag, entry)
 	if err != nil {
 		p.Log().Error("Failed to restart auth plugin",
 			"name", name,
 			"restartCount", entry.restartCount,
 			"error", err)
 	} else {
+		// RPC Init deferred — the new process will send a ready signal.
 		p.Log().Info("Auth plugin restarted successfully",
 			"name", name,
 			"restartCount", entry.restartCount)
@@ -377,10 +390,11 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 	return nil
 }
 
-// spawnAuthPlugin spawns an auth plugin process via meta.Port with binary mode.
-// It creates a MetaPortConn, establishes an RPC client, calls Init, and stores
-// the client in the handle's atomic pointer.
-func (p *PluginProcessSupervisor) spawnAuthPlugin(tag string, entry *authPluginEntry) error {
+// spawnAuthPluginProcess spawns an auth plugin binary via meta.Port with binary mode
+// and sets up the MetaPortConn. Does NOT call RPC Init — that must be deferred to
+// completeAuthPluginInit() after the actor's Init() returns, because the RPC call
+// needs HandleMessage to route meta.Port data.
+func (p *PluginProcessSupervisor) spawnAuthPluginProcess(tag string, entry *authPluginEntry) error {
 	handle := entry.handle
 
 	// Configure meta.Port with binary mode for RPC communication.
@@ -391,7 +405,7 @@ func (p *PluginProcessSupervisor) spawnAuthPlugin(tag string, entry *authPluginE
 		EnableEnvOS: true,
 		Tag:         tag,
 		Process:     gen.Atom("PluginProcessSupervisor"),
-		Binary:      meta.PortBinaryOptions{Enable: true},
+		Binary:      meta.PortBinaryOptions{Enable: true, ReadBufferSize: 4096},
 	}
 
 	metaport, err := meta.CreatePort(portOptions)
@@ -407,30 +421,44 @@ func (p *PluginProcessSupervisor) spawnAuthPlugin(tag string, entry *authPluginE
 	// Create MetaPortConn bridging meta.Port to io.ReadWriteCloser for net/rpc
 	conn := auth.NewMetaPortConn(alias, p.SendAlias)
 
-	// Create RPC client over the connection
-	rpcClient := rpc.NewClient(conn)
+	entry.metaPortAlias = alias
+	entry.conn = conn
 
-	// Call Init to configure the plugin
+	p.Log().Debug("Spawned auth plugin process", "name", handle.Name(), "tag", tag, "alias", alias)
+	return nil
+}
+
+// completeAuthPluginInit finishes the auth plugin handshake by creating an RPC client,
+// calling Init, and storing the client in the handle. Launched as a goroutine from
+// HandleMessage when the first MessagePortData (ready signal) arrives from the auth plugin.
+func (p *PluginProcessSupervisor) completeAuthPluginInit() {
+	if p.authPlugin == nil || p.authPlugin.conn == nil {
+		return
+	}
+
+	entry := p.authPlugin
+	handle := entry.handle
+	conn := entry.conn
+
+	rpcClient := rpc.NewClient(conn)
 	var resp pkgauth.InitResponse
 	if err := rpcClient.Call("AuthPlugin.Init", &pkgauth.InitRequest{Config: handle.ConfigJSON()}, &resp); err != nil {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		return fmt.Errorf("auth plugin %q init call failed: %w", handle.Name(), err)
+		p.Log().Error("Auth plugin init call failed", "name", handle.Name(), "error", err)
+		return
 	}
 	if resp.Error != "" {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		return fmt.Errorf("auth plugin %q init error: %s", handle.Name(), resp.Error)
+		p.Log().Error("Auth plugin init error", "name", handle.Name(), "error", resp.Error)
+		return
 	}
 
-	// Establish connection — pairs the MetaPortConn with the RPC client
 	handle.Connect(conn, rpcClient)
-
-	entry.metaPortAlias = alias
 	entry.healthy = true
 
-	p.Log().Debug("Spawned auth plugin", "name", handle.Name(), "tag", tag, "alias", alias)
-	return nil
+	p.Log().Info("Auth plugin initialized", "name", handle.Name())
 }
 
 // Terminate is called when the actor is being stopped.

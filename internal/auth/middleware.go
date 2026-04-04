@@ -47,7 +47,10 @@ func NewAuthMiddleware(handle *AuthPluginHandle, cache *AuthCache) echo.Middlewa
 
 			resp, err := handle.Validate(&pkgauth.ValidateRequest{Headers: headers})
 			if err != nil {
-				return echo.NewHTTPError(http.StatusUnauthorized, "auth plugin error")
+				// Plugin not connected yet (e.g., still initializing) — this is a
+				// server-side issue, not an auth failure. Return 503 so clients
+				// can distinguish from a genuine 401 and retry.
+				return echo.NewHTTPError(http.StatusServiceUnavailable, "auth plugin unavailable")
 			}
 
 			if resp.CacheTTL > 0 {

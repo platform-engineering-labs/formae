@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -27,6 +28,12 @@ func TestAuthBasic(t *testing.T) {
 
 	agent := StartAgent(t, bin, WithAuth("e2e-user", password, string(hash)))
 	baseURL := fmt.Sprintf("http://localhost:%d", agent.Port())
+
+	// Wait for the auth plugin to finish initializing. The plugin process
+	// is spawned during agent startup but the RPC handshake completes
+	// asynchronously. Poll until a valid-credentials request returns 200
+	// (not 503 "auth plugin unavailable").
+	waitForAuthReady(t, baseURL, "e2e-user", password, 30*time.Second)
 
 	t.Run("health endpoint requires no auth", func(t *testing.T) {
 		resp, err := http.Get(baseURL + "/api/v1/health")
@@ -102,4 +109,26 @@ func TestAuthBasic(t *testing.T) {
 
 func basicAuth(username, password string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
+}
+
+// waitForAuthReady polls an authenticated endpoint until the auth plugin
+// is initialized and returning 200 for valid credentials.
+func waitForAuthReady(t *testing.T, baseURL, username, password string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequest(http.MethodGet, baseURL+"/api/v1/stats", nil)
+		req.Header.Set("Authorization", basicAuth(username, password))
+
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("auth plugin not ready after %v", timeout)
 }
