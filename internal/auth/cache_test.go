@@ -11,6 +11,7 @@ import (
 
 func TestAuthCache_GetMiss(t *testing.T) {
 	cache := NewAuthCache()
+	defer cache.Stop()
 
 	_, found := cache.Get("nonexistent")
 	if found {
@@ -20,6 +21,7 @@ func TestAuthCache_GetMiss(t *testing.T) {
 
 func TestAuthCache_SetAndGet(t *testing.T) {
 	cache := NewAuthCache()
+	defer cache.Stop()
 
 	cache.Set("key1", true, time.Minute)
 
@@ -34,6 +36,7 @@ func TestAuthCache_SetAndGet(t *testing.T) {
 
 func TestAuthCache_SetInvalidAndGet(t *testing.T) {
 	cache := NewAuthCache()
+	defer cache.Stop()
 
 	cache.Set("key1", false, time.Minute)
 
@@ -48,6 +51,7 @@ func TestAuthCache_SetInvalidAndGet(t *testing.T) {
 
 func TestAuthCache_Expiry(t *testing.T) {
 	cache := NewAuthCache()
+	defer cache.Stop()
 
 	cache.Set("key1", true, 10*time.Millisecond)
 
@@ -61,6 +65,7 @@ func TestAuthCache_Expiry(t *testing.T) {
 
 func TestAuthCache_OverwriteEntry(t *testing.T) {
 	cache := NewAuthCache()
+	defer cache.Stop()
 
 	cache.Set("key1", true, time.Minute)
 	cache.Set("key1", false, time.Minute)
@@ -76,6 +81,7 @@ func TestAuthCache_OverwriteEntry(t *testing.T) {
 
 func TestAuthCache_IndependentKeys(t *testing.T) {
 	cache := NewAuthCache()
+	defer cache.Stop()
 
 	cache.Set("alice", true, time.Minute)
 	cache.Set("bob", false, time.Minute)
@@ -88,5 +94,29 @@ func TestAuthCache_IndependentKeys(t *testing.T) {
 	bobValid, found := cache.Get("bob")
 	if !found || bobValid {
 		t.Fatal("expected bob=invalid")
+	}
+}
+
+func TestAuthCache_ReapExpired(t *testing.T) {
+	cache := NewAuthCache()
+	defer cache.Stop()
+
+	cache.Set("expired", true, 10*time.Millisecond)
+	cache.Set("alive", true, time.Minute)
+
+	time.Sleep(20 * time.Millisecond)
+
+	cache.reapExpired()
+
+	cache.mu.RLock()
+	_, expiredExists := cache.entries["expired"]
+	_, aliveExists := cache.entries["alive"]
+	cache.mu.RUnlock()
+
+	if expiredExists {
+		t.Fatal("expected expired entry to be reaped")
+	}
+	if !aliveExists {
+		t.Fatal("expected alive entry to still exist")
 	}
 }

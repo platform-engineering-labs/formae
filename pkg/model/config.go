@@ -157,4 +157,5 @@ type Config struct {
 	Cli       CliConfig
 	Network   *NetworkConfig
 	PluginDir string
+	Warnings  []string `json:"-"`
 }

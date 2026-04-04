@@ -10,9 +10,12 @@ import (
 	"net/rpc"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 )
+
+const validateTimeout = 10 * time.Second
 
 const AuthTagPrefix = "auth:"
 
@@ -102,8 +105,9 @@ func (h *AuthPluginHandle) SetInitError(err error) {
 	h.initErr.Store(&err)
 }
 
-// Validate calls the auth plugin's Validate method via RPC.
-// Returns an error if Connect has not been called yet or the connection was closed.
+// Validate calls the auth plugin's Validate method via RPC with a timeout.
+// Returns an error if Connect has not been called yet, the connection was
+// closed, or the plugin does not respond within validateTimeout.
 func (h *AuthPluginHandle) Validate(req *pkgauth.ValidateRequest) (*pkgauth.ValidateResponse, error) {
 	if errPtr := h.initErr.Load(); errPtr != nil {
 		return nil, *errPtr
@@ -112,9 +116,25 @@ func (h *AuthPluginHandle) Validate(req *pkgauth.ValidateRequest) (*pkgauth.Vali
 	if client == nil {
 		return nil, fmt.Errorf("auth plugin %q: not connected", h.name)
 	}
-	var resp pkgauth.ValidateResponse
-	if err := client.Call("AuthPlugin.Validate", req, &resp); err != nil {
-		return nil, err
+
+	type result struct {
+		resp pkgauth.ValidateResponse
+		err  error
 	}
-	return &resp, nil
+	ch := make(chan result, 1)
+	go func() {
+		var r result
+		r.err = client.Call("AuthPlugin.Validate", req, &r.resp)
+		ch <- r
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return nil, r.err
+		}
+		return &r.resp, nil
+	case <-time.After(validateTimeout):
+		return nil, fmt.Errorf("auth plugin %q: validate timed out after %s", h.name, validateTimeout)
+	}
 }

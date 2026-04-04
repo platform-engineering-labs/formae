@@ -75,7 +75,7 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 		return err
 	}
 
-	display.PrintBanner()
+	app.PrintBanner()
 
 	if !app.IsSupportedOutputSchema(opts.OutputSchema) {
 		return fmt.Errorf("unsupported output schema '%s', supported schemas are: %v", opts.OutputSchema, app.SupportedOutputSchemas())

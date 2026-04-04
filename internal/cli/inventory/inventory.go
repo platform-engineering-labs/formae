@@ -12,7 +12,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -113,7 +112,7 @@ func runResourcesForMachines(app *app.App, opts *InventoryOptions) error {
 }
 
 func runResourcesForHumans(app *app.App, opts *InventoryOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	forma, _, err := app.ExtractResources(opts.Query)
 	if err != nil {
@@ -209,7 +208,7 @@ func runTargetsForMachines(app *app.App, opts *InventoryOptions) error {
 }
 
 func runTargetsForHumans(app *app.App, opts *InventoryOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	targets, _, err := app.ExtractTargets(opts.Query)
 	if err != nil {
@@ -325,7 +324,7 @@ func runPoliciesForMachines(app *app.App, opts *InventoryOptions) error {
 }
 
 func runPoliciesForHumans(app *app.App, opts *InventoryOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	policies, _, err := app.ExtractPolicies()
 	if err != nil {
@@ -347,7 +346,7 @@ func runStacksForMachines(app *app.App, opts *InventoryOptions) error {
 }
 
 func runStacksForHumans(app *app.App, opts *InventoryOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	stacks, _, err := app.ExtractStacks()
 	if err != nil {

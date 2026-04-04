@@ -230,25 +230,26 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 
 // applyDeprecatedPluginsConfig copies values from the deprecated plugins block
 // to their new locations, emitting deprecation warnings. New paths take precedence.
+// Warnings are collected in translated.Warnings so callers (CLI) can display them.
 func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pkgmodel.Config) {
 	if plugins == nil {
 		return
 	}
 
 	if plugins.PluginDir != "" && plugins.PluginDir != "~/.pel/formae/plugins" && translated.PluginDir == "~/.pel/formae/plugins" {
-		slog.Warn("Deprecated: 'plugins.pluginDir' — use top-level 'pluginDir' instead")
+		translated.Warnings = append(translated.Warnings, "Deprecated: 'plugins.pluginDir' — use top-level 'pluginDir' instead")
 		translated.PluginDir = plugins.PluginDir
 	}
 
 	if plugins.Authentication != nil && translated.Agent.Auth == nil {
-		slog.Warn("Deprecated: 'plugins.authentication' — use 'agent.auth' and 'cli.auth' instead")
+		translated.Warnings = append(translated.Warnings, "Deprecated: 'plugins.authentication' — use 'agent.auth' and 'cli.auth' instead")
 		authJSON := translateDynamic(plugins.Authentication)
 		translated.Agent.Auth = authJSON
 		translated.Cli.Auth = authJSON
 	}
 
 	if plugins.Network != nil && translated.Network == nil {
-		slog.Warn("Deprecated: 'plugins.network' — use top-level 'network' instead")
+		translated.Warnings = append(translated.Warnings, "Deprecated: 'plugins.network' — use top-level 'network' instead")
 		// The old format was a Dynamic blob. Convert to typed NetworkConfig
 		// by extracting the type field and passing the rest as-is via JSON.
 		networkJSON := translateDynamic(plugins.Network)

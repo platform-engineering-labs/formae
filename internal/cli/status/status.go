@@ -120,7 +120,7 @@ func validateStatusOptions(options *StatusOptions) error {
 }
 
 func runStatusForHumans(app *app.App, opts *StatusOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	status, nags, err := app.GetCommandsStatus(opts.Query, opts.MaxResults, false)
 	if err != nil {

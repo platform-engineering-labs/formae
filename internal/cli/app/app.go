@@ -141,6 +141,19 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	return nil
 }
 
+// PrintBanner prints the formae banner followed by any config warnings
+// (e.g. deprecation notices for the old plugins block). Call this instead
+// of display.PrintBanner() in human-readable command flows so that
+// warnings are never emitted in machine-readable (JSON) output.
+func (a *App) PrintBanner() {
+	display.PrintBanner()
+	if a.Config != nil {
+		for _, w := range a.Config.Warnings {
+			fmt.Fprintf(os.Stderr, "%s %s\n", display.Gold("Warning:"), w)
+		}
+	}
+}
+
 func (a *App) SupportedOutputSchemas() []string {
 	supported := []string{}
 
