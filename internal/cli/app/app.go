@@ -147,10 +147,11 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 // warnings are never emitted in machine-readable (JSON) output.
 func (a *App) PrintBanner() {
 	display.PrintBanner()
-	if a.Config != nil {
+	if a.Config != nil && len(a.Config.Warnings) > 0 {
 		for _, w := range a.Config.Warnings {
 			fmt.Fprintf(os.Stderr, "%s %s\n", display.Gold("Warning:"), w)
 		}
+		fmt.Fprintln(os.Stderr)
 	}
 }
 

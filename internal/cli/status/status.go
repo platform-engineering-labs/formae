@@ -181,8 +181,6 @@ func AgentCmd() *cobra.Command {
 			schema, _ := command.Flags().GetString("output-schema")
 			watch, _ := command.Flags().GetBool("watch")
 			switch consumer {
-			case printer.ConsumerHuman:
-				display.PrintBanner()
 			case printer.ConsumerMachine:
 				if schema != "json" && schema != "yaml" {
 					return fmt.Errorf("unsupported schema: %s", schema)
@@ -193,6 +191,10 @@ func AgentCmd() *cobra.Command {
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				return err
+			}
+
+			if consumer == printer.ConsumerHuman {
+				app.PrintBanner()
 			}
 
 			stats, nags, err := app.Stats()

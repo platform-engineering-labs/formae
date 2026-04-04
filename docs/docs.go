@@ -15,6 +15,32 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/check-ttl": {
+            "post": {
+                "description": "Triggers a one-shot TTL expiry check. Identifies stacks with expired TTL policies\nand initiates their destruction. Stacks with active commands are skipped.\n\nSide effects: This endpoint destroys infrastructure. Any stack whose TTL has expired\nwill have all its resources destroyed. This is irreversible.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Force TTL expiry check",
+                "responses": {
+                    "200": {
+                        "description": "OK: TTL check complete.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ForceCheckTTLResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/discover": {
             "post": {
                 "description": "Initiates an immediate discovery process to identify resources in the infrastructure.",
@@ -510,6 +536,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/stacks/{stack}/reconcile": {
+            "post": {
+                "description": "Triggers a one-shot reconcile for a specific stack. This creates and executes a\nreconcile command that reverts any out-of-band changes to managed resources on the\nstack back to their last-known desired state. The reconcile is equivalent to\nre-applying the last reconcile snapshot. The command executes asynchronously —\nuse the returned command_id to poll for completion via GET /commands/:id/status.\n\nSide effects: This endpoint creates real infrastructure changes. Any resources that\nhave been modified outside of formae since the last reconcile will be reverted to\ntheir managed state. This is a destructive operation for out-of-band changes.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stacks"
+                ],
+                "summary": "Force stack reconcile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The stack label to reconcile.",
+                        "name": "stack",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: No drift detected, nothing to reconcile.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ForceReconcileResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted: Reconcile command created and executing.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ForceReconcileResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden: Stack does not have an auto-reconcile policy.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ReconcilePolicyRequiredError"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict: Stack has active commands, reconcile skipped.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ForceReconcileResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/stats": {
             "get": {
                 "description": "Retrieves usage statistics of the Formae agent.",
@@ -655,6 +734,40 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "ResourceUpdateStates": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/model.CancelResourceState"
+                    }
+                }
+            }
+        },
+        "model.CancelResourceState": {
+            "type": "object",
+            "properties": {
+                "State": {
+                    "description": "\"Canceled\", \"InProgress\", \"Success\", \"Failed\"",
+                    "type": "string"
+                }
+            }
+        },
+        "model.ConfigFieldHint": {
+            "type": "object",
+            "properties": {
+                "CreateOnly": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "model.ConfigSchema": {
+            "type": "object",
+            "properties": {
+                "Hints": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/model.ConfigFieldHint"
+                    }
                 }
             }
         },
@@ -700,6 +813,34 @@ const docTemplate = `{
                 "FieldUpdateMethodAtomic",
                 "FieldUpdateMethodNone"
             ]
+        },
+        "model.ForceCheckTTLResponse": {
+            "type": "object",
+            "properties": {
+                "command_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "expired_stacks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.ForceReconcileResponse": {
+            "type": "object",
+            "properties": {
+                "command_id": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
         },
         "model.Forma": {
             "type": "object",
@@ -876,6 +1017,14 @@ const docTemplate = `{
                 "Value": {}
             }
         },
+        "model.ReconcilePolicyRequiredError": {
+            "type": "object",
+            "properties": {
+                "StackLabel": {
+                    "type": "string"
+                }
+            }
+        },
         "model.Resource": {
             "type": "object",
             "properties": {
@@ -969,6 +1118,9 @@ const docTemplate = `{
                 },
                 "MaxAttempts": {
                     "type": "integer"
+                },
+                "NativeId": {
+                    "type": "string"
                 },
                 "OldProperties": {
                     "type": "array",
@@ -1216,6 +1368,9 @@ const docTemplate = `{
                         "type": "integer"
                     }
                 },
+                "ConfigSchema": {
+                    "$ref": "#/definitions/model.ConfigSchema"
+                },
                 "Discoverable": {
                     "type": "boolean"
                 },
@@ -1236,6 +1391,12 @@ const docTemplate = `{
                 "CascadeSource": {
                     "type": "string"
                 },
+                "DesiredConfig": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "Discoverable": {
                     "type": "boolean"
                 },
@@ -1245,6 +1406,12 @@ const docTemplate = `{
                 },
                 "ErrorMessage": {
                     "type": "string"
+                },
+                "ExistingConfig": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 },
                 "IsCascade": {
                     "type": "boolean"

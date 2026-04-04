@@ -230,7 +230,7 @@ class PluginConfig {
         )
     Authentication: Dynamic? =
         if (authentication != null)
-            authentication.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+            authentication
         else
             null
 
@@ -242,7 +242,7 @@ class PluginConfig {
     )
     Network: Dynamic? =
         if (network != null)
-            network.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+            network
         else
             null
 }
