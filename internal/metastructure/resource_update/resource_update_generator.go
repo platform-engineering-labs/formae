@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"strings"
 
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -385,13 +385,29 @@ func generateResourceUpdatesForApply(
 
 			// Skip raw config comparison when config contains resolvables ($ref).
 			// The TargetUpdateGenerator handles resolvable-aware comparison.
-			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 &&
-				!util.JsonEqualRaw(existingTarget.Config, target.Config) {
-				return nil, apimodel.TargetAlreadyExistsError{
-					TargetLabel:    target.Label,
-					MismatchType:   "config",
-					ExistingConfig: existingTarget.Config,
-					FormaConfig:    target.Config,
+			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 {
+				// Strip $ref metadata from existing config so that a stored
+				// value with $ref wrappers compares correctly against a plain
+				// value in the new config.
+				existingResolved, err := resolver.ConvertToPluginFormat(existingTarget.Config)
+				if err != nil {
+					existingResolved = existingTarget.Config
+				}
+				// Prefer the incoming schema — it represents the current plugin
+				// version and may have new or updated hints. Fall back to the
+				// existing schema only when the incoming has none.
+				schema := target.ConfigSchema
+				if len(schema.Hints) == 0 {
+					schema = existingTarget.ConfigSchema
+				}
+				configChange := target_update.ClassifyConfigChange(existingResolved, target.Config, schema)
+				if configChange == target_update.ConfigImmutableChange {
+					return nil, apimodel.TargetAlreadyExistsError{
+						TargetLabel:    target.Label,
+						MismatchType:   "config",
+						ExistingConfig: existingTarget.Config,
+						FormaConfig:    target.Config,
+					}
 				}
 			}
 		}
@@ -500,6 +516,7 @@ func generateResourceUpdatesForReconcile(
 		checkAllResources := len(formaResourceKeys) == 0
 
 		var nonPortable []string
+		var nonPortableTarget string
 		for stackLabel, resources := range allResourcesByStack {
 			if stackLabel == constants.UnmanagedStack {
 				continue
@@ -512,13 +529,18 @@ func generateResourceUpdatesForReconcile(
 					key := fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label)
 					if checkAllResources || formaResourceKeys[key] {
 						nonPortable = append(nonPortable, fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label))
+						if nonPortableTarget == "" {
+							nonPortableTarget = resource.Target
+						}
 					}
 				}
 			}
 		}
 		if len(nonPortable) > 0 {
-			return nil, fmt.Errorf("cannot replace target: the following resources are not portable across targets and cannot be recreated:\n  - %s\nUse 'formae destroy' to remove these resources first, then apply with the new target",
-				strings.Join(nonPortable, "\n  - "))
+			return nil, apimodel.NonPortableResourcesError{
+				TargetLabel: nonPortableTarget,
+				Resources:   nonPortable,
+			}
 		}
 	}
 
@@ -841,6 +863,7 @@ func generateResourceUpdatesForPatch(
 	// In patch mode, ALL managed resources on replaced targets will be recreated, so check all
 	if len(replacedTargets) > 0 {
 		var nonPortable []string
+		var nonPortableTarget string
 		for stackLabel, resources := range allResourcesByStack {
 			if stackLabel == constants.UnmanagedStack {
 				continue
@@ -851,12 +874,17 @@ func generateResourceUpdatesForPatch(
 				}
 				if !resource.Schema.Portable {
 					nonPortable = append(nonPortable, fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label))
+					if nonPortableTarget == "" {
+						nonPortableTarget = resource.Target
+					}
 				}
 			}
 		}
 		if len(nonPortable) > 0 {
-			return nil, fmt.Errorf("cannot replace target: the following resources are not portable across targets and cannot be recreated:\n  - %s\nUse 'formae destroy' to remove these resources first, then apply with the new target",
-				strings.Join(nonPortable, "\n  - "))
+			return nil, apimodel.NonPortableResourcesError{
+				TargetLabel: nonPortableTarget,
+				Resources:   nonPortable,
+			}
 		}
 	}
 

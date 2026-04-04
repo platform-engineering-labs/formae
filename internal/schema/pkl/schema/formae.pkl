@@ -193,6 +193,19 @@ open class FieldHint extends Annotation {
     fixed IndexField: String = indexField ?? ""
 }
 
+/// Annotation for target config fields to declare mutability.
+/// Fields without this annotation are treated as immutable (createOnly).
+open class ConfigFieldHint extends Annotation {
+    hidden createOnly: Boolean = true
+
+    fixed CreateOnly: Boolean = createOnly
+}
+
+/// Schema describing per-field mutability of a target's config.
+open class ConfigSchema {
+    Hints: Mapping<String, ConfigFieldHint>?
+}
+
 // Schema output class
 open class Schema {
     /// Property to store as the NativeId following create
@@ -227,6 +240,13 @@ open class Target {
     fixed Label: String = label
     fixed Namespace: String = namespace
     fixed Config: Any? = config
+    fixed ConfigSchema: ConfigSchema? =
+        if (config != null)
+            let (hints = module.fq.configHints(reflect.Class(config.getClass())))
+            if (hints.length > 0)
+                new ConfigSchema { Hints = hints }
+            else null
+        else null
     fixed Discoverable: Boolean = discoverable
 }
 
@@ -579,6 +599,15 @@ class Fq {
                     else rawValue)
                 Pair(key, value)
         ).toDynamic()
+
+    function configHints(configClass: reflect.Class): Mapping<String, ConfigFieldHint> =
+        configClass.properties
+            .filter((_, v) -> v.allAnnotations.filterIsInstance(ConfigFieldHint).length > 0)
+            .map((k, v) ->
+                let(hint = v.allAnnotations.filterIsInstance(ConfigFieldHint).firstOrNull)
+                Pair(k.capitalize(), hint)
+            )
+            .toMapping()
 
     function schema(resourceClass: reflect.Class): Schema =
         let (hint = findResourceHint(resourceClass))

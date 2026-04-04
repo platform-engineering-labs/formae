@@ -11,7 +11,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -118,30 +117,6 @@ func (tu *TargetUpdate) MarkInProgress() { tu.State = TargetUpdateStateInProgres
 // MarkFailed transitions the target update to the Failed state.
 func (tu *TargetUpdate) MarkFailed() { tu.State = TargetUpdateStateFailed }
 
-// ValidateImmutableFields validates that immutable fields (namespace, config) haven't changed
-// Returns an error if namespace or config differ between existing and new targets
-func ValidateImmutableFields(existing, new *pkgmodel.Target) error {
-	if existing.Namespace != new.Namespace {
-		return model.TargetAlreadyExistsError{
-			TargetLabel:       new.Label,
-			ExistingNamespace: existing.Namespace,
-			FormaNamespace:    new.Namespace,
-			MismatchType:      "namespace",
-		}
-	}
-
-	if !util.JsonEqualRaw(existing.Config, new.Config) {
-		return model.TargetAlreadyExistsError{
-			TargetLabel:    new.Label,
-			ExistingConfig: existing.Config,
-			FormaConfig:    new.Config,
-			MismatchType:   "config",
-		}
-	}
-
-	return nil
-}
-
 // PersistTargetUpdates is sent to the ResourcePersister actor to persist target updates
 // to the datastore.
 type PersistTargetUpdates struct {
@@ -170,9 +145,32 @@ func ShouldTriggerDiscovery(update *TargetUpdate) bool {
 		return true
 	}
 
+	// Replace is split into delete+create by the DAG. Discovery is triggered
+	// by the create phase, not here — firing early would run against a
+	// half-applied state where the new target exists but resources haven't
+	// been recreated yet.
+
 	if update.Operation == TargetOperationUpdate {
-		// Trigger if target wasn't discoverable before
-		return update.ExistingTarget == nil || !update.ExistingTarget.Discoverable
+		// Only trigger discovery when something discovery cares about changed:
+		// the target becoming newly discoverable, or the config values changing.
+		// Skip for schema-only backfills or $ref format changes.
+		if update.ExistingTarget == nil || !update.ExistingTarget.Discoverable {
+			return true // newly discoverable
+		}
+		// Compare resolved config values (strip $ref metadata) so that
+		// format-only changes (value ↔ $ref wrapper) don't trigger discovery.
+		existingResolved, err := resolver.ConvertToPluginFormat(update.ExistingTarget.Config)
+		if err != nil {
+			existingResolved = update.ExistingTarget.Config
+		}
+		newResolved, err := resolver.ConvertToPluginFormat(update.Target.Config)
+		if err != nil {
+			newResolved = update.Target.Config
+		}
+		if !util.JsonEqualRaw(existingResolved, newResolved) {
+			return true // effective config values changed
+		}
+		return false
 	}
 
 	return false

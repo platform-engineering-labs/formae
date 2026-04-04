@@ -118,18 +118,51 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			}
 		}
 
-		configChanged, err := tp.configChanged(existing.Config, target.Config, resolvables)
+		// Determine which configs to compare. When the new config contains
+		// $ref resolvables, resolve them first so we compare actual values.
+		existingResolved, newResolved, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
 		if err != nil {
-			return TargetUpdate{}, false, fmt.Errorf("failed to compare target configs: %w", err)
+			return TargetUpdate{}, false, fmt.Errorf("failed to resolve target configs: %w", err)
 		}
 
-		if configChanged {
-			operation = TargetOperationReplace
-		} else if existing.Discoverable != target.Discoverable {
-			operation = TargetOperationUpdate
-		} else {
-			return TargetUpdate{}, false, nil
+		// Always prefer the incoming schema — it represents the current plugin
+		// version and may have new or updated hints. Fall back to the existing
+		// schema only when the incoming has none (e.g., plugin removed annotations).
+		schema := target.ConfigSchema
+		if len(schema.Hints) == 0 {
+			schema = existing.ConfigSchema
 		}
+		configChange := ClassifyConfigChange(existingResolved, newResolved, schema)
+		switch configChange {
+		case ConfigImmutableChange:
+			operation = TargetOperationReplace
+		case ConfigMutableChange:
+			operation = TargetOperationUpdate
+		case ConfigNoChange:
+			// Resolved values are identical, but we still need to update if:
+			// - The raw config format changed (e.g., plain value ↔ $ref wrapper)
+			// - The discoverable flag changed
+			// - The ConfigSchema changed (e.g., plugin annotations updated)
+			if !util.JsonEqualRaw(existing.Config, target.Config) {
+				operation = TargetOperationUpdate
+			} else if existing.Discoverable != target.Discoverable {
+				operation = TargetOperationUpdate
+			} else if len(target.ConfigSchema.Hints) > 0 && !configSchemasEqual(existing.ConfigSchema, target.ConfigSchema) {
+				// Only update for schema changes when the incoming schema has hints.
+				// An empty incoming schema means the plugin/agent doesn't emit one —
+				// don't wipe existing metadata.
+				operation = TargetOperationUpdate
+			} else {
+				return TargetUpdate{}, false, nil
+			}
+		}
+	}
+
+	// Preserve existing ConfigSchema when the incoming target doesn't provide one.
+	// Without this, persistTargetUpdate would write an empty schema, silently
+	// clearing mutability metadata for future applies.
+	if len(target.ConfigSchema.Hints) == 0 && existing != nil && len(existing.ConfigSchema.Hints) > 0 {
+		target.ConfigSchema = existing.ConfigSchema
 	}
 
 	return TargetUpdate{
@@ -143,12 +176,33 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	}, true, nil
 }
 
-// configChanged compares the existing stored config with the new config.
-// When the new config contains $ref objects, we resolve them from the DB
-// to get actual values for comparison.
-func (tp *TargetUpdateGenerator) configChanged(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (bool, error) {
+// configSchemasEqual returns true if two ConfigSchemas have identical hints.
+func configSchemasEqual(a, b pkgmodel.ConfigSchema) bool {
+	if len(a.Hints) != len(b.Hints) {
+		return false
+	}
+	for k, hintA := range a.Hints {
+		hintB, ok := b.Hints[k]
+		if !ok || hintA != hintB {
+			return false
+		}
+	}
+	return true
+}
+
+// resolvedConfigs returns the existing and new configs in a form suitable for
+// field-level comparison. Both configs are stripped of $ref metadata so that
+// ClassifyConfigChange compares plain values. When the new config contains
+// $ref resolvables, they are resolved from the DB first.
+func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, error) {
 	if len(resolvables) == 0 {
-		return !util.JsonEqualRaw(existingConfig, newConfig), nil
+		// No resolvables in new config, but existing config may still have
+		// $ref metadata from a previous apply. Strip it for comparison.
+		existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
+		if err != nil {
+			return existingConfig, newConfig, nil
+		}
+		return existingValues, newConfig, nil
 	}
 
 	// Resolve $ref values from DB for comparison
@@ -161,36 +215,33 @@ func (tp *TargetUpdateGenerator) configChanged(existingConfig, newConfig json.Ra
 
 		resource, err := tp.datastore.LoadResourceById(ksuid)
 		if err != nil || resource == nil {
-			// Can't resolve — treat as a config change
 			slog.Debug("Cannot resolve $ref from DB, treating as config change",
 				"uri", uri, "error", err)
-			return true, nil
+			return existingConfig, newConfig, nil
 		}
 
-		// Extract the property value from the resource
 		value := gjson.GetBytes(resource.Properties, propertyPath)
 		if !value.Exists() {
 			slog.Debug("Referenced property not found in resource, treating as config change",
 				"uri", uri, "propertyPath", propertyPath)
-			return true, nil
+			return existingConfig, newConfig, nil
 		}
 
-		// Substitute the resolved value into the config
 		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, value.String())
 		if err != nil {
-			return true, nil
+			return existingConfig, newConfig, nil
 		}
 	}
 
-	// Compare resolved values: strip $ref metadata from both sides
+	// Strip $ref metadata from both sides so ClassifyConfigChange sees plain values
 	existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 	if err != nil {
-		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+		return existingConfig, json.RawMessage(resolvedConfig), nil
 	}
 	newValues, err := resolver.ConvertToPluginFormat(resolvedConfig)
 	if err != nil {
-		return !util.JsonEqualRaw(existingConfig, json.RawMessage(resolvedConfig)), nil
+		return existingConfig, json.RawMessage(resolvedConfig), nil
 	}
 
-	return !util.JsonEqualRaw(existingValues, newValues), nil
+	return existingValues, newValues, nil
 }

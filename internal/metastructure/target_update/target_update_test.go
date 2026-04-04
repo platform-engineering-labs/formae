@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -80,172 +79,6 @@ func TestTargetUpdate_HasChange_NoChange(t *testing.T) {
 	assert.False(t, update.HasChange())
 }
 
-func TestValidateImmutableFields_Success_IdenticalFields(t *testing.T) {
-	config := json.RawMessage(`{"region": "us-east-1", "account": "123456789"}`)
-
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    config,
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    config,
-	}
-
-	err := ValidateImmutableFields(existing, new)
-	assert.NoError(t, err)
-}
-
-func TestValidateImmutableFields_Success_EquivalentConfig(t *testing.T) {
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{"region": "us-east-1", "account": "123"}`),
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{"account": "123", "region": "us-east-1"}`), // Different order
-	}
-
-	err := ValidateImmutableFields(existing, new)
-	assert.NoError(t, err)
-}
-
-func TestValidateImmutableFields_Error_NamespaceMismatch(t *testing.T) {
-	config := json.RawMessage(`{"region": "us-east-1"}`)
-
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    config,
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "development", // Different namespace
-		Config:    config,
-	}
-
-	err := ValidateImmutableFields(existing, new)
-
-	require.Error(t, err)
-
-	var targetErr model.TargetAlreadyExistsError
-	require.ErrorAs(t, err, &targetErr)
-	assert.Equal(t, "test-target", targetErr.TargetLabel)
-	assert.Equal(t, "production", targetErr.ExistingNamespace)
-	assert.Equal(t, "development", targetErr.FormaNamespace)
-	assert.Equal(t, "namespace", targetErr.MismatchType)
-}
-
-func TestValidateImmutableFields_Error_ConfigMismatch(t *testing.T) {
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{"region": "us-east-1", "account": "123"}`),
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{"region": "us-west-2", "account": "456"}`), // Different config
-	}
-
-	err := ValidateImmutableFields(existing, new)
-
-	require.Error(t, err)
-
-	var targetErr model.TargetAlreadyExistsError
-	require.ErrorAs(t, err, &targetErr)
-	assert.Equal(t, "test-target", targetErr.TargetLabel)
-	assert.Equal(t, json.RawMessage(`{"region": "us-east-1", "account": "123"}`), targetErr.ExistingConfig)
-	assert.Equal(t, json.RawMessage(`{"region": "us-west-2", "account": "456"}`), targetErr.FormaConfig)
-	assert.Equal(t, "config", targetErr.MismatchType)
-}
-
-func TestValidateImmutableFields_Error_ConfigMismatch_EmptyVsNonEmpty(t *testing.T) {
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{}`),
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{"region": "us-east-1"}`),
-	}
-
-	err := ValidateImmutableFields(existing, new)
-
-	require.Error(t, err)
-
-	var targetErr model.TargetAlreadyExistsError
-	require.ErrorAs(t, err, &targetErr)
-	assert.Equal(t, "config", targetErr.MismatchType)
-}
-
-func TestValidateImmutableFields_Error_ConfigMismatch_NilVsNonNil(t *testing.T) {
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    nil,
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{"region": "us-east-1"}`),
-	}
-
-	err := ValidateImmutableFields(existing, new)
-
-	require.Error(t, err)
-
-	var targetErr model.TargetAlreadyExistsError
-	require.ErrorAs(t, err, &targetErr)
-	assert.Equal(t, "config", targetErr.MismatchType)
-}
-
-func TestValidateImmutableFields_Success_NilVsEmptyObject(t *testing.T) {
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    nil,
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{}`),
-	}
-
-	err := ValidateImmutableFields(existing, new)
-	assert.NoError(t, err) // nil and {} should be treated as equivalent
-}
-
-func TestValidateImmutableFields_Success_EmptyObjectVsNil(t *testing.T) {
-	existing := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    json.RawMessage(`{}`),
-	}
-
-	new := &pkgmodel.Target{
-		Label:     "test-target",
-		Namespace: "production",
-		Config:    nil,
-	}
-
-	err := ValidateImmutableFields(existing, new)
-	assert.NoError(t, err) // {} and nil should be treated as equivalent
-}
-
 func TestTargetUpdate_ResolvablesReturnsRemainingResolvables(t *testing.T) {
 	tu := TargetUpdate{
 		RemainingResolvables: []pkgmodel.FormaeURI{
@@ -292,6 +125,20 @@ func TestShouldTriggerDiscovery_Create_Discoverable(t *testing.T) {
 	assert.True(t, ShouldTriggerDiscovery(&update))
 }
 
+func TestShouldTriggerDiscovery_Replace_NotTriggered(t *testing.T) {
+	// Replace is split into delete+create by the DAG. The create phase
+	// triggers discovery, so the replace operation itself should not.
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+		},
+		Operation: TargetOperationReplace,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
 func TestShouldTriggerDiscovery_Create_NotDiscoverable(t *testing.T) {
 	update := TargetUpdate{
 		Target: pkgmodel.Target{
@@ -320,7 +167,9 @@ func TestShouldTriggerDiscovery_Update_BecomesDiscoverable(t *testing.T) {
 	assert.True(t, ShouldTriggerDiscovery(&update))
 }
 
-func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable(t *testing.T) {
+func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable_NoConfigChange(t *testing.T) {
+	// Schema-only or format-only update on an already-discoverable target
+	// should NOT trigger discovery — nothing discovery cares about changed.
 	update := TargetUpdate{
 		Target: pkgmodel.Target{
 			Label:        "test",
@@ -329,6 +178,46 @@ func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable(t *testing.T) {
 		ExistingTarget: &pkgmodel.Target{
 			Label:        "test",
 			Discoverable: true,
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.False(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable_ConfigChanged(t *testing.T) {
+	// Mutable config change on an already-discoverable target SHOULD trigger
+	// discovery — the config change may affect which resources are visible.
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Profile":"staging"}`),
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"Profile":"dev"}`),
+		},
+		Operation: TargetOperationUpdate,
+	}
+
+	assert.True(t, ShouldTriggerDiscovery(&update))
+}
+
+func TestShouldTriggerDiscovery_Update_AlreadyDiscoverable_RefFormatChange(t *testing.T) {
+	// Format-only change ($ref wrapper vs plain value with same resolved value)
+	// should NOT trigger discovery — the effective config didn't change.
+	update := TargetUpdate{
+		Target: pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"endpoint":{"$ref":"formae://abc#/Endpoint","$value":"https://my-cluster"}}`),
+		},
+		ExistingTarget: &pkgmodel.Target{
+			Label:        "test",
+			Discoverable: true,
+			Config:       json.RawMessage(`{"endpoint":"https://my-cluster"}`),
 		},
 		Operation: TargetOperationUpdate,
 	}

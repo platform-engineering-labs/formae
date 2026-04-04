@@ -386,6 +386,22 @@ func getRawJSONField(field types.Field) ([]byte, error) {
 	}
 }
 
+// unmarshalConfigSchema extracts and unmarshals a nullable JSONB config_schema field.
+func unmarshalConfigSchema(field types.Field) (pkgmodel.ConfigSchema, error) {
+	raw, err := getRawJSONField(field)
+	if err != nil {
+		return pkgmodel.ConfigSchema{}, err
+	}
+	if raw == nil {
+		return pkgmodel.ConfigSchema{}, nil
+	}
+	var cs pkgmodel.ConfigSchema
+	if err := json.Unmarshal(raw, &cs); err != nil {
+		return pkgmodel.ConfigSchema{}, fmt.Errorf("failed to unmarshal config schema: %w", err)
+	}
+	return cs, nil
+}
+
 func getTimestampField(field types.Field) (time.Time, error) {
 	str, err := getStringField(field)
 	if err != nil {
@@ -2069,8 +2085,8 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 	ctx := context.Background()
 
 	query := `
-	INSERT INTO targets (label, version, namespace, config, discoverable)
-	VALUES (:label, 1, :namespace, :config::jsonb, :discoverable)
+	INSERT INTO targets (label, version, namespace, config, discoverable, config_schema)
+	VALUES (:label, 1, :namespace, :config::jsonb, :discoverable, :config_schema::jsonb)
 	`
 
 	configJSON, err := json.Marshal(target.Config)
@@ -2078,16 +2094,28 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 		return "", err
 	}
 
+	var configSchemaParam types.Field
+	if len(target.ConfigSchema.Hints) > 0 {
+		csJSON, err := json.Marshal(target.ConfigSchema)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal config schema: %w", err)
+		}
+		configSchemaParam = &types.FieldMemberStringValue{Value: string(csJSON)}
+	} else {
+		configSchemaParam = &types.FieldMemberIsNull{Value: true}
+	}
+
 	params := []types.SqlParameter{
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: target.Label}},
 		{Name: aws.String("namespace"), Value: &types.FieldMemberStringValue{Value: target.Namespace}},
 		{Name: aws.String("config"), Value: &types.FieldMemberStringValue{Value: string(configJSON)}},
 		{Name: aws.String("discoverable"), Value: &types.FieldMemberBooleanValue{Value: target.Discoverable}},
+		{Name: aws.String("config_schema"), Value: configSchemaParam},
 	}
 
 	_, err = d.executeStatement(ctx, query, params)
 	if err != nil {
-		slog.Error("failed to create target", "error", err, "label", target.Label)
+		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
 	}
 
@@ -2127,9 +2155,20 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 		return "", err
 	}
 
+	var configSchemaParam types.Field
+	if len(target.ConfigSchema.Hints) > 0 {
+		csJSON, err := json.Marshal(target.ConfigSchema)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal config schema: %w", err)
+		}
+		configSchemaParam = &types.FieldMemberStringValue{Value: string(csJSON)}
+	} else {
+		configSchemaParam = &types.FieldMemberIsNull{Value: true}
+	}
+
 	insertQuery := `
-	INSERT INTO targets (label, version, namespace, config, discoverable)
-	VALUES (:label, :version, :namespace, :config::jsonb, :discoverable)
+	INSERT INTO targets (label, version, namespace, config, discoverable, config_schema)
+	VALUES (:label, :version, :namespace, :config::jsonb, :discoverable, :config_schema::jsonb)
 	`
 	insertParams := []types.SqlParameter{
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: target.Label}},
@@ -2137,6 +2176,7 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 		{Name: aws.String("namespace"), Value: &types.FieldMemberStringValue{Value: target.Namespace}},
 		{Name: aws.String("config"), Value: &types.FieldMemberStringValue{Value: string(configJSON)}},
 		{Name: aws.String("discoverable"), Value: &types.FieldMemberBooleanValue{Value: target.Discoverable}},
+		{Name: aws.String("config_schema"), Value: configSchemaParam},
 	}
 
 	_, err = d.executeStatement(ctx, insertQuery, insertParams)
@@ -2152,7 +2192,7 @@ func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Targe
 	ctx := context.Background()
 
 	query := `
-	SELECT version, namespace, config, discoverable
+	SELECT version, namespace, config, discoverable, config_schema
 	FROM targets
 	WHERE label = :label
 	ORDER BY version DESC
@@ -2172,7 +2212,7 @@ func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Targe
 	}
 
 	record := output.Records[0]
-	if len(record) < 4 {
+	if len(record) < 5 {
 		return nil, fmt.Errorf("unexpected record length: %d", len(record))
 	}
 
@@ -2196,10 +2236,16 @@ func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Targe
 		return nil, fmt.Errorf("failed to parse discoverable: %w", err)
 	}
 
+	configSchema, err := unmarshalConfigSchema(record[4])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse config_schema: %w", err)
+	}
+
 	return &pkgmodel.Target{
 		Label:        targetLabel,
 		Namespace:    namespace,
 		Config:       config,
+		ConfigSchema: configSchema,
 		Discoverable: discoverable,
 		Version:      version,
 	}, nil
@@ -2209,7 +2255,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	ctx := context.Background()
 
 	query := `
-	SELECT label, version, namespace, config, discoverable
+	SELECT label, version, namespace, config, discoverable, config_schema
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -2226,7 +2272,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllTargets() ([]*pkgmodel.Target, error) {
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 5 {
+		if len(record) < 6 {
 			continue
 		}
 
@@ -2255,10 +2301,16 @@ func (d *DatastoreAuroraDataAPI) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			return nil, fmt.Errorf("failed to parse discoverable: %w", err)
 		}
 
+		configSchema, err := unmarshalConfigSchema(record[5])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse config_schema: %w", err)
+		}
+
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
 		})
@@ -2286,7 +2338,7 @@ func (d *DatastoreAuroraDataAPI) LoadTargetsByLabels(targetNames []string) ([]*p
 	}
 
 	query := fmt.Sprintf(`
-	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable
+	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable, t1.config_schema
 	FROM targets t1
 	WHERE t1.label IN (%s)
 	AND NOT EXISTS (
@@ -2304,7 +2356,7 @@ func (d *DatastoreAuroraDataAPI) LoadTargetsByLabels(targetNames []string) ([]*p
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 5 {
+		if len(record) < 6 {
 			continue
 		}
 
@@ -2313,11 +2365,13 @@ func (d *DatastoreAuroraDataAPI) LoadTargetsByLabels(targetNames []string) ([]*p
 		namespace, _ := getStringField(record[2])
 		config, _ := getRawJSONField(record[3])
 		discoverable, _ := getBoolField(record[4])
+		configSchema, _ := unmarshalConfigSchema(record[5])
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
 		})
@@ -2331,7 +2385,7 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 
 	query := `
 	WITH latest_targets AS (
-		SELECT label, version, namespace, config, discoverable
+		SELECT label, version, namespace, config, discoverable, config_schema
 		FROM targets t1
 		WHERE discoverable = TRUE
 		AND NOT EXISTS (
@@ -2341,7 +2395,7 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 			AND t2.version > t1.version
 		)
 	)
-	SELECT DISTINCT ON (config) label, version, namespace, config, discoverable
+	SELECT DISTINCT ON (config) label, version, namespace, config, discoverable, config_schema
 	FROM latest_targets
 	ORDER BY config, version DESC
 	`
@@ -2353,7 +2407,7 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 5 {
+		if len(record) < 6 {
 			continue
 		}
 
@@ -2362,11 +2416,13 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 		namespace, _ := getStringField(record[2])
 		config, _ := getRawJSONField(record[3])
 		discoverable, _ := getBoolField(record[4])
+		configSchema, _ := unmarshalConfigSchema(record[5])
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
 		})
@@ -2379,7 +2435,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 	ctx := context.Background()
 
 	queryStr := `
-	SELECT label, version, namespace, config, discoverable
+	SELECT label, version, namespace, config, discoverable, config_schema
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -2426,7 +2482,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 5 {
+		if len(record) < 6 {
 			continue
 		}
 
@@ -2435,11 +2491,13 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 		namespace, _ := getStringField(record[2])
 		config, _ := getRawJSONField(record[3])
 		discoverable, _ := getBoolField(record[4])
+		configSchema, _ := unmarshalConfigSchema(record[5])
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
 			Namespace:    namespace,
 			Config:       config,
+			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
 		})

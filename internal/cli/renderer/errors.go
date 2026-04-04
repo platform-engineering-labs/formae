@@ -90,6 +90,10 @@ func RenderErrorMessage(err error) (string, error) {
 		msg = display.Redf("stack `%s` was deleted by a concurrent command during apply setup. Please retry.\n", errResp.Data.StackLabel)
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.NonPortableResourcesError]); ok {
+		msg = renderNonPortableResourcesError(&errResp.Data)
+	}
+
 	if msg == "" {
 		return "", err
 	}
@@ -231,6 +235,16 @@ func renderRequiredFieldMissingOnCreateError(errResp *apimodel.RequiredFieldMiss
 		display.Gold("Please add values for these required fields to your forma file and try again.\n")
 
 	return message, nil
+}
+
+func renderNonPortableResourcesError(errResp *apimodel.NonPortableResourcesError) string {
+	message := display.Redf("Cannot replace target '%s'\n\n", errResp.TargetLabel) +
+		display.Gold("The following resources are bound to the current target configuration and\ncannot be automatically moved to the new target:\n\n")
+	for _, r := range errResp.Resources {
+		message += fmt.Sprintf("  - %s\n", r)
+	}
+	message += "\n" + display.Gold("To proceed, manually remove these resources first with 'formae destroy',\nthen reapply to recreate them with the new target configuration.\n")
+	return message
 }
 
 func renderTargetTree(label string, target json.RawMessage) (string, error) {

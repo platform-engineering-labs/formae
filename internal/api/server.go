@@ -683,6 +683,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusConflict, apimodel.TargetAlreadyExists, targetExistsError)
 	}
 
+	var nonPortableError apimodel.NonPortableResourcesError
+	if errors.As(err, &nonPortableError) {
+		return apiError(c, http.StatusConflict, apimodel.NonPortableResources, nonPortableError)
+	}
+
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError
 	if errors.As(err, &requiredFieldMissingError) {
 		return apiError(c, http.StatusBadRequest, apimodel.RequiredFieldMissingOnCreate, requiredFieldMissingError)

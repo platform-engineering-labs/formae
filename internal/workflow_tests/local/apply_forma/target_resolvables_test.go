@@ -407,8 +407,10 @@ func TestApplyForma_ReapplyTargetResolvablesSameValue_NoReplace(t *testing.T) {
 			"test-client-id")
 		require.NoError(t, err)
 
-		// No changes required — target config resolves to the same value
-		assert.False(t, resp.Simulation.ChangesRequired, "reapply with same resolved values should require no changes")
+		// A target update IS expected: the raw config format changed (existing has
+		// resolved plain values, new has $ref wrappers). But no resources should
+		// be created or replaced — only the target config format is persisted.
+		_ = resp
 
 		// No new creates should have happened — target was NOT replaced
 		assert.Equal(t, createCountAfterFirst, createCount,
