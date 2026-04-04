@@ -26,10 +26,11 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
-	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
+	"github.com/tidwall/gjson"
 )
 
 // getPidFile returns the PID file path, configurable via FORMAE_PID_FILE env var.
@@ -95,12 +96,12 @@ func (a *Agent) Start() error {
 		// Migrate resource plugins (with manifest and schema) from system directory.
 		// This handles backwards compatibility when OLD upgrade command didn't know
 		// about resource plugins. Also wipes existing plugins since interface changed.
-		if err := migrateResourcePlugins(a.cfg.Plugins.PluginDir); err != nil {
+		if err := migrateResourcePlugins(a.cfg.PluginDir); err != nil {
 			slog.Warn("Failed to migrate resource plugins", "error", err)
 			// Non-fatal - continue anyway, plugins might already be in place
 		}
 
-		pluginDir := util.ExpandHomePath(a.cfg.Plugins.PluginDir)
+		pluginDir := util.ExpandHomePath(a.cfg.PluginDir)
 		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
 		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
 		for i, p := range resourceInfos {
@@ -110,14 +111,25 @@ func (a *Agent) Start() error {
 		// Create auth plugin handle if auth is configured and a matching
 		// external auth plugin binary was discovered
 		var authHandle *auth.AuthPluginHandle
-		if a.cfg.Plugins.Authentication != nil {
-			authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
-			if len(authPlugins) > 0 {
-				info := authPlugins[0]
-				authHandle = auth.NewAuthPluginHandle(info.Name, info.BinaryPath, a.cfg.Plugins.Authentication)
-				slog.Info("Auth plugin configured", "name", info.Name, "version", info.Version, "path", info.BinaryPath)
+		if a.cfg.Agent.Auth != nil {
+			authType := gjson.GetBytes(a.cfg.Agent.Auth, "type").String()
+			if authType == "" {
+				slog.Error("Agent auth config missing 'type' field")
 			} else {
-				slog.Warn("Authentication configured but no auth plugin binary found")
+				authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
+				var matchedPlugin *plugindiscovery.PluginInfo
+				for i, p := range authPlugins {
+					if p.Name == authType {
+						matchedPlugin = &authPlugins[i]
+						break
+					}
+				}
+				if matchedPlugin != nil {
+					authHandle = auth.NewAuthPluginHandle(matchedPlugin.Name, matchedPlugin.BinaryPath, a.cfg.Agent.Auth)
+					slog.Info("Auth plugin configured", "name", matchedPlugin.Name, "version", matchedPlugin.Version, "path", matchedPlugin.BinaryPath)
+				} else {
+					slog.Error("Auth plugin not installed", "type", authType)
+				}
 			}
 		}
 
@@ -157,7 +169,7 @@ func (a *Agent) Start() error {
 
 		slog.Info("Agent started")
 
-		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
+		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, a.cfg.Network, metricsHandler)
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()

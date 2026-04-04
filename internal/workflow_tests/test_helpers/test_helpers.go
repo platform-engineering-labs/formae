@@ -104,7 +104,7 @@ func NewTestMetastructureConfig() *pkgmodel.Config {
 				Enabled:  false,
 			},
 		},
-		Plugins: pkgmodel.PluginConfig{},
+		PluginDir: "",
 	}
 }
 

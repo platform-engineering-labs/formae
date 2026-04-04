@@ -114,23 +114,29 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 		resourceTypesBlock = fmt.Sprintf("\n        resourceTypesToDiscover {\n%s\n        }", strings.Join(lines, "\n"))
 	}
 
-	pluginsBlock := ""
+	agentAuthBlock := ""
+	cliAuthBlock := ""
 	if options.authEnabled {
-		pluginsBlock = fmt.Sprintf(`
-plugins {
-    authentication {
-        type = "basic"
-        username = %q
-        password = %q
+		// Use Dynamic rather than typed plugin classes because pkl-go v0.12
+		// cannot decode typed PKL classes nested inside pkl.Object fields
+		// (e.g. AuthorizedUser inside a Listing inside an auth pkl.Object).
+		// Dynamic objects are decoded via the generic pkl.Object path.
+		agentAuthBlock = fmt.Sprintf(`
+    auth = new Dynamic {
+        type = "auth-basic"
         authorizedUsers = new Listing {
-            new Mapping {
-                ["Username"] = %q
-                ["Password"] = %q
+            new Dynamic {
+                username = %q
+                password = %q
             }
         }
-    }
-}
-`, options.authUsername, options.authPassword, options.authUsername, options.authBcryptHash)
+    }`, options.authUsername, options.authBcryptHash)
+		cliAuthBlock = fmt.Sprintf(`
+    auth = new Dynamic {
+        type = "auth-basic"
+        username = %q
+        password = %q
+    }`, options.authUsername, options.authPassword)
 	}
 
 	configContent := fmt.Sprintf(`/*
@@ -160,16 +166,16 @@ agent {
         consoleLogLevel = "debug"
         filePath = %q
         fileLogLevel = "debug"
-    }
+    }%s
 }
 
 cli {
     api {
         port = %d
     }
-    disableUsageReporting = true
+    disableUsageReporting = true%s
 }
-%s`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, port, pluginsBlock)
+`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)

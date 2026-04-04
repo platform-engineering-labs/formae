@@ -105,6 +105,23 @@ type StackExpirerConfig struct {
 	Disabled bool
 }
 
+type TailscaleConfig struct {
+	TLS           bool
+	AuthKey       string
+	Hostname      string
+	AdvertiseTags []string
+}
+
+type NetworkConfig struct {
+	Type      string
+	Tailscale *TailscaleConfig
+
+	// LegacyRawJSON holds the raw JSON from the deprecated plugins.network config.
+	// When set, the server passes this directly to the network registry instead
+	// of marshaling the typed Tailscale config.
+	LegacyRawJSON json.RawMessage `json:"-"`
+}
+
 type AgentConfig struct {
 	Server          ServerConfig
 	Datastore       DatastoreConfig
@@ -114,6 +131,7 @@ type AgentConfig struct {
 	Logging         LoggingConfig
 	OTel            OTelConfig
 	StackExpirer    StackExpirerConfig
+	Auth            json.RawMessage
 }
 
 type APIConfig struct {
@@ -130,17 +148,13 @@ type ArtifactConfig struct {
 type CliConfig struct {
 	API                   APIConfig
 	DisableUsageReporting bool
-}
-
-type PluginConfig struct {
-	PluginDir      string
-	Network        json.RawMessage
-	Authentication json.RawMessage
+	Auth                  json.RawMessage
 }
 
 type Config struct {
 	Agent     AgentConfig
 	Artifacts ArtifactConfig
 	Cli       CliConfig
-	Plugins   PluginConfig
+	Network   *NetworkConfig
+	PluginDir string
 }

@@ -243,9 +243,7 @@ cli {
 	disableUsageReporting = true
 }
 
-plugins {
-	pluginDir = "~/.pel/formae/plugins"
-}
+pluginDir = "~/.pel/formae/plugins"
 `, agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, logPath, agentPort)
 
 	// Write config to temp directory

@@ -112,6 +112,18 @@ type OTelConfig struct {
 	Prometheus  PrometheusConfig `pkl:"prometheus"`
 }
 
+type TailscaleConfig struct {
+	TLS           bool     `pkl:"tls"`
+	AuthKey       string   `pkl:"authKey"`
+	Hostname      string   `pkl:"hostname"`
+	AdvertiseTags []string `pkl:"advertiseTags"`
+}
+
+type NetworkConfig struct {
+	Type      string           `pkl:"type"`
+	Tailscale *TailscaleConfig `pkl:"tailscale"`
+}
+
 type AgentConfig struct {
 	Server          ServerConfig          `pkl:"server"`
 	Datastore       DatastoreConfig       `pkl:"datastore"`
@@ -121,6 +133,7 @@ type AgentConfig struct {
 	Logging         LoggingConfig         `pkl:"logging"`
 	OTel            OTelConfig            `pkl:"oTel"`
 	StackExpirer    StackExpirerConfig    `pkl:"stackExpirer"`
+	Auth            pkl.Object            `pkl:"auth"`
 }
 
 type APIConfig struct {
@@ -135,13 +148,14 @@ type ArtifactConfig struct {
 }
 
 type CliConfig struct {
-	API                   APIConfig `pkl:"api"`
-	DisableUsageReporting bool      `pkl:"disableUsageReporting"`
+	API                   APIConfig  `pkl:"api"`
+	DisableUsageReporting bool       `pkl:"disableUsageReporting"`
+	Auth                  pkl.Object `pkl:"auth"`
 }
 
+// PluginConfig is deprecated. Use top-level pluginDir, network, and agent.auth / cli.auth.
 type PluginConfig struct {
-	PluginDir string `pkl:"pluginDir"`
-	// Output is postprocessed, hence the key case difference
+	PluginDir      string      `pkl:"pluginDir"`
 	Network        *pkl.Object `pkl:"Network"`
 	Authentication *pkl.Object `pkl:"Authentication"`
 }
@@ -150,5 +164,7 @@ type Config struct {
 	Agent     AgentConfig    `pkl:"agent"`
 	Artifacts ArtifactConfig `pkl:"artifacts"`
 	Cli       CliConfig      `pkl:"cli"`
-	Plugins   PluginConfig   `pkl:"plugins"`
+	Network   *NetworkConfig `pkl:"network"`
+	PluginDir string         `pkl:"pluginDir"`
+	Plugins   *PluginConfig  `pkl:"plugins"`
 }

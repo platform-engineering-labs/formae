@@ -5,6 +5,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -19,7 +20,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/usage"
@@ -27,6 +27,8 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
+	"github.com/tidwall/gjson"
 )
 
 type App struct {
@@ -426,15 +428,22 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	var authHeader http.Header
 	var net *http.Client
 
-	if a.Config.Plugins.Authentication != nil {
-		// Lazily create the auth client (spawns subprocess on first use)
+	if a.Config.Cli.Auth != nil {
 		if a.authClient == nil {
-			authPlugins := discovery.DiscoverPlugins(util.ExpandHomePath("~/.pel/formae/plugins"), discovery.Auth)
-			if len(authPlugins) == 0 {
-				return nil, nil, fmt.Errorf("authentication configured but no auth plugin binary found")
+			authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
+			pluginDir := util.ExpandHomePath(a.Config.PluginDir)
+			authPlugins := discovery.DiscoverPlugins(pluginDir, discovery.Auth)
+			var matched *discovery.PluginInfo
+			for i, p := range authPlugins {
+				if p.Name == authType {
+					matched = &authPlugins[i]
+					break
+				}
 			}
-			info := authPlugins[0]
-			client, err := pkgauth.NewClient(info.BinaryPath, a.Config.Plugins.Authentication)
+			if matched == nil {
+				return nil, nil, fmt.Errorf("auth plugin %q not installed", authType)
+			}
+			client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to start auth plugin: %w", err)
 			}
@@ -448,13 +457,24 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 		authHeader = http.Header(resp.Headers)
 	}
 
-	if a.Config.Plugins.Network != nil {
-		netPlugin, err := network.DefaultRegistry.GetByConfig(a.Config.Plugins.Network)
+	if a.Config.Network != nil {
+		netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		net, err = netPlugin.Client(a.Config.Plugins.Network)
+		var configJSON []byte
+		if len(a.Config.Network.LegacyRawJSON) > 0 {
+			configJSON = a.Config.Network.LegacyRawJSON
+		} else {
+			var marshalErr error
+			configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
+			if marshalErr != nil {
+				return nil, nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
+			}
+		}
+
+		net, err = netPlugin.Client(configJSON)
 		if err != nil {
 			return nil, nil, err
 		}

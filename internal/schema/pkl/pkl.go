@@ -72,6 +72,25 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		}
 	}
 
+	// Build evaluator options: always include formae:/ scheme
+	opts := []func(*pklgo.EvaluatorOptions){
+		pklgo.WithFs(formaeFs, "formae"),
+		pklgo.WithResourceReader(libExtension{}),
+		pklgo.PreconfiguredOptions,
+	}
+
+	// If the plugin directory exists, generate wrappers and mount as plugins:/ scheme
+	pluginDir := defaultPluginDir()
+	if pluginDir != "" {
+		if _, statErr := os.Stat(pluginDir); statErr == nil {
+			if wrapErr := GeneratePluginWrappers(pluginDir); wrapErr != nil {
+				slog.Warn("failed to generate plugin wrappers", "error", wrapErr)
+			} else {
+				opts = append(opts, pklgo.WithFs(os.DirFS(pluginDir), "plugins"))
+			}
+		}
+	}
+
 	var evaluator pklgo.Evaluator
 
 	// Check if there's a PklProject in the directory tree
@@ -85,16 +104,12 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		evaluator, cleanup, err = newSafeProjectEvaluator(
 			context.Background(),
 			&url.URL{Scheme: "file", Path: projectDir},
-			pklgo.WithFs(formaeFs, "formae"),
-			pklgo.WithResourceReader(libExtension{}),
-			pklgo.PreconfiguredOptions,
+			opts...,
 		)
 	} else {
 		evaluator, err = pklgo.NewEvaluator(
 			context.Background(),
-			pklgo.WithFs(formaeFs, "formae"),
-			pklgo.WithResourceReader(libExtension{}),
-			pklgo.PreconfiguredOptions,
+			opts...,
 		)
 		cleanup = func() { _ = evaluator.Close() }
 	}
@@ -187,6 +202,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 					Enabled: config.Agent.OTel.Prometheus.Enabled,
 				},
 			},
+			Auth: translateAuthConfig(&config.Agent.Auth),
 		},
 		Artifacts: pkgmodel.ArtifactConfig{
 			URL:      config.Artifacts.URL,
@@ -199,15 +215,81 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 				Port: int(config.Cli.API.Port),
 			},
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
-		},
-		Plugins: pkgmodel.PluginConfig{
-			PluginDir:      config.Plugins.PluginDir,
-			Network:        translateDynamic(config.Plugins.Network),
-			Authentication: translateDynamic(config.Plugins.Authentication),
+			Auth:                  translateAuthConfig(&config.Cli.Auth),
 		},
 	}
 
+	translated.PluginDir = config.PluginDir
+	translated.Network = translateNetworkConfig(config.Network)
+
+	// Backwards compatibility: fall back to deprecated plugins block
+	applyDeprecatedPluginsConfig(config.Plugins, &translated)
+
 	return &translated
+}
+
+// applyDeprecatedPluginsConfig copies values from the deprecated plugins block
+// to their new locations, emitting deprecation warnings. New paths take precedence.
+func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pkgmodel.Config) {
+	if plugins == nil {
+		return
+	}
+
+	if plugins.PluginDir != "" && plugins.PluginDir != "~/.pel/formae/plugins" && translated.PluginDir == "~/.pel/formae/plugins" {
+		slog.Warn("Deprecated: 'plugins.pluginDir' — use top-level 'pluginDir' instead")
+		translated.PluginDir = plugins.PluginDir
+	}
+
+	if plugins.Authentication != nil && translated.Agent.Auth == nil {
+		slog.Warn("Deprecated: 'plugins.authentication' — use 'agent.auth' and 'cli.auth' instead")
+		authJSON := translateDynamic(plugins.Authentication)
+		translated.Agent.Auth = authJSON
+		translated.Cli.Auth = authJSON
+	}
+
+	if plugins.Network != nil && translated.Network == nil {
+		slog.Warn("Deprecated: 'plugins.network' — use top-level 'network' instead")
+		// The old format was a Dynamic blob. Convert to typed NetworkConfig
+		// by extracting the type field and passing the rest as-is via JSON.
+		networkJSON := translateDynamic(plugins.Network)
+		translated.Network = translateLegacyNetworkConfig(networkJSON)
+	}
+}
+
+// translateLegacyNetworkConfig converts the old plugins.network json.RawMessage
+// to a typed NetworkConfig. The old format was a flat JSON object with a Type field
+// and all config properties mixed in. The new format nests provider config.
+func translateLegacyNetworkConfig(networkJSON json.RawMessage) *pkgmodel.NetworkConfig {
+	if networkJSON == nil {
+		return nil
+	}
+	// For backwards compat, just store the raw JSON. The server's configureNetwork
+	// handles both typed NetworkConfig and legacy raw JSON via the network registry.
+	var raw map[string]any
+	if err := json.Unmarshal(networkJSON, &raw); err != nil {
+		return nil
+	}
+	netType, _ := raw["Type"].(string)
+	return &pkgmodel.NetworkConfig{
+		Type:          netType,
+		LegacyRawJSON: networkJSON,
+	}
+}
+
+func translateNetworkConfig(nc *pklmodel.NetworkConfig) *pkgmodel.NetworkConfig {
+	if nc == nil {
+		return nil
+	}
+	result := &pkgmodel.NetworkConfig{Type: nc.Type}
+	if nc.Tailscale != nil {
+		result.Tailscale = &pkgmodel.TailscaleConfig{
+			TLS:           nc.Tailscale.TLS,
+			AuthKey:       nc.Tailscale.AuthKey,
+			Hostname:      nc.Tailscale.Hostname,
+			AdvertiseTags: nc.Tailscale.AdvertiseTags,
+		}
+	}
+	return result
 }
 
 func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaApplyMode, props map[string]string) (*pkgmodel.Forma, error) {
@@ -460,6 +542,18 @@ func sanitizeValue(rv reflect.Value) any {
 		return out
 
 	case reflect.Struct:
+		// pkl.Object instances (from Dynamic or typed objects decoded as
+		// pkl.Object) are flattened to their properties/elements so the
+		// resulting JSON matches what plugins expect. Without this the
+		// raw pkl.Object struct fields (ModuleUri, Name, Properties, etc.)
+		// would leak into the JSON.
+		if obj, ok := rv.Interface().(pklgo.Object); ok {
+			if len(obj.Elements) > 0 {
+				return sanitizeValue(reflect.ValueOf(obj.Elements))
+			}
+			return sanitizeConfig(obj.Properties)
+		}
+
 		out := make(map[string]any, rv.NumField())
 		rt := rv.Type()
 		for i := 0; i < rv.NumField(); i++ {
@@ -474,6 +568,15 @@ func sanitizeValue(rv reflect.Value) any {
 	default:
 		return rv.Interface()
 	}
+}
+
+// translateAuthConfig converts a PKL auth config object to json.RawMessage.
+// Returns nil when the auth field is unset (zero-value pkl.Object with no properties).
+func translateAuthConfig(obj *pklgo.Object) json.RawMessage {
+	if obj == nil || len(obj.Properties) == 0 {
+		return nil
+	}
+	return translateDynamic(obj)
 }
 
 func translateDynamic(dyn *pklgo.Object) json.RawMessage {

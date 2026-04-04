@@ -66,9 +66,9 @@ type MetastructureAPI interface {
 }
 
 type Metastructure struct {
-	nodeName      string
-	options       gen.NodeOptions
-	Node          gen.Node
+	nodeName  string
+	options   gen.NodeOptions
+	Node      gen.Node
 	Datastore datastore.Datastore
 	Cfg       *pkgmodel.Config
 	AgentID   string
@@ -136,7 +136,6 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("ServerConfig"):            cfg.Agent.Server,
 		gen.Env("DatastoreConfig"):         cfg.Agent.Datastore,
 		gen.Env("RetryConfig"):             cfg.Agent.Retry,
-		gen.Env("PluginConfig"):            cfg.Plugins,
 		gen.Env("SynchronizationConfig"):   cfg.Agent.Synchronization,
 		gen.Env("DiscoveryConfig"):         cfg.Agent.Discovery,
 		gen.Env("LoggingConfig"):           cfg.Agent.Logging,

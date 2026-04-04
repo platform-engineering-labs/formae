@@ -62,17 +62,17 @@ type Server struct {
 	ctx            context.Context
 	authHandle     *auth.AuthPluginHandle
 	serverConfig   *pkgmodel.ServerConfig
-	pluginConfig   *pkgmodel.PluginConfig
+	networkConfig  *pkgmodel.NetworkConfig
 	metricsHandler http.Handler
 }
 
-func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, pluginConfig *pkgmodel.PluginConfig, metricsHandler http.Handler) *Server {
+func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, networkConfig *pkgmodel.NetworkConfig, metricsHandler http.Handler) *Server {
 	server := &Server{
 		metastructure:  metastructure,
 		ctx:            ctx,
 		authHandle:     authHandle,
 		serverConfig:   serverConfig,
-		pluginConfig:   pluginConfig,
+		networkConfig:  networkConfig,
 		metricsHandler: metricsHandler,
 	}
 
@@ -89,13 +89,26 @@ func (s *Server) configureAuth() {
 
 // configureNetwork sets up the network listener by loading the appropriate network plugin based on the configuration.
 func (s *Server) configureNetwork() (string, error) {
-	if s.pluginConfig.Network != nil {
-		net, err := network.DefaultRegistry.GetByConfig(s.pluginConfig.Network)
+	if s.networkConfig != nil {
+		netPlugin, err := network.DefaultRegistry.Get(s.networkConfig.Type)
 		if err != nil {
 			return "", err
 		}
 
-		s.echo.Listener, err = net.Listen(s.pluginConfig.Network, s.serverConfig.Port)
+		// Use legacy raw JSON if present (from deprecated plugins.network),
+		// otherwise marshal the typed tailscale config.
+		var configJSON []byte
+		if len(s.networkConfig.LegacyRawJSON) > 0 {
+			configJSON = s.networkConfig.LegacyRawJSON
+		} else {
+			var marshalErr error
+			configJSON, marshalErr = json.Marshal(s.networkConfig.Tailscale)
+			if marshalErr != nil {
+				return "", fmt.Errorf("failed to marshal network config: %w", marshalErr)
+			}
+		}
+
+		s.echo.Listener, err = netPlugin.Listen(configJSON, s.serverConfig.Port)
 		if err != nil {
 			return "", err
 		}

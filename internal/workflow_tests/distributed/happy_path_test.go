@@ -248,9 +248,8 @@ func newDistributedTestConfig(t *testing.T) *pkgmodel.Config {
 				Enabled: false,
 			},
 		},
-		Plugins: pkgmodel.PluginConfig{
-			// PluginCoordinator will scan ~/.pel/formae/plugins/ for plugins
-		},
+		// PluginCoordinator will scan ~/.pel/formae/plugins/ for plugins
+		PluginDir: "~/.pel/formae/plugins",
 	}
 }
 
