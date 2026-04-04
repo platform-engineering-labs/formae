@@ -26,6 +26,11 @@ import (
 
 const MaxPluginRestarts = 5
 
+// authPluginInitComplete is sent from the completeAuthPluginInit goroutine
+// back to the actor loop so that entry.healthy is only written inside the
+// actor's message-processing loop, avoiding a data race.
+type authPluginInitComplete struct{}
+
 type PluginProcessSupervisor struct {
 	act.Actor
 
@@ -213,6 +218,12 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 			p.handleAuthPluginTerminate(msg.Tag)
 		} else {
 			p.handleResourcePluginTerminate(msg.Tag)
+		}
+
+	case authPluginInitComplete:
+		if p.authPlugin != nil {
+			p.authPlugin.healthy = true
+			p.Log().Info("Auth plugin initialized", "name", p.authPlugin.handle.Name())
 		}
 
 	}
@@ -469,9 +480,13 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 	}
 
 	handle.Connect(conn, rpcClient)
-	entry.healthy = true
 
-	p.Log().Info("Auth plugin initialized", "name", handle.Name())
+	// Signal the actor loop to mark the plugin as healthy. Writing
+	// entry.healthy directly from this goroutine would be a data race
+	// on actor-owned state.
+	if err := p.Send(p.PID(), authPluginInitComplete{}); err != nil {
+		p.Log().Error("Failed to send auth init complete message", "error", err)
+	}
 }
 
 // Terminate is called when the actor is being stopped.

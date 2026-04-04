@@ -72,7 +72,9 @@ func (h *AuthPluginHandle) ConfigJSON() json.RawMessage { return h.configJSON }
 // Connect establishes the connection to the auth plugin process.
 // Must be called before Validate. Both conn and client are always set together
 // because the rpc.Client reads/writes through the MetaPortConn.
+// Clears any previous init error so a successful restart recovers cleanly.
 func (h *AuthPluginHandle) Connect(conn *MetaPortConn, client *rpc.Client) {
+	h.initErr.Store(nil)
 	h.conn = conn
 	h.client.Store(client)
 }

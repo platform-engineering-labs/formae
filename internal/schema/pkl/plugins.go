@@ -118,9 +118,15 @@ func toPascalCase(s string) string {
 	return b.String()
 }
 
-// defaultPluginDir returns the default plugin directory path (~/.pel/formae/plugins).
-// Returns "" if the home directory cannot be determined.
+// defaultPluginDir returns the plugin directory path. It checks the
+// FORMAE_PLUGIN_DIR environment variable first, falling back to
+// ~/.pel/formae/plugins. This allows custom plugin directories to be
+// resolved at config-evaluation time (before the config's own pluginDir
+// field is available).
 func defaultPluginDir() string {
+	if dir := os.Getenv("FORMAE_PLUGIN_DIR"); dir != "" {
+		return dir
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""

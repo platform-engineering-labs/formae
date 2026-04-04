@@ -67,16 +67,33 @@ func NewAuthMiddleware(handle *AuthPluginHandle, cache *AuthCache) echo.Middlewa
 	}
 }
 
-// computeCacheKey derives a cache key from all request headers by hashing
-// their sorted key-value pairs. This ensures that requests with different
-// credentials (regardless of which header carries them) get distinct cache
-// entries.
+// nonAuthHeaders are headers known to be volatile or unrelated to authentication.
+// Excluding them prevents per-request variance (User-Agent, X-Request-Id, etc.)
+// from defeating the auth cache.
+var nonAuthHeaders = map[string]bool{
+	"accept":           true,
+	"accept-encoding":  true,
+	"accept-language":  true,
+	"cache-control":    true,
+	"connection":       true,
+	"content-length":   true,
+	"content-type":     true,
+	"date":             true,
+	"host":             true,
+	"user-agent":       true,
+	"x-correlation-id": true,
+	"x-request-id":     true,
+}
+
+// computeCacheKey derives a cache key from auth-relevant request headers by
+// hashing their sorted key-value pairs, excluding known volatile headers.
 func computeCacheKey(headers map[string][]string) string {
 	h := sha256.New()
-	// Sort keys for deterministic output
 	keys := make([]string, 0, len(headers))
 	for k := range headers {
-		keys = append(keys, k)
+		if !nonAuthHeaders[strings.ToLower(k)] {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	for _, k := range keys {

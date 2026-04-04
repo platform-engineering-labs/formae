@@ -109,28 +109,31 @@ func (a *Agent) Start() error {
 		}
 
 		// Create auth plugin handle if auth is configured and a matching
-		// external auth plugin binary was discovered
+		// external auth plugin binary was discovered.
+		// If auth is explicitly configured but cannot be loaded, the agent
+		// refuses to start — running without auth when auth was requested
+		// is a security misconfiguration.
 		var authHandle *auth.AuthPluginHandle
 		if a.cfg.Agent.Auth != nil {
 			authType := gjson.GetBytes(a.cfg.Agent.Auth, "type").String()
 			if authType == "" {
-				slog.Error("Agent auth config missing 'type' field")
-			} else {
-				authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
-				var matchedPlugin *plugindiscovery.PluginInfo
-				for i, p := range authPlugins {
-					if p.Name == authType {
-						matchedPlugin = &authPlugins[i]
-						break
-					}
-				}
-				if matchedPlugin != nil {
-					authHandle = auth.NewAuthPluginHandle(matchedPlugin.Name, matchedPlugin.BinaryPath, a.cfg.Agent.Auth)
-					slog.Info("Auth plugin configured", "name", matchedPlugin.Name, "version", matchedPlugin.Version, "path", matchedPlugin.BinaryPath)
-				} else {
-					slog.Error("Auth plugin not installed", "type", authType)
+				slog.Error("Agent auth config missing 'type' field — refusing to start without auth")
+				return
+			}
+			authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
+			var matchedPlugin *plugindiscovery.PluginInfo
+			for i, p := range authPlugins {
+				if p.Name == authType {
+					matchedPlugin = &authPlugins[i]
+					break
 				}
 			}
+			if matchedPlugin == nil {
+				slog.Error("Auth plugin not installed — refusing to start without auth", "type", authType)
+				return
+			}
+			authHandle = auth.NewAuthPluginHandle(matchedPlugin.Name, matchedPlugin.BinaryPath, a.cfg.Agent.Auth)
+			slog.Info("Auth plugin configured", "name", matchedPlugin.Name, "version", matchedPlugin.Version, "path", matchedPlugin.BinaryPath)
 		}
 
 		slog.Info("Starting agent", "id", a.id)
