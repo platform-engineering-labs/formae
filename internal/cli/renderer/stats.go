@@ -174,7 +174,7 @@ func renderTablesSideBySide(tables []struct {
 
 		// Create tablewriter table
 		tw := tablewriter.NewTable(&buf,
-			tablewriter.WithMaxWidth(terminalWidth()),
+			tablewriter.WithMaxWidth(display.TerminalWidth()),
 			tablewriter.WithRowAutoWrap(tw.WrapBreak),
 			tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
 				Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On, ShowHeader: tw.On}},

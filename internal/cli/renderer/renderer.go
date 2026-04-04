@@ -42,6 +42,7 @@ func RenderSimulation(s *apimodel.Simulation) (string, error) {
 func RenderStatusSummary(status *apimodel.ListCommandStatusResponse) (string, error) {
 	var buf strings.Builder
 	table := tablewriter.NewTable(&buf,
+		tablewriter.WithMaxWidth(display.TerminalWidth()),
 		tablewriter.WithHeaderAutoFormat(tw.Off),
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
 			Settings: tw.Settings{Separators: tw.Separators{BetweenRows: tw.On}},

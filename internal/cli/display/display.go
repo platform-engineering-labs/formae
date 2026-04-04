@@ -41,8 +41,20 @@ func ClearScreen() {
 	fmt.Print("\033[2;1H") // Clear screen
 }
 
+// bannerMinWidth is the minimum terminal width needed to render the
+// combined banner without wrapping. Lines are at most 88 visible
+// characters wide (with tab expansion).
+const bannerMinWidth = 90
+
 func PrintBanner() {
-	fmt.Println(strings.Replace(banner, "version", formae.Version, 1))
+	b := strings.Replace(banner, "version", formae.Version, 1)
+	if TerminalWidth() < bannerMinWidth {
+		// Terminal too narrow for the ASCII art banner; print a
+		// compact fallback so the brand is still visible.
+		fmt.Printf("%s %s\n\n", Gold("formae"), LightBlue("v"+formae.Version))
+		return
+	}
+	fmt.Println(b)
 }
 
 func Success(msg string) {
