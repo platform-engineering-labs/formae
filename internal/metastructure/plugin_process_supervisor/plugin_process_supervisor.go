@@ -29,8 +29,9 @@ const MaxPluginRestarts = 5
 type PluginProcessSupervisor struct {
 	act.Actor
 
-	plugins    map[string]*PluginInfo
-	authPlugin *authPluginEntry
+	plugins      map[string]*PluginInfo
+	authPlugin   *authPluginEntry
+	shuttingDown bool
 }
 
 // authPluginEntry wraps an AuthPluginHandle with supervisor-specific tracking state.
@@ -221,7 +222,11 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 
 // handleResourcePluginTerminate handles termination of a resource plugin process.
 func (p *PluginProcessSupervisor) handleResourcePluginTerminate(tag string) {
-	p.Log().Error("Resource plugin terminated", "namespace", tag)
+	if p.shuttingDown {
+		p.Log().Debug("Resource plugin stopped during shutdown", "namespace", tag)
+		return
+	}
+	p.Log().Error("Resource plugin terminated unexpectedly", "namespace", tag)
 
 	pluginInfo, ok := p.plugins[tag]
 	if !ok {
@@ -272,7 +277,11 @@ func (p *PluginProcessSupervisor) handleResourcePluginTerminate(tag string) {
 // handleAuthPluginTerminate handles termination of an auth plugin process.
 func (p *PluginProcessSupervisor) handleAuthPluginTerminate(tag string) {
 	name := auth.AuthTagName(tag)
-	p.Log().Error("Auth plugin terminated", "name", name, "tag", tag)
+	if p.shuttingDown {
+		p.Log().Debug("Auth plugin stopped during shutdown", "name", name)
+		return
+	}
+	p.Log().Error("Auth plugin terminated unexpectedly", "name", name, "tag", tag)
 
 	if p.authPlugin == nil {
 		return
@@ -445,13 +454,17 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 	if err := rpcClient.Call("AuthPlugin.Init", &pkgauth.InitRequest{Config: handle.ConfigJSON()}, &resp); err != nil {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		p.Log().Error("Auth plugin init call failed", "name", handle.Name(), "error", err)
+		p.Log().Error("Auth plugin init call failed — agent cannot serve authenticated requests",
+			"name", handle.Name(), "error", err)
+		handle.SetInitError(fmt.Errorf("auth plugin %q init failed: %w", handle.Name(), err))
 		return
 	}
 	if resp.Error != "" {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		p.Log().Error("Auth plugin init error", "name", handle.Name(), "error", resp.Error)
+		p.Log().Error("Auth plugin rejected config — agent cannot serve authenticated requests",
+			"name", handle.Name(), "error", resp.Error)
+		handle.SetInitError(fmt.Errorf("auth plugin %q: %s", handle.Name(), resp.Error))
 		return
 	}
 
@@ -465,6 +478,7 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 // We gracefully terminate all plugin meta.Ports to avoid race conditions
 // during shutdown that would cause "unable to send MessagePortError" errors.
 func (p *PluginProcessSupervisor) Terminate(reason error) {
+	p.shuttingDown = true
 	p.Log().Debug("PluginProcessSupervisor terminating, stopping all plugins", "reason", reason)
 
 	var zeroAlias gen.Alias

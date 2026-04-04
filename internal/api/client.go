@@ -36,6 +36,15 @@ func NewClient(cfg pkgmodel.APIConfig, auth http.Header, net *http.Client) *Clie
 		client.SetHeader("Authorization", auth.Get("Authorization"))
 	}
 
+	// Return a clear error for 401 responses instead of letting each method
+	// report "unexpected status code: 401".
+	client.AddResponseMiddleware(func(_ *resty.Client, resp *resty.Response) error {
+		if resp.StatusCode() == http.StatusUnauthorized {
+			return AuthenticationError{}
+		}
+		return nil
+	})
+
 	return &Client{
 		endpoint: formatEndpoint(cfg.URL, cfg.Port),
 		resty:    client,

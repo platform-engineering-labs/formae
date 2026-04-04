@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -164,6 +165,51 @@ func TestMiddleware_DifferentCredentialsDifferentCacheKeys(t *testing.T) {
 
 	if mock.callCount != 2 {
 		t.Fatalf("expected 2 Validate calls for different credentials, got %d", mock.callCount)
+	}
+}
+
+func TestMiddleware_DisconnectedHandleReturns503(t *testing.T) {
+	// Handle with no connection — Validate returns error → 503
+	handle := NewAuthPluginHandle("basic", "/path", nil)
+	cache := NewAuthCache()
+
+	e := echo.New()
+	e.Use(NewAuthMiddleware(handle, cache))
+	e.GET("/test", func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for disconnected handle, got %d", rec.Code)
+	}
+}
+
+func TestMiddleware_InitErrorReturns503WithMessage(t *testing.T) {
+	// Handle with permanent init error — Validate returns the error → 503
+	handle := NewAuthPluginHandle("basic", "/path", nil)
+	initErr := fmt.Errorf("auth plugin \"basic\": missing required config field")
+	handle.SetInitError(initErr)
+
+	cache := NewAuthCache()
+
+	e := echo.New()
+	e.Use(NewAuthMiddleware(handle, cache))
+	e.GET("/test", func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for init error, got %d", rec.Code)
 	}
 }
 

@@ -41,6 +41,7 @@ type AuthPluginHandle struct {
 	configJSON json.RawMessage
 	client     atomic.Pointer[rpc.Client]
 	conn       *MetaPortConn
+	initErr    atomic.Pointer[error] // non-nil if Init failed permanently
 }
 
 // AuthPluginConfig contains the information needed to spawn an auth plugin process.
@@ -93,9 +94,18 @@ func (h *AuthPluginHandle) Feed(data []byte) {
 	}
 }
 
+// SetInitError records a permanent init failure. Subsequent Validate calls
+// return this error instead of "not connected", making the cause visible.
+func (h *AuthPluginHandle) SetInitError(err error) {
+	h.initErr.Store(&err)
+}
+
 // Validate calls the auth plugin's Validate method via RPC.
 // Returns an error if Connect has not been called yet or the connection was closed.
 func (h *AuthPluginHandle) Validate(req *pkgauth.ValidateRequest) (*pkgauth.ValidateResponse, error) {
+	if errPtr := h.initErr.Load(); errPtr != nil {
+		return nil, *errPtr
+	}
 	client := h.client.Load()
 	if client == nil {
 		return nil, fmt.Errorf("auth plugin %q: not connected", h.name)

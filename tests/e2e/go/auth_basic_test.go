@@ -11,6 +11,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +107,61 @@ func TestAuthBasic(t *testing.T) {
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("expected 401, got %d", resp.StatusCode)
 		}
+	})
+
+	t.Run("CLI command with auth succeeds", func(t *testing.T) {
+		// The agent config includes cli.auth with the correct credentials.
+		// The CLI reads this config, spawns the auth-basic plugin to obtain
+		// an Authorization header, and sends an authenticated request.
+		cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
+		resources := cli.Inventory(t)
+
+		// A fresh agent has no resources — we just verify the CLI command
+		// succeeded (exit 0) and returned a valid (possibly empty) list.
+		t.Logf("inventory returned %d resources via authenticated CLI", len(resources))
+	})
+
+	t.Run("CLI command without auth config fails against auth-protected agent", func(t *testing.T) {
+		// Create a config that points at the same agent but has NO cli.auth.
+		// The CLI will not send credentials, so the agent must reject the request.
+		noAuthConfigDir := t.TempDir()
+		noAuthConfigPath := filepath.Join(noAuthConfigDir, "formae-no-auth.conf.pkl")
+
+		noAuthConfig := fmt.Sprintf(`/*
+ * e2e test config — NO cli.auth
+ */
+
+amends "formae:/Config.pkl"
+
+cli {
+    api {
+        port = %d
+    }
+    disableUsageReporting = true
+}
+`, agent.Port())
+
+		if err := os.WriteFile(noAuthConfigPath, []byte(noAuthConfig), 0644); err != nil {
+			t.Fatalf("failed to write no-auth config: %v", err)
+		}
+
+		noAuthCLI := NewFormaeCLI(bin, noAuthConfigPath, agent.Port())
+		_, stderr, runErr := noAuthCLI.runAllowError(t,
+			"inventory", "resources",
+			"--config", noAuthConfigPath,
+			"--output-consumer", "machine",
+			"--output-schema", "json",
+		)
+
+		if runErr == nil {
+			t.Fatal("expected CLI command to fail without auth config, but it succeeded")
+		}
+
+		// The error should indicate an authentication failure (401).
+		if !strings.Contains(stderr, "401") && !strings.Contains(strings.ToLower(stderr), "unauthorized") && !strings.Contains(strings.ToLower(stderr), "auth") {
+			t.Errorf("expected auth-related error in stderr, got: %s", stderr)
+		}
+		t.Logf("CLI without auth failed as expected: %s", stderr)
 	})
 }
 

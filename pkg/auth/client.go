@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/rpc"
 	"os/exec"
+	"syscall"
 )
 
 // Client manages an auth plugin subprocess and provides typed RPC methods.
@@ -25,6 +26,11 @@ type Client struct {
 func NewClient(binaryPath string, config json.RawMessage) (*Client, error) {
 	cmd := exec.Command(binaryPath)
 	cmd.Stderr = nil // let plugin stderr go to parent stderr
+
+	// Ensure the plugin subprocess is killed if the parent dies unexpectedly
+	// (e.g., kill -9). On Linux, Pdeathsig sends SIGKILL to the child when
+	// the parent's thread exits.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -97,12 +103,15 @@ func (c *Client) GetAuthHeader() (*GetAuthHeaderResponse, error) {
 
 // Close shuts down the RPC client, closes the connection, and kills the subprocess.
 func (c *Client) Close() error {
+	var firstErr error
 	if c.rpcClient != nil {
-		c.rpcClient.Close()
+		if err := c.rpcClient.Close(); err != nil {
+			firstErr = err
+		}
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
-		c.cmd.Process.Kill()
-		c.cmd.Wait()
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
 	}
-	return nil
+	return firstErr
 }

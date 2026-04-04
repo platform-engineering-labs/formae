@@ -6,6 +6,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -386,9 +387,13 @@ func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *a
 	if err != nil {
 		if err == syscall.ECONNREFUSED {
 			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", display.Gold("Getting started:"), display.DocRoot)
-		} else {
-			return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 		}
+		if errors.Is(err, api.AuthenticationError{}) {
+			return false, nil, nil, fmt.Errorf("%s\n\n%s",
+				display.Red("authentication failed"),
+				display.Gold("Check your cli.auth and agent.auth configuration."))
+		}
+		return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 	}
 
 	if stats.Version != formae.Version {

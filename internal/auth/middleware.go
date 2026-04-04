@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -66,14 +67,23 @@ func NewAuthMiddleware(handle *AuthPluginHandle, cache *AuthCache) echo.Middlewa
 	}
 }
 
-// computeCacheKey derives a cache key from the request headers by hashing
-// the Authorization header value. Requests with identical Authorization
-// headers will share a cache entry.
+// computeCacheKey derives a cache key from all request headers by hashing
+// their sorted key-value pairs. This ensures that requests with different
+// credentials (regardless of which header carries them) get distinct cache
+// entries.
 func computeCacheKey(headers map[string][]string) string {
-	auth := headers["Authorization"]
-	if len(auth) == 0 {
-		return "no-auth"
+	h := sha256.New()
+	// Sort keys for deterministic output
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
 	}
-	h := sha256.Sum256([]byte(auth[0]))
-	return fmt.Sprintf("%x", h[:16])
+	sort.Strings(keys)
+	for _, k := range keys {
+		for _, v := range headers[k] {
+			h.Write([]byte(k))
+			h.Write([]byte(v))
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)[:16])
 }
