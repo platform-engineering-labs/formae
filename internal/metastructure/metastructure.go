@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -76,6 +77,11 @@ type Metastructure struct {
 	// TestResourcePlugin is a test-only field for injecting a resource plugin (e.g. FakeAWS)
 	// directly into the actor system, bypassing PluginManager. Must be nil in production.
 	TestResourcePlugin plugin.FullResourcePlugin
+
+	// AuthPluginHandle is the pre-created handle for the auth plugin process.
+	// Set by the agent before Start(). Passed to both the supervisor (which spawns
+	// the process) and the API server (which uses it for request validation).
+	AuthPluginHandle *auth.AuthPluginHandle
 
 	// commandMu serializes Apply/Destroy/ForceAutoReconcile to prevent TOCTOU
 	// races between the conflict check and command storage. This will be
@@ -196,6 +202,12 @@ func (m *Metastructure) Start() error {
 	// is set after construction but before Start() is called.
 	if m.TestResourcePlugin != nil {
 		m.options.Env[gen.Env("TestResourcePlugin")] = m.TestResourcePlugin
+	}
+
+	// Inject auth plugin handle for the supervisor to spawn the auth process.
+	// Set after construction but before Start(), same pattern as TestResourcePlugin.
+	if m.AuthPluginHandle != nil {
+		m.options.Env[gen.Env("AuthPluginHandle")] = m.AuthPluginHandle
 	}
 
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)

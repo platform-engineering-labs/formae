@@ -24,6 +24,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/usage"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -37,6 +38,15 @@ type App struct {
 	Projects Projects
 
 	Usage usage.Sender
+
+	authClient *pkgauth.Client
+}
+
+// Close cleans up resources held by the App, including any auth plugin subprocess.
+func (a *App) Close() {
+	if a.authClient != nil {
+		_ = a.authClient.Close()
+	}
 }
 
 type Plugins struct {
@@ -423,19 +433,29 @@ func (a *App) calculateNags(stats *apimodel.Stats) []string {
 }
 
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
-	var auth http.Header
+	var authHeader http.Header
 	var net *http.Client
 
 	if a.Config.Plugins.Authentication != nil {
-		authPlugin, err := a.PluginManager.AuthPlugin(a.Config.Plugins.Authentication)
-		if err != nil {
-			return nil, nil, err
+		// Lazily create the auth client (spawns subprocess on first use)
+		if a.authClient == nil {
+			authPlugins := a.PluginManager.ListExternalAuthPlugins()
+			if len(authPlugins) == 0 {
+				return nil, nil, fmt.Errorf("authentication configured but no auth plugin binary found")
+			}
+			info := authPlugins[0]
+			client, err := pkgauth.NewClient(info.BinaryPath, a.Config.Plugins.Authentication)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to start auth plugin: %w", err)
+			}
+			a.authClient = client
 		}
 
-		auth, err = (*authPlugin).Authorization(a.Config.Plugins.Authentication)
+		resp, err := a.authClient.GetAuthHeader()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to get auth header: %w", err)
 		}
+		authHeader = http.Header(resp.Headers)
 	}
 
 	if a.Config.Plugins.Network != nil {
@@ -450,7 +470,7 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 		}
 	}
 
-	return auth, net, nil
+	return authHeader, net, nil
 }
 
 func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {

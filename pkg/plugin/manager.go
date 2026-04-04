@@ -5,7 +5,6 @@
 package plugin
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/masterminds/semver"
-	"github.com/tidwall/gjson"
 )
 
 // ResourcePluginInfo contains metadata for external resource plugins
@@ -27,16 +25,25 @@ type ResourcePluginInfo struct {
 	BinaryPath string
 }
 
+// AuthPluginInfo holds discovery information for an external auth plugin binary.
+type AuthPluginInfo struct {
+	Name       string
+	Version    string
+	BinaryPath string
+}
+
 type Manager struct {
 	pluginPaths       []string
 	externalPluginDir string
 	plugins           []*Plugin
 
-	authenticationPlugins []*AuthenticationPlugin
-	resourcePlugins       []*FullResourcePlugin
+	resourcePlugins []*FullResourcePlugin
 
 	// External resource plugins that run as separate processes
 	externalResourcePlugins []ResourcePluginInfo
+
+	// External auth plugins that run as separate processes
+	externalAuthPlugins []AuthPluginInfo
 }
 
 func NewManager(externalPluginDir string, paths ...string) *Manager {
@@ -138,13 +145,6 @@ func (m *Manager) Load() {
 
 		m.plugins = append(m.plugins, &cast)
 		switch cast.Type() {
-		case Authentication:
-			cast, ok := lookup.(AuthenticationPlugin)
-			if !ok {
-				fmt.Fprintf(os.Stderr, "Warning: Could not cast authentication plugin %s\n", p)
-				continue
-			}
-			m.authenticationPlugins = append(m.authenticationPlugins, &cast)
 		case Resource:
 			// Load in-process resource plugins for local testing (e.g., FakeAWS)
 			// Production plugins run as external processes and are discovered separately
@@ -159,8 +159,9 @@ func (m *Manager) Load() {
 		}
 	}
 
-	// Discover external resource plugins that run as separate processes
+	// Discover external plugins that run as separate processes
 	m.discoverExternalResourcePlugins()
+	m.discoverExternalAuthPlugins()
 }
 
 func (m *Manager) discoverExternalResourcePlugins() {
@@ -270,6 +271,86 @@ func (m *Manager) ListExternalResourcePlugins() []ResourcePluginInfo {
 	return m.externalResourcePlugins
 }
 
+func (m *Manager) ListExternalAuthPlugins() []AuthPluginInfo {
+	return m.externalAuthPlugins
+}
+
+func (m *Manager) discoverExternalAuthPlugins() {
+	if m.externalPluginDir == "" {
+		return
+	}
+
+	if _, err := os.Stat(m.externalPluginDir); os.IsNotExist(err) {
+		return
+	}
+
+	entries, err := os.ReadDir(m.externalPluginDir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		pluginName := entry.Name()
+		pluginPath := filepath.Join(m.externalPluginDir, pluginName)
+
+		versionEntries, err := os.ReadDir(pluginPath)
+		if err != nil {
+			continue
+		}
+
+		type versionCandidate struct {
+			version    *semver.Version
+			versionStr string
+			binaryPath string
+		}
+		var candidates []versionCandidate
+
+		for _, vEntry := range versionEntries {
+			if !vEntry.IsDir() {
+				continue
+			}
+
+			versionStr := vEntry.Name()
+			binaryPath := filepath.Join(pluginPath, versionStr, pluginName)
+
+			if info, err := os.Stat(binaryPath); err == nil && !info.IsDir() {
+				// Check manifest to see if this is an auth plugin
+				manifestPath := filepath.Join(pluginPath, versionStr, DefaultManifestPath)
+				manifest, err := ReadManifest(manifestPath)
+				if err != nil || !manifest.IsAuthPlugin() {
+					continue
+				}
+
+				v, err := semver.NewVersion(versionStr)
+				if err != nil {
+					continue
+				}
+				candidates = append(candidates, versionCandidate{
+					version:    v,
+					versionStr: versionStr,
+					binaryPath: binaryPath,
+				})
+			}
+		}
+
+		if len(candidates) > 0 {
+			sort.Slice(candidates, func(i, j int) bool {
+				return candidates[i].version.GreaterThan(candidates[j].version)
+			})
+			best := candidates[0]
+			m.externalAuthPlugins = append(m.externalAuthPlugins, AuthPluginInfo{
+				Name:       pluginName,
+				Version:    best.versionStr,
+				BinaryPath: best.binaryPath,
+			})
+		}
+	}
+}
+
 func (m *Manager) PluginVersion(name string) *semver.Version {
 	// First check external resource plugins (separate processes)
 	// These are the distributed/process plugins like AWS that take precedence
@@ -289,18 +370,6 @@ func (m *Manager) PluginVersion(name string) *semver.Version {
 	}
 
 	return nil
-}
-
-func (m *Manager) AuthPlugin(config json.RawMessage) (*AuthenticationPlugin, error) {
-	name := gjson.Get(string(config), "Type").String()
-
-	for _, plugin := range m.authenticationPlugins {
-		if strings.EqualFold((*plugin).(Plugin).Name(), name) {
-			return plugin, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no plugin found for name: %s", name)
 }
 
 func (m *Manager) ResourcePlugin(namespace string) (*FullResourcePlugin, error) {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/api"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -101,6 +102,20 @@ func (a *Agent) Start() error {
 		pluginManager := plugin.NewManager(util.ExpandHomePath(a.cfg.Plugins.PluginDir))
 		pluginManager.Load()
 
+		// Create auth plugin handle if auth is configured and a matching
+		// external auth plugin binary was discovered
+		var authHandle *auth.AuthPluginHandle
+		if a.cfg.Plugins.Authentication != nil {
+			authPlugins := pluginManager.ListExternalAuthPlugins()
+			if len(authPlugins) > 0 {
+				info := authPlugins[0]
+				authHandle = auth.NewAuthPluginHandle(info.Name, info.BinaryPath, a.cfg.Plugins.Authentication)
+				slog.Info("Auth plugin configured", "name", info.Name, "version", info.Version, "path", info.BinaryPath)
+			} else {
+				slog.Warn("Authentication configured but no auth plugin binary found")
+			}
+		}
+
 		slog.Info("Starting agent", "id", a.id)
 
 		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, pluginManager, a.id)
@@ -108,6 +123,12 @@ func (a *Agent) Start() error {
 			slog.Error("Failed to create ms", "error", err)
 			return
 		}
+
+		// Pass auth handle to metastructure for supervisor injection
+		if authHandle != nil {
+			ms.AuthPluginHandle = authHandle
+		}
+
 		imwg.Add(ms)
 
 		if err := ms.Start(); err != nil {
@@ -131,7 +152,7 @@ func (a *Agent) Start() error {
 
 		slog.Info("Agent started")
 
-		apiServer := api.NewServer(a.ctx, ms, pluginManager, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
+		apiServer := api.NewServer(a.ctx, ms, pluginManager, authHandle, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()

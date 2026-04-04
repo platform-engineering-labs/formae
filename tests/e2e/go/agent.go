@@ -45,6 +45,10 @@ type agentOptions struct {
 	discoveryInterval       string   // PKL duration, e.g. "30.s"
 	discoveryResourceTypes  []string // resource types to discover (empty = all)
 	extraEnv                []string // additional KEY=VALUE env vars for the agent process
+	authEnabled             bool
+	authUsername            string
+	authPassword            string
+	authBcryptHash         string
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -60,6 +64,17 @@ func WithDiscovery(interval string, resourceTypes ...string) AgentOption {
 func WithEnv(envVars ...string) AgentOption {
 	return func(o *agentOptions) {
 		o.extraEnv = append(o.extraEnv, envVars...)
+	}
+}
+
+// WithAuth enables HTTP Basic Authentication on the agent.
+// The bcryptHash must be a valid bcrypt hash of password.
+func WithAuth(username, password, bcryptHash string) AgentOption {
+	return func(o *agentOptions) {
+		o.authEnabled = true
+		o.authUsername = username
+		o.authPassword = password
+		o.authBcryptHash = bcryptHash
 	}
 }
 
@@ -99,6 +114,25 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 		resourceTypesBlock = fmt.Sprintf("\n        resourceTypesToDiscover {\n%s\n        }", strings.Join(lines, "\n"))
 	}
 
+	pluginsBlock := ""
+	if options.authEnabled {
+		pluginsBlock = fmt.Sprintf(`
+plugins {
+    authentication {
+        type = "basic"
+        username = %q
+        password = %q
+        authorizedUsers {
+            new {
+                username = %q
+                password = %q
+            }
+        }
+    }
+}
+`, options.authUsername, options.authPassword, options.authUsername, options.authBcryptHash)
+	}
+
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
  */
@@ -135,7 +169,7 @@ cli {
     }
     disableUsageReporting = true
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, port)
+%s`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, port, pluginsBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)

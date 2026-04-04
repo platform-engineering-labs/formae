@@ -6,6 +6,7 @@ package plugin_process_supervisor
 
 import (
 	"fmt"
+	"net/rpc"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,8 +16,10 @@ import (
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/meta"
 	"github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -26,7 +29,17 @@ const MaxPluginRestarts = 5
 type PluginProcessSupervisor struct {
 	act.Actor
 
-	plugins map[string]*PluginInfo
+	plugins    map[string]*PluginInfo
+	authPlugin *authPluginEntry
+}
+
+// authPluginEntry wraps an AuthPluginHandle with supervisor-specific tracking state.
+type authPluginEntry struct {
+	handle        *auth.AuthPluginHandle
+	metaPortAlias gen.Alias
+	healthy       bool
+	restartCount  int
+	lastCrashTime time.Time
 }
 
 type PluginInfo struct {
@@ -83,7 +96,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 		p.Log().Debug("Discovered plugin: name=%s namespace=%s version=%s path=%s", name, namespace, version, binaryPath)
 
 		// Spawn the plugin
-		err := p.spawnPlugin(namespace, p.plugins[namespace])
+		err := p.spawnResourcePlugin(namespace, p.plugins[namespace])
 		if err != nil {
 			p.Log().Error("Failed to spawn plugin", "namespace", namespace, "error", err)
 			// Continue with other plugins even if one fails
@@ -91,7 +104,24 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 		}
 	}
 
-	p.Log().Debug("PluginProcessSupervisor initialized with %d plugins", len(p.plugins))
+	// Spawn auth plugin if configured
+	if handleVal, ok := p.Env("AuthPluginHandle"); ok {
+		if handle, ok := handleVal.(*auth.AuthPluginHandle); ok {
+			tag := auth.AuthTag(handle.Name())
+			entry := &authPluginEntry{handle: handle}
+			p.authPlugin = entry
+
+			p.Log().Debug("Spawning auth plugin", "name", handle.Name(), "tag", tag)
+
+			if err := p.spawnAuthPlugin(tag, entry); err != nil {
+				p.Log().Error("Failed to spawn auth plugin", "name", handle.Name(), "error", err)
+			}
+		}
+	}
+
+	authConfigured := p.authPlugin != nil
+	p.Log().Debug("PluginProcessSupervisor initialized with %d resource plugins, auth=%v",
+		len(p.plugins), authConfigured)
 	return nil
 }
 
@@ -143,74 +173,140 @@ func (p *PluginProcessSupervisor) logPluginOutput(pluginName, output string) {
 func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case meta.MessagePortText:
-		// Plugin text output - parse level and log appropriately
+		// Text output (stderr for auth plugins, stdout for resource plugins)
 		output := strings.TrimSpace(msg.Text)
-		pluginName := p.getPluginName(msg.Tag)
-		p.logPluginOutput(pluginName, output)
+		if auth.IsAuthTag(msg.Tag) {
+			p.logPluginOutput(auth.AuthTagName(msg.Tag), output)
+		} else {
+			pluginName := p.getPluginName(msg.Tag)
+			p.logPluginOutput(pluginName, output)
+		}
 
 	case meta.MessagePortData:
-		// Plugin binary data - parse level and log appropriately
-		output := strings.TrimSpace(string(msg.Data))
-		pluginName := p.getPluginName(msg.Tag)
-		p.logPluginOutput(pluginName, output)
+		if auth.IsAuthTag(msg.Tag) {
+			// Auth plugin binary data → feed to MetaPortConn for RPC
+			if p.authPlugin != nil {
+				p.authPlugin.handle.Feed(msg.Data)
+			}
+		} else {
+			// Resource plugin binary data - log it
+			output := strings.TrimSpace(string(msg.Data))
+			pluginName := p.getPluginName(msg.Tag)
+			p.logPluginOutput(pluginName, output)
+		}
 
 	case meta.MessagePortError:
 		// Plugin error output
-		p.Log().Error("Plugin error", "namespace", msg.Tag, "error", msg.Error)
+		p.Log().Error("Plugin error", "tag", msg.Tag, "error", msg.Error)
 
 	case meta.MessagePortTerminate:
-		// Plugin process terminated
-		p.Log().Error("Plugin terminated", "namespace", msg.Tag)
-
-		// Mark plugin as unhealthy and attempt restart
-		if pluginInfo, ok := p.plugins[msg.Tag]; ok {
-			pluginInfo.healthy = false
-			pluginInfo.lastCrashTime = time.Now()
-
-			// Send UnregisterPlugin message to PluginCoordinator first
-			err := p.Send(actornames.PluginCoordinator, messages.UnregisterPlugin{
-				Namespace: msg.Tag,
-				Reason:    "crashed",
-			})
-			if err != nil {
-				p.Log().Error("Failed to send UnregisterPlugin message", "namespace", msg.Tag, "error", err)
-			}
-
-			// Check restart limit
-			if pluginInfo.restartCount >= MaxPluginRestarts {
-				p.Log().Error("Plugin exceeded max restart attempts",
-					"namespace", msg.Tag,
-					"restartCount", pluginInfo.restartCount,
-					"maxRestarts", MaxPluginRestarts)
-				return nil
-			}
-
-			// Increment restart count and attempt restart
-			pluginInfo.restartCount++
-			p.Log().Info("Attempting to restart plugin",
-				"namespace", msg.Tag,
-				"restartCount", pluginInfo.restartCount,
-				"maxRestarts", MaxPluginRestarts)
-
-			err = p.spawnPlugin(msg.Tag, pluginInfo)
-			if err != nil {
-				p.Log().Error("Failed to restart plugin",
-					"namespace", msg.Tag,
-					"restartCount", pluginInfo.restartCount,
-					"error", err)
-			} else {
-				p.Log().Info("Plugin restarted successfully",
-					"namespace", msg.Tag,
-					"restartCount", pluginInfo.restartCount)
-			}
+		if auth.IsAuthTag(msg.Tag) {
+			p.handleAuthPluginTerminate(msg.Tag)
+		} else {
+			p.handleResourcePluginTerminate(msg.Tag)
 		}
 	}
 
 	return nil
 }
 
-// spawnPlugin spawns a plugin process via meta.Port
-func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *PluginInfo) error {
+// handleResourcePluginTerminate handles termination of a resource plugin process.
+func (p *PluginProcessSupervisor) handleResourcePluginTerminate(tag string) {
+	p.Log().Error("Resource plugin terminated", "namespace", tag)
+
+	pluginInfo, ok := p.plugins[tag]
+	if !ok {
+		return
+	}
+
+	pluginInfo.healthy = false
+	pluginInfo.lastCrashTime = time.Now()
+
+	// Send UnregisterPlugin message to PluginCoordinator first
+	err := p.Send(actornames.PluginCoordinator, messages.UnregisterPlugin{
+		Namespace: tag,
+		Reason:    "crashed",
+	})
+	if err != nil {
+		p.Log().Error("Failed to send UnregisterPlugin message", "namespace", tag, "error", err)
+	}
+
+	// Check restart limit
+	if pluginInfo.restartCount >= MaxPluginRestarts {
+		p.Log().Error("Plugin exceeded max restart attempts",
+			"namespace", tag,
+			"restartCount", pluginInfo.restartCount,
+			"maxRestarts", MaxPluginRestarts)
+		return
+	}
+
+	// Increment restart count and attempt restart
+	pluginInfo.restartCount++
+	p.Log().Info("Attempting to restart resource plugin",
+		"namespace", tag,
+		"restartCount", pluginInfo.restartCount,
+		"maxRestarts", MaxPluginRestarts)
+
+	err = p.spawnResourcePlugin(tag, pluginInfo)
+	if err != nil {
+		p.Log().Error("Failed to restart resource plugin",
+			"namespace", tag,
+			"restartCount", pluginInfo.restartCount,
+			"error", err)
+	} else {
+		p.Log().Info("Resource plugin restarted successfully",
+			"namespace", tag,
+			"restartCount", pluginInfo.restartCount)
+	}
+}
+
+// handleAuthPluginTerminate handles termination of an auth plugin process.
+func (p *PluginProcessSupervisor) handleAuthPluginTerminate(tag string) {
+	name := auth.AuthTagName(tag)
+	p.Log().Error("Auth plugin terminated", "name", name, "tag", tag)
+
+	if p.authPlugin == nil {
+		return
+	}
+	entry := p.authPlugin
+
+	entry.healthy = false
+	entry.lastCrashTime = time.Now()
+
+	// Close old connection so pending RPC calls fail fast
+	entry.handle.Close()
+
+	// Check restart limit
+	if entry.restartCount >= MaxPluginRestarts {
+		p.Log().Error("Auth plugin exceeded max restart attempts",
+			"name", name,
+			"restartCount", entry.restartCount,
+			"maxRestarts", MaxPluginRestarts)
+		return
+	}
+
+	// Increment restart count and attempt restart
+	entry.restartCount++
+	p.Log().Info("Attempting to restart auth plugin",
+		"name", name,
+		"restartCount", entry.restartCount,
+		"maxRestarts", MaxPluginRestarts)
+
+	err := p.spawnAuthPlugin(tag, entry)
+	if err != nil {
+		p.Log().Error("Failed to restart auth plugin",
+			"name", name,
+			"restartCount", entry.restartCount,
+			"error", err)
+	} else {
+		p.Log().Info("Auth plugin restarted successfully",
+			"name", name,
+			"restartCount", entry.restartCount)
+	}
+}
+
+// spawnResourcePlugin spawns a resource plugin process via meta.Port
+func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginInfo *PluginInfo) error {
 	// Get server config from environment
 	serverConfigVal, ok := p.Env("ServerConfig")
 	if !ok {
@@ -281,6 +377,62 @@ func (p *PluginProcessSupervisor) spawnPlugin(namespace string, pluginInfo *Plug
 	return nil
 }
 
+// spawnAuthPlugin spawns an auth plugin process via meta.Port with binary mode.
+// It creates a MetaPortConn, establishes an RPC client, calls Init, and stores
+// the client in the handle's atomic pointer.
+func (p *PluginProcessSupervisor) spawnAuthPlugin(tag string, entry *authPluginEntry) error {
+	handle := entry.handle
+
+	// Configure meta.Port with binary mode for RPC communication.
+	// Binary mode sends stdout data as MessagePortData (raw bytes)
+	// instead of MessagePortText (line-split text).
+	portOptions := meta.PortOptions{
+		Cmd:         handle.BinaryPath(),
+		EnableEnvOS: true,
+		Tag:         tag,
+		Process:     gen.Atom("PluginProcessSupervisor"),
+		Binary:      meta.PortBinaryOptions{Enable: true},
+	}
+
+	metaport, err := meta.CreatePort(portOptions)
+	if err != nil {
+		return fmt.Errorf("failed to create meta.Port for auth plugin %q: %w", handle.Name(), err)
+	}
+
+	alias, err := p.SpawnMeta(metaport, gen.MetaOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to spawn auth plugin %q via meta.Port: %w", handle.Name(), err)
+	}
+
+	// Create MetaPortConn bridging meta.Port to io.ReadWriteCloser for net/rpc
+	conn := auth.NewMetaPortConn(alias, p.SendAlias)
+
+	// Create RPC client over the connection
+	rpcClient := rpc.NewClient(conn)
+
+	// Call Init to configure the plugin
+	var resp pkgauth.InitResponse
+	if err := rpcClient.Call("AuthPlugin.Init", &pkgauth.InitRequest{Config: handle.ConfigJSON()}, &resp); err != nil {
+		_ = rpcClient.Close()
+		_ = conn.Close()
+		return fmt.Errorf("auth plugin %q init call failed: %w", handle.Name(), err)
+	}
+	if resp.Error != "" {
+		_ = rpcClient.Close()
+		_ = conn.Close()
+		return fmt.Errorf("auth plugin %q init error: %s", handle.Name(), resp.Error)
+	}
+
+	// Establish connection — pairs the MetaPortConn with the RPC client
+	handle.Connect(conn, rpcClient)
+
+	entry.metaPortAlias = alias
+	entry.healthy = true
+
+	p.Log().Debug("Spawned auth plugin", "name", handle.Name(), "tag", tag, "alias", alias)
+	return nil
+}
+
 // Terminate is called when the actor is being stopped.
 // We gracefully terminate all plugin meta.Ports to avoid race conditions
 // during shutdown that would cause "unable to send MessagePortError" errors.
@@ -288,12 +440,25 @@ func (p *PluginProcessSupervisor) Terminate(reason error) {
 	p.Log().Debug("PluginProcessSupervisor terminating, stopping all plugins", "reason", reason)
 
 	var zeroAlias gen.Alias
+
+	// Terminate resource plugins
 	for namespace, pluginInfo := range p.plugins {
 		if pluginInfo.metaPortAlias != zeroAlias {
-			p.Log().Debug("Terminating plugin", "namespace", namespace, "alias", pluginInfo.metaPortAlias)
+			p.Log().Debug("Terminating resource plugin", "namespace", namespace, "alias", pluginInfo.metaPortAlias)
 			if err := p.SendExitMeta(pluginInfo.metaPortAlias, reason); err != nil {
-				// Log at debug level since errors during shutdown are expected
-				p.Log().Debug("Failed to send exit to plugin", "namespace", namespace, "error", err)
+				p.Log().Debug("Failed to send exit to resource plugin", "namespace", namespace, "error", err)
+			}
+		}
+	}
+
+	// Terminate auth plugin
+	if p.authPlugin != nil {
+		p.authPlugin.handle.Close()
+		if p.authPlugin.metaPortAlias != zeroAlias {
+			tag := auth.AuthTag(p.authPlugin.handle.Name())
+			p.Log().Debug("Terminating auth plugin", "tag", tag, "alias", p.authPlugin.metaPortAlias)
+			if err := p.SendExitMeta(p.authPlugin.metaPortAlias, reason); err != nil {
+				p.Log().Debug("Failed to send exit to auth plugin", "tag", tag, "error", err)
 			}
 		}
 	}

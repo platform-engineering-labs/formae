@@ -183,7 +183,7 @@ func TestServer_ApplyFormaSuccessResponse(t *testing.T) {
 		},
 	}, nil}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -234,7 +234,7 @@ func TestServer_ApplyFormaNoChangesResponse(t *testing.T) {
 		},
 	}, nil}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -310,7 +310,7 @@ func TestServer_ApplyFormaConflictingResourcesError(t *testing.T) {
 	}
 	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, conflict}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -358,7 +358,7 @@ func TestServer_ApplyFormaPatchRejectedErrorError(t *testing.T) {
 	rejectedResult := apimodel.FormaPatchRejectedError{}
 	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, rejectedResult}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -405,7 +405,7 @@ func TestServer_ApplyFormaCyclesDetectedError(t *testing.T) {
 	cyclesDetectedResult := apimodel.FormaCyclesDetectedError{}
 	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, cyclesDetectedResult}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -457,7 +457,7 @@ func TestServer_ApplyFormaResourceNotFoundError(t *testing.T) {
 	}
 	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, resourceNotFound}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -507,7 +507,7 @@ func TestServer_ApplyFormaStackReferenceNotFoundError(t *testing.T) {
 	}
 	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, stackRefNotFound}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -557,7 +557,7 @@ func TestServer_ApplyFormaTargetReferenceNotFoundError(t *testing.T) {
 	}
 	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, targetRefNotFound}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -604,7 +604,7 @@ func TestServer_ApplyFormaUnexpectedError(t *testing.T) {
 	meta := &FakeMetastructure{}
 	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, fmt.Errorf("unexpected error")}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -655,7 +655,7 @@ func TestServer_DestroyFormaSuccessResponse(t *testing.T) {
 		},
 	}, nil}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -718,7 +718,7 @@ func TestServer_DestroyFormaConflictingResourcesError(t *testing.T) {
 
 	meta.destroyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, conflict}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -778,7 +778,7 @@ func TestServer_DestroyByQuerySuccessResponse(t *testing.T) {
 		},
 	}, nil}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -827,7 +827,7 @@ func TestServer_ExtractResourcesInvalidQueryError(t *testing.T) {
 	}
 	meta.extractResponses = []WrappedExtractResponse{{nil, invalidQuery}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/resources?query=invalid-query", nil)
 	req.Header.Set("Client-ID", "test-client-id")
@@ -854,7 +854,7 @@ func TestServer_ListCommandStatusInvalidQueryError(t *testing.T) {
 	}
 	meta.listResponses = []WrappedListResponse{{nil, invalidQuery}}
 
-	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/commands/status?commandId=invalid-query", nil)
 	req.Header.Set("Client-ID", "test-client-id")
@@ -886,7 +886,7 @@ func TestServer_CancelCommands_Success(t *testing.T) {
 		},
 	}
 
-	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
 	req.Header.Set("Client-ID", "test-client")
@@ -917,7 +917,7 @@ func TestServer_CancelCommands_WithQuery(t *testing.T) {
 		},
 	}
 
-	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel?query=stack:test", nil)
 	req.Header.Set("Client-ID", "test-client")
@@ -948,7 +948,7 @@ func TestServer_CancelCommands_NoCommandsFound(t *testing.T) {
 		},
 	}
 
-	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
 	req.Header.Set("Client-ID", "test-client")
@@ -965,7 +965,7 @@ func TestServer_CancelCommands_NoCommandsFound(t *testing.T) {
 func TestServer_CancelCommands_MissingClientID(t *testing.T) {
 	fakeMetastructure := &FakeMetastructure{}
 
-	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
+	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/cancel", nil)
 	// No Client-ID header
@@ -1038,7 +1038,7 @@ func TestServer_ListTargets_Success(t *testing.T) {
 	}
 	meta.targetResponses = []WrappedTargetResponse{{Targets: targets, Error: nil}}
 
-	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets?query=namespace:aws", nil)
 	rec := httptest.NewRecorder()
@@ -1061,7 +1061,7 @@ func TestServer_ListTargets_NoResults(t *testing.T) {
 	meta := &FakeMetastructure{}
 	meta.targetResponses = []WrappedTargetResponse{{Targets: []*pkgmodel.Target{}, Error: nil}}
 
-	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
 	rec := httptest.NewRecorder()
@@ -1085,7 +1085,7 @@ func TestServer_ListTargets_WithQuery(t *testing.T) {
 	}
 	meta.targetResponses = []WrappedTargetResponse{{Targets: targets, Error: nil}}
 
-	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets?query=namespace:tailscale+discoverable:true", nil)
 	rec := httptest.NewRecorder()
@@ -1119,7 +1119,7 @@ func TestServer_ListDrift_Success(t *testing.T) {
 		},
 	}
 
-	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/production/drift", nil)
 	rec := httptest.NewRecorder()
@@ -1151,7 +1151,7 @@ func TestServer_ListDrift_NoDrift(t *testing.T) {
 		},
 	}
 
-	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/production/drift", nil)
 	rec := httptest.NewRecorder()
