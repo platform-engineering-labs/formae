@@ -423,18 +423,22 @@ func (h *TestHarness) SetNativeIDCounter(t *testing.T, value int64) {
 }
 
 // callTestController sends a synchronous Ergo call to the TestController
-// actor on the test plugin's node. Retries once on timeout because Ergo
+// actor on the test plugin's node. Retries on timeout because Ergo
 // cross-node calls occasionally fail under load (high CRUD traffic on the
-// plugin node delays message delivery).
+// plugin node delays message delivery, especially on slow CI runners).
 func (h *TestHarness) callTestController(request any) (any, error) {
 	target := gen.ProcessID{
 		Name: testcontrol.TestControllerName,
 		Node: h.pluginNodeName,
 	}
-	res, err := callRemote(h.ergoNode, target, request, 5)
-	if err != nil && err.Error() == "timed out" {
-		// Retry with longer timeout — CI runners may be slower.
-		res, err = callRemote(h.ergoNode, target, request, 10)
+	timeouts := []int{5, 10, 15}
+	var res any
+	var err error
+	for _, t := range timeouts {
+		res, err = callRemote(h.ergoNode, target, request, t)
+		if err == nil || err.Error() != "timed out" {
+			break
+		}
 	}
 	return res, err
 }
