@@ -10,6 +10,61 @@
 
 
 ================================================================================
+LIVE UPDATE BEHAVIOR
+================================================================================
+
+  The status/watch view continuously polls the formae agent for command state.
+  It does NOT snapshot commands at CLI start — it is a live, dynamic view:
+
+  - New commands that appear on the agent are automatically sorted into the
+    view according to the current sort order (like htop with new processes)
+  - Commands that complete transition to done/failed state in-place
+  - The view is constrained by the --query flag of the CLI status command.
+    New commands appearing on the agent are also filtered by the same query,
+    so only matching commands enter the view
+  - Polling interval is tick-based (replaces the old ClearScreen + sleep loop)
+  - The "↻ live" indicator in the header shows active polling
+
+
+================================================================================
+QUERY BAR
+================================================================================
+
+  The query bar is always visible as a line above the footer, between the
+  command list and the keybinding hints:
+
+  │  ...commands...                                                              │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │  ● state:InProgress                                        /: edit query    │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │  ↑↓: select  enter: details  →←: column  s: toggle sort  q: quit  ?: help  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  When no query is active:
+
+  │  /: query                                                                    │
+
+  When editing (after pressing /):
+
+  │  / state:InProgress█                              enter: apply  esc: cancel  │
+
+  Behavior:
+  - On start: populated from --query flag value, or empty (show all)
+  - ● indicator (orange) shows when a query is active
+  - Press / to focus — cursor appears, you edit the query in-place
+  - Same query syntax as --query on the CLI (formae query language:
+    state:InProgress, type:apply, id:cmd-abc123, etc.)
+  - Press enter to apply — the view re-fetches from the agent with the new
+    query. Commands not matching disappear, new matching commands appear
+  - Press esc to cancel edit — reverts to the previous query
+  - The query is server-side: the agent filters commands before sending,
+    so only matching commands are polled and displayed
+  - Empty query = show all commands (same as no --query flag)
+  - The query bar also constrains live updates: new commands from the agent
+    only appear if they match the current query
+
+
+================================================================================
 VIEW 1: Multi-command summary (default when viewing multiple commands)
 ================================================================================
 
@@ -17,45 +72,84 @@ VIEW 1: Multi-command summary (default when viewing multiple commands)
   │  formae status command                                             ↻ live   │
   ├──────────────────────────────────────────────────────────────────────────────┤
   │                                                                              │
-  │       ID            Command  Mode       Progress              ✓  ✗  ◐  ○  Time│
-  │  ─────────────────────────────────────────────────────────────────────────── │
-  │  ✗   cmd-ghi789    apply    patch      completed 3/3          1  1  0  1  00:33│
-  │  ⣟   cmd-jkl012    apply    reconcile  █████████▒▒░░⋅⋅⋅⋅⋅ 7/12  5  2  2  3  01:58│
-  │  ⣟   cmd-abc123    apply    reconcile  █████████████░░⋅⋅⋅ 12/15 10  0  2  3  00:42│
-  │  ✓   cmd-def456    destroy             completed 8/8          8  0  0  0  00:15│
-  │                                                                              │
-  │                                                                              │
-  │                                                                              │
-  │                                                                              │
-  ├──────────────────────────────────────────────────────────────────────────────┤
-  │  enter: details  /: query  q: quit                                ?: help │
-  └──────────────────────────────────────────────────────────────────────────────┘
+  │       ID            Command  Mode       Progress              ✓  ✗  ◐  ○  Time  Age │
+  │  ──────────────────────────────────────────────────────────────────────────────── │
+  │  ⣟   cmd-jkl012    apply    reconcile  █████████▒▒░░⋅⋅⋅⋅⋅ 7/12  5  2  2  3  01:58  ~2m │
+  │  ⣟   cmd-abc123    apply    reconcile  █████████████░░⋅⋅⋅ 12/15 10  0  2  3  00:42  42s │
+  │  ✗   cmd-ghi789    apply    patch      completed 3/3          1  1  0  1  00:33  10m │
+  │  ✓   cmd-def456    destroy             completed 8/8          8  0  0  0  00:15   3h │
+  │  ✓   cmd-xyz999    apply    reconcile  completed 15/15       15  0  0  0  00:08  >1mo│
+  │  ...                                                                (scrollable) │
+  ├──────────────────────────────────────────────────────────────────────────────────┤
+  │  /: query                                                                        │
+  ├──────────────────────────────────────────────────────────────────────────────────┤
+  │  ↑↓: select  enter: details  →←: column  s: toggle sort  q: quit    ?: help     │
+  └──────────────────────────────────────────────────────────────────────────────────┘
 
   Notes:
-  - Status column on far left — failed (✗ red) and done (✓ green) visible
-    immediately. In-progress commands have no status symbol (the bar speaks)
-  - Default sort by status urgency: failed → in-progress → done
-  - s: cycle sort column. Active sort column shows indicator (e.g. Time▼)
-    Default sort (by status) has no indicator
-  - Sortable columns: Status, Time, Progress, ID
-  - Progress bar is segmented by status, using distinct characters AND colors:
+
+  Columns:
+  - Status symbol on far left — spinner for in-progress, ✗ for failed, ✓ for done
+    In-progress + failing: red spinner. Finished failed: dimmed red ✗
+  - ID: command ksuid
+  - Command: apply/destroy
+  - Mode: reconcile/patch
+  - Progress: segmented bar for in-progress, "completed N/N" text for terminal
+  - ✓ ✗ ◐ ○: per-status count columns (done, failed, in-progress, pending)
+  - Time: duration — how long the command ran (MM:SS format)
+  - Age: how old the command is — compact relative time (max 4 chars)
+    Ranges: Ns, Nm, Nh, Nd, >Nmo (1-9 months), >Ny (10mo+)
+    Display is approximate for older ages, but sorting uses the real
+    timestamp for accurate ordering
+
+  Progress bar:
+  - Segmented by status with distinct characters AND colors:
     █ (green) = done/skipped, ▒ (red) = failed, ░ (light gray) = in-progress,
     ⋅ (dark gray) = pending
   - Characters provide density hierarchy (solid → hatched → light → dots)
     so the bar is readable without color — colorblind-safe by default
-  - Colors reinforce but don't carry the meaning alone:
-    Green = done, Red = failed, Light gray = in-progress, Dark gray = pending
-  - Per-status count columns: ✓ (done), ✗ (failed), ◐ (in-progress), ○ (pending)
-    Each column header and its numbers inherit the status color
-    Zeros rendered in subtle/gray
   - Bar is elastic — fills remaining space after fixed columns
-  - "↻ live" indicator when actively polling
-  - Press enter or d to open command details view
+  - Completed commands show "completed N/N" text instead of bar (dimmed)
+
+  Row coloring:
+  - Running + failing: entire row bright red, red spinner
+  - Running healthy: normal colors, normal spinner
+  - Finished failed: entire row dimmed red (#9B4444)
+  - Finished ok: entire row dimmed gray — fades into background
+  - Cursor highlight: all text brightens, full-width background highlight
+
+  Sorting:
+  - Default sort by status urgency:
+    running+failing → running healthy → finished failed → finished ok
+  - →← moves highlight across sortable column headers
+  - s toggles sort on highlighted column (▼ desc → ▲ asc → ▼ desc)
+  - Sortable columns: Status, ID, Command, Mode, Progress, Time, Age
+  - Sort arrow visible on active column, highlight visible on navigated column
+  - The list scrolls like htop — full list, viewport follows cursor
+
+  Query bar:
+  - Always visible as a line above the footer
+  - Shows active query with ● indicator, or "/: query" hint when empty
+  - Press / to edit — replaces query line with text input
+  - enter applies, esc cancels
+  - Query constrains which commands the agent sends (server-side filter)
+
+  Keybindings:
+  - ↑↓: select row (j/k also work, not advertised)
+  - PgUp/PgDn: jump one screenful up/down
+  - enter: open command details
+  - →←: move sort column highlight
+  - s: toggle sort on highlighted column
+  - /: edit query
+  - q: quit
+  - ?: help
+  - Footer hints drop dynamically when terminal is too narrow
+    Descriptions truncate first, then hints drop entirely
 
   Responsive column priority (what drops as terminal narrows):
   - Always visible: Status, ID, Progress bar (min ~10 chars), ✓, ✗, Time
-  - Medium drops: Mode, ◐, ·
-  - Narrow drops: Type — just Status + ID + bar + ✓ + ✗ + Time
+  - Medium drops: Mode, ◐, ○, Age
+  - Narrow drops: Command — just Status + ID + bar + ✓ + ✗ + Time
 
   ASCII fallback (TERM=dumb):
   - Column headers: OK  FL  IP  PD instead of ✓  ✗  ◐  ○

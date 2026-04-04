@@ -12,6 +12,7 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
 	"strings"
@@ -62,12 +63,13 @@ type fakeUpdate struct {
 }
 
 type fakeCommand struct {
-	ID       string
-	CmdType  string
-	Mode     string
-	State    string
-	Duration time.Duration
-	Updates  []fakeUpdate
+	ID        string
+	CmdType   string
+	Mode      string
+	State     string
+	Duration  time.Duration
+	StartedAt time.Time
+	Updates   []fakeUpdate
 }
 
 func isTerminalState(s updateState) bool {
@@ -90,11 +92,13 @@ type sortableColumn struct {
 }
 
 var sortableColumns = []sortableColumn{
-	{"", func(a, b fakeCommand) bool { return statusPriority(a) < statusPriority(b) }},          // status column (no label)
-	{"Command", func(a, b fakeCommand) bool { return a.CmdType < b.CmdType }},
-	{"Mode", func(a, b fakeCommand) bool { return a.Mode < b.Mode }},
-	{"Progress", func(a, b fakeCommand) bool { return progressPct(a) < progressPct(b) }},
-	{"Time", func(a, b fakeCommand) bool { return a.Duration < b.Duration }},
+	{"", func(a, b fakeCommand) bool { return statusPriority(a) < statusPriority(b) }},       // 0: status
+	{"ID", func(a, b fakeCommand) bool { return a.ID < b.ID }},                                // 1: ID
+	{"Command", func(a, b fakeCommand) bool { return a.CmdType < b.CmdType }},                 // 2: command
+	{"Mode", func(a, b fakeCommand) bool { return a.Mode < b.Mode }},                           // 3: mode
+	{"Progress", func(a, b fakeCommand) bool { return progressPct(a) < progressPct(b) }},       // 4: progress
+	{"Time", func(a, b fakeCommand) bool { return a.Duration < b.Duration }},                    // 5: time
+	{"Age", func(a, b fakeCommand) bool { return a.StartedAt.Before(b.StartedAt) }},            // 6: age (sorts by real timestamp)
 }
 
 func progressPct(cmd fakeCommand) float64 {
@@ -130,13 +134,13 @@ func statusPriority(cmd fakeCommand) int {
 	switch cmd.State {
 	case "InProgress":
 		if hasFails {
-			return 0 // still running and failing — needs attention NOW
+			return 0 // running and failing — most urgent
 		}
-		return 2 // healthy in-progress
+		return 1 // running healthy
 	case "Failed":
-		return 1 // terminal failed — bad but settled
+		return 2 // finished failed
 	case "Done":
-		return 3
+		return 3 // finished ok
 	}
 	return 4
 }
@@ -323,6 +327,9 @@ type model struct {
 	groupSortActiveCol map[updateKind]int
 	groupSortDir       map[updateKind]sortDir
 	groupVisibleCount  map[updateKind]int // how many rows visible per group (pagination)
+	queryText    string  // current active query
+	queryEdit    string  // query being edited (when focused)
+	queryFocused bool    // is the query bar focused for editing
 	spinner    spinner.Model
 	vp         viewport.Model
 	width      int
@@ -380,10 +387,49 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Query bar editing mode — intercepts all keys
+		if m.queryFocused {
+			switch {
+			case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+				// Apply the edited query
+				m.queryText = m.queryEdit
+				m.queryFocused = false
+				// In real implementation: re-fetch from agent with new query
+				// For prototype: filter fake commands by simple substring match
+				return m, nil
+			case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+				// Cancel edit, revert
+				m.queryFocused = false
+				return m, nil
+			case key.Matches(msg, key.NewBinding(key.WithKeys("backspace"))):
+				if len(m.queryEdit) > 0 {
+					m.queryEdit = m.queryEdit[:len(m.queryEdit)-1]
+				}
+				return m, nil
+			case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+u"))):
+				m.queryEdit = ""
+				return m, nil
+			default:
+				// Append typed character
+				if msg.Type == tea.KeyRunes {
+					m.queryEdit += string(msg.Runes)
+				} else if msg.Type == tea.KeySpace {
+					m.queryEdit += " "
+				}
+				return m, nil
+			}
+		}
+
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("q", "ctrl+c"))):
 			m.quitting = true
 			return m, tea.Quit
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("/"))):
+			// Focus query bar
+			m.queryEdit = m.queryText
+			m.queryFocused = true
+			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
 			if m.view == viewMultiCommand {
@@ -500,6 +546,43 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("pgdown"))):
+			pageSize := m.height - 7
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			if m.view == viewMultiCommand {
+				m.cursor += pageSize
+				if m.cursor >= len(m.commands) {
+					m.cursor = len(m.commands) - 1
+				}
+			} else {
+				m.updateCur += pageSize
+				max := m.totalFlatRows() - 1
+				if m.updateCur > max {
+					m.updateCur = max
+				}
+			}
+			return m, nil
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("pgup"))):
+			pageSize := m.height - 7
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			if m.view == viewMultiCommand {
+				m.cursor -= pageSize
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
+			} else {
+				m.updateCur -= pageSize
+				if m.updateCur < 0 {
+					m.updateCur = 0
+				}
+			}
+			return m, nil
 		}
 	}
 
@@ -555,6 +638,8 @@ func (m *model) viewMultiCommand() string {
 
 	// Header
 	header := renderHeaderBar("formae status command", "↻ live", p, w)
+
+	// No query bar above the list — query lives in the footer only
 
 	// Column headers
 	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
@@ -617,16 +702,16 @@ func (m *model) viewMultiCommand() string {
 	// Build column header — must match row layout:
 	// row = sp2(2) + statusSym(2) + sp2(2) + id(14) + cmdType(9) + mode(11) + progressArea(bw+7) + sp(1) + counts(4*4) + sp2(2) + dur(6)
 	colLine := padRight(renderStatusCol(), 6) + // status col: " ▼ " padded to 6
-		padRight(dimStyle.Render("ID"), 14) +
-		padRight(renderColName("Command", 1), 9) +
-		padRight(renderColName("Mode", 2), 11) +
-		padRight(renderColName("Progress", 3), bw+7) +
+		padRight(renderColName("ID", 1), 14) +
+		padRight(renderColName("Command", 2), 9) +
+		padRight(renderColName("Mode", 3), 11) +
+		padRight(renderColName("Progress", 4), bw+7) +
 		" " +
 		padRight(lipgloss.NewStyle().Foreground(p.Done).Render("✓"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.InProgress).Render("◐"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Pending).Render("○"), 4) +
-		"  " + renderColName("Time", 4)
+		"  " + padRight(renderColName("Time", 5), 6) + " " + renderColName("Age", 6)
 
 	// Rows
 	var rows []string
@@ -640,28 +725,81 @@ func (m *model) viewMultiCommand() string {
 		{"enter", "details"},
 		{"→←", "column"},
 		{"s", "toggle sort"},
-		{"/", "query"},
 		{"q", "quit"},
 	}, "")
 
-	// Compose
+	// Query line — always visible above the footer
+	var queryLine string
+	queryBorderStyle := lipgloss.NewStyle().Foreground(p.Border)
+	if m.queryFocused {
+		// Editing mode
+		s := m.theme.Styles
+		editContent := "  " + s.KeybindingKey.Render("/") + " " +
+			lipgloss.NewStyle().Foreground(p.TextPrimary).Render(m.queryEdit) +
+			lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render("█") +
+			padBetween(w, "  / "+m.queryEdit+"█",
+				s.KeybindingDesc.Render("enter: apply  esc: cancel  ")) +
+			s.KeybindingDesc.Render("enter: apply  esc: cancel  ")
+		queryLine = queryBorderStyle.Render(strings.Repeat("─", w)) + "\n" + editContent
+	} else if m.queryText != "" {
+		// Active query indicator
+		indicator := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true).Render("  ● ")
+		queryContent := indicator +
+			lipgloss.NewStyle().Foreground(p.TextSecondary).Render(m.queryText) +
+			padBetween(w, "  ● "+m.queryText,
+				lipgloss.NewStyle().Foreground(p.TextSubtle).Render("/: edit query  ")) +
+			lipgloss.NewStyle().Foreground(p.TextSubtle).Render("/: edit query  ")
+		queryLine = queryBorderStyle.Render(strings.Repeat("─", w)) + "\n" + queryContent
+	} else {
+		// No query — show hint
+		queryContent := lipgloss.NewStyle().Foreground(p.TextSubtle).Render("  /: query")
+		queryLine = queryBorderStyle.Render(strings.Repeat("─", w)) + "\n" + queryContent
+	}
+
+	// Compose — scroll the command list to keep cursor visible
+	// Reserve lines: header(2) + colHeader(1) + queryLine(2) + footer(2) = 7
+	visibleRows := m.height - 7
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+
+	// Calculate scroll offset to keep cursor in view
+	scrollOffset := 0
+	if m.cursor >= visibleRows {
+		scrollOffset = m.cursor - visibleRows + 1
+	}
+	if scrollOffset > len(rows)-visibleRows {
+		scrollOffset = len(rows) - visibleRows
+	}
+	if scrollOffset < 0 {
+		scrollOffset = 0
+	}
+
 	var b strings.Builder
 	b.WriteString(header + "\n")
 	b.WriteString(colLine + "\n")
-	for _, row := range rows {
-		b.WriteString(row + "\n")
+
+	end := scrollOffset + visibleRows
+	if end > len(rows) {
+		end = len(rows)
 	}
-	usedLines := 3 + len(rows)
-	for i := usedLines; i < m.height-2; i++ {
+	for i := scrollOffset; i < end; i++ {
+		b.WriteString(rows[i] + "\n")
+	}
+	// Pad remaining space
+	rendered := end - scrollOffset
+	for i := rendered; i < visibleRows; i++ {
 		b.WriteString("\n")
 	}
+
+	b.WriteString(queryLine + "\n")
 	b.WriteString(footer)
 	return b.String()
 }
 
 func barWidth(termWidth int) int {
-	// Fixed columns: prefix(6) + ID(14) + Command(9) + Mode(11) + N/M(7) + sp(1) + counts(16) + sp2(2) + Time(6) = 72
-	fixed := 72
+	// Fixed columns: prefix(6) + ID(14) + Command(9) + Mode(11) + N/M(7) + sp(1) + counts(16) + sp2(2) + Time(6) + Age(5) = 77
+	fixed := 77
 	bw := termWidth - fixed
 	if bw < 10 {
 		bw = 10
@@ -701,7 +839,8 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	var statusSym string
 	switch cmd.State {
 	case "Failed":
-		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗"), 2)
+		// Dimmed red for finished failed
+		statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#9B4444"))).Render("✗"), 2)
 	case "Done":
 		if isFailing {
 			statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗"), 2)
@@ -754,8 +893,11 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	dimStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	subtleStyle := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
 
-	// Dim finished successful commands — one single color
 	isDoneOk := cmd.State == "Done" && !isFailing
+	isFinishedFail := (cmd.State == "Done" || cmd.State == "Failed") && isFailing
+	isRunningFail := cmd.State == "InProgress" && isFailing
+
+	// Dim finished successful commands — one single color
 	if isDoneOk {
 		dim := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
 		idStyle = dim
@@ -764,12 +906,22 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 		subtleStyle = dim
 	}
 
-	// Red text for failing/failed commands
-	if isFailing {
-		idStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
-		plainStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
-		dimStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
-		subtleStyle = withBg(lipgloss.NewStyle().Foreground(p.Error))
+	// Dimmed red for finished failed commands
+	if isFinishedFail {
+		dimRed := withBg(lipgloss.NewStyle().Foreground(lipgloss.Color("#9B4444")))
+		idStyle = dimRed
+		plainStyle = dimRed
+		dimStyle = dimRed
+		subtleStyle = dimRed
+	}
+
+	// Bright red for running failing commands
+	if isRunningFail {
+		red := withBg(lipgloss.NewStyle().Foreground(p.Error))
+		idStyle = red
+		plainStyle = red
+		dimStyle = red
+		subtleStyle = red
 	}
 
 	// Brighten all text on selected row
@@ -803,7 +955,13 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	id := pad(idStyle.Render(cmd.ID), 14)
 	cmdType := pad(plainStyle.Render(cmd.CmdType), 9)
 	mode := pad(plainStyle.Render(cmd.Mode), 11)
-	dur := pad(dimStyle.Render(formatDuration(cmd.Duration)), 6)
+	// For running commands, derive duration from StartedAt so Time and Age stay in sync
+	duration := cmd.Duration
+	if cmd.State == "InProgress" && !cmd.StartedAt.IsZero() {
+		duration = time.Since(cmd.StartedAt)
+	}
+	dur := pad(dimStyle.Render(formatDuration(duration)), 6)
+	age := pad(dimStyle.Render(formatAge(cmd.StartedAt)), 5)
 
 	// Progress area: bar + N/total for in-progress, "completed N/N" for terminal
 	isTerminal := cmd.State == "Done" || cmd.State == "Failed"
@@ -821,12 +979,20 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 	// Per-status count columns, colored — dimmed for finished ok commands
 	renderCount := func(n int, color lipgloss.AdaptiveColor) string {
 		s := withBg(lipgloss.NewStyle())
+		// Dimmed states: one color for all counts
 		if isDoneOk {
 			if isCursor {
 				return pad(s.Foreground(p.TextSecondary).Render(fmt.Sprintf("%d", n)), 4)
 			}
 			return pad(s.Foreground(p.TextSubtle).Render(fmt.Sprintf("%d", n)), 4)
 		}
+		if isFinishedFail {
+			if isCursor {
+				return pad(s.Foreground(lipgloss.Color("#FCA5A5")).Render(fmt.Sprintf("%d", n)), 4)
+			}
+			return pad(s.Foreground(lipgloss.Color("#9B4444")).Render(fmt.Sprintf("%d", n)), 4)
+		}
+		// Active rows
 		if isCursor {
 			if n == 0 {
 				return pad(s.Foreground(p.TextSecondary).Render("0"), 4)
@@ -853,7 +1019,7 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 		sp2 = bgStyle.Render("  ")
 	}
 
-	row := sp2 + statusSym + sp2 + id + cmdType + mode + progressArea + sp + doneCol + failCol + ipCol + pendCol + sp2 + dur
+	row := sp2 + statusSym + sp2 + id + cmdType + mode + progressArea + sp + doneCol + failCol + ipCol + pendCol + sp2 + dur + sp + age
 
 	// Pad the rest to full width
 	rowWidth := lipgloss.Width(row)
@@ -932,7 +1098,7 @@ func (m *model) viewSingleCommand() string {
 		padRight(lipgloss.NewStyle().Foreground(p.Error).Render("✗"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.InProgress).Render("◐"), 4) +
 		padRight(lipgloss.NewStyle().Foreground(p.Pending).Render("○"), 4) +
-		"  " + dimStyle.Render("Time")
+		"  " + padRight(dimStyle.Render("Time"), 6) + " " + dimStyle.Render("Age")
 
 	cmdRow := m.renderCommandRow(cmd, w, false)
 
@@ -1592,9 +1758,18 @@ func (m *model) renderDetailEntryWithHighlight(u fakeUpdate, w int, highlighted 
 		borderColor = p.PrimaryAccent
 	}
 
-	// Card title: status symbol + label
+	// Card title: status symbol + label — color matches row state
 	stateStr := m.renderStateSymbol(u)
-	labelStr := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(u.Label)
+	var labelColor lipgloss.TerminalColor
+	switch u.State {
+	case stateFailed, stateSkipped:
+		labelColor = p.Error
+	case stateDone:
+		labelColor = p.TextSubtle
+	default:
+		labelColor = p.PrimaryAccent
+	}
+	labelStr := lipgloss.NewStyle().Foreground(labelColor).Render(u.Label)
 
 	cardWidth := w - 8
 	if cardWidth < 30 {
@@ -1859,13 +2034,49 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d", s/60, s%60)
 }
 
+// formatAge formats a timestamp as a compact relative age string.
+// Max 4 chars. Display is approximate for older ages (>Nmo, >Ny),
+// but sorting always uses the real StartedAt timestamp for accuracy.
+// Ranges: Ns, Nm, Nh, Nd, >Nmo (1-9), >Ny (10mo+).
+func formatAge(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 10*30*24*time.Hour:
+		months := int(d.Hours() / (24 * 30))
+		if months < 1 {
+			months = 1
+		}
+		return fmt.Sprintf(">%dmo", months)
+	default:
+		years := int(d.Hours() / (24 * 365))
+		if years < 1 {
+			years = 1
+		}
+		return fmt.Sprintf(">%dy", years)
+	}
+}
+
 // -- Fake data --
 
 func fakeCommands() []fakeCommand {
-	return []fakeCommand{
+	now := time.Now()
+
+	// Original 4 commands with realistic data
+	cmds := []fakeCommand{
 		{
 			ID: "cmd-abc123", CmdType: "apply", Mode: "reconcile",
-			State: "InProgress", Duration: 42 * time.Second,
+			State: "InProgress", Duration: 42 * time.Second, StartedAt: now.Add(-42 * time.Second),
 			Updates: []fakeUpdate{
 				{Kind: kindTarget, Operation: "create", Label: "aws-us-east-1", State: stateDone, Duration: 3 * time.Second},
 				{Kind: kindStack, Operation: "create", Label: "production", State: stateDone, Duration: 1 * time.Second},
@@ -1885,7 +2096,7 @@ func fakeCommands() []fakeCommand {
 		},
 		{
 			ID: "cmd-def456", CmdType: "destroy", Mode: "",
-			State: "Done", Duration: 15 * time.Second,
+			State: "Done", Duration: 15 * time.Second, StartedAt: now.Add(-3 * time.Hour),
 			Updates: []fakeUpdate{
 				{Kind: kindResource, Operation: "delete", Label: "old-bucket", TypeName: "AWS::S3::Bucket", Stack: "staging", State: stateDone, Duration: 3 * time.Second},
 				{Kind: kindResource, Operation: "delete", Label: "legacy-app", TypeName: "AWS::Lambda::Function", Stack: "staging", State: stateDone, Duration: 2 * time.Second},
@@ -1894,7 +2105,7 @@ func fakeCommands() []fakeCommand {
 		},
 		{
 			ID: "cmd-ghi789", CmdType: "apply", Mode: "patch",
-			State: "Failed", Duration: 33 * time.Second,
+			State: "Failed", Duration: 33 * time.Second, StartedAt: now.Add(-10 * time.Minute),
 			Updates: []fakeUpdate{
 				{Kind: kindResource, Operation: "update", Label: "api-config", TypeName: "AWS::SSM::Parameter", Stack: "production", State: stateDone, Duration: 2 * time.Second},
 				{Kind: kindResource, Operation: "delete", Label: "old-data", TypeName: "AWS::S3::Bucket", Stack: "production", State: stateFailed, Duration: 4 * time.Second, Attempt: 9, MaxAttempts: 9, ErrorMessage: "BucketNotEmpty: The bucket is not empty"},
@@ -1903,7 +2114,7 @@ func fakeCommands() []fakeCommand {
 		},
 		{
 			ID: "cmd-jkl012", CmdType: "apply", Mode: "reconcile",
-			State: "InProgress", Duration: 118 * time.Second,
+			State: "InProgress", Duration: 118 * time.Second, StartedAt: now.Add(-118 * time.Second),
 			Updates: []fakeUpdate{
 				{Kind: kindTarget, Operation: "create", Label: "aws-eu-west-1", State: stateDone, Duration: 3 * time.Second},
 				{Kind: kindStack, Operation: "create", Label: "staging", State: stateDone, Duration: 1 * time.Second},
@@ -1920,6 +2131,148 @@ func fakeCommands() []fakeCommand {
 			},
 		},
 	}
+
+	// Generate ~25 more in-progress commands (various states of progress)
+	stacks := []string{"production", "staging", "development", "shared", "monitoring"}
+	modes := []string{"reconcile", "patch"}
+	types := []string{"AWS::EC2::Instance", "AWS::S3::Bucket", "AWS::RDS::DBInstance",
+		"AWS::Lambda::Function", "AWS::ECS::Service", "AWS::SQS::Queue",
+		"AWS::SNS::Topic", "AWS::DynamoDB::Table", "AWS::ElastiCache::CacheCluster"}
+
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 25; i++ {
+		id := fmt.Sprintf("cmd-%06x", rng.Intn(0xFFFFFF))
+		stack := stacks[rng.Intn(len(stacks))]
+		mode := modes[rng.Intn(len(modes))]
+		numUpdates := 3 + rng.Intn(20)
+		dur := time.Duration(10+rng.Intn(300)) * time.Second
+
+		var updates []fakeUpdate
+		hasFail := rng.Intn(5) == 0 // 20% chance of having failures
+		for j := 0; j < numUpdates; j++ {
+			op := "create"
+			if rng.Intn(3) == 0 {
+				op = "update"
+			}
+			label := fmt.Sprintf("res-%s-%d", stack[:3], j)
+			typeName := types[rng.Intn(len(types))]
+
+			var state updateState
+			r := rng.Intn(10)
+			switch {
+			case hasFail && j == numUpdates/2:
+				state = stateFailed
+			case r < 4:
+				state = stateDone
+			case r < 6:
+				state = stateInProgress
+			default:
+				state = statePending
+			}
+
+			u := fakeUpdate{
+				Kind:      kindResource,
+				Operation: op,
+				Label:     label,
+				TypeName:  typeName,
+				Stack:     stack,
+				State:     state,
+				Duration:  time.Duration(rng.Intn(60)) * time.Second,
+			}
+			if state == stateInProgress {
+				u.Attempt = 1 + rng.Intn(3)
+				u.MaxAttempts = 9
+				u.StatusMsg = "Working..."
+			}
+			if state == stateFailed {
+				u.Attempt = 9
+				u.MaxAttempts = 9
+				u.ErrorMessage = "ResourceLimitExceeded"
+			}
+			updates = append(updates, u)
+		}
+
+		cmdState := "InProgress"
+		allDone := true
+		for _, u := range updates {
+			if u.State != stateDone && u.State != stateFailed && u.State != stateSkipped {
+				allDone = false
+			}
+		}
+		if allDone && hasFail {
+			cmdState = "Failed"
+		} else if allDone {
+			cmdState = "Done"
+		}
+
+		cmds = append(cmds, fakeCommand{
+			ID:        id,
+			CmdType:   "apply",
+			Mode:      mode,
+			State:     cmdState,
+			Duration:  dur,
+			StartedAt: now.Add(-dur),
+			Updates:   updates,
+		})
+	}
+
+	// Generate ~170 older completed commands
+	for i := 0; i < 170; i++ {
+		id := fmt.Sprintf("cmd-%06x", rng.Intn(0xFFFFFF))
+		stack := stacks[rng.Intn(len(stacks))]
+		mode := modes[rng.Intn(len(modes))]
+		cmdType := "apply"
+		if rng.Intn(4) == 0 {
+			cmdType = "destroy"
+			mode = ""
+		}
+		numUpdates := 1 + rng.Intn(15)
+		age := time.Duration(1+rng.Intn(48)) * time.Hour
+		dur := time.Duration(5+rng.Intn(120)) * time.Second
+
+		var updates []fakeUpdate
+		hasFail := rng.Intn(8) == 0 // 12.5% failed
+		for j := 0; j < numUpdates; j++ {
+			op := "create"
+			if cmdType == "destroy" {
+				op = "delete"
+			} else if rng.Intn(3) == 0 {
+				op = "update"
+			}
+			state := stateDone
+			if hasFail && j == 0 {
+				state = stateFailed
+			}
+
+			updates = append(updates, fakeUpdate{
+				Kind:         kindResource,
+				Operation:    op,
+				Label:        fmt.Sprintf("res-%s-%d", stack[:3], j),
+				TypeName:     types[rng.Intn(len(types))],
+				Stack:        stack,
+				State:        state,
+				Duration:     time.Duration(rng.Intn(30)) * time.Second,
+				ErrorMessage: map[bool]string{true: "Error occurred", false: ""}[state == stateFailed],
+			})
+		}
+
+		cmdState := "Done"
+		if hasFail {
+			cmdState = "Failed"
+		}
+
+		cmds = append(cmds, fakeCommand{
+			ID:        id,
+			CmdType:   cmdType,
+			Mode:      mode,
+			State:     cmdState,
+			Duration:  dur,
+			StartedAt: now.Add(-age),
+			Updates:   updates,
+		})
+	}
+
+	return cmds
 }
 
 func main() {
