@@ -15,13 +15,13 @@ PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSI
 # Without @ref, the default branch (main) is used.
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
-    https://github.com/platform-engineering-labs/formae-plugin-aws.git \
-    https://github.com/platform-engineering-labs/formae-plugin-azure.git \
-    https://github.com/platform-engineering-labs/formae-plugin-compose.git \
-    https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
-    https://github.com/platform-engineering-labs/formae-plugin-grafana.git \
-    https://github.com/platform-engineering-labs/formae-plugin-oci.git \
-    https://github.com/platform-engineering-labs/formae-plugin-ovh.git
+    https://github.com/platform-engineering-labs/formae-plugin-aws.git@feat/msgpack-serialization \
+    https://github.com/platform-engineering-labs/formae-plugin-azure.git@feat/msgpack-serialization \
+    https://github.com/platform-engineering-labs/formae-plugin-compose.git@feat/msgpack-serialization \
+    https://github.com/platform-engineering-labs/formae-plugin-gcp.git@feat/msgpack-serialization \
+    https://github.com/platform-engineering-labs/formae-plugin-grafana.git@feat/msgpack-serialization \
+    https://github.com/platform-engineering-labs/formae-plugin-oci.git@feat/msgpack-serialization \
+    https://github.com/platform-engineering-labs/formae-plugin-ovh.git@feat/msgpack-serialization
 
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins
