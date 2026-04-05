@@ -79,7 +79,8 @@ fetch-external-plugins:
 
 ## build-external-plugins: Build all external plugins
 build-external-plugins: fetch-external-plugins
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
+		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
 		name=$$(basename $$repo .git); \
 		echo "Building $$name..."; \
 		cd "$(PLUGINS_CACHE)/$$name" && \
@@ -93,7 +94,8 @@ build-external-plugins: fetch-external-plugins
 
 ## install-external-plugins: Install external plugins to user directory (wipes existing versions)
 install-external-plugins: build-external-plugins
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
+		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
 		name=$$(basename $$repo .git); \
 		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
 		plugin_type=$$(pkl eval -x 'if (this.hasProperty("type")) type else "resource"' "$$plugin_dir/formae-plugin.pkl" 2>/dev/null || echo "resource"); \
@@ -132,7 +134,8 @@ pkg-bin: clean build build-tools build-external-plugins
 	mkdir -p ./dist/pel/formae/plugins
 	cp -Rp ./formae ./dist/pel/formae/bin
 	# Package external plugins (resource + auth)
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
+		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
 		name=$$(basename $$repo .git); \
 		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
 		plugin_type=$$(pkl eval -x 'if (this.hasProperty("type")) type else "resource"' "$$plugin_dir/formae-plugin.pkl" 2>/dev/null || echo "resource"); \
@@ -184,7 +187,8 @@ publish-pkl:
 
 ## gen-external-pkl: Resolve external plugin PKL schemas (requires formae to be published first)
 gen-external-pkl: fetch-external-plugins
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
+		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
 		name=$$(basename $$repo .git); \
 		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
 		schema_dir="$$plugin_dir/schema/pkl"; \
@@ -198,7 +202,8 @@ gen-external-pkl: fetch-external-plugins
 
 ## pkg-external-pkl: Package external plugin PKL schemas
 pkg-external-pkl: gen-external-pkl
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
+		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
 		name=$$(basename $$repo .git); \
 		schema_dir="$(PLUGINS_CACHE)/$$name/schema/pkl"; \
 		if [ -d "$$schema_dir" ] && [ -f "$$schema_dir/PklProject" ]; then \
@@ -209,7 +214,8 @@ pkg-external-pkl: gen-external-pkl
 
 ## publish-external-pkl: Publish external plugin PKL schemas to S3
 publish-external-pkl:
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
+		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
 		name=$$(basename $$repo .git); \
 		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
 		schema_dir="$$plugin_dir/schema/pkl"; \
