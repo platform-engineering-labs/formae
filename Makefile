@@ -10,7 +10,9 @@ VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-
 PKL_BUNDLE_VERSION := 0.30.0
 PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSION}/pkl-$(shell ./scripts/baduname.sh)
 
-# External plugin Git repositories to bundle
+# External plugin Git repositories to bundle.
+# Append @branch or @tag to pin a specific ref (e.g., ...aws.git@feat/msgpack).
+# Without @ref, the default branch (main) is used.
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
     https://github.com/platform-engineering-labs/formae-plugin-aws.git \
@@ -23,10 +25,6 @@ EXTERNAL_PLUGIN_REPOS ?= \
 
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins
-
-# Optional: override plugin branches for testing (e.g., AZURE_PLUGIN_REF=fix/remove-nativeid-encoding)
-AZURE_PLUGIN_REF ?=
-AWS_PLUGIN_REF ?=
 
 clean:
 	rm -rf .out/
@@ -50,29 +48,34 @@ install-gremlins:
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
 
 ## fetch-external-plugins: Clone/update external plugin repositories
+## Supports @ref suffix on repo URLs (e.g., repo.git@feat/branch)
 fetch-external-plugins:
 	@mkdir -p $(PLUGINS_CACHE)
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
+	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
+		ref=$$(echo "$$entry" | grep -o '@[^@]*$$' | sed 's/^@//'); \
+		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
 		name=$$(basename $$repo .git); \
 		if [ -d "$(PLUGINS_CACHE)/$$name" ]; then \
 			echo "Updating $$name..."; \
-			git -C "$(PLUGINS_CACHE)/$$name" pull --ff-only; \
+			git -C "$(PLUGINS_CACHE)/$$name" fetch origin; \
+			if [ -n "$$ref" ]; then \
+				echo "Checking out $$name ref: $$ref"; \
+				git -C "$(PLUGINS_CACHE)/$$name" checkout "origin/$$ref" --detach 2>/dev/null \
+					|| git -C "$(PLUGINS_CACHE)/$$name" checkout "$$ref" --detach; \
+			else \
+				git -C "$(PLUGINS_CACHE)/$$name" checkout origin/HEAD --detach 2>/dev/null \
+					|| git -C "$(PLUGINS_CACHE)/$$name" pull --ff-only; \
+			fi; \
 		else \
 			echo "Cloning $$name..."; \
-			git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
+			if [ -n "$$ref" ]; then \
+				git clone --depth 1 --branch "$$ref" $$repo "$(PLUGINS_CACHE)/$$name"; \
+			else \
+				git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
+			fi; \
 			. ./scripts/ci/track-event.sh && formae_track_event "ci_repo_clone" "cloned_repo=$$name"; \
-		fi \
+		fi; \
 	done
-	@if [ -n "$(AZURE_PLUGIN_REF)" ]; then \
-		echo "Checking out Azure plugin ref: $(AZURE_PLUGIN_REF)"; \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" fetch origin $(AZURE_PLUGIN_REF); \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" checkout FETCH_HEAD; \
-	fi
-	@if [ -n "$(AWS_PLUGIN_REF)" ]; then \
-		echo "Checking out AWS plugin ref: $(AWS_PLUGIN_REF)"; \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" fetch origin $(AWS_PLUGIN_REF); \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" checkout FETCH_HEAD; \
-	fi
 
 ## build-external-plugins: Build all external plugins
 build-external-plugins: fetch-external-plugins

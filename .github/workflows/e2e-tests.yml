@@ -3,12 +3,10 @@ name: formae-e2e-tests
 on:
   workflow_dispatch:
     inputs:
-      azure_plugin_ref:
-        description: 'Azure plugin branch/tag/SHA to test against (leave empty for main)'
-        required: false
-        default: ''
-      aws_plugin_ref:
-        description: 'AWS plugin branch/tag/SHA to test against (leave empty for main)'
+      plugin_refs:
+        description: >-
+          Plugin ref overrides as comma-separated name=ref pairs
+          (e.g., aws=feat/msgpack,azure=feat/msgpack). Leave empty for main.
         required: false
         default: ''
   pull_request:
@@ -154,6 +152,25 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Build plugin repo list with ref overrides
+        run: |
+          # Start with default repos from Makefile
+          REPOS="$(grep -A 20 '^EXTERNAL_PLUGIN_REPOS' Makefile | grep '\.git' | sed 's/\\$//' | xargs)"
+
+          # Apply ref overrides from input (e.g., "aws=feat/msgpack,azure=feat/msgpack")
+          REFS="${{ github.event.inputs.plugin_refs }}"
+          if [ -n "$REFS" ]; then
+            IFS=',' read -ra PAIRS <<< "$REFS"
+            for pair in "${PAIRS[@]}"; do
+              name="${pair%%=*}"
+              ref="${pair##*=}"
+              REPOS=$(echo "$REPOS" | sed "s|formae-plugin-${name}.git|formae-plugin-${name}.git@${ref}|g")
+              echo "Pinning ${name} to ref: ${ref}"
+            done
+          fi
+
+          echo "EXTERNAL_PLUGIN_REPOS=${REPOS}" >> "$GITHUB_ENV"
+
       - name: Running ${{ matrix.test }}
         env:
           AWS_PROFILE: e2e-test
@@ -161,8 +178,7 @@ jobs:
         run: >-
           make test-e2e
           E2E_RUN_FLAGS="-run ${{ matrix.test }}"
-          AZURE_PLUGIN_REF="${{ github.event.inputs.azure_plugin_ref }}"
-          AWS_PLUGIN_REF="${{ github.event.inputs.aws_plugin_ref }}"
+          EXTERNAL_PLUGIN_REPOS="${EXTERNAL_PLUGIN_REPOS}"
 
   cleanup:
     runs-on: ubuntu-latest
