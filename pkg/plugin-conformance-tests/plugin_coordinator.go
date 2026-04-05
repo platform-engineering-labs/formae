@@ -237,14 +237,7 @@ func (c *TestPluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request an
 func (c *TestPluginCoordinator) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case plugin.PluginAnnouncement:
-		// Decompress capabilities from the announcement
-		caps, err := plugin.DecompressCapabilities(msg.Capabilities)
-		if err != nil {
-			c.Log().Error("Failed to decompress capabilities",
-				"namespace", msg.Namespace,
-				"error", err)
-			return fmt.Errorf("failed to decompress capabilities: %w", err)
-		}
+		caps := msg.Capabilities
 
 		c.Log().Info("Plugin announced",
 			"namespace", msg.Namespace,
@@ -267,14 +260,6 @@ func (c *TestPluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			"from", from,
 			"status", msg.OperationStatus,
 			"nativeID", msg.NativeID)
-
-		// Decompress ResourceProperties if compressed for Ergo transport
-		if len(msg.ResourceProperties) == 0 && len(msg.CompressedResourceProperties) > 0 {
-			decompressed, err := plugin.DecompressJSON(msg.CompressedResourceProperties)
-			if err == nil {
-				msg.ResourceProperties = decompressed
-			}
-		}
 
 		// Store the latest progress for this operator (extract embedded ProgressResult)
 		c.latestProgress[from] = msg.ProgressResult
@@ -397,16 +382,6 @@ func (c *TestPluginCoordinator) createResource(req CreateResourceRequest) Create
 		"statusMessage", trackedProgress.StatusMessage,
 		"nativeID", trackedProgress.NativeID)
 
-	// Decompress ResourceProperties if compressed for Ergo transport.
-	// TrackedProgress compresses and nils ResourceProperties, but callers
-	// expect it on the embedded ProgressResult.
-	if len(trackedProgress.ResourceProperties) == 0 && len(trackedProgress.CompressedResourceProperties) > 0 {
-		decompressed, err := plugin.DecompressJSON(trackedProgress.CompressedResourceProperties)
-		if err == nil {
-			trackedProgress.ResourceProperties = decompressed
-		}
-	}
-
 	// Return immediately with the operator PID and initial progress
 	// The caller is responsible for polling via GetLatestProgressRequest if needed
 	return CreateResourceResult{
@@ -427,18 +402,14 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 	}
 
 	// Step 2: Send Delete request to PluginOperator
-	compRes, err := plugin.CompressResource(model.Resource{
-		Type:     req.ResourceType,
-		NativeID: req.NativeID,
-	})
-	if err != nil {
-		return DeleteResourceResult{Error: fmt.Sprintf("failed to compress resource: %v", err)}
-	}
 	deleteReq := plugin.DeleteResource{
 		Namespace:    req.Namespace,
 		NativeID:     req.NativeID,
 		ResourceType: req.ResourceType,
-		Resource:     compRes,
+		Resource: model.Resource{
+			Type:     req.ResourceType,
+			NativeID: req.NativeID,
+		},
 		TargetConfig: req.Target.Config,
 	}
 
@@ -461,14 +432,6 @@ func (c *TestPluginCoordinator) deleteResource(req DeleteResourceRequest) Delete
 		"resourceType", req.ResourceType,
 		"nativeID", req.NativeID,
 		"status", trackedProgress.OperationStatus)
-
-	// Decompress ResourceProperties if compressed for Ergo transport
-	if len(trackedProgress.ResourceProperties) == 0 && len(trackedProgress.CompressedResourceProperties) > 0 {
-		decompressed, err := plugin.DecompressJSON(trackedProgress.CompressedResourceProperties)
-		if err == nil {
-			trackedProgress.ResourceProperties = decompressed
-		}
-	}
 
 	// Return immediately with the operator PID and initial progress
 	// The caller is responsible for polling via GetLatestProgressRequest if needed
