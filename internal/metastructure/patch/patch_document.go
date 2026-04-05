@@ -440,7 +440,14 @@ func stripEmptyCollectionsFromValue(val any) any {
 			if isEmptyCollection(elem) {
 				continue
 			}
-			cleaned[k] = stripEmptyCollectionsFromValue(elem)
+			stripped := stripEmptyCollectionsFromValue(elem)
+			// Re-check after recursive stripping — a map whose children
+			// were all empty collections is itself now empty and should
+			// be removed (e.g. DestinationConfig: {OnSuccess: {}, OnFailure: {}}).
+			if isEmptyCollection(stripped) {
+				continue
+			}
+			cleaned[k] = stripped
 		}
 		return cleaned
 	case []any:
