@@ -9,7 +9,7 @@
 
 formae_track_event() {
   local api_key="${POSTHOG_API_KEY:-}"
-  if [[ -z "$api_key" ]]; then return; fi
+  if [ -z "$api_key" ]; then return; fi
 
   local event="$1"; shift
   local repo
