@@ -11,7 +11,10 @@ import (
 	"net/rpc"
 	"os/exec"
 	"syscall"
+	"time"
 )
+
+const initTimeout = 30 * time.Second
 
 // Client manages an auth plugin subprocess and provides typed RPC methods.
 // Used by the CLI to communicate with the auth plugin binary.
@@ -69,11 +72,30 @@ func NewClient(binaryPath string, config json.RawMessage) (*Client, error) {
 		cmd:       cmd,
 	}
 
-	// Call Init to configure the plugin
+	// Call Init to configure the plugin with a timeout to prevent hanging
+	// if the plugin is unresponsive.
+	type initResult struct {
+		resp InitResponse
+		err  error
+	}
+	ch := make(chan initResult, 1)
+	go func() {
+		var r initResult
+		r.err = rpcClient.Call("AuthPlugin.Init", &InitRequest{Config: config}, &r.resp)
+		ch <- r
+	}()
+
 	var resp InitResponse
-	if err := rpcClient.Call("AuthPlugin.Init", &InitRequest{Config: config}, &resp); err != nil {
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			c.Close()
+			return nil, fmt.Errorf("auth client: init call: %w", r.err)
+		}
+		resp = r.resp
+	case <-time.After(initTimeout):
 		c.Close()
-		return nil, fmt.Errorf("auth client: init call: %w", err)
+		return nil, fmt.Errorf("auth client: init timed out after %s", initTimeout)
 	}
 	if resp.Error != "" {
 		c.Close()

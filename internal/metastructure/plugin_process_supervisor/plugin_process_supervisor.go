@@ -461,13 +461,33 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 	conn := entry.conn
 
 	rpcClient := rpc.NewClient(conn)
+
+	type initResult struct {
+		resp pkgauth.InitResponse
+		err  error
+	}
+	ch := make(chan initResult, 1)
+	go func() {
+		var r initResult
+		r.err = rpcClient.Call("AuthPlugin.Init", &pkgauth.InitRequest{Config: handle.ConfigJSON()}, &r.resp)
+		ch <- r
+	}()
+
 	var resp pkgauth.InitResponse
-	if err := rpcClient.Call("AuthPlugin.Init", &pkgauth.InitRequest{Config: handle.ConfigJSON()}, &resp); err != nil {
+	var initErr error
+	select {
+	case r := <-ch:
+		resp, initErr = r.resp, r.err
+	case <-time.After(30 * time.Second):
+		initErr = fmt.Errorf("auth plugin %q: init timed out after 30s", handle.Name())
+	}
+
+	if initErr != nil {
 		_ = rpcClient.Close()
 		_ = conn.Close()
 		p.Log().Error("Auth plugin init call failed — agent cannot serve authenticated requests",
-			"name", handle.Name(), "error", err)
-		handle.SetInitError(fmt.Errorf("auth plugin %q init failed: %w", handle.Name(), err))
+			"name", handle.Name(), "error", initErr)
+		handle.SetInitError(fmt.Errorf("auth plugin %q init failed: %w", handle.Name(), initErr))
 		return
 	}
 	if resp.Error != "" {
