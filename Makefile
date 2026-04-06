@@ -103,6 +103,10 @@ install-external-plugins: build-external-plugins
 			mkdir -p "$$dest"; \
 			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$plugin_name"; \
 			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+			if [ -d "$$plugin_dir/schema/pkl" ]; then \
+				mkdir -p "$$dest/schema"; \
+				cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+			fi; \
 		else \
 			namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
 			dest="$$HOME/.pel/formae/plugins/$$namespace/v$$version"; \
@@ -137,6 +141,10 @@ pkg-bin: clean build build-tools build-external-plugins
 			mkdir -p "$$dest"; \
 			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$plugin_name"; \
 			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+			if [ -d "$$plugin_dir/schema/pkl" ]; then \
+				mkdir -p "$$dest/schema"; \
+				cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+			fi; \
 		else \
 			namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
 			dest="./dist/pel/formae/resource-plugins/$$namespace/v$$version"; \
