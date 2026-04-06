@@ -2,6 +2,10 @@ name: formae-container
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Formae version to install (e.g. 0.83.1). Defaults to git ref name.'
+        required: false
   workflow_call:
     
 jobs:
@@ -54,6 +58,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ inputs.version || github.ref_name }}
             FORMAE_ARTIFACT_USERNAME=${{ secrets.FORMAE_ARTIFACT_USERNAME }}
             FORMAE_ARTIFACT_PASSWORD=${{ secrets.FORMAE_ARTIFACT_PASSWORD }}
