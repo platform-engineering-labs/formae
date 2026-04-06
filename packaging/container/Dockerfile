@@ -18,7 +18,7 @@ RUN apt-get update &&  \
 RUN PATH=/opt/pel/formae/bin:$PATH HOME=/home/pel \
     /opt/pel/formae/bin/formae agent start >/dev/null 2>&1 & sleep 5 && \
     /opt/pel/formae/bin/formae agent stop >/dev/null 2>&1 || true && \
-    chown -R pel:pel /home/pel/.pel && \
+    chown -R pel:pel /home/pel/.pel /home/pel/.config && \
     test -d /home/pel/.pel/formae/plugins && \
     test "$(ls -A /home/pel/.pel/formae/plugins)" || \
     (echo "ERROR: plugin migration failed" && exit 1)
