@@ -20,12 +20,16 @@ type Manifest struct {
 	// Used in repository naming: formae-plugin-<name>
 	Name string `json:"name"`
 
+	// Type is the plugin type: "resource" (default) or "auth"
+	Type string `json:"type,omitempty"`
+
 	// Version is the semantic version of the plugin
 	Version string `json:"version"`
 
 	// Namespace is the resource type prefix (e.g., "AWS" for "AWS::EC2::Instance")
 	// Multiple plugins can share a namespace (e.g., localstack uses "AWS")
-	Namespace string `json:"namespace"`
+	// Only required for resource plugins.
+	Namespace string `json:"namespace,omitempty"`
 
 	// License is the SPDX license identifier (e.g., "Apache-2.0", "MIT")
 	License string `json:"license"`
@@ -33,6 +37,11 @@ type Manifest struct {
 	// MinFormaeVersion is the minimum formae version this plugin supports
 	// Used for compatibility checking and matrix testing
 	MinFormaeVersion string `json:"minFormaeVersion"`
+}
+
+// IsAuthPlugin returns true if this manifest describes an auth plugin.
+func (m *Manifest) IsAuthPlugin() bool {
+	return m.Type == "auth"
 }
 
 // DefaultManifestPath is the expected location of the plugin manifest.
@@ -83,8 +92,8 @@ func (m *Manifest) Validate() error {
 	if m.Version == "" {
 		return fmt.Errorf("manifest: version is required")
 	}
-	if m.Namespace == "" {
-		return fmt.Errorf("manifest: namespace is required")
+	if !m.IsAuthPlugin() && m.Namespace == "" {
+		return fmt.Errorf("manifest: namespace is required for resource plugins")
 	}
 	if m.License == "" {
 		return fmt.Errorf("manifest: license is required")

@@ -22,13 +22,13 @@ import (
 	echoSwagger "github.com/swaggo/echo-swagger"
 
 	_ "github.com/platform-engineering-labs/formae/docs"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 const (
@@ -60,19 +60,19 @@ type Server struct {
 	echo           *echo.Echo
 	metastructure  metastructure.MetastructureAPI
 	ctx            context.Context
-	pluginManager  *plugin.Manager
+	authHandle     *auth.AuthPluginHandle
 	serverConfig   *pkgmodel.ServerConfig
-	pluginConfig   *pkgmodel.PluginConfig
+	networkConfig  *pkgmodel.NetworkConfig
 	metricsHandler http.Handler
 }
 
-func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, pluginManager *plugin.Manager, serverConfig *pkgmodel.ServerConfig, pluginConfig *pkgmodel.PluginConfig, metricsHandler http.Handler) *Server {
+func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, networkConfig *pkgmodel.NetworkConfig, metricsHandler http.Handler) *Server {
 	server := &Server{
 		metastructure:  metastructure,
 		ctx:            ctx,
-		pluginManager:  pluginManager,
+		authHandle:     authHandle,
 		serverConfig:   serverConfig,
-		pluginConfig:   pluginConfig,
+		networkConfig:  networkConfig,
 		metricsHandler: metricsHandler,
 	}
 
@@ -81,33 +81,34 @@ func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI
 	return server
 }
 
-func (s *Server) configureAuth() error {
-	if s.pluginConfig.Authentication != nil {
-		auth, err := s.pluginManager.AuthPlugin(s.pluginConfig.Authentication)
-		if err != nil {
-			return err
-		}
-
-		handler, err := (*auth).Handler(s.pluginConfig.Authentication)
-		if err != nil {
-			return err
-		}
-
-		s.echo.Use(echo.WrapMiddleware(handler))
+func (s *Server) configureAuth() {
+	if s.authHandle != nil {
+		s.echo.Use(auth.NewAuthMiddleware(s.authHandle, auth.NewAuthCache()))
 	}
-
-	return nil
 }
 
 // configureNetwork sets up the network listener by loading the appropriate network plugin based on the configuration.
 func (s *Server) configureNetwork() (string, error) {
-	if s.pluginConfig.Network != nil {
-		net, err := network.DefaultRegistry.GetByConfig(s.pluginConfig.Network)
+	if s.networkConfig != nil {
+		netPlugin, err := network.DefaultRegistry.Get(s.networkConfig.Type)
 		if err != nil {
 			return "", err
 		}
 
-		s.echo.Listener, err = net.Listen(s.pluginConfig.Network, s.serverConfig.Port)
+		// Use legacy raw JSON if present (from deprecated plugins.network),
+		// otherwise marshal the typed tailscale config.
+		var configJSON []byte
+		if len(s.networkConfig.LegacyRawJSON) > 0 {
+			configJSON = s.networkConfig.LegacyRawJSON
+		} else {
+			var marshalErr error
+			configJSON, marshalErr = json.Marshal(s.networkConfig.Tailscale)
+			if marshalErr != nil {
+				return "", fmt.Errorf("failed to marshal network config: %w", marshalErr)
+			}
+		}
+
+		s.echo.Listener, err = netPlugin.Listen(configJSON, s.serverConfig.Port)
 		if err != nil {
 			return "", err
 		}
@@ -121,11 +122,7 @@ func (s *Server) configureNetwork() (string, error) {
 // Start launches the server in a separate goroutine
 func (s *Server) Start() {
 	go func() {
-		err := s.configureAuth()
-		if err != nil {
-			s.echo.Logger.Fatal(err)
-			return
-		}
+		s.configureAuth()
 
 		listen, err := s.configureNetwork()
 		if err != nil {

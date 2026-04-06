@@ -58,10 +58,11 @@ artifacts {
   password = "takeiteasy"
 }
 
-plugins {
-    network {
-        type = "tailscale"
+network {
+    type = "tailscale"
+    tailscale {
         tls = false
         authKey = "someAuthKey"
     }
 }
+

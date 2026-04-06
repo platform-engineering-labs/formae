@@ -45,6 +45,10 @@ type agentOptions struct {
 	discoveryInterval       string   // PKL duration, e.g. "30.s"
 	discoveryResourceTypes  []string // resource types to discover (empty = all)
 	extraEnv                []string // additional KEY=VALUE env vars for the agent process
+	authEnabled             bool
+	authUsername            string
+	authPassword            string
+	authBcryptHash         string
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -60,6 +64,17 @@ func WithDiscovery(interval string, resourceTypes ...string) AgentOption {
 func WithEnv(envVars ...string) AgentOption {
 	return func(o *agentOptions) {
 		o.extraEnv = append(o.extraEnv, envVars...)
+	}
+}
+
+// WithAuth enables HTTP Basic Authentication on the agent.
+// The bcryptHash must be a valid bcrypt hash of password.
+func WithAuth(username, password, bcryptHash string) AgentOption {
+	return func(o *agentOptions) {
+		o.authEnabled = true
+		o.authUsername = username
+		o.authPassword = password
+		o.authBcryptHash = bcryptHash
 	}
 }
 
@@ -99,6 +114,31 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 		resourceTypesBlock = fmt.Sprintf("\n        resourceTypesToDiscover {\n%s\n        }", strings.Join(lines, "\n"))
 	}
 
+	agentAuthBlock := ""
+	cliAuthBlock := ""
+	if options.authEnabled {
+		// Use Dynamic rather than typed plugin classes because pkl-go v0.12
+		// cannot decode typed PKL classes nested inside pkl.Object fields
+		// (e.g. AuthorizedUser inside a Listing inside an auth pkl.Object).
+		// Dynamic objects are decoded via the generic pkl.Object path.
+		agentAuthBlock = fmt.Sprintf(`
+    auth = new Dynamic {
+        type = "auth-basic"
+        authorizedUsers = new Listing {
+            new Dynamic {
+                username = %q
+                password = %q
+            }
+        }
+    }`, options.authUsername, options.authBcryptHash)
+		cliAuthBlock = fmt.Sprintf(`
+    auth = new Dynamic {
+        type = "auth-basic"
+        username = %q
+        password = %q
+    }`, options.authUsername, options.authPassword)
+	}
+
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
  */
@@ -126,16 +166,16 @@ agent {
         consoleLogLevel = "debug"
         filePath = %q
         fileLogLevel = "debug"
-    }
+    }%s
 }
 
 cli {
     api {
         port = %d
     }
-    disableUsageReporting = true
+    disableUsageReporting = true%s
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, port)
+`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)

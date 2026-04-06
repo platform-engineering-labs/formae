@@ -105,7 +105,7 @@ func runEval(app *app.App, opts *EvalOptions) error {
 }
 
 func runEvalForHumans(app *app.App, opts *EvalOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 	fmt.Print(display.Gold("Evaluating forma:") + "\n  " + display.Green("File: ") + fmt.Sprintf("%s\n  ", opts.FormaFile) + display.Green("Mode:") + fmt.Sprintf(" %s\n\n", opts.Mode))
 
 	result, err := app.Evaluate(opts.FormaFile, opts.Properties, opts.Mode)

@@ -12,6 +12,7 @@ PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSI
 
 # External plugin Git repositories to bundle
 EXTERNAL_PLUGIN_REPOS ?= \
+    https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
     https://github.com/platform-engineering-labs/formae-plugin-aws.git \
     https://github.com/platform-engineering-labs/formae-plugin-azure.git \
     https://github.com/platform-engineering-labs/formae-plugin-compose.git \
@@ -34,13 +35,11 @@ clean:
 	rm -rf ppm
 	rm -rf version.semver
 	rm -rf $(PLUGINS_CACHE)
-	find ./plugins -name '*.so' -delete
 
 clean-pel:
 	rm -rf ~/.pel/*
 
 build:
-	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 
 build-tools:
@@ -80,6 +79,12 @@ build-external-plugins: fetch-external-plugins
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
 		echo "Building $$name..."; \
+		cd "$(PLUGINS_CACHE)/$$name" && \
+			if grep -q 'formae/pkg/auth' go.mod 2>/dev/null; then \
+				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/auth=$(CURDIR)/pkg/auth; \
+				go mod tidy; \
+			fi && \
+			cd $(CURDIR); \
 		$(MAKE) -C "$(PLUGINS_CACHE)/$$name" build; \
 	done
 
@@ -88,21 +93,34 @@ install-external-plugins: build-external-plugins
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
 		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
-		namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
+		plugin_type=$$(pkl eval -x 'if (this.hasProperty("type")) type else "resource"' "$$plugin_dir/formae-plugin.pkl" 2>/dev/null || echo "resource"); \
 		version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
 		plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
-		dest="$$HOME/.pel/formae/plugins/$$namespace/v$$version"; \
-		echo "Installing resource plugin: $$namespace v$$version to $$dest"; \
-		rm -rf "$$HOME/.pel/formae/plugins/$$namespace"; \
-		mkdir -p "$$dest/schema"; \
-		cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
-		cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
-		cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+		if [ "$$plugin_type" = "auth" ]; then \
+			dest="$$HOME/.pel/formae/plugins/$$plugin_name/v$$version"; \
+			echo "Installing auth plugin: $$plugin_name v$$version to $$dest"; \
+			rm -rf "$$HOME/.pel/formae/plugins/$$plugin_name"; \
+			mkdir -p "$$dest"; \
+			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$plugin_name"; \
+			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+			if [ -d "$$plugin_dir/schema/pkl" ]; then \
+				mkdir -p "$$dest/schema"; \
+				cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+			fi; \
+		else \
+			namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
+			dest="$$HOME/.pel/formae/plugins/$$namespace/v$$version"; \
+			echo "Installing resource plugin: $$namespace v$$version to $$dest"; \
+			rm -rf "$$HOME/.pel/formae/plugins/$$namespace"; \
+			mkdir -p "$$dest/schema"; \
+			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
+			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+			cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+		fi; \
 	done
 	@echo "External plugins installed successfully."
 
 build-debug:
-	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
 pkg-bin: clean build build-tools build-external-plugins
@@ -110,27 +128,34 @@ pkg-bin: clean build build-tools build-external-plugins
 	mkdir -p ./dist/pel/formae/bin
 	mkdir -p ./dist/pel/formae/plugins
 	cp -Rp ./formae ./dist/pel/formae/bin
-	for f in ./plugins/*/*.so; do \
-		if [ -f "$$f" ] && file "$$f" | grep -qE "ELF|Mach-O"; then \
-			cp "$$f" ./dist/pel/formae/plugins/; \
-		fi \
-	done
-	rm -f ./dist/pel/formae/plugins/fake-*.so
-	# Package external resource plugins
+	# Package external plugins (resource + auth)
 	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
 		name=$$(basename $$repo .git); \
 		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
-		namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
+		plugin_type=$$(pkl eval -x 'if (this.hasProperty("type")) type else "resource"' "$$plugin_dir/formae-plugin.pkl" 2>/dev/null || echo "resource"); \
 		version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
 		plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
-		dest="./dist/pel/formae/resource-plugins/$$namespace/v$$version"; \
-		echo "Packaging resource plugin: $$namespace v$$version"; \
-		mkdir -p "$$dest/schema"; \
-		cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
-		cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
-		cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
-		mkdir -p "./dist/pel/formae/examples/$$plugin_name"; \
-		cp -r "$$plugin_dir/examples/"* "./dist/pel/formae/examples/$$plugin_name/" 2>/dev/null || true; \
+		if [ "$$plugin_type" = "auth" ]; then \
+			dest="./dist/pel/formae/resource-plugins/$$plugin_name/v$$version"; \
+			echo "Packaging auth plugin: $$plugin_name v$$version"; \
+			mkdir -p "$$dest"; \
+			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$plugin_name"; \
+			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+			if [ -d "$$plugin_dir/schema/pkl" ]; then \
+				mkdir -p "$$dest/schema"; \
+				cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+			fi; \
+		else \
+			namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
+			dest="./dist/pel/formae/resource-plugins/$$namespace/v$$version"; \
+			echo "Packaging resource plugin: $$namespace v$$version"; \
+			mkdir -p "$$dest/schema"; \
+			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
+			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
+			cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+			mkdir -p "./dist/pel/formae/examples/$$plugin_name"; \
+			cp -r "$$plugin_dir/examples/"* "./dist/pel/formae/examples/$$plugin_name/" 2>/dev/null || true; \
+		fi; \
 	done
 	curl -L -o ./dist/pel/formae/bin/pkl ${PKL_BIN_URL}
 	chmod 755 ./dist/pel/formae/bin/pkl
@@ -206,13 +231,13 @@ test-build:
 		done
 
 test-all: test-build test-pkl
-	go test -C ./plugins/auth-basic -tags="unit integration" -count=1 -failfast ./...
+	go test -C ./pkg/auth -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./...
 	go test -tags="unit integration" -count=1 -failfast ./...
 
 test-unit:
-	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...
+	go test -C ./pkg/auth -tags=unit -failfast ./...
 	go test -C ./pkg/model -tags=unit -failfast ./...
 	go test -C ./pkg/plugin -tags=unit -failfast ./...
 	go test -tags=unit -failfast ./...
@@ -296,7 +321,6 @@ test-unit-summary:
 	go test -tags=unit -count=1 -json  ./... | jq 'select(.Action == "fail")'
 
 test-integration:
-	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
 test-e2e: build install-external-plugins
@@ -351,8 +375,8 @@ test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 
 tidy-all:
 	go mod tidy
-	cd ./plugins/auth-basic && go mod tidy
 	cd ./tools/ppm && go mod tidy
+	cd ./pkg/auth && go mod tidy
 	cd ./pkg/model && go mod tidy
 	cd ./pkg/plugin && go mod tidy
 	cd ./pkg/ppm && go mod tidy

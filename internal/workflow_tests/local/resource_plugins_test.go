@@ -26,8 +26,5 @@ func TestMetastructure_ResourcePluginsForNamespace(t *testing.T) {
 		require.NotNil(t, p, "TestResourcePlugin should be set by test helpers")
 		assert.Equal(t, "FakeAWS", p.Namespace())
 
-		// PluginManager should not find FakeAWS (it's no longer a .so plugin)
-		_, err = d.PluginManager.ResourcePlugin("foobar")
-		assert.Error(t, err, "Expected error for nonexistent 'foobar' namespace")
 	})
 }

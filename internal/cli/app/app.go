@@ -5,6 +5,8 @@
 package app
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,31 +26,35 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/usage"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
+	"github.com/tidwall/gjson"
 )
 
 type App struct {
-	PluginManager *plugin.Manager
-
 	Config *pkgmodel.Config
 
 	Plugins  Plugins
 	Projects Projects
 
 	Usage usage.Sender
+
+	authClient *pkgauth.Client
 }
 
-type Plugins struct {
-	pluginManager *plugin.Manager
+// Close cleans up resources held by the App, including any auth plugin subprocess.
+func (a *App) Close() {
+	if a.authClient != nil {
+		_ = a.authClient.Close()
+	}
 }
 
-type Projects struct {
-	pluginManager *plugin.Manager
-}
+type Plugins struct{}
+
+type Projects struct{}
 
 func NewApp() *App {
-	mgr := plugin.NewManager(util.ExpandHomePath("~/.pel/formae/plugins"))
 	u, err := usage.NewPostHogSender()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
@@ -56,14 +62,11 @@ func NewApp() *App {
 	}
 
 	app := &App{
-		PluginManager: mgr,
-		Config:        &pkgmodel.Config{},
-		Plugins:       Plugins{mgr},
-		Projects:      Projects{mgr},
-		Usage:         u,
+		Config:   &pkgmodel.Config{},
+		Plugins:  Plugins{},
+		Projects: Projects{},
+		Usage:    u,
 	}
-
-	app.PluginManager.Load()
 
 	err = config.Config.EnsureClientID()
 	if err != nil {
@@ -136,6 +139,20 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	}
 
 	return nil
+}
+
+// PrintBanner prints the formae banner followed by any config warnings
+// (e.g. deprecation notices for the old plugins block). Call this instead
+// of display.PrintBanner() in human-readable command flows so that
+// warnings are never emitted in machine-readable (JSON) output.
+func (a *App) PrintBanner() {
+	display.PrintBanner()
+	if a.Config != nil && len(a.Config.Warnings) > 0 {
+		for _, w := range a.Config.Warnings {
+			fmt.Fprintf(os.Stderr, "%s %s\n", display.Gold("Warning:"), w)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
 }
 
 func (a *App) SupportedOutputSchemas() []string {
@@ -384,9 +401,13 @@ func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *a
 	if err != nil {
 		if err == syscall.ECONNREFUSED {
 			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", display.Gold("Getting started:"), display.DocRoot)
-		} else {
-			return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 		}
+		if errors.Is(err, api.AuthenticationError{}) {
+			return false, nil, nil, fmt.Errorf("%s\n\n%s",
+				display.Red("authentication failed"),
+				display.Gold("Check your cli.auth and agent.auth configuration."))
+		}
+		return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 	}
 
 	if stats.Version != formae.Version {
@@ -423,34 +444,62 @@ func (a *App) calculateNags(stats *apimodel.Stats) []string {
 }
 
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
-	var auth http.Header
+	var authHeader http.Header
 	var net *http.Client
 
-	if a.Config.Plugins.Authentication != nil {
-		authPlugin, err := a.PluginManager.AuthPlugin(a.Config.Plugins.Authentication)
+	if a.Config.Cli.Auth != nil {
+		if a.authClient == nil {
+			authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
+			pluginDir := util.ExpandHomePath(a.Config.PluginDir)
+			authPlugins := discovery.DiscoverPlugins(pluginDir, discovery.Auth)
+			var matched *discovery.PluginInfo
+			for i, p := range authPlugins {
+				if p.Name == authType {
+					matched = &authPlugins[i]
+					break
+				}
+			}
+			if matched == nil {
+				return nil, nil, fmt.Errorf("auth plugin %q not installed", authType)
+			}
+			client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to start auth plugin: %w", err)
+			}
+			a.authClient = client
+		}
+
+		resp, err := a.authClient.GetAuthHeader()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get auth header: %w", err)
+		}
+		authHeader = http.Header(resp.Headers)
+	}
+
+	if a.Config.Network != nil {
+		netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		auth, err = (*authPlugin).Authorization(a.Config.Plugins.Authentication)
+		var configJSON []byte
+		if len(a.Config.Network.LegacyRawJSON) > 0 {
+			configJSON = a.Config.Network.LegacyRawJSON
+		} else {
+			var marshalErr error
+			configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
+			if marshalErr != nil {
+				return nil, nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
+			}
+		}
+
+		net, err = netPlugin.Client(configJSON)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	if a.Config.Plugins.Network != nil {
-		netPlugin, err := network.DefaultRegistry.GetByConfig(a.Config.Plugins.Network)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		net, err = netPlugin.Client(a.Config.Plugins.Network)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	return auth, net, nil
+	return authHeader, net, nil
 }
 
 func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {
@@ -569,10 +618,6 @@ func (a *App) ExtractPolicies() ([]apimodel.PolicyInventoryItem, []string, error
 
 // Plugins
 
-func (p *Plugins) List() []*plugin.Plugin {
-	return p.pluginManager.List()
-}
-
 func (p *Plugins) SupportedSchemas() []string {
 	return schema.DefaultRegistry.SupportedSchemas()
 }
@@ -646,16 +691,8 @@ func (p *Projects) formatIncludes(format string, include []string) ([]string, er
 			}
 
 			// Default: resolve from hub (remote)
-			// Prefer installed version, then plugin manager version
-			var version string
 			if installedVersion != "" {
-				version = installedVersion
-			} else if v := p.pluginManager.PluginVersion(ns); v != nil {
-				version = v.String()
-			}
-
-			if version != "" {
-				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, version))
+				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, installedVersion))
 			} else {
 				// No version info available, add as plain namespace (will fail at resolve time)
 				includes = append(includes, ns)

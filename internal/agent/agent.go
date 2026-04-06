@@ -19,6 +19,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/api"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -28,6 +29,8 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
+	"github.com/tidwall/gjson"
 )
 
 // getPidFile returns the PID file path, configurable via FORMAE_PID_FILE env var.
@@ -93,21 +96,59 @@ func (a *Agent) Start() error {
 		// Migrate resource plugins (with manifest and schema) from system directory.
 		// This handles backwards compatibility when OLD upgrade command didn't know
 		// about resource plugins. Also wipes existing plugins since interface changed.
-		if err := migrateResourcePlugins(a.cfg.Plugins.PluginDir); err != nil {
+		if err := migrateResourcePlugins(a.cfg.PluginDir); err != nil {
 			slog.Warn("Failed to migrate resource plugins", "error", err)
 			// Non-fatal - continue anyway, plugins might already be in place
 		}
 
-		pluginManager := plugin.NewManager(util.ExpandHomePath(a.cfg.Plugins.PluginDir))
-		pluginManager.Load()
+		pluginDir := util.ExpandHomePath(a.cfg.PluginDir)
+		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
+		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
+		for i, p := range resourceInfos {
+			externalResourcePlugins[i] = p.ToResourcePluginInfo()
+		}
+
+		// Create auth plugin handle if auth is configured and a matching
+		// external auth plugin binary was discovered.
+		// If auth is explicitly configured but cannot be loaded, the agent
+		// refuses to start — running without auth when auth was requested
+		// is a security misconfiguration.
+		var authHandle *auth.AuthPluginHandle
+		if a.cfg.Agent.Auth != nil {
+			authType := gjson.GetBytes(a.cfg.Agent.Auth, "type").String()
+			if authType == "" {
+				slog.Error("Agent auth config missing 'type' field — refusing to start without auth")
+				return
+			}
+			authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
+			var matchedPlugin *plugindiscovery.PluginInfo
+			for i, p := range authPlugins {
+				if p.Name == authType {
+					matchedPlugin = &authPlugins[i]
+					break
+				}
+			}
+			if matchedPlugin == nil {
+				slog.Error("Auth plugin not installed — refusing to start without auth", "type", authType)
+				return
+			}
+			authHandle = auth.NewAuthPluginHandle(matchedPlugin.Name, matchedPlugin.BinaryPath, a.cfg.Agent.Auth)
+			slog.Info("Auth plugin configured", "name", matchedPlugin.Name, "version", matchedPlugin.Version, "path", matchedPlugin.BinaryPath)
+		}
 
 		slog.Info("Starting agent", "id", a.id)
 
-		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, pluginManager, a.id)
+		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, externalResourcePlugins, a.id)
 		if err != nil {
 			slog.Error("Failed to create ms", "error", err)
 			return
 		}
+
+		// Pass auth handle to metastructure for supervisor injection
+		if authHandle != nil {
+			ms.AuthPluginHandle = authHandle
+		}
+
 		imwg.Add(ms)
 
 		if err := ms.Start(); err != nil {
@@ -131,7 +172,7 @@ func (a *Agent) Start() error {
 
 		slog.Info("Agent started")
 
-		apiServer := api.NewServer(a.ctx, ms, pluginManager, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
+		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, a.cfg.Network, metricsHandler)
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()

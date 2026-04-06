@@ -49,6 +49,28 @@ definitions:
         items:
           type: string
         type: array
+      ResourceUpdateStates:
+        additionalProperties:
+          $ref: '#/definitions/model.CancelResourceState'
+        type: object
+    type: object
+  model.CancelResourceState:
+    properties:
+      State:
+        description: '"Canceled", "InProgress", "Success", "Failed"'
+        type: string
+    type: object
+  model.ConfigFieldHint:
+    properties:
+      CreateOnly:
+        type: boolean
+    type: object
+  model.ConfigSchema:
+    properties:
+      Hints:
+        additionalProperties:
+          $ref: '#/definitions/model.ConfigFieldHint'
+        type: object
     type: object
   model.FieldHint:
     properties:
@@ -81,6 +103,24 @@ definitions:
     - FieldUpdateMethodSet
     - FieldUpdateMethodAtomic
     - FieldUpdateMethodNone
+  model.ForceCheckTTLResponse:
+    properties:
+      command_ids:
+        items:
+          type: string
+        type: array
+      expired_stacks:
+        items:
+          type: string
+        type: array
+    type: object
+  model.ForceReconcileResponse:
+    properties:
+      command_id:
+        type: string
+      message:
+        type: string
+    type: object
   model.Forma:
     properties:
       Description:
@@ -198,6 +238,11 @@ definitions:
         type: string
       Value: {}
     type: object
+  model.ReconcilePolicyRequiredError:
+    properties:
+      StackLabel:
+        type: string
+    type: object
   model.Resource:
     properties:
       Group:
@@ -261,6 +306,8 @@ definitions:
         type: boolean
       MaxAttempts:
         type: integer
+      NativeId:
+        type: string
       OldProperties:
         items:
           type: integer
@@ -425,6 +472,8 @@ definitions:
         items:
           type: integer
         type: array
+      ConfigSchema:
+        $ref: '#/definitions/model.ConfigSchema'
       Discoverable:
         type: boolean
       Label:
@@ -438,6 +487,10 @@ definitions:
     properties:
       CascadeSource:
         type: string
+      DesiredConfig:
+        items:
+          type: integer
+        type: array
       Discoverable:
         type: boolean
       Duration:
@@ -445,6 +498,10 @@ definitions:
         type: integer
       ErrorMessage:
         type: string
+      ExistingConfig:
+        items:
+          type: integer
+        type: array
       IsCascade:
         type: boolean
       ModifiedTs:
@@ -466,6 +523,28 @@ info:
   title: Formae REST API
   version: "1.0"
 paths:
+  /admin/check-ttl:
+    post:
+      description: |-
+        Triggers a one-shot TTL expiry check. Identifies stacks with expired TTL policies
+        and initiates their destruction. Stacks with active commands are skipped.
+
+        Side effects: This endpoint destroys infrastructure. Any stack whose TTL has expired
+        will have all its resources destroyed. This is irreversible.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: TTL check complete.'
+          schema:
+            $ref: '#/definitions/model.ForceCheckTTLResponse'
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Force TTL expiry check
+      tags:
+      - admin
   /admin/discover:
     post:
       description: Initiates an immediate discovery process to identify resources
@@ -809,6 +888,50 @@ paths:
           schema:
             type: string
       summary: List drift for a stack
+      tags:
+      - stacks
+  /stacks/{stack}/reconcile:
+    post:
+      description: |-
+        Triggers a one-shot reconcile for a specific stack. This creates and executes a
+        reconcile command that reverts any out-of-band changes to managed resources on the
+        stack back to their last-known desired state. The reconcile is equivalent to
+        re-applying the last reconcile snapshot. The command executes asynchronously —
+        use the returned command_id to poll for completion via GET /commands/:id/status.
+
+        Side effects: This endpoint creates real infrastructure changes. Any resources that
+        have been modified outside of formae since the last reconcile will be reverted to
+        their managed state. This is a destructive operation for out-of-band changes.
+      parameters:
+      - description: The stack label to reconcile.
+        in: path
+        name: stack
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: No drift detected, nothing to reconcile.'
+          schema:
+            $ref: '#/definitions/model.ForceReconcileResponse'
+        "202":
+          description: 'Accepted: Reconcile command created and executing.'
+          schema:
+            $ref: '#/definitions/model.ForceReconcileResponse'
+        "403":
+          description: 'Forbidden: Stack does not have an auto-reconcile policy.'
+          schema:
+            $ref: '#/definitions/model.ReconcilePolicyRequiredError'
+        "409":
+          description: 'Conflict: Stack has active commands, reconcile skipped.'
+          schema:
+            $ref: '#/definitions/model.ForceReconcileResponse'
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: Force stack reconcile
       tags:
       - stacks
   /stats:

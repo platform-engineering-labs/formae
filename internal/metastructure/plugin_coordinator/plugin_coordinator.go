@@ -30,7 +30,6 @@ type PluginCoordinator struct {
 	plugins                   map[string]*RegisteredPlugin // namespace → plugin info (remote)
 	registeredLocalNamespaces map[string]bool              // namespaces registered with RateLimiter (local)
 	testPlugin                plugin.FullResourcePlugin    // test-only: directly injected plugin (e.g. FakeAWS) for workflow tests
-	pluginManager             *plugin.Manager              // legacy fallback (will be removed)
 	retryConfig               model.RetryConfig
 }
 
@@ -65,19 +64,10 @@ func (c *PluginCoordinator) findPluginByNamespace(namespace string) (*Registered
 	return nil, false
 }
 
-// findTestPlugin returns the test plugin if it matches the given namespace (case-insensitive),
-// or falls back to the legacy PluginManager during the transition period.
+// findTestPlugin returns the test plugin if it matches the given namespace (case-insensitive).
 func (c *PluginCoordinator) findTestPlugin(namespace string) plugin.FullResourcePlugin {
 	if c.testPlugin != nil && strings.EqualFold(c.testPlugin.Namespace(), namespace) {
 		return c.testPlugin
-	}
-
-	// Legacy fallback: check PluginManager (will be removed)
-	if c.pluginManager != nil {
-		rp, err := c.pluginManager.ResourcePlugin(namespace)
-		if err == nil && rp != nil {
-			return *rp
-		}
 	}
 
 	return nil
@@ -95,11 +85,6 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	// Test-only: check for directly injected test plugin (e.g. FakeAWS for workflow tests)
 	if tp, ok := c.Env("TestResourcePlugin"); ok {
 		c.testPlugin = tp.(plugin.FullResourcePlugin)
-	}
-
-	// Legacy: Get PluginManager from environment (for local plugin fallback)
-	if pm, ok := c.Env("PluginManager"); ok {
-		c.pluginManager = pm.(*plugin.Manager)
 	}
 
 	// Register test plugin namespace with RateLimiter at startup

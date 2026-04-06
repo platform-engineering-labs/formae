@@ -139,5 +139,9 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.Equal(t, "thedude", config.Artifacts.Username)
 	assert.Equal(t, "takeiteasy", config.Artifacts.Password)
 
-	assert.JSONEq(t, `{"Type": "tailscale", "Tls": false, "AuthKey": "someAuthKey"}`, string(config.Plugins.Network))
+	assert.NotNil(t, config.Network)
+	assert.Equal(t, "tailscale", config.Network.Type)
+	assert.NotNil(t, config.Network.Tailscale)
+	assert.False(t, config.Network.Tailscale.TLS)
+	assert.Equal(t, "someAuthKey", config.Network.Tailscale.AuthKey)
 }

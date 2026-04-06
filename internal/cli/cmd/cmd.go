@@ -130,6 +130,15 @@ func InitCommandWithContext(cmd *cobra.Command) (*cobra.Command, error) {
 	app := app.NewApp()
 	ctx := context.WithValue(context.Background(), "app", app)
 
+	// Ensure auth plugin subprocess is cleaned up when the CLI exits.
+	existingPostRun := cmd.PersistentPostRun
+	cmd.PersistentPostRun = func(cmd *cobra.Command, args []string) {
+		app.Close()
+		if existingPostRun != nil {
+			existingPostRun(cmd, args)
+		}
+	}
+
 	dyn, path := IsDynamicCommand(app)
 	if dyn {
 		props, err := app.Projects.Properties(path)
