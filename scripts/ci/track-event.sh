@@ -39,7 +39,7 @@ formae_track_event() {
     payload=$(echo "$payload" | jq --arg k "$key" --arg v "$val" '.properties[$k] = $v')
   done
 
-  curl -sf -o /dev/null https://us.i.posthog.com/capture/ \
+  curl -sf -o /dev/null https://k.platform.engineering/capture/ \
     -H "Content-Type: application/json" \
     -d "$payload" || echo "[telemetry] event send failed (non-critical)" >&2 &
 }

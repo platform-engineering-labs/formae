@@ -15,7 +15,7 @@ import (
 
 const (
 	APIKey      = "phc_4lcMdGyCWr8QKaPaWApjxAmrSv7hJidtVs7KP8e3Svx"
-	APIEndpoint = "https://us.i.posthog.com"
+	APIEndpoint = "https://k.platform.engineering"
 )
 
 type PostHogSender struct {
