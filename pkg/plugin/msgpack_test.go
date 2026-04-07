@@ -42,10 +42,11 @@ func TestRoundTripWithRawMessage(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := encodeMsgpack(&buf, &original)
+	encoded := buf.Bytes()
 	require.NoError(t, err)
 
 	var decoded v1Payload
-	err = decodeMsgpack(buf.Bytes(), &decoded)
+	err = decodeMsgpack(encoded, &decoded)
 	require.NoError(t, err)
 
 	assert.Equal(t, original.Name, decoded.Name)
@@ -64,11 +65,12 @@ func TestForwardCompatibility_V2PayloadDecodedAsV1(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := encodeMsgpack(&buf, &original)
+	encoded := buf.Bytes()
 	require.NoError(t, err)
 
 	// Decode into v1 struct -- extra field NewFlag should be silently ignored
 	var decoded v1Payload
-	err = decodeMsgpack(buf.Bytes(), &decoded)
+	err = decodeMsgpack(encoded, &decoded)
 	require.NoError(t, err)
 
 	assert.Equal(t, original.Name, decoded.Name)
@@ -86,11 +88,12 @@ func TestBackwardCompatibility_V1PayloadDecodedAsV2(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := encodeMsgpack(&buf, &original)
+	encoded := buf.Bytes()
 	require.NoError(t, err)
 
 	// Decode into v2 struct -- missing NewFlag should get zero value
 	var decoded v2Payload
-	err = decodeMsgpack(buf.Bytes(), &decoded)
+	err = decodeMsgpack(encoded, &decoded)
 	require.NoError(t, err)
 
 	assert.Equal(t, original.Name, decoded.Name)
@@ -109,13 +112,14 @@ func TestNonZeroDefaultsPreserved(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := encodeMsgpack(&buf, &original)
+	encoded := buf.Bytes()
 	require.NoError(t, err)
 
 	// Pre-populate the target with a non-zero default
 	decoded := v2Payload{
 		NewFlag: true, // set before decode
 	}
-	err = decodeMsgpack(buf.Bytes(), &decoded)
+	err = decodeMsgpack(encoded, &decoded)
 	require.NoError(t, err)
 
 	assert.Equal(t, original.Name, decoded.Name)
@@ -133,10 +137,11 @@ func TestNilRawMessageHandling(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := encodeMsgpack(&buf, &original)
+	encoded := buf.Bytes()
 	require.NoError(t, err)
 
 	var decoded v1Payload
-	err = decodeMsgpack(buf.Bytes(), &decoded)
+	err = decodeMsgpack(encoded, &decoded)
 	require.NoError(t, err)
 
 	assert.Equal(t, original.Name, decoded.Name)
@@ -155,13 +160,14 @@ func TestCompressionReducesSize(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := encodeMsgpack(&buf, &original)
+	encoded := buf.Bytes()
 	require.NoError(t, err)
 
 	// The raw msgpack (without zstd) would be roughly the size of the data.
 	// With zstd compression, the encoded size should be significantly smaller
 	// than the raw JSON input size.
 	rawSize := len(bigJSON) + len("compression-test") + 8 // rough estimate of raw data
-	encodedSize := buf.Len()
+	encodedSize := len(encoded)
 
 	assert.Less(t, encodedSize, rawSize,
 		"compressed size (%d) should be less than raw data size (%d)", encodedSize, rawSize)
@@ -184,12 +190,13 @@ func TestMsgpackTagFallsBackToJSONTag(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := encodeMsgpack(&buf, &original)
+	encoded := buf.Bytes()
 	require.NoError(t, err)
 
 	// Decode into a struct with msgpack tags using the same field names --
 	// this verifies the json tag names match msgpack tag names and are interoperable.
 	var decoded msgpackTagged
-	err = decodeMsgpack(buf.Bytes(), &decoded)
+	err = decodeMsgpack(encoded, &decoded)
 	require.NoError(t, err)
 
 	assert.Equal(t, original.FieldA, decoded.FieldA)

@@ -7,15 +7,10 @@ package plugin
 import "io"
 
 // MarshalEDF/UnmarshalEDF implementations for all cross-node message types.
-// These use the shared encodeMsgpack/decodeMsgpack helpers which handle
-// MessagePack serialization + zstd compression transparently. EDF calls
-// these methods instead of its default struct encoder, so nested types
-// (model.Resource, model.Schema, etc.) don't need EDF registration.
+// These use encodeMsgpack/decodeMsgpack for MessagePack + zstd compression.
 //
-// IMPORTANT: MarshalEDF must be on the VALUE receiver and UnmarshalEDF on the
-// POINTER receiver. This is required by Ergo's RegisterTypeOf which checks:
-//   - value implements Marshaler (MarshalEDF on value receiver)
-//   - pointer implements Unmarshaler (UnmarshalEDF on pointer receiver)
+// MarshalEDF on VALUE receiver, UnmarshalEDF on POINTER receiver
+// (required by Ergo's RegisterTypeOf).
 
 func (m ReadResource) MarshalEDF(w io.Writer) error  { return encodeMsgpack(w, &m) }
 func (m *ReadResource) UnmarshalEDF(data []byte) error { return decodeMsgpack(data, m) }
