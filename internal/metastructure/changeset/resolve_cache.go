@@ -69,8 +69,7 @@ func (r *ResolveCache) Init(args ...any) error {
 		r.retryDelay = 2 * time.Second
 	}
 
-	r.Log().Debug("ResolveCache actor initialized",
-		"maxRetries", r.maxRetries, "retryDelay", r.retryDelay)
+	r.Log().Debug("ResolveCache actor initialized maxRetries=%d retryDelay=%s", r.maxRetries, r.retryDelay)
 
 	return nil
 }
@@ -85,7 +84,7 @@ func (r *ResolveCache) HandleMessage(from gen.PID, message any) error {
 		r.Log().Debug("ResolveCache received shutdown request")
 		return gen.TerminateReasonNormal
 	default:
-		r.Log().Error("Received unknown message type", "messageType", reflect.TypeOf(msg))
+		r.Log().Error("Received unknown message type=%v", reflect.TypeOf(msg))
 	}
 	return nil
 }
@@ -95,11 +94,10 @@ func (r *ResolveCache) HandleMessage(from gen.PID, message any) error {
 func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI) {
 	// Check if the resource is already in the cache
 	if json, ok := r.cache[resourceURI.Stripped()]; ok {
-		r.Log().Debug("Cache hit for resource URI", "uri", resourceURI, "value", json)
+		r.Log().Debug("Cache hit for resource URI uri=%v value=%v", resourceURI, json)
 		value := json.Get(resourceURI.PropertyPath())
 		if !value.Exists() {
-			r.Log().Error("Unable to resolve property in cached properties",
-				"property", resourceURI.PropertyPath(), "resourceURI", resourceURI)
+			r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
 			_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 			return
 		}
@@ -108,20 +106,20 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 	}
 
 	// Load the resource from the stack to get the native id
-	r.Log().Debug("Cache miss for resource URI", "uri", resourceURI)
+	r.Log().Debug("Cache miss for resource URI uri=%v", resourceURI)
 	stackerResult, err := r.Call(
 		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
 		messages.LoadResource{
 			ResourceURI: resourceURI.Stripped(),
 		})
 	if err != nil {
-		r.Log().Error("Failed to load resource from resource persister", "resourceURI", resourceURI, "error", err)
+		r.Log().Error("Failed to load resource from resource persister resourceURI=%v: %v", resourceURI, err)
 		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 		return
 	}
 	loadResourceResult, ok := stackerResult.(messages.LoadResourceResult)
 	if !ok {
-		r.Log().Error("Unexpected result type from resource persister", "resultType", reflect.TypeOf(stackerResult))
+		r.Log().Error("Unexpected result type from resource persister resultType=%v", reflect.TypeOf(stackerResult))
 		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 		return
 	}
@@ -153,7 +151,7 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 
 	progress, err := r.readViaPlugin(retry)
 	if err != nil {
-		r.Log().Error("Failed to read resource via plugin", "resourceURI", resourceURI, "error", err)
+		r.Log().Error("Failed to read resource via plugin resourceURI=%v: %v", resourceURI, err)
 		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 		return
 	}
@@ -161,27 +159,25 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	// Retry on recoverable errors via SendAfter (non-blocking).
 	if progress.OperationStatus == resource.OperationStatusFailure && resource.IsRecoverable(progress.ErrorCode) {
 		if retry.Attempt < r.maxRetries {
-			r.Log().Info("ResolveCache: recoverable error, retrying",
-				"errorCode", progress.ErrorCode, "resourceURI", resourceURI,
-				"attempt", retry.Attempt, "maxRetries", r.maxRetries)
+			r.Log().Info("ResolveCache: recoverable error, retrying errorCode=%s resourceURI=%v attempt=%d maxRetries=%d",
+				progress.ErrorCode, resourceURI, retry.Attempt, r.maxRetries)
 			retry.Attempt++
 			if _, err := r.SendAfter(r.PID(), retry, r.retryDelay); err != nil {
-				r.Log().Error("Failed to schedule resolve retry", "error", err)
+				r.Log().Error("Failed to schedule resolve retry: %v", err)
 				_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 			}
 			return
 		}
-		r.Log().Error("ResolveCache: exhausted retries",
-			"errorCode", progress.ErrorCode, "resourceURI", resourceURI,
-			"attempts", retry.Attempt)
+		r.Log().Error("ResolveCache: exhausted retries errorCode=%s resourceURI=%v attempts=%d",
+			progress.ErrorCode, resourceURI, retry.Attempt)
 		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 		return
 	}
 
 	// Non-recoverable failure — do not cache, report immediately.
 	if progress.OperationStatus == resource.OperationStatusFailure {
-		r.Log().Error("ResolveCache: non-recoverable error reading resource",
-			"errorCode", progress.ErrorCode, "resourceURI", resourceURI)
+		r.Log().Error("ResolveCache: non-recoverable error reading resource errorCode=%s resourceURI=%v",
+			progress.ErrorCode, resourceURI)
 		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 		return
 	}
@@ -191,11 +187,10 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	enhancedParsed := r.preserveRefMetadata(retry.loadResult.Resource, parsed)
 
 	r.cache[resourceURI.Stripped()] = enhancedParsed
-	r.Log().Debug("Cached resolved properties", "uri", resourceURI, "value", enhancedParsed)
+	r.Log().Debug("Cached resolved properties uri=%v value=%v", resourceURI, enhancedParsed)
 	value := enhancedParsed.Get(resourceURI.PropertyPath())
 	if !value.Exists() {
-		r.Log().Error("Unable to resolve property in cached properties",
-			"property", resourceURI.PropertyPath(), "resourceURI", resourceURI)
+		r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
 		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
 		return
 	}
@@ -257,7 +252,7 @@ func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, p
 
 	pluginProps := make(map[string]any)
 	if err := json.Unmarshal([]byte(pluginResult.Raw), &pluginProps); err != nil {
-		r.Log().Error("Failed to unmarshal plugin result for metadata merging", "error", err)
+		r.Log().Error("Failed to unmarshal plugin result for metadata merging: %v", err)
 		return pluginResult
 	}
 
@@ -282,7 +277,7 @@ func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, p
 
 	enhanced, err := json.Marshal(pluginProps)
 	if err != nil {
-		r.Log().Error("Failed to marshal enhanced properties", "error", err)
+		r.Log().Error("Failed to marshal enhanced properties: %v", err)
 		return pluginResult
 	}
 

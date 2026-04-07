@@ -145,7 +145,7 @@ func (l *RateLimiter) HandleMessage(from gen.PID, message any) error {
 		}
 		l.Log().Debug("Registered namespace %s with rate limit %d", msg.Namespace, msg.MaxRequestsPerSecond)
 	default:
-		l.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
+		l.Log().Debug("Received unknown message type=%s", fmt.Sprintf("%T", message))
 	}
 	return nil
 }

@@ -131,7 +131,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 	// Cleanup empty stacks after successful completion
 	if newState == StateFinishedSuccessfully {
 		// Use the stacks captured at start, since the DAG is empty by now
-		proc.Log().Debug("Using pre-captured stacks for cleanup", "stacks", data.stacksWithDeletes, "commandID", data.changeset.CommandID)
+		proc.Log().Debug("Using pre-captured stacks for cleanup stacks=%v commandID=%s", data.stacksWithDeletes, data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
 			resourcePersisterPID := gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()}
 			// Use Send instead of Call - we don't need the response (CleanupEmptyStacks returns nil),
@@ -141,7 +141,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 				CommandID:   data.changeset.CommandID,
 			})
 			if err != nil {
-				proc.Log().Error("Failed to send CleanupEmptyStacks message", "error", err, "commandID", data.changeset.CommandID)
+				proc.Log().Error("Failed to send CleanupEmptyStacks message commandID=%s: %v", data.changeset.CommandID, err)
 			}
 		}
 	}
@@ -153,9 +153,9 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 			discoveryPID := gen.ProcessID{Name: actornames.Discovery, Node: proc.Node().Name()}
 			err := proc.Send(discoveryPID, messages.ResumeDiscovery{})
 			if err != nil {
-				proc.Log().Error("Failed to resume Discovery", "error", err, "commandID", data.changeset.CommandID)
+				proc.Log().Error("Failed to resume Discovery commandID=%s: %v", data.changeset.CommandID, err)
 			} else {
-				proc.Log().Debug("Resumed Discovery after user changeset completed", "commandID", data.changeset.CommandID)
+				proc.Log().Debug("Resumed Discovery after user changeset completed commandID=%s", data.changeset.CommandID)
 			}
 		}
 
@@ -172,11 +172,11 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 			Shutdown{},
 		)
 		if err != nil {
-			proc.Log().Error("Failed to shutdown resolve cache", "commandID", data.changeset.CommandID, "error", err)
+			proc.Log().Error("Failed to shutdown resolve cache commandID=%s: %v", data.changeset.CommandID, err)
 		}
 
 		// Send ourselves a shutdown message to terminate the process
-		proc.Log().Debug("ChangesetExecutor: sending shutdown message to self", "state", newState)
+		proc.Log().Debug("ChangesetExecutor: sending shutdown message to self state=%s", newState)
 		err = proc.Send(proc.PID(), Shutdown{})
 		if err != nil {
 			proc.Log().Error("ChangesetExecutor: failed to send terminate message: %v", err)
@@ -196,7 +196,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 			}
 			err = proc.Send(data.requestedBy, completed)
 			if err != nil {
-				proc.Log().Debug("Failed to send ChangesetCompleted event to requester", "error", err)
+				proc.Log().Debug("Failed to send ChangesetCompleted event to requester: %v", err)
 			}
 		}
 	}
@@ -218,7 +218,7 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 			CommandID: data.changeset.CommandID,
 		})
 	if err != nil {
-		proc.Log().Error("Failed to ensure resource updater", "error", err)
+		proc.Log().Error("Failed to ensure resource updater: %v", err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -234,11 +234,11 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 		discoveryPID := gen.ProcessID{Name: actornames.Discovery, Node: proc.Node().Name()}
 		_, err := proc.Call(discoveryPID, messages.PauseDiscovery{})
 		if err != nil {
-			proc.Log().Error("Failed to pause Discovery", "error", err, "commandID", data.changeset.CommandID)
+			proc.Log().Error("Failed to pause Discovery commandID=%s: %v", data.changeset.CommandID, err)
 			// Don't fail the operation - this is not critical enough to fail the user's operation
 		} else {
 			data.discoveryPaused = true
-			proc.Log().Debug("Paused Discovery for user changeset", "commandID", data.changeset.CommandID)
+			proc.Log().Debug("Paused Discovery for user changeset commandID=%s", data.changeset.CommandID)
 		}
 	}
 
@@ -275,8 +275,8 @@ func registerAllResourcesWithSynchronizer(dag *ExecutionDAG, proc gen.Process) [
 			ResourceURI: uri,
 		})
 		if err != nil {
-			proc.Log().Error("Failed to register in-progress resource with synchronizer",
-				"error", err, "resourceURI", ru.URI())
+			proc.Log().Error("Failed to register in-progress resource with synchronizer resourceURI=%v: %v",
+				ru.URI(), err)
 		}
 		registeredURIs = append(registeredURIs, uri)
 	}
@@ -293,8 +293,8 @@ func unregisterAllResourcesFromSynchronizer(resourceURIs []string, proc gen.Proc
 			ResourceURI: uri,
 		})
 		if err != nil {
-			proc.Log().Error("Failed to unregister in-progress resource from synchronizer",
-				"error", err, "resourceURI", uri)
+			proc.Log().Error("Failed to unregister in-progress resource from synchronizer resourceURI=%s: %v",
+				uri, err)
 		}
 	}
 }
@@ -306,7 +306,7 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 	for namespace, updates := range availableUpdates {
 		tokens, err := proc.Call(actornames.RateLimiter, RequestTokens{Namespace: namespace, N: updates})
 		if err != nil {
-			proc.Log().Error("Failed to fetch tokens for namespace", "namespace", namespace, "error", err)
+			proc.Log().Error("Failed to fetch tokens for namespace=%s: %v", namespace, err)
 			return StateFinishedWithError, data, nil, nil
 		}
 		n := tokens.(TokensGranted).N
@@ -316,7 +316,7 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 		updates := data.changeset.GetExecutableUpdates(namespace, n)
 		err = startUpdates(updates, data.changeset.CommandID, proc)
 		if err != nil {
-			proc.Log().Error("Failed to start executable updates for changeset", "commandID", data.changeset.CommandID, "error", err)
+			proc.Log().Error("Failed to start executable updates for changeset commandID=%s: %v", data.changeset.CommandID, err)
 			return StateFinishedWithError, data, nil, nil
 		}
 	}
@@ -374,7 +374,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 				},
 			)
 			if err != nil {
-				proc.Log().Error("Failed to update target state in persister", "error", err, "target", tu.Target.Label)
+				proc.Log().Error("Failed to update target state in persister target=%s: %v", tu.Target.Label, err)
 			}
 		}
 	}
@@ -389,7 +389,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 			// metadata so plugins receive plain values.
 			pluginConfig, err := resolver.ConvertToPluginFormat(message.ResolvedConfig)
 			if err != nil {
-				proc.Log().Error("Failed to convert target config to plugin format", "error", err, "target", tu.Target.Label)
+				proc.Log().Error("Failed to convert target config to plugin format target=%s: %v", tu.Target.Label, err)
 				pluginConfig = message.ResolvedConfig
 			}
 			for _, n := range data.changeset.DAG.Nodes {
@@ -425,7 +425,7 @@ func findRunningUpdate[T Update](data ChangesetData, messageURI pkgmodel.FormaeU
 func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, event updateFinishedEvent, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	// If we're in canceled state, ignore late messages
 	if state == StateCanceled {
-		proc.Log().Debug("Ignoring update finished in canceled state", "nodeURI", event.nodeURI)
+		proc.Log().Debug("Ignoring update finished in canceled state nodeURI=%v", event.nodeURI)
 		return state, data, nil, nil
 	}
 
@@ -440,8 +440,8 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 				} else {
 					node.Update.MarkFailed()
 				}
-				proc.Log().Debug("In-progress update finished during cancellation",
-					"nodeURI", event.nodeURI, "success", event.isSuccess)
+				proc.Log().Debug("In-progress update finished during cancellation nodeURI=%v success=%v",
+					event.nodeURI, event.isSuccess)
 				break
 			}
 		}
@@ -454,20 +454,20 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 		}
 
 		if inProgressCount == 0 {
-			proc.Log().Debug("All in-progress updates completed, transitioning to Canceled",
-				"commandID", data.changeset.CommandID)
+			proc.Log().Debug("All in-progress updates completed, transitioning to Canceled commandID=%s",
+				data.changeset.CommandID)
 			return StateCanceled, data, nil, nil
 		}
 
-		proc.Log().Debug("Still waiting for in-progress updates during cancellation",
-			"commandID", data.changeset.CommandID, "remainingCount", inProgressCount)
+		proc.Log().Debug("Still waiting for in-progress updates during cancellation commandID=%s remainingCount=%d",
+			data.changeset.CommandID, inProgressCount)
 		return state, data, nil, nil
 	}
 
 	// Find the finished node in the DAG
 	node, exists := data.changeset.DAG.Nodes[event.nodeURI]
 	if !exists || !node.Update.IsRunning() {
-		proc.Log().Debug("Update finished but not found in active DAG (likely already completed)", "nodeURI", event.nodeURI)
+		proc.Log().Debug("Update finished but not found in active DAG (likely already completed) nodeURI=%v", event.nodeURI)
 		return state, data, nil, nil
 	}
 
@@ -488,7 +488,7 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 	// Update DAG and get any cascading failures
 	cascadingFailures, err := data.changeset.UpdateDAG(event.nodeURI, node.Update)
 	if err != nil {
-		proc.Log().Error("Failed to update DAG", "error", err, "nodeURI", event.nodeURI)
+		proc.Log().Error("Failed to update DAG nodeURI=%v: %v", event.nodeURI, err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -503,15 +503,15 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 			}
 			switch u := failedUpdate.(type) {
 			case *resource_update.ResourceUpdate:
-				proc.Log().Debug("Resource marked as failed due to cascade",
-					"uri", u.URI(), "operation", u.Operation, "originalFailure", event.nodeURI)
+				proc.Log().Debug("Resource marked as failed due to cascade uri=%v operation=%s originalFailure=%v",
+					u.URI(), u.Operation, event.nodeURI)
 				failedResources = append(failedResources, forma_persister.ResourceUpdateRef{
 					URI:       u.URI(),
 					Operation: u.Operation,
 				})
 			case *target_update.TargetUpdate:
-				proc.Log().Debug("Target marked as failed due to cascade",
-					"label", u.Target.Label, "operation", u.Operation, "originalFailure", event.nodeURI)
+				proc.Log().Debug("Target marked as failed due to cascade label=%s operation=%s originalFailure=%v",
+					u.Target.Label, u.Operation, event.nodeURI)
 				failedTargets = append(failedTargets, forma_persister.TargetUpdateRef{
 					Label:     u.Target.Label,
 					Operation: u.Operation,
@@ -532,7 +532,7 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 				ResourceModifiedTs: now,
 			})
 			if err != nil {
-				proc.Log().Error("Failed to mark resources as failed in persister", "error", err, "commandID", data.changeset.CommandID)
+				proc.Log().Error("Failed to mark resources as failed in persister commandID=%s: %v", data.changeset.CommandID, err)
 			}
 		}
 
@@ -543,13 +543,13 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 				TargetModifiedTs: now,
 			})
 			if err != nil {
-				proc.Log().Error("Failed to mark targets as failed in persister", "error", err, "commandID", data.changeset.CommandID)
+				proc.Log().Error("Failed to mark targets as failed in persister commandID=%s: %v", data.changeset.CommandID, err)
 			}
 		}
 	}
 
 	if data.changeset.IsComplete() {
-		proc.Log().Debug("Changeset execution finished for command", "commandID", data.changeset.CommandID)
+		proc.Log().Debug("Changeset execution finished for command commandID=%s", data.changeset.CommandID)
 		return StateFinishedSuccessfully, data, nil, nil
 	}
 
@@ -568,7 +568,7 @@ func startUpdates(updates []Update, commandID string, proc gen.Process) error {
 				return err
 			}
 		default:
-			proc.Log().Error("Unknown update type in startUpdates", "uri", update.NodeURI())
+			proc.Log().Error("Unknown update type in startUpdates uri=%v", update.NodeURI())
 		}
 	}
 
@@ -576,7 +576,7 @@ func startUpdates(updates []Update, commandID string, proc gen.Process) error {
 }
 
 func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, proc gen.Process) error {
-	proc.Log().Debug("Starting resource updater", "uri", ru.URI(), "operation", ru.Operation)
+	proc.Log().Debug("Starting resource updater uri=%v operation=%s", ru.URI(), ru.Operation)
 
 	// Register non-sync resources as in-progress with the Synchronizer
 	// to prevent race conditions where sync might include resources being updated by user operations
@@ -586,7 +586,7 @@ func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, p
 			ResourceURI: string(ru.URI()),
 		})
 		if err != nil {
-			proc.Log().Error("Failed to register in-progress resource with synchronizer", "error", err, "resourceURI", ru.URI())
+			proc.Log().Error("Failed to register in-progress resource with synchronizer resourceURI=%v: %v", ru.URI(), err)
 			// Don't return error - this is not critical enough to fail the operation
 		}
 	}
@@ -598,7 +598,7 @@ func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, p
 			CommandID:   commandID,
 		})
 	if err != nil {
-		proc.Log().Error("Failed to ensure resource updater", "error", err)
+		proc.Log().Error("Failed to ensure resource updater: %v", err)
 		return err
 	}
 
@@ -608,7 +608,7 @@ func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, p
 			CommandID:      commandID,
 		})
 	if err != nil {
-		proc.Log().Error("Failed to send start message to resource updater", "error", err)
+		proc.Log().Error("Failed to send start message to resource updater: %v", err)
 		return err
 	}
 
@@ -619,7 +619,7 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 	label := tu.Target.Label
 	operation := string(tu.Operation)
 
-	proc.Log().Debug("Starting target updater", "label", label, "operation", operation)
+	proc.Log().Debug("Starting target updater label=%s operation=%s", label, operation)
 
 	_, err := proc.Call(
 		gen.ProcessID{Name: actornames.TargetUpdaterSupervisor, Node: proc.Node().Name()},
@@ -630,7 +630,7 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 		},
 	)
 	if err != nil {
-		proc.Log().Error("Failed to ensure target updater", "error", err)
+		proc.Log().Error("Failed to ensure target updater: %v", err)
 		return err
 	}
 
@@ -642,7 +642,7 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 		},
 	)
 	if err != nil {
-		proc.Log().Error("Failed to send start message to target updater", "error", err)
+		proc.Log().Error("Failed to send start message to target updater: %v", err)
 		return err
 	}
 
@@ -650,7 +650,7 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 }
 
 func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
-	proc.Log().Debug("ChangesetExecutor received cancel request", "commandID", message.CommandID)
+	proc.Log().Debug("ChangesetExecutor received cancel request commandID=%s", message.CommandID)
 
 	// Collect resources by state
 	var resourcesToCancel []forma_persister.ResourceUpdateRef
@@ -694,12 +694,11 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 			},
 		)
 		if err != nil {
-			proc.Log().Error("Failed to mark resources as canceled", "commandID", data.changeset.CommandID, "error", err)
+			proc.Log().Error("Failed to mark resources as canceled commandID=%s: %v", data.changeset.CommandID, err)
 		}
 
-		proc.Log().Debug("Marked NotStarted resources as canceled",
-			"commandID", message.CommandID,
-			"canceledCount", len(resourcesToCancel))
+		proc.Log().Debug("Marked NotStarted resources as canceled commandID=%s canceledCount=%d",
+			message.CommandID, len(resourcesToCancel))
 	}
 
 	cancelResp := CancelResponse{ResourceStates: resourceStates}
@@ -707,13 +706,12 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 	// Determine next state
 	var nextState gen.Atom
 	if inProgressCount > 0 {
-		proc.Log().Debug("Command is canceling, waiting for in-progress resources to complete",
-			"commandID", message.CommandID,
-			"inProgressCount", inProgressCount)
+		proc.Log().Debug("Command is canceling, waiting for in-progress resources to complete commandID=%s inProgressCount=%d",
+			message.CommandID, inProgressCount)
 		nextState = StateCanceling
 	} else {
-		proc.Log().Debug("Command canceled immediately (no in-progress resources)",
-			"commandID", message.CommandID)
+		proc.Log().Debug("Command canceled immediately (no in-progress resources) commandID=%s",
+			message.CommandID)
 		nextState = StateCanceled
 	}
 

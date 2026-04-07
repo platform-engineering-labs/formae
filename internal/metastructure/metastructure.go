@@ -395,7 +395,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}, nil
 	}
 
-	m.Node.Log().Debug("Storing forma command", "commandID", fa.ID)
+	m.Node.Log().Debug("Storing forma command commandID=%s", fa.ID)
 	_, err = m.callActor(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 		forma_persister.StoreNewFormaCommand{Command: *fa},
@@ -417,7 +417,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			slog.Error("Failed to persist stack updates", "error", err)
 			return nil, fmt.Errorf("failed to persist stack updates: %w", err)
 		}
-		m.Node.Log().Debug("Successfully persisted stack updates", "count", len(fa.StackUpdates))
+		m.Node.Log().Debug("Successfully persisted stack updates count=%d", len(fa.StackUpdates))
 
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
@@ -498,7 +498,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			slog.Error("Failed to persist policy updates", "error", err)
 			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
 		}
-		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+		m.Node.Log().Debug("Successfully persisted policy updates count=%d", len(fa.PolicyUpdates))
 
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
@@ -514,7 +514,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	}
 
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
+		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
 			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
@@ -524,7 +524,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			return nil, fmt.Errorf("failed to ensure ChangesetExecutor: %w", err)
 		}
 
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
+		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
 			changeset.Start{Changeset: cs},
@@ -720,7 +720,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}, nil
 	}
 
-	m.Node.Log().Debug("Storing forma command", "commandID", fa.ID)
+	m.Node.Log().Debug("Storing forma command commandID=%s", fa.ID)
 	_, err = m.callActor(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 		forma_persister.StoreNewFormaCommand{Command: *fa},
@@ -743,7 +743,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			slog.Error("Failed to persist policy updates", "error", err)
 			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
 		}
-		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+		m.Node.Log().Debug("Successfully persisted policy updates count=%d", len(fa.PolicyUpdates))
 
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
@@ -764,7 +764,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			return nil, err
 		}
 
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
+		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
 			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
@@ -774,7 +774,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			return nil, fmt.Errorf("failed to ensure ChangesetExecutor: %w", err)
 		}
 
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
+		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
 			changeset.Start{Changeset: cs},
@@ -1447,7 +1447,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// phantom dependency links in the new changeset's pipeline.
 		cs, _ := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply)
 
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command", "commandID", fa.ID)
+		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
 			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
@@ -1457,7 +1457,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			return err
 		}
 
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
+		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
 			changeset.Start{Changeset: cs},

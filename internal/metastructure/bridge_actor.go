@@ -47,7 +47,7 @@ func (b *MetastructureBridge) HandleMessage(from gen.PID, message any) error {
 			select {
 			case msg.ErrorChan <- err:
 			default:
-				b.Log().Error("failed to send error response to channel", "error", err)
+				b.Log().Error("failed to send error response to channel: %v", err)
 			}
 		} else {
 			select {
@@ -64,7 +64,7 @@ func (b *MetastructureBridge) HandleMessage(from gen.PID, message any) error {
 		// Since the bridge acts as a parent when ensuring child actors, we receive these
 		// completion messages. The metastructure uses a fire-and-forget pattern and doesn't
 		// need these notifications, so we simply ignore them.
-		b.Log().Debug("Ignoring changeset completion message (fire-and-forget pattern)", "commandID", msg.CommandID)
+		b.Log().Debug("Ignoring changeset completion message (fire-and-forget pattern) commandID=%s", msg.CommandID)
 		return nil
 
 	default:

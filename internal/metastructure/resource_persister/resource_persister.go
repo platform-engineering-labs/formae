@@ -93,7 +93,7 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
 	default:
-		rp.Log().Error("ResourcePersister: unknown request type", "type", fmt.Sprintf("%T", request))
+		rp.Log().Error("ResourcePersister: unknown request type=%s", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)
 	}
 }
@@ -107,7 +107,7 @@ func (rp *ResourcePersister) HandleMessage(from gen.PID, message any) error {
 		rp.cleanupEmptyStacks(msg.StackLabels, msg.CommandID)
 		return nil
 	default:
-		rp.Log().Error("ResourcePersister: unknown message type", "type", fmt.Sprintf("%T", message))
+		rp.Log().Error("ResourcePersister: unknown message type=%s", fmt.Sprintf("%T", message))
 		return nil
 	}
 }
@@ -448,20 +448,20 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 }
 
 func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.TargetUpdate, commandID string) ([]string, error) {
-	rp.Log().Debug("Starting to persist target updates", "count", len(updates), "commandID", commandID)
+	rp.Log().Debug("Starting to persist target updates count=%d commandID=%s", len(updates), commandID)
 
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
-		rp.Log().Debug("Persisting target update", "index", i, "label", updates[i].Target.Label)
+		rp.Log().Debug("Persisting target update index=%d label=%s", i, updates[i].Target.Label)
 		if err := rp.persistTargetUpdate(&updates[i]); err != nil {
-			rp.Log().Error("Failed to persist target update", "index", i, "label", updates[i].Target.Label, "error", err)
+			rp.Log().Error("Failed to persist target update index=%d label=%s: %v", i, updates[i].Target.Label, err)
 			return nil, fmt.Errorf("failed to persist target update for %s: %w", updates[i].Target.Label, err)
 		}
-		rp.Log().Debug("Successfully persisted target update", "index", i, "label", updates[i].Target.Label)
+		rp.Log().Debug("Successfully persisted target update index=%d label=%s", i, updates[i].Target.Label)
 		versions = append(versions, updates[i].Version)
 	}
 
-	rp.Log().Debug("Finished persisting all target updates", "commandID", commandID)
+	rp.Log().Debug("Finished persisting all target updates commandID=%s", commandID)
 	return versions, nil
 }
 
@@ -519,12 +519,11 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 			Node: rp.Node().Name(),
 		}
 		if err := rp.Send(discoveryPID, discovery.Discover{Once: true}); err != nil {
-			rp.Log().Error("Failed to trigger discovery for newly discoverable target",
-				"label", update.Target.Label,
-				"error", err)
+			rp.Log().Error("Failed to trigger discovery for newly discoverable target label=%s: %v",
+				update.Target.Label, err)
 		} else {
-			rp.Log().Debug("Triggered discovery for newly discoverable target",
-				"label", update.Target.Label)
+			rp.Log().Debug("Triggered discovery for newly discoverable target label=%s",
+				update.Target.Label)
 		}
 	}
 
@@ -532,20 +531,20 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 }
 
 func (rp *ResourcePersister) persistStackUpdates(updates []stack_update.StackUpdate, commandID string) ([]string, error) {
-	rp.Log().Debug("Starting to persist stack updates", "count", len(updates), "commandID", commandID)
+	rp.Log().Debug("Starting to persist stack updates count=%d commandID=%s", len(updates), commandID)
 
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
-		rp.Log().Debug("Persisting stack update", "index", i, "label", updates[i].Stack.Label)
+		rp.Log().Debug("Persisting stack update index=%d label=%s", i, updates[i].Stack.Label)
 		if err := rp.persistStackUpdate(&updates[i], commandID); err != nil {
-			rp.Log().Error("Failed to persist stack update", "index", i, "label", updates[i].Stack.Label, "error", err)
+			rp.Log().Error("Failed to persist stack update index=%d label=%s: %v", i, updates[i].Stack.Label, err)
 			return nil, fmt.Errorf("failed to persist stack update for %s: %w", updates[i].Stack.Label, err)
 		}
-		rp.Log().Debug("Successfully persisted stack update", "index", i, "label", updates[i].Stack.Label)
+		rp.Log().Debug("Successfully persisted stack update index=%d label=%s", i, updates[i].Stack.Label)
 		versions = append(versions, updates[i].Version)
 	}
 
-	rp.Log().Debug("Finished persisting all stack updates", "commandID", commandID)
+	rp.Log().Debug("Finished persisting all stack updates commandID=%s", commandID)
 	return versions, nil
 }
 
@@ -587,7 +586,7 @@ func (rp *ResourcePersister) persistStackUpdate(update *stack_update.StackUpdate
 }
 
 func (rp *ResourcePersister) persistPolicyUpdates(updates []policy_update.PolicyUpdate, commandID string, stackIDMap map[string]string) ([]string, error) {
-	rp.Log().Debug("Starting to persist policy updates", "count", len(updates), "commandID", commandID)
+	rp.Log().Debug("Starting to persist policy updates count=%d commandID=%s", len(updates), commandID)
 
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
@@ -597,16 +596,16 @@ func (rp *ResourcePersister) persistPolicyUpdates(updates []policy_update.Policy
 			label = updates[i].Policy.GetLabel()
 		}
 
-		rp.Log().Debug("Persisting policy update", "index", i, "label", label, "operation", updates[i].Operation)
+		rp.Log().Debug("Persisting policy update index=%d label=%s operation=%s", i, label, updates[i].Operation)
 		if err := rp.persistPolicyUpdate(&updates[i], commandID, stackIDMap); err != nil {
-			rp.Log().Error("Failed to persist policy update", "index", i, "label", label, "error", err)
+			rp.Log().Error("Failed to persist policy update index=%d label=%s: %v", i, label, err)
 			return nil, fmt.Errorf("failed to persist policy update for %s: %w", label, err)
 		}
-		rp.Log().Debug("Successfully persisted policy update", "index", i, "label", label)
+		rp.Log().Debug("Successfully persisted policy update index=%d label=%s", i, label)
 		versions = append(versions, updates[i].Version)
 	}
 
-	rp.Log().Debug("Finished persisting all policy updates", "commandID", commandID)
+	rp.Log().Debug("Finished persisting all policy updates commandID=%s", commandID)
 	return versions, nil
 }
 
@@ -845,9 +844,8 @@ func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID 
 	for _, stackLabel := range stackLabels {
 		count, err := rp.datastore.CountResourcesInStack(stackLabel)
 		if err != nil {
-			rp.Log().Error("Failed to count resources in stack",
-				"stackLabel", stackLabel,
-				"error", err)
+			rp.Log().Error("Failed to count resources in stack stackLabel=%s: %v",
+				stackLabel, err)
 			continue
 		}
 
