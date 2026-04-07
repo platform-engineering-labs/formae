@@ -137,7 +137,7 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data SynchronizerData, proc gen.Process) (gen.Atom, SynchronizerData, error) {
 	if oldState == StateSynchronizing && newState == StateIdle {
-		proc.Log().Debug("Synchronization finished", "duration", time.Since(data.timeStarted))
+		proc.Log().Debug("Synchronization finished duration=%s", time.Since(data.timeStarted))
 		if err := scheduleNextSync(data, proc); err != nil {
 			return newState, data, gen.TerminateReasonPanic
 		}
@@ -153,7 +153,7 @@ func synchronize(from gen.PID, state gen.Atom, data SynchronizerData, message Sy
 		proc.Log().Debug("Synchronizer already running, consider configuring a longer interval")
 		return state, data, nil, nil
 	}
-	proc.Log().Debug("Starting resource synchronization", "timestamp", data.timeStarted)
+	proc.Log().Debug("Starting resource synchronization timestamp=%v", data.timeStarted)
 
 	return synchronizeAllResources(state, data, proc)
 }
@@ -161,13 +161,13 @@ func synchronize(from gen.PID, state gen.Atom, data SynchronizerData, message Sy
 func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	resourcesByStack, err := data.datastore.LoadAllResourcesByStack()
 	if err != nil {
-		proc.Log().Error("failed to load stacks: %w", err)
+		proc.Log().Error("failed to load stacks: %v", err)
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
 	existingTargets, err := data.datastore.LoadAllTargets()
 	if err != nil {
-		proc.Log().Error("failed to load targets: %w", err)
+		proc.Log().Error("failed to load targets: %v", err)
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
@@ -190,16 +190,16 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			messages.GetPluginInfo{Namespace: namespace},
 		)
 		if err != nil {
-			proc.Log().Debug("Failed to check plugin availability, skipping namespace",
-				"namespace", namespace, "error", err)
+			proc.Log().Debug("Failed to check plugin availability, skipping namespace=%s: %v",
+				namespace, err)
 			pluginInfoByNamespace[namespace] = pluginCache{available: false}
 			continue
 		}
 
 		pluginInfo, ok := response.(messages.PluginInfoResponse)
 		if !ok || !pluginInfo.Found {
-			proc.Log().Debug("Plugin not available yet, skipping namespace from sync",
-				"namespace", namespace)
+			proc.Log().Debug("Plugin not available yet, skipping namespace from sync namespace=%s",
+				namespace)
 			pluginInfoByNamespace[namespace] = pluginCache{available: false}
 			continue
 		}
@@ -238,7 +238,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			nil, nil,
 		)
 		if err != nil {
-			proc.Log().Error("failed to generate resource updates for stack %s: %w", stackLabel, err)
+			proc.Log().Error("failed to generate resource updates for stack %s: %v", stackLabel, err)
 			return state, data, nil, gen.TerminateReasonPanic
 		}
 
@@ -252,7 +252,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		if _, excluded := data.excludedResources[resourceURI]; !excluded {
 			filteredResourceUpdates = append(filteredResourceUpdates, update)
 		} else {
-			proc.Log().Debug("Excluding resource from sync (in-progress operation)", "resourceURI", resourceURI)
+			proc.Log().Debug("Excluding resource from sync (in-progress operation) resourceURI=%s", resourceURI)
 		}
 	}
 	allResourceUpdates = filteredResourceUpdates
@@ -263,9 +263,8 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		namespace := update.DesiredState.Namespace()
 		cache, ok := pluginInfoByNamespace[namespace]
 		if !ok || !cache.available {
-			proc.Log().Debug("Plugin not available, skipping resource from sync",
-				"namespace", namespace,
-				"resourceURI", string(update.URI()))
+			proc.Log().Debug("Plugin not available, skipping resource from sync namespace=%s resourceURI=%s",
+				namespace, string(update.URI()))
 			continue
 		}
 		availableResourceUpdates = append(availableResourceUpdates, update)
@@ -298,36 +297,36 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		"synchronizer",
 	)
 	data.commandID = syncCommand.ID
-	proc.Log().Debug("Synchronizer: created sync command", "commandID", syncCommand.ID, "resourceUpdateCount", len(allResourceUpdates))
+	proc.Log().Debug("Synchronizer: created sync command commandID=%s resourceUpdateCount=%d", syncCommand.ID, len(allResourceUpdates))
 
 	_, err = proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *syncCommand})
 	if err != nil {
-		proc.Log().Error("failed to store batch forma command: %w", err)
+		proc.Log().Error("failed to store batch forma command: %v", err)
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
 	// Sync commands (READs) will never contain cycles so we can safely ignore the error here.
 	cs, _ := changeset.NewChangeset(allResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync)
 
-	proc.Log().Debug("Ensuring ChangesetExecutor for sync command", "commandID", syncCommand.ID)
+	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
 		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: proc.Node().Name()},
 		changeset.EnsureChangesetExecutor{CommandID: syncCommand.ID},
 	)
 	if err != nil {
-		proc.Log().Error("failed to ensure ChangesetExecutor for sync command %s: %w", syncCommand.ID, err)
+		proc.Log().Error("failed to ensure ChangesetExecutor for sync command %s: %v", syncCommand.ID, err)
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
-	proc.Log().Debug("Starting ChangesetExecutor for sync command", "commandID", syncCommand.ID)
+	proc.Log().Debug("Starting ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	err = proc.Send(
 		gen.ProcessID{Name: actornames.ChangesetExecutor(syncCommand.ID), Node: proc.Node().Name()},
 		changeset.Start{Changeset: cs, NotifyOnComplete: true},
 	)
 	if err != nil {
-		proc.Log().Error("failed to start ChangesetExecutor for sync command %s: %w", syncCommand.ID, err)
+		proc.Log().Error("failed to start ChangesetExecutor for sync command %s: %v", syncCommand.ID, err)
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
@@ -336,7 +335,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 
 func changesetCompleted(from gen.PID, state gen.Atom, data SynchronizerData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	if message.CommandID != data.commandID {
-		proc.Log().Error("Synchronizer received ChangesetCompleted for unknown command ID", "commandID", message.CommandID)
+		proc.Log().Error("Synchronizer received ChangesetCompleted for unknown command ID commandID=%s", message.CommandID)
 		return state, data, nil, nil
 	}
 
@@ -345,13 +344,13 @@ func changesetCompleted(from gen.PID, state gen.Atom, data SynchronizerData, mes
 
 func registerInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	data.excludedResources[message.ResourceURI] = struct{}{}
-	proc.Log().Debug("Resource registered as in-progress, excluded from sync", "resourceURI", message.ResourceURI)
+	proc.Log().Debug("Resource registered as in-progress, excluded from sync resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
 }
 
 func unregisterInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
 	delete(data.excludedResources, message.ResourceURI)
-	proc.Log().Debug("Resource unregistered from in-progress, can be synced", "resourceURI", message.ResourceURI)
+	proc.Log().Debug("Resource unregistered from in-progress, can be synced resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
 }
 

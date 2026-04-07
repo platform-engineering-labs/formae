@@ -98,7 +98,7 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 		// Spawn the plugin
 		err := p.spawnResourcePlugin(namespace, p.plugins[namespace])
 		if err != nil {
-			p.Log().Error("Failed to spawn plugin", "namespace", namespace, "error", err)
+			p.Log().Error("Failed to spawn plugin namespace=%s: %v", namespace, err)
 			// Continue with other plugins even if one fails
 			continue
 		}
@@ -111,10 +111,10 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 			entry := &authPluginEntry{handle: handle}
 			p.authPlugin = entry
 
-			p.Log().Debug("Spawning auth plugin", "name", handle.Name(), "tag", tag)
+			p.Log().Debug("Spawning auth plugin name=%s tag=%s", handle.Name(), tag)
 
 			if err := p.spawnAuthPluginProcess(tag, entry); err != nil {
-				p.Log().Error("Failed to spawn auth plugin process", "name", handle.Name(), "error", err)
+				p.Log().Error("Failed to spawn auth plugin process name=%s: %v", handle.Name(), err)
 			}
 			// RPC Init is deferred: the plugin writes a ready signal to stdout
 			// when it starts, which arrives as MessagePortData in HandleMessage.
@@ -211,7 +211,7 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 
 	case meta.MessagePortError:
 		// Plugin error output
-		p.Log().Error("Plugin error", "tag", msg.Tag, "error", msg.Error)
+		p.Log().Error("Plugin error tag=%s: %v", msg.Tag, msg.Error)
 
 	case meta.MessagePortTerminate:
 		if auth.IsAuthTag(msg.Tag) {
@@ -223,7 +223,7 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 	case authPluginInitComplete:
 		if p.authPlugin != nil {
 			p.authPlugin.healthy = true
-			p.Log().Info("Auth plugin initialized", "name", p.authPlugin.handle.Name())
+			p.Log().Info("Auth plugin initialized name=%s", p.authPlugin.handle.Name())
 		}
 
 	}
@@ -234,10 +234,10 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 // handleResourcePluginTerminate handles termination of a resource plugin process.
 func (p *PluginProcessSupervisor) handleResourcePluginTerminate(tag string) {
 	if p.shuttingDown {
-		p.Log().Debug("Resource plugin stopped during shutdown", "namespace", tag)
+		p.Log().Debug("Resource plugin stopped during shutdown namespace=%s", tag)
 		return
 	}
-	p.Log().Error("Resource plugin terminated unexpectedly", "namespace", tag)
+	p.Log().Error("Resource plugin terminated unexpectedly namespace=%s", tag)
 
 	pluginInfo, ok := p.plugins[tag]
 	if !ok {
@@ -253,35 +253,28 @@ func (p *PluginProcessSupervisor) handleResourcePluginTerminate(tag string) {
 		Reason:    "crashed",
 	})
 	if err != nil {
-		p.Log().Error("Failed to send UnregisterPlugin message", "namespace", tag, "error", err)
+		p.Log().Error("Failed to send UnregisterPlugin message namespace=%s: %v", tag, err)
 	}
 
 	// Check restart limit
 	if pluginInfo.restartCount >= MaxPluginRestarts {
-		p.Log().Error("Plugin exceeded max restart attempts",
-			"namespace", tag,
-			"restartCount", pluginInfo.restartCount,
-			"maxRestarts", MaxPluginRestarts)
+		p.Log().Error("Plugin exceeded max restart attempts namespace=%s restartCount=%d maxRestarts=%d",
+			tag, pluginInfo.restartCount, MaxPluginRestarts)
 		return
 	}
 
 	// Increment restart count and attempt restart
 	pluginInfo.restartCount++
-	p.Log().Info("Attempting to restart resource plugin",
-		"namespace", tag,
-		"restartCount", pluginInfo.restartCount,
-		"maxRestarts", MaxPluginRestarts)
+	p.Log().Info("Attempting to restart resource plugin namespace=%s restartCount=%d maxRestarts=%d",
+		tag, pluginInfo.restartCount, MaxPluginRestarts)
 
 	err = p.spawnResourcePlugin(tag, pluginInfo)
 	if err != nil {
-		p.Log().Error("Failed to restart resource plugin",
-			"namespace", tag,
-			"restartCount", pluginInfo.restartCount,
-			"error", err)
+		p.Log().Error("Failed to restart resource plugin namespace=%s restartCount=%d: %v",
+			tag, pluginInfo.restartCount, err)
 	} else {
-		p.Log().Info("Resource plugin restarted successfully",
-			"namespace", tag,
-			"restartCount", pluginInfo.restartCount)
+		p.Log().Info("Resource plugin restarted successfully namespace=%s restartCount=%d",
+			tag, pluginInfo.restartCount)
 	}
 }
 
@@ -289,10 +282,10 @@ func (p *PluginProcessSupervisor) handleResourcePluginTerminate(tag string) {
 func (p *PluginProcessSupervisor) handleAuthPluginTerminate(tag string) {
 	name := auth.AuthTagName(tag)
 	if p.shuttingDown {
-		p.Log().Debug("Auth plugin stopped during shutdown", "name", name)
+		p.Log().Debug("Auth plugin stopped during shutdown name=%s", name)
 		return
 	}
-	p.Log().Error("Auth plugin terminated unexpectedly", "name", name, "tag", tag)
+	p.Log().Error("Auth plugin terminated unexpectedly name=%s tag=%s", name, tag)
 
 	if p.authPlugin == nil {
 		return
@@ -307,34 +300,27 @@ func (p *PluginProcessSupervisor) handleAuthPluginTerminate(tag string) {
 
 	// Check restart limit
 	if entry.restartCount >= MaxPluginRestarts {
-		p.Log().Error("Auth plugin exceeded max restart attempts",
-			"name", name,
-			"restartCount", entry.restartCount,
-			"maxRestarts", MaxPluginRestarts)
+		p.Log().Error("Auth plugin exceeded max restart attempts name=%s restartCount=%d maxRestarts=%d",
+			name, entry.restartCount, MaxPluginRestarts)
 		return
 	}
 
 	// Increment restart count and attempt restart
 	entry.restartCount++
-	p.Log().Info("Attempting to restart auth plugin",
-		"name", name,
-		"restartCount", entry.restartCount,
-		"maxRestarts", MaxPluginRestarts)
+	p.Log().Info("Attempting to restart auth plugin name=%s restartCount=%d maxRestarts=%d",
+		name, entry.restartCount, MaxPluginRestarts)
 
 	// Reset so the next ready signal triggers completeAuthPluginInit again.
 	entry.initStarted = false
 
 	err := p.spawnAuthPluginProcess(tag, entry)
 	if err != nil {
-		p.Log().Error("Failed to restart auth plugin",
-			"name", name,
-			"restartCount", entry.restartCount,
-			"error", err)
+		p.Log().Error("Failed to restart auth plugin name=%s restartCount=%d: %v",
+			name, entry.restartCount, err)
 	} else {
 		// RPC Init deferred — the new process will send a ready signal.
-		p.Log().Info("Auth plugin restarted successfully",
-			"name", name,
-			"restartCount", entry.restartCount)
+		p.Log().Info("Auth plugin restarted successfully name=%s restartCount=%d",
+			name, entry.restartCount)
 	}
 }
 
@@ -376,7 +362,7 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 			} else {
 				env[gen.Env("FORMAE_OTEL_INSECURE")] = "false"
 			}
-			p.Log().Debug("OTel config passed to plugin", "namespace", namespace, "endpoint", otelConfig.OTLP.Endpoint)
+			p.Log().Debug("OTel config passed to plugin namespace=%s endpoint=%s", namespace, otelConfig.OTLP.Endpoint)
 		}
 	}
 
@@ -406,7 +392,7 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 	pluginInfo.nodeName = gen.Atom(nodeName)
 	pluginInfo.healthy = true
 
-	p.Log().Debug("Spawned plugin", "namespace", namespace, "node", nodeName, "alias", alias)
+	p.Log().Debug("Spawned plugin namespace=%s node=%s alias=%v", namespace, nodeName, alias)
 	return nil
 }
 
@@ -444,7 +430,7 @@ func (p *PluginProcessSupervisor) spawnAuthPluginProcess(tag string, entry *auth
 	entry.metaPortAlias = alias
 	entry.conn = conn
 
-	p.Log().Debug("Spawned auth plugin process", "name", handle.Name(), "tag", tag, "alias", alias)
+	p.Log().Debug("Spawned auth plugin process name=%s tag=%s alias=%v", handle.Name(), tag, alias)
 	return nil
 }
 
@@ -485,16 +471,16 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 	if initErr != nil {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		p.Log().Error("Auth plugin init call failed — agent cannot serve authenticated requests",
-			"name", handle.Name(), "error", initErr)
+		p.Log().Error("Auth plugin init call failed — agent cannot serve authenticated requests name=%s: %v",
+			handle.Name(), initErr)
 		handle.SetInitError(fmt.Errorf("auth plugin %q init failed: %w", handle.Name(), initErr))
 		return
 	}
 	if resp.Error != "" {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		p.Log().Error("Auth plugin rejected config — agent cannot serve authenticated requests",
-			"name", handle.Name(), "error", resp.Error)
+		p.Log().Error("Auth plugin rejected config — agent cannot serve authenticated requests name=%s: %s",
+			handle.Name(), resp.Error)
 		handle.SetInitError(fmt.Errorf("auth plugin %q: %s", handle.Name(), resp.Error))
 		return
 	}
@@ -505,7 +491,7 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 	// entry.healthy directly from this goroutine would be a data race
 	// on actor-owned state.
 	if err := p.Send(p.PID(), authPluginInitComplete{}); err != nil {
-		p.Log().Error("Failed to send auth init complete message", "error", err)
+		p.Log().Error("Failed to send auth init complete message: %v", err)
 	}
 }
 
@@ -514,16 +500,16 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 // during shutdown that would cause "unable to send MessagePortError" errors.
 func (p *PluginProcessSupervisor) Terminate(reason error) {
 	p.shuttingDown = true
-	p.Log().Debug("PluginProcessSupervisor terminating, stopping all plugins", "reason", reason)
+	p.Log().Debug("PluginProcessSupervisor terminating, stopping all plugins reason=%v", reason)
 
 	var zeroAlias gen.Alias
 
 	// Terminate resource plugins
 	for namespace, pluginInfo := range p.plugins {
 		if pluginInfo.metaPortAlias != zeroAlias {
-			p.Log().Debug("Terminating resource plugin", "namespace", namespace, "alias", pluginInfo.metaPortAlias)
+			p.Log().Debug("Terminating resource plugin namespace=%s alias=%v", namespace, pluginInfo.metaPortAlias)
 			if err := p.SendExitMeta(pluginInfo.metaPortAlias, reason); err != nil {
-				p.Log().Debug("Failed to send exit to resource plugin", "namespace", namespace, "error", err)
+				p.Log().Debug("Failed to send exit to resource plugin namespace=%s: %v", namespace, err)
 			}
 		}
 	}
@@ -533,9 +519,9 @@ func (p *PluginProcessSupervisor) Terminate(reason error) {
 		p.authPlugin.handle.Close()
 		if p.authPlugin.metaPortAlias != zeroAlias {
 			tag := auth.AuthTag(p.authPlugin.handle.Name())
-			p.Log().Debug("Terminating auth plugin", "tag", tag, "alias", p.authPlugin.metaPortAlias)
+			p.Log().Debug("Terminating auth plugin tag=%s alias=%v", tag, p.authPlugin.metaPortAlias)
 			if err := p.SendExitMeta(p.authPlugin.metaPortAlias, reason); err != nil {
-				p.Log().Debug("Failed to send exit to auth plugin", "tag", tag, "error", err)
+				p.Log().Debug("Failed to send exit to auth plugin tag=%s: %v", tag, err)
 			}
 		}
 	}
