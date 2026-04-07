@@ -506,24 +506,16 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	delete(data.outstandingListOperations, mapKey)
 
 	// Remove the operation from remaining work if the plugin reported an error
-	if message.Error != nil {
-		proc.Log().Error("Failed to list resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, message.Error)
+	if message.Error != "" {
+		proc.Log().Error("Failed to list resources for %s in target %s: %s", message.ResourceType, message.TargetLabel, message.Error)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
 		}
 		return state, data, nil, nil
 	}
 
-	// Decompress the resources from the gzip-compressed message
-	listedResources, err := plugin.DecompressListedResources(message.Resources)
-	if err != nil {
-		proc.Log().Error("Failed to decompress resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
-		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
-		}
-		return state, data, nil, nil
-	}
-	proc.Log().Debug("Decompressed %d resources for %s in target %s", len(listedResources), message.ResourceType, message.TargetLabel)
+	listedResources := message.Resources
+	proc.Log().Debug("Received %d resources for %s in target %s", len(listedResources), message.ResourceType, message.TargetLabel)
 
 	// De-duplicate resources already under management
 	var newResources []plugin.ListedResource

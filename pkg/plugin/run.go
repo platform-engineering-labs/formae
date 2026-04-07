@@ -5,10 +5,7 @@
 package plugin
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -50,53 +47,7 @@ type PluginAnnouncement struct {
 	Version              string
 	NodeName             string
 	MaxRequestsPerSecond int
-
-	// Capabilities contains gzip-compressed JSON of PluginCapabilities.
-	// Use CompressCapabilities() and DecompressCapabilities() helpers.
-	// This compression is required because Ergo has a hardcoded 64KB buffer
-	// limit that cannot be configured via MaxMessageSize.
-	Capabilities []byte
-}
-
-// CompressCapabilities compresses PluginCapabilities to gzip-compressed JSON.
-func CompressCapabilities(caps PluginCapabilities) ([]byte, error) {
-	jsonData, err := json.Marshal(caps)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal capabilities: %w", err)
-	}
-
-	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
-	}
-
-	if _, err := gz.Write(jsonData); err != nil {
-		return nil, fmt.Errorf("failed to write compressed data: %w", err)
-	}
-
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// DecompressCapabilities decompresses gzip-compressed JSON to PluginCapabilities.
-func DecompressCapabilities(data []byte) (PluginCapabilities, error) {
-	var caps PluginCapabilities
-
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return caps, fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer gz.Close()
-
-	if err := json.NewDecoder(gz).Decode(&caps); err != nil {
-		return caps, fmt.Errorf("failed to decode capabilities: %w", err)
-	}
-
-	return caps, nil
+	Capabilities         PluginCapabilities
 }
 
 // Run starts the plugin process and announces it to the agent's PluginRegistry.

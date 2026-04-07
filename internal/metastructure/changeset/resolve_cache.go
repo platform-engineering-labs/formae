@@ -43,7 +43,6 @@ type resolveRetry struct {
 	Attempt     int
 	// Pre-loaded state from the first attempt so we don't re-fetch from persister.
 	loadResult messages.LoadResourceResult
-	compRes    []byte
 	config     json.RawMessage
 }
 
@@ -133,20 +132,12 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 		targetConfig = cleanConfig
 	}
 
-	compRes, err := plugin.CompressResource(loadResourceResult.Resource)
-	if err != nil {
-		r.Log().Error("Failed to compress resource resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
-		return
-	}
-
 	// Execute the first attempt inline (no delay).
 	retry := resolveRetry{
 		From:        from,
 		ResourceURI: resourceURI,
 		Attempt:     1,
 		loadResult:  loadResourceResult,
-		compRes:     compRes,
 		config:      targetConfig,
 	}
 	r.continueResolve(retry)
@@ -236,8 +227,8 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 			Namespace:         retry.loadResult.Resource.Namespace(),
 			ResourceType:      retry.loadResult.Resource.Type,
 			ResourceNamespace: retry.loadResult.Resource.Namespace(),
-			ExistingResource:  retry.compRes,
-			Resource:          retry.compRes,
+			ExistingResource:  retry.loadResult.Resource,
+			Resource:          retry.loadResult.Resource,
 			NativeID:          retry.loadResult.Resource.NativeID,
 			TargetConfig:      retry.config,
 		})
@@ -248,14 +239,6 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 	progress, ok := progressResult.(plugin.TrackedProgress)
 	if !ok {
 		return nil, fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
-	}
-	// Decompress resource properties if sent compressed over Ergo (64KB limit)
-	if len(progress.CompressedResourceProperties) > 0 && len(progress.ResourceProperties) == 0 {
-		decompressed, err := plugin.DecompressJSON(progress.CompressedResourceProperties)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decompress resource properties: %w", err)
-		}
-		progress.ResourceProperties = decompressed
 	}
 	return &progress, nil
 }

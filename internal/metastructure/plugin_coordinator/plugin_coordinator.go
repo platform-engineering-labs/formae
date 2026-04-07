@@ -142,14 +142,9 @@ func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (
 func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case messages.PluginAnnouncement:
-		// Decompress capabilities from the announcement
-		caps, err := plugin.DecompressCapabilities(msg.Capabilities)
-		if err != nil {
-			c.Log().Error("Failed to decompress capabilities for namespace %s: %v", msg.Namespace, err)
-			return fmt.Errorf("failed to decompress capabilities: %w", err)
-		}
+		caps := msg.Capabilities
 
-		c.Log().Debug("Decompressed capabilities for namespace %s: %d resources, %d schemas, %d bytes compressed", msg.Namespace, len(caps.SupportedResources), len(caps.ResourceSchemas), len(msg.Capabilities))
+		c.Log().Debug("Received capabilities for namespace %s: %d resources, %d schemas", msg.Namespace, len(caps.SupportedResources), len(caps.ResourceSchemas))
 
 		c.plugins[msg.Namespace] = &RegisteredPlugin{
 			Namespace:            msg.Namespace,
@@ -157,21 +152,19 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			NodeName:             from.Node,
 			MaxRequestsPerSecond: msg.MaxRequestsPerSecond,
 			RegisteredAt:         time.Now(),
-			// Store decompressed capabilities
-			SupportedResources: caps.SupportedResources,
-			ResourceSchemas:    caps.ResourceSchemas,
-			MatchFilters:       caps.MatchFilters,
-			LabelConfig:        caps.LabelConfig,
+			SupportedResources:   caps.SupportedResources,
+			ResourceSchemas:      caps.ResourceSchemas,
+			MatchFilters:         caps.MatchFilters,
+			LabelConfig:          caps.LabelConfig,
 		}
 		c.Log().Info("Plugin registered: namespace=%s node=%s rateLimit=%d resources=%d",
 			msg.Namespace, msg.NodeName, msg.MaxRequestsPerSecond, len(caps.SupportedResources))
 
 		// Register the namespace with RateLimiter
-		err = c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
+		if err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 			Namespace:            msg.Namespace,
 			MaxRequestsPerSecond: msg.MaxRequestsPerSecond,
-		})
-		if err != nil {
+		}); err != nil {
 			c.Log().Error("Failed to register namespace %s with RateLimiter: %v", msg.Namespace, err)
 		}
 

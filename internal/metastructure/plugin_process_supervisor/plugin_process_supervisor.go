@@ -424,8 +424,15 @@ func (p *PluginProcessSupervisor) spawnAuthPluginProcess(tag string, entry *auth
 		return fmt.Errorf("failed to spawn auth plugin %q via meta.Port: %w", handle.Name(), err)
 	}
 
-	// Create MetaPortConn bridging meta.Port to io.ReadWriteCloser for net/rpc
-	conn := auth.NewMetaPortConn(alias, p.SendAlias)
+	// Create MetaPortConn bridging meta.Port to io.ReadWriteCloser for net/rpc.
+	// Use Node().Send instead of process SendAlias because the RPC init runs
+	// in a goroutine, and Ergo v3.2.0 forbids process-level Send/SendAlias
+	// from goroutines when the process is sleeping. Node.Send is not bound to
+	// process state and works from any goroutine.
+	node := p.Node()
+	conn := auth.NewMetaPortConn(alias, func(a gen.Alias, msg any) error {
+		return node.Send(a, msg)
+	})
 
 	entry.metaPortAlias = alias
 	entry.conn = conn
@@ -489,8 +496,9 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 
 	// Signal the actor loop to mark the plugin as healthy. Writing
 	// entry.healthy directly from this goroutine would be a data race
-	// on actor-owned state.
-	if err := p.Send(p.PID(), authPluginInitComplete{}); err != nil {
+	// on actor-owned state. Use Node().Send (not bound to process state)
+	// because this runs in a goroutine where process Send is not allowed.
+	if err := p.Node().Send(p.PID(), authPluginInitComplete{}); err != nil {
 		p.Log().Error("Failed to send auth init complete message: %v", err)
 	}
 }
