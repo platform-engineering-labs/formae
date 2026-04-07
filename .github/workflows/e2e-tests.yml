@@ -164,7 +164,7 @@ jobs:
             for pair in "${PAIRS[@]}"; do
               name="${pair%%=*}"
               ref="${pair##*=}"
-              REPOS=$(echo "$REPOS" | sed "s|formae-plugin-${name}.git|formae-plugin-${name}.git@${ref}|g")
+              REPOS=$(echo "$REPOS" | sed "s|formae-plugin-${name}.git\(@[^ ]*\)\{0,1\}|formae-plugin-${name}.git@${ref}|g")
               echo "Pinning ${name} to ref: ${ref}"
             done
           fi

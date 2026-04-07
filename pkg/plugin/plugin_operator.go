@@ -213,7 +213,7 @@ type PluginOperatorCheckStatus struct {
 	ResourceType      string // Optional resource type for status checks
 	TargetConfig      json.RawMessage
 	ResourceOperation resource.Operation
-	Request           any
+	Request           any `json:"-"` // local-only: not serialized across nodes
 }
 
 // StatusCheck is an interface that facilitates generating a status check message from the different resource
@@ -754,9 +754,16 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 				proc.Log().Info("PluginOperator: %T operation failed with recoverable error code %s. Status message: %s. Retrying (%d/%d)", operation, progress.ErrorCode, progress.StatusMessage, data.attempts, maxAttempts)
 			}
 			data.LastStatusMessage = progress.StatusMessage
-			var retryMessage PluginOperatorRetry
-			if val, ok := operation.(PluginOperatorCheckStatus); ok {
+
+			// Build the retry message. When coming from the cross-node resume
+			// path, PluginOperatorCheckStatus.Request is nil (not serialized)
+			// so we fall back to scheduling another status check instead of
+			// retrying the original operation.
+			var retryMessage any
+			if val, ok := operation.(PluginOperatorCheckStatus); ok && val.Request != nil {
 				retryMessage = PluginOperatorRetry{ResourceOperation: val.ResourceOperation, Request: val.Request}
+			} else if _, ok := operation.(PluginOperatorCheckStatus); ok {
+				retryMessage = operation.StatusCheck(&progress.ProgressResult)
 			} else {
 				retryMessage = PluginOperatorRetry{ResourceOperation: operation.Operation(), Request: operation}
 			}
@@ -767,6 +774,11 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 				return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
 			}
 
+			// When falling back to a status check, stay in waiting_for_resource
+			// (the status handler) instead of retrying (which needs the original request).
+			if _, isRetry := retryMessage.(PluginOperatorRetry); !isRetry {
+				return StateWaitingForResource, data, progress, nil, nil
+			}
 			return StateRetrying, data, progress, nil, nil
 		}
 
