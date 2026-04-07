@@ -19,8 +19,6 @@ cloud.google.com/go/storage v1.5.0/go.mod h1:tpKbwo567HUNpVclU5sGELwQWBDZ8gh0Zeo
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
 ergo.services/application v0.0.0-20240904055159-7f2e1a954c05 h1:EeLfravNUGx3tPsBdP2W9TpgHD34o1WuDO4OQrbMAiw=
 ergo.services/application v0.0.0-20240904055159-7f2e1a954c05/go.mod h1:huT9GXrAFMIHbRwnzXu0zxna7XjXl3tEpXWnW+IVR2o=
-ergo.services/ergo v1.999.320 h1:IYyjCBJvXPLW8Mpy6pq5FoBa2RjNAS4QSL2lK7bBueQ=
-ergo.services/ergo v1.999.320/go.mod h1:bLQ6PoO6Mz/8gVuzvPv3xfMfo1P9w6rZV1WnMXMeMdg=
 ergo.services/meta v0.0.0-20240904054930-a97f6add8a78 h1:YXdrLtG0aaWuUf8efXHJ+Jn1WIJXa0+hNPpTpHDTxA4=
 ergo.services/meta v0.0.0-20240904054930-a97f6add8a78/go.mod h1:xS6UTIK9KGYAOUAVdAwXTe+CchjSrqi1wHYiEsRQrJo=
 filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
@@ -33,6 +31,8 @@ github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c/go.mod h1:ukJfTF
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
 github.com/JeroenSoeters/actor/statemachine v0.0.0-20260319024748-85c28f9f660b h1:HBny9tCyJDRftwBjIYPO2cHJu2faBhmyfvFMeGda/cU=
 github.com/JeroenSoeters/actor/statemachine v0.0.0-20260319024748-85c28f9f660b/go.mod h1:pZkasfR9a9QIG3HbjvI5dDZpv07YQFgYXiXqCctIrmg=
+github.com/JeroenSoeters/ergo v1.999.320-pel.1 h1:f+FhIqLSeK81oArXJ9QkaOhHjahyW9Ec0T50xlGVxI4=
+github.com/JeroenSoeters/ergo v1.999.320-pel.1/go.mod h1:bLQ6PoO6Mz/8gVuzvPv3xfMfo1P9w6rZV1WnMXMeMdg=
 github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc=
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
 github.com/Masterminds/semver v1.5.0 h1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=

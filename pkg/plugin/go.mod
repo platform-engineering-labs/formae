@@ -9,7 +9,7 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ../model
 replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
 
 require (
-	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
+	ergo.services/actor/statemachine v0.0.0-00010101000000-000000000000
 	ergo.services/ergo v1.999.320
 	github.com/apple/pkl-go v0.12.0
 	github.com/klauspost/compress v1.18.5
@@ -63,3 +63,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.1

@@ -48,7 +48,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
 	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
-	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.2
+	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/ppm v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260319010158-0bb81e14e83f
@@ -257,3 +257,5 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633 // indirect
 )
+
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.1
