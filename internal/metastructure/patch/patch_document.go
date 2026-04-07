@@ -68,6 +68,20 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		return nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
+	// Strip fields that are both writeOnly AND createOnly from the desired
+	// state (patch) before comparison. writeOnly fields are never returned by
+	// the provider's Read, so they're always absent from the document. If the
+	// field is also createOnly, the "add" op that jsonpatch generates triggers
+	// a resource replacement even though nothing actually changed. Stripping
+	// them from the patch prevents phantom replacements on re-apply.
+	writeOnlyCreateOnly := intersectFields(schema.WriteOnly(), schema.CreateOnly())
+	if len(writeOnlyCreateOnly) > 0 {
+		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, writeOnlyCreateOnly)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
+		}
+	}
+
 	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
@@ -168,6 +182,21 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 	}
 
 	return patchDoc, nil
+}
+
+// intersectFields returns fields present in both slices.
+func intersectFields(a, b []string) []string {
+	set := make(map[string]struct{}, len(b))
+	for _, f := range b {
+		set[f] = struct{}{}
+	}
+	var result []string
+	for _, f := range a {
+		if _, ok := set[f]; ok {
+			result = append(result, f)
+		}
+	}
+	return result
 }
 
 // removeWriteOnlyFields removes writeOnly fields from the document.
