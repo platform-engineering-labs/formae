@@ -210,11 +210,11 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, proc gen.Process) (gen.Atom, DiscoveryData, error) {
 	if oldState == StateDiscovering && newState == StateIdle {
-		proc.Log().Debug("Discovery finished. The following resources have been discovered:\n"+renderSummary(data.summary), "duration", time.Since(data.timeStarted))
+		proc.Log().Debug("Discovery finished (duration=%s). The following resources have been discovered:\n%s", time.Since(data.timeStarted), renderSummary(data.summary))
 		if data.isScheduledDiscovery {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return newState, data, gen.TerminateReasonPanic
 			}
 		}
@@ -228,7 +228,7 @@ func pauseDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message me
 	}
 
 	data.pauseCount++
-	proc.Log().Debug("Discovery paused", "pauseCount", data.pauseCount, "outstandingListOps", len(data.outstandingListOperations), "outstandingSyncCmds", len(data.outstandingSyncCommands))
+	proc.Log().Debug("Discovery paused pauseCount=%d outstandingListOps=%d outstandingSyncCmds=%d", data.pauseCount, len(data.outstandingListOperations), len(data.outstandingSyncCommands))
 	return state, data, messages.PauseDiscoveryResponse{}, nil, nil
 }
 
@@ -240,13 +240,13 @@ func resumeDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message m
 	if data.pauseCount > 0 {
 		data.pauseCount--
 	}
-	proc.Log().Debug("Discovery resume requested", "pauseCount", data.pauseCount)
+	proc.Log().Debug("Discovery resume requested pauseCount=%d", data.pauseCount)
 
 	// If we're no longer paused and have queued operations, resume scanning
 	if data.pauseCount == 0 && len(data.queuedListOperations) > 0 {
 		err := proc.Send(proc.PID(), ResumeScanning{})
 		if err != nil {
-			proc.Log().Error("Failed to send ResumeScanning after unpause", "error", err)
+			proc.Log().Error("Failed to send ResumeScanning after unpause: %v", err)
 			return state, data, nil, gen.TerminateReasonPanic
 		}
 	}
@@ -290,11 +290,11 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// Clear per-cycle state at start of each discovery cycle
 	data.pluginInfoCache = make(map[string]*messages.PluginInfoResponse)
 	data.typesWithChildrenQueued = make(map[string]struct{})
-	proc.Log().Debug("Starting resource discovery", "timestamp", data.timeStarted)
+	proc.Log().Debug("Starting resource discovery timestamp=%v", data.timeStarted)
 
 	allTargets, err := data.ds.LoadDiscoverableTargets()
 	if err != nil {
-		proc.Log().Error("Discovery: failed to load targets from datastore", "error", err)
+		proc.Log().Error("Discovery: failed to load targets from datastore: %v", err)
 		allTargets = []*pkgmodel.Target{}
 	}
 	data.SetTargets(allTargets)
@@ -306,10 +306,10 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 		if data.isScheduledDiscovery {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return StateIdle, data, nil, gen.TerminateReasonPanic
 			}
-			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
+			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
 		}
 
 		return StateIdle, data, nil, nil
@@ -359,10 +359,10 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 		if data.isScheduledDiscovery {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return StateIdle, data, nil, gen.TerminateReasonPanic
 			}
-			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
+			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
 		}
 		return StateIdle, data, nil, nil
 	}
@@ -385,7 +385,7 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 
 	// Don't start new list operations if Discovery is paused
 	if data.pauseCount > 0 {
-		proc.Log().Debug("Discovery is paused, skipping resumeScanning", "pauseCount", data.pauseCount)
+		proc.Log().Debug("Discovery is paused, skipping resumeScanning pauseCount=%d", data.pauseCount)
 		return state, data, nil, nil
 	}
 
@@ -397,7 +397,7 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 		remaining := len(data.queuedListOperations[namespace])
 		tokens, err := proc.Call(actornames.RateLimiter, changeset.RequestTokens{Namespace: namespace, N: remaining})
 		if err != nil {
-			proc.Log().Error("Failed to fetch tokens for namespace.", "namespace", namespace, "error", err)
+			proc.Log().Error("Failed to fetch tokens for namespace=%s: %v", namespace, err)
 			return state, data, nil, gen.TerminateReasonPanic
 		}
 		n := tokens.(changeset.TokensGranted).N
@@ -689,7 +689,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		Command: *syncCommand,
 	})
 	if err != nil {
-		proc.Log().Error("failed to store sync command", "error", err)
+		proc.Log().Error("failed to store sync command: %v", err)
 		return "", err
 	}
 
@@ -697,7 +697,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	// sync reads are independent and one failed read must not cascade to others.
 	cs, _ := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync)
 
-	proc.Log().Debug("Ensuring ChangesetExecutor for sync command", "commandID", syncCommand.ID)
+	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
 		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: proc.Node().Name()},
 		changeset.EnsureChangesetExecutor{CommandID: syncCommand.ID},
@@ -707,7 +707,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		return "", err
 	}
 
-	proc.Log().Debug("Starting ChangesetExecutor for sync command", "commandID", syncCommand.ID)
+	proc.Log().Debug("Starting ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	err = proc.Send(
 		gen.ProcessID{Name: actornames.ChangesetExecutor(syncCommand.ID), Node: proc.Node().Name()},
 		changeset.Start{Changeset: cs, NotifyOnComplete: true},
@@ -741,7 +741,7 @@ func discoverChildrenOnce(op ListOperation, data DiscoveryData, proc gen.Process
 	}
 	parents, err := data.ds.QueryResources(&query)
 	if err != nil {
-		proc.Log().Error("Failed to load parent resources", "type", op.ResourceType, "target", op.TargetLabel, "error", err)
+		proc.Log().Error("Failed to load parent resources type=%s target=%s: %v", op.ResourceType, op.TargetLabel, err)
 		return fmt.Errorf("failed to load parent resources: %w", err)
 	}
 
@@ -772,7 +772,7 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 						ListValue:      actualValue,
 					}
 				} else {
-					proc.Log().Error("Missing parent property", "property", param.ParentProperty, "parent_id", parent.NativeID)
+					proc.Log().Error("Missing parent property property=%s parent_id=%s", param.ParentProperty, parent.NativeID)
 				}
 			}
 			data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(data.queuedListOperations[data.targets[op.TargetLabel].Namespace], ListOperation{
@@ -785,7 +785,7 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 			// If a delayed message is pending, it will process the queued work when it arrives.
 			if !data.hasPendingResumeScan {
 				if err := proc.Send(proc.PID(), ResumeScanning{}); err != nil {
-					proc.Log().Error("Failed to send ResumeScanning", "error", err)
+					proc.Log().Error("Failed to send ResumeScanning: %v", err)
 					return fmt.Errorf("failed to send ResumeScanning: %w", err)
 				}
 			}
@@ -798,13 +798,13 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	op, exists := data.outstandingSyncCommands[message.CommandID]
 	if !exists {
-		proc.Log().Error("Discovery received ChangesetCompleted for unknown command ID", "commandID", message.CommandID)
+		proc.Log().Error("Discovery received ChangesetCompleted for unknown command ID commandID=%s", message.CommandID)
 		return state, data, nil, nil
 	}
 	delete(data.outstandingSyncCommands, message.CommandID)
 
 	if message.State == changeset.ChangeSetStateFinishedWithErrors {
-		proc.Log().Error("Discovery failed to synchronize discovered resources", "resourceType", op.ResourceType, "listParams", op.ListParams, "commandID", message.CommandID)
+		proc.Log().Error("Discovery failed to synchronize discovered resources resourceType=%s listParams=%s commandID=%s", op.ResourceType, op.ListParams, message.CommandID)
 		delete(data.nativeIDsByCommand, message.CommandID)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
@@ -823,7 +823,7 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		}
 		allParents, err := data.ds.QueryResources(&query)
 		if err != nil {
-			proc.Log().Error("Failed to load parent resources for child discovery", "type", op.ResourceType, "target", op.TargetLabel, "error", err)
+			proc.Log().Error("Failed to load parent resources for child discovery type=%s target=%s: %v", op.ResourceType, op.TargetLabel, err)
 			if !data.HasOutstandingWork() {
 				return StateIdle, data, nil, nil
 			}

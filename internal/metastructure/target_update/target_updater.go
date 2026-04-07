@@ -123,7 +123,7 @@ func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Proces
 		},
 	)
 	if err != nil {
-		proc.Log().Error("TargetUpdater: failed to send ResolveValue", "error", err, "uri", first)
+		proc.Log().Error("TargetUpdater: failed to send ResolveValue uri=%v: %v", first, err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -139,7 +139,7 @@ func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Proces
 func targetValueResolved(from gen.PID, state gen.Atom, data TargetUpdaterData, message messages.ValueResolved, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
 	err := data.targetUpdate.ResolveValue(message.ResourceURI, message.Value)
 	if err != nil {
-		proc.Log().Error("TargetUpdater: failed to resolve value", "error", err, "uri", message.ResourceURI)
+		proc.Log().Error("TargetUpdater: failed to resolve value uri=%v: %v", message.ResourceURI, err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -148,13 +148,13 @@ func targetValueResolved(from gen.PID, state gen.Atom, data TargetUpdaterData, m
 
 // targetFailedToResolve handles a resolution failure.
 func targetFailedToResolve(from gen.PID, state gen.Atom, data TargetUpdaterData, message messages.FailedToResolveValue, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
-	proc.Log().Error("TargetUpdater: failed to resolve target config property", "uri", message.ResourceURI)
+	proc.Log().Error("TargetUpdater: failed to resolve target config property uri=%v", message.ResourceURI)
 	return StateFinishedWithError, data, nil, nil
 }
 
 // targetResolveCacheTimeout handles the timeout when the resolve cache doesn't respond.
 func targetResolveCacheTimeout(from gen.PID, state gen.Atom, data TargetUpdaterData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
-	proc.Log().Error("TargetUpdater: resolve cache timeout", "target", data.targetUpdate.Target.Label)
+	proc.Log().Error("TargetUpdater: resolve cache timeout target=%s", data.targetUpdate.Target.Label)
 	return StateFinishedWithError, data, nil, nil
 }
 
@@ -168,7 +168,7 @@ func persistTarget(data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUp
 		},
 	)
 	if err != nil {
-		proc.Log().Error("TargetUpdater: failed to persist target update", "error", err, "target", data.targetUpdate.Target.Label)
+		proc.Log().Error("TargetUpdater: failed to persist target update target=%s: %v", data.targetUpdate.Target.Label, err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -184,7 +184,7 @@ func onTargetUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Targe
 			finalState = TargetUpdateStateFailed
 		}
 
-		proc.Log().Debug("TargetUpdater: sending TargetUpdateFinished to requester", "state", newState, "target", data.targetUpdate.Target.Label)
+		proc.Log().Debug("TargetUpdater: sending TargetUpdateFinished to requester state=%s target=%s", newState, data.targetUpdate.Target.Label)
 		err := proc.Send(
 			data.requestedBy,
 			TargetUpdateFinished{
@@ -194,7 +194,7 @@ func onTargetUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Targe
 			},
 		)
 		if err != nil {
-			proc.Log().Error("TargetUpdater: failed to send TargetUpdateFinished to requester", "error", err)
+			proc.Log().Error("TargetUpdater: failed to send TargetUpdateFinished to requester: %v", err)
 		}
 
 		// Send ourselves a shutdown message to terminate the process.
