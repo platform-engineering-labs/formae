@@ -137,9 +137,9 @@ build-debug:
 
 pkg-bin: clean build build-external-plugins
 	echo '${VERSION}' > ./version.semver
-	mkdir -p ./dist/pel/formae/bin
+	mkdir -p ./dist/pel/bin
 	mkdir -p ./dist/pel/formae/plugins
-	cp -Rp ./formae ./dist/pel/formae/bin
+	cp -Rp ./formae ./dist/pel/bin
 	# Package external plugins (resource + auth)
 	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
 		repo=$$(echo "$$entry" | sed 's/@[^@]*$$//'); \
