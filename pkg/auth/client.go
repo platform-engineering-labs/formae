@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/rpc"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
