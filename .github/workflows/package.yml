@@ -2,22 +2,7 @@ name: formae-package
 
 on:
   workflow_dispatch:
-    inputs:
-      pkg_job:
-        description: "platform to build and publish"
-        type: choice
-        default: "all"
-        options:
-          - "all"
-          - "pkg_linux_arm64"
-          - "pkg_linux_x8664"
-          - "pkg_macos_arm64"
-          - "pkg_macos_x8664"
-  push:
-    branches:
-      - main
-    tags:
-      - '[0-9]*'  # Only package tags, not pkg/*/v* module tags
+  workflow_call:
 
 permissions:
   id-token: write
