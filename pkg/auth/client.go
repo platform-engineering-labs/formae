@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/rpc"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
@@ -29,11 +28,7 @@ type Client struct {
 func NewClient(binaryPath string, config json.RawMessage) (*Client, error) {
 	cmd := exec.Command(binaryPath)
 	cmd.Stderr = nil // let plugin stderr go to parent stderr
-
-	// Ensure the plugin subprocess is killed if the parent dies unexpectedly
-	// (e.g., kill -9). On Linux, Pdeathsig sends SIGKILL to the child when
-	// the parent's thread exits.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	setSysProcAttr(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
