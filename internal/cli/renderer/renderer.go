@@ -909,6 +909,7 @@ func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, 
 func RenderInventoryResources(resources []pkgmodel.Resource, maxRows int) (string, error) {
 	var buf strings.Builder
 	table := tablewriter.NewTable(&buf,
+		tablewriter.WithMaxWidth(display.TerminalWidth()),
 		tablewriter.WithRowAutoWrap(tw.WrapBreak),
 		tablewriter.WithHeaderAutoFormat(tw.Off),
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
