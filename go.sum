@@ -363,6 +363,7 @@ github.com/platform-engineering-labs/jsonpatch v0.0.0-20260319010158-0bb81e14e83
 github.com/platform-engineering-labs/jsonpatch v0.0.0-20260319010158-0bb81e14e83f/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
 github.com/platform-engineering-labs/orbital v0.1.35 h1:kh6khvl6Ri9TKrqGGzN52oeuSTToYk/luAXrIm65cO8=
 github.com/platform-engineering-labs/orbital v0.1.35/go.mod h1:wwVPqOmW5RO78dDzL/G5CN1Ioao0P/aUsOZVrPVx64s=
+github.com/platform-engineering-labs/orbital v0.1.36/go.mod h1:wwVPqOmW5RO78dDzL/G5CN1Ioao0P/aUsOZVrPVx64s=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
