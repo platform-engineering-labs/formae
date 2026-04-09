@@ -42,7 +42,7 @@ func GeneratePluginWrappers(pluginDir string) error {
 			continue
 		}
 
-		configPath := filepath.Join(pluginPath, versionDir, "schema", "pkl", "Config.pkl")
+		configPath := filepath.Join(pluginPath, versionDir, "schema", "Config.pkl")
 		if _, err := os.Stat(configPath); err != nil {
 			continue
 		}
@@ -50,7 +50,7 @@ func GeneratePluginWrappers(pluginDir string) error {
 		wrapperName := toPascalCase(pluginName) + ".pkl"
 		wrapperPath := filepath.Join(pluginDir, wrapperName)
 
-		relativePath := fmt.Sprintf("./%s/%s/schema/pkl/Config.pkl", pluginName, versionDir)
+		relativePath := fmt.Sprintf("./%s/%s/schema/Config.pkl", pluginName, versionDir)
 		content := fmt.Sprintf(
 			"/// Auto-generated wrapper for %s plugin.\n"+
 				"/// Do not edit — regenerated on each config evaluation.\n"+
