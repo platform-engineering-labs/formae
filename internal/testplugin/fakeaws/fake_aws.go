@@ -81,10 +81,9 @@ func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	}
 }
 
-func (s *FakeAWS) RateLimit() plugin.RateLimitConfig {
-	return plugin.RateLimitConfig{
-		Scope:                            plugin.RateLimitScopeNamespace,
-		MaxRequestsPerSecondForNamespace: RateLimitMaxRPS,
+func (s *FakeAWS) RateLimit() model.RateLimitConfig {
+	return model.RateLimitConfig{
+		MaxRequestsPerSecond: RateLimitMaxRPS,
 	}
 }
 
@@ -277,12 +276,12 @@ func (s *FakeAWS) List(context context.Context, request *resource.ListRequest) (
 }
 
 // DiscoveryFilters returns declarative filters for testing discovery exclusion
-func (s *FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
-	return []plugin.MatchFilter{
+func (s *FakeAWS) DiscoveryFilters() []model.MatchFilter {
+	return []model.MatchFilter{
 		{
 			// Filter 1: Exclude by top-level property
 			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-			Conditions: []plugin.FilterCondition{
+			Conditions: []model.FilterCondition{
 				{
 					PropertyPath:  "$.SkipDiscovery",
 					PropertyValue: "true",
@@ -292,7 +291,7 @@ func (s *FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
 		{
 			// Filter 2: Exclude by tag in array format [{"Key": "...", "Value": "..."}]
 			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-			Conditions: []plugin.FilterCondition{
+			Conditions: []model.FilterCondition{
 				{
 					PropertyPath:  `$.Tags[?(@.Key=="SkipDiscovery")].Value`,
 					PropertyValue: "true",
@@ -302,7 +301,7 @@ func (s *FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
 		{
 			// Filter 3: Exclude by tag in map format {"key": "value"}
 			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-			Conditions: []plugin.FilterCondition{
+			Conditions: []model.FilterCondition{
 				{
 					PropertyPath:  "$.Tags.SkipDiscovery",
 					PropertyValue: "true",
@@ -314,8 +313,8 @@ func (s *FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
 
 // LabelConfig returns the label extraction configuration for discovered FakeAWS resources.
 // Uses the same pattern as the real AWS plugin for testing.
-func (s *FakeAWS) LabelConfig() plugin.LabelConfig {
-	return plugin.LabelConfig{
+func (s *FakeAWS) LabelConfig() model.LabelConfig {
+	return model.LabelConfig{
 		DefaultQuery:      `$.Tags[?(@.Key=='Name')].Value`,
 		ResourceOverrides: map[string]string{},
 	}

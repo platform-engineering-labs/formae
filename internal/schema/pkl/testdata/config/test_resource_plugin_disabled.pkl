@@ -1,0 +1,14 @@
+amends "formae:/Config.pkl"
+
+import "formae:/Config.pkl"
+
+local class FakeAwsConfig extends Config.BaseResourcePluginConfig {}
+
+agent {
+    resourcePlugins {
+        new FakeAwsConfig {
+            type = "fake-aws"
+            enabled = false
+        }
+    }
+}

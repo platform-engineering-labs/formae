@@ -8,6 +8,33 @@ import "github.com/apple/pkl-go/pkl"
 
 func init() {
 	pkl.RegisterMapping("formae.Config#User", User{})
+	pkl.RegisterMapping("formae.Config#RateLimitConfig", RateLimitConfig{})
+	pkl.RegisterMapping("formae.Config#RetryConfig", RetryConfig{})
+	pkl.RegisterMapping("formae.Config#LabelConfig", LabelConfig{})
+	pkl.RegisterMapping("formae.Config#MatchFilter", MatchFilter{})
+	pkl.RegisterMapping("formae.Config#FilterCondition", FilterCondition{})
+}
+
+// ResourcePlugin nested types used when decoding BaseResourcePluginConfig
+// subclasses from pkl.Object properties.
+
+type RateLimitConfig struct {
+	MaxRequestsPerSecond int32 `pkl:"maxRequestsPerSecond"`
+}
+
+type LabelConfig struct {
+	DefaultQuery      string      `pkl:"defaultQuery"`
+	ResourceOverrides *pkl.Object `pkl:"resourceOverrides"`
+}
+
+type MatchFilter struct {
+	ResourceTypes []string          `pkl:"resourceTypes"`
+	Conditions    []FilterCondition `pkl:"conditions"`
+}
+
+type FilterCondition struct {
+	PropertyPath  string `pkl:"propertyPath"`
+	PropertyValue string `pkl:"propertyValue"`
 }
 
 type ServerConfig struct {
@@ -127,13 +154,14 @@ type NetworkConfig struct {
 type AgentConfig struct {
 	Server          ServerConfig          `pkl:"server"`
 	Datastore       DatastoreConfig       `pkl:"datastore"`
-	Retry           RetryConfig           `pkl:"retry"`
+	Retry           *RetryConfig          `pkl:"retry"`
 	Synchronization SynchronizationConfig `pkl:"synchronization"`
 	Discovery       DiscoveryConfig       `pkl:"discovery"`
 	Logging         LoggingConfig         `pkl:"logging"`
 	OTel            OTelConfig            `pkl:"oTel"`
 	StackExpirer    StackExpirerConfig    `pkl:"stackExpirer"`
 	Auth            pkl.Object            `pkl:"auth"`
+	ResourcePlugins []pkl.Object          `pkl:"resourcePlugins"`
 }
 
 type APIConfig struct {

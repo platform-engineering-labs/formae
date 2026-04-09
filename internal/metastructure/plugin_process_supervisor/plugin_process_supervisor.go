@@ -5,6 +5,8 @@
 package plugin_process_supervisor
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/rpc"
 	"regexp"
@@ -34,9 +36,10 @@ type authPluginInitComplete struct{}
 type PluginProcessSupervisor struct {
 	act.Actor
 
-	plugins      map[string]*PluginInfo
-	authPlugin   *authPluginEntry
-	shuttingDown bool
+	plugins       map[string]*PluginInfo
+	authPlugin    *authPluginEntry
+	shuttingDown  bool
+	pluginConfigs map[string]json.RawMessage // plugin-specific config keyed by type (lowercase)
 }
 
 // authPluginEntry wraps an AuthPluginHandle with supervisor-specific tracking state.
@@ -102,6 +105,21 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 			// Continue with other plugins even if one fails
 			continue
 		}
+	}
+
+	// Read per-plugin custom configs for passing to plugin binaries
+	if val, ok := p.Env("ResourcePluginConfigs"); ok {
+		if configs, ok := val.([]pkgmodel.ResourcePluginUserConfig); ok {
+			p.pluginConfigs = make(map[string]json.RawMessage)
+			for _, cfg := range configs {
+				if len(cfg.PluginConfig) > 0 {
+					p.pluginConfigs[cfg.Type] = cfg.PluginConfig
+				}
+			}
+		}
+	}
+	if p.pluginConfigs == nil {
+		p.pluginConfigs = make(map[string]json.RawMessage)
 	}
 
 	// Spawn auth plugin if configured
@@ -364,6 +382,11 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 			}
 			p.Log().Debug("OTel config passed to plugin namespace=%s endpoint=%s", namespace, otelConfig.OTLP.Endpoint)
 		}
+	}
+
+	// Add plugin-specific config if available
+	if pluginCfg, ok := p.pluginConfigs[strings.ToLower(namespace)]; ok {
+		env[gen.Env("FORMAE_PLUGIN_CONFIG")] = base64.StdEncoding.EncodeToString(pluginCfg)
 	}
 
 	// Configure meta.Port options

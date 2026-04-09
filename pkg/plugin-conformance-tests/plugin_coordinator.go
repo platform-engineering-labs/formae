@@ -46,7 +46,7 @@ type RegisteredPluginInfo struct {
 	NodeName           gen.Atom
 	SupportedResources []plugin.ResourceDescriptor
 	ResourceSchemas    map[string]model.Schema
-	MatchFilters       []plugin.MatchFilter
+	MatchFilters       []model.MatchFilter
 	RegisteredAt       time.Time
 }
 

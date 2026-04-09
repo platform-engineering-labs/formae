@@ -54,13 +54,15 @@ type GetPluginInfo struct {
 
 // PluginInfoResponse contains plugin capabilities
 type PluginInfoResponse struct {
-	Found              bool
-	Namespace          string
-	SupportedResources []plugin.ResourceDescriptor
-	ResourceSchemas    map[string]model.Schema
-	MatchFilters       []plugin.MatchFilter
-	LabelConfig        plugin.LabelConfig
-	Error              string // Set if Found is false
+	Found                   bool
+	Namespace               string
+	SupportedResources      []plugin.ResourceDescriptor
+	ResourceSchemas         map[string]model.Schema
+	MatchFilters            []model.MatchFilter
+	LabelConfig             model.LabelConfig
+	ResourceTypesToDiscover []string
+	LabelTagKeys            []string
+	Error                   string // Set if Found is false
 }
 
 // GetRegisteredPlugins requests a list of all registered plugins from PluginCoordinator

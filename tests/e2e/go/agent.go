@@ -49,6 +49,7 @@ type agentOptions struct {
 	authUsername            string
 	authPassword            string
 	authBcryptHash         string
+	resourcePluginsBlock    string   // raw PKL block for agent.resourcePlugins
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -64,6 +65,13 @@ func WithDiscovery(interval string, resourceTypes ...string) AgentOption {
 func WithEnv(envVars ...string) AgentOption {
 	return func(o *agentOptions) {
 		o.extraEnv = append(o.extraEnv, envVars...)
+	}
+}
+
+// WithResourcePlugins adds a raw PKL block for agent.resourcePlugins.
+func WithResourcePlugins(pklBlock string) AgentOption {
+	return func(o *agentOptions) {
+		o.resourcePluginsBlock = pklBlock
 	}
 }
 
@@ -166,7 +174,7 @@ agent {
         consoleLogLevel = "debug"
         filePath = %q
         fileLogLevel = "debug"
-    }%s
+    }%s%s
 }
 
 cli {
@@ -175,7 +183,7 @@ cli {
     }
     disableUsageReporting = true%s
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, port, cliAuthBlock)
+`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)
@@ -304,6 +312,16 @@ func (a *Agent) Port() int {
 // ConfigPath returns the path to the agent's configuration file.
 func (a *Agent) ConfigPath() string {
 	return a.config.ConfigPath
+}
+
+// LogFile returns the path to the agent's log file.
+func (a *Agent) LogFile() string {
+	return a.config.LogFile
+}
+
+// StdoutLogFile returns the path to the agent's stdout/stderr capture.
+func (a *Agent) StdoutLogFile() string {
+	return filepath.Join(a.config.DataDir, "agent-stdout.log")
 }
 
 // pickFreePort asks the OS for a free TCP port by listening on :0 and

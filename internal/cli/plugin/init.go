@@ -574,8 +574,9 @@ func transformContent(content string, config *PluginConfig) string {
 	// Module path
 	content = strings.ReplaceAll(content, "github.com/your-org/formae-plugin-example", config.ModulePath)
 
-	// Plugin name (lowercase)
+	// Plugin name and type (lowercase)
 	content = strings.ReplaceAll(content, `name = "example"`, fmt.Sprintf(`name = "%s"`, config.Name))
+	content = strings.ReplaceAll(content, `type = "example"`, fmt.Sprintf(`type = "%s"`, config.Name))
 
 	// Namespace (uppercase in resource types)
 	upperNamespace := strings.ToUpper(config.Namespace)

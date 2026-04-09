@@ -168,6 +168,36 @@ class NetworkConfig {
     tailscale: TailscaleConfig?
 }
 
+class RateLimitConfig {
+    maxRequestsPerSecond: Int = 10
+}
+
+class LabelConfig {
+    defaultQuery: String?
+    resourceOverrides: Mapping<String, String>?
+}
+
+class FilterCondition {
+    propertyPath: String
+    propertyValue: String?
+}
+
+class MatchFilter {
+    resourceTypes: Listing<String>
+    conditions: Listing<FilterCondition>
+}
+
+abstract class BaseResourcePluginConfig {
+    type: String
+    enabled: Boolean = true
+    rateLimit: RateLimitConfig?
+    labelConfig: LabelConfig?
+    discoveryFilters: Listing<MatchFilter>?
+    resourceTypesToDiscover: Listing<String>?
+    labelTagKeys: Listing<String>?
+    retry: RetryConfig?
+}
+
 abstract class BaseAgentAuthConfig {
     type: String
 }
@@ -193,7 +223,11 @@ class AgentConfig {
 
     stackExpirer: StackExpirerConfig = new StackExpirerConfig{}
 
-    auth: (BaseAgentAuthConfig|Dynamic)?
+    auth: BaseAgentAuthConfig?
+
+    resourcePlugins: Listing<BaseResourcePluginConfig>(
+        this.toList().map((it) -> it.type).isDistinct
+    )?
 }
 
 class ApiConfig {
@@ -215,7 +249,7 @@ class CliConfig {
 
     disableUsageReporting: Boolean = false
 
-    auth: (BaseCliAuthConfig|Dynamic)?
+    auth: BaseCliAuthConfig?
 }
 
 /// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.

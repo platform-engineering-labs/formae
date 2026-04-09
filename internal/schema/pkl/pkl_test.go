@@ -13,6 +13,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
 
@@ -144,4 +145,43 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.NotNil(t, config.Network.Tailscale)
 	assert.False(t, config.Network.Tailscale.TLS)
 	assert.Equal(t, "someAuthKey", config.Network.Tailscale.AuthKey)
+}
+
+func TestTranslateResourcePluginConfig(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_resource_plugin_config.pkl")
+	require.NoError(t, err)
+
+	require.Len(t, config.Agent.ResourcePlugins, 1)
+	rpc := config.Agent.ResourcePlugins[0]
+	assert.Equal(t, "fake-aws", rpc.Type)
+	assert.True(t, rpc.Enabled)
+	assert.NotNil(t, rpc.RateLimit)
+	assert.Equal(t, 5, rpc.RateLimit.MaxRequestsPerSecond)
+	assert.Equal(t, []string{"FakeAWS::S3::Bucket"}, rpc.ResourceTypesToDiscover)
+	assert.Equal(t, []string{"Name", "Env"}, rpc.LabelTagKeys)
+	assert.NotNil(t, rpc.Retry)
+	assert.Equal(t, 3, rpc.Retry.MaxRetries)
+	assert.Equal(t, 5*time.Second, rpc.Retry.RetryDelay)
+	assert.Equal(t, 2*time.Second, rpc.Retry.StatusCheckInterval)
+}
+
+func TestTranslateResourcePluginConfig_Disabled(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_resource_plugin_disabled.pkl")
+	require.NoError(t, err)
+
+	require.Len(t, config.Agent.ResourcePlugins, 1)
+	assert.Equal(t, "fake-aws", config.Agent.ResourcePlugins[0].Type)
+	assert.False(t, config.Agent.ResourcePlugins[0].Enabled)
+}
+
+func TestDeprecationWarning_GlobalRetryWithPerPlugin(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_deprecation_retry.pkl")
+	require.NoError(t, err)
+
+	require.Len(t, config.Warnings, 1)
+	assert.Contains(t, config.Warnings[0], "agent.retry")
+	assert.Contains(t, config.Warnings[0], "deprecated")
 }

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
 	pklgo "github.com/apple/pkl-go/pkl"
 	"github.com/platform-engineering-labs/formae"
@@ -164,11 +165,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 					Region:     config.Agent.Datastore.AuroraDataAPI.Region,
 				},
 			},
-			Retry: pkgmodel.RetryConfig{
-				StatusCheckInterval: config.Agent.Retry.StatusCheckInterval.GoDuration(),
-				MaxRetries:          int(config.Agent.Retry.MaxRetries),
-				RetryDelay:          config.Agent.Retry.RetryDelay.GoDuration(),
-			},
+			Retry: translateRetryConfig(config.Agent.Retry),
 			Synchronization: pkgmodel.SynchronizationConfig{
 				Enabled:  config.Agent.Synchronization.Enabled,
 				Interval: config.Agent.Synchronization.Interval.GoDuration(),
@@ -202,7 +199,8 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 					Enabled: config.Agent.OTel.Prometheus.Enabled,
 				},
 			},
-			Auth: translateAuthConfig(&config.Agent.Auth),
+			Auth:            translateAuthConfig(&config.Agent.Auth),
+			ResourcePlugins: translateResourcePluginConfigs(config.Agent.ResourcePlugins),
 		},
 		Artifacts: pkgmodel.ArtifactConfig{
 			URL:      config.Artifacts.URL,
@@ -225,7 +223,63 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 	// Backwards compatibility: fall back to deprecated plugins block
 	applyDeprecatedPluginsConfig(config.Plugins, &translated)
 
+	// Warn when global settings conflict with per-plugin overrides
+	checkResourcePluginDeprecations(&translated)
+
 	return &translated
+}
+
+// checkResourcePluginDeprecations warns when global settings conflict with per-plugin overrides.
+func checkResourcePluginDeprecations(translated *pkgmodel.Config) {
+	if len(translated.Agent.ResourcePlugins) == 0 {
+		return
+	}
+
+	hasPerPluginRetry := false
+	hasPerPluginRTD := false
+	hasPerPluginLTK := false
+
+	for _, rpc := range translated.Agent.ResourcePlugins {
+		if rpc.Retry != nil {
+			hasPerPluginRetry = true
+		}
+		if len(rpc.ResourceTypesToDiscover) > 0 {
+			hasPerPluginRTD = true
+		}
+		if len(rpc.LabelTagKeys) > 0 {
+			hasPerPluginLTK = true
+		}
+	}
+
+	// Default RetryConfig values as defined in Config.pkl
+	defaultRetry := pkgmodel.RetryConfig{
+		StatusCheckInterval: 20 * time.Second,
+		MaxRetries:          9,
+		RetryDelay:          10 * time.Second,
+	}
+
+	if hasPerPluginRetry && translated.Agent.Retry != defaultRetry {
+		w := "Your configuration file uses per-plugin 'retry' — the global 'agent.retry' is deprecated in favor of per-plugin retry config"
+		slog.Warn(w)
+		translated.Warnings = append(translated.Warnings, w)
+	}
+
+	if hasPerPluginRTD && len(translated.Agent.Discovery.ResourceTypesToDiscover) > 0 {
+		w := "Your configuration file uses per-plugin 'resourceTypesToDiscover' — the global 'agent.discovery.resourceTypesToDiscover' is deprecated in favor of per-plugin config"
+		slog.Warn(w)
+		translated.Warnings = append(translated.Warnings, w)
+	}
+
+	// The PKL default for labelTagKeys is ["Name"]; treat it as "not explicitly set"
+	defaultLTK := []string{"Name"}
+	globalLTKIsNonDefault := len(translated.Agent.Discovery.LabelTagKeys) > 0 &&
+		(len(translated.Agent.Discovery.LabelTagKeys) != 1 || translated.Agent.Discovery.LabelTagKeys[0] != defaultLTK[0])
+
+	if hasPerPluginLTK && globalLTKIsNonDefault {
+		w := "Your configuration file uses per-plugin 'labelTagKeys' — the global 'agent.discovery.labelTagKeys' is deprecated in favor of per-plugin config"
+		slog.Warn(w)
+		translated.Warnings = append(translated.Warnings, w)
+	}
 }
 
 // applyDeprecatedPluginsConfig copies values from the deprecated plugins block
@@ -597,6 +651,166 @@ func translateDynamic(dyn *pklgo.Object) json.RawMessage {
 	}
 
 	return configJson
+}
+
+func translateRetryConfig(rc *pklmodel.RetryConfig) pkgmodel.RetryConfig {
+	if rc == nil {
+		return pkgmodel.RetryConfig{}
+	}
+	return pkgmodel.RetryConfig{
+		StatusCheckInterval: rc.StatusCheckInterval.GoDuration(),
+		MaxRetries:          int(rc.MaxRetries),
+		RetryDelay:          rc.RetryDelay.GoDuration(),
+	}
+}
+
+func translateResourcePluginConfigs(objects []pklgo.Object) []pkgmodel.ResourcePluginUserConfig {
+	if len(objects) == 0 {
+		return nil
+	}
+	var configs []pkgmodel.ResourcePluginUserConfig
+	for i := range objects {
+		configs = append(configs, translateResourcePluginConfig(&objects[i]))
+	}
+	return configs
+}
+
+func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUserConfig {
+	props := obj.Properties
+
+	cfg := pkgmodel.ResourcePluginUserConfig{
+		Type:    pklString(props, "type"),
+		Enabled: pklBool(props, "enabled", true),
+	}
+
+	// rateLimit
+	if rl, ok := props["rateLimit"]; ok && rl != nil {
+		if rlObj, ok := rl.(*pklmodel.RateLimitConfig); ok {
+			cfg.RateLimit = &pkgmodel.RateLimitConfig{
+				MaxRequestsPerSecond: int(rlObj.MaxRequestsPerSecond),
+			}
+		}
+	}
+
+	// labelConfig
+	if lc, ok := props["labelConfig"]; ok && lc != nil {
+		if lcObj, ok := lc.(*pklmodel.LabelConfig); ok {
+			cfg.LabelConfig = &pkgmodel.LabelConfig{
+				DefaultQuery:      lcObj.DefaultQuery,
+				ResourceOverrides: pklMappingToStringMap(lcObj.ResourceOverrides),
+			}
+		}
+	}
+
+	// discoveryFilters
+	if df, ok := props["discoveryFilters"]; ok && df != nil {
+		cfg.DiscoveryFilters = translateDiscoveryFilters(df)
+	}
+
+	// resourceTypesToDiscover
+	if rtd, ok := props["resourceTypesToDiscover"]; ok && rtd != nil {
+		cfg.ResourceTypesToDiscover = pklListingToStringSlice(rtd)
+	}
+
+	// labelTagKeys
+	if ltk, ok := props["labelTagKeys"]; ok && ltk != nil {
+		cfg.LabelTagKeys = pklListingToStringSlice(ltk)
+	}
+
+	// retry
+	if r, ok := props["retry"]; ok && r != nil {
+		if rObj, ok := r.(*pklmodel.RetryConfig); ok {
+			cfg.Retry = &pkgmodel.RetryConfig{
+				StatusCheckInterval: rObj.StatusCheckInterval.GoDuration(),
+				MaxRetries:          int(rObj.MaxRetries),
+				RetryDelay:          rObj.RetryDelay.GoDuration(),
+			}
+		}
+	}
+
+	return cfg
+}
+
+func translateDiscoveryFilters(v any) []pkgmodel.MatchFilter {
+	switch filters := v.(type) {
+	case []any:
+		var result []pkgmodel.MatchFilter
+		for _, f := range filters {
+			if mf, ok := f.(*pklmodel.MatchFilter); ok {
+				result = append(result, translateMatchFilter(mf))
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func translateMatchFilter(mf *pklmodel.MatchFilter) pkgmodel.MatchFilter {
+	result := pkgmodel.MatchFilter{
+		ResourceTypes: mf.ResourceTypes,
+	}
+	for _, c := range mf.Conditions {
+		result.Conditions = append(result.Conditions, pkgmodel.FilterCondition{
+			PropertyPath:  c.PropertyPath,
+			PropertyValue: c.PropertyValue,
+		})
+	}
+	return result
+}
+
+// pklString extracts a string from a pkl.Object properties map.
+func pklString(props map[string]any, key string) string {
+	if v, ok := props[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// pklBool extracts a bool from a pkl.Object properties map with a default.
+func pklBool(props map[string]any, key string, defaultVal bool) bool {
+	if v, ok := props[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return defaultVal
+}
+
+// pklListingToStringSlice converts a PKL Listing value (typically []any) to []string.
+func pklListingToStringSlice(v any) []string {
+	switch val := v.(type) {
+	case []any:
+		var result []string
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case []string:
+		return val
+	default:
+		return nil
+	}
+}
+
+// pklMappingToStringMap converts a PKL Mapping (pkl.Object with Entries) to map[string]string.
+func pklMappingToStringMap(obj *pklgo.Object) map[string]string {
+	if obj == nil || len(obj.Entries) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(obj.Entries))
+	for k, v := range obj.Entries {
+		if ks, ok := k.(string); ok {
+			if vs, ok := v.(string); ok {
+				result[ks] = vs
+			}
+		}
+	}
+	return result
 }
 
 func parseLogLevel(level string) slog.Level {

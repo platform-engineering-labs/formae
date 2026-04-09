@@ -142,6 +142,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("OTelConfig"):              cfg.Agent.OTel,
 		gen.Env("StackExpirerConfig"):      cfg.Agent.StackExpirer,
 		gen.Env("AgentID"):                 agentID,
+		gen.Env("ResourcePluginConfigs"):   cfg.Agent.ResourcePlugins,
 	}
 
 	// Enable Ergo networking for distributed plugin architecture

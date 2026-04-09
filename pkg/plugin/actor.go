@@ -73,7 +73,7 @@ func (p *PluginActor) Init(args ...any) error {
 		Namespace:            p.namespace,
 		Version:              p.plugin.Version().String(),
 		NodeName:             string(p.Node().Name()),
-		MaxRequestsPerSecond: p.plugin.RateLimit().MaxRequestsPerSecondForNamespace,
+		MaxRequestsPerSecond: p.plugin.RateLimit().MaxRequestsPerSecond,
 		Capabilities:         caps,
 	}
 

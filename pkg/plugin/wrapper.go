@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/masterminds/semver"
-	"github.com/platform-engineering-labs/formae/pkg/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -26,7 +26,7 @@ type pluginWrapper struct {
 
 	// Auto-extracted from schema directory
 	descriptors         []ResourceDescriptor
-	resourceTypeSchemas map[string]model.Schema
+	resourceTypeSchemas map[string]pkgmodel.Schema
 
 	// Observability - optional, may be nil
 	logger  Logger
@@ -39,7 +39,7 @@ func WrapPlugin(
 	p ResourcePlugin,
 	manifest *Manifest,
 	descriptors []ResourceDescriptor,
-	schemas map[string]model.Schema,
+	schemas map[string]pkgmodel.Schema,
 ) (FullResourcePlugin, error) {
 	v, err := semver.NewVersion(manifest.Version)
 	if err != nil {
@@ -82,24 +82,24 @@ func (w *pluginWrapper) SupportedResources() []ResourceDescriptor {
 	return w.descriptors
 }
 
-func (w *pluginWrapper) SchemaForResourceType(resourceType string) (model.Schema, error) {
+func (w *pluginWrapper) SchemaForResourceType(resourceType string) (pkgmodel.Schema, error) {
 	if schema, ok := w.resourceTypeSchemas[resourceType]; ok {
 		return schema, nil
 	}
-	return model.Schema{}, nil
+	return pkgmodel.Schema{}, nil
 }
 
 // Configuration methods - delegated to user's plugin
 
-func (w *pluginWrapper) RateLimit() RateLimitConfig {
+func (w *pluginWrapper) RateLimit() pkgmodel.RateLimitConfig {
 	return w.plugin.RateLimit()
 }
 
-func (w *pluginWrapper) DiscoveryFilters() []MatchFilter {
+func (w *pluginWrapper) DiscoveryFilters() []pkgmodel.MatchFilter {
 	return w.plugin.DiscoveryFilters()
 }
 
-func (w *pluginWrapper) LabelConfig() LabelConfig {
+func (w *pluginWrapper) LabelConfig() pkgmodel.LabelConfig {
 	return w.plugin.LabelConfig()
 }
 

@@ -8,6 +8,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -210,6 +211,19 @@ func SetupPlugin(ctx context.Context, p plugin.ResourcePlugin, config RunConfig)
 		obs.SetObservability(logger, nil) // Metrics can be added later
 	}
 
+	// 9. Configure plugin-specific settings if the plugin supports it
+	if cfg, ok := wrapped.(plugin.Configurable); ok {
+		if pluginConfigB64 := os.Getenv("FORMAE_PLUGIN_CONFIG"); pluginConfigB64 != "" {
+			pluginConfigJSON, err := base64.StdEncoding.DecodeString(pluginConfigB64)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode FORMAE_PLUGIN_CONFIG: %w", err)
+			}
+			if err := cfg.Configure(pluginConfigJSON); err != nil {
+				return nil, fmt.Errorf("plugin configuration failed: %w", err)
+			}
+		}
+	}
+
 	return wrapped, nil
 }
 
@@ -282,6 +296,19 @@ func SetupPluginFromDir(ctx context.Context, p plugin.ResourcePlugin, pluginDir 
 	if obs, ok := wrapped.(plugin.ObservablePlugin); ok {
 		logger := setupPluginLogger(manifest.Namespace)
 		obs.SetObservability(logger, nil) // Metrics can be added later
+	}
+
+	// 8. Configure plugin-specific settings if the plugin supports it
+	if cfg, ok := wrapped.(plugin.Configurable); ok {
+		if pluginConfigB64 := os.Getenv("FORMAE_PLUGIN_CONFIG"); pluginConfigB64 != "" {
+			pluginConfigJSON, err := base64.StdEncoding.DecodeString(pluginConfigB64)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode FORMAE_PLUGIN_CONFIG: %w", err)
+			}
+			if err := cfg.Configure(pluginConfigJSON); err != nil {
+				return nil, fmt.Errorf("plugin configuration failed: %w", err)
+			}
+		}
 	}
 
 	return wrapped, nil

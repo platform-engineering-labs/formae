@@ -21,7 +21,8 @@ EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-gcp.git@feat/msgpack-serialization \
     https://github.com/platform-engineering-labs/formae-plugin-grafana.git@feat/msgpack-serialization \
     https://github.com/platform-engineering-labs/formae-plugin-oci.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-ovh.git@feat/msgpack-serialization
+    https://github.com/platform-engineering-labs/formae-plugin-ovh.git@feat/msgpack-serialization \
+    https://github.com/platform-engineering-labs/formae-plugin-sftp.git
 
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins

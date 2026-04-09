@@ -1,0 +1,21 @@
+amends "formae:/Config.pkl"
+
+import "formae:/Config.pkl"
+
+local class FakeAwsConfig extends Config.BaseResourcePluginConfig {}
+
+agent {
+    resourcePlugins {
+        new FakeAwsConfig {
+            type = "fake-aws"
+            rateLimit { maxRequestsPerSecond = 5 }
+            resourceTypesToDiscover { "FakeAWS::S3::Bucket" }
+            labelTagKeys { "Name"; "Env" }
+            retry {
+                maxRetries = 3
+                retryDelay = 5.s
+                statusCheckInterval = 2.s
+            }
+        }
+    }
+}
