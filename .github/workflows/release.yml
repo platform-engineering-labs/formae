@@ -116,10 +116,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install pkl
-        uses: pkl-community/setup-pkl@v0
-        with:
-          pkl-version: 0.30.0
+      - name: Install Pkl
+        run: |
+          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes pkl@0.31.0
+
+      - name: Add PEL to PATH
+        run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
