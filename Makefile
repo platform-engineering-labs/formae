@@ -87,8 +87,14 @@ build-external-plugins: fetch-external-plugins
 		cd "$(PLUGINS_CACHE)/$$name" && \
 			if grep -q 'formae/pkg/auth' go.mod 2>/dev/null; then \
 				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/auth=$(CURDIR)/pkg/auth; \
-				go mod tidy; \
 			fi && \
+			if grep -q 'formae/pkg/model' go.mod 2>/dev/null; then \
+				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/model=$(CURDIR)/pkg/model; \
+			fi && \
+			if grep -q 'formae/pkg/plugin' go.mod 2>/dev/null; then \
+				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/plugin=$(CURDIR)/pkg/plugin; \
+			fi && \
+			go mod tidy && \
 			cd $(CURDIR); \
 		$(MAKE) -C "$(PLUGINS_CACHE)/$$name" build; \
 	done
