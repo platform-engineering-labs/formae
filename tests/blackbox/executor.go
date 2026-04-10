@@ -923,7 +923,13 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		if ru.State == "Success" {
 			switch ru.Operation {
 			case "create":
-				model.ClearAuthoritativeSlot(stackIdx, slotIdx)
+				// Don't let stale command completions override authoritative
+				// slots (e.g. TTL destroy that happened after this command was
+				// accepted). Authoritative is only cleared during optimistic
+				// prediction when a NEW command is accepted.
+				if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
+					goto markDone
+				}
 				props := ""
 				if ru.Properties != nil {
 					props = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
