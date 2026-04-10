@@ -6,6 +6,7 @@ package fakeaws
 
 import (
 	"context"
+	"sync"
 
 	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -16,6 +17,7 @@ import (
 type FakeAWS struct {
 	// pendingCreates tracks in-progress creates by RequestID so Status can
 	// return the original properties when the resource "completes".
+	mu             sync.Mutex
 	pendingCreates map[string][]byte
 }
 
@@ -155,7 +157,9 @@ func (s *FakeAWS) Create(context context.Context, request *resource.CreateReques
 	}
 
 	requestID := "1234"
+	s.mu.Lock()
 	s.pendingCreates[requestID] = request.Properties
+	s.mu.Unlock()
 	return &resource.CreateResult{
 		ProgressResult: &resource.ProgressResult{
 			Operation:       resource.OperationCreate,
@@ -221,8 +225,10 @@ func (s *FakeAWS) Status(ctx context.Context, request *resource.StatusRequest) (
 			return ret, nil
 		}
 	}
+	s.mu.Lock()
 	props := s.pendingCreates[request.RequestID]
 	delete(s.pendingCreates, request.RequestID)
+	s.mu.Unlock()
 	return &resource.StatusResult{
 		ProgressResult: &resource.ProgressResult{
 			Operation:          resource.OperationCreate,

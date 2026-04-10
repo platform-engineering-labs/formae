@@ -435,6 +435,7 @@ func (c *PluginCoordinator) getRegisteredPlugins() messages.GetRegisteredPlugins
 			LabelTagKeys:            registered.LabelTagKeys,
 			RetryConfig:             registered.RetryConfig,
 			LabelConfig:             registered.LabelConfig,
+			DiscoveryFilters:        registered.MatchFilters,
 		})
 	}
 

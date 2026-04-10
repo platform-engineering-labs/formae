@@ -80,6 +80,7 @@ type RegisteredPluginInfo struct {
 	LabelTagKeys            []string
 	RetryConfig             *model.RetryConfig
 	LabelConfig             model.LabelConfig
+	DiscoveryFilters        []model.MatchFilter
 }
 
 // GetRegisteredPluginsResult is the response to GetRegisteredPlugins

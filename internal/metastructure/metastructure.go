@@ -1939,6 +1939,7 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 					LabelTagKeys:            p.LabelTagKeys,
 					RetryConfig:             p.RetryConfig,
 					LabelConfig:             &p.LabelConfig,
+					DiscoveryFilters:        p.DiscoveryFilters,
 				})
 			}
 		}

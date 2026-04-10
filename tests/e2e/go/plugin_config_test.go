@@ -64,9 +64,12 @@ func TestPluginConfig(t *testing.T) {
 			MaxRequestsPerSecond    int      `json:"MaxRequestsPerSecond"`
 			ResourceTypesToDiscover []string `json:"ResourceTypesToDiscover"`
 			LabelTagKeys            []string `json:"LabelTagKeys"`
-			LabelConfig             *struct {
+			LabelConfig *struct {
 				DefaultQuery string `json:"DefaultQuery"`
 			} `json:"LabelConfig"`
+			DiscoveryFilters []struct {
+				ResourceTypes []string `json:"ResourceTypes"`
+			} `json:"DiscoveryFilters"`
 		} `json:"Plugins"`
 	}
 	if err := json.Unmarshal(body, &stats); err != nil {
@@ -93,6 +96,13 @@ func TestPluginConfig(t *testing.T) {
 			t.Run("labelTagKeys override", func(t *testing.T) {
 				if len(p.LabelTagKeys) != 1 || p.LabelTagKeys[0] != "custom-label" {
 					t.Errorf("expected labelTagKeys [custom-label], got %v", p.LabelTagKeys)
+				}
+			})
+
+			t.Run("discovery filters from plugin defaults", func(t *testing.T) {
+				// SFTP plugin returns nil discovery filters — field should be empty
+				if len(p.DiscoveryFilters) != 0 {
+					t.Errorf("expected empty DiscoveryFilters, got %v", p.DiscoveryFilters)
 				}
 			})
 
