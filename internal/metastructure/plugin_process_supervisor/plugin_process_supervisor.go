@@ -73,6 +73,21 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 	p.plugins = make(map[string]*PluginInfo)
 	p.Log().Debug("PluginProcessSupervisor started")
 
+	// Read per-plugin custom configs before spawning plugins so the env vars are available
+	if val, ok := p.Env("ResourcePluginConfigs"); ok {
+		if configs, ok := val.([]pkgmodel.ResourcePluginUserConfig); ok {
+			p.pluginConfigs = make(map[string]json.RawMessage)
+			for _, cfg := range configs {
+				if len(cfg.PluginConfig) > 0 {
+					p.pluginConfigs[cfg.Type] = cfg.PluginConfig
+				}
+			}
+		}
+	}
+	if p.pluginConfigs == nil {
+		p.pluginConfigs = make(map[string]json.RawMessage)
+	}
+
 	// Get external resource plugins from environment
 	var externalPlugins []plugin.ResourcePluginInfo
 	if val, ok := p.Env("ExternalResourcePlugins"); ok {
@@ -105,21 +120,6 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 			// Continue with other plugins even if one fails
 			continue
 		}
-	}
-
-	// Read per-plugin custom configs for passing to plugin binaries
-	if val, ok := p.Env("ResourcePluginConfigs"); ok {
-		if configs, ok := val.([]pkgmodel.ResourcePluginUserConfig); ok {
-			p.pluginConfigs = make(map[string]json.RawMessage)
-			for _, cfg := range configs {
-				if len(cfg.PluginConfig) > 0 {
-					p.pluginConfigs[cfg.Type] = cfg.PluginConfig
-				}
-			}
-		}
-	}
-	if p.pluginConfigs == nil {
-		p.pluginConfigs = make(map[string]json.RawMessage)
 	}
 
 	// Spawn auth plugin if configured

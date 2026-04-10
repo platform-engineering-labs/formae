@@ -50,6 +50,7 @@ type agentOptions struct {
 	authPassword            string
 	authBcryptHash         string
 	resourcePluginsBlock    string   // raw PKL block for agent.resourcePlugins
+	pklImports              string   // raw PKL import statements (top-level)
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -69,8 +70,10 @@ func WithEnv(envVars ...string) AgentOption {
 }
 
 // WithResourcePlugins adds a raw PKL block for agent.resourcePlugins.
-func WithResourcePlugins(pklBlock string) AgentOption {
+// imports is optional top-level PKL import statements (e.g., `import "plugins:/Sftp.pkl" as Sftp`).
+func WithResourcePlugins(imports, pklBlock string) AgentOption {
 	return func(o *agentOptions) {
+		o.pklImports = imports
 		o.resourcePluginsBlock = pklBlock
 	}
 }
@@ -148,7 +151,7 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
  */
 
 amends "formae:/Config.pkl"
-
+%s
 agent {
     server {
         port = %d
@@ -179,7 +182,7 @@ cli {
     }
     disableUsageReporting = true%s
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
+`, options.pklImports, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)

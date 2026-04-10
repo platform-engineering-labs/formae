@@ -11,30 +11,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
-// TestPluginConfig verifies that per-plugin configuration flows through the
-// full path: PKL config → agent translation → coordinator merge → stats API.
+// TestPluginConfig verifies the full per-plugin configuration flow:
 //
-// It configures the SFTP plugin with overrides for rate limit, label config,
-// and resourceTypesToDiscover, then verifies these merged values are visible
-// in the /api/v1/stats response.
+// 1. Typed PKL config with plugin import → agent translation → coordinator merge
+// 2. Base-class overrides (rate limit, resourceTypesToDiscover) visible in stats API
+// 3. Plugin-specific custom fields (defaultTimeoutSeconds, defaultFilePermissions)
+//    reach the plugin binary via the Configurable interface
 func TestPluginConfig(t *testing.T) {
 	bin := FormaeBinary(t)
 
+	sftpImport := `import "plugins:/Sftp.pkl" as Sftp`
 	resourcePluginsBlock := `
     resourcePlugins {
-        new BaseResourcePluginConfig {
-            type = "sftp"
+        new Sftp.PluginConfig {
             rateLimit { maxRequestsPerSecond = 3 }
             resourceTypesToDiscover { "SFTP::File" }
             labelTagKeys { "custom-label" }
+            defaultTimeoutSeconds = 60
+            defaultFilePermissions = "0755"
         }
     }`
 
-	agent := StartAgent(t, bin, WithResourcePlugins(resourcePluginsBlock))
+	agent := StartAgent(t, bin, WithResourcePlugins(sftpImport, resourcePluginsBlock))
 	baseURL := fmt.Sprintf("http://localhost:%d", agent.Port())
 
 	waitForAgent(t, baseURL, 30*time.Second)
@@ -108,6 +112,25 @@ func TestPluginConfig(t *testing.T) {
 	if !found {
 		t.Errorf("SFTP plugin not found in stats. Plugins: %s", string(body))
 	}
+
+	t.Run("plugin-specific config received via Configure()", func(t *testing.T) {
+		// The SFTP plugin logs its config when Configure() is called.
+		// Check the agent stdout log for the expected output.
+		var allLogs string
+		if content, err := os.ReadFile(agent.LogFile()); err == nil {
+			allLogs += string(content)
+		}
+		if content, err := os.ReadFile(agent.StdoutLogFile()); err == nil {
+			allLogs += string(content)
+		}
+
+		if !strings.Contains(allLogs, "defaultTimeoutSeconds=60") {
+			t.Errorf("expected Configure() log with defaultTimeoutSeconds=60\nLogs:\n%s", allLogs)
+		}
+		if !strings.Contains(allLogs, "defaultFilePermissions=0755") {
+			t.Errorf("expected Configure() log with defaultFilePermissions=0755\nLogs:\n%s", allLogs)
+		}
+	})
 }
 
 // waitForAgent polls the health endpoint until the agent is ready.

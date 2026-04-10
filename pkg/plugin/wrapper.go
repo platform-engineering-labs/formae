@@ -6,6 +6,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/masterminds/semver"
@@ -60,6 +61,14 @@ func WrapPlugin(
 func (w *pluginWrapper) SetObservability(logger Logger, metrics MetricRegistry) {
 	w.logger = logger
 	w.metrics = metrics
+}
+
+// Configure passes plugin-specific config to the inner plugin if it implements Configurable.
+func (w *pluginWrapper) Configure(config json.RawMessage) error {
+	if cfg, ok := w.plugin.(Configurable); ok {
+		return cfg.Configure(config)
+	}
+	return nil
 }
 
 // Identity methods - from manifest

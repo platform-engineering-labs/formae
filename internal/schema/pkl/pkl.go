@@ -728,6 +728,21 @@ func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUse
 		}
 	}
 
+	// Marshal remaining unknown properties into PluginConfig for plugin-specific fields
+	baseKeys := map[string]bool{
+		"type": true, "enabled": true, "rateLimit": true, "labelConfig": true,
+		"discoveryFilters": true, "resourceTypesToDiscover": true, "labelTagKeys": true, "retry": true,
+	}
+	extra := make(map[string]any)
+	for k, v := range props {
+		if !baseKeys[k] {
+			extra[k] = v
+		}
+	}
+	if len(extra) > 0 {
+		cfg.PluginConfig, _ = json.Marshal(sanitizeConfig(extra))
+	}
+
 	return cfg
 }
 
