@@ -176,6 +176,20 @@ func TestTranslateResourcePluginConfig_Disabled(t *testing.T) {
 	assert.False(t, config.Agent.ResourcePlugins[0].Enabled)
 }
 
+func TestTranslateResourcePluginConfig_Dynamic(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_resource_plugin_dynamic.pkl")
+	require.NoError(t, err)
+	require.NotNil(t, config)
+
+	require.Len(t, config.Agent.ResourcePlugins, 1)
+	rpc := config.Agent.ResourcePlugins[0]
+	assert.Equal(t, "sftp", rpc.Type)
+	assert.True(t, rpc.Enabled)
+	require.NotNil(t, rpc.RateLimit)
+	assert.Equal(t, 3, rpc.RateLimit.MaxRequestsPerSecond)
+}
+
 func TestDeprecationWarning_GlobalRetryWithPerPlugin(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_deprecation_retry.pkl")

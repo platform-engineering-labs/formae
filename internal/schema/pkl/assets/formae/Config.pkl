@@ -187,7 +187,7 @@ class MatchFilter {
     conditions: Listing<FilterCondition>
 }
 
-abstract class BaseResourcePluginConfig {
+open class BaseResourcePluginConfig {
     type: String
     enabled: Boolean = true
     rateLimit: RateLimitConfig?
@@ -225,8 +225,7 @@ class AgentConfig {
 
     auth: BaseAgentAuthConfig?
 
-    resourcePlugins: Listing(
-        this.toList().every((it) -> it.hasProperty("type")) &&
+    resourcePlugins: Listing<BaseResourcePluginConfig>(
         this.toList().map((it) -> it.type).isDistinct
     )?
 }
