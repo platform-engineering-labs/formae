@@ -223,7 +223,7 @@ class AgentConfig {
 
     stackExpirer: StackExpirerConfig = new StackExpirerConfig{}
 
-    auth: BaseAgentAuthConfig?
+    auth: (BaseAgentAuthConfig|Dynamic)?
 
     resourcePlugins: Listing<BaseResourcePluginConfig>(
         this.toList().map((it) -> it.type).isDistinct
@@ -249,7 +249,7 @@ class CliConfig {
 
     disableUsageReporting: Boolean = false
 
-    auth: BaseCliAuthConfig?
+    auth: (BaseCliAuthConfig|Dynamic)?
 }
 
 /// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.
