@@ -37,7 +37,7 @@ func TestPluginConfig(t *testing.T) {
             type = "sftp"
             rateLimit { maxRequestsPerSecond = 3 }
             defaultTimeoutSeconds = 60
-            maxConcurrentConnections = 10
+            defaultFilePermissions = "0755"
         }
     }`
 
@@ -102,8 +102,8 @@ func TestPluginConfig(t *testing.T) {
 		if !strings.Contains(allLogs, "defaultTimeoutSeconds=60") {
 			t.Errorf("logs do not contain Configure() output with defaultTimeoutSeconds=60.\nLogs:\n%s", allLogs)
 		}
-		if !strings.Contains(allLogs, "maxConcurrentConnections=10") {
-			t.Errorf("logs do not contain Configure() output with maxConcurrentConnections=10.\nLogs:\n%s", allLogs)
+		if !strings.Contains(allLogs, "defaultFilePermissions=0755") {
+			t.Errorf("logs do not contain Configure() output with defaultFilePermissions=0755.\nLogs:\n%s", allLogs)
 		}
 	})
 }
