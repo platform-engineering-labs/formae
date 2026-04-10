@@ -33,6 +33,17 @@ func TestPluginConfig(t *testing.T) {
             rateLimit { maxRequestsPerSecond = 3 }
             resourceTypesToDiscover { "SFTP::File" }
             labelTagKeys { "custom-label" }
+            discoveryFilters {
+                new MatchFilter {
+                    resourceTypes { "SFTP::File" }
+                    conditions {
+                        new FilterCondition {
+                            propertyPath = "$.hidden"
+                            propertyValue = "true"
+                        }
+                    }
+                }
+            }
             defaultTimeoutSeconds = 60
             defaultFilePermissions = "0755"
         }
@@ -99,10 +110,12 @@ func TestPluginConfig(t *testing.T) {
 				}
 			})
 
-			t.Run("discovery filters from plugin defaults", func(t *testing.T) {
-				// SFTP plugin returns nil discovery filters — field should be empty
-				if len(p.DiscoveryFilters) != 0 {
-					t.Errorf("expected empty DiscoveryFilters, got %v", p.DiscoveryFilters)
+			t.Run("discovery filters override", func(t *testing.T) {
+				if len(p.DiscoveryFilters) != 1 {
+					t.Fatalf("expected 1 discovery filter, got %d", len(p.DiscoveryFilters))
+				}
+				if len(p.DiscoveryFilters[0].ResourceTypes) != 1 || p.DiscoveryFilters[0].ResourceTypes[0] != "SFTP::File" {
+					t.Errorf("expected filter for SFTP::File, got %v", p.DiscoveryFilters[0].ResourceTypes)
 				}
 			})
 
