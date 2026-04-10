@@ -124,20 +124,20 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 
 	agentAuthBlock := ""
 	cliAuthBlock := ""
+	authImport := ""
 	if options.authEnabled {
+		authImport = `import "plugins:/AuthBasic.pkl" as AuthBasic`
 		agentAuthBlock = fmt.Sprintf(`
-    auth {
-        type = "auth-basic"
+    auth = new AuthBasic.AgentConfig {
         authorizedUsers = new Listing {
-            new Mapping {
-                ["Username"] = %q
-                ["Password"] = %q
+            new AuthBasic.AuthorizedUser {
+                username = %q
+                password = %q
             }
         }
     }`, options.authUsername, options.authBcryptHash)
 		cliAuthBlock = fmt.Sprintf(`
-    auth {
-        type = "auth-basic"
+    auth = new AuthBasic.CliConfig {
         username = %q
         password = %q
     }`, options.authUsername, options.authPassword)
@@ -148,6 +148,7 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
  */
 
 amends "formae:/Config.pkl"
+%s
 
 agent {
     server {
@@ -179,7 +180,7 @@ cli {
     }
     disableUsageReporting = true%s
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
+`, authImport, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)
