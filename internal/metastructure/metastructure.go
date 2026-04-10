@@ -1930,11 +1930,15 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		if pluginsResult, ok := result.(messages.GetRegisteredPluginsResult); ok {
 			for _, p := range pluginsResult.Plugins {
 				plugins = append(plugins, apimodel.PluginInfo{
-					Namespace:            p.Namespace,
-					Version:              p.Version,
-					NodeName:             p.NodeName,
-					MaxRequestsPerSecond: p.MaxRequestsPerSecond,
-					ResourceCount:        p.ResourceCount,
+					Namespace:               p.Namespace,
+					Version:                 p.Version,
+					NodeName:                p.NodeName,
+					MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
+					ResourceCount:           p.ResourceCount,
+					ResourceTypesToDiscover: p.ResourceTypesToDiscover,
+					LabelTagKeys:            p.LabelTagKeys,
+					RetryConfig:             p.RetryConfig,
+					LabelConfig:             &p.LabelConfig,
 				})
 			}
 		}

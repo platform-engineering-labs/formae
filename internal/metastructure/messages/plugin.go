@@ -69,12 +69,17 @@ type PluginInfoResponse struct {
 type GetRegisteredPlugins struct{}
 
 // RegisteredPluginInfo contains basic information about a registered plugin
+// including the merged config (plugin defaults + user overrides).
 type RegisteredPluginInfo struct {
-	Namespace            string
-	Version              string
-	NodeName             string
-	MaxRequestsPerSecond int
-	ResourceCount        int
+	Namespace               string
+	Version                 string
+	NodeName                string
+	MaxRequestsPerSecond    int
+	ResourceCount           int
+	ResourceTypesToDiscover []string
+	LabelTagKeys            []string
+	RetryConfig             *model.RetryConfig
+	LabelConfig             model.LabelConfig
 }
 
 // GetRegisteredPluginsResult is the response to GetRegisteredPlugins

@@ -426,11 +426,15 @@ func (c *PluginCoordinator) getRegisteredPlugins() messages.GetRegisteredPlugins
 
 	for _, registered := range c.plugins {
 		plugins = append(plugins, messages.RegisteredPluginInfo{
-			Namespace:            registered.Namespace,
-			Version:              registered.Version,
-			NodeName:             string(registered.NodeName),
-			MaxRequestsPerSecond: registered.MaxRequestsPerSecond,
-			ResourceCount:        len(registered.SupportedResources),
+			Namespace:               registered.Namespace,
+			Version:                 registered.Version,
+			NodeName:                string(registered.NodeName),
+			MaxRequestsPerSecond:    registered.MaxRequestsPerSecond,
+			ResourceCount:           len(registered.SupportedResources),
+			ResourceTypesToDiscover: registered.ResourceTypesToDiscover,
+			LabelTagKeys:            registered.LabelTagKeys,
+			RetryConfig:             registered.RetryConfig,
+			LabelConfig:             registered.LabelConfig,
 		})
 	}
 

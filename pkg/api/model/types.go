@@ -7,6 +7,8 @@ package model
 import (
 	"encoding/json"
 	"time"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 type SubmitCommandResponse struct {
@@ -164,12 +166,17 @@ type Stats struct {
 }
 
 // PluginInfo represents information about a registered plugin
+// including the merged config (plugin defaults + user overrides).
 type PluginInfo struct {
-	Namespace            string `json:"Namespace"`
-	Version              string `json:"Version"`
-	NodeName             string `json:"NodeName"`
-	MaxRequestsPerSecond int    `json:"MaxRequestsPerSecond"`
-	ResourceCount        int    `json:"ResourceCount"`
+	Namespace               string           `json:"Namespace"`
+	Version                 string           `json:"Version"`
+	NodeName                string           `json:"NodeName"`
+	MaxRequestsPerSecond    int              `json:"MaxRequestsPerSecond"`
+	ResourceCount           int              `json:"ResourceCount"`
+	ResourceTypesToDiscover []string         `json:"ResourceTypesToDiscover,omitempty"`
+	LabelTagKeys            []string         `json:"LabelTagKeys,omitempty"`
+	RetryConfig             *pkgmodel.RetryConfig `json:"RetryConfig,omitempty"`
+	LabelConfig             *pkgmodel.LabelConfig `json:"LabelConfig,omitempty"`
 }
 
 type ForceReconcileResponse struct {
