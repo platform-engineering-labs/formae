@@ -225,7 +225,8 @@ class AgentConfig {
 
     auth: BaseAgentAuthConfig?
 
-    resourcePlugins: Listing<BaseResourcePluginConfig>(
+    resourcePlugins: Listing(
+        this.toList().every((it) -> it.hasProperty("type"))
         this.toList().map((it) -> it.type).isDistinct
     )?
 }
