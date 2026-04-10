@@ -198,11 +198,11 @@ open class BaseResourcePluginConfig {
     retry: RetryConfig?
 }
 
-abstract class BaseAgentAuthConfig {
+open class BaseAgentAuthConfig {
     type: String
 }
 
-abstract class BaseCliAuthConfig {
+open class BaseCliAuthConfig {
     type: String
 }
 

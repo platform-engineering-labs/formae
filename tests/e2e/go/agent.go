@@ -125,22 +125,18 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 	agentAuthBlock := ""
 	cliAuthBlock := ""
 	if options.authEnabled {
-		// Use Dynamic rather than typed plugin classes because pkl-go v0.12
-		// cannot decode typed PKL classes nested inside pkl.Object fields
-		// (e.g. AuthorizedUser inside a Listing inside an auth pkl.Object).
-		// Dynamic objects are decoded via the generic pkl.Object path.
 		agentAuthBlock = fmt.Sprintf(`
-    auth = new Dynamic {
+    auth {
         type = "auth-basic"
         authorizedUsers = new Listing {
-            new Dynamic {
-                username = %q
-                password = %q
+            new Mapping {
+                ["Username"] = %q
+                ["Password"] = %q
             }
         }
     }`, options.authUsername, options.authBcryptHash)
 		cliAuthBlock = fmt.Sprintf(`
-    auth = new Dynamic {
+    auth {
         type = "auth-basic"
         username = %q
         password = %q
