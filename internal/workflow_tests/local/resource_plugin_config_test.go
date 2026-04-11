@@ -43,6 +43,7 @@ func TestResourcePluginConfig_DisabledPlugin(t *testing.T) {
 		// Because the config has Enabled=false for "fakeaws", the coordinator
 		// should reject the announcement and not register the plugin.
 		err = testutil.Send(m.Node, "PluginCoordinator", messages.PluginAnnouncement{
+			Name:                 "fakeaws",
 			Namespace:            "FakeAWS",
 			Version:              "0.0.1",
 			NodeName:             "fake-plugin-node",
@@ -92,6 +93,7 @@ func TestResourcePluginConfig_RateLimitOverride(t *testing.T) {
 		// Simulate a plugin announcing itself with a default rate limit of 10.
 		// The user config overrides this to 3.
 		err = testutil.Send(m.Node, "PluginCoordinator", messages.PluginAnnouncement{
+			Name:                 "fakeaws",
 			Namespace:            "FakeAWS",
 			Version:              "0.0.1",
 			NodeName:             "fake-plugin-node",

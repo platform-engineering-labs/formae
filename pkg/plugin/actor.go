@@ -70,6 +70,7 @@ func (p *PluginActor) Init(args ...any) error {
 		Node: p.agentNode,
 	}
 	announcement := PluginAnnouncement{
+		Name:                 p.plugin.Name(),
 		Namespace:            p.namespace,
 		Version:              p.plugin.Version().String(),
 		NodeName:             string(p.Node().Name()),

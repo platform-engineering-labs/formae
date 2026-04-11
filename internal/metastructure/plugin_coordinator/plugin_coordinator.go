@@ -31,7 +31,7 @@ type PluginCoordinator struct {
 	registeredLocalNamespaces map[string]bool              // namespaces registered with RateLimiter (local)
 	testPlugin                plugin.FullResourcePlugin    // test-only: directly injected plugin (e.g. FakeAWS) for workflow tests
 	retryConfig               model.RetryConfig
-	resourcePluginConfigs     map[string]model.ResourcePluginUserConfig // keyed by type (lowercase)
+	resourcePluginConfigs     map[string]model.ResourcePluginUserConfig // keyed by plugin name (lowercase)
 }
 
 // RegisteredPlugin contains information about a registered plugin
@@ -80,11 +80,12 @@ func (c *PluginCoordinator) findTestPlugin(namespace string) plugin.FullResource
 
 // mergePluginConfig overlays user config on top of plugin-announced defaults.
 // Returns a zero-value RegisteredPlugin and false if the plugin is disabled.
-func (c *PluginCoordinator) mergePluginConfig(namespace string, announced RegisteredPlugin) (RegisteredPlugin, bool) {
-	userCfg, hasUserConfig := c.resourcePluginConfigs[strings.ToLower(namespace)]
+// Config is looked up by plugin name (from manifest), not namespace.
+func (c *PluginCoordinator) mergePluginConfig(name, namespace string, announced RegisteredPlugin) (RegisteredPlugin, bool) {
+	userCfg, hasUserConfig := c.resourcePluginConfigs[strings.ToLower(name)]
 
 	if hasUserConfig && !userCfg.Enabled {
-		c.Log().Info("Plugin disabled by config, skipping registration: namespace=%s", namespace)
+		c.Log().Info("Plugin disabled by config, skipping registration: name=%s namespace=%s", name, namespace)
 		return RegisteredPlugin{}, false
 	}
 
@@ -113,7 +114,7 @@ func (c *PluginCoordinator) mergePluginConfig(namespace string, announced Regist
 
 // resolveRetryConfig returns per-plugin RetryConfig if set, otherwise the global fallback.
 func (c *PluginCoordinator) resolveRetryConfig(namespace string) model.RetryConfig {
-	if p, ok := c.plugins[namespace]; ok && p.RetryConfig != nil {
+	if p, ok := c.findPluginByNamespace(namespace); ok && p.RetryConfig != nil {
 		return *p.RetryConfig
 	}
 	return c.retryConfig
@@ -214,7 +215,7 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			LabelConfig:          caps.LabelConfig,
 		}
 
-		merged, enabled := c.mergePluginConfig(msg.Namespace, announced)
+		merged, enabled := c.mergePluginConfig(msg.Name, msg.Namespace, announced)
 		if !enabled {
 			return nil
 		}
@@ -396,8 +397,8 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 		LabelConfig:        localPlugin.LabelConfig(),
 	}
 
-	// Overlay user config for local/test plugins
-	if userCfg, ok := c.resourcePluginConfigs[strings.ToLower(req.Namespace)]; ok {
+	// Overlay user config for local/test plugins (lookup by name, not namespace)
+	if userCfg, ok := c.resourcePluginConfigs[strings.ToLower(localPlugin.Name())]; ok {
 		if userCfg.LabelConfig != nil {
 			resp.LabelConfig = *userCfg.LabelConfig
 		}

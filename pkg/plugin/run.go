@@ -43,6 +43,7 @@ type PluginCapabilities struct {
 // PluginAnnouncement is sent by plugins to PluginCoordinator on startup.
 // It contains all information needed for the agent to interact with the plugin.
 type PluginAnnouncement struct {
+	Name                 string // Plugin name from manifest (e.g., "compose", "aws")
 	Namespace            string
 	Version              string
 	NodeName             string
