@@ -1936,7 +1936,6 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 					MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
 					ResourceCount:           p.ResourceCount,
 					ResourceTypesToDiscover: p.ResourceTypesToDiscover,
-					LabelTagKeys:            p.LabelTagKeys,
 					RetryConfig:             p.RetryConfig,
 					LabelConfig:             &p.LabelConfig,
 					DiscoveryFilters:        p.DiscoveryFilters,

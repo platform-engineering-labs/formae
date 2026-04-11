@@ -157,9 +157,9 @@ func TestTranslateResourcePluginConfig(t *testing.T) {
 	assert.Equal(t, "fake-aws", rpc.Type)
 	assert.True(t, rpc.Enabled)
 	assert.NotNil(t, rpc.RateLimit)
-	assert.Equal(t, 5, rpc.RateLimit.MaxRequestsPerSecond)
+	assert.Equal(t, model.RateLimitScopeNamespace, rpc.RateLimit.Scope)
+	assert.Equal(t, 5, rpc.RateLimit.MaxRequestsPerSecondForNamespace)
 	assert.Equal(t, []string{"FakeAWS::S3::Bucket"}, rpc.ResourceTypesToDiscover)
-	assert.Equal(t, []string{"Name", "Env"}, rpc.LabelTagKeys)
 	assert.NotNil(t, rpc.Retry)
 	assert.Equal(t, 3, rpc.Retry.MaxRetries)
 	assert.Equal(t, 5*time.Second, rpc.Retry.RetryDelay)
@@ -187,7 +187,7 @@ func TestTranslateResourcePluginConfig_Dynamic(t *testing.T) {
 	assert.Equal(t, "sftp", rpc.Type)
 	assert.True(t, rpc.Enabled)
 	require.NotNil(t, rpc.RateLimit)
-	assert.Equal(t, 3, rpc.RateLimit.MaxRequestsPerSecond)
+	assert.Equal(t, 3, rpc.RateLimit.MaxRequestsPerSecondForNamespace)
 }
 
 func TestTranslateResourcePluginConfig_CustomFields(t *testing.T) {

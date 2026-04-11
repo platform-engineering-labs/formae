@@ -80,7 +80,8 @@ func (p *TestPlugin) RateLimit() model.RateLimitConfig {
 		// 60+ concurrent PluginOperator CRUD calls on the plugin Ergo node,
 		// which delays cross-node message delivery to the TestController and
 		// causes test harness call timeouts.
-		MaxRequestsPerSecond: 20,
+		Scope:                            model.RateLimitScopeNamespace,
+		MaxRequestsPerSecondForNamespace: 20,
 	}
 }
 

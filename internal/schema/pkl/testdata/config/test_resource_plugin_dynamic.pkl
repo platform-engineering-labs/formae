@@ -9,7 +9,7 @@ agent {
     resourcePlugins {
         new BaseResourcePluginConfig {
             type = "sftp"
-            rateLimit { maxRequestsPerSecond = 3 }
+            rateLimit { maxRequestsPerSecondForNamespace = 3 }
         }
     }
 }

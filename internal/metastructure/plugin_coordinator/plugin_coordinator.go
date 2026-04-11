@@ -50,7 +50,6 @@ type RegisteredPlugin struct {
 
 	// Per-plugin config (merged from user config)
 	ResourceTypesToDiscover []string
-	LabelTagKeys            []string
 	RetryConfig             *model.RetryConfig
 }
 
@@ -93,7 +92,7 @@ func (c *PluginCoordinator) mergePluginConfig(namespace string, announced Regist
 
 	if hasUserConfig {
 		if userCfg.RateLimit != nil {
-			merged.MaxRequestsPerSecond = userCfg.RateLimit.MaxRequestsPerSecond
+			merged.MaxRequestsPerSecond = userCfg.RateLimit.MaxRequestsPerSecondForNamespace
 		}
 		if userCfg.LabelConfig != nil {
 			merged.LabelConfig = *userCfg.LabelConfig
@@ -103,9 +102,6 @@ func (c *PluginCoordinator) mergePluginConfig(namespace string, announced Regist
 		}
 		if len(userCfg.ResourceTypesToDiscover) > 0 {
 			merged.ResourceTypesToDiscover = userCfg.ResourceTypesToDiscover
-		}
-		if len(userCfg.LabelTagKeys) > 0 {
-			merged.LabelTagKeys = userCfg.LabelTagKeys
 		}
 		if userCfg.Retry != nil {
 			merged.RetryConfig = userCfg.Retry
@@ -141,7 +137,7 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	// This is needed because ChangesetExecutor requests tokens before SpawnPluginOperator
 	if c.testPlugin != nil {
 		namespace := c.testPlugin.Namespace()
-		maxRPS := c.testPlugin.RateLimit().MaxRequestsPerSecond
+		maxRPS := c.testPlugin.RateLimit().MaxRequestsPerSecondForNamespace
 		err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 			Namespace:            namespace,
 			MaxRequestsPerSecond: maxRPS,
@@ -273,7 +269,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 	if localPlugin := c.findTestPlugin(req.Namespace); localPlugin != nil {
 		// Register namespace with RateLimiter if not already registered
 		if !c.registeredLocalNamespaces[req.Namespace] {
-			maxRPS := localPlugin.RateLimit().MaxRequestsPerSecond
+			maxRPS := localPlugin.RateLimit().MaxRequestsPerSecondForNamespace
 			err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
 				Namespace:            req.Namespace,
 				MaxRequestsPerSecond: maxRPS,
@@ -370,7 +366,6 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 			MatchFilters:            registered.MatchFilters,
 			LabelConfig:             registered.LabelConfig,
 			ResourceTypesToDiscover: registered.ResourceTypesToDiscover,
-			LabelTagKeys:            registered.LabelTagKeys,
 		}
 	}
 
@@ -412,9 +407,6 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 		if len(userCfg.ResourceTypesToDiscover) > 0 {
 			resp.ResourceTypesToDiscover = userCfg.ResourceTypesToDiscover
 		}
-		if len(userCfg.LabelTagKeys) > 0 {
-			resp.LabelTagKeys = userCfg.LabelTagKeys
-		}
 	}
 
 	return resp
@@ -432,7 +424,6 @@ func (c *PluginCoordinator) getRegisteredPlugins() messages.GetRegisteredPlugins
 			MaxRequestsPerSecond:    registered.MaxRequestsPerSecond,
 			ResourceCount:           len(registered.SupportedResources),
 			ResourceTypesToDiscover: registered.ResourceTypesToDiscover,
-			LabelTagKeys:            registered.LabelTagKeys,
 			RetryConfig:             registered.RetryConfig,
 			LabelConfig:             registered.LabelConfig,
 			DiscoveryFilters:        registered.MatchFilters,

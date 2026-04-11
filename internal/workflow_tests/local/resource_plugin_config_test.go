@@ -76,7 +76,7 @@ func TestResourcePluginConfig_RateLimitOverride(t *testing.T) {
 			{
 				Type:      "fakeaws",
 				Enabled:   true,
-				RateLimit: &pkgmodel.RateLimitConfig{MaxRequestsPerSecond: 3},
+				RateLimit: &pkgmodel.RateLimitConfig{Scope: pkgmodel.RateLimitScopeNamespace, MaxRequestsPerSecondForNamespace: 3},
 			},
 		}
 

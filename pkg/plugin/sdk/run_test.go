@@ -24,7 +24,8 @@ type mockPlugin struct{}
 
 func (m *mockPlugin) RateLimit() pkgmodel.RateLimitConfig {
 	return pkgmodel.RateLimitConfig{
-		MaxRequestsPerSecond: 10,
+		Scope:                            pkgmodel.RateLimitScopeNamespace,
+		MaxRequestsPerSecondForNamespace: 10,
 	}
 }
 
@@ -100,7 +101,7 @@ func TestSetupPluginFromDir_CreatesFullResourcePlugin(t *testing.T) {
 	assert.NotEmpty(t, schema.Fields, "Schema should have fields")
 
 	// Verify config methods are delegated to the plugin
-	assert.Equal(t, 10, wrapped.RateLimit().MaxRequestsPerSecond)
+	assert.Equal(t, 10, wrapped.RateLimit().MaxRequestsPerSecondForNamespace)
 	assert.Equal(t, "$.Name", wrapped.LabelConfig().DefaultQuery)
 }
 

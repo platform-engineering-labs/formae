@@ -85,7 +85,8 @@ func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 
 func (s *FakeAWS) RateLimit() model.RateLimitConfig {
 	return model.RateLimitConfig{
-		MaxRequestsPerSecond: RateLimitMaxRPS,
+		Scope:                            model.RateLimitScopeNamespace,
+		MaxRequestsPerSecondForNamespace: RateLimitMaxRPS,
 	}
 }
 

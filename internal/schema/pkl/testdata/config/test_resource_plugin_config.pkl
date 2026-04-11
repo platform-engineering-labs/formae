@@ -14,9 +14,8 @@ agent {
     resourcePlugins {
         new FakeAwsConfig {
             type = "fake-aws"
-            rateLimit { maxRequestsPerSecond = 5 }
+            rateLimit { maxRequestsPerSecondForNamespace = 5 }
             resourceTypesToDiscover { "FakeAWS::S3::Bucket" }
-            labelTagKeys { "Name"; "Env" }
             retry {
                 maxRetries = 3
                 retryDelay = 5.s

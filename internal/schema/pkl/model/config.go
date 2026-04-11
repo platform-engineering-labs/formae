@@ -19,7 +19,8 @@ func init() {
 // subclasses from pkl.Object properties.
 
 type RateLimitConfig struct {
-	MaxRequestsPerSecond int32 `pkl:"maxRequestsPerSecond"`
+	Scope                            string `pkl:"scope"`
+	MaxRequestsPerSecondForNamespace int32  `pkl:"maxRequestsPerSecondForNamespace"`
 }
 
 type LabelConfig struct {

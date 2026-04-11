@@ -30,9 +30,8 @@ func TestPluginConfig(t *testing.T) {
 	resourcePluginsBlock := `
     resourcePlugins {
         new Sftp.PluginConfig {
-            rateLimit { maxRequestsPerSecond = 3 }
+            rateLimit { maxRequestsPerSecondForNamespace = 3 }
             resourceTypesToDiscover { "SFTP::File" }
-            labelTagKeys { "custom-label" }
             discoveryFilters {
                 new MatchFilter {
                     resourceTypes { "SFTP::File" }
@@ -74,7 +73,6 @@ func TestPluginConfig(t *testing.T) {
 			Namespace               string   `json:"Namespace"`
 			MaxRequestsPerSecond    int      `json:"MaxRequestsPerSecond"`
 			ResourceTypesToDiscover []string `json:"ResourceTypesToDiscover"`
-			LabelTagKeys            []string `json:"LabelTagKeys"`
 			LabelConfig *struct {
 				DefaultQuery string `json:"DefaultQuery"`
 			} `json:"LabelConfig"`
@@ -101,12 +99,6 @@ func TestPluginConfig(t *testing.T) {
 			t.Run("resourceTypesToDiscover override", func(t *testing.T) {
 				if len(p.ResourceTypesToDiscover) != 1 || p.ResourceTypesToDiscover[0] != "SFTP::File" {
 					t.Errorf("expected resourceTypesToDiscover [SFTP::File], got %v", p.ResourceTypesToDiscover)
-				}
-			})
-
-			t.Run("labelTagKeys override", func(t *testing.T) {
-				if len(p.LabelTagKeys) != 1 || p.LabelTagKeys[0] != "custom-label" {
-					t.Errorf("expected labelTagKeys [custom-label], got %v", p.LabelTagKeys)
 				}
 			})
 

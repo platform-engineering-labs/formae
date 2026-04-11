@@ -61,7 +61,6 @@ type PluginInfoResponse struct {
 	MatchFilters            []model.MatchFilter
 	LabelConfig             model.LabelConfig
 	ResourceTypesToDiscover []string
-	LabelTagKeys            []string
 	Error                   string // Set if Found is false
 }
 
@@ -77,7 +76,6 @@ type RegisteredPluginInfo struct {
 	MaxRequestsPerSecond    int
 	ResourceCount           int
 	ResourceTypesToDiscover []string
-	LabelTagKeys            []string
 	RetryConfig             *model.RetryConfig
 	LabelConfig             model.LabelConfig
 	DiscoveryFilters        []model.MatchFilter

@@ -174,7 +174,6 @@ type PluginInfo struct {
 	MaxRequestsPerSecond    int              `json:"MaxRequestsPerSecond"`
 	ResourceCount           int              `json:"ResourceCount"`
 	ResourceTypesToDiscover []string         `json:"ResourceTypesToDiscover,omitempty"`
-	LabelTagKeys            []string         `json:"LabelTagKeys,omitempty"`
 	RetryConfig             *pkgmodel.RetryConfig    `json:"RetryConfig,omitempty"`
 	LabelConfig             *pkgmodel.LabelConfig    `json:"LabelConfig,omitempty"`
 	DiscoveryFilters        []pkgmodel.MatchFilter   `json:"DiscoveryFilters,omitempty"`

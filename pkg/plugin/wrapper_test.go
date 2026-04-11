@@ -22,7 +22,8 @@ type mockPlugin struct{}
 
 func (m *mockPlugin) RateLimit() pkgmodel.RateLimitConfig {
 	return pkgmodel.RateLimitConfig{
-		MaxRequestsPerSecond: 10,
+		Scope:                            pkgmodel.RateLimitScopeNamespace,
+		MaxRequestsPerSecondForNamespace: 10,
 	}
 }
 
@@ -97,7 +98,7 @@ func TestWrapPlugin_CreatesFullResourcePlugin(t *testing.T) {
 	assert.Equal(t, schemas["Test::Resource::Two"], schema2)
 
 	// Verify config methods are delegated
-	assert.Equal(t, 10, wrapped.RateLimit().MaxRequestsPerSecond)
+	assert.Equal(t, 10, wrapped.RateLimit().MaxRequestsPerSecondForNamespace)
 	assert.Equal(t, "$.Name", wrapped.LabelConfig().DefaultQuery)
 }
 

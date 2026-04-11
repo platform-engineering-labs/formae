@@ -10,9 +10,18 @@ import (
 	"time"
 )
 
-// RateLimitConfig specifies rate limiting behavior for a plugin.
+// RateLimitScope defines the granularity of rate limiting
+type RateLimitScope string
+
+const (
+	// RateLimitScopeNamespace applies rate limiting at the plugin namespace level (e.g., AWS, Azure)
+	RateLimitScopeNamespace RateLimitScope = "Namespace"
+)
+
+// RateLimitConfig specifies rate limiting behavior for a plugin
 type RateLimitConfig struct {
-	MaxRequestsPerSecond int
+	Scope                            RateLimitScope
+	MaxRequestsPerSecondForNamespace int
 }
 
 // LabelConfig defines how to extract labels from discovered resources.
@@ -184,7 +193,6 @@ type ResourcePluginUserConfig struct {
 	LabelConfig             *LabelConfig
 	DiscoveryFilters        []MatchFilter
 	ResourceTypesToDiscover []string
-	LabelTagKeys            []string
 	Retry                   *RetryConfig
 	PluginConfig            json.RawMessage
 }

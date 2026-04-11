@@ -169,7 +169,8 @@ class NetworkConfig {
 }
 
 class RateLimitConfig {
-    maxRequestsPerSecond: Int = 10
+    scope: String = "Namespace"
+    maxRequestsPerSecondForNamespace: Int = 10
 }
 
 class LabelConfig {
@@ -194,7 +195,6 @@ open class BaseResourcePluginConfig {
     labelConfig: LabelConfig?
     discoveryFilters: Listing<MatchFilter>?
     resourceTypesToDiscover: Listing<String>?
-    labelTagKeys: Listing<String>?
     retry: RetryConfig?
 }
 

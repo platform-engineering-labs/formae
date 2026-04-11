@@ -237,7 +237,6 @@ func checkResourcePluginDeprecations(translated *pkgmodel.Config) {
 
 	hasPerPluginRetry := false
 	hasPerPluginRTD := false
-	hasPerPluginLTK := false
 
 	for _, rpc := range translated.Agent.ResourcePlugins {
 		if rpc.Retry != nil {
@@ -245,9 +244,6 @@ func checkResourcePluginDeprecations(translated *pkgmodel.Config) {
 		}
 		if len(rpc.ResourceTypesToDiscover) > 0 {
 			hasPerPluginRTD = true
-		}
-		if len(rpc.LabelTagKeys) > 0 {
-			hasPerPluginLTK = true
 		}
 	}
 
@@ -266,17 +262,6 @@ func checkResourcePluginDeprecations(translated *pkgmodel.Config) {
 
 	if hasPerPluginRTD && len(translated.Agent.Discovery.ResourceTypesToDiscover) > 0 {
 		w := "Your configuration file uses per-plugin 'resourceTypesToDiscover' — the global 'agent.discovery.resourceTypesToDiscover' is deprecated in favor of per-plugin config"
-		slog.Warn(w)
-		translated.Warnings = append(translated.Warnings, w)
-	}
-
-	// The PKL default for labelTagKeys is ["Name"]; treat it as "not explicitly set"
-	defaultLTK := []string{"Name"}
-	globalLTKIsNonDefault := len(translated.Agent.Discovery.LabelTagKeys) > 0 &&
-		(len(translated.Agent.Discovery.LabelTagKeys) != 1 || translated.Agent.Discovery.LabelTagKeys[0] != defaultLTK[0])
-
-	if hasPerPluginLTK && globalLTKIsNonDefault {
-		w := "Your configuration file uses per-plugin 'labelTagKeys' — the global 'agent.discovery.labelTagKeys' is deprecated in favor of per-plugin config"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 	}
@@ -687,7 +672,8 @@ func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUse
 	if rl, ok := props["rateLimit"]; ok && rl != nil {
 		if rlObj, ok := rl.(*pklmodel.RateLimitConfig); ok {
 			cfg.RateLimit = &pkgmodel.RateLimitConfig{
-				MaxRequestsPerSecond: int(rlObj.MaxRequestsPerSecond),
+				Scope:                            pkgmodel.RateLimitScope(rlObj.Scope),
+				MaxRequestsPerSecondForNamespace: int(rlObj.MaxRequestsPerSecondForNamespace),
 			}
 		}
 	}
@@ -712,11 +698,6 @@ func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUse
 		cfg.ResourceTypesToDiscover = pklListingToStringSlice(rtd)
 	}
 
-	// labelTagKeys
-	if ltk, ok := props["labelTagKeys"]; ok && ltk != nil {
-		cfg.LabelTagKeys = pklListingToStringSlice(ltk)
-	}
-
 	// retry
 	if r, ok := props["retry"]; ok && r != nil {
 		if rObj, ok := r.(*pklmodel.RetryConfig); ok {
@@ -731,7 +712,7 @@ func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUse
 	// Marshal remaining unknown properties into PluginConfig for plugin-specific fields
 	baseKeys := map[string]bool{
 		"type": true, "enabled": true, "rateLimit": true, "labelConfig": true,
-		"discoveryFilters": true, "resourceTypesToDiscover": true, "labelTagKeys": true, "retry": true,
+		"discoveryFilters": true, "resourceTypesToDiscover": true, "retry": true,
 	}
 	extra := make(map[string]any)
 	for k, v := range props {
