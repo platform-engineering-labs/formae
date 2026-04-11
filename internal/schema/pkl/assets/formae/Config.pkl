@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: FSL-1.1-ALv2
  */
 
-module formae.Config
+open module formae.Config
 
 typealias Port = Int(this >= 0 && this <= 65535)
 
@@ -156,6 +156,26 @@ class OTelConfig {
     prometheus: PrometheusConfig = new PrometheusConfig{}
 }
 
+class TailscaleConfig {
+    tls: Boolean = false
+    authKey: String
+    hostname: String?
+    advertiseTags: Listing<String>?
+}
+
+class NetworkConfig {
+    type: String
+    tailscale: TailscaleConfig?
+}
+
+abstract class BaseAgentAuthConfig {
+    type: String
+}
+
+abstract class BaseCliAuthConfig {
+    type: String
+}
+
 class AgentConfig {
     server: ServerConfig = new ServerConfig{}
 
@@ -172,6 +192,8 @@ class AgentConfig {
     oTel: OTelConfig = new OTelConfig{}
 
     stackExpirer: StackExpirerConfig = new StackExpirerConfig{}
+
+    auth: (BaseAgentAuthConfig|Dynamic)?
 }
 
 class ApiConfig {
@@ -192,8 +214,11 @@ class CliConfig {
     api: ApiConfig
 
     disableUsageReporting: Boolean = false
+
+    auth: (BaseCliAuthConfig|Dynamic)?
 }
 
+/// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.
 class PluginConfig {
     pluginDir: String = "~/.pel/formae/plugins"
 
@@ -205,7 +230,7 @@ class PluginConfig {
         )
     Authentication: Dynamic? =
         if (authentication != null)
-            authentication.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+            authentication
         else
             null
 
@@ -217,7 +242,7 @@ class PluginConfig {
     )
     Network: Dynamic? =
         if (network != null)
-            network.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+            network
         else
             null
 }
@@ -228,4 +253,9 @@ artifacts: ArtifactConfig = new ArtifactConfig{}
 
 cli: CliConfig = new CliConfig{}
 
-plugins: PluginConfig = new PluginConfig{}
+network: NetworkConfig?
+
+pluginDir: String = "~/.pel/formae/plugins"
+
+/// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.
+plugins: PluginConfig?
