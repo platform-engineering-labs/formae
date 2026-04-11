@@ -274,6 +274,41 @@ open class Resolvable {
     $visibility: String = visibility
 }
 
+/// Resolvable that resolves to a Mapping. Supports key-based access via at().
+/// Usage: stack.res.endpoints.at("service:3000")
+open class MappingResolvable extends Resolvable {
+    local _self = this
+    /// Access a value by its key in the resolved Mapping.
+    /// Special characters (colons, dots) are escaped automatically for gjson.
+    function at(key: String): Resolvable = new Resolvable {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = if (_self.property != null)
+            _self.property + "." + key.replaceAll(":", "\\:").replaceAll(".", "\\.")
+            else key.replaceAll(":", "\\:").replaceAll(".", "\\.")
+        visibility = _self.visibility
+    }
+}
+
+/// Resolvable that resolves to a Listing. Supports index-based access via at().
+/// Returns MappingResolvable by default. Plugin authors can subclass and
+/// override at() to return a typed element resolvable for ergonomic field
+/// access (e.g., svc.res.endpoints.at(0).uri).
+open class ListingResolvable extends Resolvable {
+    local _self = this
+    /// Access an element by its index in the resolved Listing.
+    function at(index: Int): MappingResolvable = new MappingResolvable {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = if (_self.property != null)
+            _self.property + "." + index.toString()
+            else index.toString()
+        visibility = _self.visibility
+    }
+}
+
 open class Value {
     hidden value: String
     hidden visibility: "Clear"|"Opaque" = "Clear"
