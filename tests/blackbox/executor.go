@@ -345,7 +345,18 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	// Process completed commands in REVERSE order (most recent first) so
 	// later command outcomes take precedence over earlier ones. This matches
 	// DrainPendingCommands' reverse-order processing.
+	//
+	// Seed the corrected map from authoritative slots so that stale commands
+	// (accepted before a TTL destroy or similar authoritative event) cannot
+	// override ground truth established by ForceCheckTTLAndWait.
 	corrected := make(map[struct{ stackIdx, slotIdx int }]bool)
+	for s, stack := range model.Stacks {
+		for idx := range stack.Resources {
+			if model.IsAuthoritativeSlot(s, idx) {
+				corrected[struct{ stackIdx, slotIdx int }{s, idx}] = true
+			}
+		}
+	}
 	for i := len(completed) - 1; i >= 0; i-- {
 		cc := completed[i]
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", cc.ac.CommandID, cc.cmd.State)
@@ -923,13 +934,7 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		if ru.State == "Success" {
 			switch ru.Operation {
 			case "create":
-				// Don't let stale command completions override authoritative
-				// slots (e.g. TTL destroy that happened after this command was
-				// accepted). Authoritative is only cleared during optimistic
-				// prediction when a NEW command is accepted.
-				if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
-					goto markDone
-				}
+				model.ClearAuthoritativeSlot(stackIdx, slotIdx)
 				props := ""
 				if ru.Properties != nil {
 					props = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
