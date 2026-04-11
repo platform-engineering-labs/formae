@@ -29,8 +29,8 @@ type LabelConfig struct {
 }
 
 type MatchFilter struct {
-	ResourceTypes []string          `pkl:"resourceTypes"`
-	Conditions    []FilterCondition `pkl:"conditions"`
+	ResourceTypes []string           `pkl:"resourceTypes"`
+	Conditions    []*FilterCondition `pkl:"conditions"`
 }
 
 type FilterCondition struct {
