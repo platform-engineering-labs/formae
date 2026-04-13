@@ -328,9 +328,15 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 
 		discoverableResources := pluginInfo.SupportedResources
 		supportedResources := make([]plugin.ResourceDescriptor, 0)
+
+		// Per-plugin resourceTypesToDiscover takes precedence over global
+		typesToDiscover := pluginInfo.ResourceTypesToDiscover
+		if len(typesToDiscover) == 0 {
+			typesToDiscover = data.discoveryCfg.ResourceTypesToDiscover
+		}
+
 		for _, desc := range discoverableResources {
-			if len(data.discoveryCfg.ResourceTypesToDiscover) == 0 ||
-				slices.Contains(data.discoveryCfg.ResourceTypesToDiscover, desc.Type) {
+			if len(typesToDiscover) == 0 || slices.Contains(typesToDiscover, desc.Type) {
 				supportedResources = append(supportedResources, desc)
 				data.resourceDescriptors[desc.Type] = desc
 			}
@@ -596,7 +602,7 @@ func getSchemaFromCache(data *DiscoveryData, namespace, resourceType string) (pk
 }
 
 // getMatchFiltersFromCache retrieves MatchFilters from the cached plugin info
-func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []plugin.MatchFilter {
+func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []pkgmodel.MatchFilter {
 	pluginInfo, ok := data.pluginInfoCache[namespace]
 	if !ok {
 		return nil
@@ -605,8 +611,8 @@ func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []plugin.Ma
 }
 
 // findMatchFiltersForType finds all MatchFilters that apply to the given resource type
-func findMatchFiltersForType(filters []plugin.MatchFilter, resourceType string) []plugin.MatchFilter {
-	var result []plugin.MatchFilter
+func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
+	var result []pkgmodel.MatchFilter
 	for i := range filters {
 		if slices.Contains(filters[i].ResourceTypes, resourceType) {
 			result = append(result, filters[i])

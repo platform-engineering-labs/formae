@@ -15,13 +15,14 @@ PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSI
 # Without @ref, the default branch (main) is used.
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
-    https://github.com/platform-engineering-labs/formae-plugin-aws.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-azure.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-compose.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-gcp.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-grafana.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-oci.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-ovh.git@feat/msgpack-serialization
+    https://github.com/platform-engineering-labs/formae-plugin-aws.git@feat/resource-plugin-config \
+    https://github.com/platform-engineering-labs/formae-plugin-azure.git@feat/resource-plugin-config \
+    https://github.com/platform-engineering-labs/formae-plugin-compose.git@feat/resource-plugin-config \
+    https://github.com/platform-engineering-labs/formae-plugin-gcp.git@feat/resource-plugin-config \
+    https://github.com/platform-engineering-labs/formae-plugin-grafana.git@feat/resource-plugin-config \
+    https://github.com/platform-engineering-labs/formae-plugin-oci.git@feat/resource-plugin-config \
+    https://github.com/platform-engineering-labs/formae-plugin-ovh.git@feat/resource-plugin-config \
+    https://github.com/platform-engineering-labs/formae-plugin-sftp.git@feat/resource-plugin-config
 
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins
@@ -86,8 +87,14 @@ build-external-plugins: fetch-external-plugins
 		cd "$(PLUGINS_CACHE)/$$name" && \
 			if grep -q 'formae/pkg/auth' go.mod 2>/dev/null; then \
 				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/auth=$(CURDIR)/pkg/auth; \
-				go mod tidy; \
 			fi && \
+			if grep -q 'formae/pkg/model' go.mod 2>/dev/null; then \
+				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/model=$(CURDIR)/pkg/model; \
+			fi && \
+			if grep -q 'formae/pkg/plugin' go.mod 2>/dev/null; then \
+				go mod edit -replace github.com/platform-engineering-labs/formae/pkg/plugin=$(CURDIR)/pkg/plugin; \
+			fi && \
+			go mod tidy && \
 			cd $(CURDIR); \
 		$(MAKE) -C "$(PLUGINS_CACHE)/$$name" build; \
 	done
@@ -112,6 +119,10 @@ install-external-plugins: build-external-plugins
 				mkdir -p "$$dest/schema"; \
 				cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
 			fi; \
+			if [ -f "$$plugin_dir/schema/Config.pkl" ]; then \
+				mkdir -p "$$dest/schema"; \
+				cp "$$plugin_dir/schema/Config.pkl" "$$dest/schema/"; \
+			fi; \
 		else \
 			namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
 			dest="$$HOME/.pel/formae/plugins/$$namespace/v$$version"; \
@@ -121,6 +132,9 @@ install-external-plugins: build-external-plugins
 			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
 			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
 			cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+			if [ -f "$$plugin_dir/schema/Config.pkl" ]; then \
+				cp "$$plugin_dir/schema/Config.pkl" "$$dest/schema/"; \
+			fi; \
 		fi; \
 	done
 	@echo "External plugins installed successfully."
@@ -151,6 +165,10 @@ pkg-bin: clean build build-tools build-external-plugins
 				mkdir -p "$$dest/schema"; \
 				cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
 			fi; \
+			if [ -f "$$plugin_dir/schema/Config.pkl" ]; then \
+				mkdir -p "$$dest/schema"; \
+				cp "$$plugin_dir/schema/Config.pkl" "$$dest/schema/"; \
+			fi; \
 		else \
 			namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
 			dest="./dist/pel/formae/resource-plugins/$$namespace/v$$version"; \
@@ -159,6 +177,9 @@ pkg-bin: clean build build-tools build-external-plugins
 			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
 			cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
 			cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
+			if [ -f "$$plugin_dir/schema/Config.pkl" ]; then \
+				cp "$$plugin_dir/schema/Config.pkl" "$$dest/schema/"; \
+			fi; \
 			mkdir -p "./dist/pel/formae/examples/$$plugin_name"; \
 			cp -r "$$plugin_dir/examples/"* "./dist/pel/formae/examples/$$plugin_name/" 2>/dev/null || true; \
 		fi; \

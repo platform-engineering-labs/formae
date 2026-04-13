@@ -101,6 +101,7 @@ jobs:
           - TestSimulateApply
           - TestExtractAndReapply
           - TestAuthBasic
+          - TestPluginConfig
 
     steps:
       - uses: actions/checkout@v4

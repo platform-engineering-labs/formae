@@ -74,13 +74,13 @@ func (p *TestPlugin) SupportedResources() []plugin.ResourceDescriptor {
 	}
 }
 
-func (p *TestPlugin) RateLimit() plugin.RateLimitConfig {
-	return plugin.RateLimitConfig{
-		Scope:                            plugin.RateLimitScopeNamespace,
+func (p *TestPlugin) RateLimit() model.RateLimitConfig {
+	return model.RateLimitConfig{
 		// Keep rate limit realistic. Higher values (e.g. 100) cause bursts of
 		// 60+ concurrent PluginOperator CRUD calls on the plugin Ergo node,
 		// which delays cross-node message delivery to the TestController and
 		// causes test harness call timeouts.
+		Scope:                            model.RateLimitScopeNamespace,
 		MaxRequestsPerSecondForNamespace: 20,
 	}
 }
@@ -316,12 +316,12 @@ func (p *TestPlugin) List(_ context.Context, request *resource.ListRequest) (*re
 	}, nil
 }
 
-func (p *TestPlugin) DiscoveryFilters() []plugin.MatchFilter {
+func (p *TestPlugin) DiscoveryFilters() []model.MatchFilter {
 	return nil
 }
 
-func (p *TestPlugin) LabelConfig() plugin.LabelConfig {
-	return plugin.LabelConfig{
+func (p *TestPlugin) LabelConfig() model.LabelConfig {
+	return model.LabelConfig{
 		DefaultQuery:      "$.Name",
 		ResourceOverrides: map[string]string{},
 	}

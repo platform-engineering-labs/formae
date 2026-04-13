@@ -168,11 +168,41 @@ class NetworkConfig {
     tailscale: TailscaleConfig?
 }
 
-abstract class BaseAgentAuthConfig {
+class RateLimitConfig {
+    scope: String = "Namespace"
+    maxRequestsPerSecondForNamespace: Int = 10
+}
+
+class LabelConfig {
+    defaultQuery: String?
+    resourceOverrides: Mapping<String, String>?
+}
+
+class FilterCondition {
+    propertyPath: String
+    propertyValue: String?
+}
+
+class MatchFilter {
+    resourceTypes: Listing<String>
+    conditions: Listing<FilterCondition>
+}
+
+open class BaseResourcePluginConfig {
+    type: String
+    enabled: Boolean = true
+    rateLimit: RateLimitConfig?
+    labelConfig: LabelConfig?
+    discoveryFilters: Listing<MatchFilter>?
+    resourceTypesToDiscover: Listing<String>?
+    retry: RetryConfig?
+}
+
+open class BaseAgentAuthConfig {
     type: String
 }
 
-abstract class BaseCliAuthConfig {
+open class BaseCliAuthConfig {
     type: String
 }
 
@@ -194,6 +224,10 @@ class AgentConfig {
     stackExpirer: StackExpirerConfig = new StackExpirerConfig{}
 
     auth: (BaseAgentAuthConfig|Dynamic)?
+
+    resourcePlugins: Listing<BaseResourcePluginConfig>(
+        this.toList().map((it) -> it.type).isDistinct
+    )?
 }
 
 class ApiConfig {

@@ -142,6 +142,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("OTelConfig"):              cfg.Agent.OTel,
 		gen.Env("StackExpirerConfig"):      cfg.Agent.StackExpirer,
 		gen.Env("AgentID"):                 agentID,
+		gen.Env("ResourcePluginConfigs"):   cfg.Agent.ResourcePlugins,
 	}
 
 	// Enable Ergo networking for distributed plugin architecture
@@ -1929,11 +1930,15 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		if pluginsResult, ok := result.(messages.GetRegisteredPluginsResult); ok {
 			for _, p := range pluginsResult.Plugins {
 				plugins = append(plugins, apimodel.PluginInfo{
-					Namespace:            p.Namespace,
-					Version:              p.Version,
-					NodeName:             p.NodeName,
-					MaxRequestsPerSecond: p.MaxRequestsPerSecond,
-					ResourceCount:        p.ResourceCount,
+					Namespace:               p.Namespace,
+					Version:                 p.Version,
+					NodeName:                p.NodeName,
+					MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
+					ResourceCount:           p.ResourceCount,
+					ResourceTypesToDiscover: p.ResourceTypesToDiscover,
+					RetryConfig:             p.RetryConfig,
+					LabelConfig:             &p.LabelConfig,
+					DiscoveryFilters:        p.DiscoveryFilters,
 				})
 			}
 		}

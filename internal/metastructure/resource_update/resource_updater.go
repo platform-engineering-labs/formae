@@ -158,8 +158,8 @@ var PluginOperationCallTimeout = 60
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
 	commandID       string
-	labelConfig     plugin.LabelConfig // JSONPath-based label extraction config from plugin
-	labelTagKeys    []string           // Legacy tag-based label keys for backwards compatibility
+	labelConfig     pkgmodel.LabelConfig // JSONPath-based label extraction config from plugin
+	labelTagKeys    []string             // Legacy tag-based label keys for backwards compatibility
 	resourceLabeler *ResourceLabeler
 	retryConfig     pkgmodel.RetryConfig
 	requestedBy     gen.PID
@@ -874,7 +874,7 @@ func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateDa
 
 // shouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter.
 // Returns true if all conditions match (AND logic), indicating the resource should be excluded.
-func shouldFilterByMatchFilter(filter *plugin.MatchFilter, properties json.RawMessage) bool {
+func shouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.RawMessage) bool {
 	if filter == nil {
 		return false
 	}
@@ -892,7 +892,7 @@ func shouldFilterByMatchFilter(filter *plugin.MatchFilter, properties json.RawMe
 // evaluateCondition evaluates a single filter condition using JSONPath.
 // PropertyPath is a JSONPath expression to query properties.
 // PropertyValue: empty = existence check, non-empty = exact string match.
-func evaluateCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+func evaluateCondition(cond pkgmodel.FilterCondition, properties json.RawMessage) bool {
 	var data any
 	if err := json.Unmarshal(properties, &data); err != nil {
 		return false

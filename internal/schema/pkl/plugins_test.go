@@ -18,8 +18,8 @@ import (
 func TestGeneratePluginWrappers_CreatesWrapperForPluginWithSchema(t *testing.T) {
 	pluginDir := t.TempDir()
 
-	// Create a fake plugin with schema/pkl/Config.pkl
-	configDir := filepath.Join(pluginDir, "auth-basic", "v0.1.0", "schema", "pkl")
+	// Create a fake plugin with schema/Config.pkl
+	configDir := filepath.Join(pluginDir, "auth-basic", "v0.1.0", "schema")
 	require.NoError(t, os.MkdirAll(configDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "Config.pkl"), []byte("open module authBasic.Config\n"), 0644))
 
@@ -30,15 +30,15 @@ func TestGeneratePluginWrappers_CreatesWrapperForPluginWithSchema(t *testing.T) 
 	content, err := os.ReadFile(wrapperPath)
 	require.NoError(t, err)
 
-	assert.Contains(t, string(content), `extends "./auth-basic/v0.1.0/schema/pkl/Config.pkl"`)
+	assert.Contains(t, string(content), `extends "./auth-basic/v0.1.0/schema/Config.pkl"`)
 	assert.Contains(t, string(content), "Auto-generated wrapper for auth-basic plugin")
 }
 
 func TestGeneratePluginWrappers_SkipsPluginsWithoutSchema(t *testing.T) {
 	pluginDir := t.TempDir()
 
-	// Create a plugin directory without schema/pkl/Config.pkl
-	require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, "aws", "v0.1.3", "schema", "pkl"), 0755))
+	// Create a plugin directory without schema/Config.pkl
+	require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, "aws", "v0.1.3", "schema"), 0755))
 	// No Config.pkl written
 
 	err := GeneratePluginWrappers(pluginDir)
@@ -65,7 +65,7 @@ func TestGeneratePluginWrappers_PicksHighestVersion(t *testing.T) {
 
 	// Create two versions — only v0.2.0 has Config.pkl but both are version dirs
 	for _, ver := range []string{"v0.1.0", "v0.2.0"} {
-		configDir := filepath.Join(pluginDir, "my-plugin", ver, "schema", "pkl")
+		configDir := filepath.Join(pluginDir, "my-plugin", ver, "schema")
 		require.NoError(t, os.MkdirAll(configDir, 0755))
 		require.NoError(t, os.WriteFile(filepath.Join(configDir, "Config.pkl"), []byte("open module myPlugin.Config\n"), 0644))
 	}
@@ -76,7 +76,7 @@ func TestGeneratePluginWrappers_PicksHighestVersion(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(pluginDir, "MyPlugin.pkl"))
 	require.NoError(t, err)
 
-	assert.Contains(t, string(content), `extends "./my-plugin/v0.2.0/schema/pkl/Config.pkl"`)
+	assert.Contains(t, string(content), `extends "./my-plugin/v0.2.0/schema/Config.pkl"`)
 }
 
 func TestGeneratePluginWrappers_SkipsNonDirectoryEntries(t *testing.T) {

@@ -1,0 +1,26 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "formae:/Config.pkl"
+
+import "formae:/Config.pkl"
+
+local class FakeAwsConfig extends Config.BaseResourcePluginConfig {
+    type = "fake-aws"
+}
+
+agent {
+    retry {
+        maxRetries = 5
+    }
+    resourcePlugins {
+        new FakeAwsConfig {
+            retry {
+                maxRetries = 3
+            }
+        }
+    }
+}

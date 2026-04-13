@@ -49,6 +49,8 @@ type agentOptions struct {
 	authUsername            string
 	authPassword            string
 	authBcryptHash         string
+	resourcePluginsBlock    string   // raw PKL block for agent.resourcePlugins
+	pklImports              string   // raw PKL import statements (top-level)
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -64,6 +66,15 @@ func WithDiscovery(interval string, resourceTypes ...string) AgentOption {
 func WithEnv(envVars ...string) AgentOption {
 	return func(o *agentOptions) {
 		o.extraEnv = append(o.extraEnv, envVars...)
+	}
+}
+
+// WithResourcePlugins adds a raw PKL block for agent.resourcePlugins.
+// imports is optional top-level PKL import statements (e.g., `import "plugins:/Sftp.pkl" as Sftp`).
+func WithResourcePlugins(imports, pklBlock string) AgentOption {
+	return func(o *agentOptions) {
+		o.pklImports = imports
+		o.resourcePluginsBlock = pklBlock
 	}
 }
 
@@ -117,22 +128,18 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 	agentAuthBlock := ""
 	cliAuthBlock := ""
 	if options.authEnabled {
-		// Use Dynamic rather than typed plugin classes because pkl-go v0.12
-		// cannot decode typed PKL classes nested inside pkl.Object fields
-		// (e.g. AuthorizedUser inside a Listing inside an auth pkl.Object).
-		// Dynamic objects are decoded via the generic pkl.Object path.
 		agentAuthBlock = fmt.Sprintf(`
-    auth = new Dynamic {
+    auth {
         type = "auth-basic"
         authorizedUsers = new Listing {
-            new Dynamic {
-                username = %q
-                password = %q
+            new Mapping {
+                ["Username"] = %q
+                ["Password"] = %q
             }
         }
     }`, options.authUsername, options.authBcryptHash)
 		cliAuthBlock = fmt.Sprintf(`
-    auth = new Dynamic {
+    auth {
         type = "auth-basic"
         username = %q
         password = %q
@@ -144,7 +151,7 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
  */
 
 amends "formae:/Config.pkl"
-
+%s
 agent {
     server {
         port = %d
@@ -166,7 +173,7 @@ agent {
         consoleLogLevel = "debug"
         filePath = %q
         fileLogLevel = "debug"
-    }%s
+    }%s%s
 }
 
 cli {
@@ -175,7 +182,7 @@ cli {
     }
     disableUsageReporting = true%s
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, port, cliAuthBlock)
+`, options.pklImports, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)
@@ -304,6 +311,16 @@ func (a *Agent) Port() int {
 // ConfigPath returns the path to the agent's configuration file.
 func (a *Agent) ConfigPath() string {
 	return a.config.ConfigPath
+}
+
+// LogFile returns the path to the agent's log file.
+func (a *Agent) LogFile() string {
+	return a.config.LogFile
+}
+
+// StdoutLogFile returns the path to the agent's stdout/stderr capture.
+func (a *Agent) StdoutLogFile() string {
+	return filepath.Join(a.config.DataDir, "agent-stdout.log")
 }
 
 // pickFreePort asks the OS for a free TCP port by listening on :0 and

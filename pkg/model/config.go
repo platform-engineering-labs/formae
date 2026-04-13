@@ -10,6 +10,68 @@ import (
 	"time"
 )
 
+// RateLimitScope defines the granularity of rate limiting
+type RateLimitScope string
+
+const (
+	// RateLimitScopeNamespace applies rate limiting at the plugin namespace level (e.g., AWS, Azure)
+	RateLimitScopeNamespace RateLimitScope = "Namespace"
+)
+
+// RateLimitConfig specifies rate limiting behavior for a plugin
+type RateLimitConfig struct {
+	Scope                            RateLimitScope
+	MaxRequestsPerSecondForNamespace int
+}
+
+// LabelConfig defines how to extract labels from discovered resources.
+// Labels are constructed by evaluating JSONPath queries against resource properties.
+type LabelConfig struct {
+	// DefaultQuery is a JSONPath expression applied to all resources in this namespace.
+	// Example for AWS: `$.Tags[?(@.Key=='Name')].Value`
+	// If empty, falls back to NativeID.
+	DefaultQuery string
+
+	// ResourceOverrides provides JSONPath expressions for specific resource types,
+	// overriding the DefaultQuery. Use for resources without tags or with
+	// non-standard label sources.
+	// Key: resource type (e.g., "AWS::IAM::Policy")
+	// Value: JSONPath expression (e.g., "$.PolicyName")
+	ResourceOverrides map[string]string
+}
+
+// QueryForResourceType returns the JSONPath query for a given resource type.
+// Returns the resource-specific override if exists, otherwise the default query.
+func (c LabelConfig) QueryForResourceType(resourceType string) string {
+	if override, ok := c.ResourceOverrides[resourceType]; ok {
+		return override
+	}
+	return c.DefaultQuery
+}
+
+// MatchFilter is a declarative, serializable filter definition for discovery.
+// Resources matching ALL conditions in a filter are excluded from discovery.
+type MatchFilter struct {
+	ResourceTypes []string          // Resource types this filter applies to
+	Conditions    []FilterCondition // All conditions must match (AND logic) to exclude
+}
+
+// FilterCondition defines a single condition for filtering resources.
+// Uses JSONPath expressions to query resource properties.
+type FilterCondition struct {
+	// PropertyPath is a JSONPath expression to query resource properties.
+	// Examples:
+	//   - "$.Tags[?(@.Key=='Name')].Value" - get value of tag with key "Name"
+	//   - "$.Tags[?(@.Key=~'eks:automode:.*')]" - check if any tag key matches regex
+	//   - "$.SkipDiscovery" - get top-level property value
+	PropertyPath string
+
+	// PropertyValue is the expected value to match.
+	// Empty string means existence check (path returns any value = match).
+	// Non-empty means exact string match against the query result.
+	PropertyValue string
+}
+
 const (
 	SqliteDatastore        = "sqlite"
 	PostgresDatastore      = "postgres"
@@ -122,6 +184,19 @@ type NetworkConfig struct {
 	LegacyRawJSON json.RawMessage `json:"-"`
 }
 
+// ResourcePluginUserConfig holds per-plugin configuration from the user's
+// formae.conf.pkl. Fields are optional — nil means "use plugin default."
+type ResourcePluginUserConfig struct {
+	Type                    string
+	Enabled                 bool
+	RateLimit               *RateLimitConfig
+	LabelConfig             *LabelConfig
+	DiscoveryFilters        []MatchFilter
+	ResourceTypesToDiscover []string
+	Retry                   *RetryConfig
+	PluginConfig            json.RawMessage
+}
+
 type AgentConfig struct {
 	Server          ServerConfig
 	Datastore       DatastoreConfig
@@ -132,6 +207,7 @@ type AgentConfig struct {
 	OTel            OTelConfig
 	StackExpirer    StackExpirerConfig
 	Auth            json.RawMessage
+	ResourcePlugins []ResourcePluginUserConfig
 }
 
 type APIConfig struct {

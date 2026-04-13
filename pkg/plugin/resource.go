@@ -6,9 +6,10 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/masterminds/semver"
-	"github.com/platform-engineering-labs/formae/pkg/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -24,9 +25,9 @@ const Resource Type = "resource"
 // used internally by the formae agent.
 type ResourcePlugin interface {
 	// Configuration methods
-	RateLimit() RateLimitConfig
-	DiscoveryFilters() []MatchFilter
-	LabelConfig() LabelConfig
+	RateLimit() pkgmodel.RateLimitConfig
+	DiscoveryFilters() []pkgmodel.MatchFilter
+	LabelConfig() pkgmodel.LabelConfig
 
 	// CRUD operations
 	Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error)
@@ -39,20 +40,6 @@ type ResourcePlugin interface {
 
 	// Discovery support
 	List(context context.Context, request *resource.ListRequest) (*resource.ListResult, error)
-}
-
-// RateLimitScope defines the granularity of rate limiting
-type RateLimitScope string
-
-const (
-	// RateLimitScopeNamespace applies rate limiting at the plugin namespace level (e.g., AWS, Azure)
-	RateLimitScopeNamespace RateLimitScope = "Namespace"
-)
-
-// RateLimitConfig specifies rate limiting behavior for a plugin
-type RateLimitConfig struct {
-	Scope                            RateLimitScope
-	MaxRequestsPerSecondForNamespace int
 }
 
 // FullResourcePlugin is the internal interface used by the formae agent.
@@ -69,32 +56,7 @@ type FullResourcePlugin interface {
 
 	// Schema methods - auto-extracted from schema/pkl/ directory
 	SupportedResources() []ResourceDescriptor
-	SchemaForResourceType(resourceType string) (model.Schema, error)
-}
-
-// LabelConfig defines how to extract labels from discovered resources.
-// Labels are constructed by evaluating JSONPath queries against resource properties.
-type LabelConfig struct {
-	// DefaultQuery is a JSONPath expression applied to all resources in this namespace.
-	// Example for AWS: `$.Tags[?(@.Key=='Name')].Value`
-	// If empty, falls back to NativeID.
-	DefaultQuery string
-
-	// ResourceOverrides provides JSONPath expressions for specific resource types,
-	// overriding the DefaultQuery. Use for resources without tags or with
-	// non-standard label sources.
-	// Key: resource type (e.g., "AWS::IAM::Policy")
-	// Value: JSONPath expression (e.g., "$.PolicyName")
-	ResourceOverrides map[string]string
-}
-
-// QueryForResourceType returns the JSONPath query for a given resource type.
-// Returns the resource-specific override if exists, otherwise the default query.
-func (c LabelConfig) QueryForResourceType(resourceType string) string {
-	if override, ok := c.ResourceOverrides[resourceType]; ok {
-		return override
-	}
-	return c.DefaultQuery
+	SchemaForResourceType(resourceType string) (pkgmodel.Schema, error)
 }
 
 // ObservablePlugin is an optional interface for plugins that support observability.
@@ -104,37 +66,22 @@ type ObservablePlugin interface {
 	SetObservability(logger Logger, metrics MetricRegistry)
 }
 
+// Configurable is an optional interface for plugins that accept custom configuration.
+// If implemented, the SDK calls Configure with the plugin-specific config JSON from
+// the user's formae.conf.pkl (the fields beyond BaseResourcePluginConfig).
+// Configure is called once during plugin setup, before the plugin announces to the agent.
+type Configurable interface {
+	Configure(config json.RawMessage) error
+}
+
 // PluginInfo provides read-only plugin metadata for discovery operations.
 // This interface is implemented by both local ResourcePlugin and remote plugin info proxies.
 type PluginInfo interface {
 	GetNamespace() string
 	SupportedResources() []ResourceDescriptor
-	SchemaForResourceType(resourceType string) (model.Schema, error)
-	DiscoveryFilters() []MatchFilter
-	LabelConfig() LabelConfig
-}
-
-// MatchFilter is a declarative, serializable filter definition for discovery.
-// Resources matching ALL conditions in a filter are excluded from discovery.
-type MatchFilter struct {
-	ResourceTypes []string          // Resource types this filter applies to
-	Conditions    []FilterCondition // All conditions must match (AND logic) to exclude
-}
-
-// FilterCondition defines a single condition for filtering resources.
-// Uses JSONPath expressions to query resource properties.
-type FilterCondition struct {
-	// PropertyPath is a JSONPath expression to query resource properties.
-	// Examples:
-	//   - "$.Tags[?(@.Key=='Name')].Value" - get value of tag with key "Name"
-	//   - "$.Tags[?(@.Key=~'eks:automode:.*')]" - check if any tag key matches regex
-	//   - "$.SkipDiscovery" - get top-level property value
-	PropertyPath string
-
-	// PropertyValue is the expected value to match.
-	// Empty string means existence check (path returns any value = match).
-	// Non-empty means exact string match against the query result.
-	PropertyValue string
+	SchemaForResourceType(resourceType string) (pkgmodel.Schema, error)
+	DiscoveryFilters() []pkgmodel.MatchFilter
+	LabelConfig() pkgmodel.LabelConfig
 }
 
 // used in tests to simulate testable behaviour

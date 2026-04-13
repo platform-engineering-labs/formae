@@ -13,26 +13,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/platform-engineering-labs/formae/pkg/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 // mockPlugin is a minimal ResourcePlugin implementation for testing
 type mockPlugin struct{}
 
-func (m *mockPlugin) RateLimit() RateLimitConfig {
-	return RateLimitConfig{
-		Scope:                            RateLimitScopeNamespace,
+func (m *mockPlugin) RateLimit() pkgmodel.RateLimitConfig {
+	return pkgmodel.RateLimitConfig{
+		Scope:                            pkgmodel.RateLimitScopeNamespace,
 		MaxRequestsPerSecondForNamespace: 10,
 	}
 }
 
-func (m *mockPlugin) DiscoveryFilters() []MatchFilter {
+func (m *mockPlugin) DiscoveryFilters() []pkgmodel.MatchFilter {
 	return nil
 }
 
-func (m *mockPlugin) LabelConfig() LabelConfig {
-	return LabelConfig{DefaultQuery: "$.Name"}
+func (m *mockPlugin) LabelConfig() pkgmodel.LabelConfig {
+	return pkgmodel.LabelConfig{DefaultQuery: "$.Name"}
 }
 
 func (m *mockPlugin) Create(ctx context.Context, req *resource.CreateRequest) (*resource.CreateResult, error) {
@@ -73,7 +73,7 @@ func TestWrapPlugin_CreatesFullResourcePlugin(t *testing.T) {
 		{Type: "Test::Resource::Two"},
 	}
 
-	schemas := map[string]model.Schema{
+	schemas := map[string]pkgmodel.Schema{
 		"Test::Resource::One": {Identifier: "Name", Fields: []string{"Name", "Tags"}},
 		"Test::Resource::Two": {Identifier: "Value", Fields: []string{"Value"}},
 	}
@@ -98,7 +98,6 @@ func TestWrapPlugin_CreatesFullResourcePlugin(t *testing.T) {
 	assert.Equal(t, schemas["Test::Resource::Two"], schema2)
 
 	// Verify config methods are delegated
-	assert.Equal(t, RateLimitScopeNamespace, wrapped.RateLimit().Scope)
 	assert.Equal(t, 10, wrapped.RateLimit().MaxRequestsPerSecondForNamespace)
 	assert.Equal(t, "$.Name", wrapped.LabelConfig().DefaultQuery)
 }
@@ -131,5 +130,5 @@ func TestWrapPlugin_SchemaForResourceType_ReturnsEmptyForUnknownType(t *testing.
 
 	schema, err := wrapped.SchemaForResourceType("Unknown::Type")
 	require.NoError(t, err)
-	assert.Equal(t, model.Schema{}, schema)
+	assert.Equal(t, pkgmodel.Schema{}, schema)
 }

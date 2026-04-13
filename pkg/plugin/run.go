@@ -36,13 +36,14 @@ import (
 type PluginCapabilities struct {
 	SupportedResources []ResourceDescriptor
 	ResourceSchemas    map[string]model.Schema // key = resource type
-	MatchFilters       []MatchFilter
-	LabelConfig        LabelConfig
+	MatchFilters       []model.MatchFilter
+	LabelConfig        model.LabelConfig
 }
 
 // PluginAnnouncement is sent by plugins to PluginCoordinator on startup.
 // It contains all information needed for the agent to interact with the plugin.
 type PluginAnnouncement struct {
+	Name                 string // Plugin name from manifest (e.g., "compose", "aws")
 	Namespace            string
 	Version              string
 	NodeName             string
@@ -89,6 +90,7 @@ func Run(fp FullResourcePlugin) {
 	options.Network.Cookie = cookie
 	options.Security.ExposeEnvRemoteSpawn = true
 	options.Log.Level = gen.LogLevelDebug
+	options.Log.DefaultLogger.Disable = true
 
 	// Configure plugin's own Ergo acceptor on a random free port.
 	// The plugin needs its own acceptor for the agent to spawn remote PluginOperator processes.
