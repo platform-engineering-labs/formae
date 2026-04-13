@@ -15,50 +15,48 @@ import (
 
 func TestPluginCoordinator_CaseInsensitiveNamespaceLookup(t *testing.T) {
 	c := &PluginCoordinator{
-		plugins: map[string]*RegisteredPlugin{
-			"Azure": {
-				Namespace:            "Azure",
-				MaxRequestsPerSecond: 10,
-			},
-			"aws": {
-				Namespace:            "aws",
-				MaxRequestsPerSecond: 20,
-			},
-		},
+		plugins: newNamespaceRegistry(),
 	}
+	c.plugins.Set("Azure", &RegisteredPlugin{
+		Namespace:            "Azure",
+		MaxRequestsPerSecond: 10,
+	})
+	c.plugins.Set("aws", &RegisteredPlugin{
+		Namespace:            "aws",
+		MaxRequestsPerSecond: 20,
+	})
 
-	plugin, ok := c.findPluginByNamespace("azure")
+	plugin, ok := c.plugins.Get("azure")
 	require.True(t, ok)
 	assert.Equal(t, "Azure", plugin.Namespace)
 
-	plugin, ok = c.findPluginByNamespace("AZURE")
+	plugin, ok = c.plugins.Get("AZURE")
 	require.True(t, ok)
 	assert.Equal(t, "Azure", plugin.Namespace)
 
-	plugin, ok = c.findPluginByNamespace("AWS")
+	plugin, ok = c.plugins.Get("AWS")
 	require.True(t, ok)
 	assert.Equal(t, "aws", plugin.Namespace)
 
-	plugin, ok = c.findPluginByNamespace("aws")
+	plugin, ok = c.plugins.Get("aws")
 	require.True(t, ok)
 	assert.Equal(t, "aws", plugin.Namespace)
 
-	_, ok = c.findPluginByNamespace("NonExistent")
+	_, ok = c.plugins.Get("NonExistent")
 	assert.False(t, ok)
 }
 
 func TestPluginCoordinator_GetPluginInfo_CaseInsensitive(t *testing.T) {
 	c := &PluginCoordinator{
-		plugins: map[string]*RegisteredPlugin{
-			"Azure": {
-				Namespace:            "Azure",
-				MaxRequestsPerSecond: 10,
-				SupportedResources: []plugin.ResourceDescriptor{
-					{Type: "Azure::Compute::VM", Discoverable: true},
-				},
-			},
-		},
+		plugins: newNamespaceRegistry(),
 	}
+	c.plugins.Set("Azure", &RegisteredPlugin{
+		Namespace:            "Azure",
+		MaxRequestsPerSecond: 10,
+		SupportedResources: []plugin.ResourceDescriptor{
+			{Type: "Azure::Compute::VM", Discoverable: true},
+		},
+	})
 
 	resp := c.getPluginInfo(messages.GetPluginInfo{Namespace: "azure"})
 	assert.True(t, resp.Found)

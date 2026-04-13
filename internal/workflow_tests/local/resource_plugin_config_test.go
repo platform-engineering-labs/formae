@@ -24,10 +24,12 @@ func TestResourcePluginConfig_DisabledPlugin(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.ResourcePlugins = []pkgmodel.ResourcePluginUserConfig{
-			{
-				Type:    "fakeaws",
-				Enabled: false,
-			},
+			// Covers both the announced "fakeaws" (below) and the injected test
+			// plugin whose Name() is "fake-aws" - both share the FakeAWS namespace.
+			// The coordinator looks up user config by plugin name, not namespace,
+			// so both entries are needed to suppress registration end-to-end.
+			{Type: "fakeaws", Enabled: false},
+			{Type: "fake-aws", Enabled: false},
 		}
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, nil, cfg)
@@ -59,7 +61,7 @@ func TestResourcePluginConfig_DisabledPlugin(t *testing.T) {
 		// Give the coordinator time to process the announcement
 		time.Sleep(500 * time.Millisecond)
 
-		// Query the coordinator for registered plugins — the disabled plugin
+		// Query the coordinator for registered plugins - the disabled plugin
 		// should NOT appear in the list.
 		result, err := testutil.Call(m.Node, "PluginCoordinator", messages.GetRegisteredPlugins{})
 		require.NoError(t, err)
@@ -109,7 +111,7 @@ func TestResourcePluginConfig_RateLimitOverride(t *testing.T) {
 		// Give the coordinator time to process the announcement
 		time.Sleep(500 * time.Millisecond)
 
-		// Query the coordinator for registered plugins — the plugin should be
+		// Query the coordinator for registered plugins - the plugin should be
 		// registered with the overridden rate limit of 3, not the announced 10.
 		result, err := testutil.Call(m.Node, "PluginCoordinator", messages.GetRegisteredPlugins{})
 		require.NoError(t, err)

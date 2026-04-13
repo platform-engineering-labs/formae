@@ -27,11 +27,59 @@ import (
 type PluginCoordinator struct {
 	act.Actor
 
-	plugins                   map[string]*RegisteredPlugin // namespace → plugin info (remote)
-	registeredLocalNamespaces map[string]bool              // namespaces registered with RateLimiter (local)
-	testPlugin                plugin.FullResourcePlugin    // test-only: directly injected plugin (e.g. FakeAWS) for workflow tests
+	plugins                   *namespaceRegistry        // namespace → plugin info (remote), case-insensitive
+	registeredLocalNamespaces *namespaceSet             // namespaces registered with RateLimiter (local), case-insensitive
+	testPlugin                plugin.FullResourcePlugin // test-only: directly injected plugin (e.g. FakeAWS) for workflow tests
 	retryConfig               model.RetryConfig
 	resourcePluginConfigs     map[string]model.ResourcePluginUserConfig // keyed by plugin name (lowercase)
+}
+
+// namespaceRegistry is a case-insensitive map keyed by plugin namespace.
+// Keys are normalized to lowercase on Set; Get/Delete lowercase their input.
+// The stored RegisteredPlugin.Namespace field keeps the announcement's original
+// casing for display; only the map key is canonical.
+type namespaceRegistry struct {
+	m map[string]*RegisteredPlugin
+}
+
+func newNamespaceRegistry() *namespaceRegistry {
+	return &namespaceRegistry{m: make(map[string]*RegisteredPlugin)}
+}
+
+func (r *namespaceRegistry) Set(ns string, p *RegisteredPlugin) {
+	r.m[strings.ToLower(ns)] = p
+}
+
+func (r *namespaceRegistry) Get(ns string) (*RegisteredPlugin, bool) {
+	p, ok := r.m[strings.ToLower(ns)]
+	return p, ok
+}
+
+func (r *namespaceRegistry) Delete(ns string) {
+	delete(r.m, strings.ToLower(ns))
+}
+
+// All returns the underlying map for iteration. Callers must not mutate it.
+func (r *namespaceRegistry) All() map[string]*RegisteredPlugin {
+	return r.m
+}
+
+// namespaceSet is a case-insensitive set of namespaces.
+type namespaceSet struct {
+	m map[string]struct{}
+}
+
+func newNamespaceSet() *namespaceSet {
+	return &namespaceSet{m: make(map[string]struct{})}
+}
+
+func (s *namespaceSet) Has(ns string) bool {
+	_, ok := s.m[strings.ToLower(ns)]
+	return ok
+}
+
+func (s *namespaceSet) Add(ns string) {
+	s.m[strings.ToLower(ns)] = struct{}{}
 }
 
 // RegisteredPlugin contains information about a registered plugin
@@ -51,22 +99,6 @@ type RegisteredPlugin struct {
 	// Per-plugin config (merged from user config)
 	ResourceTypesToDiscover []string
 	RetryConfig             *model.RetryConfig
-}
-
-// findPluginByNamespace performs a case-insensitive lookup for a plugin by namespace.
-// We use case-insensitive matching because different parts of the system may use different
-// casing conventions for namespaces. For example, the PKL Target schema normalizes namespace
-// to uppercase (via toUpperCase()), while plugins may register with mixed case (e.g., "Azure"
-// vs "AZURE"). This ensures seamless plugin discovery regardless of casing.
-// Note: If we ever need to support plugins with the same name but different casing (unlikely),
-// we would need to revisit this approach.
-func (c *PluginCoordinator) findPluginByNamespace(namespace string) (*RegisteredPlugin, bool) {
-	for ns, plugin := range c.plugins {
-		if strings.EqualFold(ns, namespace) {
-			return plugin, true
-		}
-	}
-	return nil, false
 }
 
 // findTestPlugin returns the test plugin if it matches the given namespace (case-insensitive).
@@ -98,9 +130,14 @@ func (c *PluginCoordinator) mergePluginConfig(name, namespace string, announced 
 		if userCfg.LabelConfig != nil {
 			merged.LabelConfig = *userCfg.LabelConfig
 		}
+		// DiscoveryFilters: `!= nil` - explicit empty (user wrote `discoveryFilters { }`)
+		// means "no filters, don't exclude anything," distinct from the plugin default.
 		if userCfg.DiscoveryFilters != nil {
 			merged.MatchFilters = userCfg.DiscoveryFilters
 		}
+		// ResourceTypesToDiscover: `len > 0` - empty and absent both mean "discover all"
+		// at the discovery layer (see discovery.go handling of a zero-length list), so
+		// explicit empty has no distinct meaning to preserve here.
 		if len(userCfg.ResourceTypesToDiscover) > 0 {
 			merged.ResourceTypesToDiscover = userCfg.ResourceTypesToDiscover
 		}
@@ -114,7 +151,7 @@ func (c *PluginCoordinator) mergePluginConfig(name, namespace string, announced 
 
 // resolveRetryConfig returns per-plugin RetryConfig if set, otherwise the global fallback.
 func (c *PluginCoordinator) resolveRetryConfig(namespace string) model.RetryConfig {
-	if p, ok := c.findPluginByNamespace(namespace); ok && p.RetryConfig != nil {
+	if p, ok := c.plugins.Get(namespace); ok && p.RetryConfig != nil {
 		return *p.RetryConfig
 	}
 	return c.retryConfig
@@ -126,29 +163,12 @@ func NewPluginCoordinator() gen.ProcessBehavior {
 }
 
 func (c *PluginCoordinator) Init(args ...any) error {
-	c.plugins = make(map[string]*RegisteredPlugin)
-	c.registeredLocalNamespaces = make(map[string]bool)
+	c.plugins = newNamespaceRegistry()
+	c.registeredLocalNamespaces = newNamespaceSet()
 
 	// Test-only: check for directly injected test plugin (e.g. FakeAWS for workflow tests)
 	if tp, ok := c.Env("TestResourcePlugin"); ok {
 		c.testPlugin = tp.(plugin.FullResourcePlugin)
-	}
-
-	// Register test plugin namespace with RateLimiter at startup
-	// This is needed because ChangesetExecutor requests tokens before SpawnPluginOperator
-	if c.testPlugin != nil {
-		namespace := c.testPlugin.Namespace()
-		maxRPS := c.testPlugin.RateLimit().MaxRequestsPerSecondForNamespace
-		err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
-			Namespace:            namespace,
-			MaxRequestsPerSecond: maxRPS,
-		})
-		if err != nil {
-			c.Log().Error("Failed to register test plugin namespace %s with RateLimiter: %v", namespace, err)
-		} else {
-			c.registeredLocalNamespaces[namespace] = true
-			c.Log().Debug("Registered test plugin namespace %s with RateLimiter (maxRPS=%d)", namespace, maxRPS)
-		}
 	}
 
 	retryCfg, ok := c.Env("RetryConfig")
@@ -168,14 +188,100 @@ func (c *PluginCoordinator) Init(args ...any) error {
 		c.resourcePluginConfigs = make(map[string]model.ResourcePluginUserConfig)
 	}
 
+	// Register the test plugin through the same merge path that external plugins
+	// use at announcement time, so read paths (getPluginInfo, resolveRetryConfig)
+	// see identical merged config regardless of whether the plugin is local or remote.
+	// The NodeName is left empty to signal "local" to spawnPluginOperator.
+	if c.testPlugin != nil {
+		c.registerTestPlugin()
+	}
+
+	c.warnUnclaimedPluginConfigs()
+
 	c.Log().Debug("PluginCoordinator started")
 	return nil
+}
+
+// registerTestPlugin builds a synthetic RegisteredPlugin from the injected test
+// plugin, runs it through mergePluginConfig to apply any user overrides, stores
+// it in c.plugins, and registers the namespace with the RateLimiter using the
+// merged RPS. This unifies config handling: all read paths go through c.plugins
+// whether the plugin is remote (announced) or local (test-injected).
+func (c *PluginCoordinator) registerTestPlugin() {
+	namespace := c.testPlugin.Namespace()
+
+	schemas := make(map[string]model.Schema)
+	for _, rd := range c.testPlugin.SupportedResources() {
+		if schema, err := c.testPlugin.SchemaForResourceType(rd.Type); err == nil {
+			schemas[rd.Type] = schema
+		}
+	}
+
+	announced := RegisteredPlugin{
+		Namespace:            namespace,
+		MaxRequestsPerSecond: c.testPlugin.RateLimit().MaxRequestsPerSecondForNamespace,
+		RegisteredAt:         time.Now(),
+		SupportedResources:   c.testPlugin.SupportedResources(),
+		ResourceSchemas:      schemas,
+		MatchFilters:         c.testPlugin.DiscoveryFilters(),
+		LabelConfig:          c.testPlugin.LabelConfig(),
+		// NodeName intentionally empty - signals "local" to spawnPluginOperator.
+	}
+
+	merged, enabled := c.mergePluginConfig(c.testPlugin.Name(), namespace, announced)
+	if !enabled {
+		c.Log().Info("Test plugin disabled by config, skipping registration: namespace=%s", namespace)
+		return
+	}
+	c.plugins.Set(namespace, &merged)
+
+	// Register namespace with RateLimiter using the merged RPS so per-plugin
+	// rate-limit overrides apply to test plugins too. Required because
+	// ChangesetExecutor requests tokens before SpawnPluginOperator.
+	if err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
+		Namespace:            namespace,
+		MaxRequestsPerSecond: merged.MaxRequestsPerSecond,
+	}); err != nil {
+		c.Log().Error("Failed to register test plugin namespace %s with RateLimiter: %v", namespace, err)
+		return
+	}
+	c.registeredLocalNamespaces.Add(namespace)
+	c.Log().Debug("Registered test plugin namespace %s with RateLimiter (maxRPS=%d)", namespace, merged.MaxRequestsPerSecond)
+}
+
+// warnUnclaimedPluginConfigs emits a warning for each user-configured plugin
+// whose `type` does not match any installed plugin's name (case-insensitive).
+// The install list comes from the shared ExternalResourcePlugins env var; a
+// configured type with no matching installed plugin is silently inert
+// otherwise, which is a common misconfiguration trap.
+func (c *PluginCoordinator) warnUnclaimedPluginConfigs() {
+	if len(c.resourcePluginConfigs) == 0 {
+		return
+	}
+
+	installed := make(map[string]struct{})
+	if val, ok := c.Env("ExternalResourcePlugins"); ok {
+		if plugins, ok := val.([]plugin.ResourcePluginInfo); ok {
+			for _, p := range plugins {
+				installed[strings.ToLower(p.Name)] = struct{}{}
+			}
+		}
+	}
+	if c.testPlugin != nil {
+		installed[strings.ToLower(c.testPlugin.Name())] = struct{}{}
+	}
+
+	for key, cfg := range c.resourcePluginConfigs {
+		if _, ok := installed[key]; !ok {
+			c.Log().Warning("Resource plugin config references unknown plugin - config will be ignored: type=%s", cfg.Type)
+		}
+	}
 }
 
 func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
 	case messages.GetPluginNode:
-		plugin, ok := c.findPluginByNamespace(req.Namespace)
+		plugin, ok := c.plugins.Get(req.Namespace)
 		if !ok {
 			return nil, fmt.Errorf("plugin not found: %s", req.Namespace)
 		}
@@ -220,7 +326,7 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 
-		c.plugins[msg.Namespace] = &merged
+		c.plugins.Set(msg.Namespace, &merged)
 		c.Log().Info("Plugin registered: namespace=%s node=%s rateLimit=%d resources=%d",
 			msg.Namespace, msg.NodeName, merged.MaxRequestsPerSecond, len(caps.SupportedResources))
 
@@ -233,8 +339,8 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 		}
 
 	case messages.UnregisterPlugin:
-		if _, ok := c.plugins[msg.Namespace]; ok {
-			delete(c.plugins, msg.Namespace)
+		if _, ok := c.plugins.Get(msg.Namespace); ok {
+			c.plugins.Delete(msg.Namespace)
 			c.Log().Debug("Plugin unregistered: namespace=%s reason=%s", msg.Namespace, msg.Reason)
 		}
 
@@ -255,8 +361,10 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 		req.OperationID,
 	)
 
-	// 1. Check if plugin is registered (distributed mode)
-	if registeredPlugin, ok := c.findPluginByNamespace(req.Namespace); ok {
+	// 1. Check if plugin is registered. NodeName distinguishes remote (announced
+	//    from a plugin process) from local (test-injected). Registration itself
+	//    is unified - see registerTestPlugin.
+	if registeredPlugin, ok := c.plugins.Get(req.Namespace); ok && registeredPlugin.NodeName != "" {
 		pid, err := c.remoteSpawn(req.Namespace, registeredPlugin.NodeName, registerName)
 		if err != nil {
 			c.Log().Error("Failed to remote spawn PluginOperator for namespace %s on node %s: %v", req.Namespace, registeredPlugin.NodeName, err)
@@ -266,24 +374,8 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 		return messages.SpawnPluginOperatorResult{PID: pid}
 	}
 
-	// 2. Fallback: Check test plugin / legacy PluginManager
+	// 2. Fall back to the locally-injected test plugin.
 	if localPlugin := c.findTestPlugin(req.Namespace); localPlugin != nil {
-		// Register namespace with RateLimiter if not already registered
-		if !c.registeredLocalNamespaces[req.Namespace] {
-			maxRPS := localPlugin.RateLimit().MaxRequestsPerSecondForNamespace
-			err := c.Send(actornames.RateLimiter, changeset.RegisterNamespace{
-				Namespace:            req.Namespace,
-				MaxRequestsPerSecond: maxRPS,
-			})
-			if err != nil {
-				c.Log().Error("Failed to register namespace %s with RateLimiter: %v", req.Namespace, err)
-				// Don't fail the spawn - rate limiting is not critical
-			} else {
-				c.registeredLocalNamespaces[req.Namespace] = true
-				c.Log().Debug("Registered local plugin namespace %s with RateLimiter (maxRPS=%d)", req.Namespace, maxRPS)
-			}
-		}
-
 		pid, err := c.localSpawn(req.Namespace, localPlugin, registerName)
 		if err != nil {
 			c.Log().Error("Failed to local spawn PluginOperator for namespace %s: %v", req.Namespace, err)
@@ -354,70 +446,34 @@ func (c *PluginCoordinator) localSpawn(namespace string, localPlugin plugin.Full
 }
 
 // getPluginInfo retrieves plugin information for the given namespace.
-// It first checks registered external plugins, then falls back to local plugins.
-// Filters are cached from the initial plugin announcement (no refresh needed since filters are static).
+// Both remote plugins (announced) and local test plugins (registered at Init)
+// live in c.plugins with their user-config overrides already merged in, so the
+// lookup is a single path.
 func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.PluginInfoResponse {
-	// 1. Check external plugins first
-	if registered, ok := c.findPluginByNamespace(req.Namespace); ok {
-		return messages.PluginInfoResponse{
-			Found:                   true,
-			Namespace:               req.Namespace,
-			SupportedResources:      registered.SupportedResources,
-			ResourceSchemas:         registered.ResourceSchemas,
-			MatchFilters:            registered.MatchFilters,
-			LabelConfig:             registered.LabelConfig,
-			ResourceTypesToDiscover: registered.ResourceTypesToDiscover,
-		}
-	}
-
-	// 2. Fall back to test plugin / legacy PluginManager
-	localPlugin := c.findTestPlugin(req.Namespace)
-	if localPlugin == nil {
+	registered, ok := c.plugins.Get(req.Namespace)
+	if !ok {
 		return messages.PluginInfoResponse{
 			Found: false,
 			Error: fmt.Sprintf("plugin not found: %s", req.Namespace),
 		}
 	}
-
-	// Build schema map from local plugin
-	schemas := make(map[string]model.Schema)
-	for _, rd := range localPlugin.SupportedResources() {
-		schema, err := localPlugin.SchemaForResourceType(rd.Type)
-		if err == nil {
-			schemas[rd.Type] = schema
-		}
+	return messages.PluginInfoResponse{
+		Found:                   true,
+		Namespace:               req.Namespace,
+		SupportedResources:      registered.SupportedResources,
+		ResourceSchemas:         registered.ResourceSchemas,
+		MatchFilters:            registered.MatchFilters,
+		LabelConfig:             registered.LabelConfig,
+		ResourceTypesToDiscover: registered.ResourceTypesToDiscover,
 	}
-
-	resp := messages.PluginInfoResponse{
-		Found:              true,
-		Namespace:          req.Namespace,
-		SupportedResources: localPlugin.SupportedResources(),
-		ResourceSchemas:    schemas,
-		MatchFilters:       localPlugin.DiscoveryFilters(),
-		LabelConfig:        localPlugin.LabelConfig(),
-	}
-
-	// Overlay user config for local/test plugins (lookup by name, not namespace)
-	if userCfg, ok := c.resourcePluginConfigs[strings.ToLower(localPlugin.Name())]; ok {
-		if userCfg.LabelConfig != nil {
-			resp.LabelConfig = *userCfg.LabelConfig
-		}
-		if userCfg.DiscoveryFilters != nil {
-			resp.MatchFilters = userCfg.DiscoveryFilters
-		}
-		if len(userCfg.ResourceTypesToDiscover) > 0 {
-			resp.ResourceTypesToDiscover = userCfg.ResourceTypesToDiscover
-		}
-	}
-
-	return resp
 }
 
 // getRegisteredPlugins returns a list of all registered plugins
 func (c *PluginCoordinator) getRegisteredPlugins() messages.GetRegisteredPluginsResult {
-	plugins := make([]messages.RegisteredPluginInfo, 0, len(c.plugins))
+	all := c.plugins.All()
+	plugins := make([]messages.RegisteredPluginInfo, 0, len(all))
 
-	for _, registered := range c.plugins {
+	for _, registered := range all {
 		plugins = append(plugins, messages.RegisteredPluginInfo{
 			Namespace:               registered.Namespace,
 			Version:                 registered.Version,

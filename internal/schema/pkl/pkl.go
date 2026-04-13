@@ -255,13 +255,13 @@ func checkResourcePluginDeprecations(translated *pkgmodel.Config) {
 	}
 
 	if hasPerPluginRetry && translated.Agent.Retry != defaultRetry {
-		w := "Your configuration file uses per-plugin 'retry' — the global 'agent.retry' is deprecated in favor of per-plugin retry config"
+		w := "Your configuration file uses per-plugin 'retry' - the global 'agent.retry' is deprecated in favor of per-plugin retry config"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 	}
 
 	if hasPerPluginRTD && len(translated.Agent.Discovery.ResourceTypesToDiscover) > 0 {
-		w := "Your configuration file uses per-plugin 'resourceTypesToDiscover' — the global 'agent.discovery.resourceTypesToDiscover' is deprecated in favor of per-plugin config"
+		w := "Your configuration file uses per-plugin 'resourceTypesToDiscover' - the global 'agent.discovery.resourceTypesToDiscover' is deprecated in favor of per-plugin config"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 	}
@@ -276,14 +276,14 @@ func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pk
 	}
 
 	if plugins.PluginDir != "" && plugins.PluginDir != "~/.pel/formae/plugins" && translated.PluginDir == "~/.pel/formae/plugins" {
-		w := "Your configuration file uses deprecated 'plugins.pluginDir' — migrate to top-level 'pluginDir'"
+		w := "Your configuration file uses deprecated 'plugins.pluginDir' - migrate to top-level 'pluginDir'"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 		translated.PluginDir = plugins.PluginDir
 	}
 
 	if plugins.Authentication != nil && translated.Agent.Auth == nil {
-		w := "Your configuration file uses deprecated 'plugins.authentication' — migrate to 'agent.auth' and 'cli.auth'"
+		w := "Your configuration file uses deprecated 'plugins.authentication' - migrate to 'agent.auth' and 'cli.auth'"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 		authJSON := translateDynamic(plugins.Authentication)
@@ -292,7 +292,7 @@ func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pk
 	}
 
 	if plugins.Network != nil && translated.Network == nil {
-		w := "Your configuration file uses deprecated 'plugins.network' — migrate to top-level 'network'"
+		w := "Your configuration file uses deprecated 'plugins.network' - migrate to top-level 'network'"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 		// The old format was a Dynamic blob. Convert to typed NetworkConfig
@@ -668,44 +668,33 @@ func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUse
 		Enabled: pklBool(props, "enabled", true),
 	}
 
-	// rateLimit
-	if rl, ok := props["rateLimit"]; ok && rl != nil {
-		if rlObj, ok := rl.(*pklmodel.RateLimitConfig); ok {
-			cfg.RateLimit = &pkgmodel.RateLimitConfig{
-				Scope:                            pkgmodel.RateLimitScope(rlObj.Scope),
-				MaxRequestsPerSecondForNamespace: int(rlObj.MaxRequestsPerSecondForNamespace),
-			}
+	if rl, ok := pklTypedField[*pklmodel.RateLimitConfig](props, "rateLimit", cfg.Type); ok {
+		cfg.RateLimit = &pkgmodel.RateLimitConfig{
+			Scope:                            pkgmodel.RateLimitScope(rl.Scope),
+			MaxRequestsPerSecondForNamespace: int(rl.MaxRequestsPerSecondForNamespace),
 		}
 	}
 
-	// labelConfig
-	if lc, ok := props["labelConfig"]; ok && lc != nil {
-		if lcObj, ok := lc.(*pklmodel.LabelConfig); ok {
-			cfg.LabelConfig = &pkgmodel.LabelConfig{
-				DefaultQuery:      lcObj.DefaultQuery,
-				ResourceOverrides: pklMappingToStringMap(lcObj.ResourceOverrides),
-			}
+	if lc, ok := pklTypedField[*pklmodel.LabelConfig](props, "labelConfig", cfg.Type); ok {
+		cfg.LabelConfig = &pkgmodel.LabelConfig{
+			DefaultQuery:      lc.DefaultQuery,
+			ResourceOverrides: pklMappingToStringMap(lc.ResourceOverrides),
 		}
 	}
 
-	// discoveryFilters
 	if df, ok := props["discoveryFilters"]; ok && df != nil {
 		cfg.DiscoveryFilters = translateDiscoveryFilters(df)
 	}
 
-	// resourceTypesToDiscover
 	if rtd, ok := props["resourceTypesToDiscover"]; ok && rtd != nil {
 		cfg.ResourceTypesToDiscover = pklListingToStringSlice(rtd)
 	}
 
-	// retry
-	if r, ok := props["retry"]; ok && r != nil {
-		if rObj, ok := r.(*pklmodel.RetryConfig); ok {
-			cfg.Retry = &pkgmodel.RetryConfig{
-				StatusCheckInterval: rObj.StatusCheckInterval.GoDuration(),
-				MaxRetries:          int(rObj.MaxRetries),
-				RetryDelay:          rObj.RetryDelay.GoDuration(),
-			}
+	if r, ok := pklTypedField[*pklmodel.RetryConfig](props, "retry", cfg.Type); ok {
+		cfg.Retry = &pkgmodel.RetryConfig{
+			StatusCheckInterval: r.StatusCheckInterval.GoDuration(),
+			MaxRetries:          int(r.MaxRetries),
+			RetryDelay:          r.RetryDelay.GoDuration(),
 		}
 	}
 
@@ -721,7 +710,12 @@ func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUse
 		}
 	}
 	if len(extra) > 0 {
-		cfg.PluginConfig, _ = json.Marshal(sanitizeConfig(extra))
+		raw, err := json.Marshal(sanitizeConfig(extra))
+		if err != nil {
+			slog.Error("failed to marshal plugin-specific config - plugin will start with defaults", "type", cfg.Type, "error", err)
+		} else {
+			cfg.PluginConfig = raw
+		}
 	}
 
 	return cfg
@@ -753,6 +747,25 @@ func translateMatchFilter(mf *pklmodel.MatchFilter) pkgmodel.MatchFilter {
 		})
 	}
 	return result
+}
+
+// pklTypedField extracts a typed value from a pkl.Object properties map.
+// Returns (zero, false) when the key is absent or nil. When the key is present
+// but the stored value does not match T, logs a Warn and returns (zero, false)
+// - callers treat that the same as "absent," but the log line surfaces the
+// mismatch so it isn't silently dropped. pluginType is included for context.
+func pklTypedField[T any](props map[string]any, key string, pluginType string) (T, bool) {
+	var zero T
+	v, ok := props[key]
+	if !ok || v == nil {
+		return zero, false
+	}
+	typed, ok := v.(T)
+	if !ok {
+		slog.Warn("plugin config field has unexpected type - ignoring", "type", pluginType, "field", key, "got", fmt.Sprintf("%T", v))
+		return zero, false
+	}
+	return typed, true
 }
 
 // pklString extracts a string from a pkl.Object properties map.

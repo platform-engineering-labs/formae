@@ -214,7 +214,7 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 				go p.completeAuthPluginInit()
 				return nil
 			}
-			// Subsequent binary data is RPC traffic — feed to MetaPortConn.
+			// Subsequent binary data is RPC traffic - feed to MetaPortConn.
 			// Use entry.conn directly because handle.conn is nil until
 			// Connect() is called after the RPC handshake completes.
 			if p.authPlugin.conn != nil {
@@ -336,7 +336,7 @@ func (p *PluginProcessSupervisor) handleAuthPluginTerminate(tag string) {
 		p.Log().Error("Failed to restart auth plugin name=%s restartCount=%d: %v",
 			name, entry.restartCount, err)
 	} else {
-		// RPC Init deferred — the new process will send a ready signal.
+		// RPC Init deferred - the new process will send a ready signal.
 		p.Log().Info("Auth plugin restarted successfully name=%s restartCount=%d",
 			name, entry.restartCount)
 	}
@@ -384,7 +384,9 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 		}
 	}
 
-	// Add plugin-specific config if available
+	// NOTE: FORMAE_PLUGIN_CONFIG is cleartext-equivalent (base64 is encoding,
+	// not encryption). Plugin authors should never put secrets in Configurable
+	// fields - see the pkg/plugin.Configurable doc comment for the trust boundary.
 	if pluginCfg, ok := p.pluginConfigs[strings.ToLower(namespace)]; ok {
 		env[gen.Env("FORMAE_PLUGIN_CONFIG")] = base64.StdEncoding.EncodeToString(pluginCfg)
 	}
@@ -420,7 +422,7 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 }
 
 // spawnAuthPluginProcess spawns an auth plugin binary via meta.Port with binary mode
-// and sets up the MetaPortConn. Does NOT call RPC Init — that must be deferred to
+// and sets up the MetaPortConn. Does NOT call RPC Init - that must be deferred to
 // completeAuthPluginInit() after the actor's Init() returns, because the RPC call
 // needs HandleMessage to route meta.Port data.
 func (p *PluginProcessSupervisor) spawnAuthPluginProcess(tag string, entry *authPluginEntry) error {
@@ -501,7 +503,7 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 	if initErr != nil {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		p.Log().Error("Auth plugin init call failed — agent cannot serve authenticated requests name=%s: %v",
+		p.Log().Error("Auth plugin init call failed - agent cannot serve authenticated requests name=%s: %v",
 			handle.Name(), initErr)
 		handle.SetInitError(fmt.Errorf("auth plugin %q init failed: %w", handle.Name(), initErr))
 		return
@@ -509,7 +511,7 @@ func (p *PluginProcessSupervisor) completeAuthPluginInit() {
 	if resp.Error != "" {
 		_ = rpcClient.Close()
 		_ = conn.Close()
-		p.Log().Error("Auth plugin rejected config — agent cannot serve authenticated requests name=%s: %s",
+		p.Log().Error("Auth plugin rejected config - agent cannot serve authenticated requests name=%s: %s",
 			handle.Name(), resp.Error)
 		handle.SetInitError(fmt.Errorf("auth plugin %q: %s", handle.Name(), resp.Error))
 		return

@@ -70,6 +70,17 @@ type ObservablePlugin interface {
 // If implemented, the SDK calls Configure with the plugin-specific config JSON from
 // the user's formae.conf.pkl (the fields beyond BaseResourcePluginConfig).
 // Configure is called once during plugin setup, before the plugin announces to the agent.
+//
+// SECURITY: the config payload is transported to the plugin process via the
+// FORMAE_PLUGIN_CONFIG environment variable (base64-encoded JSON). Environment
+// is cleartext-equivalent - readable via /proc/<pid>/environ, surfaced in core
+// dumps, and may appear in journal output under some configurations. Plugin
+// authors MUST NOT place secrets (API keys, passwords, private keys) in
+// Configurable fields. Route secrets through the $ref/$value resolver path
+// instead, which is designed for that purpose.
+//
+// Configure is called once per plugin-process lifetime. Config changes in
+// formae.conf.pkl require an agent restart to take effect.
 type Configurable interface {
 	Configure(config json.RawMessage) error
 }
