@@ -126,6 +126,42 @@ func TestClassifyConfigChange_FieldAdded(t *testing.T) {
 	assert.Equal(t, ConfigMutableChange, result)
 }
 
+func TestClassifyConfigChange_ResolvableValueIgnored(t *testing.T) {
+	// Stored config has resolved $value, new config only has $ref — should be equal
+	existing := json.RawMessage(`{
+		"Auth": {"Type":"EKS","Endpoint":{"$ref":"formae://abc#/Endpoint","$value":"https://cluster.eks.amazonaws.com"},"ClusterName":{"$ref":"formae://abc#/Name","$value":"my-cluster"}},
+		"HasLoadBalancer": false
+	}`)
+	new := json.RawMessage(`{
+		"Auth": {"Type":"EKS","Endpoint":{"$ref":"formae://abc#/Endpoint"},"ClusterName":{"$ref":"formae://abc#/Name"}},
+		"HasLoadBalancer": true
+	}`)
+	schema := pkgmodel.ConfigSchema{
+		Hints: map[string]pkgmodel.ConfigFieldHint{
+			"Auth":            {CreateOnly: true},
+			"HasLoadBalancer": {CreateOnly: false},
+		},
+	}
+
+	result := ClassifyConfigChange(existing, new, schema)
+	// Auth is unchanged (same $ref), HasLoadBalancer is mutable — so MutableChange, not ImmutableChange
+	assert.Equal(t, ConfigMutableChange, result)
+}
+
+func TestClassifyConfigChange_ResolvableDifferentRef_IsImmutable(t *testing.T) {
+	// Different $ref means genuinely different config
+	existing := json.RawMessage(`{"Auth": {"Endpoint":{"$ref":"formae://abc#/Endpoint","$value":"https://old.com"}}}`)
+	new := json.RawMessage(`{"Auth": {"Endpoint":{"$ref":"formae://xyz#/Endpoint"}}}`)
+	schema := pkgmodel.ConfigSchema{
+		Hints: map[string]pkgmodel.ConfigFieldHint{
+			"Auth": {CreateOnly: true},
+		},
+	}
+
+	result := ClassifyConfigChange(existing, new, schema)
+	assert.Equal(t, ConfigImmutableChange, result)
+}
+
 func TestClassifyConfigChange_FieldRemoved(t *testing.T) {
 	existing := json.RawMessage(`{"Region":"us-east-1","Profile":"prod"}`)
 	new := json.RawMessage(`{"Region":"us-east-1"}`)
