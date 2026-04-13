@@ -84,7 +84,30 @@ func jsonBytesEqual(a, b json.RawMessage) bool {
 	if err := json.Unmarshal(b, &bVal); err != nil {
 		return false
 	}
+	// Strip $value from resolvables so that resolved vs unresolved
+	// configs compare equal when the $ref is the same.
+	stripResolvableValues(aVal)
+	stripResolvableValues(bVal)
 	aBytes, _ := json.Marshal(aVal)
 	bBytes, _ := json.Marshal(bVal)
 	return string(aBytes) == string(bBytes)
+}
+
+// stripResolvableValues recursively removes $value from any object that
+// contains a $ref key. This ensures that a resolved config (with cached
+// $value) compares equal to an unresolved config (only $ref).
+func stripResolvableValues(v any) {
+	switch val := v.(type) {
+	case map[string]any:
+		if _, hasRef := val["$ref"]; hasRef {
+			delete(val, "$value")
+		}
+		for _, child := range val {
+			stripResolvableValues(child)
+		}
+	case []any:
+		for _, item := range val {
+			stripResolvableValues(item)
+		}
+	}
 }
