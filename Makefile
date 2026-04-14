@@ -236,9 +236,6 @@ publish-external-pkl:
 		fi \
 	done
 
-publish-setup:
-	aws s3 cp ./scripts/setup.sh s3://hub.platform.engineering/setup/formae.sh
-
 run:
 	go run cmd/formae/main.go
 
@@ -417,4 +414,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build install-gremlins build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
