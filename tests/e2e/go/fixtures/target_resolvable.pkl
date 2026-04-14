@@ -46,10 +46,8 @@ forma {
   local grafanaTarget = new formae.Target {
     label = "e2e-grafana"
     namespace = "GRAFANA"
-    config = new Mapping {
-      ["Type"] = "Grafana"
-      ["Endpoints"] = lgtmStack.res.endpoints
-      ["EndpointKey"] = "lgtm:3000"
+    config = new grafana.Config {
+      url = lgtmStack.res.endpoints.at("lgtm:3000")
     }
   }
   grafanaTarget
