@@ -634,6 +634,47 @@ func TestGeneratePatch_WriteOnlyFieldsGenerateAddOperation(t *testing.T) {
 	assert.Equal(t, "secret123", passwordOp.Value, "Password value should be preserved")
 }
 
+func TestGeneratePatch_WriteOnlyCreateOnlyFieldsNoPhantomReplacement(t *testing.T) {
+	// Reproduces GitHub Issue #21: fields marked both writeOnly AND createOnly
+	// trigger phantom resource replacement on re-apply.
+	//
+	// writeOnly fields are stripped from the document (Read never returns them).
+	// If the field is also createOnly, jsonpatch generates an "add" op,
+	// which triggers needsReplacement. The fix strips these fields from the
+	// desired state (patch) before comparison.
+
+	// Existing state (from Read — writeOnly field is absent)
+	document := []byte(`{
+		"ClusterName": "my-cluster",
+		"Endpoint": "https://eks.example.com"
+	}`)
+
+	// Desired state (from PKL — includes the writeOnly+createOnly field)
+	patch := []byte(`{
+		"ClusterName": "my-cluster",
+		"Endpoint": "https://eks.example.com",
+		"AccessConfig": {
+			"AuthenticationMode": "API_AND_CONFIG_MAP"
+		}
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"ClusterName", "Endpoint", "AccessConfig"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"AccessConfig": {
+				WriteOnly:  true,
+				CreateOnly: true,
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, needsReplacement, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement, "writeOnly+createOnly field should NOT trigger replacement")
+	assert.Nil(t, patchDoc, "No patch should be generated when only writeOnly+createOnly fields differ")
+}
+
 func TestGeneratePatch_AddTagsWhileRetainingExisting(t *testing.T) {
 	// This is the existing resource state (from the database) - VPC with 1 tag
 	document := []byte(`{
