@@ -1386,3 +1386,28 @@ func newTestRef(property string) string {
 	ksuid := util.NewID()
 	return fmt.Sprintf("formae://%s#/%s", ksuid, property)
 }
+
+func TestExtractPropertyValue_MapKey(t *testing.T) {
+	properties := []byte(`{"endpoints":{"lgtm:3000":"http://localhost:3000","lgtm:4318":"http://localhost:4318"}}`)
+	result := gjson.GetBytes(properties, `endpoints.lgtm\:3000`)
+	require.True(t, result.Exists())
+	assert.Equal(t, "http://localhost:3000", result.String())
+}
+
+func TestExtractPropertyValue_ListIndexField(t *testing.T) {
+	properties := []byte(`{"endpoints":[{"uri":"https://db-1.ovh.net:5432","component":"postgresql"},{"uri":"https://db-2.ovh.net:5432","component":"replica"}]}`)
+	result := gjson.GetBytes(properties, "endpoints.0.uri")
+	require.True(t, result.Exists())
+	assert.Equal(t, "https://db-1.ovh.net:5432", result.String())
+
+	result2 := gjson.GetBytes(properties, "endpoints.1.component")
+	require.True(t, result2.Exists())
+	assert.Equal(t, "replica", result2.String())
+}
+
+func TestExtractPropertyValue_EscapedDotInKey(t *testing.T) {
+	properties := []byte(`{"config":{"host.name":"example.com"}}`)
+	result := gjson.GetBytes(properties, `config.host\.name`)
+	require.True(t, result.Exists())
+	assert.Equal(t, "example.com", result.String())
+}

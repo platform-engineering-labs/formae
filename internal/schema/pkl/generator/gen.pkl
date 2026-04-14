@@ -272,6 +272,38 @@ function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, rever
         else
             null
 
+/// Renders a resolvable property path as valid PKL.
+/// Simple paths like "arn" render as "arn".
+/// Collection paths like "endpoints.lgtm\:3000" render as "endpoints.at("lgtm:3000")".
+/// Nested paths like "endpoints.0.uri" render as "endpoints.at(0).at("uri")".
+function renderResolvableProperty(property: String): String =
+    if (!property.contains("."))
+        // Simple scalar property — render as-is
+        property
+    else
+        // Collection path — split on unescaped dots and render at() chain
+        let (segments = splitGjsonPath(property))
+        let (base = segments[0])
+        let (rest = segments.drop(1))
+        base + rest.fold("", (acc, seg) ->
+            let (unescaped = seg.replaceAll("\\:", ":").replaceAll("\\.", "."))
+            // Numeric segments are list indices, otherwise map keys
+            if (unescaped.matches(Regex("[0-9]+")))
+                acc + ".at(" + unescaped + ")"
+            else
+                acc + ".at(\"" + unescaped + "\")"
+        )
+
+/// Splits a gjson path on unescaped dots.
+/// "endpoints.lgtm\:3000" -> ["endpoints", "lgtm\:3000"]
+/// "endpoints.0.uri" -> ["endpoints", "0", "uri"]
+function splitGjsonPath(path: String): List<String> =
+    // Replace escaped dots with a placeholder, split on dots, restore
+    let (placeholder = "<<ESCAPED_DOT>>")
+    let (escaped = path.replaceAll("\\.", placeholder))
+    let (parts = escaped.split("."))
+    parts.map((p) -> p.replaceAll(placeholder, "\\."))
+
 function getResolvablePropertyMapping(typeName: String): Map<String, String> =
     if (resolvables.MapResolvableResourceUri().containsKey(typeName))
         let (resolvableInfo = resolvables.MapResolvableResourceUri()[typeName])
@@ -306,13 +338,20 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
         let (property = valueAsMap.getOrNull("$property"))
         let (resolvableMapping = getResolvablePropertyMapping(typeName))
         let (mappedProperty =
-            if (property != null && resolvableMapping.containsKey(property))
-                resolvableMapping[property]
-            else if (property != null)
-               // This should not happen
-               property
-            else
+            if (property == null)
                 null
+            else if (resolvableMapping.containsKey(property))
+                // Direct match — simple scalar property
+                resolvableMapping[property]
+            else if (property.contains("."))
+                // Collection path — map the base segment, keep the rest
+                let (segments = splitGjsonPath(property))
+                let (base = segments[0])
+                let (rest = segments.drop(1))
+                let (mappedBase = if (resolvableMapping.containsKey(base)) resolvableMapping[base] else base)
+                mappedBase + rest.fold("", (acc, seg) -> acc + "." + seg)
+            else
+                property
         )
         let (r = new FakeResolvable {
             stack = s
@@ -599,7 +638,7 @@ local function formatValueWithTypes(value: Any, indent: String): String =
               comment + "\n" +
               (if (stack != null) indent + "  stack = \"\(stack)\" //resolvable\n" else "") +
               (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
-              indent + "}.\(property)"
+              indent + "}." + renderResolvableProperty(property)
         else if (typeName == "FakeValue")
           // Special handling for FakeValue - render using fluent API
           let (fakeValue = value.getOrNull("FakeValue"))
