@@ -334,6 +334,28 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 }
 
 func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	// When a resource's target has been deleted (e.g., unmanaged resources
+	// orphaned after a destroy), the target config will be nil. We can't
+	// call the plugin without a target config, so short-circuit to NotFound.
+	// The "deleted OOB" path in the ResourcePersister will then remove the
+	// resource from the DB.
+	if data.resourceUpdate.ResourceTarget.Config == nil {
+		proc.Log().Info("ResourceUpdater: target config is nil for resource %v (target %s was likely deleted), treating as NotFound",
+			data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.ResourceTarget.Label)
+		now := util.TimeNow()
+		notFound := plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:       resource.OperationRead,
+				OperationStatus: resource.OperationStatusSuccess,
+				ErrorCode:       resource.OperationErrorCodeNotFound,
+			},
+			ResourceType: data.resourceUpdate.DesiredState.Type,
+			StartTs:      now,
+			ModifiedTs:   now,
+		}
+		return handleProgressUpdate(gen.PID{}, state, data, notFound, proc)
+	}
+
 	// Convert properties to plugin format (extracts $value from opaque structures)
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {

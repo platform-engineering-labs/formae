@@ -578,9 +578,13 @@ func startUpdates(updates []Update, commandID string, proc gen.Process) error {
 func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, proc gen.Process) error {
 	proc.Log().Debug("Starting resource updater uri=%v operation=%s", ru.URI(), ru.Operation)
 
-	// Register non-sync resources as in-progress with the Synchronizer
-	// to prevent race conditions where sync might include resources being updated by user operations
-	if ru.Source != resource_update.FormaCommandSourceSynchronize {
+	// Register user-initiated resources as in-progress with the Synchronizer
+	// to prevent race conditions where sync might include resources being
+	// updated by user operations. Discovery and sync resources are excluded
+	// because their changesets don't run the upfront unregister path
+	// (changesetHasUserUpdates returns false), which would leak entries in
+	// the Synchronizer's excludedResources set.
+	if ru.Source == resource_update.FormaCommandSourceUser {
 		synchronizerPID := gen.ProcessID{Name: actornames.Synchronizer, Node: proc.Node().Name()}
 		err := proc.Send(synchronizerPID, messages.RegisterInProgressResource{
 			ResourceURI: string(ru.URI()),
