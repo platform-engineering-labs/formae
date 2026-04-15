@@ -1,6 +1,8 @@
 module github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests
 
-go 1.25
+go 1.26
+
+toolchain go1.26.2
 
 require (
 	ergo.services/ergo v1.999.320

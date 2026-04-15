@@ -1,6 +1,6 @@
 module github.com/platform-engineering-labs/formae/tests/testplugin
 
-go 1.25
+go 1.26
 
 replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plugin
 

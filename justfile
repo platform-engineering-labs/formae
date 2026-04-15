@@ -3,8 +3,18 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
 export VERSION := `git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*"`
+
+export CHANNEL := ```
+    version=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+    channel=$(echo $version | cut -d'-' -f2-)
+    if [[ "$channel" == "$version" ]]; then
+        echo "stable"
+    else
+        echo $channel
+    fi
+```
+
 GITHUB := env("GITHUB_ACTIONS", "false")
-CHANNEL := env("OPS_CHANNEL", "dev")
 
 default: clean build setup
 
@@ -13,8 +23,6 @@ clean:
 
 build:
     make pkg-bin
-    mkdir -p dist/pel/bin
-    mv dist/pel/formae/bin/formae dist/pel/bin
     rm -rf dist/pel/formae/bin
 
 setup:
