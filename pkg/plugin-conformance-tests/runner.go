@@ -1677,6 +1677,18 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 		}
 	}
 
+	// Include additional pre-existing resource types that should be discovered
+	// but aren't created OOB (e.g., static parent resources like OCI compartments).
+	if extra := os.Getenv("FORMAE_TEST_EXTRA_DISCOVERY_TYPES"); extra != "" {
+		for _, rt := range strings.Split(extra, ",") {
+			rt = strings.TrimSpace(rt)
+			if rt != "" && !seenTypes[rt] {
+				resourceTypes = append(resourceTypes, rt)
+				seenTypes[rt] = true
+			}
+		}
+	}
+
 	// Configure discovery to only scan the resource types being tested (including dependencies).
 	// This prevents discovery from scanning all resource types, which causes
 	// excessive rate limiting and timeouts.
