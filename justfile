@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
+set shell := ["bash", "-cu"]
+
 export VERSION := `git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*"`
 
 export CHANNEL := ```
