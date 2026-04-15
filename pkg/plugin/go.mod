@@ -1,8 +1,8 @@
 module github.com/platform-engineering-labs/formae/pkg/plugin
 
-go 1.25
+go 1.26
 
-toolchain go1.25.1
+toolchain go1.26.2
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../model
 

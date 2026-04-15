@@ -340,7 +340,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 	// The "deleted OOB" path in the ResourcePersister will then remove the
 	// resource from the DB.
 	if data.resourceUpdate.ResourceTarget.Config == nil {
-		proc.Log().Info("ResourceUpdater: target config is nil for resource %v (target %s was likely deleted), treating as NotFound",
+		proc.Log().Debug("ResourceUpdater: target config is nil for resource %v (target %s was likely deleted), treating as NotFound",
 			data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.ResourceTarget.Label)
 		now := util.TimeNow()
 		notFound := plugin.TrackedProgress{

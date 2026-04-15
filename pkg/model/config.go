@@ -7,6 +7,7 @@ package model
 import (
 	"encoding/json"
 	"log/slog"
+	"net/url"
 	"time"
 )
 
@@ -79,15 +80,15 @@ const (
 )
 
 type ServerConfig struct {
-	Nodename     string
-	Hostname     string
-	Port         int
+	Nodename      string
+	Hostname      string
+	Port          int
 	ErgoPort      int `pkl:"ergoPort"`
 	RegistrarPort int
 	Secret        string
-	ObserverPort int
-	TLSCert      string
-	TLSKey       string
+	ObserverPort  int
+	TLSCert       string
+	TLSKey        string
 }
 
 type DatastoreConfig struct {
@@ -216,7 +217,7 @@ type APIConfig struct {
 }
 
 type ArtifactConfig struct {
-	URL      string
+	URL      url.URL
 	Username string
 	Password string
 }

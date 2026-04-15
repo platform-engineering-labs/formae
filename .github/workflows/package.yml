@@ -2,22 +2,7 @@ name: formae-package
 
 on:
   workflow_dispatch:
-    inputs:
-      pkg_job:
-        description: "platform to build and publish"
-        type: choice
-        default: "all"
-        options:
-          - "all"
-          - "pkg_linux_arm64"
-          - "pkg_linux_x8664"
-          - "pkg_macos_arm64"
-          - "pkg_macos_x8664"
-  push:
-    branches:
-      - main
-    tags:
-      - '[0-9]*'  # Only package tags, not pkg/*/v* module tags
+  workflow_call:
 
 permissions:
   id-token: write
@@ -29,7 +14,6 @@ env:
   OPS_PKG_CRT: ${{ secrets.OPS_PKG_CRT }}
   OPS_PKG_KEY: ${{ secrets.OPS_PKG_KEY }}
   OPS_TREE_CONF: ${{ secrets.OPS_TREE_CONF }}
-  OPS_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'dev' }}
 
 jobs:
   pkg_linux_arm64:
@@ -52,7 +36,7 @@ jobs:
 
       - name: Install Orbital and Pkl
         run: |
-          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install orbital
+          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes orbital pkl@0.31.0
 
       - name: Add PEL to PATH
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
@@ -60,7 +44,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.1'
+          go-version: '1.26.2'
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -92,7 +76,7 @@ jobs:
 
       - name: Install Orbital and Pkl
         run: |
-          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install orbital
+          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes orbital pkl@0.31.0
 
       - name: Add PEL to PATH
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
@@ -100,7 +84,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.1'
+          go-version: '1.26.2'
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -132,7 +116,7 @@ jobs:
 
       - name: Install Orbital and Pkl
         run: |
-          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install orbital
+          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes orbital pkl@0.31.0
 
       - name: Add PEL to PATH
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
@@ -140,7 +124,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.1'
+          go-version: '1.26.2'
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -172,7 +156,7 @@ jobs:
 
       - name: Install Orbital and Pkl
         run: |
-          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install orbital
+          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes orbital pkl@0.31.0
 
       - name: Add PEL to PATH
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
@@ -180,7 +164,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.1'
+          go-version: '1.26.2'
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
