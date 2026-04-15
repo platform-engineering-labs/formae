@@ -441,7 +441,16 @@ func generateResourceUpdatesForSync(
 		if source == FormaCommandSourceDiscovery {
 			for _, r := range forma.Resources {
 				if r.Stack == stack.SingleStackLabel() {
-					ru, err := NewResourceUpdateForSyncWithFilter(r, *existingTargetMap[r.Target], source)
+					// When a target has been deleted but resources referencing it
+					// remain in the DB (e.g., unmanaged resources from discovery),
+					// pass an empty sentinel Target. The ResourceUpdater will
+					// detect the nil Config and short-circuit to NotFound, causing
+					// the resource to be cleaned up via the "deleted OOB" path.
+					target := existingTargetMap[r.Target]
+					if target == nil {
+						target = &pkgmodel.Target{Label: r.Target}
+					}
+					ru, err := NewResourceUpdateForSyncWithFilter(r, *target, source)
 					if err != nil {
 						return nil, fmt.Errorf("failed to create resource update sync for %s: %w", r.Label, err)
 					}
@@ -464,9 +473,14 @@ func generateResourceUpdatesForSync(
 					// from the plugin) rather than the stale schema stored in the DB
 					existingResource.Schema = resource.Schema
 
+					// See comment above: pass empty sentinel when target is gone.
+					target := existingTargetMap[existingResource.Target]
+					if target == nil {
+						target = &pkgmodel.Target{Label: existingResource.Target}
+					}
 					resourceUpdate, err := NewResourceUpdateForSync(
 						*existingResource,
-						*existingTargetMap[existingResource.Target],
+						*target,
 						source,
 					)
 					if err != nil {
