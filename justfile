@@ -4,7 +4,7 @@
 
 set shell := ["bash", "-cu"]
 
-export VERSION := `git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*"`
+export VERSION := `git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*" | cut -d'-' -f1`
 
 export CHANNEL := ```
     version=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
