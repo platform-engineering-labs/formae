@@ -450,8 +450,15 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	if a.Config.Cli.Auth != nil {
 		if a.authClient == nil {
 			authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
-			pluginDir := util.ExpandHomePath(a.Config.PluginDir)
-			authPlugins := discovery.DiscoverPlugins(pluginDir, discovery.Auth)
+			devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
+			binPath, err := os.Executable()
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to determine binary path: %w", err)
+			}
+			systemPluginDir := discovery.SystemPluginDir(binPath)
+			authPlugins := discovery.DiscoverPluginsMulti(
+				[]string{devPluginDir, systemPluginDir}, discovery.Auth,
+			)
 			var matched *discovery.PluginInfo
 			for i, p := range authPlugins {
 				if p.Name == authType {

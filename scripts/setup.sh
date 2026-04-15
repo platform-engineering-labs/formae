@@ -2,7 +2,6 @@
 
 # Support FORMAE_INSTALL_PREFIX env var for custom install location
 export INSTALLPREFIX="${FORMAE_INSTALL_PREFIX:-/opt/pel}"
-export PLUGINDIR="$HOME/.pel/formae/plugins"
 export OS=$(uname | tr '[:upper:]' '[:lower:]')
 
 export ARCH=$(uname -m |  tr -d '_')
