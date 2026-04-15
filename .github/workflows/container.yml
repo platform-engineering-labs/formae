@@ -32,6 +32,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set VERSION and CHANNEL
+        run: |
+          echo VERSION=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*" | cut -d'-' -f1) >> $GITHUB_ENV
+          version=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+          channel=$(echo $version | cut -d'-' -f2-)
+          if [[ "$channel" == "$version" ]]; then
+            echo CHANNEL=stable >> $GITHUB_ENV
+          else
+            echo CHANNEL=$channel >> $GITHUB_ENV
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -54,6 +65,5 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
-            FORMAE_ARTIFACT_USERNAME=${{ secrets.FORMAE_ARTIFACT_USERNAME }}
-            FORMAE_ARTIFACT_PASSWORD=${{ secrets.FORMAE_ARTIFACT_PASSWORD }}
+            VERSION=${{ env.VERSION }}
+            CHANNEL=${{ env.CHANNEL }}

@@ -1,13 +1,16 @@
 FROM ubuntu:latest
 
-ARG VERSION=latest
-ARG FORMAE_ARTIFACT_USERNAME
-ARG FORMAE_ARTIFACT_PASSWORD
+ARG VERSION
+ARG CHANNEL="stable"
+
+RUN if [ -z "$VERSION" ]; then echo "VERSION is required"; exit 1; fi
+
+ENV PATH=/opt/pel/bin:$PATH
 
 RUN useradd -m -s /bin/bash pel
 RUN apt-get update &&  \
     apt-get install -y jq curl && \
-    HOME=/home/pel /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes formae@${VERSION} && \
+    HOME=/home/pel /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel ${CHANNEL} formae@${VERSION} && \
     apt-get remove -y jq curl && \
     apt-get autoremove -y --purge && \
     apt-get clean && \
@@ -24,7 +27,6 @@ RUN PATH=/opt/pel/bin:$PATH HOME=/home/pel \
 
 USER pel
 WORKDIR /home/pel
-ENV PATH=/opt/pel/bin:$PATH
 
 EXPOSE 49684
 
