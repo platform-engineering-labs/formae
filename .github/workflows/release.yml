@@ -149,6 +149,8 @@ jobs:
     uses: "./.github/workflows/package.yml"
     secrets: inherit
     if: ${{ contains(fromJSON('["", "pkg_opkg", "all"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
+    needs:
+      - verify
 
   pkg_container:
     uses: "./.github/workflows/container.yml"
