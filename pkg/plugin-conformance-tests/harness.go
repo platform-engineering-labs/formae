@@ -528,14 +528,24 @@ func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
 	// Create database path in temp directory
 	dbPath := filepath.Join(h.tempDir, "formae-test.db")
 
-	// Build the resourceTypesToDiscover listing
+	// Build the resourceTypesToDiscover listing for per-plugin config
 	resourceTypesList := ""
 	for _, rt := range resourceTypes {
-		resourceTypesList += fmt.Sprintf("        %q\n", rt)
+		resourceTypesList += fmt.Sprintf("            %q\n", rt)
+	}
+
+	// Determine plugin name from discovered plugins for per-plugin config block
+	pluginName := ""
+	if len(h.externalResourcePlugins) > 0 {
+		pluginName = h.externalResourcePlugins[0].Name
+	}
+	if pluginName == "" {
+		return fmt.Errorf("no external resource plugins discovered; cannot configure per-plugin discovery")
 	}
 
 	// Generate updated config file with discovery enabled
 	// Use unique nodename per test to enable parallel test execution
+	// resourceTypesToDiscover is configured per-plugin via agent.resourcePlugins
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
  *
@@ -563,13 +573,18 @@ agent {
     }
     discovery {
         enabled = true
-        resourceTypesToDiscover {
-%s        }
     }
     logging {
         consoleLogLevel = "debug"
         filePath = %q
         fileLogLevel = "debug"
+    }
+    resourcePlugins {
+        new {
+            type = %q
+            resourceTypesToDiscover {
+%s            }
+        }
     }
 }
 
@@ -579,7 +594,9 @@ cli {
     }
 	disableUsageReporting = true
 }
-`, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, resourceTypesList, h.logFile, h.agentPort)
+
+pluginDir = "~/.pel/formae/plugins"
+`, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, h.logFile, pluginName, resourceTypesList, h.agentPort)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {
