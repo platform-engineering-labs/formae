@@ -1340,6 +1340,7 @@ func successfullyFinishedResourceUpdateCreatingS3Bucket() *resource_update.Resou
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation: resource_update.OperationCreate,
 		State:     resource_update.ResourceUpdateStateSuccess,
@@ -1393,6 +1394,7 @@ func resourceUpdateModifyingS3Bucket(ksuid string) *resource_update.ResourceUpda
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation:            resource_update.OperationUpdate,
 		State:                resource_update.ResourceUpdateStateNotStarted,
@@ -1427,6 +1429,7 @@ func resourceUpdateDeletingS3Bucket(ksuid string) *resource_update.ResourceUpdat
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation:            resource_update.OperationDelete,
 		State:                resource_update.ResourceUpdateStateNotStarted,
@@ -1461,6 +1464,7 @@ func resourceUpdateReadingS3Bucket(ksuid string) *resource_update.ResourceUpdate
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation:            resource_update.OperationRead,
 		State:                resource_update.ResourceUpdateStateNotStarted,
@@ -1488,6 +1492,7 @@ func resourceUpdateCreatingS3Bucket(bucketKsuid, vpcKsuid string) *resource_upda
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation:      resource_update.OperationCreate,
 		State:          resource_update.ResourceUpdateStateNotStarted,
@@ -1512,6 +1517,7 @@ func partiallyCompletedResourceUpdateDeletingS3Bucket(ksuid string) *resource_up
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation: resource_update.OperationDelete,
 		State:     resource_update.ResourceUpdateStateInProgress,
@@ -1552,6 +1558,7 @@ func partiallyCompletedResourceUpdateCreatingS3Bucket() *resource_update.Resourc
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation: resource_update.OperationCreate,
 		State:     resource_update.ResourceUpdateStateInProgress,
@@ -1593,6 +1600,7 @@ func partiallyCompletedResourceUpdateModifyingS3Bucket() *resource_update.Resour
 		ResourceTarget: pkgmodel.Target{
 			Label:     "test-target",
 			Namespace: "test-namespace",
+			Config:    json.RawMessage(`{"region":"us-east-1"}`),
 		},
 		Operation: resource_update.OperationUpdate,
 		State:     resource_update.ResourceUpdateStateInProgress,
