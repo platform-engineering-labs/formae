@@ -324,4 +324,3 @@ func waitForPidFileRemoval(timeout time.Duration) bool {
 	}
 	return false
 }
-
