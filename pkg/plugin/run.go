@@ -91,6 +91,7 @@ func Run(fp FullResourcePlugin) {
 	options.Security.ExposeEnvRemoteSpawn = true
 	options.Log.Level = gen.LogLevelDebug
 	options.Log.DefaultLogger.Disable = true
+	options.Log.DefaultLogger.DisableBanner = true
 
 	// Configure plugin's own Ergo acceptor on a random free port.
 	// The plugin needs its own acceptor for the agent to spawn remote PluginOperator processes.
