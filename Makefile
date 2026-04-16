@@ -12,14 +12,14 @@ VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-
 # Without @ref, the default branch (main) is used.
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
-    https://github.com/platform-engineering-labs/formae-plugin-aws.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-azure.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-compose.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-gcp.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-grafana.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-oci.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-ovh.git@feat/msgpack-serialization \
-    https://github.com/platform-engineering-labs/formae-plugin-sftp.git@feat/msgpack-serialization
+    https://github.com/platform-engineering-labs/formae-plugin-aws.git \
+    https://github.com/platform-engineering-labs/formae-plugin-azure.git \
+    https://github.com/platform-engineering-labs/formae-plugin-compose.git \
+    https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
+    https://github.com/platform-engineering-labs/formae-plugin-grafana.git \
+    https://github.com/platform-engineering-labs/formae-plugin-oci.git \
+    https://github.com/platform-engineering-labs/formae-plugin-ovh.git \
+    https://github.com/platform-engineering-labs/formae-plugin-sftp.git
 
 # Directory for cloned plugins
 PLUGINS_CACHE := .plugins
