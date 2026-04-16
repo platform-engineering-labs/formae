@@ -528,14 +528,26 @@ func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
 	// Create database path in temp directory
 	dbPath := filepath.Join(h.tempDir, "formae-test.db")
 
-	// Build the resourceTypesToDiscover listing
+	// Build the resourceTypesToDiscover listing for per-plugin config
 	resourceTypesList := ""
 	for _, rt := range resourceTypes {
-		resourceTypesList += fmt.Sprintf("        %q\n", rt)
+		resourceTypesList += fmt.Sprintf("            %q\n", rt)
 	}
+
+	// Determine plugin name and PascalCase alias from discovered plugins
+	pluginName := ""
+	if len(h.externalResourcePlugins) > 0 {
+		pluginName = h.externalResourcePlugins[0].Name
+	}
+	if pluginName == "" {
+		return fmt.Errorf("no external resource plugins discovered; cannot configure per-plugin discovery")
+	}
+	pluginAlias := pluginNameToPascalCase(pluginName)
 
 	// Generate updated config file with discovery enabled
 	// Use unique nodename per test to enable parallel test execution
+	// resourceTypesToDiscover is configured per-plugin via agent.resourcePlugins
+	// using the typed PluginConfig from the plugin's schema/Config.pkl
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
  *
@@ -545,17 +557,19 @@ func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
 // Auto-generated test configuration
 amends "formae:/Config.pkl"
 
+import "plugins:/%s.pkl" as %s
+
 agent {
     server {
-        port = %d
-        ergoPort = %d
-        registrarPort = %d
-        secret = %q
-        nodename = "formae-%s"
+        port = %%d
+        ergoPort = %%d
+        registrarPort = %%d
+        secret = %%q
+        nodename = "formae-%%s"
     }
     datastore {
         sqlite {
-            filePath = %q
+            filePath = %%q
         }
     }
     synchronization {
@@ -563,23 +577,31 @@ agent {
     }
     discovery {
         enabled = true
-        resourceTypesToDiscover {
-%s        }
     }
     logging {
         consoleLogLevel = "debug"
-        filePath = %q
+        filePath = %%q
         fileLogLevel = "debug"
+    }
+    resourcePlugins {
+        new %s.PluginConfig {
+            resourceTypesToDiscover {
+%%s            }
+        }
     }
 }
 
 cli {
     api {
-        port = %d
+        port = %%d
     }
 	disableUsageReporting = true
 }
-`, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, resourceTypesList, h.logFile, h.agentPort)
+
+pluginDir = "~/.pel/formae/plugins"
+`, pluginAlias, pluginAlias, pluginAlias)
+
+	configContent = fmt.Sprintf(configContent, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, h.logFile, resourceTypesList, h.agentPort)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {
@@ -1977,4 +1999,21 @@ func (h *TestHarness) WaitForResourceRemovedFromInventory(resourceType, nativeID
 	}
 
 	return fmt.Errorf("timeout waiting for resource %s (type: %s) to be removed from inventory after %v", nativeID, resourceType, timeout)
+}
+
+// pluginNameToPascalCase converts a hyphenated plugin name to PascalCase
+// for use in PKL import aliases. For example: "aws" -> "Aws", "auth-basic" -> "AuthBasic".
+func pluginNameToPascalCase(name string) string {
+	parts := strings.Split(name, "-")
+	var b strings.Builder
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		b.WriteString(strings.ToUpper(part[:1]))
+		if len(part) > 1 {
+			b.WriteString(part[1:])
+		}
+	}
+	return b.String()
 }
