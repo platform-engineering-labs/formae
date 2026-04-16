@@ -35,7 +35,7 @@ var RootCmdUsageTemplate = display.Grey("Usage: ") + display.Green("{{.CommandPa
 	"{{if .HasAvailableLocalFlags}}\n" + display.Gold("Options:\n") +
 	"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
 	"{{end}}" +
-	display.Links("Docs", "cli/{{.Name}}") +
+	display.DefaultLinks() +
 	"\n"
 
 var SimpleCmdUsageTemplate = display.Grey("Usage: ") + display.Green("{{.CommandPath}}{{if .HasAvailableLocalFlags}} [OPTIONS]{{end}}{{if .HasAvailableSubCommands}} [COMMAND]{{end}}") +
@@ -53,7 +53,7 @@ var SimpleCmdUsageTemplate = display.Grey("Usage: ") + display.Green("{{.Command
 	"{{if .LocalFlags | hasPropertyFlags}}\n" + display.Gold("Properties:\n") +
 	"{{range .LocalFlags | propertyUsage}}{{.}}\n{{end}}" +
 	"{{end}}" +
-	display.Links("Docs", "cli/{{.Name}}") +
+	display.DefaultLinks() +
 	"\n"
 
 var PropertyCommands = []string{
@@ -68,7 +68,7 @@ func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *c
 
 		err := app.LoadConfig(configFilePath, filepath.Join(config.Config.ConfigDirectory(), config.ConfigFileNamePrefix))
 		if err != nil {
-			return nil, fmt.Errorf("%w%s", err, display.Links("Configuration docs", "configuration"))
+			return nil, fmt.Errorf("%w\n\n%s %s", err, display.Gold("Configuration docs:"), display.DocRoot+"/configuration")
 		}
 
 		return app, nil

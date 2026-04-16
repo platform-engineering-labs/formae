@@ -411,7 +411,7 @@ func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *a
 	}
 
 	if stats.Version != formae.Version {
-		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s%s", formae.Version, stats.Version, display.Gold("Configuration documentation:"), display.DocRoot, "operations")
+		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, display.Gold("Configuration documentation:"), display.DocRoot)
 	}
 
 	if transmitStats && !a.Config.Cli.DisableUsageReporting {
