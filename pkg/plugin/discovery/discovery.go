@@ -211,6 +211,12 @@ func FilterCompatiblePlugins(plugins []PluginInfo, agentVersion, sdkMinFormaeVer
 		return nil
 	}
 
+	// Development builds have version "0.0.0" (ldflags not set).
+	// Skip compatibility checks entirely — all plugins are loaded.
+	if agentVersion == "0.0.0" {
+		return plugins
+	}
+
 	agentVer, err := semver.NewVersion(agentVersion)
 	if err != nil {
 		slog.Warn("cannot parse agent version; skipping all plugin compatibility checks",

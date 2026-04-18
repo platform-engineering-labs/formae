@@ -57,7 +57,7 @@ type PluginAnnouncement struct {
 // Returns nil for empty or unparseable versions to avoid crashing when the env
 // var is not set or contains an unexpected format.
 func CheckAgentCompatibility(agentVersion string) error {
-	if agentVersion == "" {
+	if agentVersion == "" || agentVersion == "0.0.0" {
 		return nil
 	}
 

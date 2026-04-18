@@ -273,6 +273,17 @@ func TestFilterCompatiblePlugins_UnparseableSDKMinFormaeVersion(t *testing.T) {
 	assert.Empty(t, result)
 }
 
+func TestFilterCompatiblePlugins_DevBuildSkipsChecks(t *testing.T) {
+	plugins := []PluginInfo{
+		{Name: "aws", MinFormaeVersion: "0.84.0"},
+		{Name: "old", MinFormaeVersion: "0.50.0"},
+	}
+
+	// Dev builds use version "0.0.0" — all plugins should be loaded
+	result := FilterCompatiblePlugins(plugins, "0.0.0", "0.84.0")
+	require.Len(t, result, 2)
+}
+
 func TestFilterCompatiblePlugins_EmptyInput(t *testing.T) {
 	result := FilterCompatiblePlugins(nil, "1.0.0", "0.50.0")
 	assert.Nil(t, result)
