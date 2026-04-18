@@ -102,22 +102,8 @@ func getFreePort() (int, error) {
 
 // NewTestHarness creates a new test harness instance
 func NewTestHarness(t *testing.T) *TestHarness {
-	// Check for FORMAE_BINARY env var first
-	formaeBinary := os.Getenv("FORMAE_BINARY")
-	if formaeBinary == "" {
-		// Fall back to default path relative to repo root
-		// When running with `go test -C`, we need to go up to repo root
-		binPath := filepath.Join("..", "..", "..", "formae")
-		absPath, err := filepath.Abs(binPath)
-		if err != nil {
-			t.Fatalf("failed to get absolute path for formae binary: %v", err)
-		}
-		formaeBinary = absPath
-	}
-
-	if _, err := os.Stat(formaeBinary); os.IsNotExist(err) {
-		t.Fatalf("formae binary not found at %s. Set FORMAE_BINARY env var or run 'make build' first", formaeBinary)
-	}
+	// Acquire the formae binary, downloading via orbital if needed
+	formaeBinary, binaryCleanup := EnsureFormaeBinary(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -129,6 +115,19 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		cleanupFuncs: []func(){},
 		agentStarted: false,
 	}
+
+	// Register binary cleanup so any temp download directory is removed on teardown
+	h.RegisterCleanup(binaryCleanup)
+
+	// Resolve PKL dependencies for the plugin under test
+	pluginDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+	schemaDir := filepath.Join(pluginDir, "schema", "pkl")
+	testdataDir := filepath.Join(pluginDir, "testdata")
+	restorePKL := ResolvePKLDependencies(t, "", schemaDir, testdataDir)
+	t.Cleanup(restorePKL)
 
 	// Set up test environment (temp dir and config)
 	if err := h.setupTestEnvironment(); err != nil {
