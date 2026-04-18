@@ -228,7 +228,8 @@ func getDiscoveryTimeout() time.Duration {
 //   - Deletes the resource via formae destroy
 //
 // Environment variables:
-//   - FORMAE_BINARY: Path to the formae binary (required)
+//   - FORMAE_BINARY: Path to the formae binary (optional). If not set, the binary is
+//     downloaded automatically via orbital.
 //   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
 //     Supports comma-separated patterns for multiple filters.
 //     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
@@ -244,11 +245,6 @@ func getDiscoveryTimeout() time.Duration {
 //	    conformance.RunCRUDTests(t)
 //	}
 func RunCRUDTests(t *testing.T) {
-	// Skip if not running conformance tests
-	if os.Getenv("FORMAE_BINARY") == "" {
-		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
-	}
-
 	// Skip if test type is discovery-only
 	if getTestType() == TestTypeDiscovery {
 		t.Skip("Skipping CRUD tests: FORMAE_TEST_TYPE=discovery")
@@ -1533,7 +1529,8 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 //   - Cleans up the resource
 //
 // Environment variables:
-//   - FORMAE_BINARY: Path to the formae binary (required)
+//   - FORMAE_BINARY: Path to the formae binary (optional). If not set, the binary is
+//     downloaded automatically via orbital.
 //   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
 //     Supports comma-separated patterns for multiple filters.
 //     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
@@ -1547,11 +1544,6 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 //	    conformance.RunDiscoveryTests(t)
 //	}
 func RunDiscoveryTests(t *testing.T) {
-	// Skip if not running conformance tests
-	if os.Getenv("FORMAE_BINARY") == "" {
-		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
-	}
-
 	// Skip if test type is CRUD-only
 	if getTestType() == TestTypeCRUD {
 		t.Skip("Skipping discovery tests: FORMAE_TEST_TYPE=crud")

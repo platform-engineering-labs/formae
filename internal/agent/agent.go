@@ -27,6 +27,7 @@ import (
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/util"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
@@ -103,6 +104,9 @@ func (a *Agent) Start() error {
 
 		pluginDir := util.ExpandHomePath(a.cfg.PluginDir)
 		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
+		resourceInfos = plugindiscovery.FilterCompatiblePlugins(
+			resourceInfos, formae.Version, plugin.MinFormaeVersion,
+		)
 		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
 		for i, p := range resourceInfos {
 			externalResourcePlugins[i] = p.ToResourcePluginInfo()
@@ -121,6 +125,8 @@ func (a *Agent) Start() error {
 				return
 			}
 			authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
+			// For auth plugins, check compatibility separately so we can give a
+			// specific error message (not just "not installed").
 			var matchedPlugin *plugindiscovery.PluginInfo
 			for i, p := range authPlugins {
 				if p.Name == authType {
@@ -130,6 +136,18 @@ func (a *Agent) Start() error {
 			}
 			if matchedPlugin == nil {
 				slog.Error("Auth plugin not installed — refusing to start without auth", "type", authType)
+				return
+			}
+			compatibleAuth := plugindiscovery.FilterCompatiblePlugins(
+				[]plugindiscovery.PluginInfo{*matchedPlugin}, formae.Version, pkgauth.MinFormaeVersion,
+			)
+			if len(compatibleAuth) == 0 {
+				slog.Error("Auth plugin installed but incompatible — refusing to start",
+					"type", authType,
+					"version", matchedPlugin.Version,
+					"pluginMinFormaeVersion", matchedPlugin.MinFormaeVersion,
+					"agentMinFormaeVersion", pkgauth.MinFormaeVersion,
+					"upgradeSDK", pkgauth.SDKVersion)
 				return
 			}
 			authHandle = auth.NewAuthPluginHandle(matchedPlugin.Name, matchedPlugin.BinaryPath, a.cfg.Agent.Auth)

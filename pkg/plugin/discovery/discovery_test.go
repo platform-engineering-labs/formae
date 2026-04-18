@@ -172,3 +172,129 @@ func TestDiscoverPlugins_Auth_SkipsPluginsWithoutManifest(t *testing.T) {
 
 	assert.Nil(t, DiscoverPlugins(baseDir, Auth))
 }
+
+func TestDiscoverPlugins_Resource_PopulatesMinFormaeVersion(t *testing.T) {
+	baseDir := t.TempDir()
+	createFakePlugin(t, baseDir, "cloudflare-dns", "v1.2.0", resourceManifest("cloudflare-dns", "CLOUDFLARE"))
+
+	results := DiscoverPlugins(baseDir, Resource)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "0.80.0", results[0].MinFormaeVersion)
+}
+
+func TestDiscoverPlugins_Resource_EmptyMinFormaeVersionWhenNoManifest(t *testing.T) {
+	baseDir := t.TempDir()
+	createFakePlugin(t, baseDir, "my-plugin", "v0.1.0", "")
+
+	results := DiscoverPlugins(baseDir, Resource)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "", results[0].MinFormaeVersion)
+}
+
+func TestFilterCompatiblePlugins(t *testing.T) {
+	compatible := PluginInfo{
+		Name:             "aws",
+		Namespace:        "AWS",
+		Version:          "v2.0.0",
+		BinaryPath:       "/plugins/aws/v2.0.0/aws",
+		Type:             Resource,
+		MinFormaeVersion: "0.80.0",
+	}
+	requiresNewerFormae := PluginInfo{
+		Name:             "gcp",
+		Namespace:        "GCP",
+		Version:          "v1.0.0",
+		BinaryPath:       "/plugins/gcp/v1.0.0/gcp",
+		Type:             Resource,
+		MinFormaeVersion: "99.0.0", // requires a much newer agent
+	}
+	builtAgainstOlderSDK := PluginInfo{
+		Name:             "azure",
+		Namespace:        "AZURE",
+		Version:          "v1.0.0",
+		BinaryPath:       "/plugins/azure/v1.0.0/azure",
+		Type:             Resource,
+		MinFormaeVersion: "0.1.0", // older than sdkMinFormaeVersion
+	}
+	noManifestVersion := PluginInfo{
+		Name:             "old-plugin",
+		Namespace:        "OLD",
+		Version:          "v0.5.0",
+		BinaryPath:       "/plugins/old-plugin/v0.5.0/old-plugin",
+		Type:             Resource,
+		MinFormaeVersion: "", // no manifest
+	}
+
+	allPlugins := []PluginInfo{compatible, requiresNewerFormae, builtAgainstOlderSDK, noManifestVersion}
+
+	// agentVersion=1.0.0 is >= compatible's minFormaeVersion (0.80.0)
+	// sdkMinFormaeVersion=0.50.0 is <= compatible's minFormaeVersion (0.80.0)
+	result := FilterCompatiblePlugins(allPlugins, "1.0.0", "0.50.0")
+
+	require.Len(t, result, 1)
+	assert.Equal(t, "aws", result[0].Name)
+}
+
+func TestFilterCompatiblePlugins_UnparseableAgentVersion(t *testing.T) {
+	plugins := []PluginInfo{
+		{
+			Name:             "aws",
+			MinFormaeVersion: "0.80.0",
+		},
+	}
+
+	result := FilterCompatiblePlugins(plugins, "not-a-version", "0.50.0")
+	assert.Empty(t, result)
+}
+
+func TestFilterCompatiblePlugins_UnparseablePluginMinFormaeVersion(t *testing.T) {
+	plugins := []PluginInfo{
+		{
+			Name:             "aws",
+			MinFormaeVersion: "garbage",
+		},
+	}
+
+	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0")
+	assert.Empty(t, result)
+}
+
+func TestFilterCompatiblePlugins_UnparseableSDKMinFormaeVersion(t *testing.T) {
+	plugins := []PluginInfo{
+		{
+			Name:             "aws",
+			MinFormaeVersion: "0.80.0",
+		},
+	}
+
+	result := FilterCompatiblePlugins(plugins, "1.0.0", "bad-version")
+	assert.Empty(t, result)
+}
+
+func TestFilterCompatiblePlugins_DevBuildSkipsChecks(t *testing.T) {
+	plugins := []PluginInfo{
+		{Name: "aws", MinFormaeVersion: "0.84.0"},
+		{Name: "old", MinFormaeVersion: "0.50.0"},
+	}
+
+	// Dev builds use version "0.0.0" — all plugins should be loaded
+	result := FilterCompatiblePlugins(plugins, "0.0.0", "0.84.0")
+	require.Len(t, result, 2)
+}
+
+func TestFilterCompatiblePlugins_EmptyInput(t *testing.T) {
+	result := FilterCompatiblePlugins(nil, "1.0.0", "0.50.0")
+	assert.Nil(t, result)
+}
+
+func TestFilterCompatiblePlugins_AllCompatible(t *testing.T) {
+	plugins := []PluginInfo{
+		{Name: "aws", MinFormaeVersion: "0.80.0"},
+		{Name: "gcp", MinFormaeVersion: "0.90.0"},
+	}
+
+	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0")
+	require.Len(t, result, 2)
+}

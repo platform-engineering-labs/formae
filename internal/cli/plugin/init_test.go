@@ -9,6 +9,7 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -206,4 +207,34 @@ func TestValidateOutputDir(t *testing.T) {
 			t.Error("expected error for non-empty current directory, got nil")
 		}
 	})
+}
+
+func TestTransformContent_ConfigPKL(t *testing.T) {
+	config := &PluginConfig{
+		Name:      "sftp",
+		Namespace: "SFTP",
+	}
+
+	input := `/// Users import this via: import "plugins:/<PluginName>.pkl" as <PluginName>
+///   new <PluginName>.PluginConfig {
+open module example.Config
+    type = "example"
+`
+	result := transformContent(input, config)
+
+	// Verify <PluginName> is replaced with capitalized name
+	if strings.Contains(result, "<PluginName>") {
+		t.Error("expected <PluginName> to be replaced")
+	}
+	if !strings.Contains(result, "Sftp") {
+		t.Error("expected capitalized plugin name 'Sftp'")
+	}
+	// Verify module name
+	if !strings.Contains(result, "module sftp.Config") {
+		t.Errorf("expected 'module sftp.Config', got: %s", result)
+	}
+	// Verify type
+	if !strings.Contains(result, `type = "sftp"`) {
+		t.Errorf("expected type = sftp")
+	}
 }
