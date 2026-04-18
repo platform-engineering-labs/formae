@@ -8,6 +8,7 @@
 package discovery
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,11 +27,12 @@ const (
 
 // PluginInfo holds discovery metadata for an installed plugin.
 type PluginInfo struct {
-	Name       string
-	Namespace  string // from manifest; empty for auth plugins
-	Version    string
-	BinaryPath string
-	Type       PluginType
+	Name             string
+	Namespace        string // from manifest; empty for auth plugins
+	Version          string
+	BinaryPath       string
+	Type             PluginType
+	MinFormaeVersion string // from manifest; empty when no manifest
 }
 
 // ToResourcePluginInfo converts to the SDK type used by the metastructure.
@@ -93,12 +95,18 @@ func DiscoverPlugins(pluginDir string, pluginType PluginType) []PluginInfo {
 			namespace = manifest.Namespace
 		}
 
+		var minFormaeVersion string
+		if manifest != nil {
+			minFormaeVersion = manifest.MinFormaeVersion
+		}
+
 		results = append(results, PluginInfo{
-			Name:       pluginName,
-			Namespace:  namespace,
-			Version:    best.versionStr,
-			BinaryPath: best.binaryPath,
-			Type:       pluginType,
+			Name:             pluginName,
+			Namespace:        namespace,
+			Version:          best.versionStr,
+			BinaryPath:       best.binaryPath,
+			Type:             pluginType,
+			MinFormaeVersion: minFormaeVersion,
 		})
 	}
 
@@ -185,4 +193,76 @@ func discoverHighestVersion(pluginPath, pluginName string, pluginType PluginType
 
 	best := candidates[0]
 	return best.versionCandidate, best.manifest, true
+}
+
+// FilterCompatiblePlugins returns the subset of plugins that are compatible
+// with the running agent. Two version checks are performed per plugin:
+//
+//  1. Agent too old: agentVersion < plugin.MinFormaeVersion means the plugin
+//     requires a newer formae agent.
+//  2. Plugin too old: plugin.MinFormaeVersion < sdkMinFormaeVersion means the
+//     plugin was built against an older SDK that is no longer supported.
+//
+// Plugins with an empty or unparseable MinFormaeVersion are skipped with a
+// warning. If agentVersion or sdkMinFormaeVersion cannot be parsed, all
+// plugins are skipped.
+func FilterCompatiblePlugins(plugins []PluginInfo, agentVersion, sdkMinFormaeVersion string) []PluginInfo {
+	if len(plugins) == 0 {
+		return nil
+	}
+
+	agentVer, err := semver.NewVersion(agentVersion)
+	if err != nil {
+		slog.Warn("cannot parse agent version; skipping all plugin compatibility checks",
+			"agentVersion", agentVersion, "error", err)
+		return nil
+	}
+
+	sdkMinVer, err := semver.NewVersion(sdkMinFormaeVersion)
+	if err != nil {
+		slog.Warn("cannot parse SDK minimum formae version; skipping all plugin compatibility checks",
+			"sdkMinFormaeVersion", sdkMinFormaeVersion, "error", err)
+		return nil
+	}
+
+	var compatible []PluginInfo
+
+	for _, p := range plugins {
+		if p.MinFormaeVersion == "" {
+			slog.Warn("plugin has no MinFormaeVersion in manifest; skipping",
+				"plugin", p.Name, "version", p.Version)
+			continue
+		}
+
+		pluginMinVer, err := semver.NewVersion(p.MinFormaeVersion)
+		if err != nil {
+			slog.Warn("plugin has unparseable MinFormaeVersion; skipping",
+				"plugin", p.Name, "version", p.Version,
+				"minFormaeVersion", p.MinFormaeVersion, "error", err)
+			continue
+		}
+
+		// Check 1: agent too old for this plugin
+		if agentVer.LessThan(pluginMinVer) {
+			slog.Warn("plugin requires newer formae; skipping",
+				"plugin", p.Name, "version", p.Version,
+				"pluginMinFormaeVersion", p.MinFormaeVersion,
+				"agentVersion", agentVersion)
+			continue
+		}
+
+		// Check 2: plugin built against an older, unsupported SDK
+		if pluginMinVer.LessThan(sdkMinVer) {
+			slog.Warn("plugin built against older SDK; skipping — upgrade to SDK "+plugin.SDKVersion,
+				"plugin", p.Name, "version", p.Version,
+				"pluginMinFormaeVersion", p.MinFormaeVersion,
+				"sdkMinFormaeVersion", sdkMinFormaeVersion,
+				"currentSDKVersion", plugin.SDKVersion)
+			continue
+		}
+
+		compatible = append(compatible, p)
+	}
+
+	return compatible
 }

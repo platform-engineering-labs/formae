@@ -103,6 +103,9 @@ func (a *Agent) Start() error {
 
 		pluginDir := util.ExpandHomePath(a.cfg.PluginDir)
 		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
+		resourceInfos = plugindiscovery.FilterCompatiblePlugins(
+			resourceInfos, formae.Version, plugin.MinFormaeVersion,
+		)
 		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
 		for i, p := range resourceInfos {
 			externalResourcePlugins[i] = p.ToResourcePluginInfo()
@@ -121,6 +124,9 @@ func (a *Agent) Start() error {
 				return
 			}
 			authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
+			authPlugins = plugindiscovery.FilterCompatiblePlugins(
+				authPlugins, formae.Version, plugin.MinFormaeVersion,
+			)
 			var matchedPlugin *plugindiscovery.PluginInfo
 			for i, p := range authPlugins {
 				if p.Name == authType {
