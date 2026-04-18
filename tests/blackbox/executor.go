@@ -2198,6 +2198,32 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 		}
 		model.Stacks[stackIdx].TTLExpired = false
 		t.Logf("ForceCheckTTLAndWait: stack %s command %s completed: %s", expiredLabel, commandID, cmd.State)
+
+		if cmd.State == "Success" {
+			// Purge accepted commands whose requested slots all fall within
+			// the destroyed stack. Their outcomes are stale — the TTL destroy
+			// is the ground truth. Without this, reconcileCompletedAcceptedCommands
+			// or DrainPendingCommands would process the stale command response
+			// (e.g. op=create from a SetTTLPolicy reconcile-apply) and override
+			// the model state set by the TTL destroy.
+			filtered := model.AcceptedCommands[:0]
+			for _, ac := range model.AcceptedCommands {
+				superseded := len(ac.RequestedSlots) > 0
+				for _, ref := range ac.RequestedSlots {
+					if ref.StackIndex != stackIdx {
+						superseded = false
+						break
+					}
+				}
+				if superseded {
+					t.Logf("ForceCheckTTLAndWait: purging superseded command %s (all slots in destroyed stack %s)",
+						ac.CommandID, expiredLabel)
+				} else {
+					filtered = append(filtered, ac)
+				}
+			}
+			model.AcceptedCommands = filtered
+		}
 	}
 }
 

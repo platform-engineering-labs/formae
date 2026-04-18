@@ -231,7 +231,7 @@ func TestFilterCompatiblePlugins(t *testing.T) {
 
 	// agentVersion=1.0.0 is >= compatible's minFormaeVersion (0.80.0)
 	// sdkMinFormaeVersion=0.50.0 is <= compatible's minFormaeVersion (0.80.0)
-	result := FilterCompatiblePlugins(allPlugins, "1.0.0", "0.50.0")
+	result := FilterCompatiblePlugins(allPlugins, "1.0.0", "0.50.0", "0.2.1")
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "aws", result[0].Name)
@@ -245,7 +245,7 @@ func TestFilterCompatiblePlugins_UnparseableAgentVersion(t *testing.T) {
 		},
 	}
 
-	result := FilterCompatiblePlugins(plugins, "not-a-version", "0.50.0")
+	result := FilterCompatiblePlugins(plugins, "not-a-version", "0.50.0", "0.2.1")
 	assert.Empty(t, result)
 }
 
@@ -257,7 +257,7 @@ func TestFilterCompatiblePlugins_UnparseablePluginMinFormaeVersion(t *testing.T)
 		},
 	}
 
-	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0")
+	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0", "0.2.1")
 	assert.Empty(t, result)
 }
 
@@ -269,7 +269,7 @@ func TestFilterCompatiblePlugins_UnparseableSDKMinFormaeVersion(t *testing.T) {
 		},
 	}
 
-	result := FilterCompatiblePlugins(plugins, "1.0.0", "bad-version")
+	result := FilterCompatiblePlugins(plugins, "1.0.0", "bad-version", "0.2.1")
 	assert.Empty(t, result)
 }
 
@@ -280,12 +280,12 @@ func TestFilterCompatiblePlugins_DevBuildSkipsChecks(t *testing.T) {
 	}
 
 	// Dev builds use version "0.0.0" — all plugins should be loaded
-	result := FilterCompatiblePlugins(plugins, "0.0.0", "0.84.0")
+	result := FilterCompatiblePlugins(plugins, "0.0.0", "0.84.0", "0.2.1")
 	require.Len(t, result, 2)
 }
 
 func TestFilterCompatiblePlugins_EmptyInput(t *testing.T) {
-	result := FilterCompatiblePlugins(nil, "1.0.0", "0.50.0")
+	result := FilterCompatiblePlugins(nil, "1.0.0", "0.50.0", "0.2.1")
 	assert.Nil(t, result)
 }
 
@@ -295,6 +295,6 @@ func TestFilterCompatiblePlugins_AllCompatible(t *testing.T) {
 		{Name: "gcp", MinFormaeVersion: "0.90.0"},
 	}
 
-	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0")
+	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0", "0.2.1")
 	require.Len(t, result, 2)
 }

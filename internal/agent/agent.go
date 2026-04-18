@@ -105,7 +105,7 @@ func (a *Agent) Start() error {
 		pluginDir := util.ExpandHomePath(a.cfg.PluginDir)
 		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
 		resourceInfos = plugindiscovery.FilterCompatiblePlugins(
-			resourceInfos, formae.Version, plugin.MinFormaeVersion,
+			resourceInfos, formae.Version, plugin.MinFormaeVersion, plugin.SDKVersion,
 		)
 		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
 		for i, p := range resourceInfos {
@@ -139,7 +139,7 @@ func (a *Agent) Start() error {
 				return
 			}
 			compatibleAuth := plugindiscovery.FilterCompatiblePlugins(
-				[]plugindiscovery.PluginInfo{*matchedPlugin}, formae.Version, pkgauth.MinFormaeVersion,
+				[]plugindiscovery.PluginInfo{*matchedPlugin}, formae.Version, pkgauth.MinFormaeVersion, pkgauth.SDKVersion,
 			)
 			if len(compatibleAuth) == 0 {
 				slog.Error("Auth plugin installed but incompatible — refusing to start",

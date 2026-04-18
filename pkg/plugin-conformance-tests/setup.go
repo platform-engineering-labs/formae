@@ -79,8 +79,8 @@ func EnsureFormaeBinary(t *testing.T) (binaryPath string, cleanup func()) {
 	version := extractVersion(t, binPath)
 	t.Logf("formae binary version: %s", version)
 
-	os.Setenv("FORMAE_VERSION", version)
-	os.Setenv("FORMAE_BINARY", binPath)
+	t.Setenv("FORMAE_VERSION", version)
+	t.Setenv("FORMAE_BINARY", binPath)
 
 	return binPath, cleanup
 }
@@ -109,6 +109,11 @@ func ResolvePKLDependencies(t *testing.T, version string, projectDirs ...string)
 
 	for _, dir := range projectDirs {
 		pklPath := filepath.Join(dir, "PklProject")
+
+		if _, err := os.Stat(pklPath); os.IsNotExist(err) {
+			t.Logf("No PklProject found in %s, skipping", dir)
+			continue
+		}
 
 		original, err := os.ReadFile(pklPath)
 		if err != nil {
