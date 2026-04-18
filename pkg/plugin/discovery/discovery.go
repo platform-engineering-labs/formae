@@ -206,7 +206,7 @@ func discoverHighestVersion(pluginPath, pluginName string, pluginType PluginType
 // Plugins with an empty or unparseable MinFormaeVersion are skipped with a
 // warning. If agentVersion or sdkMinFormaeVersion cannot be parsed, all
 // plugins are skipped.
-func FilterCompatiblePlugins(plugins []PluginInfo, agentVersion, sdkMinFormaeVersion string) []PluginInfo {
+func FilterCompatiblePlugins(plugins []PluginInfo, agentVersion, sdkMinFormaeVersion, sdkVersion string) []PluginInfo {
 	if len(plugins) == 0 {
 		return nil
 	}
@@ -259,11 +259,11 @@ func FilterCompatiblePlugins(plugins []PluginInfo, agentVersion, sdkMinFormaeVer
 
 		// Check 2: plugin built against an older, unsupported SDK
 		if pluginMinVer.LessThan(sdkMinVer) {
-			slog.Warn("plugin built against older SDK; skipping — upgrade to SDK "+plugin.SDKVersion,
+			slog.Warn("plugin built against older SDK; skipping — upgrade to SDK "+sdkVersion,
 				"plugin", p.Name, "version", p.Version,
 				"pluginMinFormaeVersion", p.MinFormaeVersion,
 				"sdkMinFormaeVersion", sdkMinFormaeVersion,
-				"currentSDKVersion", plugin.SDKVersion)
+				"currentSDKVersion", sdkVersion)
 			continue
 		}
 
