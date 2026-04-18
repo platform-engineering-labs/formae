@@ -58,16 +58,7 @@ func Error(msg string) {
 }
 
 func DefaultLinks() string {
-	return Links("Docs", "")
-}
-
-func Links(docLinkName string, deepLinkName string) string {
-	deepLink := DocRoot
-	if deepLinkName != "" {
-		deepLink += "/" + deepLinkName
-	}
-
 	return "\n" + Gold("Code: ") + "https://github.com/platform-engineering-labs/formae" +
-		"\n" + Gold(fmt.Sprintf("%s: ", docLinkName)) + deepLink +
+		"\n" + Gold("Docs: ") + DocRoot +
 		"\n" + Gold("Bugs: ") + "https://github.com/platform-engineering-labs/formae/issues"
 }
