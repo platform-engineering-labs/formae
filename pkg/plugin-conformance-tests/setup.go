@@ -23,7 +23,7 @@ import (
 	"github.com/platform-engineering-labs/orbital/platform"
 )
 
-const hubURL = "https://hub.platform.engineering/binaries/repo.json"
+const hubURL = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
 
 // EnsureFormaeBinary returns the path to a formae binary, downloading it via
 // orbital if the FORMAE_BINARY environment variable is not already set. The
@@ -256,13 +256,13 @@ func extractVersion(t *testing.T, binPath string) string {
 		t.Fatalf("failed to get formae version: %v\noutput: %s", err, string(out))
 	}
 
-	// Output is typically "formae version X.Y.Z" or just "X.Y.Z"
-	output := strings.TrimSpace(string(out))
-	parts := strings.Fields(output)
+	// Output is "formae version: X.Y.Z\ngo version: go1.X.Y" — parse first line only
+	firstLine := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	parts := strings.Fields(firstLine)
 	if len(parts) == 0 {
 		t.Fatalf("empty version output from formae binary")
 	}
 
-	// Return the last field which should be the version number
+	// Return the last field of the first line (the formae version)
 	return parts[len(parts)-1]
 }
