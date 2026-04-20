@@ -51,6 +51,7 @@ type DatastorePostgres struct {
 	agentID string
 	cfg     *pkgmodel.DatastoreConfig
 	ctx     context.Context
+	metrics *datastoreMetrics
 }
 
 // BuildConnStr constructs a PostgreSQL connection string from config fields.
@@ -160,7 +161,13 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		// Non-fatal - continue without pool metrics
 	}
 
-	d := DatastorePostgres{pool: pool, agentID: agentID, cfg: cfg, ctx: ctx}
+	m, err := newDatastoreMetrics()
+	if err != nil {
+		slog.Error("failed to initialize datastore metrics", "error", err)
+		// Non-fatal - continue without query duration metrics
+	}
+
+	d := DatastorePostgres{pool: pool, agentID: agentID, cfg: cfg, ctx: ctx, metrics: m}
 
 	slog.Info("Started PostgreSQL datastore", "host", cfg.Postgres.Host, "port", cfg.Postgres.Port, "database", cfg.Postgres.Database, "schema", cfg.Postgres.Schema, "user", cfg.Postgres.User, "connectionParams", cfg.Postgres.ConnectionParams)
 
@@ -170,6 +177,7 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
 	ctx, span := tracer.Start(context.Background(), "StoreFormaCommand")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "store_forma_command", time.Now())
 
 	for _, r := range fa.ResourceUpdates {
 		if r.DesiredState.Properties == nil {
@@ -491,6 +499,7 @@ func (d DatastorePostgres) DeleteFormaCommand(fa *forma_command.FormaCommand, co
 func (d DatastorePostgres) GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error) {
 	ctx, span := tracer.Start(context.Background(), "GetFormaCommandByCommandID")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "get_forma_command_by_id", time.Now())
 
 	query := formaCommandWithResourceUpdatesQueryBasePostgres + " WHERE fc.command_id = $1" + resourceUpdateOrderByPostgres
 	rows, err := d.pool.Query(ctx, query, commandID)
@@ -570,6 +579,7 @@ func extendPostgresQueryString[T any](queryStr string, queryItem *datastore.Quer
 func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
 	ctx, span := tracer.Start(context.Background(), "QueryFormaCommands")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "query_forma_commands", time.Now())
 
 	// Build subquery to find matching command IDs with filtering and LIMIT
 	subqueryStr := "SELECT command_id FROM forma_commands WHERE 1=1"
@@ -621,6 +631,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) (string, error) {
 	ctx, span := tracer.Start(context.Background(), "GetKSUIDByTriplet")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "get_ksuid_by_triplet", time.Now())
 
 	query := `
 	SELECT ksuid
@@ -646,6 +657,7 @@ func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) 
 func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey) (map[pkgmodel.TripletKey]string, error) {
 	ctx, span := tracer.Start(context.Background(), "BatchGetKSUIDsByTriplets")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "batch_get_ksuids_by_triplets", time.Now())
 
 	if len(triplets) == 0 {
 		return make(map[pkgmodel.TripletKey]string), nil
@@ -702,6 +714,7 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack string) ([]datastore.ResourceModification, error) {
 	ctx, span := tracer.Start(context.Background(), "GetResourceModificationsSinceLastReconcile")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "get_resource_modifications_since_last_reconcile", time.Now())
 
 	query := `
 	SELECT DISTINCT
@@ -1459,6 +1472,7 @@ func (d DatastorePostgres) DeleteStack(label string, commandID string) (string, 
 func (d DatastorePostgres) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
 	ctx, span := tracer.Start(context.Background(), "GetStackByLabel")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "get_stack_by_label", time.Now())
 
 	// Get the latest version of the stack, return nil if deleted
 	// We need to check if the MOST RECENT version is a delete operation
@@ -1619,6 +1633,7 @@ func (d DatastorePostgres) CountResourcesInStack(label string) (int, error) {
 func (d DatastorePostgres) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	ctx, span := tracer.Start(context.Background(), "ListAllStackMetadata")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "list_all_stacks", time.Now())
 
 	// Get all stacks at their latest version that aren't deleted
 	// Uses window function to reliably get the most recent version per stack id
@@ -2714,6 +2729,7 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 func (d DatastorePostgres) QueryResources(query *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "QueryResources")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "query_resources", time.Now())
 
 	queryStr := `
 	SELECT data, ksuid
@@ -3276,6 +3292,7 @@ func (d DatastorePostgres) CountResourcesInTarget(targetLabel string) (int, erro
 func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
 	ctx, span := tracer.Start(context.Background(), "BulkStoreResourceUpdates")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "bulk_store_resource_updates", time.Now())
 
 	if len(updates) == 0 {
 		return nil
@@ -3399,6 +3416,7 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
 	ctx, span := tracer.Start(context.Background(), "LoadResourceUpdates")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "load_resource_updates", time.Now())
 
 	query := `
 		SELECT ksuid, operation, state, start_ts, modified_ts,
@@ -3520,6 +3538,7 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateResourceUpdateState")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "update_resource_update_state", time.Now())
 
 	query := `
 		UPDATE resource_updates
@@ -3595,6 +3614,7 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs []datastore.ResourceUpdateRef, state resource_update.ResourceUpdateState, modifiedTs time.Time) error {
 	ctx, span := tracer.Start(context.Background(), "BatchUpdateResourceUpdateState")
 	defer span.End()
+	defer d.metrics.recordDuration(ctx, "batch_update_resource_update_state", time.Now())
 
 	if len(refs) == 0 {
 		return nil
