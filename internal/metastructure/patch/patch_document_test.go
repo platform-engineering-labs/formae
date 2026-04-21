@@ -1680,7 +1680,7 @@ func TestGeneratePatch_ProviderDefaultInsideNestedArray_PortMappingHostPort_Mixe
 	schema := pkgmodel.Schema{
 		Fields: []string{"Family", "ContainerDefinitions"},
 		Hints: map[string]pkgmodel.FieldHint{
-			"ContainerDefinitions": {CreateOnly: true},
+			"ContainerDefinitions":                       {CreateOnly: true},
 			"ContainerDefinitions.PortMappings.HostPort": {HasProviderDefault: true},
 		},
 	}
@@ -1736,7 +1736,7 @@ func TestGeneratePatch_ProviderDefaultInsideNestedArray_PortMappingHostPort(t *t
 	schema := pkgmodel.Schema{
 		Fields: []string{"Family", "ContainerDefinitions"},
 		Hints: map[string]pkgmodel.FieldHint{
-			"ContainerDefinitions": {CreateOnly: true},
+			"ContainerDefinitions":                       {CreateOnly: true},
 			"ContainerDefinitions.PortMappings.HostPort": {HasProviderDefault: true},
 		},
 	}
