@@ -226,6 +226,22 @@ func TestBlugeQuerier_resourceQuery_SimpleStack(t *testing.T) {
 	assert.Equal(t, expectedResourceQuery, resourceQuery)
 }
 
+func TestBlugeQuerier_resourceQuery_SimpleTarget(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "target:test-target"
+	expectedResourceQuery := &datastore.ResourceQuery{
+		Target: &datastore.QueryItem[string]{
+			Item:       "test-target",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	resourceQuery, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResourceQuery, resourceQuery)
+}
+
 func TestBlugeQuerier_resourceQuery_ExcludedStack(t *testing.T) {
 	querier := &BlugeQuerier{}
 
