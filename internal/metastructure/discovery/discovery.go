@@ -755,23 +755,13 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 
 	for _, parent := range parents {
 		for childNode, mappingProps := range parentNode.children {
-			listParams := make(map[string]plugin.ListParam)
-			for _, param := range mappingProps {
-				value, found := parent.GetProperty(param.ParentProperty)
-				if found {
-					// Extract the actual value if this is a JSON reference object.
-					// This handles cases like OCI resources where parent properties (e.g. CompartmentID)
-					// are serialized as {"$ref":"...","$value":"..."} reference objects.
-					// We need only the value for the List API call.
-					actualValue := extractActualValue(value)
-					listParams[param.ListProperty] = plugin.ListParam{
-						ParentProperty: param.ParentProperty,
-						ListParam:      param.ListProperty,
-						ListValue:      actualValue,
-					}
-				} else {
-					proc.Log().Error("Missing parent property property=%s parent_id=%s", param.ParentProperty, parent.NativeID)
-				}
+			listParams, ok := buildChildListParams(parent, mappingProps)
+			if !ok {
+				// At least one required mapping property is missing on the parent.
+				// Skip queueing — a List call without the required filter parameters
+				// would be rejected by the cloud API (e.g. AWS CloudControl).
+				proc.Log().Error("Skipping child discovery - parent missing required property childType=%s parentType=%s parentNativeID=%s", childNode.resourceType, parent.Type, parent.NativeID)
+				continue
 			}
 			data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(data.queuedListOperations[data.targets[op.TargetLabel].Namespace], ListOperation{
 				ResourceType: childNode.resourceType,
@@ -791,6 +781,28 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 	}
 
 	return nil
+}
+
+// buildChildListParams resolves each parent property listed in mappingProps into a
+// plugin.ListParam keyed by the child's list parameter name. It returns (nil, false)
+// if any required parent property is missing, so callers can skip queueing a child
+// list operation that would otherwise issue an API call with incomplete filters.
+// Parent properties serialized as resolvable reference objects
+// ({"$ref":..., "$value":...}) are unwrapped to their underlying value.
+func buildChildListParams(parent *pkgmodel.Resource, mappingProps []plugin.ListParameter) (map[string]plugin.ListParam, bool) {
+	params := make(map[string]plugin.ListParam, len(mappingProps))
+	for _, p := range mappingProps {
+		value, found := parent.GetProperty(p.ParentProperty)
+		if !found {
+			return nil, false
+		}
+		params[p.ListProperty] = plugin.ListParam{
+			ParentProperty: p.ParentProperty,
+			ListParam:      p.ListProperty,
+			ListValue:      extractActualValue(value),
+		}
+	}
+	return params, true
 }
 
 func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {

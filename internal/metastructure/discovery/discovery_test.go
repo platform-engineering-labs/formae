@@ -5,12 +5,14 @@
 package discovery
 
 import (
+	"encoding/json"
 	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
@@ -143,6 +145,62 @@ func TestMultipleNamespacesMerge(t *testing.T) {
 
 	ociVcn := hierarchy["OCI::VCN::VCN"]
 	assert.Len(t, ociVcn.children, 1)
+}
+
+func TestBuildChildListParams(t *testing.T) {
+	mappingProps := []plugin.ListParameter{
+		{ParentProperty: "ServiceName", ListProperty: "Service"},
+		{ParentProperty: "Cluster", ListProperty: "Cluster"},
+	}
+
+	t.Run("returns populated params and ok when all parent properties resolve", func(t *testing.T) {
+		parent := &pkgmodel.Resource{
+			Type:       "AWS::ECS::Service",
+			Properties: json.RawMessage(`{"ServiceName":"my-service","Cluster":"my-cluster"}`),
+		}
+
+		params, ok := buildChildListParams(parent, mappingProps)
+
+		assert.True(t, ok)
+		assert.Equal(t, map[string]plugin.ListParam{
+			"Service": {ParentProperty: "ServiceName", ListParam: "Service", ListValue: "my-service"},
+			"Cluster": {ParentProperty: "Cluster", ListParam: "Cluster", ListValue: "my-cluster"},
+		}, params)
+	})
+
+	t.Run("returns not-ok when any required parent property is missing", func(t *testing.T) {
+		parent := &pkgmodel.Resource{
+			Type:       "AWS::ECS::Service",
+			Properties: json.RawMessage(`{"ServiceName":"my-service"}`),
+		}
+
+		_, ok := buildChildListParams(parent, mappingProps)
+
+		assert.False(t, ok, "should refuse to build params when Cluster is missing")
+	})
+
+	t.Run("returns not-ok when parent properties are empty", func(t *testing.T) {
+		parent := &pkgmodel.Resource{
+			Type:       "AWS::ECS::Service",
+			Properties: json.RawMessage(`{}`),
+		}
+
+		_, ok := buildChildListParams(parent, mappingProps)
+
+		assert.False(t, ok)
+	})
+
+	t.Run("extracts value from resolvable reference objects", func(t *testing.T) {
+		parent := &pkgmodel.Resource{
+			Type:       "AWS::ECS::Service",
+			Properties: json.RawMessage(`{"ServiceName":"my-service","Cluster":{"$ref":"formae://cluster-ksuid#/Arn","$value":"my-cluster-arn"}}`),
+		}
+
+		params, ok := buildChildListParams(parent, mappingProps)
+
+		assert.True(t, ok)
+		assert.Equal(t, "my-cluster-arn", params["Cluster"].ListValue)
+	})
 }
 
 func TestInjectResolvables(t *testing.T) {
