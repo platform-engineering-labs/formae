@@ -44,6 +44,27 @@ func init() {
 	schema.DefaultRegistry.Register(PKL{})
 }
 
+// bundledPklCommand returns the sibling pkl binary next to the formae executable,
+// or nil to let pkl-go fall back to PATH. Using PATH risks picking up a pkl
+// version that doesn't support stdlib features our schemas rely on (e.g.
+// `pkl.reflect.Property.allAnnotations` needs 0.31+).
+func bundledPklCommand() []string {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	// Resolve symlinks so /usr/local/bin/formae -> /opt/pel/bin/formae finds
+	// /opt/pel/bin/pkl rather than looking in /usr/local/bin.
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	bundled := filepath.Join(filepath.Dir(exe), "pkl")
+	if info, err := os.Stat(bundled); err == nil && !info.IsDir() {
+		return []string{bundled}
+	}
+	return nil
+}
+
 func (p PKL) Name() string {
 	return "pkl"
 }
@@ -108,10 +129,11 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 			opts...,
 		)
 	} else {
-		evaluator, err = pklgo.NewEvaluator(
-			context.Background(),
-			opts...,
-		)
+		if cmd := bundledPklCommand(); cmd != nil {
+			evaluator, err = pklgo.NewEvaluatorWithCommand(context.Background(), cmd, opts...)
+		} else {
+			evaluator, err = pklgo.NewEvaluator(context.Background(), opts...)
+		}
 		cleanup = func() { _ = evaluator.Close() }
 	}
 
@@ -362,14 +384,19 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 			return nil, err
 		}
 	} else {
-		evaluator, err = pklgo.NewEvaluator(
-			context.Background(),
+		evalOpts := []func(*pklgo.EvaluatorOptions){
 			pklgo.PreconfiguredOptions,
 			pklgo.WithResourceReader(libExtension{}),
 			func(opts *pklgo.EvaluatorOptions) {
 				opts.Properties = props
 				opts.OutputFormat = "json"
-			})
+			},
+		}
+		if pklCmd := bundledPklCommand(); pklCmd != nil {
+			evaluator, err = pklgo.NewEvaluatorWithCommand(context.Background(), pklCmd, evalOpts...)
+		} else {
+			evaluator, err = pklgo.NewEvaluator(context.Background(), evalOpts...)
+		}
 		cleanup = func() { _ = evaluator.Close() }
 
 		if err != nil {
@@ -490,11 +517,21 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.Sc
 		}
 	}
 
-	evaluator, err := pklgo.NewEvaluator(context.Background(), pklgo.PreconfiguredOptions, pklgo.WithFs(assets, "assets"), func(opts *pklgo.EvaluatorOptions) {
-		opts.Properties = map[string]string{
-			"packages": strings.Join(include, ","),
-		}
-	})
+	projOpts := []func(*pklgo.EvaluatorOptions){
+		pklgo.PreconfiguredOptions,
+		pklgo.WithFs(assets, "assets"),
+		func(opts *pklgo.EvaluatorOptions) {
+			opts.Properties = map[string]string{
+				"packages": strings.Join(include, ","),
+			}
+		},
+	}
+	var evaluator pklgo.Evaluator
+	if pklCmd := bundledPklCommand(); pklCmd != nil {
+		evaluator, err = pklgo.NewEvaluatorWithCommand(context.Background(), pklCmd, projOpts...)
+	} else {
+		evaluator, err = pklgo.NewEvaluator(context.Background(), projOpts...)
+	}
 	if err != nil {
 		return err
 	}
@@ -834,7 +871,12 @@ func parseLogLevel(level string) slog.Level {
 // This function keeps both evaluators alive until the returned cleanup function is
 // called, which closes the entire manager.
 func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pklgo.EvaluatorOptions)) (pklgo.Evaluator, func(), error) {
-	manager := pklgo.NewEvaluatorManager()
+	var manager pklgo.EvaluatorManager
+	if cmd := bundledPklCommand(); cmd != nil {
+		manager = pklgo.NewEvaluatorManagerWithCommand(cmd)
+	} else {
+		manager = pklgo.NewEvaluatorManager()
+	}
 
 	projectEvaluator, err := manager.NewEvaluator(ctx, opts...)
 	if err != nil {
