@@ -1080,7 +1080,13 @@ func TestHasValue(t *testing.T) {
 func TestRemoveProviderDefaultFields_NestedFieldInsideArray(t *testing.T) {
 	// Simulates ECS ContainerDefinitions: provider default fields (Cpu, Essential)
 	// are nested inside an array of sub-resources. The path "ContainerDefinitions.Cpu"
-	// must traverse the array and remove Cpu from each element.
+	// must traverse the array and remove Cpu from every element.
+	//
+	// For array-traversing provider-default paths, stripping is symmetric on
+	// both sides (see removeProviderDefaultFields doc): jsonpatch's set-based
+	// array comparison cannot pair a document element carrying a provider-
+	// populated sub-field with a patch element that omits it, so we remove the
+	// key unconditionally, even if one patch element happens to mention it.
 	document := []byte(`{
 		"Family": "my-task",
 		"ContainerDefinitions": [
@@ -1097,8 +1103,6 @@ func TestRemoveProviderDefaultFields_NestedFieldInsideArray(t *testing.T) {
 		]
 	}`)
 
-	// Cpu has provider default and is NOT in desired state → should be removed from document
-	// Essential has provider default but IS in desired state → should NOT be removed
 	result, err := removeProviderDefaultFields(document, patch, []string{"ContainerDefinitions.Cpu", "ContainerDefinitions.Essential"})
 	require.NoError(t, err)
 
@@ -1109,20 +1113,21 @@ func TestRemoveProviderDefaultFields_NestedFieldInsideArray(t *testing.T) {
 	containers := resultMap["ContainerDefinitions"].([]any)
 	require.Len(t, containers, 2)
 
-	// Cpu should be removed from both containers (not in desired state)
+	// Both Cpu (absent from patch) and Essential (present in patch) must be
+	// removed from every document element — array-nested provider defaults
+	// are stripped symmetrically.
 	container0 := containers[0].(map[string]any)
-	_, hasCpu0 := container0["Cpu"]
-	assert.False(t, hasCpu0, "Cpu should be removed from first container when not in desired state")
-
 	container1 := containers[1].(map[string]any)
-	_, hasCpu1 := container1["Cpu"]
-	assert.False(t, hasCpu1, "Cpu should be removed from second container when not in desired state")
 
-	// Essential should be kept (present in desired state)
+	_, hasCpu0 := container0["Cpu"]
+	assert.False(t, hasCpu0, "Cpu should be removed from first document element")
+	_, hasCpu1 := container1["Cpu"]
+	assert.False(t, hasCpu1, "Cpu should be removed from second document element")
+
 	_, hasEssential0 := container0["Essential"]
-	assert.True(t, hasEssential0, "Essential should be kept when present in desired state")
+	assert.False(t, hasEssential0, "Essential should be stripped symmetrically from the document even when present in patch (array-nested provider default)")
 	_, hasEssential1 := container1["Essential"]
-	assert.True(t, hasEssential1, "Essential should be kept when present in desired state")
+	assert.False(t, hasEssential1, "Essential should be stripped symmetrically from the document even when present in patch (array-nested provider default)")
 }
 
 func TestFieldExistsInMap_ArrayTraversal(t *testing.T) {
@@ -1547,6 +1552,274 @@ func TestGeneratePatch_EntitySetProviderDefaults_WithUserChange(t *testing.T) {
 	require.Len(t, ops, 1, "Expected exactly one patch operation for the changed attribute")
 	assert.Equal(t, "replace", ops[0].Operation)
 	assert.Contains(t, ops[0].Path, "Value")
+}
+
+// Reproduces the exact bug from the issue: re-applying an unchanged ECS
+// TaskDefinition triggers a REPLACE because the provider populates
+// ContainerDefinition.Cpu=0 on Read, and the diff through jsonpatch's set
+// semantics treats the document element {Name:x, Cpu:0} as different from
+// the desired element {Name:x}. Because ContainerDefinitions is createOnly,
+// any add/remove on that path triggers needsReplacement=true.
+//
+// This test passes with a single-element array today (the existing
+// fieldExistsInMap short-circuits "Cpu not anywhere in patch" = strip).
+// The next test exercises the mixed case where at least one sibling does
+// set Cpu, which is what the production bug looks like.
+func TestGeneratePatch_ProviderDefaultInsideArray_SingleElement_NoReplace(t *testing.T) {
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "grafana", "Image": "grafana/grafana:latest", "Cpu": 0}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "grafana", "Image": "grafana/grafana:latest"}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions":     {CreateOnly: true},
+			"ContainerDefinitions.Cpu": {HasProviderDefault: true},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement, "provider-default Cpu inside createOnly list should not trigger replacement")
+	assert.Empty(t, patchDoc, "no patch expected when the only diff is a provider-default sub-field")
+}
+
+// Mixed case: one container sets Cpu, another does not. fieldExistsInMap
+// returns true (Cpu is in at least one patch element) so the existing
+// top-level-only stripping leaves Cpu=0 on the second container in the
+// document. jsonpatch's set comparison then fails to match the sidecar
+// element, emits add/remove on /ContainerDefinitions, and createOnly
+// detection trips needsReplacement.
+func TestGeneratePatch_ProviderDefaultInsideArray_MixedElements_NoReplace(t *testing.T) {
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx", "Cpu": 512},
+			{"Name": "sidecar", "Image": "envoy", "Cpu": 0}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx", "Cpu": 512},
+			{"Name": "sidecar", "Image": "envoy"}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions":     {CreateOnly: true},
+			"ContainerDefinitions.Cpu": {HasProviderDefault: true},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	if !assert.False(t, needsReplacement, "mixed-element provider-default sub-field should not trigger replacement") {
+		var ops []jsonpatch.JsonPatchOperation
+		_ = json.Unmarshal(patchDoc, &ops)
+		for _, op := range ops {
+			t.Logf("  unexpected op: %s %s = %v", op.Operation, op.Path, op.Value)
+		}
+	}
+	assert.Empty(t, patchDoc, "expected no patch when only diff is a provider-default sub-field")
+}
+
+// Mixed variant of the HostPort case: one PortMapping sets HostPort, the
+// other doesn't. Exercises the same pair-wise pathology as
+// TestGeneratePatch_ProviderDefaultInsideArray_MixedElements_NoReplace but
+// two levels deep.
+func TestGeneratePatch_ProviderDefaultInsideNestedArray_PortMappingHostPort_Mixed(t *testing.T) {
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "app",
+				"Image": "nginx",
+				"PortMappings": [
+					{"ContainerPort": 80, "HostPort": 8080, "Protocol": "tcp"},
+					{"ContainerPort": 443, "HostPort": 0, "Protocol": "tcp"}
+				]
+			}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "app",
+				"Image": "nginx",
+				"PortMappings": [
+					{"ContainerPort": 80, "HostPort": 8080, "Protocol": "tcp"},
+					{"ContainerPort": 443, "Protocol": "tcp"}
+				]
+			}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions": {CreateOnly: true},
+			"ContainerDefinitions.PortMappings.HostPort": {HasProviderDefault: true},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	if !assert.False(t, needsReplacement, "mixed HostPort inside nested array should not trigger replacement") {
+		var ops []jsonpatch.JsonPatchOperation
+		_ = json.Unmarshal(patchDoc, &ops)
+		for _, op := range ops {
+			t.Logf("  unexpected op: %s %s = %v", op.Operation, op.Path, op.Value)
+		}
+	}
+	assert.Empty(t, patchDoc, "expected no patch when only diff is a provider-default sub-field two levels deep")
+}
+
+// Same shape as above but with a deeper path: PortMapping.HostPort is a
+// sub-field inside ContainerDefinition.PortMappings — two levels of
+// array-nesting.
+func TestGeneratePatch_ProviderDefaultInsideNestedArray_PortMappingHostPort(t *testing.T) {
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "app",
+				"Image": "nginx",
+				"PortMappings": [
+					{"ContainerPort": 80, "HostPort": 0, "Protocol": "tcp"},
+					{"ContainerPort": 443, "HostPort": 0, "Protocol": "tcp"}
+				]
+			}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "app",
+				"Image": "nginx",
+				"PortMappings": [
+					{"ContainerPort": 80, "Protocol": "tcp"},
+					{"ContainerPort": 443, "Protocol": "tcp"}
+				]
+			}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions": {CreateOnly: true},
+			"ContainerDefinitions.PortMappings.HostPort": {HasProviderDefault: true},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	if !assert.False(t, needsReplacement, "provider-default sub-field two levels deep should not trigger replacement") {
+		var ops []jsonpatch.JsonPatchOperation
+		_ = json.Unmarshal(patchDoc, &ops)
+		for _, op := range ops {
+			t.Logf("  unexpected op: %s %s = %v", op.Operation, op.Path, op.Value)
+		}
+	}
+	assert.Empty(t, patchDoc, "expected no patch when only diff is a provider-default sub-field inside a nested array")
+}
+
+// Negative test: a genuinely user-changed field inside a list element must
+// still produce a replacement.
+func TestGeneratePatch_UserChangedFieldInsideArray_StillReplaces(t *testing.T) {
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx:1.25", "Cpu": 0}
+		]
+	}`)
+
+	// User changed the image tag — this is a real change to a createOnly field,
+	// should trigger a replacement.
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{"Name": "app", "Image": "nginx:1.27"}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions":     {CreateOnly: true},
+			"ContainerDefinitions.Cpu": {HasProviderDefault: true},
+		},
+	}
+
+	_, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+	assert.True(t, needsReplacement, "user-changed field on a createOnly list element should still trigger replacement")
+}
+
+// Negative test: at the top level, stripping must remain conditional. A user
+// who explicitly overrides a provider-default value should still see a diff
+// (this is the BucketEncryption override case we already test elsewhere,
+// repeated here to guard against regressions from the new recursive logic).
+func TestGeneratePatch_TopLevelProviderDefaultOverride_StillDiffs(t *testing.T) {
+	document := []byte(`{
+		"BucketName": "my-bucket",
+		"BucketEncryption": {"SSEAlgorithm": "AES256"}
+	}`)
+
+	patch := []byte(`{
+		"BucketName": "my-bucket",
+		"BucketEncryption": {"SSEAlgorithm": "aws:kms"}
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"BucketName", "BucketEncryption"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"BucketEncryption": {HasProviderDefault: true},
+		},
+	}
+
+	patchDoc, _, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc, "user-overridden top-level provider-default must still diff")
 }
 
 func TestGeneratePatch_EntitySetProviderDefaults_ReconcileMode(t *testing.T) {

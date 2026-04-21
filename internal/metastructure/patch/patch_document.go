@@ -141,12 +141,17 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 		return nil, err
 	}
 
-	// Remove provider default fields from the document (existing state) if they are not in the desired state (patch).
-	// Provider default fields are optional fields that cloud providers assign default values to.
-	// If the user didn't specify the field in their PKL, we don't want to generate a "remove" operation
-	// that would delete the provider-assigned default. By removing these fields from the document
-	// before comparison (only when they're not in the desired state), we prevent oscillation.
-	documentWithoutProviderDefaults, err := removeProviderDefaultFields(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, hasProviderDefaultFields)
+	// Remove provider default fields. For top-level paths we only strip from the
+	// document when the field is absent from the patch (preserves user
+	// overrides). For paths that traverse a list — e.g. `ContainerDefinitions.Cpu`
+	// — we strip the leaf key from BOTH sides in every array element, because
+	// jsonpatch's default set-based array comparison cannot reliably pair a
+	// document element that carries the provider-populated value with a patch
+	// element that omits it. Symmetric stripping makes those sub-fields
+	// invisible to the diff regardless of their value, which is the behavior we
+	// want for a hasProviderDefault annotation on a sub-field of a list
+	// element. See removeProviderDefaultFields for details.
+	patchWithSchemaFieldsOnly, documentWithoutProviderDefaults, err := removeProviderDefaultFieldsBoth(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, hasProviderDefaultFields)
 	if err != nil {
 		return nil, err
 	}
@@ -258,38 +263,175 @@ func removeNestedField(obj map[string]any, path []string) {
 	}
 }
 
-// removeProviderDefaultFields removes fields from the document (actual state) that have provider defaults,
-// but only if those fields are NOT present in the patch (desired state).
-// This prevents "remove" operations for fields where the cloud provider assigns default values.
+// removeProviderDefaultFields removes fields with provider defaults from the
+// document (actual state) — and, for fields nested inside array elements,
+// symmetrically from the patch (desired state) too.
+//
+// Two regimes are at play:
+//
+//  1. Pure-object paths (e.g. "BucketEncryption" or "Config.Encryption"):
+//     the field is removed from the document only when it is absent from the
+//     patch. This preserves a user's explicit override of the provider
+//     default — their desired value remains in the patch and diffs normally.
+//
+//  2. Array-traversing paths (e.g. "ContainerDefinitions.Cpu" or
+//     "ContainerDefinitions.PortMappings.HostPort"): the leaf key is stripped
+//     from BOTH sides, in every reachable array element. This is necessary
+//     because jsonpatch compares array elements as opaque JSON blobs under
+//     its default set semantics, so a document element that carries the
+//     provider-populated value (e.g. Cpu:0) won't match a patch element that
+//     omits it — even though the user-intended shape is identical. The mixed
+//     case (one element sets the field, the other doesn't) cannot be fixed
+//     by stripping the document alone, because set-comparison has no stable
+//     pairing between elements. Symmetric stripping makes the provider-
+//     populated sub-field invisible to the diff regardless of value, which
+//     is the correct semantic for a hasProviderDefault annotation inside a
+//     collection of heterogeneous sub-resources.
 func removeProviderDefaultFields(document []byte, patch []byte, hasProviderDefaultFields []string) ([]byte, error) {
+	_, stripped, err := removeProviderDefaultFieldsBoth(document, patch, hasProviderDefaultFields)
+	return stripped, err
+}
+
+// removeProviderDefaultFieldsBoth is the two-sided counterpart used by the
+// patch pipeline: it returns the stripped patch as well as the stripped
+// document so that array-nested provider defaults are removed symmetrically.
+// Callers that only need the document side can use removeProviderDefaultFields.
+func removeProviderDefaultFieldsBoth(document []byte, patch []byte, hasProviderDefaultFields []string) ([]byte, []byte, error) {
 	if len(hasProviderDefaultFields) == 0 {
-		return document, nil
+		return patch, document, nil
 	}
 
 	var docMap map[string]any
 	if err := json.Unmarshal(document, &docMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal document: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal document: %w", err)
 	}
 
 	var patchMap map[string]any
 	if err := json.Unmarshal(patch, &patchMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal patch: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal patch: %w", err)
 	}
 
 	for _, fieldPath := range hasProviderDefaultFields {
 		pathParts := strings.Split(fieldPath, ".")
-		// Only remove from document if the field is NOT in the desired state (patch)
-		if !fieldExistsInMap(patchMap, pathParts) {
-			removeNestedField(docMap, pathParts)
+		stripProviderDefaultPath(docMap, patchMap, pathParts)
+	}
+
+	patchSerialized, err := json.Marshal(patchMap)
+	if err != nil {
+		return nil, nil, err
+	}
+	docSerialized, err := json.Marshal(docMap)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return patchSerialized, docSerialized, nil
+}
+
+// stripProviderDefaultPath walks a dotted field path through parallel document
+// and patch maps. Whenever the walk descends through an array, it iterates the
+// array on BOTH sides and applies the remaining path to every element,
+// dropping the leaf key symmetrically (see the comment on
+// removeProviderDefaultFields for the rationale). For walks that never enter
+// an array, it falls back to the original conditional behavior: the leaf is
+// stripped from the document only when it is absent in the patch.
+func stripProviderDefaultPath(doc, patch map[string]any, path []string) {
+	if len(path) == 0 || doc == nil {
+		return
+	}
+
+	// Last segment — conditional strip on document only, to preserve user overrides.
+	if len(path) == 1 {
+		if !fieldExistsInMap(patch, path) {
+			delete(doc, path[0])
+		}
+		return
+	}
+
+	head, tail := path[0], path[1:]
+
+	docVal, docHas := doc[head]
+	patchVal := any(nil)
+	if patch != nil {
+		patchVal = patch[head]
+	}
+
+	// Array on either side: walk into each element symmetrically.
+	if docArr, ok := docVal.([]any); ok {
+		patchArr, _ := patchVal.([]any)
+		stripProviderDefaultInsideArray(docArr, patchArr, tail)
+		return
+	}
+	if patchArr, ok := patchVal.([]any); ok {
+		// Document doesn't have this key (or has it as a non-array).
+		// Still strip from every patch element to keep both sides symmetric.
+		stripProviderDefaultInsideArray(nil, patchArr, tail)
+		return
+	}
+
+	// Pure object traversal — recurse.
+	if !docHas {
+		return
+	}
+	docNested, ok := docVal.(map[string]any)
+	if !ok {
+		return
+	}
+	var patchNested map[string]any
+	if p, ok := patchVal.(map[string]any); ok {
+		patchNested = p
+	}
+	stripProviderDefaultPath(docNested, patchNested, tail)
+}
+
+// stripProviderDefaultInsideArray walks the remaining path into each element
+// of the doc and patch arrays in parallel (by position where available, else
+// independently) and removes the leaf key from BOTH sides in every reachable
+// element. Elements that aren't objects (or don't match the expected shape)
+// are left alone.
+func stripProviderDefaultInsideArray(docArr, patchArr []any, path []string) {
+	if len(path) == 0 {
+		return
+	}
+
+	for _, elem := range docArr {
+		if elemMap, ok := elem.(map[string]any); ok {
+			stripProviderDefaultInArrayElem(elemMap, path)
 		}
 	}
+	for _, elem := range patchArr {
+		if elemMap, ok := elem.(map[string]any); ok {
+			stripProviderDefaultInArrayElem(elemMap, path)
+		}
+	}
+}
 
-	serialized, err := json.Marshal(docMap)
-	if err != nil {
-		return nil, err
+// stripProviderDefaultInArrayElem handles the remaining path INSIDE an array
+// element. Any further array traversal recurses via
+// stripProviderDefaultInsideArray; object traversal continues into the
+// nested map; the leaf key is deleted unconditionally, because once we are
+// inside an array element the provider-populated value cannot be reliably
+// matched to a counterpart on the other side (set semantics).
+func stripProviderDefaultInArrayElem(elem map[string]any, path []string) {
+	if len(path) == 0 || elem == nil {
+		return
+	}
+	if len(path) == 1 {
+		delete(elem, path[0])
+		return
 	}
 
-	return serialized, nil
+	head, tail := path[0], path[1:]
+	val, has := elem[head]
+	if !has {
+		return
+	}
+	switch v := val.(type) {
+	case map[string]any:
+		stripProviderDefaultInArrayElem(v, tail)
+	case []any:
+		stripProviderDefaultInsideArray(v, nil, tail)
+	}
 }
 
 // removeProviderDefaultEntitySetElements filters EntitySet arrays in the document (actual state)
