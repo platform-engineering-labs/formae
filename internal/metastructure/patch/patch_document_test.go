@@ -1857,3 +1857,155 @@ func TestGeneratePatch_EntitySetProviderDefaults_ReconcileMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "Expected no patch when only provider-default elements differ in reconcile mode")
 }
+
+// Regression test for the spurious ECS Service replace on reapply. The cloud
+// provider returns nested lists (Environment, PortMappings inside a
+// ContainerDefinition) in a canonicalised order that may differ from the
+// PKL-evaluated desired state. Each nested element is byte-identical across
+// the two sides; only the order within the nested list differs. At the outer
+// ContainerDefinitions level, jsonpatch must treat the list as a multiset of
+// semantically-equal elements and emit no ops — otherwise the createOnly
+// ContainerDefinitions path trips needsReplacement.
+//
+// Before the jsonpatch recursive set-compare fix, matchesValue compared list
+// elements by json.Marshal bytes. json.Marshal sorts map keys but preserves
+// array order, so the outer container's serialised form diverged whenever any
+// nested list was reordered, producing false diffs → replace.
+func TestGeneratePatch_NestedListOrderingInsideArrayElement_NoReplace(t *testing.T) {
+	// document: stored state (cloud API returned Environment in one order)
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "grafana",
+				"Image": "grafana/grafana:latest",
+				"Environment": [
+					{"Name": "GF_AUTH_ANONYMOUS_ENABLED", "Value": "true"},
+					{"Name": "GF_AUTH_DISABLE_LOGIN_FORM", "Value": "true"},
+					{"Name": "GF_AUTH_ANONYMOUS_ORG_ROLE", "Value": "Admin"}
+				]
+			}
+		]
+	}`)
+
+	// patch: desired state (PKL-evaluated output with Environment in a different order)
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "grafana",
+				"Image": "grafana/grafana:latest",
+				"Environment": [
+					{"Name": "GF_AUTH_ANONYMOUS_ENABLED", "Value": "true"},
+					{"Name": "GF_AUTH_ANONYMOUS_ORG_ROLE", "Value": "Admin"},
+					{"Name": "GF_AUTH_DISABLE_LOGIN_FORM", "Value": "true"}
+				]
+			}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions": {CreateOnly: true},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement, "reordering a nested Environment list should not trigger a replace")
+	assert.Empty(t, patchDoc, "no patch expected when the only diff is the order of semantically-equal nested elements")
+}
+
+// Same bug with PortMappings reordering instead of Environment — AWS returns
+// PortMappings in a different order than the forma declared. Covers the
+// tempo-container case from the LGTM load-test forma.
+func TestGeneratePatch_NestedPortMappingsOrderInsideArrayElement_NoReplace(t *testing.T) {
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "tempo",
+				"Image": "grafana/tempo:latest",
+				"PortMappings": [
+					{"ContainerPort": 4317, "Protocol": "tcp"},
+					{"ContainerPort": 4318, "Protocol": "tcp"},
+					{"ContainerPort": 3200, "Protocol": "tcp"}
+				]
+			}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "tempo",
+				"Image": "grafana/tempo:latest",
+				"PortMappings": [
+					{"ContainerPort": 3200, "Protocol": "tcp"},
+					{"ContainerPort": 4317, "Protocol": "tcp"},
+					{"ContainerPort": 4318, "Protocol": "tcp"}
+				]
+			}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions": {CreateOnly: true},
+		},
+	}
+
+	patchDoc, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+	assert.False(t, needsReplacement, "reordering nested PortMappings should not trigger a replace")
+	assert.Empty(t, patchDoc)
+}
+
+// Negative guard: a genuine content change inside a nested list must still
+// produce a replace when the outer list sits under a createOnly path.
+func TestGeneratePatch_NestedListContentChange_StillReplaces(t *testing.T) {
+	document := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "grafana",
+				"Image": "grafana/grafana:latest",
+				"Environment": [{"Name": "A", "Value": "1"}]
+			}
+		]
+	}`)
+
+	patch := []byte(`{
+		"Family": "my-task",
+		"ContainerDefinitions": [
+			{
+				"Name": "grafana",
+				"Image": "grafana/grafana:latest",
+				"Environment": [{"Name": "A", "Value": "2"}]
+			}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions": {CreateOnly: true},
+		},
+	}
+
+	_, needsReplacement, err := generatePatch(
+		document, patch, resolver.NewResolvableProperties(), schema,
+		pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+	assert.True(t, needsReplacement, "real content change inside a nested list must still trigger replacement")
+}
