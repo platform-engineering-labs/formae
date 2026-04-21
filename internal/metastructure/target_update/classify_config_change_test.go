@@ -148,6 +148,17 @@ func TestClassifyConfigChange_ResolvableValueIgnored(t *testing.T) {
 	assert.Equal(t, ConfigMutableChange, result)
 }
 
+func TestClassifyConfigChange_ResolvableValueIgnored_NoHints(t *testing.T) {
+	// Stored config has resolved $value, new config only has $ref, and schema
+	// carries no hints. The sole diff is the cached $value, so the result
+	// should be NoChange — not ImmutableChange from the empty-hints early return.
+	existing := json.RawMessage(`{"Auth": {"Endpoint":{"$ref":"formae://abc#/Endpoint","$value":"https://cluster.eks.amazonaws.com"}}}`)
+	new := json.RawMessage(`{"Auth": {"Endpoint":{"$ref":"formae://abc#/Endpoint"}}}`)
+
+	result := ClassifyConfigChange(existing, new, pkgmodel.ConfigSchema{})
+	assert.Equal(t, ConfigNoChange, result)
+}
+
 func TestClassifyConfigChange_ResolvableDifferentRef_IsImmutable(t *testing.T) {
 	// Different $ref means genuinely different config
 	existing := json.RawMessage(`{"Auth": {"Endpoint":{"$ref":"formae://abc#/Endpoint","$value":"https://old.com"}}}`)
