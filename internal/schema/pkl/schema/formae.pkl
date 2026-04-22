@@ -468,13 +468,9 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = resourceClass.properties.filter((_, v) ->
-            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
-            isSubResourceType(v.type)
-        ).flatMap((k, v) ->
-
+        let(nestedHints = resourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(subResourceClass = getSubResourceClass(v.type))
 
             let(subHintsMap = subHints(subResourceClass))
@@ -506,12 +502,9 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = subResourceClass.properties.filter((_, v) ->
-            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
-            isSubResourceType(v.type)
-        ).flatMap((k, v) ->
+        let(nestedHints = subResourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
+            let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(nestedSubResourceClass = getSubResourceClass(v.type))
             let(nestedSubHints = subHintsWithVisited(nestedSubResourceClass, nextVisited))
 
