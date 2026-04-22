@@ -509,6 +509,9 @@ func formatValueForDisplay(value any) string {
 	// the add-side formatter (formatPatchValue). Without this, remove ops
 	// use Go's default `map[k:v]` syntax while add ops use JSON, making
 	// array-set diffs visually uncomparable.
+	// Note: json.Marshal sorts map keys alphabetically, so both sides are
+	// key-aligned regardless of source order — that alignment is what makes
+	// the diff readable.
 	switch v := value.(type) {
 	case map[string]any, []any:
 		if bytes, err := json.Marshal(v); err == nil {
