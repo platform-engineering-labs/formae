@@ -204,6 +204,59 @@ local testTaskDefNoContainers = new TestTaskDef {
     family = "my-family"
 }
 
+// Test that hints propagate through a sub-resource whose field
+// declaration carries NO @FieldHint on the parent sub-resource.
+// Mirrors AWS::ECS::TaskDefinition's Volumes.EFSVolumeConfiguration.RootDirectory
+// pattern: the outer field (Volumes) is annotated, the inner SubResource
+// type (EFSVolumeConfiguration) has @SubResourceHint on its class but no
+// @FieldHint on the Volume.eFSVolumeConfiguration declaration, and the
+// deepest field (rootDirectory) carries @FieldHint{hasProviderDefault=true}.
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDeepLeaf extends formae.SubResource {
+    @formae.FieldHint{hasProviderDefault = true}
+    rootDirectory: String?
+}
+
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestVolume extends formae.SubResource {
+    // Intentionally no @formae.FieldHint on this declaration.
+    // The inner SubResource class carries @SubResourceHint itself, and
+    // its fields carry @FieldHint, so their hints MUST still propagate.
+    efsVolumeConfiguration: TestDeepLeaf?
+
+    @formae.FieldHint
+    name: String
+}
+
+@formae.ResourceHint {
+    type = "Test::DeepNested"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDeepNested extends formae.Resource {
+    @formae.FieldHint{
+        createOnly = true
+        hasProviderDefault = true
+    }
+    volumes: Listing<TestVolume>?
+}
+
+local testDeepNested = new TestDeepNested {
+    label = "test-deep-nested"
+    volumes = new Listing {
+        new TestVolume {
+            name = "wal"
+            efsVolumeConfiguration = new TestDeepLeaf {
+                rootDirectory = "/"
+            }
+        }
+    }
+}
+
 // Test config class with ConfigFieldHint annotations
 local class TestConfig {
     hidden fixed type: String = "TestProvider"
@@ -441,6 +494,18 @@ facts {
         hints["ContainerDefinitions.Cpu"].HasProviderDefault == true &&
         hints.containsKey("ContainerDefinitions.Name") &&
         hints.containsKey("ContainerDefinitions.Image")
+    }
+
+    ["Hints propagate through SubResource nested inside SubResource without intermediate FieldHint"] {
+        let (hints = testDeepNested.hints())
+        // Top-level and 2-level hints still work
+        hints.containsKey("Volumes") &&
+        hints["Volumes"].CreateOnly == true &&
+        hints.containsKey("Volumes.Name") &&
+        // 3-level hint must emit even though TestVolume.efsVolumeConfiguration
+        // has no @FieldHint on its declaration.
+        hints.containsKey("Volumes.EfsVolumeConfiguration.RootDirectory") &&
+        hints["Volumes.EfsVolumeConfiguration.RootDirectory"].HasProviderDefault == true
     }
 
     ["Nullable Mapping renders as empty map when null"] {
