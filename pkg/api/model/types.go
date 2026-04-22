@@ -67,6 +67,7 @@ type ResourceUpdate struct {
 	OldStackName    string            `json:"OldStackName,omitempty"`
 	Operation       string            `json:"Operation"`
 	PatchDocument   json.RawMessage   `json:"PatchDocument,omitempty"`
+	ReplacementPatchDocument json.RawMessage `json:"ReplacementPatchDocument,omitempty"`
 	State           string            `json:"State"`
 	Duration        int64             `json:"Duration,omitempty"` // milliseconds
 	CurrentAttempt  int               `json:"CurrentAttempt,omitempty"`

@@ -51,6 +51,7 @@ func NewResourceUpdateForExisting(
 	}
 
 	var patchDocument json.RawMessage
+	var replacementPatchDocument json.RawMessage
 	var needsReplacement bool
 
 	if hasChanges {
@@ -64,7 +65,7 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
 		}
 
-		patchDocument, needsReplacement, err = patch.GeneratePatch(
+		patchDocument, replacementPatchDocument, needsReplacement, err = patch.GeneratePatch(
 			existingPluginProps,
 			newPluginProps,
 			resolvableProperties,
@@ -85,7 +86,7 @@ func NewResourceUpdateForExisting(
 
 	if needsReplacement {
 		// Replacement required
-		replaceUpdates, err := NewResourceUpdateForReplace(existingResource, newResource, existingTarget, newTarget, source)
+		replaceUpdates, err := NewResourceUpdateForReplace(existingResource, newResource, existingTarget, newTarget, source, replacementPatchDocument)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replacement updates for resource %s: %w", existingResource.Label, err)
 		}
@@ -129,6 +130,7 @@ func NewResourceUpdateForReplace(
 	existingTarget pkgmodel.Target,
 	newTarget pkgmodel.Target,
 	source FormaCommandSource,
+	replacementPatchDocument json.RawMessage,
 ) ([]ResourceUpdate, error) {
 	GroupID := util.NewID()
 
@@ -145,6 +147,7 @@ func NewResourceUpdateForReplace(
 	}
 
 	deleteUpdate.GroupID = GroupID
+	deleteUpdate.ReplacementPatchDocument = replacementPatchDocument
 
 	// Create create operation for new resource
 	createUpdate := ResourceUpdate{

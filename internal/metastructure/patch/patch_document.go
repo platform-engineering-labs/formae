@@ -16,7 +16,7 @@ import (
 
 var defaultIgnoredFields = []jsonpatch.Path{}
 
-func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
+func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
 	return generatePatch(document, patch, properties, schema, mode)
 }
 
@@ -52,10 +52,10 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
+func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, properties)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to flatten and resolve refs: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to flatten and resolve refs: %w", err)
 	}
 
 	var strategy jsonpatch.PatchStrategy
@@ -65,7 +65,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	case pkgmodel.FormaApplyModePatch:
 		strategy = jsonpatch.PatchStrategyEnsureExists
 	default:
-		return nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
+		return nil, nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
 	// Strip fields that are both writeOnly AND createOnly from the desired
@@ -78,13 +78,13 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	if len(writeOnlyCreateOnly) > 0 {
 		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, writeOnlyCreateOnly)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
+			return nil, nil, false, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
 		}
 	}
 
 	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
 
 	// Remove spurious patch operations that add empty arrays or maps.
@@ -102,27 +102,39 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	patchOps = stripEmptyCollectionsFromOps(patchOps)
 
 	if len(patchOps) == 0 {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 
 	// Separate createOnly operations from mutable operations. CreateOnly
 	// fields cannot be updated in-place via the cloud API — if they changed,
 	// the resource needs a full replacement (destroy + create). We detect
-	// this and strip createOnly ops from the patch sent to the plugin.
+	// this, preserve the stripped ops separately so the CLI can render which
+	// immutable properties triggered the replacement, and strip them from the
+	// patch sent to the plugin.
 	createOnlyFields := schema.CreateOnly()
 	needsReplacement, _ := containsCreateOnlyFields(patchOps, createOnlyFields)
+	replacementOps := extractCreateOnlyFields(patchOps, createOnlyFields)
 	patchOps = filterCreateOnlyFields(patchOps, createOnlyFields)
 
 	if len(patchOps) == 0 && !needsReplacement {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 
 	patchJson, err := json.Marshal(patchOps)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to serialize patch document: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to serialize patch document: %w", err)
 	}
 
-	return json.RawMessage(patchJson), needsReplacement, nil
+	var replacementJson json.RawMessage
+	if len(replacementOps) > 0 {
+		replacementBytes, err := json.Marshal(replacementOps)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to serialize replacement patch document: %w", err)
+		}
+		replacementJson = json.RawMessage(replacementBytes)
+	}
+
+	return json.RawMessage(patchJson), replacementJson, needsReplacement, nil
 }
 
 func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
@@ -670,6 +682,23 @@ func filterCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyF
 		}
 	}
 	return filtered
+}
+
+// extractCreateOnlyFields returns the subset of patch operations that target
+// createOnly fields — the inverse of filterCreateOnlyFields. Used to preserve
+// the triggering ops for CLI rendering when a replacement is required.
+func extractCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) []jsonpatch.JsonPatchOperation {
+	if len(createOnlyFields) == 0 {
+		return nil
+	}
+	var extracted []jsonpatch.JsonPatchOperation
+	for _, op := range patchOps {
+		path := cleanPath(op.Path)
+		if isCreateOnlyPath(path, createOnlyFields) {
+			extracted = append(extracted, op)
+		}
+	}
+	return extracted
 }
 
 // isCreateOnlyPath checks if a patch path targets a createOnly field.

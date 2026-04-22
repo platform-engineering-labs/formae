@@ -348,6 +348,18 @@ func createDisplayUpdateFromGroup(group []apimodel.ResourceUpdate) apimodel.Reso
 
 	if hasDelete && hasCreate {
 		displayUpdate.Operation = apimodel.OperationReplace
+		// Merge the fields needed to render the replacement reason. The
+		// delete half carries ReplacementPatchDocument and the old property
+		// values; the create half carries the new property values.
+		for _, update := range group {
+			switch update.Operation {
+			case apimodel.OperationDelete:
+				displayUpdate.ReplacementPatchDocument = update.ReplacementPatchDocument
+				displayUpdate.OldProperties = update.Properties
+			case apimodel.OperationCreate:
+				displayUpdate.Properties = update.Properties
+			}
+		}
 	} else if hasDelete {
 		displayUpdate.Operation = apimodel.OperationDelete
 	} else if hasCreate {
@@ -410,6 +422,15 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 			refLabels = make(map[string]string)
 		}
 		FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+	}
+
+	if rc.Operation == apimodel.OperationReplace && len(rc.ReplacementPatchDocument) > 0 {
+		propertiesNode := node.Add(display.Grey("because these immutable properties changed:"))
+		refLabels := rc.ReferenceLabels
+		if refLabels == nil {
+			refLabels = make(map[string]string)
+		}
+		FormatPatchDocument(propertiesNode, rc.ReplacementPatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
 	}
 }
 

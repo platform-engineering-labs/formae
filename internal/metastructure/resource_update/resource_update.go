@@ -77,6 +77,7 @@ type ResourceUpdate struct {
 	MatchFilters             []pkgmodel.MatchFilter   `json:"matchFilters,omitempty"`  // Declarative filters (any match = exclude)
 	IsCascade                bool                     `json:"IsCascade,omitempty"`     // True if this delete is triggered by cascade
 	CascadeSource            string                   `json:"CascadeSource,omitempty"` // Label of resource that triggered the cascade
+	ReplacementPatchDocument json.RawMessage          `json:"ReplacementPatchDocument,omitempty"` // CreateOnly-field ops that triggered a replacement; set on the delete half of a replace pair. Purely API/CLI metadata — not sent to plugins or persisted on the Resource.
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {
