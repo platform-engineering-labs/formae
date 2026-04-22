@@ -1,0 +1,14 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "formae:/Config.pkl"
+
+artifacts {
+  url = "https://example.org/repo#stable"
+  username = "alice"
+  password = "s3cr3t"
+  repositories = new Listing {}
+}

@@ -244,7 +244,36 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 	// Warn when global settings conflict with per-plugin overrides
 	checkResourcePluginDeprecations(&translated)
 
+	// Synthesize Repositories from legacy flat fields and emit deprecation warnings
+	emitArtifactDeprecationWarnings(&translated)
+
 	return &translated
+}
+
+// emitArtifactDeprecationWarnings synthesizes a canonical Repositories entry from
+// the legacy flat URL field and appends deprecation warnings to translated.Warnings.
+func emitArtifactDeprecationWarnings(translated *pkgmodel.Config) {
+	a := &translated.Artifacts
+	// When the user config uses the legacy flat fields and hasn't migrated
+	// to repositories, synthesize a single binary repository entry and warn.
+	if a.URL.String() != "" && len(a.Repositories) == 0 {
+		a.Repositories = []pkgmodel.Repository{
+			{URI: a.URL, Type: pkgmodel.RepositoryTypeBinary},
+		}
+		w := "artifacts.url is deprecated; migrate to artifacts.repositories. The URL has been loaded as a 'binary' repository for this release."
+		slog.Warn(w)
+		translated.Warnings = append(translated.Warnings, w)
+	}
+	if a.Username != "" {
+		w := "artifacts.username is deprecated; repository credentials will be per-repo in a future release"
+		slog.Warn(w)
+		translated.Warnings = append(translated.Warnings, w)
+	}
+	if a.Password != "" {
+		w := "artifacts.password is deprecated; repository credentials will be per-repo in a future release"
+		slog.Warn(w)
+		translated.Warnings = append(translated.Warnings, w)
+	}
 }
 
 // checkResourcePluginDeprecations warns when global settings conflict with per-plugin overrides.
