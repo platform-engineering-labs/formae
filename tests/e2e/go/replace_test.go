@@ -43,9 +43,9 @@ func testReplaceAWS(t *testing.T, cli *FormaeCLI) {
 	AssertStringProperty(t, role, "Description", "e2e replace test role v1")
 
 	// Step 3a: Simulate v2 — RoleName is CreateOnly, so formae should plan a
-	// replacement. The simulate response must carry ReplacementPatchDocument
-	// on the delete half so the CLI can show *why* the resource is being
-	// replaced in the plan preview.
+	// replacement. The simulate response must carry CreateOnlyPatch on the
+	// delete half so the CLI can show *why* the resource is being replaced
+	// in the plan preview.
 	simResult := cli.Simulate(t, "reconcile", fixtureV2)
 	if !simResult.ChangesRequired {
 		t.Fatal("expected simulate to report ChangesRequired=true for v1→v2 replacement")
@@ -61,11 +61,11 @@ func testReplaceAWS(t *testing.T, cli *FormaeCLI) {
 	if deleteRU == nil {
 		t.Fatalf("expected a delete operation for the role in the simulate plan, got updates=%+v", simResult.ResourceUpdates)
 	}
-	if len(deleteRU.ReplacementPatchDocument) == 0 {
-		t.Fatal("delete half of the replacement pair must carry ReplacementPatchDocument so the CLI can render the reason")
+	if len(deleteRU.CreateOnlyPatch) == 0 {
+		t.Fatal("delete half of the replacement pair must carry CreateOnlyPatch so the CLI can render the reason")
 	}
-	if !bytes.Contains(deleteRU.ReplacementPatchDocument, []byte("RoleName")) {
-		t.Fatalf("ReplacementPatchDocument must reference the createOnly field (RoleName) that triggered the replace; got %s", string(deleteRU.ReplacementPatchDocument))
+	if !bytes.Contains(deleteRU.CreateOnlyPatch, []byte("RoleName")) {
+		t.Fatalf("CreateOnlyPatch must reference the createOnly field (RoleName) that triggered the replace; got %s", string(deleteRU.CreateOnlyPatch))
 	}
 
 	// Step 3b: Apply v2 — RoleName is CreateOnly, so formae should replace

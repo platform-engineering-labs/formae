@@ -172,7 +172,7 @@ func TestFormatHumanReadableStatus_Replacement(t *testing.T) {
 }
 
 func TestRenderSimulation_Replacement_ShowsReason(t *testing.T) {
-	replacementPatch := json.RawMessage(`[{"op":"replace","path":"/FifoQueue","value":true}]`)
+	createOnlyPatch := json.RawMessage(`[{"op":"replace","path":"/FifoQueue","value":true}]`)
 	oldProps := json.RawMessage(`{"FifoQueue":false}`)
 	newProps := json.RawMessage(`{"FifoQueue":true}`)
 
@@ -183,15 +183,15 @@ func TestRenderSimulation_Replacement_ShowsReason(t *testing.T) {
 			Command:   "apply",
 			ResourceUpdates: []apimodel.ResourceUpdate{
 				{
-					ResourceID:               util.NewID(),
-					ResourceType:             "FakeAWS::SQS::Queue",
-					ResourceLabel:            "my-queue",
-					StackName:                "test-stack",
-					Operation:                "delete",
-					State:                    "NotStarted",
-					GroupID:                  "replace-group-reason",
-					Properties:               oldProps,
-					ReplacementPatchDocument: replacementPatch,
+					ResourceID:      util.NewID(),
+					ResourceType:    "FakeAWS::SQS::Queue",
+					ResourceLabel:   "my-queue",
+					StackName:       "test-stack",
+					Operation:       "delete",
+					State:           "NotStarted",
+					GroupID:         "replace-group-reason",
+					Properties:      oldProps,
+					CreateOnlyPatch: createOnlyPatch,
 				},
 				{
 					ResourceID:    util.NewID(),
@@ -215,9 +215,8 @@ func TestRenderSimulation_Replacement_ShowsReason(t *testing.T) {
 	assert.Contains(t, result, "of type FakeAWS::SQS::Queue")
 	assert.Contains(t, result, "because these immutable properties changed:")
 	assert.Contains(t, result, "FifoQueue")
-	// The old single-op render (pre-fix) for replacements did not include this header.
-	// The header should not appear when the replacement patch is absent — verified
-	// by TestFormatHumanReadableStatus_Replacement which does not carry the field.
+	// When CreateOnlyPatch is absent the header is not rendered — verified by
+	// TestFormatHumanReadableStatus_Replacement which does not carry the field.
 }
 
 func TestFormatHumanReadableStatus_UnmanagedMigration(t *testing.T) {

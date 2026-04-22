@@ -42,11 +42,11 @@ type Resource struct {
 
 // ResourceUpdate represents an individual resource update within a command.
 type ResourceUpdate struct {
-	Label                    string
-	Type                     string
-	Operation                string
-	State                    string
-	ReplacementPatchDocument json.RawMessage
+	Label           string
+	Type            string
+	Operation       string
+	State           string
+	CreateOnlyPatch json.RawMessage
 }
 
 // FormaeCLI wraps the formae binary for CLI command execution.
@@ -120,11 +120,11 @@ func (f *FormaeCLI) Simulate(t *testing.T, mode string, fixturePath string, extr
 		ChangesRequired bool `json:"ChangesRequired"`
 		Command         struct {
 			ResourceUpdates []struct {
-				ResourceLabel            string          `json:"ResourceLabel"`
-				ResourceType             string          `json:"ResourceType"`
-				Operation                string          `json:"Operation"`
-				State                    string          `json:"State"`
-				ReplacementPatchDocument json.RawMessage `json:"ReplacementPatchDocument"`
+				ResourceLabel   string          `json:"ResourceLabel"`
+				ResourceType    string          `json:"ResourceType"`
+				Operation       string          `json:"Operation"`
+				State           string          `json:"State"`
+				CreateOnlyPatch json.RawMessage `json:"CreateOnlyPatch"`
 			} `json:"ResourceUpdates"`
 		} `json:"Command"`
 	}
@@ -135,11 +135,11 @@ func (f *FormaeCLI) Simulate(t *testing.T, mode string, fixturePath string, extr
 	updates := make([]ResourceUpdate, len(response.Command.ResourceUpdates))
 	for i, ru := range response.Command.ResourceUpdates {
 		updates[i] = ResourceUpdate{
-			Label:                    ru.ResourceLabel,
-			Type:                     ru.ResourceType,
-			Operation:                ru.Operation,
-			State:                    ru.State,
-			ReplacementPatchDocument: ru.ReplacementPatchDocument,
+			Label:           ru.ResourceLabel,
+			Type:            ru.ResourceType,
+			Operation:       ru.Operation,
+			State:           ru.State,
+			CreateOnlyPatch: ru.CreateOnlyPatch,
 		}
 	}
 

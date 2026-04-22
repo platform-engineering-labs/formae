@@ -67,7 +67,13 @@ type ResourceUpdate struct {
 	OldStackName    string            `json:"OldStackName,omitempty"`
 	Operation       string            `json:"Operation"`
 	PatchDocument   json.RawMessage   `json:"PatchDocument,omitempty"`
-	ReplacementPatchDocument json.RawMessage `json:"ReplacementPatchDocument,omitempty"`
+	// CreateOnlyPatch is a JSON-patch document (same format as PatchDocument)
+	// listing only the ops against createOnly fields that triggered a
+	// resource replacement. Populated on the delete half of a replace pair
+	// so the CLI can render which immutable properties forced the replace.
+	// Never sent to resource plugins — the replace executes as a plain
+	// destroy + create.
+	CreateOnlyPatch json.RawMessage   `json:"CreateOnlyPatch,omitempty"`
 	State           string            `json:"State"`
 	Duration        int64             `json:"Duration,omitempty"` // milliseconds
 	CurrentAttempt  int               `json:"CurrentAttempt,omitempty"`
