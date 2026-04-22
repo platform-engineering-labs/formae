@@ -8,12 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -93,14 +90,6 @@ func (a *Agent) Start() error {
 
 		// Setup logging with OTel handler
 		logging.SetupBackendLogging(&a.cfg.Agent.Logging, otelLogHandler)
-
-		// Migrate resource plugins (with manifest and schema) from system directory.
-		// This handles backwards compatibility when OLD upgrade command didn't know
-		// about resource plugins. Also wipes existing plugins since interface changed.
-		if err := migrateResourcePlugins(a.cfg.PluginDir); err != nil {
-			slog.Warn("Failed to migrate resource plugins", "error", err)
-			// Non-fatal - continue anyway, plugins might already be in place
-		}
 
 		pluginDir := util.ExpandHomePath(a.cfg.PluginDir)
 		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
@@ -338,120 +327,3 @@ func waitForPidFileRemoval(timeout time.Duration) bool {
 	return false
 }
 
-// copyFile copies a file from src to dst, preserving the executable permission.
-func copyFile(src, dst string) (err error) {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = srcFile.Close() }()
-
-	srcInfo, err := srcFile.Stat()
-	if err != nil {
-		return err
-	}
-
-	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := dstFile.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-	}()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
-}
-
-// migrateResourcePlugins checks for resource plugins in the system install
-// directory and copies them to the user's plugin directory. This handles
-// backwards compatibility when OLD upgrade command didn't know about resource
-// plugins. The user plugin directory is wiped first since the plugin interface
-// changed and old plugins are incompatible.
-func migrateResourcePlugins(userPluginDir string) error {
-	systemResourcePluginsDir := filepath.Join(formae.DefaultInstallPath, "resource-plugins")
-
-	namespaces, err := os.ReadDir(systemResourcePluginsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No resource-plugins directory in system location
-		}
-		return fmt.Errorf("failed to read system resource-plugins directory: %w", err)
-	}
-
-	userPluginDir = util.ExpandHomePath(userPluginDir)
-
-	for _, nsEntry := range namespaces {
-		if !nsEntry.IsDir() {
-			continue
-		}
-		namespace := strings.ToLower(nsEntry.Name())
-		nsPath := filepath.Join(systemResourcePluginsDir, nsEntry.Name())
-
-		// Remove existing namespace directory before installing new versions
-		existingNamespaceDir := filepath.Join(userPluginDir, namespace)
-		if err := os.RemoveAll(existingNamespaceDir); err != nil {
-			return fmt.Errorf("failed to remove existing plugin directory %s: %w", existingNamespaceDir, err)
-		}
-		slog.Info("Removed existing plugin directory for migration", "path", existingNamespaceDir)
-
-		versions, err := os.ReadDir(nsPath)
-		if err != nil {
-			continue
-		}
-
-		for _, vEntry := range versions {
-			if !vEntry.IsDir() {
-				continue
-			}
-			version := vEntry.Name()
-			srcDir := filepath.Join(nsPath, version)
-			destDir := filepath.Join(userPluginDir, namespace, version)
-
-			// Create destination and copy entire directory
-			if err := copyDir(srcDir, destDir); err != nil {
-				return fmt.Errorf("failed to copy resource plugin %s/%s: %w", namespace, version, err)
-			}
-
-			slog.Info("Migrated resource plugin", "namespace", namespace, "version", version, "dest", destDir)
-		}
-	}
-
-	return nil
-}
-
-// copyDir recursively copies a directory from src to dst.
-func copyDir(src, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
