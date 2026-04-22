@@ -7,6 +7,7 @@ package renderer
 import (
 	"encoding/json"
 	"iter"
+	"strings"
 	"testing"
 
 	"github.com/ddddddO/gtree"
@@ -277,6 +278,72 @@ func TestFormatPatchDocument_OpaqueWriteOnlyField(t *testing.T) {
 		assert.Contains(t, nodes[1].Name(), "opaque value")
 		assert.Contains(t, nodes[1].Name(), `set property "SecretString"`)
 		assert.NotContains(t, nodes[1].Name(), "L4clqcm50IFl")
+	})
+}
+
+func TestFormatPatchDocument_RemoveArrayObject_RendersAsJSON(t *testing.T) {
+	// Regression test: remove ops on array-of-objects were previously rendered
+	// using Go's default map formatter (`map[k:v ...]`), while add ops used
+	// JSON. That made array-set diffs visually uncomparable. Both sides must
+	// now emit JSON.
+	node := gtree.NewRoot("")
+	patchDoc := []map[string]any{
+		{
+			"op":   "remove",
+			"path": "/volumeClaimTemplates/0",
+		},
+	}
+	serialized, err := json.Marshal(patchDoc)
+	assert.NoError(t, err)
+
+	previousProperties := json.RawMessage(`{
+		"volumeClaimTemplates": [
+			{"metadata": {"name": "data"}, "spec": {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem"}}
+		]
+	}`)
+
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), previousProperties, map[string]string{}, "")
+
+	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
+	assert.NoError(t, err)
+
+	// Expect one line like: `remove entry "<json>" from "volumeClaimTemplates"`
+	var removeLine string
+	for _, n := range nodes {
+		if name := n.Name(); strings.Contains(name, "remove entry") {
+			removeLine = name
+			break
+		}
+	}
+	assert.NotEmpty(t, removeLine, "expected a 'remove entry' line in rendered output")
+	assert.Contains(t, removeLine, `"metadata":{"name":"data"}`,
+		"remove entry should render the removed object as JSON, not Go map syntax")
+	assert.NotContains(t, removeLine, "map[metadata:",
+		"remove entry must not leak Go's default map formatter")
+}
+
+func TestFormatValueForDisplay_CompositeValuesAsJSON(t *testing.T) {
+	t.Run("map renders as JSON", func(t *testing.T) {
+		v := map[string]any{"k": "v", "n": float64(1)}
+		got := formatValueForDisplay(v)
+		// json.Marshal sorts map keys alphabetically, so output is deterministic.
+		assert.Equal(t, `{"k":"v","n":1}`, got)
+	})
+
+	t.Run("slice renders as JSON", func(t *testing.T) {
+		v := []any{"a", float64(2), map[string]any{"k": "v"}}
+		got := formatValueForDisplay(v)
+		assert.Equal(t, `["a",2,{"k":"v"}]`, got)
+	})
+
+	t.Run("scalar still uses %v", func(t *testing.T) {
+		assert.Equal(t, "42", formatValueForDisplay(42))
+		assert.Equal(t, "hello", formatValueForDisplay("hello"))
+	})
+
+	t.Run("opaque Value wrapper still returns opaque marker", func(t *testing.T) {
+		v := map[string]any{"$visibility": "Opaque", "$value": "secret"}
+		assert.Equal(t, "(opaque value)", formatValueForDisplay(v))
 	})
 }
 
