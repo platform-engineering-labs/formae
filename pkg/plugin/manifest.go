@@ -37,6 +37,12 @@ type Manifest struct {
 	// MinFormaeVersion is the minimum formae version this plugin supports
 	// Used for compatibility checking and matrix testing
 	MinFormaeVersion string `json:"minFormaeVersion"`
+
+	// Summary is a short one-liner description for CLI listings (optional)
+	Summary string `json:"summary,omitempty"`
+
+	// Category is a UI filter tag, e.g. "cloud", "auth", "config" (optional)
+	Category string `json:"category,omitempty"`
 }
 
 // IsAuthPlugin returns true if this manifest describes an auth plugin.

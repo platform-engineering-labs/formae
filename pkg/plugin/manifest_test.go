@@ -64,6 +64,47 @@ output { renderer = new JsonRenderer {} }
 	assert.Equal(t, "DirTest", manifest.Namespace)
 }
 
+func TestReadManifest_ParsesSummaryAndCategory(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestContent := `
+name = "summary-test"
+version = "1.0.0"
+namespace = "Test"
+license = "MIT"
+minFormaeVersion = "0.85.0"
+summary = "A short one-liner for testing"
+category = "cloud"
+output { renderer = new JsonRenderer {} }
+`
+	err := os.WriteFile(filepath.Join(tempDir, "formae-plugin.pkl"), []byte(manifestContent), 0644)
+	require.NoError(t, err)
+
+	manifest, err := ReadManifestFromDir(tempDir)
+	require.NoError(t, err)
+	assert.Equal(t, "A short one-liner for testing", manifest.Summary)
+	assert.Equal(t, "cloud", manifest.Category)
+}
+
+func TestReadManifest_SummaryAndCategoryOptional(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestContent := `
+name = "no-extras"
+version = "1.0.0"
+namespace = "Test"
+license = "MIT"
+minFormaeVersion = "0.85.0"
+output { renderer = new JsonRenderer {} }
+`
+	err := os.WriteFile(filepath.Join(tempDir, "formae-plugin.pkl"), []byte(manifestContent), 0644)
+	require.NoError(t, err)
+
+	manifest, err := ReadManifestFromDir(tempDir)
+	require.NoError(t, err)
+	assert.Equal(t, "", manifest.Summary)
+	assert.Equal(t, "", manifest.Category)
+	assert.NoError(t, manifest.Validate())
+}
+
 func TestManifest_Validate_RequiresAllFields(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -96,8 +137,13 @@ func TestManifest_Validate_RequiresAllFields(t *testing.T) {
 			expectError: "minFormaeVersion is required",
 		},
 		{
-			name:        "valid manifest",
+			name:        "valid manifest without summary or category",
 			manifest:    Manifest{Name: "test", Version: "1.0.0", Namespace: "Test", License: "MIT", MinFormaeVersion: "0.80.0"},
+			expectError: "",
+		},
+		{
+			name:        "valid manifest with summary and category",
+			manifest:    Manifest{Name: "test", Version: "1.0.0", Namespace: "Test", License: "MIT", MinFormaeVersion: "0.80.0", Summary: "A plugin", Category: "cloud"},
 			expectError: "",
 		},
 	}
