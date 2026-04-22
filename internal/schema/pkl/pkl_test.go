@@ -215,3 +215,23 @@ func TestDeprecationWarning_GlobalRetryWithPerPlugin(t *testing.T) {
 	assert.Contains(t, config.Warnings[0], "agent.retry")
 	assert.Contains(t, config.Warnings[0], "deprecated")
 }
+
+func TestDeprecationWarning_LegacyArtifactsURL(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_deprecation_artifacts.pkl")
+	require.NoError(t, err)
+
+	// Expect three warnings: url, username, password
+	require.Len(t, config.Warnings, 3)
+	assert.Contains(t, config.Warnings[0], "artifacts.url")
+	assert.Contains(t, config.Warnings[0], "deprecated")
+	assert.Contains(t, config.Warnings[1], "artifacts.username")
+	assert.Contains(t, config.Warnings[1], "deprecated")
+	assert.Contains(t, config.Warnings[2], "artifacts.password")
+	assert.Contains(t, config.Warnings[2], "deprecated")
+
+	// The URL should have been synthesized into Repositories as a binary entry
+	require.Len(t, config.Artifacts.Repositories, 1)
+	assert.Equal(t, "example.org", config.Artifacts.Repositories[0].URI.Host)
+	assert.Equal(t, model.RepositoryTypeBinary, config.Artifacts.Repositories[0].Type)
+}
