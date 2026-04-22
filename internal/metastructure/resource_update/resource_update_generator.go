@@ -762,7 +762,7 @@ func generateResourceUpdatesForReconcile(
 			if update.Operation == OperationUpdate && replacedTargets[update.DesiredState.Target] {
 				replaceOps, err := NewResourceUpdateForReplace(
 					update.PriorState, update.DesiredState,
-					update.ExistingTarget, update.ResourceTarget, source,
+					update.ExistingTarget, update.ResourceTarget, source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for target replace: %w", err)
@@ -807,7 +807,7 @@ func generateResourceUpdatesForReconcile(
 				replaceOps, err := NewResourceUpdateForReplace(
 					*resource, *resource,
 					*existingTargetMap[resource.Target], *desiredTargetMap[resource.Target],
-					source,
+					source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for non-forma resource: %w", err)
@@ -1005,7 +1005,7 @@ func generateResourceUpdatesForPatch(
 			if update.Operation == OperationUpdate && replacedTargets[update.DesiredState.Target] {
 				replaceOps, err := NewResourceUpdateForReplace(
 					update.PriorState, update.DesiredState,
-					update.ExistingTarget, update.ResourceTarget, source,
+					update.ExistingTarget, update.ResourceTarget, source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for target replace: %w", err)
@@ -1044,7 +1044,7 @@ func generateResourceUpdatesForPatch(
 				replaceOps, err := NewResourceUpdateForReplace(
 					*resource, *resource,
 					*existingTargetMap[resource.Target], *desiredTargetMap[resource.Target],
-					source,
+					source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for non-forma resource: %w", err)
@@ -1167,6 +1167,7 @@ func convertUpdatesToReplacementsForDependencies(allResourceUpdates []ResourceUp
 					update.ExistingTarget,
 					update.ResourceTarget,
 					source,
+					nil,
 				)
 				if err != nil {
 					slog.Error("Failed to create replacement updates for resource",
@@ -1245,6 +1246,7 @@ func convertDependencyDeletesToReplacements(allResourceUpdates []ResourceUpdate,
 					depDelete.ResourceTarget,
 					*desiredTargetMap[formaResource.Target],
 					source,
+					nil,
 				)
 				if err != nil {
 					slog.Error("Failed to create replacement updates for dependency delete",
