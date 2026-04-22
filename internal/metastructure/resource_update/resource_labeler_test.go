@@ -206,6 +206,31 @@ func TestLabelForUnmanagedResource_JSONPathQueryTakesPrecedenceOverLegacyTagKeys
 	assert.Equal(t, "FromJSONPath", label)
 }
 
+func TestLabelForUnmanagedResource_CommaSeparatedQueryJoinsResults(t *testing.T) {
+	nativeId := "canary-defaults/canary-svc"
+	properties := json.RawMessage(`{"metadata":{"namespace":"canary-defaults","name":"canary-svc"}}`)
+	labelConfig := pkgmodel.LabelConfig{
+		DefaultQuery: "$.metadata.namespace,$.metadata.name",
+	}
+
+	l := newResourceLabelerForTest(t)
+	label := l.LabelForUnmanagedResource(nativeId, "K8S::Core::Service", properties, labelConfig, nil)
+	assert.Equal(t, "canary-defaults-canary-svc", label)
+}
+
+func TestLabelForUnmanagedResource_CommaSeparatedQuerySingleResult(t *testing.T) {
+	nativeId := "canary-clusterrole"
+	properties := json.RawMessage(`{"metadata":{"name":"canary-clusterrole"}}`)
+	labelConfig := pkgmodel.LabelConfig{
+		DefaultQuery: "$.metadata.namespace,$.metadata.name",
+	}
+
+	l := newResourceLabelerForTest(t)
+	label := l.LabelForUnmanagedResource(nativeId, "K8S::Rbac::ClusterRole", properties, labelConfig, nil)
+	// Cluster-scoped: no namespace, only name
+	assert.Equal(t, "canary-clusterrole", label)
+}
+
 func newResourceLabelerForTest(t *testing.T, setup ...func(datastore.Datastore)) *resource_update.ResourceLabeler {
 	t.Helper()
 

@@ -69,13 +69,10 @@ func (l *ResourceLabeler) LabelForUnmanagedResource(
 // extractLabelFromQuery evaluates a JSONPath query against properties and returns
 // concatenated string results. When the query returns multiple values (e.g., from
 // a filter with OR conditions), all values are joined with the label separator.
+// Supports comma-separated queries (e.g., "$.metadata.namespace,$.metadata.name")
+// where each query is evaluated independently and results are joined.
 func (l *ResourceLabeler) extractLabelFromQuery(properties json.RawMessage, query string) string {
 	if len(properties) == 0 {
-		return ""
-	}
-
-	path, err := labelJSONPathParser.Parse(query)
-	if err != nil {
 		return ""
 	}
 
@@ -84,15 +81,30 @@ func (l *ResourceLabeler) extractLabelFromQuery(properties json.RawMessage, quer
 		return ""
 	}
 
-	results := path.Select(data)
-	if len(results) == 0 {
-		return ""
+	var parts []string
+	for _, q := range strings.Split(query, ",") {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		for _, s := range l.evaluateQuery(data, q) {
+			parts = append(parts, s)
+		}
 	}
 
-	// Collect all string values from results
+	return strings.Join(parts, labelSeparator)
+}
+
+// evaluateQuery runs a single JSONPath query and returns string results.
+func (l *ResourceLabeler) evaluateQuery(data any, query string) []string {
+	path, err := labelJSONPathParser.Parse(query)
+	if err != nil {
+		return nil
+	}
+
+	results := path.Select(data)
 	var parts []string
 	for _, result := range results {
-		// Handle array result (e.g., from tag filter query)
 		if arr, ok := result.([]any); ok {
 			for _, item := range arr {
 				if str, ok := item.(string); ok && str != "" {
@@ -101,14 +113,11 @@ func (l *ResourceLabeler) extractLabelFromQuery(properties json.RawMessage, quer
 			}
 			continue
 		}
-
-		// Handle direct string result
 		if str, ok := result.(string); ok && str != "" {
 			parts = append(parts, str)
 		}
 	}
-
-	return strings.Join(parts, labelSeparator)
+	return parts
 }
 
 // extractLabelFromLegacyTagKeys extracts a label using the legacy tag-based approach.
