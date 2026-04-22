@@ -224,11 +224,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 			Auth:            translateAuthConfig(&config.Agent.Auth),
 			ResourcePlugins: translateResourcePluginConfigs(config.Agent.ResourcePlugins),
 		},
-		Artifacts: pkgmodel.ArtifactConfig{
-			URL:      config.Artifacts.URL,
-			Username: config.Artifacts.Username,
-			Password: config.Artifacts.Password,
-		},
+		Artifacts: translateArtifactConfig(&config.Artifacts),
 		Cli: pkgmodel.CliConfig{
 			API: pkgmodel.APIConfig{
 				URL:  config.Cli.API.URL,
@@ -684,6 +680,21 @@ func translateRetryConfig(rc *pklmodel.RetryConfig) pkgmodel.RetryConfig {
 		MaxRetries:          int(rc.MaxRetries),
 		RetryDelay:          rc.RetryDelay.GoDuration(),
 	}
+}
+
+func translateArtifactConfig(ac *pklmodel.ArtifactConfig) pkgmodel.ArtifactConfig {
+	result := pkgmodel.ArtifactConfig{
+		URL:      ac.URL,
+		Username: ac.Username,
+		Password: ac.Password,
+	}
+	for _, r := range ac.Repositories {
+		result.Repositories = append(result.Repositories, pkgmodel.Repository{
+			URI:  r.URI,
+			Type: pkgmodel.RepositoryType(r.Type),
+		})
+	}
+	return result
 }
 
 func translateResourcePluginConfigs(objects []pklgo.Object) []pkgmodel.ResourcePluginUserConfig {

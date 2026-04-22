@@ -216,10 +216,27 @@ type APIConfig struct {
 	Port int
 }
 
+// RepositoryType discriminates orbital repositories by purpose.
+type RepositoryType string
+
+const (
+	RepositoryTypeBinary       RepositoryType = "binary"
+	RepositoryTypeFormaePlugin RepositoryType = "formae-plugin"
+)
+
+// Repository points to a single orbital repository.
+type Repository struct {
+	URI  url.URL
+	Type RepositoryType
+}
+
 type ArtifactConfig struct {
 	URL      url.URL
 	Username string
 	Password string
+	// Repositories is the canonical list. When empty and URL is set,
+	// the translation layer populates it with a single binary entry.
+	Repositories []Repository
 }
 
 type CliConfig struct {
