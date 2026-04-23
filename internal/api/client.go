@@ -615,3 +615,131 @@ func (c *Client) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
 		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
+
+func (c *Client) ListPlugins(scope string, query, category, pluginType, channel string) (*apimodel.ListPluginsResponse, error) {
+	req := c.resty.R()
+	params := map[string]string{"scope": scope}
+	if query != "" {
+		params["q"] = query
+	}
+	if category != "" {
+		params["category"] = category
+	}
+	if pluginType != "" {
+		params["type"] = pluginType
+	}
+	if channel != "" {
+		params["channel"] = channel
+	}
+	req.SetQueryParams(params)
+
+	resp, err := req.Get(c.endpoint + "/api/v1/plugins")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+	}
+
+	var result apimodel.ListPluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) GetPlugin(name string) (*apimodel.GetPluginResponse, error) {
+	resp, err := c.resty.R().Get(c.endpoint + "/api/v1/plugins/" + name)
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+	}
+
+	var result apimodel.GetPluginResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) InstallPlugins(req apimodel.InstallPluginsRequest) (*apimodel.InstallPluginsResponse, error) {
+	resp, err := c.resty.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(req).
+		Post(c.endpoint + "/api/v1/plugins/install")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("plugin install failed: %d - %s", resp.StatusCode(), resp.String())
+	}
+
+	var result apimodel.InstallPluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.UninstallPluginsResponse, error) {
+	resp, err := c.resty.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(req).
+		Post(c.endpoint + "/api/v1/plugins/uninstall")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("plugin uninstall failed: %d - %s", resp.StatusCode(), resp.String())
+	}
+
+	var result apimodel.UninstallPluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.UpgradePluginsResponse, error) {
+	resp, err := c.resty.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(req).
+		Post(c.endpoint + "/api/v1/plugins/upgrade")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("plugin upgrade failed: %d - %s", resp.StatusCode(), resp.String())
+	}
+
+	var result apimodel.UpgradePluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
