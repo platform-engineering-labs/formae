@@ -64,7 +64,7 @@ func TestGenerateResourceUpdates_TargetReplace_Reconcile_StackInForma(t *testing
 	replacedTargets := map[string]bool{"aws-prod": true}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, replacedTargets, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, replacedTargets, nil)
 
 	require.NoError(t, err)
 
@@ -119,7 +119,7 @@ func TestGenerateResourceUpdates_TargetReplace_Reconcile_StackNotInForma(t *test
 	replacedTargets := map[string]bool{"aws-prod": true}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, replacedTargets, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, replacedTargets, nil)
 
 	require.NoError(t, err)
 
@@ -198,7 +198,7 @@ func TestGenerateResourceUpdates_TargetReplace_Patch(t *testing.T) {
 	replacedTargets := map[string]bool{"aws-prod": true}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModePatch,
-		FormaCommandSourceUser, existingTargets, ds, replacedTargets, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, replacedTargets, nil)
 
 	require.NoError(t, err)
 

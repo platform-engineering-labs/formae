@@ -264,6 +264,40 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 	}
 }
 
+// fetchLivePluginSchemas queries the PluginCoordinator for the current Schema of
+// every resource type referenced in the forma, keyed by resource type. Returns an
+// empty (but non-nil) map on any lookup failure so callers can pass through safely
+// — a missing live schema means the stored/CLI schema is used, which is the
+// pre-existing behavior.
+func (m *Metastructure) fetchLivePluginSchemas(forma *pkgmodel.Forma) map[string]pkgmodel.Schema {
+	result := make(map[string]pkgmodel.Schema)
+	if forma == nil {
+		return result
+	}
+	namespaces := make(map[string]struct{})
+	for _, r := range forma.Resources {
+		namespaces[r.Namespace()] = struct{}{}
+	}
+	for ns := range namespaces {
+		response, err := m.callActor(
+			gen.ProcessID{Name: actornames.PluginCoordinator, Node: m.Node.Name()},
+			messages.GetPluginInfo{Namespace: ns},
+		)
+		if err != nil {
+			slog.Debug("fetchLivePluginSchemas: GetPluginInfo failed", "namespace", ns, "error", err)
+			continue
+		}
+		info, ok := response.(messages.PluginInfoResponse)
+		if !ok || !info.Found {
+			continue
+		}
+		for rtype, schema := range info.ResourceSchemas {
+			result[rtype] = schema
+		}
+	}
+	return result
+}
+
 func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
@@ -280,7 +314,8 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	livePluginSchemas := m.fetchLivePluginSchemas(forma)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser, livePluginSchemas)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -693,7 +728,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser, nil)
 	if err != nil {
 		slog.Error("Failed to create destroy from forma", "error", err)
 		return nil, err
@@ -1820,12 +1855,20 @@ func checkForEmptyStackCreation(command *forma_command.FormaCommand) error {
 	return nil
 }
 
+// FormaCommandFromForma builds a FormaCommand from a user-supplied Forma.
+//
+// livePluginSchemas, when non-nil, carries the agent's live per-resource-type Schema
+// keyed by resource type. It is forwarded to GenerateResourceUpdates to override any
+// stale client-side PKL schema the CLI may have compiled against an older formae SDK
+// — required so the patch-time recursive provider-default stripper can walk new
+// Hint paths added to the schema on the agent side.
 func FormaCommandFromForma(forma *pkgmodel.Forma,
 	formaCommandConfig *config.FormaCommandConfig,
 	command pkgmodel.Command,
 	ds datastore.Datastore,
 	clientID string,
-	source resource_update.FormaCommandSource) (*forma_command.FormaCommand, error) {
+	source resource_update.FormaCommandSource,
+	livePluginSchemas map[string]pkgmodel.Schema) (*forma_command.FormaCommand, error) {
 
 	if formaCommandConfig.Mode == "" {
 		formaCommandConfig.Mode = pkgmodel.FormaApplyModePatch
@@ -1871,7 +1914,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, deletedTargets)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, livePluginSchemas, replacedTargets, deletedTargets)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr

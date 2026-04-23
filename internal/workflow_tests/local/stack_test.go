@@ -357,7 +357,7 @@ func TestMetastructure_StackForApplyImplicitReplaceModeWithRemoveOfOneResource(t
 
 		formaCommand, _ := FormaCommandFromForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, pkgmodel.CommandApply, m.Datastore, "test", resource_update.FormaCommandSourceUser)
+		}, pkgmodel.CommandApply, m.Datastore, "test", resource_update.FormaCommandSourceUser, nil)
 
 		assert.Equal(t, formaCommand.ResourceUpdates[0].State, forma_command.CommandStateNotStarted)
 
@@ -406,7 +406,7 @@ func TestMetastructure_StackForApplyImplicitReplaceModeWithRenameLabelOfResource
 
 		formaCommand, _ := FormaCommandFromForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, pkgmodel.CommandApply, m.Datastore, "test", resource_update.FormaCommandSourceUser)
+		}, pkgmodel.CommandApply, m.Datastore, "test", resource_update.FormaCommandSourceUser, nil)
 
 		assert.Equal(t, formaCommand.ResourceUpdates[0].State, resource_update.ResourceUpdateStateNotStarted)
 

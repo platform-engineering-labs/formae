@@ -295,6 +295,7 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				ds,
 				nil,
 				nil,
+				nil,
 			)
 
 			if tt.expectedError != "" {
@@ -1114,6 +1115,92 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 	assert.Equal(t, "my-s3-bucket-delete", updates[0].DesiredState.Label)
 }
 
+// Verifies that livePluginSchemas merges deep hasProviderDefault hints into the
+// CLI-supplied forma schema so the recursive provider-default stripper neutralizes
+// existing-state defaults on fields the CLI schema doesn't know about. Without the
+// merge, a createOnly ancestor trips a full replacement because the stripper has no
+// hint path to walk into the deep sub-resource.
+func TestGenerateResourceUpdatesForReconcile_LivePluginSchemaOverridesFormaSchema_StripsProviderDefault(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	staleSchema := pkgmodel.Schema{
+		Identifier: "Ref",
+		Hints: map[string]pkgmodel.FieldHint{
+			"Volumes": {CreateOnly: true, HasProviderDefault: true},
+		},
+		Fields: []string{"Volumes"},
+	}
+
+	existing := pkgmodel.Resource{
+		Label:  "my-task",
+		Type:   "Test::TaskDef",
+		Stack:  "infra",
+		Target: "test-target",
+		Schema: staleSchema,
+		Properties: json.RawMessage(`{
+			"Volumes": [
+				{"Name": "wal", "EFSVolumeConfiguration": {"RootDirectory": "/"}}
+			]
+		}`),
+	}
+
+	formaResource := pkgmodel.Resource{
+		Label:  "my-task",
+		Type:   "Test::TaskDef",
+		Stack:  "infra",
+		Target: "test-target",
+		Schema: staleSchema,
+		Properties: json.RawMessage(`{
+			"Volumes": [
+				{"Name": "wal", "EFSVolumeConfiguration": {}}
+			]
+		}`),
+	}
+
+	// Agent's live plugin schema — includes the deep hint the stale CLI schema lacks.
+	livePluginSchemas := map[string]pkgmodel.Schema{
+		"Test::TaskDef": {
+			Identifier: "Ref",
+			Hints: map[string]pkgmodel.FieldHint{
+				"Volumes":                                      {CreateOnly: true, HasProviderDefault: true},
+				"Volumes.EFSVolumeConfiguration.RootDirectory": {HasProviderDefault: true},
+			},
+			Fields: []string{"Volumes"},
+		},
+	}
+
+	_, err := ds.StoreStack(&pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{existing},
+	}, "test-cmd-1")
+	assert.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infra"}},
+		Resources: []pkgmodel.Resource{formaResource},
+	}
+
+	existingTargets := []*pkgmodel.Target{
+		{Label: "test-target", Config: json.RawMessage(`{"Region": "us-west-2"}`), Namespace: "test"},
+	}
+
+	updates, err := GenerateResourceUpdates(
+		forma,
+		pkgmodel.CommandApply,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		existingTargets,
+		ds,
+		livePluginSchemas,
+		nil, nil,
+	)
+	assert.NoError(t, err)
+	for _, u := range updates {
+		assert.NotEqual(t, OperationDelete, u.Operation, "must not emit delete for replace: live schema should strip the provider-default diff")
+		assert.NotEqual(t, OperationCreate, u.Operation, "must not emit create for replace: live schema should strip the provider-default diff")
+	}
+}
+
 func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 	ds, _ := GetDeps(t)
 
@@ -1386,7 +1473,7 @@ func TestGenerateResourceUpdatesForReconcile_ForwardReferenceToNewResource(t *te
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil, nil)
 
 	assert.NoError(t, err, "forward reference to new resource should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")
@@ -1482,7 +1569,7 @@ func TestGenerateResourceUpdatesForReconcile_AddNewResourceWithForwardReference(
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil, nil)
 
 	assert.NoError(t, err, "adding new resource with forward reference should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")

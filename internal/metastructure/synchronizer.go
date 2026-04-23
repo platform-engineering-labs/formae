@@ -235,6 +235,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			resource_update.FormaCommandSourceSynchronize,
 			existingTargets,
 			data.datastore,
+			nil, // livePluginSchemas: Synchronizer already stamps fresh schemas inline above
 			nil, nil,
 		)
 		if err != nil {

@@ -336,6 +336,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		resource_update.FormaCommandSourcePolicyAutoReconcile,
 		existingTargets,
 		ds,
+		nil, // livePluginSchemas: auto-reconciler uses DB-sourced forma, schemas already stored
 		nil, nil,
 	)
 	if err != nil {

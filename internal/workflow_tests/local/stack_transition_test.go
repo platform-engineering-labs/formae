@@ -58,6 +58,7 @@ func TestStackTransition_Integration(t *testing.T) {
 				m.Datastore,
 				nil,
 				nil,
+				nil,
 			)
 			require.NoError(t, err)
 			require.Len(t, updates, 1)
@@ -101,6 +102,7 @@ func TestStackTransition_Integration(t *testing.T) {
 				resource_update.FormaCommandSourceUser,
 				[]*pkgmodel.Target{&target},
 				m.Datastore,
+				nil,
 				nil,
 				nil,
 			)

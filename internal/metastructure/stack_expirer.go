@@ -223,6 +223,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		resource_update.FormaCommandSourceUser, // Treat expiration as user-initiated
 		existingTargets,
 		ds,
+		nil, // livePluginSchemas: destroy uses stored schema, no fresh stamping needed
 		nil, nil,
 	)
 	if err != nil {

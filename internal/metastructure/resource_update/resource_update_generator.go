@@ -20,7 +20,16 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// GenerateResourceUpdates converts a Forma and command parameters into ResourceUpdates that can be executed
+// GenerateResourceUpdates converts a Forma and command parameters into ResourceUpdates that can be executed.
+//
+// livePluginSchemas, when non-nil, provides the agent's live per-resource-type Schema
+// keyed by resource type (e.g. "AWS::ECS::TaskDefinition"). Any forma resource whose
+// type matches a key in the map has its Schema replaced with the live schema before
+// patch generation. This overrides any stale client-side PKL schema the CLI compiled
+// against an older formae SDK — critical when a new Schema.Hint on the agent side is
+// required for the recursive provider-default stripper to neutralize AWS-populated
+// values in existing state. Callers that don't have a live schema source (e.g. the
+// Synchronizer, which stamps fresh schemas inline) may pass nil.
 func GenerateResourceUpdates(
 	forma *pkgmodel.Forma,
 	command pkgmodel.Command,
@@ -28,9 +37,35 @@ func GenerateResourceUpdates(
 	source FormaCommandSource,
 	existingTargets []*pkgmodel.Target,
 	ds ResourceDataLookup,
+	livePluginSchemas map[string]pkgmodel.Schema,
 	replacedTargets map[string]bool,
 	deletedTargets map[string]bool,
 ) ([]ResourceUpdate, error) {
+
+	// Merge the agent's live per-resource-type Hints into each forma resource's Schema
+	// before patch generation. The CLI compiles its forma against whichever formae SDK
+	// version its PklProject pins — which may lag behind the SDK bundled with the running
+	// agent. Newly-added hasProviderDefault annotations on deep sub-resource fields are
+	// required by the patch-time recursive provider-default stripper; without this merge,
+	// stored state containing an AWS-populated default can't be neutralized and a
+	// createOnly ancestor trips a spurious replacement on reapply.
+	//
+	// Semantics: live hints are added to (and, on key collision, override) the CLI-supplied
+	// hints. Only Hints are touched — Fields, Identifier, Portable, and the rest of the
+	// Schema reflect the resource instance's property shape (e.g. classifying properties as
+	// regular vs read-only) and must keep the form in which the CLI produced them.
+	for i := range forma.Resources {
+		fresh, ok := livePluginSchemas[forma.Resources[i].Type]
+		if !ok || len(fresh.Hints) == 0 {
+			continue
+		}
+		if forma.Resources[i].Schema.Hints == nil {
+			forma.Resources[i].Schema.Hints = make(map[string]pkgmodel.FieldHint, len(fresh.Hints))
+		}
+		for k, v := range fresh.Hints {
+			forma.Resources[i].Schema.Hints[k] = v
+		}
+	}
 
 	var referenceLabels map[string]string
 	var err error

@@ -656,7 +656,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		return "", fmt.Errorf("failed to load targets: %w", err)
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(&forma, pkgmodel.CommandSync, formaCommandConfig.Mode, resource_update.FormaCommandSourceDiscovery, existingTargets, data.ds, nil, nil)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(&forma, pkgmodel.CommandSync, formaCommandConfig.Mode, resource_update.FormaCommandSourceDiscovery, existingTargets, data.ds, nil, nil, nil)
 	if err != nil {
 		proc.Log().Error("failed to generate resource updates: %v", err)
 		return "", fmt.Errorf("failed to generate resource updates: %w", err)
