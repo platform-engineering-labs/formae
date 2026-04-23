@@ -1602,7 +1602,7 @@ func (d DatastorePostgres) CountResourcesInStack(label string) (int, error) {
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.uri = r2.uri
-			AND r2.version > r1.version
+			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
 		AND operation != $2
 	`
@@ -3257,7 +3257,7 @@ func (d DatastorePostgres) CountResourcesInTarget(targetLabel string) (int, erro
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.uri = r2.uri
-			AND r2.version > r1.version
+			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
 		AND operation != $2
 	`
