@@ -50,6 +50,16 @@ func (a *App) Close() {
 	}
 }
 
+// NewClient creates a new API client using the App's configuration,
+// auth, and network settings.
+func (a *App) NewClient() (*api.Client, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	return api.NewClient(a.Config.Cli.API, auth, net), nil
+}
+
 type Plugins struct{}
 
 type Projects struct{}
@@ -373,6 +383,48 @@ func (a *App) ForceDiscover() error {
 	}
 
 	return client.ForceDiscover()
+}
+
+func (a *App) InstallPlugins(req apimodel.InstallPluginsRequest) (*apimodel.InstallPluginsResponse, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+		return nil, err
+	}
+
+	return client.InstallPlugins(req)
+}
+
+func (a *App) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.UninstallPluginsResponse, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+		return nil, err
+	}
+
+	return client.UninstallPlugins(req)
+}
+
+func (a *App) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.UpgradePluginsResponse, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+		return nil, err
+	}
+
+	return client.UpgradePlugins(req)
 }
 
 func (a *App) Stats() (*apimodel.Stats, []string, error) {
