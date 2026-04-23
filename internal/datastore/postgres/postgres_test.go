@@ -103,11 +103,6 @@ func TestLoadResourcesByStack_ExcludesDeletedResourceWhenVersionsMixCase(t *test
 	require.NoError(t, err)
 	defer conn.Close(ctx) //nolint:errcheck
 
-	// Create the stack row first so downstream code that joins against stacks works.
-	_, err = conn.Exec(ctx, `INSERT INTO stacks (ksuid, version, label, description) VALUES ($1, $2, $3, $4)`,
-		"stack-ksuid", "v1", "test-stack", "")
-	require.NoError(t, err)
-
 	// Earlier update row with an uppercase letter in the version's locale-significant position.
 	updateVersion := "2wQUVeqpcVTSF4ROlhC9N4kMUPk"
 	// Chronologically-later delete row with a lowercase letter. Byte order puts this after
