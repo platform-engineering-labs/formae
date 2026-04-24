@@ -19,6 +19,34 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+func TestExtractResolvableRefs_ReturnsTargetPathsForEachRef(t *testing.T) {
+	props := json.RawMessage(`{
+		"Cluster": {"$ref": "formae://CL#/Arn", "$value": "arn-cluster"},
+		"LoadBalancers": [
+			{"TargetGroupArn": {"$ref": "formae://LN#/DefaultActions.0.TargetGroupArn", "$value": "arn-tg"}}
+		],
+		"Name": "static"
+	}`)
+	res := pkgmodel.Resource{Properties: props}
+
+	refs := ExtractResolvableRefs(res)
+
+	// Build an easy-to-assert map of TargetPath → ResourceURI.
+	got := map[string]pkgmodel.FormaeURI{}
+	for _, r := range refs {
+		got[r.TargetPath] = r.URI
+	}
+	if got["Cluster"] != "formae://CL" {
+		t.Errorf("Cluster: got %q", got["Cluster"])
+	}
+	if got["LoadBalancers.0.TargetGroupArn"] != "formae://LN" {
+		t.Errorf("LoadBalancers.0.TargetGroupArn: got %q", got["LoadBalancers.0.TargetGroupArn"])
+	}
+	if len(refs) != 2 {
+		t.Errorf("expected 2 refs, got %d: %+v", len(refs), refs)
+	}
+}
+
 func TestResolvePropertyReferences(t *testing.T) {
 	t.Run("resolves basic reference", func(t *testing.T) {
 		vpcRef := newTestRef("VpcId")
