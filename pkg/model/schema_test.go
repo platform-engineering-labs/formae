@@ -7,29 +7,26 @@ package model
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFieldHintHostsOnJSONRoundTrip(t *testing.T) {
 	original := FieldHint{HostsOn: true}
+
 	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err)
+
 	var decoded FieldHint
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !decoded.HostsOn {
-		t.Fatalf("expected HostsOn=true, got %#v (raw=%s)", decoded, string(data))
-	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+
+	assert.True(t, decoded.HostsOn, "HostsOn should round-trip through JSON (raw=%s)", string(data))
 }
 
 func TestFieldHintHostsOnDefaultsFalse(t *testing.T) {
 	var decoded FieldHint
-	if err := json.Unmarshal([]byte(`{"CreateOnly":true}`), &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if decoded.HostsOn {
-		t.Fatalf("expected HostsOn default false for pre-existing stored schemas, got true")
-	}
+	require.NoError(t, json.Unmarshal([]byte(`{"CreateOnly":true}`), &decoded))
+
+	assert.False(t, decoded.HostsOn, "HostsOn should default false for pre-existing stored schemas")
 }
