@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -337,6 +338,212 @@ func TestApplyForma_DestroyThenReapplyTargetWithResolvables(t *testing.T) {
 		resources, err = m.Datastore.LoadResourcesByStack("infra")
 		require.NoError(t, err)
 		assert.Len(t, resources, 1, "cluster resource should be re-created")
+	})
+}
+
+// TestApplyForma_DestroyOrder_TargetReachabilityComposesWithAttachesTo is a
+// composition test: the pre-existing target-reachability edge and the new
+// AttachesTo edge must chain correctly so that when a plugin target points at
+// a resource R and another resource S attaches to R, destroying the stack
+// deletes things in the order:
+//
+//  1. resource on target (needs the target alive to CRUD via plugin)
+//  2. target (waits for #1 via buildTargetResourceEdges)
+//  3. R — the resource the target points at (waits for target via buildTargetResolvableEdges)
+//  4. S — attaches to R (waits for R via AttachesTo)
+//
+// This is the exact topology that produces the LGTM "endpoint goes dark
+// mid-destroy" bug when the AttachesTo edge is missing: S would delete in
+// parallel with #1, taking down the control-plane that the plugin target
+// depends on before the plugin has finished CRUD'ing the things on that target.
+//
+// Mapping to the LGTM case:
+//
+//	dashboard  ↔ Grafana dashboard / folder
+//	grafana    ↔ lgtm-grafana target
+//	vpc        ↔ lgtm-listener (what the target's URL points at)
+//	cidr       ↔ lgtm-service (attaches to the listener's TG; AttachesTo)
+//
+// We reuse FakeAWS::EC2::VPC and FakeAWS::EC2::VPCCidrBlock because
+// VPCCidrBlock.VpcId already carries AttachesTo=true in the fakeaws schema.
+func TestApplyForma_DestroyOrder_TargetReachabilityComposesWithAttachesTo(t *testing.T) {
+	const vpcKsuid = "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
+
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "1234",
+					NativeID:           "native-" + request.Label,
+					ResourceProperties: request.Properties,
+				}}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				switch request.ResourceType {
+				case "FakeAWS::EC2::VPC":
+					return &resource.ReadResult{
+						ResourceType: request.ResourceType,
+						Properties:   `{"Id":"vpc-1","CidrBlock":"10.0.0.0/16"}`,
+					}, nil
+				case "FakeAWS::EC2::VPCCidrBlock":
+					return &resource.ReadResult{
+						ResourceType: request.ResourceType,
+						Properties:   `{"Id":"cidr-1","CidrBlock":"10.0.1.0/24","VpcId":"vpc-1"}`,
+					}, nil
+				case "FakeAWS::S3::Bucket":
+					return &resource.ReadResult{
+						ResourceType: request.ResourceType,
+						Properties:   `{"BucketName":"dashboard","Endpoint":"https://dashboard.example.com"}`,
+					}, nil
+				}
+				return &resource.ReadResult{ResourceType: request.ResourceType, Properties: "{}"}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return &resource.DeleteResult{ProgressResult: &resource.ProgressResult{
+					Operation:       resource.OperationDelete,
+					OperationStatus: resource.OperationStatusSuccess,
+					NativeID:        request.NativeID,
+				}}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:   "vpc",
+					Type:    "FakeAWS::EC2::VPC",
+					Stack:   "test",
+					Target:  "provider",
+					Managed: true,
+					Ksuid:   vpcKsuid,
+					Schema:  pkgmodel.Schema{Identifier: "Id", Fields: []string{"Id", "CidrBlock"}},
+					Properties: json.RawMessage(`{
+						"Id": "vpc-1",
+						"CidrBlock": "10.0.0.0/16"
+					}`),
+				},
+				{
+					Label:   "cidr",
+					Type:    "FakeAWS::EC2::VPCCidrBlock",
+					Stack:   "test",
+					Target:  "provider",
+					Managed: true,
+					Schema: pkgmodel.Schema{
+						Identifier: "Id",
+						Fields:     []string{"Id", "CidrBlock", "VpcId"},
+						// AttachesTo here must keep cidr alive until vpc is gone.
+						Hints: map[string]pkgmodel.FieldHint{"VpcId": {AttachesTo: true}},
+					},
+					Properties: json.RawMessage(fmt.Sprintf(`{
+						"Id": "cidr-1",
+						"CidrBlock": "10.0.1.0/24",
+						"VpcId": {"$ref":"formae://%s#/Id","$value":"vpc-1"}
+					}`, vpcKsuid)),
+				},
+				{
+					// "dashboard" stands in for a Grafana resource on the plugin target.
+					// It does not $ref anything — it's just a resource on the "grafana"
+					// target, so its delete must happen before the target's delete.
+					Label:   "dashboard",
+					Type:    "FakeAWS::S3::Bucket",
+					Stack:   "test",
+					Target:  "grafana",
+					Managed: true,
+					Schema:  pkgmodel.Schema{Identifier: "BucketName", Portable: true},
+					Properties: json.RawMessage(`{
+						"BucketName": "dashboard",
+						"Endpoint": "https://dashboard.example.com"
+					}`),
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{Label: "provider", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+				{
+					// "grafana" target's endpoint $refs vpc.Id — this produces the
+					// target-reachability edge that pins vpc.delete after the
+					// target.delete (which itself waits for "dashboard").
+					Label:     "grafana",
+					Namespace: "FakeAWS",
+					Config: json.RawMessage(fmt.Sprintf(`{
+						"endpoint": {"$ref":"formae://%s#/Id","$value":"vpc-1"}
+					}`, vpcKsuid)),
+				},
+			},
+		}
+
+		// Apply
+		_, err = m.ApplyForma(forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id")
+		require.NoError(t, err)
+		assert.Eventually(t, func() bool {
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			return len(incomplete) == 0
+		}, 15*time.Second, 100*time.Millisecond, "apply should complete")
+
+		resources, err := m.Datastore.LoadResourcesByStack("test")
+		require.NoError(t, err)
+		require.Len(t, resources, 3, "vpc, cidr and dashboard should all be created")
+
+		// Destroy
+		_, err = m.DestroyForma(forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client-id")
+		require.NoError(t, err)
+		assert.Eventually(t, func() bool {
+			cmds, _ := m.Datastore.LoadFormaCommands()
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			return len(cmds) == 2 && len(incomplete) == 0
+		}, 15*time.Second, 100*time.Millisecond, "destroy should complete")
+
+		// Find the destroy command and extract ModifiedTs per label.
+		cmds, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+
+		var destroy *forma_command.FormaCommand
+		for _, cmd := range cmds {
+			if cmd.Command == pkgmodel.CommandDestroy {
+				destroy = cmd
+				break
+			}
+		}
+		require.NotNil(t, destroy, "destroy command should be persisted")
+		require.Len(t, destroy.ResourceUpdates, 3)
+
+		modifiedTsOf := func(label string) time.Time {
+			for _, ru := range destroy.ResourceUpdates {
+				if ru.DesiredState.Label == label {
+					return ru.ModifiedTs
+				}
+			}
+			t.Fatalf("no ResourceUpdate for %q", label)
+			return time.Time{}
+		}
+		dashboardTs := modifiedTsOf("dashboard")
+		vpcTs := modifiedTsOf("vpc")
+		cidrTs := modifiedTsOf("cidr")
+
+		// Assertion 1 — pre-existing target-reachability edge:
+		// vpc must outlive the dashboard, because dashboard's target ("grafana")
+		// refs vpc, and the target can only be deleted after its users are gone.
+		assert.True(t,
+			dashboardTs.Before(vpcTs),
+			"dashboard.delete must complete before vpc.delete via target-reachability (dashboard=%v vpc=%v)",
+			dashboardTs, vpcTs)
+
+		// Assertion 2 — the new AttachesTo edge:
+		// cidr attaches to vpc; its delete must wait for vpc.delete.
+		assert.True(t,
+			vpcTs.Before(cidrTs),
+			"vpc.delete must complete before cidr.delete via AttachesTo (vpc=%v cidr=%v)",
+			vpcTs, cidrTs)
 	})
 }
 
