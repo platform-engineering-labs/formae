@@ -1616,11 +1616,17 @@ type pluginOperationResult struct {
 }
 
 // oobOperationTimeout caps how long retryOnRecoverable will wait on a single
-// OOB create/delete attempt. Slow cloud resources (e.g. AWS::EKS::Cluster,
-// which legitimately takes 10–15 min to reach ACTIVE) need a generous budget,
-// so the default is 30 min. Plugin authors with even slower resources can
-// override via the FORMAE_TEST_OOB_TIMEOUT environment variable (integer
-// minutes, matching FORMAE_TEST_TIMEOUT / FORMAE_TEST_DISCOVERY_TIMEOUT).
+// OOB Create or Delete RPC attempt to the plugin (via waitForOperationProgress).
+// Slow cloud resources — AWS::EKS::Cluster is ~10–15 min to reach ACTIVE,
+// RDS clusters and managed Kubernetes clusters on other providers are
+// similar — need a generous budget, so the default is 30 min. Plugin
+// authors can override via FORMAE_TEST_OOB_TIMEOUT (integer minutes,
+// matching FORMAE_TEST_TIMEOUT / FORMAE_TEST_DISCOVERY_TIMEOUT).
+//
+// This is distinct from FORMAE_TEST_OOB_DELETE_TIMEOUT, which bounds the
+// *post-sync inventory tombstone wait* after an OOB delete has already
+// returned from the plugin — a separate, much shorter wait handled in
+// runner.go's Step 24.
 const defaultOOBOperationTimeoutMinutes = 30
 
 func oobOperationTimeout() time.Duration {
