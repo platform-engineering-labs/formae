@@ -940,12 +940,17 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
 					goto markDone
 				}
-				if ru.Properties != nil {
-					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
-					// Update properties without touching existence state or
-					// authoritative flags. Unlike creates, updates don't
-					// change whether a resource exists.
-					if res := model.Resource(stackIdx, slotIdx); res != nil {
+				res := model.Resource(stackIdx, slotIdx)
+				if res != nil {
+					// A successful update proves the resource exists. This
+					// matters when a reconcile command returns op=update for a
+					// resource the model predicted would fail: the agent found
+					// the resource already existed and updated it.
+					if res.State == StateNotExist {
+						res.State = StateExists
+					}
+					if ru.Properties != nil {
+						props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
 						res.Properties = props
 					}
 				}
