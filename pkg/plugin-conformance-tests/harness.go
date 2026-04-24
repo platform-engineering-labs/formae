@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -1618,17 +1619,17 @@ type pluginOperationResult struct {
 // OOB create/delete attempt. Slow cloud resources (e.g. AWS::EKS::Cluster,
 // which legitimately takes 10–15 min to reach ACTIVE) need a generous budget,
 // so the default is 30 min. Plugin authors with even slower resources can
-// override via FORMAE_CONFORMANCE_OOB_TIMEOUT (any Go duration string, e.g.
-// "45m" or "1h").
-const defaultOOBOperationTimeout = 30 * time.Minute
+// override via the FORMAE_TEST_OOB_TIMEOUT environment variable (integer
+// minutes, matching FORMAE_TEST_TIMEOUT / FORMAE_TEST_DISCOVERY_TIMEOUT).
+const defaultOOBOperationTimeoutMinutes = 30
 
 func oobOperationTimeout() time.Duration {
-	if v := os.Getenv("FORMAE_CONFORMANCE_OOB_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
+	if val := os.Getenv("FORMAE_TEST_OOB_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
 		}
 	}
-	return defaultOOBOperationTimeout
+	return defaultOOBOperationTimeoutMinutes * time.Minute
 }
 
 // retryOnRecoverable executes a plugin operation (create/delete) with retries on recoverable errors.
