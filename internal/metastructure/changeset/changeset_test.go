@@ -2102,7 +2102,7 @@ func hasDependency(child, parent *DAGNode) bool {
 	return false
 }
 
-func TestBuildDeleteDependencies_HostsOnInvertsEdgeDirection(t *testing.T) {
+func TestBuildDeleteDependencies_AttachesToInvertsEdgeDirection(t *testing.T) {
 	var (
 		aURI = pkgmodel.NewFormaeURI("A1", "")
 		bURI = pkgmodel.NewFormaeURI("B1", "")
@@ -2146,26 +2146,26 @@ func TestBuildDeleteDependencies_HostsOnInvertsEdgeDirection(t *testing.T) {
 			t.Fatalf("expected B.delete to depend on A.delete")
 		}
 		if hasDependency(aNode, bNode) {
-			t.Fatalf("did not expect A.delete to depend on B.delete without HostsOn")
+			t.Fatalf("did not expect A.delete to depend on B.delete without AttachesTo")
 		}
 	})
 
-	t.Run("HostsOn: A.delete waits for B.delete (reachability order)", func(t *testing.T) {
-		dag := build(t, pkgmodel.FieldHint{HostsOn: true})
+	t.Run("AttachesTo: A.delete waits for B.delete (reachability order)", func(t *testing.T) {
+		dag := build(t, pkgmodel.FieldHint{AttachesTo: true})
 		bNode := dagNodeForOp(t, dag, bURI, resource_update.OperationDelete)
 		aNode := dagNodeForOp(t, dag, aURI, resource_update.OperationDelete)
 		if !hasDependency(aNode, bNode) {
-			t.Fatalf("expected A.delete to depend on B.delete under HostsOn")
+			t.Fatalf("expected A.delete to depend on B.delete under AttachesTo")
 		}
 		if hasDependency(bNode, aNode) {
-			t.Fatalf("did not expect B.delete to depend on A.delete under HostsOn")
+			t.Fatalf("did not expect B.delete to depend on A.delete under AttachesTo")
 		}
 	})
 }
 
 func TestBuildDeleteDependencies_MixedRefsOnOneResourceGetIndependentDirections(t *testing.T) {
-	// A has two refs: f1 → B (HostsOn), f2 → C (no hint).
-	// Expected: A.delete waits for B.delete (HostsOn) AND C.delete waits for A.delete (reverse construction).
+	// A has two refs: f1 → B (AttachesTo), f2 → C (no hint).
+	// Expected: A.delete waits for B.delete (AttachesTo) AND C.delete waits for A.delete (reverse construction).
 	var (
 		aURI = pkgmodel.NewFormaeURI("A1", "")
 		bURI = pkgmodel.NewFormaeURI("B1", "")
@@ -2174,7 +2174,7 @@ func TestBuildDeleteDependencies_MixedRefsOnOneResourceGetIndependentDirections(
 	aResource := pkgmodel.Resource{
 		Ksuid: "A1", Label: "a", Type: "Test::A", Stack: "s",
 		Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
-			"f1": {HostsOn: true},
+			"f1": {AttachesTo: true},
 			// "f2" intentionally absent → plain construction
 		}},
 		Properties: json.RawMessage(`{
@@ -2200,13 +2200,13 @@ func TestBuildDeleteDependencies_MixedRefsOnOneResourceGetIndependentDirections(
 	cNode := dagNodeForOp(t, cs.DAG, cURI, resource_update.OperationDelete)
 
 	if !hasDependency(aNode, bNode) {
-		t.Errorf("A.delete should depend on B.delete (HostsOn edge)")
+		t.Errorf("A.delete should depend on B.delete (AttachesTo edge)")
 	}
 	if !hasDependency(cNode, aNode) {
 		t.Errorf("C.delete should depend on A.delete (reverse construction edge)")
 	}
 	if hasDependency(bNode, aNode) {
-		t.Errorf("B.delete should not depend on A.delete (HostsOn inverts this edge)")
+		t.Errorf("B.delete should not depend on A.delete (AttachesTo inverts this edge)")
 	}
 }
 

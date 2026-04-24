@@ -19,7 +19,7 @@ type FieldHint struct {
 	Required           bool `json:"Required" pkl:"Required"`
 	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
 	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
-	HostsOn            bool `json:"HostsOn" pkl:"HostsOn"`
+	AttachesTo            bool `json:"AttachesTo" pkl:"AttachesTo"`
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`

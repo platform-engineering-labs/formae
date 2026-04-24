@@ -107,7 +107,7 @@ func (s *FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, erro
 				"Ipv6Pool",
 				"VpcId"},
 			Hints: map[string]model.FieldHint{
-				"VpcId": {HostsOn: true},
+				"VpcId": {AttachesTo: true},
 			},
 		}, nil
 	default:

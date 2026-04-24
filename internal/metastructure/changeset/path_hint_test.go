@@ -29,19 +29,19 @@ func TestStripArrayIndices(t *testing.T) {
 func TestFieldHintForPath_MatchesAfterStripping(t *testing.T) {
 	schema := pkgmodel.Schema{
 		Hints: map[string]pkgmodel.FieldHint{
-			"LoadBalancers.TargetGroupArn": {HostsOn: true},
+			"LoadBalancers.TargetGroupArn": {AttachesTo: true},
 		},
 	}
 	got := fieldHintForPath(schema, "LoadBalancers.0.TargetGroupArn")
-	if !got.HostsOn {
-		t.Fatalf("expected HostsOn=true after index stripping, got %#v", got)
+	if !got.AttachesTo {
+		t.Fatalf("expected AttachesTo=true after index stripping, got %#v", got)
 	}
 }
 
 func TestFieldHintForPath_ReturnsZeroWhenUnknown(t *testing.T) {
 	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{}}
 	got := fieldHintForPath(schema, "Missing.Field")
-	if got.HostsOn || got.CreateOnly || got.Required {
+	if got.AttachesTo || got.CreateOnly || got.Required {
 		t.Fatalf("expected zero hint for unknown path, got %#v", got)
 	}
 }

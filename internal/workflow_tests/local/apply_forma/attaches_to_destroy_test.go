@@ -25,17 +25,17 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// TestHostsOnInvertDestroyOrder verifies that when Schema.Hints["VpcId"].HostsOn=true
+// TestAttachesToInvertDestroyOrder verifies that when Schema.Hints["VpcId"].AttachesTo=true
 // on FakeAWS::EC2::VPCCidrBlock, destroying a stack containing a VPC and a CIDR block
 // (where CIDR's VpcId references the VPC) produces the inverted delete order:
 // VPC deletes BEFORE CIDR block (instead of usual reverse-construction "child first").
 //
-// Without HostsOn, the destroy order is: cidr.delete → vpc.delete (reverse construction).
-// With HostsOn on VpcId, the destroy order is: vpc.delete → cidr.delete (inverted).
-func TestHostsOnInvertDestroyOrder(t *testing.T) {
+// Without AttachesTo, the destroy order is: cidr.delete → vpc.delete (reverse construction).
+// With AttachesTo on VpcId, the destroy order is: vpc.delete → cidr.delete (inverted).
+func TestAttachesToInvertDestroyOrder(t *testing.T) {
 	// Deterministic KSUID for the VPC so the CIDR block can $ref it.
 	// Without a $ref, the resolver sees no edge between the resources
-	// and the DAG builder has no ref on which to apply the HostsOn hint.
+	// and the DAG builder has no ref on which to apply the AttachesTo hint.
 	const vpcKsuid = "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
 
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
@@ -110,16 +110,16 @@ func TestHostsOnInvertDestroyOrder(t *testing.T) {
 					Schema: pkgmodel.Schema{
 						Identifier: "Id",
 						Fields:     []string{"Id", "CidrBlock", "VpcId"},
-						// HostsOn semantically inverts destroy-edge direction:
+						// AttachesTo semantically inverts destroy-edge direction:
 						// cidr.delete waits for vpc.delete instead of the default
 						// reverse-construction order (vpc.delete waits for cidr.delete).
 						// The plugin schema in fake_aws.go carries the same hint.
 						Hints: map[string]pkgmodel.FieldHint{
-							"VpcId": {HostsOn: true},
+							"VpcId": {AttachesTo: true},
 						},
 					},
 					// VpcId is a $ref so the resolver produces an edge the DAG
-					// builder can apply the HostsOn hint to. A plain string here
+					// builder can apply the AttachesTo hint to. A plain string here
 					// would produce no edge and the test would assert nothing useful.
 					Properties: json.RawMessage(fmt.Sprintf(`{
 						"Id": "cidr-1",
@@ -201,11 +201,11 @@ func TestHostsOnInvertDestroyOrder(t *testing.T) {
 		vpcModifiedTs := modifiedTsOfResource("vpc")
 		cidrModifiedTs := modifiedTsOfResource("cidr")
 
-		// The key assertion: with HostsOn on VpcId, vpc.delete should complete BEFORE cidr.delete
+		// The key assertion: with AttachesTo on VpcId, vpc.delete should complete BEFORE cidr.delete
 		// (inverted from the normal reverse-construction order).
 		assert.True(t,
 			vpcModifiedTs.Before(cidrModifiedTs),
-			"vpc.delete must complete before cidr.delete under HostsOn annotation (vpc=%v cidr=%v)",
+			"vpc.delete must complete before cidr.delete under AttachesTo annotation (vpc=%v cidr=%v)",
 			vpcModifiedTs, cidrModifiedTs)
 
 		// Also verify that the state is Success (not Failed or other terminal states)

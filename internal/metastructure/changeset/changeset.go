@@ -219,7 +219,7 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 // buildDeleteDependencies creates dependencies for delete operations.
 // For most refs the direction is REVERSED (construction-reversed): the
 // dependency is deleted after the consumer. For refs annotated with
-// HostsOn=true the direction is FORWARD (reachability order): the
+// AttachesTo=true the direction is FORWARD (reachability order): the
 // host resource is deleted first, then the hosted resource.
 func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.ResourceUpdate) {
 	deleteOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
@@ -262,7 +262,7 @@ func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.Resource
 			// Look up the field hint for this reference by ksuid.
 			targetPath := refPathByKsuid[depBase.KSUID()]
 			hint := fieldHintForPath(deleteOp.DesiredState.Schema, targetPath)
-			if hint.HostsOn {
+			if hint.AttachesTo {
 				// Reachability edge: the hosting resource waits for the hosted-on
 				// resource's delete. Destroy order: hosted-on first, hosting second.
 				dependentGroup.LinkWith(depNode)

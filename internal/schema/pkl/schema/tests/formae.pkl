@@ -577,19 +577,19 @@ facts {
         type == "AWS::S3::Bucket"
     }
 
-    ["FieldHint exposes HostsOn"] {
-        testHostsOnSchema.Hints["F1"].HostsOn == true
+    ["FieldHint exposes AttachesTo"] {
+        testAttachesToSchema.Hints["F1"].AttachesTo == true
     }
 
-    ["FieldHint HostsOn defaults to false"] {
-        (new formae.FieldHint {}).HostsOn == false
+    ["FieldHint AttachesTo defaults to false"] {
+        (new formae.FieldHint {}).AttachesTo == false
     }
 }
 
-local testHostsOnSchema = new formae.Schema {
+local testAttachesToSchema = new formae.Schema {
     Identifier = "AWS::Test::Thing"
     Fields = new Listing { "F1" }
     Hints = new Mapping {
-        ["F1"] = new formae.FieldHint { hostsOn = true }
+        ["F1"] = new formae.FieldHint { attachesTo = true }
     }
 }

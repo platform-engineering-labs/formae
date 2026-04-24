@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFieldHintHostsOnJSONRoundTrip(t *testing.T) {
-	original := FieldHint{HostsOn: true}
+func TestFieldHintAttachesToJSONRoundTrip(t *testing.T) {
+	original := FieldHint{AttachesTo: true}
 
 	data, err := json.Marshal(original)
 	require.NoError(t, err)
@@ -21,12 +21,12 @@ func TestFieldHintHostsOnJSONRoundTrip(t *testing.T) {
 	var decoded FieldHint
 	require.NoError(t, json.Unmarshal(data, &decoded))
 
-	assert.True(t, decoded.HostsOn, "HostsOn should round-trip through JSON (raw=%s)", string(data))
+	assert.True(t, decoded.AttachesTo, "AttachesTo should round-trip through JSON (raw=%s)", string(data))
 }
 
-func TestFieldHintHostsOnDefaultsFalse(t *testing.T) {
+func TestFieldHintAttachesToDefaultsFalse(t *testing.T) {
 	var decoded FieldHint
 	require.NoError(t, json.Unmarshal([]byte(`{"CreateOnly":true}`), &decoded))
 
-	assert.False(t, decoded.HostsOn, "HostsOn should default false for pre-existing stored schemas")
+	assert.False(t, decoded.AttachesTo, "AttachesTo should default false for pre-existing stored schemas")
 }
