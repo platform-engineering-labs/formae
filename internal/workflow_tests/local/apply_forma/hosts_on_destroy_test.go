@@ -8,6 +8,7 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -32,6 +33,11 @@ import (
 // Without HostsOn, the destroy order is: cidr.delete → vpc.delete (reverse construction).
 // With HostsOn on VpcId, the destroy order is: vpc.delete → cidr.delete (inverted).
 func TestHostsOnInvertDestroyOrder(t *testing.T) {
+	// Deterministic KSUID for the VPC so the CIDR block can $ref it.
+	// Without a $ref, the resolver sees no edge between the resources
+	// and the DAG builder has no ref on which to apply the HostsOn hint.
+	const vpcKsuid = "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
+
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// Create resource overrides for successful Create and Delete operations.
 		overrides := &plugin.ResourcePluginOverrides{
@@ -45,10 +51,21 @@ func TestHostsOnInvertDestroyOrder(t *testing.T) {
 				}}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
-				return &resource.ReadResult{
-					ResourceType: request.ResourceType,
-					Properties:   "{}",
-				}, nil
+				// Return the same Properties that were created; this lets the
+				// resolver find the VPC's Id when the CIDR block $refs it.
+				switch request.ResourceType {
+				case "FakeAWS::EC2::VPC":
+					return &resource.ReadResult{
+						ResourceType: request.ResourceType,
+						Properties:   `{"Id":"vpc-1","CidrBlock":"10.0.0.0/16"}`,
+					}, nil
+				case "FakeAWS::EC2::VPCCidrBlock":
+					return &resource.ReadResult{
+						ResourceType: request.ResourceType,
+						Properties:   `{"Id":"cidr-1","CidrBlock":"10.0.1.0/24","VpcId":"vpc-1"}`,
+					}, nil
+				}
+				return &resource.ReadResult{ResourceType: request.ResourceType, Properties: "{}"}, nil
 			},
 			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
 				return &resource.DeleteResult{ProgressResult: &resource.ProgressResult{
@@ -77,6 +94,7 @@ func TestHostsOnInvertDestroyOrder(t *testing.T) {
 					Stack:   "test",
 					Target:  "provider",
 					Managed: true,
+					Ksuid:   vpcKsuid,
 					Schema:  pkgmodel.Schema{Identifier: "Id", Fields: []string{"Id", "CidrBlock"}},
 					Properties: json.RawMessage(`{
 						"Id": "vpc-1",
@@ -92,19 +110,22 @@ func TestHostsOnInvertDestroyOrder(t *testing.T) {
 					Schema: pkgmodel.Schema{
 						Identifier: "Id",
 						Fields:     []string{"Id", "CidrBlock", "VpcId"},
-						// This hint indicates that VpcId "hosts" a dependency on the VPC resource,
-						// which should invert the delete order during destroy.
-						// The plugin schema (in fake_aws.go) has the same hint.
+						// HostsOn semantically inverts destroy-edge direction:
+						// cidr.delete waits for vpc.delete instead of the default
+						// reverse-construction order (vpc.delete waits for cidr.delete).
+						// The plugin schema in fake_aws.go carries the same hint.
 						Hints: map[string]pkgmodel.FieldHint{
 							"VpcId": {HostsOn: true},
 						},
 					},
-					// Simple properties with VpcId matching the VPC's Id
-					Properties: json.RawMessage(`{
+					// VpcId is a $ref so the resolver produces an edge the DAG
+					// builder can apply the HostsOn hint to. A plain string here
+					// would produce no edge and the test would assert nothing useful.
+					Properties: json.RawMessage(fmt.Sprintf(`{
 						"Id": "cidr-1",
 						"CidrBlock": "10.0.1.0/24",
-						"VpcId": "vpc-1"
-					}`),
+						"VpcId": {"$ref":"formae://%s#/Id","$value":"vpc-1"}
+					}`, vpcKsuid)),
 				},
 			},
 			Targets: []pkgmodel.Target{
