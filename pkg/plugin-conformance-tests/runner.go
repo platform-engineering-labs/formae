@@ -251,6 +251,11 @@ func getOOBDeleteTimeout() time.Duration {
 //     When set to "discovery", CRUD tests are skipped.
 //   - FORMAE_TEST_TIMEOUT: Timeout in minutes for long-running operations (optional).
 //     Default is 5 minutes. Set to 15 for slow resources like Cloud SQL.
+//   - FORMAE_TEST_OOB_TIMEOUT: Timeout in minutes for a single OOB Create or
+//     Delete RPC to the plugin during the discovery test's CreateOOB phase
+//     (optional). Default is 30 minutes. Raise for resources with longer
+//     provisioning times (e.g. AWS::EKS::Cluster, managed-Kubernetes on
+//     other providers).
 //   - FORMAE_TEST_OOB_DELETE_TIMEOUT: Timeout in minutes for the OOB-delete phase's
 //     wait-for-inventory-removal step (optional). Default is 2 minutes. Raise
 //     for slow backends (e.g. managed Kubernetes).
