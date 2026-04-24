@@ -17,6 +17,12 @@ VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
 # OPS/orbital), NOT part of the build identity.
 CHANNEL := $(shell t="$(RAW_VERSION)"; c="$${t#*-}"; if [ "$$c" = "$$t" ]; then echo stable; else echo "$$c"; fi)
 
+# Channels we accept publishing to. orbital's `ops publish` silently creates
+# unknown channels, so a tag typo would materialise a real channel in the
+# package index. Gate the publish on an explicit allowlist to make typos
+# loud instead of silent.
+ALLOWED_CHANNELS := stable dev
+
 # External plugin Git repositories to bundle.
 # Append @branch or @tag to pin a specific ref (e.g., ...aws.git@feat/msgpack).
 # Without @ref, the default branch (main) is used.
@@ -199,12 +205,21 @@ gen-pkl:
 pkg-pkl:
 	pkl project package ./internal/schema/pkl/schema --skip-publish-check
 
+## check-channel: Fail if the tag's channel is not in ALLOWED_CHANNELS.
+## A separate target so any publish step that relies on CHANNEL can depend on it.
+check-channel:
+	@if [ -z "$(filter $(CHANNEL),$(ALLOWED_CHANNELS))" ]; then \
+	    echo "ERROR: channel '$(CHANNEL)' (from tag '$(RAW_VERSION)') is not in ALLOWED_CHANNELS: $(ALLOWED_CHANNELS)" >&2; \
+	    echo "       Use a bare semver tag for stable (e.g. 0.85.0) or a '-dev' suffix (e.g. 0.85.0-dev)." >&2; \
+	    exit 1; \
+	fi
+
 ## publish-pkl: Publish core formae schema to S3.
 ## The stable channel publishes to /formae/ (back-compat with existing plugin
 ## pins). Other channels publish to /formae/<channel>/ so consumers can opt
 ## into non-stable schema by URL — PKL has no native channel concept, so the
 ## namespacing is encoded in the path.
-publish-pkl:
+publish-pkl: check-channel
 	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae$(if $(filter-out stable,$(CHANNEL)),/$(CHANNEL),)/
 
 ## gen-external-pkl: Resolve external plugin PKL schemas (requires formae to be published first)
