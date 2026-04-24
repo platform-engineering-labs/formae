@@ -1,8 +1,19 @@
 amends "pkl:Project"
 
+// Channel: written by `make gen-pkl` from the Makefile's CHANNEL variable
+// (derived from the git tag suffix). Defaults to "stable" if the file is
+// absent — matches the behaviour of an untagged or stable build.
+//
+// PKL has no native channel concept, so the channel must be encoded in the
+// package URL path. When channel != "stable" the package's self-declared
+// baseUri/packageZipUrl gain a `<channel>/` prefix, mirroring where
+// `make publish-pkl` syncs the artefacts to.
+local channel: String = read?("../../../../channel")?.text?.trim() ?? "stable"
+local channelPrefix: String = if (channel == "stable") "" else "\(channel)/"
+
 package {
   name = "formae"
-  baseUri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/\(name)/\(name)"
+  baseUri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/\(name)/\(channelPrefix)\(name)"
   version = read("../../../../version.semver").text.trim()
-  packageZipUrl = "https://hub.platform.engineering/plugins/pkl/schema/pkl/\(name)/\(name)@\(version).zip"
+  packageZipUrl = "https://hub.platform.engineering/plugins/pkl/schema/pkl/\(name)/\(channelPrefix)\(name)@\(version).zip"
 }

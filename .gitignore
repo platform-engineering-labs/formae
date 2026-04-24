@@ -97,3 +97,4 @@ docs/design/
 
 # External plugin cache (cloned plugin repos during build)
 .plugins/
+channel
