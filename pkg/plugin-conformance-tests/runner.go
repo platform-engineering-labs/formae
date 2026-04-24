@@ -212,12 +212,12 @@ func getDiscoveryTimeout() time.Duration {
 	return 2 * time.Minute // Default timeout
 }
 
-// getOOBTimeout returns the timeout duration for the OOB-delete phase's
+// getOOBDeleteTimeout returns the timeout duration for the OOB-delete phase's
 // wait-for-inventory-removal step (sync must tombstone the out-of-band
-// deletion). It reads from FORMAE_TEST_OOB_TIMEOUT (in minutes).
+// deletion). It reads from FORMAE_TEST_OOB_DELETE_TIMEOUT (in minutes).
 // Default is 2 minutes. Raise for slow backends (e.g. managed Kubernetes).
-func getOOBTimeout() time.Duration {
-	if val := os.Getenv("FORMAE_TEST_OOB_TIMEOUT"); val != "" {
+func getOOBDeleteTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_OOB_DELETE_TIMEOUT"); val != "" {
 		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
 			return time.Duration(minutes) * time.Minute
 		}
@@ -251,7 +251,7 @@ func getOOBTimeout() time.Duration {
 //     When set to "discovery", CRUD tests are skipped.
 //   - FORMAE_TEST_TIMEOUT: Timeout in minutes for long-running operations (optional).
 //     Default is 5 minutes. Set to 15 for slow resources like Cloud SQL.
-//   - FORMAE_TEST_OOB_TIMEOUT: Timeout in minutes for the OOB-delete phase's
+//   - FORMAE_TEST_OOB_DELETE_TIMEOUT: Timeout in minutes for the OOB-delete phase's
 //     wait-for-inventory-removal step (optional). Default is 2 minutes. Raise
 //     for slow backends (e.g. managed Kubernetes).
 //
@@ -1524,7 +1524,7 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 
 	// === Step 24: Verify resource is removed from inventory (tombstoned by sync) ===
 	t.Log("Step 24: Waiting for resource to be removed from inventory after OOB delete...")
-	if err := harness.WaitForResourceRemovedFromInventory(actualResourceType, oobNativeID, getOOBTimeout()); err != nil {
+	if err := harness.WaitForResourceRemovedFromInventory(actualResourceType, oobNativeID, getOOBDeleteTimeout()); err != nil {
 		rc.CRUDFatalf(t, idx, PhaseOOBDelete, "Resource should be removed from inventory after OOB delete + sync: %v", err)
 	}
 	t.Log("OOB delete detection verified - sync correctly tombstoned the resource!")
