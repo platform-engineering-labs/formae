@@ -5,7 +5,17 @@
 .DEFAULT_GOAL := all
 
 DEBUG_GOFLAGS := -gcflags="all=-N -l"
-VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+
+# The latest tag, possibly carrying a `-channel` suffix (e.g., 0.85.0-dev).
+RAW_VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+# Canonical semver — everything before the first `-`. Used as the artifact
+# version for binaries, the PKL package, and the `formae --version` string.
+VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
+# Channel — everything after the first `-`, or `stable` if the tag has no
+# suffix. Mirrors the convention already used in justfile and container.yml.
+# The channel is a namespace (URL sub-path for PKL, --channel flag for
+# OPS/orbital), NOT part of the build identity.
+CHANNEL := $(shell t="$(RAW_VERSION)"; c="$${t#*-}"; if [ "$$c" = "$$t" ]; then echo stable; else echo "$$c"; fi)
 
 # External plugin Git repositories to bundle.
 # Append @branch or @tag to pin a specific ref (e.g., ...aws.git@feat/msgpack).
@@ -189,9 +199,13 @@ gen-pkl:
 pkg-pkl:
 	pkl project package ./internal/schema/pkl/schema --skip-publish-check
 
-## publish-pkl: Publish core formae schema to S3
+## publish-pkl: Publish core formae schema to S3.
+## The stable channel publishes to /formae/ (back-compat with existing plugin
+## pins). Other channels publish to /formae/<channel>/ so consumers can opt
+## into non-stable schema by URL — PKL has no native channel concept, so the
+## namespacing is encoded in the path.
 publish-pkl:
-	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
+	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae$(if $(filter-out stable,$(CHANNEL)),/$(CHANNEL),)/
 
 ## gen-external-pkl: Resolve external plugin PKL schemas (requires formae to be published first)
 gen-external-pkl: fetch-external-plugins
