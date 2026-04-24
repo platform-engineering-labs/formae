@@ -136,7 +136,7 @@ func (c *Client) ApplyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode,
 	case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -175,7 +175,7 @@ func (c *Client) DestroyForma(forma *pkgmodel.Forma, simulate bool, clientID str
 	case http.StatusBadRequest, http.StatusConflict:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -206,7 +206,7 @@ func (c *Client) DestroyByQuery(query string, simulate bool, clientID string) (*
 	case http.StatusBadRequest, http.StatusConflict:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -237,7 +237,7 @@ func (c *Client) CancelCommands(query string, clientID string) (*apimodel.Cancel
 	case http.StatusBadRequest:
 		return c.parseCancelCommandsErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -481,7 +481,7 @@ func (c *Client) ExtractResources(query string) (*pkgmodel.Forma, error) {
 		return c.parseListResourcesErrorResponse(resp.Body)
 
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -504,7 +504,7 @@ func (c *Client) ListTargets(query string) ([]*pkgmodel.Target, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -526,7 +526,7 @@ func (c *Client) ListStacks() ([]*pkgmodel.Stack, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -548,7 +548,7 @@ func (c *Client) ListPolicies() ([]apimodel.PolicyInventoryItem, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -591,7 +591,7 @@ func (c *Client) ForceReconcile(stackLabel string) (*apimodel.ForceReconcileResp
 	case http.StatusForbidden:
 		return nil, fmt.Errorf("stack does not have an auto-reconcile policy attached; force-reconcile requires one")
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -612,6 +612,6 @@ func (c *Client) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
 		}
 		return &result, nil
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
