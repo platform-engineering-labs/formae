@@ -576,4 +576,20 @@ facts {
         schema.Identifier == "BucketName" &&
         type == "AWS::S3::Bucket"
     }
+
+    ["FieldHint exposes HostsOn"] {
+        testHostsOnSchema.Hints["F1"].HostsOn == true
+    }
+
+    ["FieldHint HostsOn defaults to false"] {
+        (new formae.FieldHint {}).HostsOn == false
+    }
+}
+
+local testHostsOnSchema = new formae.Schema {
+    Identifier = "AWS::Test::Thing"
+    Fields = new Listing { "F1" }
+    Hints = new Mapping {
+        ["F1"] = new formae.FieldHint { hostsOn = true }
+    }
 }

@@ -176,6 +176,7 @@ open class FieldHint extends Annotation {
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
     hidden hasProviderDefault: Boolean = false
+    hidden hostsOn: Boolean = false
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
 
@@ -189,6 +190,7 @@ open class FieldHint extends Annotation {
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed HostsOn: Boolean = hostsOn
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
 }
