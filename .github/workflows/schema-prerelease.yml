@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Schema version to publish (e.g., 0.83.1)"
+        description: "Schema version to publish, optionally with a `-<channel>` suffix (e.g., `0.85.0` for stable, `0.85.0-dev` for the dev channel)"
         required: true
         type: string
       source_branch:
-        description: "Branch to build schema from (default: main)"
+        description: "Branch to build schema from"
         required: false
         default: "main"
         type: string
@@ -33,11 +33,26 @@ jobs:
           fetch-tags: true
 
       - name: Validate version format
+        # Accepts a bare semver (stable) or `<semver>-<channel>`. The Makefile's
+        # check-channel target enforces the allowlist (stable, dev) at publish
+        # time, so we only do a shape check here.
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Error: version must be semver format (e.g., 0.83.1)"
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-z][a-z0-9]*)?$'; then
+            echo "Error: version must be '<semver>' or '<semver>-<channel>' (e.g., 0.85.0 or 0.85.0-dev)"
             exit 1
           fi
+
+      - name: Configure git identity for ephemeral tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Tag HEAD locally so the Makefile derives VERSION + CHANNEL correctly
+        # The Makefile derives VERSION (stripped semver) and CHANNEL from
+        # `git describe --tags --abbrev=0`. Creating a local tag (not pushed)
+        # at HEAD lets `make gen-pkl pkg-pkl publish-pkl` route to the right
+        # channel sub-path with a clean filename.
+        run: git tag --annotate --message='schema-prerelease' '${{ inputs.version }}'
 
       - name: Install Pkl
         run: |
@@ -46,16 +61,16 @@ jobs:
       - name: Add PEL to PATH
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
-      - name: Set version and resolve
-        run: |
-          echo '${{ inputs.version }}' > ./version.semver
-          pkl project resolve internal/schema/pkl/schema
-
-      - name: Package schema
-        run: pkl project package ./internal/schema/pkl/schema --skip-publish-check
+      - name: Resolve and package schema
+        # Delegated to the Makefile so the channel-aware logic landed in the
+        # tree (gen-pkl writes a clean version.semver, pkg-pkl produces the
+        # `.out/formae@<semver>/` artifact) is the single source of truth.
+        run: make gen-pkl pkg-pkl
 
       - name: Show package contents
-        run: ls -la .out/formae@${{ inputs.version }}/
+        run: |
+          version=$(make -s version)
+          ls -la ".out/formae@$version/"
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -64,13 +79,25 @@ jobs:
           role-to-assume: arn:aws:iam::897722706215:role/github-pel
           role-session-name: SchemaPrerelease
 
-      - name: Publish schema to S3
-        run: aws s3 sync .out/formae@${{ inputs.version }} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
+      - name: Publish schema to S3 (channel-aware)
+        # `make publish-pkl` depends on `check-channel`, which fails loudly if
+        # the resolved CHANNEL is not in ALLOWED_CHANNELS — typo guard.
+        run: make publish-pkl
 
       - name: Summary
         run: |
+          version=$(make -s version)
+          # CHANNEL is computed by the Makefile from the tag suffix.
+          channel=$(make -s -p 2>/dev/null | sed -n 's/^CHANNEL := //p' | head -1)
+          if [ "$channel" = "stable" ]; then
+            url="package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@$version"
+          else
+            url="package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/$channel/formae@$version"
+          fi
           echo "## Schema Pre-release" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Source branch:** ${{ inputs.source_branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status:** Published to \`package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag input:** \`${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Resolved version:** \`$version\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Channel:** \`$channel\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source branch:** \`${{ inputs.source_branch }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL:** \`$url\`" >> $GITHUB_STEP_SUMMARY
