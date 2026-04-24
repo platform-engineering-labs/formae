@@ -1614,6 +1614,23 @@ type pluginOperationResult struct {
 	err             string // non-empty if the coordinator returned an error
 }
 
+// oobOperationTimeout caps how long retryOnRecoverable will wait on a single
+// OOB create/delete attempt. Slow cloud resources (e.g. AWS::EKS::Cluster,
+// which legitimately takes 10–15 min to reach ACTIVE) need a generous budget,
+// so the default is 30 min. Plugin authors with even slower resources can
+// override via FORMAE_CONFORMANCE_OOB_TIMEOUT (any Go duration string, e.g.
+// "45m" or "1h").
+const defaultOOBOperationTimeout = 30 * time.Minute
+
+func oobOperationTimeout() time.Duration {
+	if v := os.Getenv("FORMAE_CONFORMANCE_OOB_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultOOBOperationTimeout
+}
+
 // retryOnRecoverable executes a plugin operation (create/delete) with retries on recoverable errors.
 // The opFn performs the actor call and returns the initial result. The caller's label is used for logging.
 func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOperationResult, error)) (resource.ProgressResult, error) {
@@ -1631,8 +1648,8 @@ func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOpera
 
 		progress := res.initialProgress
 		if progress.OperationStatus == resource.OperationStatusInProgress {
-			h.t.Logf("%s in progress, waiting for completion...", label)
-			progress, err = h.waitForOperationProgress(res.operatorPID, progress, 10*time.Minute)
+			h.t.Logf("%s in progress, waiting for completion (timeout %s)...", label, oobOperationTimeout())
+			progress, err = h.waitForOperationProgress(res.operatorPID, progress, oobOperationTimeout())
 			if err != nil {
 				return resource.ProgressResult{}, fmt.Errorf("waiting for %s to complete: %w", label, err)
 			}
