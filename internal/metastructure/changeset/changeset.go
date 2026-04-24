@@ -216,31 +216,60 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 	}
 }
 
-// buildDeleteDependencies creates REVERSED dependencies for delete operations
+// buildDeleteDependencies creates dependencies for delete operations.
+// For most refs the direction is REVERSED (construction-reversed): the
+// dependency is deleted after the consumer. For refs annotated with
+// HostsOn=true the direction is FORWARD (reachability order): the
+// host resource is deleted first, then the hosted resource.
 func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.ResourceUpdate) {
 	deleteOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
-
-	// Collect all delete operations
 	for _, op := range allOps {
 		if op.Operation == resource_update.OperationDelete {
 			deleteOps[op.URI()] = op
 		}
 	}
 
-	// Build REVERSED dependencies for deletes
 	for _, deleteOp := range deleteOps {
 		dependentOpURI := createOperationURI(deleteOp.URI(), resource_update.OperationDelete)
 		dependentGroup := p.Nodes[dependentOpURI]
+		if dependentGroup == nil {
+			continue
+		}
+
+		// Build a lookup map from referenced-resource-ksuid → TargetPath using
+		// the actual Properties JSON. This lets us find the field hint for each
+		// reference. We fall back gracefully when a ref isn't found in the map.
+		refPathByKsuid := make(map[string]string)
+		for _, ref := range resolver.ExtractResolvableRefs(deleteOp.DesiredState) {
+			// ExtractResolvableRefs returns URIs of the form "formae://<ksuid>" (no
+			// fragment). Extract just the ksuid part.
+			ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
+			if ksuid != "" {
+				refPathByKsuid[ksuid] = ref.TargetPath
+			}
+		}
 
 		for _, resolvableURI := range deleteOp.RemainingResolvables {
-			dependencyBaseURI := resolvableURI.Stripped()
+			depBase := resolvableURI.Stripped()
+			if _, exists := deleteOps[depBase]; !exists {
+				continue
+			}
+			depNode := p.Nodes[createOperationURI(depBase, resource_update.OperationDelete)]
+			if depNode == nil {
+				continue
+			}
 
-			if _, exists := deleteOps[dependencyBaseURI]; exists {
-				dependencyOpURI := createOperationURI(dependencyBaseURI, resource_update.OperationDelete)
-				dependencyGroup := p.Nodes[dependencyOpURI]
-
-				// REVERSE: dependency delete waits for dependent delete to complete
-				dependencyGroup.LinkWith(dependentGroup)
+			// Look up the field hint for this reference by ksuid.
+			targetPath := refPathByKsuid[depBase.KSUID()]
+			hint := fieldHintForPath(deleteOp.DesiredState.Schema, targetPath)
+			if hint.HostsOn {
+				// Reachability edge: the hosting resource waits for the hosted-on
+				// resource's delete. Destroy order: hosted-on first, hosting second.
+				dependentGroup.LinkWith(depNode)
+			} else {
+				// Construction-reversed edge (existing behavior): B.delete waits
+				// for A.delete. Destroy order: consumer first, producer second.
+				depNode.LinkWith(dependentGroup)
 			}
 		}
 	}

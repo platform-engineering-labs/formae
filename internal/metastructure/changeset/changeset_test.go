@@ -5,6 +5,7 @@
 package changeset
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -2078,4 +2079,164 @@ func TestChangeset_SyncReadFailureDoesNotCascade(t *testing.T) {
 	remaining := cs.GetExecutableUpdates("AWS", 10)
 	require.Len(t, remaining, 1)
 	assert.NotEqual(t, failed.NodeURI(), remaining[0].NodeURI())
+}
+
+// dagNodeForOp returns the DAG node for (URI, operation).
+func dagNodeForOp(t *testing.T, dag *ExecutionDAG, uri pkgmodel.FormaeURI, op resource_update.OperationType) *DAGNode {
+	t.Helper()
+	opURI := createOperationURI(uri, op)
+	node, ok := dag.Nodes[opURI]
+	if !ok {
+		t.Fatalf("DAG missing node %s", opURI)
+	}
+	return node
+}
+
+// hasDependency reports whether `child` has `parent` in its Dependencies list.
+func hasDependency(child, parent *DAGNode) bool {
+	for _, d := range child.Dependencies {
+		if d == parent {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildDeleteDependencies_HostsOnInvertsEdgeDirection(t *testing.T) {
+	var (
+		aURI = pkgmodel.NewFormaeURI("A1", "")
+		bURI = pkgmodel.NewFormaeURI("B1", "")
+	)
+
+	build := func(t *testing.T, hint pkgmodel.FieldHint) *ExecutionDAG {
+		t.Helper()
+		aResource := pkgmodel.Resource{
+			Ksuid: "A1", Label: "a", Type: "Test::A", Stack: "s",
+			Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"f1": hint}},
+			Properties: json.RawMessage(`{
+				"f1": {"$ref":"formae://B1#/Out","$value":"v"}
+			}`),
+		}
+		bResource := pkgmodel.Resource{
+			Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s",
+			Properties: json.RawMessage(`{}`),
+		}
+
+		aDelete := resource_update.ResourceUpdate{
+			DesiredState:         aResource,
+			Operation:            resource_update.OperationDelete,
+			RemainingResolvables: []pkgmodel.FormaeURI{bURI},
+		}
+		bDelete := resource_update.ResourceUpdate{
+			DesiredState: bResource,
+			Operation:    resource_update.OperationDelete,
+		}
+		cs, err := NewChangeset([]resource_update.ResourceUpdate{aDelete, bDelete}, nil, "c1", pkgmodel.CommandApply)
+		if err != nil {
+			t.Fatalf("NewChangeset: %v", err)
+		}
+		return cs.DAG
+	}
+
+	t.Run("no hint: B.delete waits for A.delete (reverse construction)", func(t *testing.T) {
+		dag := build(t, pkgmodel.FieldHint{})
+		bNode := dagNodeForOp(t, dag, bURI, resource_update.OperationDelete)
+		aNode := dagNodeForOp(t, dag, aURI, resource_update.OperationDelete)
+		if !hasDependency(bNode, aNode) {
+			t.Fatalf("expected B.delete to depend on A.delete")
+		}
+		if hasDependency(aNode, bNode) {
+			t.Fatalf("did not expect A.delete to depend on B.delete without HostsOn")
+		}
+	})
+
+	t.Run("HostsOn: A.delete waits for B.delete (reachability order)", func(t *testing.T) {
+		dag := build(t, pkgmodel.FieldHint{HostsOn: true})
+		bNode := dagNodeForOp(t, dag, bURI, resource_update.OperationDelete)
+		aNode := dagNodeForOp(t, dag, aURI, resource_update.OperationDelete)
+		if !hasDependency(aNode, bNode) {
+			t.Fatalf("expected A.delete to depend on B.delete under HostsOn")
+		}
+		if hasDependency(bNode, aNode) {
+			t.Fatalf("did not expect B.delete to depend on A.delete under HostsOn")
+		}
+	})
+}
+
+func TestBuildDeleteDependencies_MixedRefsOnOneResourceGetIndependentDirections(t *testing.T) {
+	// A has two refs: f1 → B (HostsOn), f2 → C (no hint).
+	// Expected: A.delete waits for B.delete (HostsOn) AND C.delete waits for A.delete (reverse construction).
+	var (
+		aURI = pkgmodel.NewFormaeURI("A1", "")
+		bURI = pkgmodel.NewFormaeURI("B1", "")
+		cURI = pkgmodel.NewFormaeURI("C1", "")
+	)
+	aResource := pkgmodel.Resource{
+		Ksuid: "A1", Label: "a", Type: "Test::A", Stack: "s",
+		Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+			"f1": {HostsOn: true},
+			// "f2" intentionally absent → plain construction
+		}},
+		Properties: json.RawMessage(`{
+			"f1": {"$ref":"formae://B1#/Out","$value":"v"},
+			"f2": {"$ref":"formae://C1#/Out","$value":"v"}
+		}`),
+	}
+	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
+	cResource := pkgmodel.Resource{Ksuid: "C1", Label: "c", Type: "Test::C", Stack: "s", Properties: json.RawMessage(`{}`)}
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{
+			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI, cURI}},
+			{DesiredState: bResource, Operation: resource_update.OperationDelete},
+			{DesiredState: cResource, Operation: resource_update.OperationDelete},
+		}, nil, "c2", pkgmodel.CommandApply)
+	if err != nil {
+		t.Fatalf("NewChangeset: %v", err)
+	}
+
+	aNode := dagNodeForOp(t, cs.DAG, aURI, resource_update.OperationDelete)
+	bNode := dagNodeForOp(t, cs.DAG, bURI, resource_update.OperationDelete)
+	cNode := dagNodeForOp(t, cs.DAG, cURI, resource_update.OperationDelete)
+
+	if !hasDependency(aNode, bNode) {
+		t.Errorf("A.delete should depend on B.delete (HostsOn edge)")
+	}
+	if !hasDependency(cNode, aNode) {
+		t.Errorf("C.delete should depend on A.delete (reverse construction edge)")
+	}
+	if hasDependency(bNode, aNode) {
+		t.Errorf("B.delete should not depend on A.delete (HostsOn inverts this edge)")
+	}
+}
+
+func TestBuildDeleteDependencies_MissingHintFallsBackToConstructionReverse(t *testing.T) {
+	// A refs B via f1 but A's Schema.Hints is empty/nil. Expected: default
+	// construction-reverse behavior (B.delete waits for A.delete). No panic
+	// when the hint map is nil for the stripped path.
+	var (
+		aURI = pkgmodel.NewFormaeURI("A1", "")
+		bURI = pkgmodel.NewFormaeURI("B1", "")
+	)
+	aResource := pkgmodel.Resource{
+		Ksuid: "A1", Label: "a", Type: "Test::A", Stack: "s",
+		Schema:     pkgmodel.Schema{}, // no Hints map at all
+		Properties: json.RawMessage(`{"f1": {"$ref":"formae://B1#/Out","$value":"v"}}`),
+	}
+	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{
+			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI}},
+			{DesiredState: bResource, Operation: resource_update.OperationDelete},
+		}, nil, "c3", pkgmodel.CommandApply)
+	if err != nil {
+		t.Fatalf("NewChangeset: %v", err)
+	}
+
+	aNode := dagNodeForOp(t, cs.DAG, aURI, resource_update.OperationDelete)
+	bNode := dagNodeForOp(t, cs.DAG, bURI, resource_update.OperationDelete)
+	if !hasDependency(bNode, aNode) {
+		t.Fatalf("missing hint should fall through to construction-reverse: B.delete must depend on A.delete")
+	}
 }
