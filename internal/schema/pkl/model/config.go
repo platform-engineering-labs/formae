@@ -184,7 +184,7 @@ type ArtifactConfig struct {
 	URL          url.URL      `pkl:"url"`
 	Username     string       `pkl:"username"`
 	Password     string       `pkl:"password"`
-	Repositories []Repository `pkl:"repositories"`
+	Repositories []*Repository `pkl:"repositories"`
 }
 
 type CliConfig struct {
