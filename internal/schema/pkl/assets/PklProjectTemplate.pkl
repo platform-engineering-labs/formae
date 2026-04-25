@@ -6,26 +6,13 @@
 
 import "pkl:semver"
 
-/// Remote package dependency.
-///
-/// Input format from Go side (see Package.FormatForPklTemplate):
-///   plugin.name@version              — stable channel
-///   plugin.name@version;channel      — non-stable channel (e.g. "dev")
-///
-/// PKL has no native channel concept, so non-stable channels are encoded
-/// in the URL path. The package's manifest at the published URL is itself
-/// channel-aware (set by the formae Makefile's gen-pkl target writing a
-/// `channel` file consumed by formae's PklProject), so the URL produced
-/// here matches where the artefact actually lives.
+/// Remote package dependency (format: plugin.name@version)
 local class RemotePkg {
   plugin: String
   name: String
   version: semver.Version
-  channel: String? // null for stable, otherwise the channel name (e.g. "dev")
 
-  hidden channelPrefix: String = if (channel == null) "" else "\(channel)/"
-
-  function uri(): String = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(channelPrefix)\(name)@\(version.toString())"
+  function uri(): String = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(name)@\(version.toString())"
 }
 
 /// Local package dependency (format: local:name:path)
@@ -36,22 +23,14 @@ local class LocalPkg {
 
 local packageStrings = read("prop:packages").split(",")
 
-/// Filter and parse remote packages.
-///
-/// Stable form:     `plugin.name@version`              → `plugin.formae@0.85.0`
-/// Channel form:    `plugin.name@version;channel`      → `plugin.formae@0.85.0;dev`
-///
-/// The `;channel` suffix is appended by Go's FormatForPklTemplate when the
-/// package's Channel is non-empty and non-stable; absence implies stable.
+/// Filter and parse remote packages (format: plugin.name@version)
 local remotePkgs: List<RemotePkg> = packageStrings
   .filter((p) -> !p.startsWith("local:"))
-  .map((p) -> let (versionAndChannel = p.split("@")[1].split(";"))
-    new RemotePkg {
-      plugin = p.split(".")[0]
-      name = p.split(".")[1].split("@")[0]
-      version = semver.Version(versionAndChannel[0])
-      channel = if (versionAndChannel.length > 1) versionAndChannel[1] else null
-    })
+  .map((p) -> new RemotePkg {
+    plugin = p.split(".")[0]
+    name = p.split(".")[1].split("@")[0]
+    version = semver.Version(p.split("@")[1])
+  })
 
 /// Filter and parse local packages (format: local:name:path)
 local localPkgs: List<LocalPkg> = packageStrings

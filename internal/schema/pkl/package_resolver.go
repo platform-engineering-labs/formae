@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/masterminds/semver"
-	"github.com/platform-engineering-labs/formae"
 )
 
 // Package represents a PKL schema package dependency
@@ -20,27 +19,16 @@ type Package struct {
 	Name      string // Package name (e.g., "formae", "aws", "gcp")
 	Plugin    string // Plugin name for remote packages (e.g., "pkl", "aws")
 	Version   string // Version for remote packages
-	Channel   string // Release channel for remote packages (e.g., "stable", "dev"). Empty/"stable" → URL stays at the flat /<plugin>/<name>/ prefix; non-stable → /<channel>/ sub-path.
 	IsLocal   bool   // True if this is a local package
 	LocalPath string // Absolute path for local packages
 }
 
 // FormatForPklTemplate returns the package in the format expected by PklProjectTemplate.pkl
-//
-// Remote, stable channel:    "plugin.name@version"          (e.g., "pkl.formae@0.75.1")
-// Remote, non-stable channel: "plugin.name@version;channel"  (e.g., "pkl.formae@0.85.0;dev")
-// Local:                      "local:name:/path/to/PklProject"
-//
-// The `;channel` suffix is parsed by PklProjectTemplate.pkl to insert a
-// channel sub-path in the generated package URL. Stable packages are
-// emitted in the original 3-part form for back-compat with consumers that
-// don't know about channels.
+// Remote: "plugin.name@version" (e.g., "pkl.formae@0.75.1")
+// Local: "local:name:/path/to/PklProject" (e.g., "local:gcp:/path/to/PklProject")
 func (p Package) FormatForPklTemplate() string {
 	if p.IsLocal {
 		return fmt.Sprintf("local:%s:%s", p.Name, p.LocalPath)
-	}
-	if p.Channel != "" && p.Channel != "stable" {
-		return fmt.Sprintf("%s.%s@%s;%s", p.Plugin, p.Name, p.Version, p.Channel)
 	}
 	return fmt.Sprintf("%s.%s@%s", p.Plugin, p.Name, p.Version)
 }
@@ -94,20 +82,11 @@ func (r *PackageResolver) Add(namespace, plugin, version string) {
 		}
 	}
 
-	// Add as remote package. The channel is currently only meaningful for the
-	// formae self-package — external plugin schemas are pinned via their own
-	// PklProject files and resolved through pkl, so they carry their own
-	// channel info there. If we ever need per-plugin channels at the agent
-	// layer we'll plumb that through too.
-	channel := ""
-	if name == "formae" {
-		channel = formae.Channel
-	}
+	// Add as remote package
 	r.packages[name] = Package{
 		Name:    name,
 		Plugin:  strings.ToLower(plugin),
 		Version: version,
-		Channel: channel,
 		IsLocal: false,
 	}
 }

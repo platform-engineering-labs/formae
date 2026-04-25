@@ -57,7 +57,7 @@ clean-pel:
 	rm -rf ~/.pel/*
 
 build:
-	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}' -X 'github.com/platform-engineering-labs/formae.Channel=${CHANNEL}'" -o formae cmd/formae/main.go
+	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
