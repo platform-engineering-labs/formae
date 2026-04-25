@@ -139,12 +139,6 @@ jobs:
       - name: Publish core PKL schema to S3
         run: make publish-pkl
 
-      - name: Package external plugin PKL schemas
-        run: make pkg-external-pkl
-
-      - name: Publish external plugin PKL schemas to S3
-        run: make publish-external-pkl
-
   pkg_opkg:
     uses: "./.github/workflows/package.yml"
     secrets: inherit
