@@ -19,9 +19,13 @@ set -euo pipefail
 OUT="${1:?usage: $0 <output-dir>}"
 PLUGIN_REFS="${PLUGIN_REFS:-}"
 
-# Plugins required by the e2e suite. aws + azure are mandatory; compose
-# and grafana are optional (target-resolvable tests skip if missing).
-PLUGINS=(aws azure compose grafana)
+# Plugins required by the e2e suite.
+# - aws/azure: mandatory for cloud provider tests.
+# - compose/grafana: optional, used by target-resolvable tests; setup_pkl.sh
+#   gracefully skips related fixtures if missing.
+# - auth-basic: required by the agent at startup (formae refuses to boot
+#   without an auth plugin).
+PLUGINS=(aws azure compose grafana auth-basic)
 
 # Resolve any ref overrides into an associative array.
 declare -A REF
@@ -53,18 +57,25 @@ for p in "${PLUGINS[@]}"; do
 
     NAME=$(pkl eval -x 'name' formae-plugin.pkl)
     VERSION=$(pkl eval -x 'version' formae-plugin.pkl)
-    NAMESPACE=$(pkl eval -x 'namespace' formae-plugin.pkl)
-    NS_DIR=$(echo "$NAMESPACE" | tr '[:upper:]' '[:lower:]')
+    TYPE=$(pkl eval -x 'if (this.hasProperty("type")) type else "resource"' formae-plugin.pkl)
 
-    STAGE="$OUT/$NS_DIR/v$VERSION"
+    # Auth plugins are staged by name; resource plugins by lowercase namespace.
+    if [[ "$TYPE" == "auth" ]]; then
+        STAGE_DIR="$NAME"
+    else
+        NAMESPACE=$(pkl eval -x 'namespace' formae-plugin.pkl)
+        STAGE_DIR=$(echo "$NAMESPACE" | tr '[:upper:]' '[:lower:]')
+    fi
+
+    STAGE="$OUT/$STAGE_DIR/v$VERSION"
     mkdir -p "$STAGE/schema"
 
-    cp "bin/$NAME" "$STAGE/$NS_DIR"
+    cp "bin/$NAME" "$STAGE/$STAGE_DIR"
     cp formae-plugin.pkl "$STAGE/"
     if [[ -d schema/pkl ]]; then cp -r schema/pkl "$STAGE/schema/"; fi
     if [[ -f schema/Config.pkl ]]; then cp schema/Config.pkl "$STAGE/schema/"; fi
 
-    echo "==> Staged $NAME v$VERSION at $STAGE (namespace dir: $NS_DIR)"
+    echo "==> Staged $NAME v$VERSION at $STAGE"
     popd >/dev/null
 done
 
