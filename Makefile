@@ -12,7 +12,7 @@ VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-
 # Without @ref, the default branch (main) is used.
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
-    https://github.com/platform-engineering-labs/formae-plugin-aws.git \
+    https://github.com/platform-engineering-labs/formae-plugin-aws.git@feat/formae-0.85.0-flat-url \
     https://github.com/platform-engineering-labs/formae-plugin-azure.git \
     https://github.com/platform-engineering-labs/formae-plugin-compose.git \
     https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
