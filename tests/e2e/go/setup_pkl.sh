@@ -17,12 +17,23 @@ FIXTURES_DIR="$SCRIPT_DIR/fixtures"
 PLUGINS_DIR="$HOME/.pel/formae/plugins"
 PKLPROJECT_PATH="$FIXTURES_DIR/PklProject"
 
-# Ensure version.semver exists (needed by formae PklProject)
+# Ensure version.semver and channel exist (needed by formae PklProject).
+# Mirrors the Makefile: VERSION is the part before the first `-`, CHANNEL is
+# the part after (defaulting to `stable`). Channel is a URL namespace, not
+# part of the build identity, so it must not leak into the semver.
 VERSION_FILE="$REPO_ROOT/version.semver"
-if [[ ! -f "$VERSION_FILE" ]]; then
-    VERSION=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*" 2>/dev/null || echo "0.0.0-dev")
+CHANNEL_FILE="$REPO_ROOT/channel"
+if [[ ! -f "$VERSION_FILE" ]] || [[ ! -f "$CHANNEL_FILE" ]]; then
+    RAW_VERSION=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*" 2>/dev/null || echo "0.0.0")
+    VERSION="${RAW_VERSION%%-*}"
+    if [[ "$RAW_VERSION" == "$VERSION" ]]; then
+        CHANNEL="stable"
+    else
+        CHANNEL="${RAW_VERSION#*-}"
+    fi
     echo "$VERSION" > "$VERSION_FILE"
-    echo "Generated $VERSION_FILE with version $VERSION"
+    echo "$CHANNEL" > "$CHANNEL_FILE"
+    echo "Generated $VERSION_FILE ($VERSION) + $CHANNEL_FILE ($CHANNEL)"
 fi
 
 # hub_uri reads the baseUri and version from an installed plugin's schema
