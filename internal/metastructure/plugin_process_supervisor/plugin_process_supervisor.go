@@ -365,7 +365,6 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 		gen.Env("FORMAE_PLUGIN_NODE"):    nodeName,
 		gen.Env("FORMAE_NETWORK_COOKIE"): serverConfig.Secret,
 		gen.Env("FORMAE_VERSION"):        formae.Version,
-		gen.Env("FORMAE_CHANNEL"):        formae.Channel,
 		gen.Env("FORMAE_ERGO_PORT"):      strconv.Itoa(serverConfig.ErgoPort),
 		gen.Env("FORMAE_REGISTRAR_PORT"): strconv.Itoa(serverConfig.RegistrarPort),
 	}
