@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae"
 )
 
 func TestPackage_FormatForPklTemplate_Remote(t *testing.T) {
@@ -24,6 +26,60 @@ func TestPackage_FormatForPklTemplate_Remote(t *testing.T) {
 		IsLocal: false,
 	}
 	assert.Equal(t, "pkl.formae@0.75.1", pkg.FormatForPklTemplate())
+}
+
+func TestPackage_FormatForPklTemplate_RemoteWithChannel(t *testing.T) {
+	pkg := Package{
+		Name:    "formae",
+		Plugin:  "pkl",
+		Version: "0.85.0",
+		Channel: "dev",
+	}
+	assert.Equal(t, "pkl.formae@0.85.0;dev", pkg.FormatForPklTemplate(),
+		"non-stable channel should append `;<channel>` so the PKL template routes to /<channel>/")
+}
+
+func TestPackage_FormatForPklTemplate_RemoteStableChannelEmittedFlat(t *testing.T) {
+	pkg := Package{
+		Name:    "formae",
+		Plugin:  "pkl",
+		Version: "0.85.0",
+		Channel: "stable",
+	}
+	assert.Equal(t, "pkl.formae@0.85.0", pkg.FormatForPklTemplate(),
+		"stable channel should emit the legacy 3-part form for back-compat with consumers that don't know about channels")
+}
+
+func TestPackageResolver_AddFormae_PicksUpChannelFromBuildLdflag(t *testing.T) {
+	// formae.Channel is set by the Makefile's ldflag from CHANNEL. In tests
+	// the binary isn't ldflag-stamped, so we simulate by setting and restoring.
+	original := formae.Channel
+	t.Cleanup(func() { formae.Channel = original })
+	formae.Channel = "dev"
+
+	resolver := NewPackageResolver()
+	resolver.Add("formae", "pkl", "0.85.0")
+
+	packages := resolver.GetPackages()
+	assert.Len(t, packages, 1)
+	assert.Equal(t, "formae", packages[0].Name)
+	assert.Equal(t, "dev", packages[0].Channel,
+		"resolver.Add should snapshot formae.Channel onto the formae package so the URL routes correctly")
+	assert.Equal(t, "pkl.formae@0.85.0;dev", packages[0].FormatForPklTemplate())
+}
+
+func TestPackageResolver_AddNonFormae_DoesNotPickUpFormaeChannel(t *testing.T) {
+	original := formae.Channel
+	t.Cleanup(func() { formae.Channel = original })
+	formae.Channel = "dev"
+
+	resolver := NewPackageResolver()
+	resolver.Add("aws", "aws", "0.1.6")
+
+	packages := resolver.GetPackages()
+	assert.Len(t, packages, 1)
+	assert.Equal(t, "", packages[0].Channel,
+		"only the formae self-package picks up formae.Channel; external plugins carry their own pin via PklProject")
 }
 
 func TestPackage_FormatForPklTemplate_Local(t *testing.T) {

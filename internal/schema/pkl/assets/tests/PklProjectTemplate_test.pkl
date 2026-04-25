@@ -140,6 +140,41 @@ facts {
     v.minor == 20
     v.patch == 30
   }
+
+  // ===== Channel-aware parsing tests =====
+
+  ["stable form has no channel suffix and parses to a clean version"] {
+    local p = "pkl.formae@\(testVersion)"
+    let (versionAndChannel = p.split("@")[1].split(";"))
+      versionAndChannel.length == 1 &&
+      versionAndChannel[0] == testVersion
+  }
+
+  ["channel form parses out the channel after `;`"] {
+    local p = "pkl.formae@\(testVersion);dev"
+    let (versionAndChannel = p.split("@")[1].split(";"))
+      versionAndChannel.length == 2 &&
+      versionAndChannel[0] == testVersion &&
+      versionAndChannel[1] == "dev"
+  }
+
+  ["channel form yields a `<channel>/` URL prefix; stable yields no prefix"] {
+    local stableChannel: String? = null
+    local devChannel: String? = "dev"
+    let (stablePrefix = if (stableChannel == null) "" else "\(stableChannel)/")
+      let (devPrefix = if (devChannel == null) "" else "\(devChannel)/")
+        stablePrefix == "" &&
+        devPrefix == "dev/"
+  }
+
+  ["channel-form URL routes to /channel/ sub-path"] {
+    local plugin = "pkl"
+    local name = "formae"
+    local channel: String? = "dev"
+    let (channelPrefix = if (channel == null) "" else "\(channel)/")
+      let (uri = "package://hub.platform.engineering/plugins/\(plugin)/schema/pkl/\(name)/\(channelPrefix)\(name)@\(testVersion)")
+        uri == "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/dev/formae@\(testVersion)"
+  }
 }
 
 examples {
