@@ -15,7 +15,13 @@ VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
 # suffix. Mirrors the convention already used in justfile and container.yml.
 # The channel is a namespace (URL sub-path for PKL, --channel flag for
 # OPS/orbital), NOT part of the build identity.
-CHANNEL := $(shell t="$(RAW_VERSION)"; c="$${t#*-}"; if [ "$$c" = "$$t" ]; then echo stable; else echo "$$c"; fi)
+#
+# Implemented in pure Make builtins so it parses on GNU make 3.81 (the
+# macOS-default in CI) as well as 4.x (Linux). `subst` turns "0.85.0-dev"
+# into "0.85.0 dev"; `word 2` extracts "dev". `or` returns the first
+# non-empty arg, defaulting to "stable" when there is no `-channel`
+# suffix.
+CHANNEL := $(or $(word 2,$(subst -, ,$(RAW_VERSION))),stable)
 
 # Channels we accept publishing to. orbital's `ops publish` silently creates
 # unknown channels, so a tag typo would materialise a real channel in the
