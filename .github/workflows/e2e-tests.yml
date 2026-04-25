@@ -155,33 +155,22 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build plugin repo list with ref overrides
+      - name: Stage test plugins from source
+        env:
+          PLUGIN_REFS: ${{ github.event.inputs.plugin_refs }}
         run: |
-          # Start with default repos from Makefile
-          REPOS="$(grep -A 20 '^EXTERNAL_PLUGIN_REPOS' Makefile | grep '\.git' | sed 's/\\$//' | xargs)"
-
-          # Apply ref overrides from input (e.g., "aws=feat/msgpack,azure=feat/msgpack")
-          REFS="${{ github.event.inputs.plugin_refs }}"
-          if [ -n "$REFS" ]; then
-            IFS=',' read -ra PAIRS <<< "$REFS"
-            for pair in "${PAIRS[@]}"; do
-              name="${pair%%=*}"
-              ref="${pair##*=}"
-              REPOS=$(echo "$REPOS" | sed "s|formae-plugin-${name}.git\(@[^ ]*\)\{0,1\}|formae-plugin-${name}.git@${ref}|g")
-              echo "Pinning ${name} to ref: ${ref}"
-            done
-          fi
-
-          echo "EXTERNAL_PLUGIN_REPOS=${REPOS}" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/test-plugins"
+          bash scripts/setup-test-plugins.sh "$RUNNER_TEMP/test-plugins"
+          echo "FORMAE_PLUGIN_DIR=$RUNNER_TEMP/test-plugins" >> "$GITHUB_ENV"
 
       - name: Running ${{ matrix.test }}
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          FORMAE_PLUGIN_DIR: ${{ env.FORMAE_PLUGIN_DIR }}
         run: >-
           make test-e2e
           E2E_RUN_FLAGS="-run ${{ matrix.test }}"
-          EXTERNAL_PLUGIN_REPOS="${EXTERNAL_PLUGIN_REPOS}"
 
   cleanup:
     runs-on: ubuntu-latest

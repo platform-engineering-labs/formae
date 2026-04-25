@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FIXTURES_DIR="$SCRIPT_DIR/fixtures"
-PLUGINS_DIR="$HOME/.pel/formae/plugins"
+PLUGINS_DIR="${FORMAE_PLUGIN_DIR:-$HOME/.pel/formae/plugins}"
 PKLPROJECT_PATH="$FIXTURES_DIR/PklProject"
 
 # Ensure version.semver exists (needed by formae PklProject).
@@ -52,7 +52,7 @@ hub_uri() {
     if [[ -z "$plugin_dir" ]] || [[ ! -f "$plugin_dir/schema/pkl/PklProject" ]]; then
         if [[ "$required" == "true" ]]; then
             echo "ERROR: $alias plugin not found at $PLUGINS_DIR/$ns_dir/"
-            echo "Run 'make install-external-plugins' first."
+            echo "Run 'scripts/setup-test-plugins.sh \$FORMAE_PLUGIN_DIR' first, then re-run with FORMAE_PLUGIN_DIR set."
             exit 1
         else
             echo "WARN: $alias plugin not found at $PLUGINS_DIR/$ns_dir/ — related E2E tests will be skipped" >&2
