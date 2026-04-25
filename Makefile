@@ -5,7 +5,24 @@
 .DEFAULT_GOAL := all
 
 DEBUG_GOFLAGS := -gcflags="all=-N -l"
-VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+
+# The latest tag, possibly carrying a `-channel` suffix (e.g., 0.85.0-dev).
+RAW_VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+# Canonical semver — everything before the first `-`. Used as the artifact
+# version for binaries and the PKL package. Mirrors the convention already
+# in justfile and container.yml.
+VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
+# Channel — everything after the first `-`, or `stable` if the tag has no
+# suffix. Used for orbital channel routing. PKL schemas are always published
+# to a flat URL regardless of channel; channel only affects binary/container
+# release routing.
+#
+# Implemented in pure Make builtins so it parses on GNU make 3.81 (the
+# macOS-default in CI) as well as 4.x (Linux). `subst` turns "0.85.0-dev"
+# into "0.85.0 dev"; `word 2` extracts "dev". `or` returns the first
+# non-empty arg, defaulting to "stable" when there is no `-channel`
+# suffix.
+CHANNEL := $(or $(word 2,$(subst -, ,$(RAW_VERSION))),stable)
 
 # External plugin Git repositories to bundle.
 # Append @branch or @tag to pin a specific ref (e.g., ...aws.git@feat/msgpack).
