@@ -451,8 +451,11 @@ class Fq {
         }
     }
 
-    function findResourceHint(resourceClass: reflect.Class?): ResourceHint =
-      resourceClass.annotations.filterIsInstance(ResourceHint).firstOrNull ?? findResourceHint(resourceClass.superclass)
+    function findResourceHint(resourceClass: reflect.Class?): ResourceHint? =
+      if (resourceClass == null)
+        null
+      else
+        resourceClass.annotations.filterIsInstance(ResourceHint).firstOrNull ?? findResourceHint(resourceClass.superclass)
 
     function findSubResourceHint(resourceClass: reflect.Class?): SubResourceHint? =
       if (resourceClass == null)
