@@ -476,9 +476,13 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 
 		// Configure local schema resolution if requested
 		if schemaLocation == schema.SchemaLocationLocal {
-			homeDir, err := os.UserHomeDir()
-			if err == nil {
-				pluginsDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
+			pluginsDir := os.Getenv("FORMAE_PLUGIN_DIR")
+			if pluginsDir == "" {
+				if homeDir, err := os.UserHomeDir(); err == nil {
+					pluginsDir = filepath.Join(homeDir, ".pel", "formae", "plugins")
+				}
+			}
+			if pluginsDir != "" {
 				resolver.WithLocalSchemas(pluginsDir)
 			}
 		}
