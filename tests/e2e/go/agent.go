@@ -146,12 +146,17 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
     }`, options.authUsername, options.authPassword)
 	}
 
+	pluginDirBlock := ""
+	if dir := os.Getenv("FORMAE_PLUGIN_DIR"); dir != "" {
+		pluginDirBlock = fmt.Sprintf("\npluginDir = %q", dir)
+	}
+
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
  */
 
 amends "formae:/Config.pkl"
-%s
+%s%s
 agent {
     server {
         port = %d
@@ -182,7 +187,7 @@ cli {
     }
     disableUsageReporting = true%s
 }
-`, options.pklImports, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
+`, options.pklImports, pluginDirBlock, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)
