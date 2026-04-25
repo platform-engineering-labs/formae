@@ -51,7 +51,7 @@ func NewResourceUpdateForExisting(
 	}
 
 	var patchDocument json.RawMessage
-	var needsReplacement bool
+	var createOnlyPatch json.RawMessage
 
 	if hasChanges {
 		existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
@@ -64,7 +64,7 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
 		}
 
-		patchDocument, needsReplacement, err = patch.GeneratePatch(
+		patchDocument, createOnlyPatch, err = patch.GeneratePatch(
 			existingPluginProps,
 			newPluginProps,
 			resolvableProperties,
@@ -75,7 +75,7 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
 		}
 
-		if patchDocument == nil && !stackChanged {
+		if patchDocument == nil && len(createOnlyPatch) == 0 && !stackChanged {
 			return []ResourceUpdate{}, nil
 		}
 	} else {
@@ -83,9 +83,9 @@ func NewResourceUpdateForExisting(
 		filteredProps = existingResource.Properties
 	}
 
-	if needsReplacement {
-		// Replacement required
-		replaceUpdates, err := NewResourceUpdateForReplace(existingResource, newResource, existingTarget, newTarget, source)
+	if len(createOnlyPatch) > 0 {
+		// CreateOnly fields changed — plan a destroy+create instead of an update.
+		replaceUpdates, err := NewResourceUpdateForReplace(existingResource, newResource, existingTarget, newTarget, source, createOnlyPatch)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replacement updates for resource %s: %w", existingResource.Label, err)
 		}
@@ -129,6 +129,7 @@ func NewResourceUpdateForReplace(
 	existingTarget pkgmodel.Target,
 	newTarget pkgmodel.Target,
 	source FormaCommandSource,
+	createOnlyPatch json.RawMessage,
 ) ([]ResourceUpdate, error) {
 	GroupID := util.NewID()
 
@@ -145,6 +146,7 @@ func NewResourceUpdateForReplace(
 	}
 
 	deleteUpdate.GroupID = GroupID
+	deleteUpdate.CreateOnlyPatch = createOnlyPatch
 
 	// Create create operation for new resource
 	createUpdate := ResourceUpdate{

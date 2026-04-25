@@ -17,6 +17,7 @@ import (
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/registrar"
+	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 
 	"go.opentelemetry.io/contrib/instrumentation/host"
@@ -51,6 +52,37 @@ type PluginAnnouncement struct {
 	Capabilities         PluginCapabilities
 }
 
+// CheckAgentCompatibility verifies that the given agent version is compatible
+// with this SDK. Returns an error if the agent version is older than MinFormaeVersion.
+// Returns nil for empty or unparseable versions to avoid crashing when the env
+// var is not set or contains an unexpected format.
+func CheckAgentCompatibility(agentVersion string) error {
+	if agentVersion == "" || agentVersion == "0.0.0" {
+		return nil
+	}
+
+	agentVer, err := semver.NewVersion(agentVersion)
+	if err != nil {
+		// Don't crash on unparseable versions
+		return nil
+	}
+
+	minVer, err := semver.NewVersion(MinFormaeVersion)
+	if err != nil {
+		// MinFormaeVersion is a compile-time constant; if it's invalid, don't crash
+		return nil
+	}
+
+	if agentVer.LessThan(minVer) {
+		return fmt.Errorf(
+			"agent version %s is older than the minimum required by this plugin SDK (%s); please upgrade the formae agent",
+			agentVersion, MinFormaeVersion,
+		)
+	}
+
+	return nil
+}
+
 // Run starts the plugin process and announces it to the agent's PluginRegistry.
 // This is the main entry point for resource plugins.
 //
@@ -58,6 +90,11 @@ type PluginAnnouncement struct {
 // a simplified ResourcePlugin. For built-in plugins that implement FullResourcePlugin
 // directly, use this function.
 func Run(fp FullResourcePlugin) {
+	// Check that the agent is compatible with this SDK version
+	if err := CheckAgentCompatibility(os.Getenv("FORMAE_VERSION")); err != nil {
+		log.Fatal(err)
+	}
+
 	// Register message types for network serialization
 	registerEDFTypes()
 

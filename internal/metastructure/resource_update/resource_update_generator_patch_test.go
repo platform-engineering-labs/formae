@@ -225,6 +225,19 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 	assert.Contains(t, subnetDelete.RemainingResolvables, expectedVpcUri)
 	assert.Empty(t, vpcDelete.RemainingResolvables, "VPC delete should have no dependencies")
 	assert.Empty(t, vpcCreate.RemainingResolvables, "VPC create should have no dependencies")
+
+	// The VPC delete half of the replace pair carries the createOnly patch
+	// ops that triggered the replacement, so the CLI can render the reason.
+	// The create half must not carry it (otherwise the group coalescer would
+	// pick it up from the wrong side).
+	assert.NotEmpty(t, vpcDelete.CreateOnlyPatch,
+		"VPC delete must carry createOnly patch ops triggering the replace")
+	assert.Contains(t, string(vpcDelete.CreateOnlyPatch), "/CidrBlock",
+		"createOnly patch must reference the immutable field that triggered it")
+	assert.Empty(t, vpcCreate.CreateOnlyPatch,
+		"VPC create must NOT carry createOnly patch ops — only the delete half does")
+	assert.Empty(t, subnetDelete.CreateOnlyPatch,
+		"implicit delete (not a replacement) must NOT carry createOnly patch ops")
 }
 
 func TestGenerateResourceUpdatesForApply_PatchMode(t *testing.T) {

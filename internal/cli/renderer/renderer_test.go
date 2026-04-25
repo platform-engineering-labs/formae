@@ -171,6 +171,54 @@ func TestFormatHumanReadableStatus_Replacement(t *testing.T) {
 	assert.NotContains(t, result, "create resource test-subnet")
 }
 
+func TestRenderSimulation_Replacement_ShowsReason(t *testing.T) {
+	createOnlyPatch := json.RawMessage(`[{"op":"replace","path":"/FifoQueue","value":true}]`)
+	oldProps := json.RawMessage(`{"FifoQueue":false}`)
+	newProps := json.RawMessage(`{"FifoQueue":true}`)
+
+	simulation := apimodel.Simulation{
+		ChangesRequired: true,
+		Command: apimodel.Command{
+			CommandID: "test-replace-reason-id",
+			Command:   "apply",
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{
+					ResourceID:      util.NewID(),
+					ResourceType:    "FakeAWS::SQS::Queue",
+					ResourceLabel:   "my-queue",
+					StackName:       "test-stack",
+					Operation:       "delete",
+					State:           "NotStarted",
+					GroupID:         "replace-group-reason",
+					Properties:      oldProps,
+					CreateOnlyPatch: createOnlyPatch,
+				},
+				{
+					ResourceID:    util.NewID(),
+					ResourceType:  "FakeAWS::SQS::Queue",
+					ResourceLabel: "my-queue",
+					StackName:     "test-stack",
+					Operation:     "create",
+					State:         "NotStarted",
+					GroupID:       "replace-group-reason",
+					Properties:    newProps,
+				},
+			},
+		},
+	}
+
+	result, err := RenderSimulation(&simulation)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "replace resource my-queue")
+	assert.Contains(t, result, "of type FakeAWS::SQS::Queue")
+	assert.Contains(t, result, "because these immutable properties changed:")
+	assert.Contains(t, result, "FifoQueue")
+	// When CreateOnlyPatch is absent the header is not rendered — verified by
+	// TestFormatHumanReadableStatus_Replacement which does not carry the field.
+}
+
 func TestFormatHumanReadableStatus_UnmanagedMigration(t *testing.T) {
 	status := apimodel.Command{
 		CommandID: "test-unmanaged-id",

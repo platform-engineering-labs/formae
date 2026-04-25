@@ -29,6 +29,12 @@ const (
 // When schema has no hints (backwards compat), any change is treated as immutable.
 // Fields without a hint in the schema are treated as immutable (createOnly=true).
 func ClassifyConfigChange(existing, new json.RawMessage, schema pkgmodel.ConfigSchema) ConfigChangeType {
+	// Drop cached $value entries up front so a config with $ref+$value compares
+	// equal to one with only $ref. Without this, the early-return branches below
+	// would treat a cache-only diff as a real change.
+	existing = stripResolvableValuesRaw(existing)
+	new = stripResolvableValuesRaw(new)
+
 	if util.JsonEqualRaw(existing, new) {
 		return ConfigNoChange
 	}
@@ -91,6 +97,25 @@ func jsonBytesEqual(a, b json.RawMessage) bool {
 	aBytes, _ := json.Marshal(aVal)
 	bBytes, _ := json.Marshal(bVal)
 	return string(aBytes) == string(bBytes)
+}
+
+// stripResolvableValuesRaw returns a copy of raw with $value stripped from
+// every object that also carries a $ref. If raw is not valid JSON, it is
+// returned unchanged.
+func stripResolvableValuesRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	stripResolvableValues(v)
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // stripResolvableValues recursively removes $value from any object that

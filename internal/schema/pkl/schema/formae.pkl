@@ -176,6 +176,7 @@ open class FieldHint extends Annotation {
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
     hidden hasProviderDefault: Boolean = false
+    hidden attachesTo: Boolean = false
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
 
@@ -189,6 +190,7 @@ open class FieldHint extends Annotation {
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed AttachesTo: Boolean = attachesTo
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
 }
@@ -468,13 +470,9 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = resourceClass.properties.filter((_, v) ->
-            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
-            isSubResourceType(v.type)
-        ).flatMap((k, v) ->
-
+        let(nestedHints = resourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(subResourceClass = getSubResourceClass(v.type))
 
             let(subHintsMap = subHints(subResourceClass))
@@ -506,12 +504,9 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = subResourceClass.properties.filter((_, v) ->
-            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
-            isSubResourceType(v.type)
-        ).flatMap((k, v) ->
+        let(nestedHints = subResourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
+            let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(nestedSubResourceClass = getSubResourceClass(v.type))
             let(nestedSubHints = subHintsWithVisited(nestedSubResourceClass, nextVisited))
 

@@ -605,5 +605,12 @@ func transformContent(content string, config *PluginConfig) string {
 	// PKL import paths - @<packageName>/<packageName>.pkl
 	content = strings.ReplaceAll(content, `@example/example.pkl`, fmt.Sprintf(`@%s/%s.pkl`, config.Name, config.Name))
 
+	// PKL module name in Config.pkl
+	content = strings.ReplaceAll(content, "module example.Config", fmt.Sprintf("module %s.Config", config.Name))
+
+	// <PluginName> placeholder in doc comments (capitalize first letter for display)
+	displayName := strings.ToUpper(config.Name[:1]) + config.Name[1:]
+	content = strings.ReplaceAll(content, "<PluginName>", displayName)
+
 	return content
 }

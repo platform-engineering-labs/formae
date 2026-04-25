@@ -212,6 +212,19 @@ func getDiscoveryTimeout() time.Duration {
 	return 2 * time.Minute // Default timeout
 }
 
+// getOOBDeleteTimeout returns the timeout duration for the OOB-delete phase's
+// wait-for-inventory-removal step (sync must tombstone the out-of-band
+// deletion). It reads from FORMAE_TEST_OOB_DELETE_TIMEOUT (in minutes).
+// Default is 2 minutes. Raise for slow backends (e.g. managed Kubernetes).
+func getOOBDeleteTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_OOB_DELETE_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return 2 * time.Minute // Default timeout
+}
+
 // RunCRUDTests discovers test cases from the testdata directory and runs
 // the standard CRUD lifecycle test for each resource type.
 //
@@ -228,7 +241,8 @@ func getDiscoveryTimeout() time.Duration {
 //   - Deletes the resource via formae destroy
 //
 // Environment variables:
-//   - FORMAE_BINARY: Path to the formae binary (required)
+//   - FORMAE_BINARY: Path to the formae binary (optional). If not set, the binary is
+//     downloaded automatically via orbital.
 //   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
 //     Supports comma-separated patterns for multiple filters.
 //     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
@@ -237,6 +251,14 @@ func getDiscoveryTimeout() time.Duration {
 //     When set to "discovery", CRUD tests are skipped.
 //   - FORMAE_TEST_TIMEOUT: Timeout in minutes for long-running operations (optional).
 //     Default is 5 minutes. Set to 15 for slow resources like Cloud SQL.
+//   - FORMAE_TEST_OOB_TIMEOUT: Timeout in minutes for a single OOB Create or
+//     Delete RPC to the plugin during the discovery test's CreateOOB phase
+//     (optional). Default is 30 minutes. Raise for resources with longer
+//     provisioning times (e.g. AWS::EKS::Cluster, managed-Kubernetes on
+//     other providers).
+//   - FORMAE_TEST_OOB_DELETE_TIMEOUT: Timeout in minutes for the OOB-delete phase's
+//     wait-for-inventory-removal step (optional). Default is 2 minutes. Raise
+//     for slow backends (e.g. managed Kubernetes).
 //
 // This function should be called from a plugin's conformance_test.go:
 //
@@ -244,11 +266,6 @@ func getDiscoveryTimeout() time.Duration {
 //	    conformance.RunCRUDTests(t)
 //	}
 func RunCRUDTests(t *testing.T) {
-	// Skip if not running conformance tests
-	if os.Getenv("FORMAE_BINARY") == "" {
-		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
-	}
-
 	// Skip if test type is discovery-only
 	if getTestType() == TestTypeDiscovery {
 		t.Skip("Skipping CRUD tests: FORMAE_TEST_TYPE=discovery")
@@ -1512,7 +1529,7 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 
 	// === Step 24: Verify resource is removed from inventory (tombstoned by sync) ===
 	t.Log("Step 24: Waiting for resource to be removed from inventory after OOB delete...")
-	if err := harness.WaitForResourceRemovedFromInventory(actualResourceType, oobNativeID, 2*time.Minute); err != nil {
+	if err := harness.WaitForResourceRemovedFromInventory(actualResourceType, oobNativeID, getOOBDeleteTimeout()); err != nil {
 		rc.CRUDFatalf(t, idx, PhaseOOBDelete, "Resource should be removed from inventory after OOB delete + sync: %v", err)
 	}
 	t.Log("OOB delete detection verified - sync correctly tombstoned the resource!")
@@ -1533,7 +1550,8 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 //   - Cleans up the resource
 //
 // Environment variables:
-//   - FORMAE_BINARY: Path to the formae binary (required)
+//   - FORMAE_BINARY: Path to the formae binary (optional). If not set, the binary is
+//     downloaded automatically via orbital.
 //   - FORMAE_TEST_FILTER: Filter test cases by name, resource type, or file path (optional).
 //     Supports comma-separated patterns for multiple filters.
 //     Examples: "s3-bucket", "ec2-instance,vpc", "testdata/network"
@@ -1547,11 +1565,6 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 //	    conformance.RunDiscoveryTests(t)
 //	}
 func RunDiscoveryTests(t *testing.T) {
-	// Skip if not running conformance tests
-	if os.Getenv("FORMAE_BINARY") == "" {
-		t.Skip("Skipping conformance test: FORMAE_BINARY not set. Run 'make conformance-test' instead.")
-	}
-
 	// Skip if test type is CRUD-only
 	if getTestType() == TestTypeCRUD {
 		t.Skip("Skipping discovery tests: FORMAE_TEST_TYPE=crud")

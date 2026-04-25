@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -102,22 +103,8 @@ func getFreePort() (int, error) {
 
 // NewTestHarness creates a new test harness instance
 func NewTestHarness(t *testing.T) *TestHarness {
-	// Check for FORMAE_BINARY env var first
-	formaeBinary := os.Getenv("FORMAE_BINARY")
-	if formaeBinary == "" {
-		// Fall back to default path relative to repo root
-		// When running with `go test -C`, we need to go up to repo root
-		binPath := filepath.Join("..", "..", "..", "formae")
-		absPath, err := filepath.Abs(binPath)
-		if err != nil {
-			t.Fatalf("failed to get absolute path for formae binary: %v", err)
-		}
-		formaeBinary = absPath
-	}
-
-	if _, err := os.Stat(formaeBinary); os.IsNotExist(err) {
-		t.Fatalf("formae binary not found at %s. Set FORMAE_BINARY env var or run 'make build' first", formaeBinary)
-	}
+	// Acquire the formae binary, downloading via orbital if needed
+	formaeBinary, binaryCleanup := EnsureFormaeBinary(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -129,6 +116,19 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		cleanupFuncs: []func(){},
 		agentStarted: false,
 	}
+
+	// Register binary cleanup so any temp download directory is removed on teardown
+	h.RegisterCleanup(binaryCleanup)
+
+	// Resolve PKL dependencies for the plugin under test
+	pluginDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+	schemaDir := filepath.Join(pluginDir, "schema", "pkl")
+	testdataDir := filepath.Join(pluginDir, "testdata")
+	restorePKL := ResolvePKLDependencies(t, "", schemaDir, testdataDir)
+	t.Cleanup(restorePKL)
 
 	// Set up test environment (temp dir and config)
 	if err := h.setupTestEnvironment(); err != nil {
@@ -1615,6 +1615,29 @@ type pluginOperationResult struct {
 	err             string // non-empty if the coordinator returned an error
 }
 
+// oobOperationTimeout caps how long retryOnRecoverable will wait on a single
+// OOB Create or Delete RPC attempt to the plugin (via waitForOperationProgress).
+// Slow cloud resources — AWS::EKS::Cluster is ~10–15 min to reach ACTIVE,
+// RDS clusters and managed Kubernetes clusters on other providers are
+// similar — need a generous budget, so the default is 30 min. Plugin
+// authors can override via FORMAE_TEST_OOB_TIMEOUT (integer minutes,
+// matching FORMAE_TEST_TIMEOUT / FORMAE_TEST_DISCOVERY_TIMEOUT).
+//
+// This is distinct from FORMAE_TEST_OOB_DELETE_TIMEOUT, which bounds the
+// *post-sync inventory tombstone wait* after an OOB delete has already
+// returned from the plugin — a separate, much shorter wait handled in
+// runner.go's Step 24.
+const defaultOOBOperationTimeoutMinutes = 30
+
+func oobOperationTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_OOB_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return defaultOOBOperationTimeoutMinutes * time.Minute
+}
+
 // retryOnRecoverable executes a plugin operation (create/delete) with retries on recoverable errors.
 // The opFn performs the actor call and returns the initial result. The caller's label is used for logging.
 func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOperationResult, error)) (resource.ProgressResult, error) {
@@ -1632,8 +1655,8 @@ func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOpera
 
 		progress := res.initialProgress
 		if progress.OperationStatus == resource.OperationStatusInProgress {
-			h.t.Logf("%s in progress, waiting for completion...", label)
-			progress, err = h.waitForOperationProgress(res.operatorPID, progress, 10*time.Minute)
+			h.t.Logf("%s in progress, waiting for completion (timeout %s)...", label, oobOperationTimeout())
+			progress, err = h.waitForOperationProgress(res.operatorPID, progress, oobOperationTimeout())
 			if err != nil {
 				return resource.ProgressResult{}, fmt.Errorf("waiting for %s to complete: %w", label, err)
 			}

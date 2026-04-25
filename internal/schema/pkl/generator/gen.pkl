@@ -60,6 +60,15 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     else
       Unexpected("Dynamic|Collection", value.getClass().simpleName)
 
+  [Float] = (_, value) ->
+    if (value is Float) value
+    else if (value is Int) value.toFloat()
+    else if (value is String)
+      let (parsed = value.toFloatOrNull())
+        if (parsed != null) parsed
+        else Unexpected("Float", "String('\(value)') that cannot be parsed as Float")
+    else Unexpected("Float", value.getClass().simpleName)
+
   [Number] = (_, value) ->
     if (value is Number) value
     else if (value is String)

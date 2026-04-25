@@ -46,6 +46,30 @@ func ExtractResolvableURIs(resource pkgmodel.Resource) []pkgmodel.FormaeURI {
 	return resolver.getResolvableURIs()
 }
 
+// ResolvableRef pairs a resolvable's target resource URI with the field-path
+// at which the reference appears in the consuming resource. Consumers that
+// need to look up per-field schema hints use this instead of ExtractResolvableURIs.
+type ResolvableRef struct {
+	URI        pkgmodel.FormaeURI // resource being referenced
+	TargetPath string             // dot-separated path within the consuming resource
+}
+
+// ExtractResolvableRefs returns every resolvable in the resource along with
+// the path at which it sits. Supersedes ExtractResolvableURIs for callers that
+// need TargetPath; the URI-only helper is retained for existing callers.
+func ExtractResolvableRefs(resource pkgmodel.Resource) []ResolvableRef {
+	pr := newPropertyResolverFromResource(resource)
+	out := make([]ResolvableRef, 0, len(pr.refs))
+	for _, refs := range pr.refs {
+		for _, ref := range refs {
+			// Construct URI without fragment (just scheme://ksuid)
+			uri := pkgmodel.FormaeURI(fmt.Sprintf("formae://%s", ref.ResourceURI.KSUID()))
+			out = append(out, ResolvableRef{URI: uri, TargetPath: ref.TargetPath})
+		}
+	}
+	return out
+}
+
 // ExtractResolvableURIsFromJSON extracts all resolvable URIs from raw JSON.
 // Used for target Config fields.
 func ExtractResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.FormaeURI {
