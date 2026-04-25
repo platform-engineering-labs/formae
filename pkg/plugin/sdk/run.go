@@ -24,23 +24,61 @@ import (
 )
 
 const (
-	// FormaeSchemaPackageURL is the base URL for the formae schema package.
-	// The version will be appended at runtime.
-	FormaeSchemaPackageURL = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@"
+	// formaeSchemaPackageURLBase is the base URL for the formae schema package.
+	// The channel sub-path (if any) and version are inserted at runtime — see
+	// formaeSchemaPackageURL.
+	formaeSchemaPackageURLBase = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/"
 
 	// FormaeVersionEnvVar is the environment variable set by the agent when spawning plugins.
 	// It contains the formae version to use for schema resolution.
 	FormaeVersionEnvVar = "FORMAE_VERSION"
+
+	// FormaeChannelEnvVar is the environment variable set by the agent when
+	// spawning plugins. It contains the formae release channel (e.g.,
+	// "stable", "dev"). The plugin SDK uses it to route the formae schema
+	// URL to the right channel sub-path. Empty / "stable" → flat path.
+	FormaeChannelEnvVar = "FORMAE_CHANNEL"
 
 	// FormaePluginLogLevelEnvVar controls the log level for plugin output.
 	// Valid values: debug, info, warn, error. Default: info.
 	FormaePluginLogLevelEnvVar = "FORMAE_LOG_PLUGINS"
 )
 
+// FormaeSchemaPackageURL is retained for back-compat with any out-of-tree
+// callers; it points at the flat (stable-channel) URL prefix. New code
+// should use formaeSchemaPackageURL which is channel-aware.
+//
+// Deprecated: use formaeSchemaPackageURL.
+const FormaeSchemaPackageURL = formaeSchemaPackageURLBase + "formae@"
+
+// formaeSchemaPackageURL constructs the package URL for the formae schema
+// at the given version, prefixing the channel sub-path when channel is
+// non-empty and non-stable. PKL has no native channel concept, so the
+// channel must be encoded in the URL path.
+//
+//   formaeSchemaPackageURL("0.85.0", "")        → ".../formae/formae@0.85.0"
+//   formaeSchemaPackageURL("0.85.0", "stable")  → ".../formae/formae@0.85.0"
+//   formaeSchemaPackageURL("0.85.0", "dev")     → ".../formae/dev/formae@0.85.0"
+func formaeSchemaPackageURL(version, channel string) string {
+	if channel == "" || channel == "stable" {
+		return formaeSchemaPackageURLBase + "formae@" + version
+	}
+	return formaeSchemaPackageURLBase + channel + "/formae@" + version
+}
+
 // getFormaeVersion returns the formae version to use for schema resolution.
 // The FORMAE_VERSION env var is set by the agent when spawning plugins.
 func getFormaeVersion() string {
 	return os.Getenv(FormaeVersionEnvVar)
+}
+
+// getFormaeChannel returns the formae release channel, defaulting to
+// "stable" when the env var is unset. Stable maps to the flat URL prefix.
+func getFormaeChannel() string {
+	if c := os.Getenv(FormaeChannelEnvVar); c != "" {
+		return c
+	}
+	return "stable"
 }
 
 // getPluginLogLevel returns the slog.Level for plugin logging based on env var.
@@ -171,7 +209,7 @@ func SetupPlugin(ctx context.Context, p plugin.ResourcePlugin, config RunConfig)
 	formaeSchemaPath := config.FormaeSchemaPath
 	if formaeSchemaPath == "" {
 		// Use remote package URL with the formae version from agent (or manifest fallback)
-		formaeSchemaPath = FormaeSchemaPackageURL + getFormaeVersion()
+		formaeSchemaPath = formaeSchemaPackageURL(getFormaeVersion(), getFormaeChannel())
 	}
 
 	// 4. Build dependencies for schema extraction
@@ -258,7 +296,7 @@ func SetupPluginFromDir(ctx context.Context, p plugin.ResourcePlugin, pluginDir 
 	formaeSchemaPath := config.FormaeSchemaPath
 	if formaeSchemaPath == "" {
 		// Use remote package URL with the formae version from agent (or manifest fallback)
-		formaeSchemaPath = FormaeSchemaPackageURL + getFormaeVersion()
+		formaeSchemaPath = formaeSchemaPackageURL(getFormaeVersion(), getFormaeChannel())
 	}
 
 	// 3. Build dependencies for schema extraction
