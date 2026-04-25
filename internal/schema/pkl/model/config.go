@@ -181,9 +181,9 @@ type Repository struct {
 }
 
 type ArtifactConfig struct {
-	URL          url.URL      `pkl:"url"`
-	Username     string       `pkl:"username"`
-	Password     string       `pkl:"password"`
+	URL          url.URL       `pkl:"url"`
+	Username     string        `pkl:"username"`
+	Password     string        `pkl:"password"`
 	Repositories []*Repository `pkl:"repositories"`
 }
 
