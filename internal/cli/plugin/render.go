@@ -84,31 +84,31 @@ func renderPluginInfo(p *apimodel.Plugin) string {
 	if p.InstalledVersion != "" {
 		installed = " (installed)"
 	}
-	sb.WriteString(fmt.Sprintf("%s %s%s\n", display.LightBlue(p.Name), p.InstalledVersion, display.Green(installed)))
-	sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Type:"), p.Type))
+	fmt.Fprintf(&sb, "%s %s%s\n", display.LightBlue(p.Name), p.InstalledVersion, display.Green(installed))
+	fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Type:"), p.Type)
 	if p.Namespace != "" {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Namespace:"), p.Namespace))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Namespace:"), p.Namespace)
 	}
 	if p.Category != "" {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Category:"), p.Category))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Category:"), p.Category)
 	}
 	if p.Summary != "" {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Summary:"), p.Summary))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Summary:"), p.Summary)
 	}
 	if p.Publisher != "" {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Publisher:"), p.Publisher))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Publisher:"), p.Publisher)
 	}
 	if p.License != "" {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("License:"), p.License))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("License:"), p.License)
 	}
 	if p.Channel != "" {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Channel:"), p.Channel))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Channel:"), p.Channel)
 	}
 	if len(p.AvailableVersions) > 0 {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Available:"), strings.Join(p.AvailableVersions, ", ")))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Available:"), strings.Join(p.AvailableVersions, ", "))
 	}
 	if p.ManagedBy != "" {
-		sb.WriteString(fmt.Sprintf("  %-14s %s\n", display.Grey("Part of:"), p.ManagedBy))
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Part of:"), p.ManagedBy)
 	}
 	return sb.String()
 }

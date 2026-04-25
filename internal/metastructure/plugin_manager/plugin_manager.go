@@ -100,11 +100,6 @@ func New(logger *slog.Logger, repos []pkgmodel.Repository) (*PluginManager, erro
 	return &PluginManager{logger: logger, orb: orb}, nil
 }
 
-// newForTesting creates a PluginManager with a fake orbital client.
-func newForTesting(logger *slog.Logger, orb orbitalClient) *PluginManager {
-	return &PluginManager{logger: logger, orb: orb}
-}
-
 // List returns every installed plugin.
 func (pm *PluginManager) List() ([]Plugin, error) {
 	pkgs, err := pm.orb.List()
