@@ -9,26 +9,27 @@ DEBUG_GOFLAGS := -gcflags="all=-N -l"
 # The latest tag, possibly carrying a `-channel` suffix (e.g., 0.85.0-dev).
 RAW_VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
 # Canonical semver — everything before the first `-`. Used as the artifact
-# version for binaries, the PKL package, and the `formae --version` string.
+# version for binaries and the PKL package. Mirrors the convention already
+# in justfile and container.yml.
 VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
 # Channel — everything after the first `-`, or `stable` if the tag has no
-# suffix. Mirrors the convention already used in justfile and container.yml.
-# The channel is a namespace (URL sub-path for PKL, --channel flag for
-# OPS/orbital), NOT part of the build identity.
-CHANNEL := $(shell t="$(RAW_VERSION)"; c="$${t#*-}"; if [ "$$c" = "$$t" ]; then echo stable; else echo "$$c"; fi)
-
-# Channels we accept publishing to. orbital's `ops publish` silently creates
-# unknown channels, so a tag typo would materialise a real channel in the
-# package index. Gate the publish on an explicit allowlist to make typos
-# loud instead of silent.
-ALLOWED_CHANNELS := stable dev
+# suffix. Used for orbital channel routing. PKL schemas are always published
+# to a flat URL regardless of channel; channel only affects binary/container
+# release routing.
+#
+# Implemented in pure Make builtins so it parses on GNU make 3.81 (the
+# macOS-default in CI) as well as 4.x (Linux). `subst` turns "0.85.0-dev"
+# into "0.85.0 dev"; `word 2` extracts "dev". `or` returns the first
+# non-empty arg, defaulting to "stable" when there is no `-channel`
+# suffix.
+CHANNEL := $(or $(word 2,$(subst -, ,$(RAW_VERSION))),stable)
 
 # External plugin Git repositories to bundle.
 # Append @branch or @tag to pin a specific ref (e.g., ...aws.git@feat/msgpack).
 # Without @ref, the default branch (main) is used.
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
-    https://github.com/platform-engineering-labs/formae-plugin-aws.git \
+    https://github.com/platform-engineering-labs/formae-plugin-aws.git@feat/0.1.6-attachesto \
     https://github.com/platform-engineering-labs/formae-plugin-azure.git \
     https://github.com/platform-engineering-labs/formae-plugin-compose.git \
     https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
@@ -153,7 +154,6 @@ build-debug:
 
 pkg-bin: clean build build-external-plugins
 	echo '${VERSION}' > ./version.semver
-	echo '${CHANNEL}' > ./channel
 	mkdir -p ./dist/pel/bin
 	mkdir -p ./dist/pel/formae/plugins
 	cp -Rp ./formae ./dist/pel/bin
@@ -197,7 +197,6 @@ pkg-bin: clean build build-external-plugins
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
-	echo '${CHANNEL}' > ./channel
 	pkl project resolve internal/schema/pkl/schema
 	pkl project resolve internal/schema/pkl/generator
 	pkl project resolve internal/schema/pkl/testdata/forma
@@ -207,22 +206,9 @@ gen-pkl:
 pkg-pkl:
 	pkl project package ./internal/schema/pkl/schema --skip-publish-check
 
-## check-channel: Fail if the tag's channel is not in ALLOWED_CHANNELS.
-## A separate target so any publish step that relies on CHANNEL can depend on it.
-check-channel:
-	@if [ -z "$(filter $(CHANNEL),$(ALLOWED_CHANNELS))" ]; then \
-	    echo "ERROR: channel '$(CHANNEL)' (from tag '$(RAW_VERSION)') is not in ALLOWED_CHANNELS: $(ALLOWED_CHANNELS)" >&2; \
-	    echo "       Use a bare semver tag for stable (e.g. 0.85.0) or a '-dev' suffix (e.g. 0.85.0-dev)." >&2; \
-	    exit 1; \
-	fi
-
-## publish-pkl: Publish core formae schema to S3.
-## The stable channel publishes to /formae/ (back-compat with existing plugin
-## pins). Other channels publish to /formae/<channel>/ so consumers can opt
-## into non-stable schema by URL — PKL has no native channel concept, so the
-## namespacing is encoded in the path.
-publish-pkl: check-channel
-	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae$(if $(filter-out stable,$(CHANNEL)),/$(CHANNEL),)/
+## publish-pkl: Publish core formae schema to S3
+publish-pkl:
+	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
 
 ## gen-external-pkl: Resolve external plugin PKL schemas (requires formae to be published first)
 gen-external-pkl: fetch-external-plugins
