@@ -153,7 +153,6 @@ build-debug:
 
 pkg-bin: clean build build-external-plugins
 	echo '${VERSION}' > ./version.semver
-	echo '${CHANNEL}' > ./channel
 	mkdir -p ./dist/pel/bin
 	mkdir -p ./dist/pel/formae/plugins
 	cp -Rp ./formae ./dist/pel/bin
@@ -197,7 +196,6 @@ pkg-bin: clean build build-external-plugins
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
-	echo '${CHANNEL}' > ./channel
 	pkl project resolve internal/schema/pkl/schema
 	pkl project resolve internal/schema/pkl/generator
 	pkl project resolve internal/schema/pkl/testdata/forma
