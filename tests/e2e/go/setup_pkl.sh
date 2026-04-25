@@ -17,24 +17,25 @@ FIXTURES_DIR="$SCRIPT_DIR/fixtures"
 PLUGINS_DIR="$HOME/.pel/formae/plugins"
 PKLPROJECT_PATH="$FIXTURES_DIR/PklProject"
 
-# Ensure version.semver and channel exist (needed by formae PklProject).
-# Mirrors the Makefile: VERSION is the part before the first `-`, CHANNEL is
-# the part after (defaulting to `stable`). Channel is a URL namespace, not
-# part of the build identity, so it must not leak into the semver.
+# Ensure version.semver exists (needed by formae PklProject).
+# Strip any pre-release suffix (e.g. 0.85.0-dev → 0.85.0) so the build
+# identity is the canonical semver, matching what schema-prerelease publishes
+# to the hub.
 VERSION_FILE="$REPO_ROOT/version.semver"
-CHANNEL_FILE="$REPO_ROOT/channel"
-if [[ ! -f "$VERSION_FILE" ]] || [[ ! -f "$CHANNEL_FILE" ]]; then
+if [[ ! -f "$VERSION_FILE" ]]; then
     RAW_VERSION=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*" 2>/dev/null || echo "0.0.0")
     VERSION="${RAW_VERSION%%-*}"
-    if [[ "$RAW_VERSION" == "$VERSION" ]]; then
-        CHANNEL="stable"
-    else
-        CHANNEL="${RAW_VERSION#*-}"
-    fi
     echo "$VERSION" > "$VERSION_FILE"
-    echo "$CHANNEL" > "$CHANNEL_FILE"
-    echo "Generated $VERSION_FILE ($VERSION) + $CHANNEL_FILE ($CHANNEL)"
+    echo "Generated $VERSION_FILE ($VERSION)"
 fi
+
+# Resolve formae from the hub — mirrors how a real user's PklProject references
+# formae (by hub URI, not by local path) and ensures PKL nominal type identity
+# between the fixture's formae and the formae pinned by hub-fetched plugin
+# schemas. Requires the corresponding schema version to have been published
+# via the schema-prerelease workflow.
+FORMAE_VERSION=$(cat "$VERSION_FILE")
+FORMAE_URI="package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@${FORMAE_VERSION}"
 
 # hub_uri reads the baseUri and version from an installed plugin's schema
 # PklProject and emits a PklProject dependency line using the hub URI.
@@ -73,13 +74,15 @@ AZURE_DEP=$(hub_uri "azure" "azure" true)
 COMPOSE_DEP=$(hub_uri "docker" "compose" false)
 GRAFANA_DEP=$(hub_uri "grafana" "grafana" false)
 
-# Generate PklProject. Formae core uses local schema (testing from source);
-# all plugins use published hub URIs.
+# Generate PklProject. Both formae core and plugins are pinned via hub URIs
+# — matches a real user's setup, and avoids the PKL type-identity split that
+# would happen if the fixture's formae and a plugin's formae were declared
+# at different URIs.
 cat > "$PKLPROJECT_PATH" << EOF
 amends "pkl:Project"
 
 dependencies {
-  ["formae"] = import("../../../../internal/schema/pkl/schema/PklProject")
+  ["formae"] { uri = "$FORMAE_URI" }
 $AWS_DEP
 $AZURE_DEP
 ${COMPOSE_DEP:+$COMPOSE_DEP
