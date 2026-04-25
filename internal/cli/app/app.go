@@ -780,7 +780,10 @@ func parseIncludeSpec(include string) (namespace string, isLocal bool) {
 // Returns (schemaPath, version) where schemaPath is the path to PklProject (empty if no schema),
 // and version is the highest installed version (empty if plugin not installed).
 func (p *Projects) findInstalledPlugin(namespace string) (schemaPath string, version string) {
-	pluginsDir := util.ExpandHomePath("~/.pel/formae/plugins")
+	pluginsDir := os.Getenv("FORMAE_PLUGIN_DIR")
+	if pluginsDir == "" {
+		pluginsDir = util.ExpandHomePath("~/.pel/formae/plugins")
+	}
 
 	// Case-insensitive lookup: list plugins dir and find matching name
 	pluginEntries, err := os.ReadDir(pluginsDir)

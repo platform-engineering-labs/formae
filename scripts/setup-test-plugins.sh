@@ -25,7 +25,8 @@ PLUGIN_REFS="${PLUGIN_REFS:-}"
 #   gracefully skips related fixtures if missing.
 # - auth-basic: required by the agent at startup (formae refuses to boot
 #   without an auth plugin).
-PLUGINS=(aws azure compose grafana auth-basic)
+# - sftp: required by TestPluginConfig (imports plugins:/Sftp.pkl).
+PLUGINS=(aws azure compose grafana auth-basic sftp)
 
 # Resolve any ref overrides into an associative array.
 declare -A REF
