@@ -29,7 +29,7 @@ CHANNEL := $(or $(word 2,$(subst -, ,$(RAW_VERSION))),stable)
 # Without @ref, the default branch (main) is used.
 EXTERNAL_PLUGIN_REPOS ?= \
     https://github.com/platform-engineering-labs/formae-plugin-auth-basic.git \
-    https://github.com/platform-engineering-labs/formae-plugin-aws.git \
+    https://github.com/platform-engineering-labs/formae-plugin-aws.git@feat/0.1.6-attachesto \
     https://github.com/platform-engineering-labs/formae-plugin-azure.git \
     https://github.com/platform-engineering-labs/formae-plugin-compose.git \
     https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
