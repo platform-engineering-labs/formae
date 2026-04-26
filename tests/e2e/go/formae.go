@@ -481,12 +481,15 @@ func (f *FormaeCLI) DestroyExpectError(t *testing.T, fixturePath string, extraAr
 }
 
 // ProjectInit runs `formae project init` to generate a new project in the
-// given directory. This is a CLI-only command that does not require an agent.
+// given directory. This is a CLI-only command that does not require an agent,
+// but it still needs --config so the CLI can resolve the configured plugin
+// directory when looking up @local plugin schemas.
 func (f *FormaeCLI) ProjectInit(t *testing.T, dir string, includes ...string) {
 	t.Helper()
 
 	args := []string{
 		"project", "init", dir,
+		"--config", f.configPath,
 		"--schema", "pkl",
 		"--yes",
 	}
@@ -494,8 +497,6 @@ func (f *FormaeCLI) ProjectInit(t *testing.T, dir string, includes ...string) {
 		args = append(args, "--include", inc)
 	}
 
-	// ProjectInit does not need --config (no agent), so use exec.Command
-	// directly instead of f.run() which always adds --config.
 	cmd := exec.Command(f.binaryPath, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
