@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
@@ -41,6 +42,7 @@ func ProjectInitCmd() *cobra.Command {
 			schema, _ := command.Flags().GetString("schema")
 			include, _ := command.Flags().GetStringArray("include")
 			yes, _ := command.Flags().GetBool("yes")
+			pluginDir, _ := command.Flags().GetString("plugin-dir")
 
 			// Confirm with user if no plugins specified
 			if len(include) == 0 && !yes {
@@ -56,12 +58,8 @@ func ProjectInitCmd() *cobra.Command {
 				fmt.Println()
 			}
 
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
-			if err != nil {
-				return err
-			}
-
-			return app.Projects.Init(command.Flags().Arg(0), schema, include, util.ExpandHomePath(app.Config.PluginDir))
+			projects := &app.Projects{}
+			return projects.Init(command.Flags().Arg(0), schema, include, util.ExpandHomePath(pluginDir))
 		},
 		SilenceErrors: true,
 	}
@@ -69,6 +67,7 @@ func ProjectInitCmd() *cobra.Command {
 	command.Flags().String("schema", "pkl", "Schema to use for the project (pkl)")
 	command.Flags().StringArray("include", []string{}, "Packages to include (use @local suffix for local plugins, e.g. myplugin@local)")
 	command.Flags().BoolP("yes", "y", false, "Skip confirmation prompts")
+	command.Flags().String("plugin-dir", "~/.pel/formae/plugins", "Directory to scan for @local plugin schemas")
 
 	return command
 }
