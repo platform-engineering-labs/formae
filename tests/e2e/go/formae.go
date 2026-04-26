@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -481,17 +482,20 @@ func (f *FormaeCLI) DestroyExpectError(t *testing.T, fixturePath string, extraAr
 }
 
 // ProjectInit runs `formae project init` to generate a new project in the
-// given directory. This is a CLI-only command that does not require an agent,
-// but it still needs --config so the CLI can resolve the configured plugin
-// directory when looking up @local plugin schemas.
+// given directory. This is a CLI-only command that does not require an agent.
+// It does need --plugin-dir to locate locally-staged test plugins for @local
+// schema resolution; the value comes from FORMAE_PLUGIN_DIR (set by CI / the
+// agent test harness) when present.
 func (f *FormaeCLI) ProjectInit(t *testing.T, dir string, includes ...string) {
 	t.Helper()
 
 	args := []string{
 		"project", "init", dir,
-		"--config", f.configPath,
 		"--schema", "pkl",
 		"--yes",
+	}
+	if pluginDir := os.Getenv("FORMAE_PLUGIN_DIR"); pluginDir != "" {
+		args = append(args, "--plugin-dir", pluginDir)
 	}
 	for _, inc := range includes {
 		args = append(args, "--include", inc)
