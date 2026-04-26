@@ -72,7 +72,10 @@ func NewApp() *App {
 	}
 
 	app := &App{
-		Config:   &pkgmodel.Config{},
+		// Default PluginDir matches the PKL Config.pkl default so that CLI
+		// commands invoked without --config still get sane plugin discovery.
+		// LoadConfig overwrites this when a config file is present.
+		Config:   &pkgmodel.Config{PluginDir: "~/.pel/formae/plugins"},
 		Plugins:  Plugins{},
 		Projects: Projects{},
 		Usage:    u,
