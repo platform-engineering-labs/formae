@@ -581,7 +581,9 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOpt
 	if err != nil {
 		return "", err
 	}
-
+	if options.SchemaLocation == schema.SchemaLocationLocal && options.LocalPluginDir == "" {
+		options.LocalPluginDir = util.ExpandHomePath(a.Config.PluginDir)
+	}
 	return schemaPlugin.SerializeForma(forma, options)
 }
 
@@ -590,10 +592,12 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 	if err != nil {
 		return schema.GenerateSourcesResult{}, err
 	}
-	// Extract always uses local schema resolution
-	includes, _ := a.Projects.formatIncludes(outputSchema, []string{"aws@local"})
-
-	return schemaPlugin.GenerateSourceCode(forma, targetPath, includes, schema.SchemaLocationLocal)
+	options := &schema.SerializeOptions{
+		Schema:         outputSchema,
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: util.ExpandHomePath(a.Config.PluginDir),
+	}
+	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
 }
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
@@ -676,12 +680,12 @@ func (p *Plugins) SupportedSchemas() []string {
 
 // Projects
 
-func (p *Projects) Init(path string, format string, include []string) error {
+func (p *Projects) Init(path string, format string, include []string, pluginsDir string) error {
 	// TODO(discount-elf) think about this namespace issue, since different packages can be included in plugins we currently
 	// need plugin.package for download delivery
 	switch format {
 	case "pkl":
-		includes, err := p.formatIncludes(format, include)
+		includes, err := p.formatIncludes(format, include, pluginsDir)
 		if err != nil {
 			return err
 		}
@@ -717,7 +721,7 @@ func (p *Projects) Init(path string, format string, include []string) error {
 	return nil
 }
 
-func (p *Projects) formatIncludes(format string, include []string) ([]string, error) {
+func (p *Projects) formatIncludes(format string, include []string, pluginsDir string) ([]string, error) {
 	var includes []string
 	switch format {
 	case "pkl":
@@ -731,7 +735,7 @@ func (p *Projects) formatIncludes(format string, include []string) ([]string, er
 			ns, isLocal := parseIncludeSpec(inc)
 
 			// Find installed plugin info (handles case-insensitive lookup)
-			localPath, installedVersion := p.findInstalledPlugin(ns)
+			localPath, installedVersion := p.findInstalledPlugin(ns, pluginsDir)
 
 			// If @local suffix specified, must resolve locally
 			if isLocal {
@@ -772,10 +776,9 @@ func parseIncludeSpec(include string) (namespace string, isLocal bool) {
 // It performs case-insensitive directory lookup.
 // Returns (schemaPath, version) where schemaPath is the path to PklProject (empty if no schema),
 // and version is the highest installed version (empty if plugin not installed).
-func (p *Projects) findInstalledPlugin(namespace string) (schemaPath string, version string) {
-	pluginsDir := os.Getenv("FORMAE_PLUGIN_DIR")
+func (p *Projects) findInstalledPlugin(namespace, pluginsDir string) (schemaPath string, version string) {
 	if pluginsDir == "" {
-		pluginsDir = util.ExpandHomePath("~/.pel/formae/plugins")
+		return "", ""
 	}
 
 	// Case-insensitive lookup: list plugins dir and find matching name

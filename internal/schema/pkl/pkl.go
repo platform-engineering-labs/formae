@@ -21,7 +21,6 @@ import (
 	"time"
 
 	pklgo "github.com/apple/pkl-go/pkl"
-	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -447,71 +446,67 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 	return forma, nil
 }
 
-func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []string, options *schema.SerializeOptions) (schema.GenerateSourcesResult, error) {
 	res := schema.GenerateSourcesResult{}
 
-	code, err := p.SerializeForma(forma, &schema.SerializeOptions{Schema: "pkl", SchemaLocation: schemaLocation})
+	if options == nil {
+		options = &schema.SerializeOptions{Schema: "pkl"}
+	}
+	if options.Schema == "" {
+		options.Schema = "pkl"
+	}
+	schemaLocation := options.SchemaLocation
+	if schemaLocation == "" {
+		schemaLocation = schema.SchemaLocationRemote
+	}
+
+	if !strings.HasSuffix(path, ".pkl") {
+		path = path + ".pkl"
+	}
+	res.TargetPath = path
+
+	parentDir := filepath.Dir(path)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to create parent directory: %v", err)
+	}
+
+	projectFile := filepath.Join(parentDir, "PklProject")
+	if _, err := os.Stat(projectFile); err == nil {
+		// Case 1: target dir has an existing PklProject — reuse its deps so the
+		// generated .pkl resolves cleanly when the user later evaluates it under
+		// their own project.
+		deps, parseErr := parsePklProjectDeps(projectFile)
+		if parseErr != nil {
+			return schema.GenerateSourcesResult{}, fmt.Errorf("failed to parse existing PklProject %q: %w", projectFile, parseErr)
+		}
+		options.Dependencies = deps
+	} else if os.IsNotExist(err) {
+		// Case 2: no existing PklProject — discover deps from options.LocalPluginDir
+		// and pin them so the generator and target ProjectInit use identical specs.
+		deps := resolveIncludes(forma, options)
+		options.Dependencies = deps
+
+		if err := p.ProjectInit(parentDir, deps, schemaLocation); err != nil {
+			return schema.GenerateSourcesResult{}, fmt.Errorf("failed to initialize Pkl project: %v", err)
+		}
+		res.InitializedNewProject = true
+		res.ProjectPath = parentDir
+		fmt.Println("Initialized new Pkl project at", parentDir)
+	} else {
+		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to stat %q: %w", projectFile, err)
+	}
+
+	code, err := p.SerializeForma(forma, options)
 	if err != nil {
 		slog.Error(err.Error())
 		return schema.GenerateSourcesResult{}, schema.ErrFailedToGenerateSources
 	}
 	res.ResourceCount = len(forma.Resources)
 
-	// add .pkl to path if not present
-	if !strings.HasSuffix(path, ".pkl") {
-		path = path + ".pkl"
-	}
-	res.TargetPath = path
-
-	// Ensure parent directory exists
-	parentDir := filepath.Dir(path)
-	if err = os.MkdirAll(parentDir, 0755); err != nil {
-		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to create parent directory: %v", err)
-	}
-
-	projectFile := filepath.Join(parentDir, "PklProject")
-	if _, err = os.Stat(projectFile); os.IsNotExist(err) {
-		// Build package dependencies using PackageResolver
-		resolver := NewPackageResolver()
-
-		// Configure local schema resolution if requested
-		if schemaLocation == schema.SchemaLocationLocal {
-			pluginsDir := os.Getenv("FORMAE_PLUGIN_DIR")
-			if pluginsDir == "" {
-				if homeDir, err := os.UserHomeDir(); err == nil {
-					pluginsDir = filepath.Join(homeDir, ".pel", "formae", "plugins")
-				}
-			}
-			if pluginsDir != "" {
-				resolver.WithLocalSchemas(pluginsDir)
-			}
-		}
-
-		resolver.Add("formae", "pkl", formae.Version)
-
-		// Extract namespaces from forma resources
-		for _, res := range forma.Resources {
-			ns := strings.ToLower(res.Namespace())
-			resolver.Add(ns, ns, resolver.InstalledVersion(ns))
-		}
-
-		// No PklProject exists, initialize it with resolved packages
-		err = p.ProjectInit(parentDir, resolver.GetPackageStrings(), schemaLocation)
-		if err != nil {
-			return schema.GenerateSourcesResult{}, fmt.Errorf("failed to initialize Pkl project: %v", err)
-		}
-		res.InitializedNewProject = true
-		res.ProjectPath = parentDir
-		fmt.Println("Initialized new Pkl project at", parentDir)
-	}
-
-	err = os.WriteFile(path, []byte(code), 0644)
-	if err != nil {
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
 		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to write Pkl file: %v", err)
 	}
 
-	// Check if PklProject.deps.json exists after writing the Pkl file
-	// Only warn for remote schema location since local schemas don't need resolution
 	depsFile := filepath.Join(parentDir, "PklProject.deps.json")
 	if _, err := os.Stat(depsFile); os.IsNotExist(err) && schemaLocation == schema.SchemaLocationRemote {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("Pkl dependencies not resolved. Run 'pkl project resolve' in '%s' to resolve Pkl dependencies.", parentDir))

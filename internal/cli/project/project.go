@@ -12,6 +12,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
+	"github.com/platform-engineering-labs/formae/internal/util"
 )
 
 func ProjectCmd() *cobra.Command {
@@ -60,7 +61,7 @@ func ProjectInitCmd() *cobra.Command {
 				return err
 			}
 
-			return app.Projects.Init(command.Flags().Arg(0), schema, include)
+			return app.Projects.Init(command.Flags().Arg(0), schema, include, util.ExpandHomePath(app.Config.PluginDir))
 		},
 		SilenceErrors: true,
 	}
