@@ -22,10 +22,11 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeOrbitalClient struct {
-	refreshErr error
-	installErr error
-	removeErr  error
-	updateErr  error
+	refreshErr      error
+	installErr      error
+	removeErr       error
+	updateErr       error
+	availableForErr error
 
 	installed []*records.Package
 	available map[string]*records.Status
@@ -58,6 +59,9 @@ func (f *fakeOrbitalClient) Available() (map[string]*records.Status, error) {
 	return f.available, nil
 }
 func (f *fakeOrbitalClient) AvailableFor(name string) (*records.Status, error) {
+	if f.availableForErr != nil {
+		return nil, f.availableForErr
+	}
 	if f.available == nil {
 		return nil, nil
 	}
@@ -90,6 +94,7 @@ func newPackage(t *testing.T, name, version string, metadata map[string]map[stri
 	}
 }
 
+
 // ---------------------------------------------------------------------------
 // constructor
 // ---------------------------------------------------------------------------
@@ -97,7 +102,8 @@ func newPackage(t *testing.T, name, version string, metadata map[string]map[stri
 func TestNewPluginManager(t *testing.T) {
 	pm := newForTesting(slog.Default(), &fakeOrbitalClient{})
 	require.NotNil(t, pm)
-	require.NotNil(t, pm.orb)
+	require.NotNil(t, pm.listOrb)
+	require.NotNil(t, pm.factory)
 }
 
 // ---------------------------------------------------------------------------
@@ -116,10 +122,11 @@ func TestList_ReturnsInstalledPlugins(t *testing.T) {
 		installed: []*records.Package{
 			newPackage(t, "formae-plugin-aws", "1.2.3", map[string]map[string]string{
 				"plugin":  {"type": "resource", "namespace": "aws"},
-				"display": {"category": "cloud"},
+				"display": {"kind": "plugin", "category": "cloud"},
 			}),
 			newPackage(t, "formae-plugin-tailscale", "0.5.0", map[string]map[string]string{
 				"plugin": {"type": "network", "namespace": "tailscale"},
+				"display": {"kind": "plugin"},
 			}),
 		},
 	}
@@ -141,6 +148,55 @@ func TestList_ReturnsInstalledPlugins(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// List metadata filtering
+// ---------------------------------------------------------------------------
+
+func TestList_IncludesMetapackages(t *testing.T) {
+	// Curated metapackages set display.kind == "metapackage" (and have no
+	// "plugin" metadata block since they have no runtime). They should
+	// surface in List the same way regular plugins do, with Kind set so
+	// the renderer can group them separately.
+	fake := &fakeOrbitalClient{
+		installed: []*records.Package{
+			newPackage(t, "standard", "0.1.0", map[string]map[string]string{
+				"display": {"kind": "metapackage", "category": "bundle"},
+			}),
+		},
+	}
+	pm := newForTesting(slog.Default(), fake)
+
+	plugins, err := pm.List()
+	require.NoError(t, err)
+	require.Len(t, plugins, 1)
+	assert.Equal(t, "standard", plugins[0].Name)
+	assert.Equal(t, "metapackage", plugins[0].Kind)
+	assert.Equal(t, "bundle", plugins[0].Category)
+	assert.Equal(t, "", plugins[0].Type, "metapackages have no runtime type")
+}
+
+func TestList_FiltersOutPackagesWithoutPluginMetadata(t *testing.T) {
+	// formae and pkl are binary tooling installed in the orbital tree but
+	// carry no "plugin" metadata; only the package with plugin metadata
+	// should surface through List.
+	fake := &fakeOrbitalClient{
+		installed: []*records.Package{
+			newPackage(t, "formae", "0.85.0", nil),
+			newPackage(t, "pkl", "0.31.0", nil),
+			newPackage(t, "formae-plugin-aws", "1.2.3", map[string]map[string]string{
+				"plugin": {"type": "resource", "namespace": "aws"},
+				"display": {"kind": "plugin"},
+			}),
+		},
+	}
+	pm := newForTesting(slog.Default(), fake)
+
+	plugins, err := pm.List()
+	require.NoError(t, err)
+	require.Len(t, plugins, 1)
+	assert.Equal(t, "formae-plugin-aws", plugins[0].Name)
+}
+
+// ---------------------------------------------------------------------------
 // Available
 // ---------------------------------------------------------------------------
 
@@ -151,7 +207,7 @@ func TestAvailable_NoFilter(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-aws", "1.2.3", map[string]map[string]string{
 						"plugin":  {"type": "resource", "namespace": "aws"},
-						"display": {"category": "cloud"},
+						"display": {"kind": "plugin", "category": "cloud"},
 					}),
 					newPackage(t, "formae-plugin-aws", "1.1.0", nil),
 				},
@@ -160,7 +216,7 @@ func TestAvailable_NoFilter(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-azure", "0.1.0", map[string]map[string]string{
 						"plugin":  {"type": "resource", "namespace": "azure"},
-						"display": {"category": "cloud"},
+						"display": {"kind": "plugin", "category": "cloud"},
 					}),
 				},
 			},
@@ -189,7 +245,7 @@ func TestAvailable_FilterByCategory(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-aws", "1.0.0", map[string]map[string]string{
 						"plugin":  {"type": "resource"},
-						"display": {"category": "cloud"},
+						"display": {"kind": "plugin", "category": "cloud"},
 					}),
 				},
 			},
@@ -197,7 +253,7 @@ func TestAvailable_FilterByCategory(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-tailscale", "0.3.0", map[string]map[string]string{
 						"plugin":  {"type": "network"},
-						"display": {"category": "networking"},
+						"display": {"kind": "plugin", "category": "networking"},
 					}),
 				},
 			},
@@ -218,6 +274,7 @@ func TestAvailable_FilterByType(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-aws", "1.0.0", map[string]map[string]string{
 						"plugin": {"type": "resource"},
+						"display": {"kind": "plugin"},
 					}),
 				},
 			},
@@ -225,6 +282,7 @@ func TestAvailable_FilterByType(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-tailscale", "0.3.0", map[string]map[string]string{
 						"plugin": {"type": "network"},
+						"display": {"kind": "plugin"},
 					}),
 				},
 			},
@@ -243,12 +301,14 @@ func TestAvailable_FilterByQuery(t *testing.T) {
 		available: map[string]*records.Status{
 			"formae-plugin-aws": {
 				Available: []*records.Package{
-					newPackage(t, "formae-plugin-aws", "1.0.0", nil),
+					newPackage(t, "formae-plugin-aws", "1.0.0",
+						map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}}),
 				},
 			},
 			"formae-plugin-azure": {
 				Available: []*records.Package{
-					newPackage(t, "formae-plugin-azure", "0.1.0", nil),
+					newPackage(t, "formae-plugin-azure", "0.1.0",
+						map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}}),
 				},
 			},
 		},
@@ -267,7 +327,8 @@ func TestAvailable_RefreshFailureDoesNotBlock(t *testing.T) {
 		available: map[string]*records.Status{
 			"formae-plugin-aws": {
 				Available: []*records.Package{
-					newPackage(t, "formae-plugin-aws", "1.0.0", nil),
+					newPackage(t, "formae-plugin-aws", "1.0.0",
+						map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}}),
 				},
 			},
 		},
@@ -292,6 +353,185 @@ func TestAvailable_EmptyStatus(t *testing.T) {
 	assert.Empty(t, plugins)
 }
 
+func TestAvailable_FiltersOutPackagesWithoutPluginMetadata(t *testing.T) {
+	// formae has no plugin metadata; sftp does. Only sftp surfaces.
+	fake := &fakeOrbitalClient{
+		available: map[string]*records.Status{
+			"formae": {
+				Available: []*records.Package{
+					newPackage(t, "formae", "0.85.0", nil),
+				},
+			},
+			"formae-plugin-sftp": {
+				Available: []*records.Package{
+					newPackage(t, "formae-plugin-sftp", "0.1.0", map[string]map[string]string{
+						"plugin": {"type": "resource", "namespace": "sftp"},
+						"display": {"kind": "plugin"},
+					}),
+				},
+			},
+		},
+	}
+	pm := newForTesting(slog.Default(), fake)
+
+	plugins, err := pm.Available(AvailableFilter{})
+	require.NoError(t, err)
+	require.Len(t, plugins, 1)
+	assert.Equal(t, "formae-plugin-sftp", plugins[0].Name)
+}
+
+func TestAvailable_InstalledVersionFromInstalledFlag(t *testing.T) {
+	// Two candidates; v1.1.0 is the one orbital marks Installed.
+	// InstalledVersion must reflect that — NOT just Available[0].Version.
+	pkgInstalled := newPackage(t, "formae-plugin-aws", "1.1.0",
+		map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}})
+	pkgInstalled.Installed = true
+	pkgNewer := newPackage(t, "formae-plugin-aws", "1.2.0",
+		map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}})
+
+	fake := &fakeOrbitalClient{
+		available: map[string]*records.Status{
+			"formae-plugin-aws": {
+				Available: []*records.Package{pkgNewer, pkgInstalled},
+			},
+		},
+	}
+	pm := newForTesting(slog.Default(), fake)
+
+	plugins, err := pm.Available(AvailableFilter{})
+	require.NoError(t, err)
+	require.Len(t, plugins, 1)
+	assert.Equal(t, "1.1.0", plugins[0].InstalledVersion)
+}
+
+func TestAvailable_NoInstalledVersionWhenNoneInstalled(t *testing.T) {
+	// Nothing in Available has Installed=true → InstalledVersion is empty.
+	fake := &fakeOrbitalClient{
+		available: map[string]*records.Status{
+			"formae-plugin-sftp": {
+				Available: []*records.Package{
+					newPackage(t, "formae-plugin-sftp", "0.1.0",
+						map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}}),
+				},
+			},
+		},
+	}
+	pm := newForTesting(slog.Default(), fake)
+
+	plugins, err := pm.Available(AvailableFilter{})
+	require.NoError(t, err)
+	require.Len(t, plugins, 1)
+	assert.Equal(t, "", plugins[0].InstalledVersion)
+}
+
+// ---------------------------------------------------------------------------
+// Channel routing
+// ---------------------------------------------------------------------------
+
+// channelFakes builds a factory that hands out a different fake per channel.
+func channelFakes(byChannel map[string]*fakeOrbitalClient) orbitalFactory {
+	return func(channel string) (orbitalClient, error) {
+		if c, ok := byChannel[channel]; ok {
+			return c, nil
+		}
+		return &fakeOrbitalClient{}, nil
+	}
+}
+
+func TestAvailable_DefaultsToStableChannel(t *testing.T) {
+	stable := &fakeOrbitalClient{available: map[string]*records.Status{}}
+	dev := &fakeOrbitalClient{
+		available: map[string]*records.Status{
+			"formae-plugin-sftp": {
+				Available: []*records.Package{
+					newPackage(t, "formae-plugin-sftp", "0.1.0-dev.1",
+						map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}}),
+				},
+			},
+		},
+	}
+	pm := newForTestingWithFactory(slog.Default(), &fakeOrbitalClient{},
+		channelFakes(map[string]*fakeOrbitalClient{
+			"stable": stable,
+			"dev":    dev,
+		}))
+
+	plugins, err := pm.Available(AvailableFilter{})
+	require.NoError(t, err)
+	assert.Empty(t, plugins, "default search must hit stable, which is empty")
+}
+
+func TestAvailable_ChannelOverrideReturnsDevPlugin(t *testing.T) {
+	stable := &fakeOrbitalClient{available: map[string]*records.Status{}}
+	dev := &fakeOrbitalClient{
+		available: map[string]*records.Status{
+			"formae-plugin-sftp": {
+				Available: []*records.Package{
+					newPackage(t, "formae-plugin-sftp", "0.1.0-dev.1",
+						map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}}),
+				},
+			},
+		},
+	}
+	pm := newForTestingWithFactory(slog.Default(), &fakeOrbitalClient{},
+		channelFakes(map[string]*fakeOrbitalClient{
+			"stable": stable,
+			"dev":    dev,
+		}))
+
+	plugins, err := pm.Available(AvailableFilter{Channel: "dev"})
+	require.NoError(t, err)
+	require.Len(t, plugins, 1)
+	assert.Equal(t, "formae-plugin-sftp", plugins[0].Name)
+}
+
+func TestInfo_ChannelOverride(t *testing.T) {
+	stable := &fakeOrbitalClient{available: map[string]*records.Status{}}
+	dev := &fakeOrbitalClient{
+		available: map[string]*records.Status{
+			"formae-plugin-sftp": {
+				Available: []*records.Package{
+					newPackage(t, "formae-plugin-sftp", "0.1.0-dev.1",
+						map[string]map[string]string{"plugin": {"type": "resource"}, "display": {"kind": "plugin"}}),
+				},
+			},
+		},
+	}
+	pm := newForTestingWithFactory(slog.Default(), &fakeOrbitalClient{},
+		channelFakes(map[string]*fakeOrbitalClient{
+			"stable": stable,
+			"dev":    dev,
+		}))
+
+	pStable, err := pm.Info("formae-plugin-sftp", "")
+	require.NoError(t, err)
+	assert.Nil(t, pStable, "info on default stable channel should not find dev-only plugin")
+
+	pDev, err := pm.Info("formae-plugin-sftp", "dev")
+	require.NoError(t, err)
+	require.NotNil(t, pDev)
+	assert.Equal(t, "formae-plugin-sftp", pDev.Name)
+}
+
+func TestInstall_ChannelRoutesToCorrectClient(t *testing.T) {
+	stable := &fakeOrbitalClient{}
+	dev := &fakeOrbitalClient{}
+	pm := newForTestingWithFactory(slog.Default(), &fakeOrbitalClient{},
+		channelFakes(map[string]*fakeOrbitalClient{
+			"stable": stable,
+			"dev":    dev,
+		}))
+
+	_, err := pm.Install(InstallRequest{
+		Packages: []PackageRef{{Name: "formae-plugin-sftp", Version: "0.1.0-dev.1"}},
+		Channel:  "dev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"formae-plugin-sftp@0.1.0-dev.1"}, dev.installedSpecs,
+		"install with --channel dev must route to the dev client")
+	assert.Empty(t, stable.installedSpecs, "stable client should not see this install")
+}
+
 // ---------------------------------------------------------------------------
 // Info
 // ---------------------------------------------------------------------------
@@ -303,6 +543,7 @@ func TestInfo_Found(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-aws", "1.2.0", map[string]map[string]string{
 						"plugin": {"type": "resource", "namespace": "aws"},
+						"display": {"kind": "plugin"},
 					}),
 					newPackage(t, "formae-plugin-aws", "1.1.0", nil),
 				},
@@ -311,7 +552,7 @@ func TestInfo_Found(t *testing.T) {
 	}
 	pm := newForTesting(slog.Default(), fake)
 
-	p, err := pm.Info("formae-plugin-aws")
+	p, err := pm.Info("formae-plugin-aws", "")
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	assert.Equal(t, "formae-plugin-aws", p.Name)
@@ -323,7 +564,40 @@ func TestInfo_NotFound(t *testing.T) {
 	fake := &fakeOrbitalClient{available: map[string]*records.Status{}}
 	pm := newForTesting(slog.Default(), fake)
 
-	p, err := pm.Info("nonexistent")
+	p, err := pm.Info("nonexistent", "")
+	require.NoError(t, err)
+	assert.Nil(t, p)
+}
+
+// TestInfo_NotFoundFromOrbitalError verifies that orbital's "no available
+// packages for: X" error (returned when X is in none of the configured
+// channel's repos) is translated to a not-found nil result rather than
+// bubbling up as a 500.
+func TestInfo_NotFoundFromOrbitalError(t *testing.T) {
+	fake := &fakeOrbitalClient{
+		availableForErr: errors.New("no available packages for: ghost"),
+	}
+	pm := newForTesting(slog.Default(), fake)
+
+	p, err := pm.Info("ghost", "dev")
+	require.NoError(t, err)
+	assert.Nil(t, p)
+}
+
+func TestInfo_NotFoundWhenNoPluginMetadata(t *testing.T) {
+	// `formae` has no "plugin" metadata; Info treats it as not-a-plugin.
+	fake := &fakeOrbitalClient{
+		available: map[string]*records.Status{
+			"formae": {
+				Available: []*records.Package{
+					newPackage(t, "formae", "0.85.0", nil),
+				},
+			},
+		},
+	}
+	pm := newForTesting(slog.Default(), fake)
+
+	p, err := pm.Info("formae", "")
 	require.NoError(t, err)
 	assert.Nil(t, p)
 }
@@ -339,6 +613,7 @@ func TestInstall_Success(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-aws", "1.2.0", map[string]map[string]string{
 						"plugin": {"type": "resource"},
+						"display": {"kind": "plugin"},
 					}),
 				},
 			},
@@ -405,6 +680,7 @@ func TestUninstall_Success(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-aws", "1.0.0", map[string]map[string]string{
 						"plugin": {"type": "resource"},
+						"display": {"kind": "plugin"},
 					}),
 				},
 			},
@@ -443,6 +719,7 @@ func TestUpgrade_Success(t *testing.T) {
 				Available: []*records.Package{
 					newPackage(t, "formae-plugin-aws", "2.0.0", map[string]map[string]string{
 						"plugin": {"type": "resource"},
+						"display": {"kind": "plugin"},
 					}),
 				},
 			},

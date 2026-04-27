@@ -61,7 +61,8 @@ func (s *Server) getPluginHandler(c echo.Context) error {
 	}
 
 	name := c.Param("name")
-	p, err := pm.Info(name)
+	channel := c.QueryParam("channel")
+	p, err := pm.Info(name, channel)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -89,6 +90,7 @@ func (s *Server) installPluginsHandler(c echo.Context) error {
 
 	pmReq := plugin_manager.InstallRequest{
 		Packages: toManagerPackageRefs(req.Packages),
+		Channel:  req.Channel,
 	}
 	resp, err := pm.Install(pmReq)
 	if err != nil {
@@ -142,6 +144,7 @@ func (s *Server) upgradePluginsHandler(c echo.Context) error {
 
 	pmReq := plugin_manager.UpgradeRequest{
 		Packages: toManagerPackageRefs(req.Packages),
+		Channel:  req.Channel,
 	}
 	resp, err := pm.Upgrade(pmReq)
 	if err != nil {
@@ -167,6 +170,7 @@ func toAPIPlugins(plugins []plugin_manager.Plugin) []apimodel.Plugin {
 func toAPIPlugin(p plugin_manager.Plugin) apimodel.Plugin {
 	return apimodel.Plugin{
 		Name:              p.Name,
+		Kind:              p.Kind,
 		Type:              p.Type,
 		Namespace:         p.Namespace,
 		Category:          p.Category,

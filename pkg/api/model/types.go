@@ -199,6 +199,7 @@ type ForceCheckTTLResponse struct {
 // Plugin describes a single plugin, used by the list and info endpoints.
 type Plugin struct {
 	Name              string                       `json:"name"`
+	Kind              string                       `json:"kind,omitempty"`
 	Type              string                       `json:"type"`
 	Namespace         string                       `json:"namespace,omitempty"`
 	Category          string                       `json:"category,omitempty"`
@@ -239,6 +240,7 @@ type GetPluginResponse struct {
 
 type InstallPluginsRequest struct {
 	Packages []PackageRef `json:"packages"`
+	Channel  string       `json:"channel,omitempty"`
 }
 
 type InstallPluginsResponse struct {
@@ -259,6 +261,7 @@ type UninstallPluginsResponse struct {
 
 type UpgradePluginsRequest struct {
 	Packages []PackageRef `json:"packages,omitempty"`
+	Channel  string       `json:"channel,omitempty"`
 }
 
 type UpgradePluginsResponse struct {
