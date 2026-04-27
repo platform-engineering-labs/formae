@@ -16,14 +16,7 @@ RUN apt-get update &&  \
     apt-get clean && \
     /opt/pel/bin/formae clean --all
 
-# Trigger plugin migration so resource plugins are baked into the image.
-# Run as the pel user so files/pid files are created with correct ownership.
-# Running as root would leave a root-owned /tmp/formae.pid that the pel user
-# cannot read or delete at container runtime, breaking agent startup.
-RUN su - pel -c "PATH=/opt/pel/bin:$PATH HOME=/home/pel /opt/pel/bin/formae agent start >/dev/null 2>&1 & sleep 5 && /opt/pel/bin/formae agent stop >/dev/null 2>&1 || true" && \
-    test -d /home/pel/.pel/formae/plugins && \
-    test "$(ls -A /home/pel/.pel/formae/plugins)" || \
-    (echo "ERROR: plugin migration failed" && exit 1)
+RUN chown -R pel:pel /home/pel
 
 USER pel
 WORKDIR /home/pel

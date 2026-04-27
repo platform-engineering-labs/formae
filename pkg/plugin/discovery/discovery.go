@@ -113,6 +113,31 @@ func DiscoverPlugins(pluginDir string, pluginType PluginType) []PluginInfo {
 	return results
 }
 
+// DiscoverPluginsMulti scans multiple plugin directories and merges results.
+// Directories are checked in order; the first directory containing a given
+// plugin name wins. This allows dev plugins (listed first) to override
+// system-installed plugins.
+func DiscoverPluginsMulti(pluginDirs []string, pluginType PluginType) []PluginInfo {
+	seen := make(map[string]bool)
+	var results []PluginInfo
+
+	for _, dir := range pluginDirs {
+		plugins := DiscoverPlugins(dir, pluginType)
+		for _, p := range plugins {
+			if seen[p.Name] {
+				continue
+			}
+			seen[p.Name] = true
+			results = append(results, p)
+		}
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
 type versionCandidate struct {
 	version    *semver.Version
 	versionStr string

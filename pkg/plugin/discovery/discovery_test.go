@@ -173,6 +173,73 @@ func TestDiscoverPlugins_Auth_SkipsPluginsWithoutManifest(t *testing.T) {
 	assert.Nil(t, DiscoverPlugins(baseDir, Auth))
 }
 
+func TestDiscoverPluginsMulti_DevOverridesSystem(t *testing.T) {
+	systemDir := t.TempDir()
+	devDir := t.TempDir()
+
+	createFakePlugin(t, systemDir, "aws", "v1.0.0", resourceManifest("aws", "AWS"))
+	createFakePlugin(t, devDir, "aws", "v0.0.1-dev", resourceManifest("aws", "AWS"))
+
+	results := DiscoverPluginsMulti([]string{devDir, systemDir}, Resource)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "aws", results[0].Name)
+	assert.Equal(t, "v0.0.1-dev", results[0].Version)
+	assert.Contains(t, results[0].BinaryPath, devDir)
+}
+
+func TestDiscoverPluginsMulti_SystemUsedWhenNoDevOverride(t *testing.T) {
+	systemDir := t.TempDir()
+	devDir := t.TempDir()
+
+	createFakePlugin(t, systemDir, "aws", "v1.0.0", resourceManifest("aws", "AWS"))
+	createFakePlugin(t, systemDir, "azure", "v2.0.0", resourceManifest("azure", "AZURE"))
+	createFakePlugin(t, devDir, "aws", "v0.0.1-dev", resourceManifest("aws", "AWS"))
+
+	results := DiscoverPluginsMulti([]string{devDir, systemDir}, Resource)
+
+	require.Len(t, results, 2)
+
+	names := map[string]string{}
+	for _, r := range results {
+		names[r.Name] = r.Version
+	}
+	assert.Equal(t, "v0.0.1-dev", names["aws"])
+	assert.Equal(t, "v2.0.0", names["azure"])
+}
+
+func TestDiscoverPluginsMulti_SkipsEmptyAndNonexistentDirs(t *testing.T) {
+	systemDir := t.TempDir()
+	createFakePlugin(t, systemDir, "aws", "v1.0.0", resourceManifest("aws", "AWS"))
+
+	results := DiscoverPluginsMulti([]string{"", "/nonexistent", t.TempDir(), systemDir}, Resource)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "aws", results[0].Name)
+}
+
+func TestDiscoverPluginsMulti_NilDirs(t *testing.T) {
+	assert.Nil(t, DiscoverPluginsMulti(nil, Resource))
+}
+
+func TestDiscoverPluginsMulti_Auth(t *testing.T) {
+	systemDir := t.TempDir()
+	devDir := t.TempDir()
+
+	createFakePlugin(t, systemDir, "auth-basic", "v1.0.0", authManifest("auth-basic"))
+	createFakePlugin(t, devDir, "auth-custom", "v0.1.0", authManifest("auth-custom"))
+
+	results := DiscoverPluginsMulti([]string{devDir, systemDir}, Auth)
+
+	require.Len(t, results, 2)
+	names := map[string]bool{}
+	for _, r := range results {
+		names[r.Name] = true
+	}
+	assert.True(t, names["auth-basic"])
+	assert.True(t, names["auth-custom"])
+}
+
 func TestDiscoverPlugins_Resource_PopulatesMinFormaeVersion(t *testing.T) {
 	baseDir := t.TempDir()
 	createFakePlugin(t, baseDir, "cloudflare-dns", "v1.2.0", resourceManifest("cloudflare-dns", "CLOUDFLARE"))

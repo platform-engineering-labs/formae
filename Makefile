@@ -155,7 +155,6 @@ build-debug:
 pkg-bin: clean build build-external-plugins
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/bin
-	mkdir -p ./dist/pel/formae/plugins
 	cp -Rp ./formae ./dist/pel/bin
 	# Package external plugins (resource + auth)
 	@for entry in $(EXTERNAL_PLUGIN_REPOS); do \
@@ -166,7 +165,7 @@ pkg-bin: clean build build-external-plugins
 		version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
 		plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
 		if [ "$$plugin_type" = "auth" ]; then \
-			dest="./dist/pel/formae/resource-plugins/$$plugin_name/v$$version"; \
+			dest="./dist/pel/formae/plugins/$$plugin_name/v$$version"; \
 			echo "Packaging auth plugin: $$plugin_name v$$version"; \
 			mkdir -p "$$dest"; \
 			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$plugin_name"; \
@@ -181,7 +180,7 @@ pkg-bin: clean build build-external-plugins
 			fi; \
 		else \
 			namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
-			dest="./dist/pel/formae/resource-plugins/$$namespace/v$$version"; \
+			dest="./dist/pel/formae/plugins/$$namespace/v$$version"; \
 			echo "Packaging resource plugin: $$namespace v$$version"; \
 			mkdir -p "$$dest/schema"; \
 			cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
