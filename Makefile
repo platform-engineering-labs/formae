@@ -167,8 +167,12 @@ test-integration:
 test-e2e: build
 	echo "Setting up e2e PKL dependencies..."
 	bash ./tests/e2e/go/setup_pkl.sh
+	echo "Staging formae binary in installer-shaped tree (.../bin/formae + .../.ops)..."
+	rm -rf $(CURDIR)/dist/e2e
+	mkdir -p $(CURDIR)/dist/e2e/bin $(CURDIR)/dist/e2e/.ops
+	cp $(CURDIR)/formae $(CURDIR)/dist/e2e/bin/formae
 	echo "Running e2e tests..."
-	E2E_FORMAE_BINARY=$(CURDIR)/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
+	E2E_FORMAE_BINARY=$(CURDIR)/dist/e2e/bin/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
 
 ## test-property: Run property tests (FullChaos 100 iterations, others 50)
 test-property:
