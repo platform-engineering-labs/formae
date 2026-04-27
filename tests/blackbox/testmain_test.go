@@ -18,13 +18,25 @@ func TestMain(m *testing.M) {
 	// Find project root (walk up to go.mod)
 	projectRoot := findProjectRoot()
 
-	// Build formae binary once for all blackbox tests
+	// Build formae binary once for all blackbox tests. The binary lives at
+	// <tmpDir>/bin/formae so orbital's tree-root derivation
+	// (filepath.Dir(filepath.Dir(binPath))) resolves to <tmpDir>, where we
+	// then create an empty .ops/ directory. That satisfies orbital's
+	// Ready() check (it only tests for the directory's existence) without
+	// scaffolding a real signed orbital tree, so the agent's plugin manager
+	// initializes cleanly at startup. Production builds installed via
+	// setup.sh have a fully populated orbital tree at /opt/pel and follow
+	// the same path naturally.
 	tmpDir, err := os.MkdirTemp("", "formae-blackbox-*")
 	if err != nil {
 		log.Fatalf("failed to create temp dir: %v", err)
 	}
 
-	formaeBinary = filepath.Join(tmpDir, "formae")
+	formaeBinary = filepath.Join(tmpDir, "bin", "formae")
+	if err := os.MkdirAll(filepath.Dir(formaeBinary), 0755); err != nil {
+		os.RemoveAll(tmpDir)
+		log.Fatalf("Failed to create binary dir: %v", err)
+	}
 	cmd := exec.Command("go", "build", "-o", formaeBinary, "./cmd/formae")
 	cmd.Dir = projectRoot
 	cmd.Stdout = os.Stderr
@@ -32,6 +44,10 @@ func TestMain(m *testing.M) {
 	if err := cmd.Run(); err != nil {
 		os.RemoveAll(tmpDir)
 		log.Fatalf("Failed to build formae binary: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".ops"), 0755); err != nil {
+		os.RemoveAll(tmpDir)
+		log.Fatalf("Failed to create orbital tree marker: %v", err)
 	}
 
 	code := m.Run()
