@@ -37,21 +37,25 @@ func PluginUninstallCmd() *cobra.Command {
 				return err
 			}
 
+			// Build the CLI-local manager before printing the agent results
+			// to avoid duplicated output if orbital re-execs us under sudo.
+			// See install.go for the full explanation.
+			authNames := filterAuthOps(resp.Operations)
+			var localMgr *CLIPluginManager
+			if len(authNames) > 0 {
+				localMgr, _ = NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories)
+			}
+
 			for _, op := range resp.Operations {
 				fmt.Printf("  %s Removed %s from agent\n", display.Green("✓"), op.Name)
 			}
 
-			// Dual-uninstall for auth plugins
-			authNames := filterAuthOps(resp.Operations)
-			if len(authNames) > 0 {
-				localMgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories)
-				if err == nil && localMgr != nil {
-					if localErr := localMgr.LocalUninstall(authNames); localErr != nil {
-						fmt.Printf("  %s CLI-side uninstall failed: %s\n", display.Gold("!"), localErr.Error())
-					} else {
-						for _, name := range authNames {
-							fmt.Printf("  %s Removed %s from cli\n", display.Green("✓"), name)
-						}
+			if localMgr != nil {
+				if localErr := localMgr.LocalUninstall(authNames); localErr != nil {
+					fmt.Printf("  %s CLI-side uninstall failed: %s\n", display.Gold("!"), localErr.Error())
+				} else {
+					for _, name := range authNames {
+						fmt.Printf("  %s Removed %s from cli\n", display.Green("✓"), name)
 					}
 				}
 			}

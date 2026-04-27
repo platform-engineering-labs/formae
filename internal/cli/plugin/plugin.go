@@ -104,11 +104,12 @@ func PluginSearchCmd() *cobra.Command {
 }
 
 func PluginInfoCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "info <name>",
 		Short: "Show detailed plugin information",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cc *cobra.Command, args []string) error {
+			channel, _ := cc.Flags().GetString("channel")
 			app, err := cmd.AppFromContext(cc.Context(), "", "", cc)
 			if err != nil {
 				return err
@@ -119,7 +120,7 @@ func PluginInfoCmd() *cobra.Command {
 				return err
 			}
 
-			resp, err := client.GetPlugin(args[0])
+			resp, err := client.GetPlugin(args[0], channel)
 			if err != nil {
 				return err
 			}
@@ -132,4 +133,6 @@ func PluginInfoCmd() *cobra.Command {
 		},
 		SilenceErrors: true,
 	}
+	c.Flags().String("channel", "", "Query a different channel")
+	return c
 }
