@@ -14,24 +14,37 @@ import (
 
 func renderPluginList(agentPlugins []apimodel.Plugin) string {
 	if len(agentPlugins) == 0 {
-		return "No plugins installed."
+		return "No plugins installed.\n"
 	}
 
 	var sb strings.Builder
 
-	// Group by type
-	var resource, auth []apimodel.Plugin
+	// Group by kind/type. Bundles get their own section so users can see
+	// what curated collections they have installed alongside the
+	// individual plugins those bundles pulled in. Internally orbital
+	// calls these "metapackages"; we render them as "bundles" in the CLI
+	// for friendlier vocabulary.
+	var resource, auth, bundles []apimodel.Plugin
 	for _, p := range agentPlugins {
-		if p.Type == "auth" {
+		switch {
+		case p.Kind == "metapackage":
+			bundles = append(bundles, p)
+		case p.Type == "auth":
 			auth = append(auth, p)
-		} else {
+		default:
 			resource = append(resource, p)
 		}
 	}
 
-	if len(resource) > 0 {
-		sb.WriteString(display.LightBlue("Resource plugins (agent):") + "\n")
-		for _, p := range resource {
+	emit := func(header string, plugins []apimodel.Plugin, addLeadingNewline bool) {
+		if len(plugins) == 0 {
+			return
+		}
+		if addLeadingNewline {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(display.LightBlue(header) + "\n")
+		for _, p := range plugins {
 			line := fmt.Sprintf("  %s %s  %s",
 				display.Green("✓"),
 				padRight(p.Name, 14),
@@ -43,26 +56,16 @@ func renderPluginList(agentPlugins []apimodel.Plugin) string {
 		}
 	}
 
-	if len(auth) > 0 {
-		if len(resource) > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString(display.LightBlue("Auth plugins:") + "\n")
-		for _, p := range auth {
-			line := fmt.Sprintf("  %s %s  %s",
-				display.Green("✓"),
-				padRight(p.Name, 14),
-				display.Grey(p.InstalledVersion))
-			sb.WriteString(line + "\n")
-		}
-	}
+	emit("Resource plugins:", resource, false)
+	emit("Auth plugins:", auth, len(resource) > 0)
+	emit("Bundles:", bundles, len(resource) > 0 || len(auth) > 0)
 
 	return sb.String()
 }
 
 func renderPluginSearch(plugins []apimodel.Plugin) string {
 	if len(plugins) == 0 {
-		return "No plugins found."
+		return "No plugins found.\n"
 	}
 
 	var sb strings.Builder
@@ -85,15 +88,28 @@ func renderPluginInfo(p *apimodel.Plugin) string {
 		installed = " (installed)"
 	}
 	fmt.Fprintf(&sb, "%s %s%s\n", display.LightBlue(p.Name), p.InstalledVersion, display.Green(installed))
-	fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Type:"), p.Type)
-	if p.Namespace != "" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Namespace:"), p.Namespace)
+
+	// For bundles display "bundle" rather than the empty plugin type and
+	// surface the description so the user understands what the bundle
+	// pulls in. For plugins, fall back to the plugin runtime type
+	// (resource | auth) and namespace as before. ("metapackage" is the
+	// internal orbital term; "bundle" is what we show users.)
+	if p.Kind == "metapackage" {
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Type:"), "bundle")
+	} else {
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Type:"), p.Type)
+		if p.Namespace != "" {
+			fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Namespace:"), p.Namespace)
+		}
 	}
 	if p.Category != "" {
 		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Category:"), p.Category)
 	}
 	if p.Summary != "" {
 		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Summary:"), p.Summary)
+	}
+	if p.Kind == "metapackage" && p.Description != "" && p.Description != p.Summary {
+		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Description:"), p.Description)
 	}
 	if p.Publisher != "" {
 		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Publisher:"), p.Publisher)
