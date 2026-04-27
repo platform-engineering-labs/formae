@@ -774,6 +774,9 @@ const docTemplate = `{
         "model.FieldHint": {
             "type": "object",
             "properties": {
+                "AttachesTo": {
+                    "type": "boolean"
+                },
                 "CreateOnly": {
                     "type": "boolean"
                 },
@@ -813,6 +816,19 @@ const docTemplate = `{
                 "FieldUpdateMethodAtomic",
                 "FieldUpdateMethodNone"
             ]
+        },
+        "model.FilterCondition": {
+            "type": "object",
+            "properties": {
+                "propertyPath": {
+                    "description": "PropertyPath is a JSONPath expression to query resource properties.\nExamples:\n  - \"$.Tags[?(@.Key=='Name')].Value\" - get value of tag with key \"Name\"\n  - \"$.Tags[?(@.Key=~'eks:automode:.*')]\" - check if any tag key matches regex\n  - \"$.SkipDiscovery\" - get top-level property value",
+                    "type": "string"
+                },
+                "propertyValue": {
+                    "description": "PropertyValue is the expected value to match.\nEmpty string means existence check (path returns any value = match).\nNon-empty means exact string match against the query result.",
+                    "type": "string"
+                }
+            }
         },
         "model.ForceCheckTTLResponse": {
             "type": "object",
@@ -884,6 +900,22 @@ const docTemplate = `{
                 }
             }
         },
+        "model.LabelConfig": {
+            "type": "object",
+            "properties": {
+                "defaultQuery": {
+                    "description": "DefaultQuery is a JSONPath expression applied to all resources in this namespace.\nExample for AWS: ` + "`" + `$.Tags[?(@.Key=='Name')].Value` + "`" + `\nIf empty, falls back to NativeID.",
+                    "type": "string"
+                },
+                "resourceOverrides": {
+                    "description": "ResourceOverrides provides JSONPath expressions for specific resource types,\noverriding the DefaultQuery. Use for resources without tags or with\nnon-standard label sources.\nKey: resource type (e.g., \"AWS::IAM::Policy\")\nValue: JSONPath expression (e.g., \"$.PolicyName\")",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "model.ListCommandStatusResponse": {
             "type": "object",
             "properties": {
@@ -891,6 +923,25 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command"
+                    }
+                }
+            }
+        },
+        "model.MatchFilter": {
+            "type": "object",
+            "properties": {
+                "conditions": {
+                    "description": "All conditions must match (AND logic) to exclude",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.FilterCondition"
+                    }
+                },
+                "resourceTypes": {
+                    "description": "Resource types this filter applies to",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
                     }
                 }
             }
@@ -909,6 +960,15 @@ const docTemplate = `{
         "model.PluginInfo": {
             "type": "object",
             "properties": {
+                "DiscoveryFilters": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.MatchFilter"
+                    }
+                },
+                "LabelConfig": {
+                    "$ref": "#/definitions/model.LabelConfig"
+                },
                 "MaxRequestsPerSecond": {
                     "type": "integer"
                 },
@@ -920,6 +980,15 @@ const docTemplate = `{
                 },
                 "ResourceCount": {
                     "type": "integer"
+                },
+                "ResourceTypesToDiscover": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "RetryConfig": {
+                    "$ref": "#/definitions/model.RetryConfig"
                 },
                 "Version": {
                     "type": "string"
@@ -1100,6 +1169,13 @@ const docTemplate = `{
                 "CascadeSource": {
                     "type": "string"
                 },
+                "CreateOnlyPatch": {
+                    "description": "CreateOnlyPatch is a JSON-patch document (same format as PatchDocument)\nlisting only the ops against createOnly fields that triggered a\nresource replacement. Populated on the delete half of a replace pair\nso the CLI can render which immutable properties forced the replace.\nNever sent to resource plugins — the replace executes as a plain\ndestroy + create.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "CurrentAttempt": {
                     "type": "integer"
                 },
@@ -1169,6 +1245,20 @@ const docTemplate = `{
                 },
                 "StateMessage": {
                     "type": "string"
+                }
+            }
+        },
+        "model.RetryConfig": {
+            "type": "object",
+            "properties": {
+                "maxRetries": {
+                    "type": "integer"
+                },
+                "retryDelay": {
+                    "$ref": "#/definitions/time.Duration"
+                },
+                "statusCheckInterval": {
+                    "$ref": "#/definitions/time.Duration"
                 }
             }
         },
@@ -1432,6 +1522,30 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "time.Duration": {
+            "type": "integer",
+            "format": "int64",
+            "enum": [
+                -9223372036854775808,
+                9223372036854775807,
+                1,
+                1000,
+                1000000,
+                1000000000,
+                60000000000,
+                3600000000000
+            ],
+            "x-enum-varnames": [
+                "minDuration",
+                "maxDuration",
+                "Nanosecond",
+                "Microsecond",
+                "Millisecond",
+                "Second",
+                "Minute",
+                "Hour"
+            ]
         }
     }
 }`

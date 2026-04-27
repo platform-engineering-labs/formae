@@ -652,8 +652,12 @@ func (c *Client) ListPlugins(scope string, query, category, pluginType, channel 
 	return &result, nil
 }
 
-func (c *Client) GetPlugin(name string) (*apimodel.GetPluginResponse, error) {
-	resp, err := c.resty.R().Get(c.endpoint + "/api/v1/plugins/" + name)
+func (c *Client) GetPlugin(name, channel string) (*apimodel.GetPluginResponse, error) {
+	r := c.resty.R()
+	if channel != "" {
+		r = r.SetQueryParam("channel", channel)
+	}
+	resp, err := r.Get(c.endpoint + "/api/v1/plugins/" + name)
 	if err != nil {
 		return nil, err
 	}

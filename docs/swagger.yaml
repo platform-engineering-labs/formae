@@ -74,6 +74,8 @@ definitions:
     type: object
   model.FieldHint:
     properties:
+      AttachesTo:
+        type: boolean
       CreateOnly:
         type: boolean
       HasProviderDefault:
@@ -103,6 +105,23 @@ definitions:
     - FieldUpdateMethodSet
     - FieldUpdateMethodAtomic
     - FieldUpdateMethodNone
+  model.FilterCondition:
+    properties:
+      propertyPath:
+        description: |-
+          PropertyPath is a JSONPath expression to query resource properties.
+          Examples:
+            - "$.Tags[?(@.Key=='Name')].Value" - get value of tag with key "Name"
+            - "$.Tags[?(@.Key=~'eks:automode:.*')]" - check if any tag key matches regex
+            - "$.SkipDiscovery" - get top-level property value
+        type: string
+      propertyValue:
+        description: |-
+          PropertyValue is the expected value to match.
+          Empty string means existence check (path returns any value = match).
+          Non-empty means exact string match against the query result.
+        type: string
+    type: object
   model.ForceCheckTTLResponse:
     properties:
       command_ids:
@@ -149,11 +168,43 @@ definitions:
           $ref: '#/definitions/model.Target'
         type: array
     type: object
+  model.LabelConfig:
+    properties:
+      defaultQuery:
+        description: |-
+          DefaultQuery is a JSONPath expression applied to all resources in this namespace.
+          Example for AWS: `$.Tags[?(@.Key=='Name')].Value`
+          If empty, falls back to NativeID.
+        type: string
+      resourceOverrides:
+        additionalProperties:
+          type: string
+        description: |-
+          ResourceOverrides provides JSONPath expressions for specific resource types,
+          overriding the DefaultQuery. Use for resources without tags or with
+          non-standard label sources.
+          Key: resource type (e.g., "AWS::IAM::Policy")
+          Value: JSONPath expression (e.g., "$.PolicyName")
+        type: object
+    type: object
   model.ListCommandStatusResponse:
     properties:
       Commands:
         items:
           $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
+        type: array
+    type: object
+  model.MatchFilter:
+    properties:
+      conditions:
+        description: All conditions must match (AND logic) to exclude
+        items:
+          $ref: '#/definitions/model.FilterCondition'
+        type: array
+      resourceTypes:
+        description: Resource types this filter applies to
+        items:
+          type: string
         type: array
     type: object
   model.ModifiedStack:
@@ -165,6 +216,12 @@ definitions:
     type: object
   model.PluginInfo:
     properties:
+      DiscoveryFilters:
+        items:
+          $ref: '#/definitions/model.MatchFilter'
+        type: array
+      LabelConfig:
+        $ref: '#/definitions/model.LabelConfig'
       MaxRequestsPerSecond:
         type: integer
       Namespace:
@@ -173,6 +230,12 @@ definitions:
         type: string
       ResourceCount:
         type: integer
+      ResourceTypesToDiscover:
+        items:
+          type: string
+        type: array
+      RetryConfig:
+        $ref: '#/definitions/model.RetryConfig'
       Version:
         type: string
     type: object
@@ -293,6 +356,17 @@ definitions:
     properties:
       CascadeSource:
         type: string
+      CreateOnlyPatch:
+        description: |-
+          CreateOnlyPatch is a JSON-patch document (same format as PatchDocument)
+          listing only the ops against createOnly fields that triggered a
+          resource replacement. Populated on the delete half of a replace pair
+          so the CLI can render which immutable properties forced the replace.
+          Never sent to resource plugins — the replace executes as a plain
+          destroy + create.
+        items:
+          type: integer
+        type: array
       CurrentAttempt:
         type: integer
       Duration:
@@ -340,6 +414,15 @@ definitions:
         type: string
       StateMessage:
         type: string
+    type: object
+  model.RetryConfig:
+    properties:
+      maxRetries:
+        type: integer
+      retryDelay:
+        $ref: '#/definitions/time.Duration'
+      statusCheckInterval:
+        $ref: '#/definitions/time.Duration'
     type: object
   model.Schema:
     properties:
@@ -515,6 +598,27 @@ definitions:
       TargetLabel:
         type: string
     type: object
+  time.Duration:
+    enum:
+    - -9223372036854775808
+    - 9223372036854775807
+    - 1
+    - 1000
+    - 1000000
+    - 1000000000
+    - 60000000000
+    - 3600000000000
+    format: int64
+    type: integer
+    x-enum-varnames:
+    - minDuration
+    - maxDuration
+    - Nanosecond
+    - Microsecond
+    - Millisecond
+    - Second
+    - Minute
+    - Hour
 host: localhost:8080
 info:
   contact: {}
