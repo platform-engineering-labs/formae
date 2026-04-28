@@ -271,8 +271,9 @@ func (f *FormaeCLI) Inventory(t *testing.T, args ...string) []Resource {
 
 // ExtractToFile runs `formae extract` with the given query and writes the
 // resulting PKL to targetPath. The --yes flag is set to overwrite without
-// prompting.
-func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string) {
+// prompting. Additional flags can be passed via extraArgs (e.g.
+// "--schema-location", "local").
+func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string, extraArgs ...string) {
 	t.Helper()
 
 	args := []string{
@@ -280,10 +281,29 @@ func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string)
 		"--config", f.configPath,
 		"--query", query,
 		"--yes",
-		targetPath,
 	}
+	args = append(args, extraArgs...)
+	args = append(args, targetPath)
 
 	f.run(t, args...)
+}
+
+// Eval runs `formae eval` against the given forma fixture and returns stdout
+// as bytes. The machine consumer + json output schema are set so the result
+// is parseable.
+func (f *FormaeCLI) Eval(t *testing.T, fixturePath string, extraArgs ...string) []byte {
+	t.Helper()
+
+	args := []string{
+		"eval",
+		"--config", f.configPath,
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	}
+	args = append(args, extraArgs...)
+	args = append(args, fixturePath)
+
+	return f.run(t, args...)
 }
 
 // StatusCommand queries the status of a specific command by ID.

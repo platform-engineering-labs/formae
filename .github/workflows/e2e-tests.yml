@@ -107,6 +107,12 @@ jobs:
             plugins: aws
           - test: TestExtractAndReapply
             plugins: aws
+          - test: TestEvalDefault
+            plugins: aws
+          - test: TestEvalSchemaLocationLocal
+            plugins: aws
+          - test: TestExtractSchemaLocationLocal
+            plugins: aws
           - test: TestAuthBasic
             plugins: auth-basic
           - test: TestPluginConfig
