@@ -625,9 +625,19 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOpt
 	if err != nil {
 		return "", err
 	}
-	if options.SchemaLocation == schema.SchemaLocationLocal && options.LocalPluginDir == "" {
-		options.LocalPluginDir = util.ExpandHomePath(a.Config.PluginDir)
+
+	// Resolve plugin schema URIs from the agent rather than scanning the CLI
+	// box's local plugin dir. After the multi-source plugin-discovery refactor,
+	// orbital-installed plugins live alongside the agent and are not present on
+	// the CLI machine in any deployment where the two are separate. Same
+	// pattern as GenerateSourceCode.
+	versions, err := a.InstalledResourcePluginVersions()
+	if err != nil {
+		return "", fmt.Errorf("listing installed plugins: %w", err)
 	}
+	options.SchemaLocation = schema.SchemaLocationRemote
+	options.Dependencies = buildRemoteDependencyStrings(forma, versions)
+
 	return schemaPlugin.SerializeForma(forma, options)
 }
 
