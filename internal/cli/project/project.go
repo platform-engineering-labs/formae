@@ -65,7 +65,8 @@ func ProjectInitCmd() *cobra.Command {
 			// query if every include is @local (no version needed).
 			var installedVersions map[string]string
 			if needsAgent(include) {
-				appCtx, err := cmd.AppFromContext(command.Context(), "", "", command)
+				configFile, _ := command.Flags().GetString("config")
+				appCtx, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 				if err != nil {
 					return err
 				}
@@ -85,6 +86,7 @@ func ProjectInitCmd() *cobra.Command {
 	command.Flags().StringArray("include", []string{}, "Packages to include (use @local suffix for local plugins, e.g. myplugin@local)")
 	command.Flags().BoolP("yes", "y", false, "Skip confirmation prompts")
 	command.Flags().String("plugin-dir", "~/.pel/formae/plugins", "Directory to scan for @local plugin schemas")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }
