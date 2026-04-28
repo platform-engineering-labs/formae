@@ -168,7 +168,6 @@ test-e2e: build
 	echo "Setting up e2e PKL dependencies..."
 	bash ./tests/e2e/go/setup_pkl.sh
 	echo "Staging formae binary in installer-shaped tree (.../bin/formae + .../.ops)..."
-	rm -rf $(CURDIR)/dist/e2e
 	mkdir -p $(CURDIR)/dist/e2e/bin $(CURDIR)/dist/e2e/.ops
 	cp $(CURDIR)/formae $(CURDIR)/dist/e2e/bin/formae
 	echo "Running e2e tests..."

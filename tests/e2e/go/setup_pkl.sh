@@ -52,7 +52,7 @@ hub_uri() {
     if [[ -z "$plugin_dir" ]] || [[ ! -f "$plugin_dir/schema/pkl/PklProject" ]]; then
         if [[ "$required" == "true" ]]; then
             echo "ERROR: $alias plugin not found at $PLUGINS_DIR/$ns_dir/"
-            echo "Run 'scripts/setup-test-plugins.sh \$FORMAE_PLUGIN_DIR' first, then re-run with FORMAE_PLUGIN_DIR set."
+            echo "Install plugins via 'formae plugin install $alias' against an agent whose orbital tree shares this directory, or set FORMAE_PLUGIN_DIR to a tree that has it."
             exit 1
         else
             echo "WARN: $alias plugin not found at $PLUGINS_DIR/$ns_dir/ — related E2E tests will be skipped" >&2
