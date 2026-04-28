@@ -291,17 +291,25 @@ func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string,
 // Eval runs `formae eval` against the given forma fixture and returns stdout
 // as bytes. The machine consumer + json output schema are set so the result
 // is parseable.
+//
+// The fixture path is placed immediately after the subcommand because
+// IsDynamicCommand (cmd.go) iterates os.Args looking for the first argument
+// containing a supported file extension and treats it as the forma file.
+// If --config (which points at formae.conf.pkl) appeared first, it would be
+// mis-detected as the forma file and the PKL evaluator would refuse to
+// load formae:/Config.pkl. Apply's helper uses the same ordering for the
+// same reason.
 func (f *FormaeCLI) Eval(t *testing.T, fixturePath string, extraArgs ...string) []byte {
 	t.Helper()
 
 	args := []string{
 		"eval",
+		fixturePath,
 		"--config", f.configPath,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	}
 	args = append(args, extraArgs...)
-	args = append(args, fixturePath)
 
 	return f.run(t, args...)
 }
