@@ -102,7 +102,7 @@ jobs:
           - test: TestTargetResolvable
             plugins: compose grafana
           - test: TestProjectInit
-            plugins: azure
+            plugins: aws azure
           - test: TestSimulateApply
             plugins: aws
           - test: TestExtractAndReapply
