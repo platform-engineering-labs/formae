@@ -44,7 +44,7 @@ func (cliconfig) DataDirectory() string {
 func (cliconfig) EnsureConfigDirectory() error {
 	configPath := Config.ConfigDirectory()
 	if configPath == "" {
-		return fmt.Errorf("failed to ensure formae config directory")
+		return fmt.Errorf("failed to ensure config directory")
 	}
 
 	return os.MkdirAll(configPath, 0700)
@@ -53,7 +53,7 @@ func (cliconfig) EnsureConfigDirectory() error {
 func (cliconfig) EnsureDataDirectory() error {
 	dataPath := Config.DataDirectory()
 	if dataPath == "" {
-		return fmt.Errorf("failed to ensure formae data directory")
+		return fmt.Errorf("failed to ensure data directory")
 	}
 
 	return os.MkdirAll(dataPath, 0700)
@@ -62,7 +62,7 @@ func (cliconfig) EnsureDataDirectory() error {
 func (cliconfig) EnsureId(id string) error {
 	configPath := Config.DataDirectory()
 	if configPath == "" {
-		return fmt.Errorf("failed to ensure formae directory")
+		return fmt.Errorf("failed to ensure data directory")
 	}
 
 	idFile := filepath.Join(configPath, id)
@@ -89,7 +89,7 @@ func (cliconfig) EnsureAgentID() error {
 func (cliconfig) ClientID() (string, error) {
 	configPath := Config.DataDirectory()
 	if configPath == "" {
-		return "", fmt.Errorf("failed to retrieve formae directory")
+		return "", fmt.Errorf("failed to retrieve data directory")
 	}
 
 	clientIDFile := filepath.Join(configPath, "cli_client_id")
@@ -104,7 +104,7 @@ func (cliconfig) ClientID() (string, error) {
 func (cliconfig) AgentID() (string, error) {
 	configPath := Config.DataDirectory()
 	if configPath == "" {
-		return "", fmt.Errorf("failed to retrieve formae directory")
+		return "", fmt.Errorf("failed to retrieve data directory")
 	}
 
 	agentIDFile := filepath.Join(configPath, "agent_id")
