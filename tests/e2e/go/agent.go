@@ -146,14 +146,15 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
     }`, options.authUsername, options.authPassword)
 	}
 
-	// Intentionally no pluginDir override here. The agent's default
-	// ~/.pel/formae/plugins (empty in CI) plus the multi-source scan
-	// of SystemPluginDir(binPath) finds orbital-installed plugins
-	// without help. Setting cfg.PluginDir to the same path as the
-	// system dir would collide with CleanStaleDevPlugins and delete
-	// the only copy of every plugin. setup_pkl.sh still reads
-	// FORMAE_PLUGIN_DIR independently of the agent.
+	// When FORMAE_PLUGIN_DIR is set, mirror it into the test agent's
+	// pluginDir so the CLI's extract command (which reads pluginDir
+	// from the same config file as the agent) finds the orbital-
+	// installed plugins. CleanStaleDevPlugins is guarded against the
+	// devDir == systemDir collision this can produce.
 	pluginDirBlock := ""
+	if dir := os.Getenv("FORMAE_PLUGIN_DIR"); dir != "" {
+		pluginDirBlock = fmt.Sprintf("\npluginDir = %q", dir)
+	}
 
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
