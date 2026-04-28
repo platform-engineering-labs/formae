@@ -220,6 +220,13 @@ jobs:
               exit 1
           fi
 
+          # Warm orbital's cache. The agent's install endpoint does not
+          # auto-refresh repository metadata, so a fresh tree fails with
+          # "no install candidates found". `plugin search` invokes the
+          # Available API which does refresh, populating the cache.
+          # TODO: drop this once the install endpoint refreshes itself.
+          dist/e2e/bin/formae plugin search --channel stable >/dev/null
+
           # Install only the plugins this test needs.
           dist/e2e/bin/formae plugin install ${{ matrix.plugins }} --channel stable
 
