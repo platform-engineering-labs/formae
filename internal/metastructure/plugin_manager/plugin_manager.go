@@ -139,6 +139,14 @@ func New(logger *slog.Logger, repos []pkgmodel.Repository) (*PluginManager, erro
 	if !listOrb.Ready() {
 		return nil, fmt.Errorf("orbital tree not initialized at the path derived from the formae binary location; install formae via the orbital installer or set up an orbital tree manually")
 	}
+	// Warm orbital's repository cache at startup. Without this, the first
+	// plugin install on a fresh tree fails with "no install candidates
+	// found" because the install endpoint doesn't auto-refresh — only
+	// Available does. Best-effort: a refresh failure (e.g. hub unreachable)
+	// must not block agent startup; subsequent operations will retry.
+	if err := listOrb.Refresh(); err != nil {
+		logger.Warn("orbital cache refresh failed at startup; plugin operations will rely on cached data until the next refresh", "error", err)
+	}
 	return &PluginManager{logger: logger, listOrb: listOrb, factory: factory}, nil
 }
 
