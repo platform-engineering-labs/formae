@@ -416,6 +416,40 @@ func (a *App) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.
 	return client.UninstallPlugins(req)
 }
 
+// InstalledResourcePluginVersions queries the agent for installed resource
+// plugins and returns a map of lowercase namespace to installed version. Used
+// by `formae extract` and `formae project init` to pin remote schema URIs
+// without scanning local plugin directories — orbital-installed plugins live
+// on the agent box, not on the CLI box, so the local-scan approach broke for
+// any deployment where agent and CLI are separate.
+func (a *App) InstalledResourcePluginVersions() (map[string]string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	resp, err := client.ListPlugins("installed", "", "", "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string, len(resp.Plugins))
+	for _, p := range resp.Plugins {
+		if p.Type != "resource" {
+			continue
+		}
+		key := strings.ToLower(p.Namespace)
+		if key == "" {
+			key = strings.ToLower(p.Name)
+		}
+		if p.InstalledVersion != "" {
+			result[key] = p.InstalledVersion
+		}
+	}
+	return result, nil
+}
+
 func (a *App) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.UpgradePluginsResponse, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
@@ -602,12 +636,51 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 	if err != nil {
 		return schema.GenerateSourcesResult{}, err
 	}
+
+	// Resolve plugin schema URIs from the agent rather than scanning the CLI
+	// box's local plugin dir. After the multi-source plugin-discovery refactor,
+	// orbital-installed plugins live alongside the agent and are not present on
+	// the CLI machine in any deployment where the two are separate.
+	versions, err := a.InstalledResourcePluginVersions()
+	if err != nil {
+		return schema.GenerateSourcesResult{}, fmt.Errorf("listing installed plugins: %w", err)
+	}
+
 	options := &schema.SerializeOptions{
 		Schema:         outputSchema,
-		SchemaLocation: schema.SchemaLocationLocal,
-		LocalPluginDir: util.ExpandHomePath(a.Config.PluginDir),
+		SchemaLocation: schema.SchemaLocationRemote,
+		Dependencies:   buildRemoteDependencyStrings(forma, versions),
 	}
 	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
+}
+
+// buildRemoteDependencyStrings produces PklProjectTemplate-formatted dep
+// strings (`<plugin>.<name>@<version>`) for every namespace present in the
+// forma, plus formae core. Versions come from the agent's installed-plugins
+// view; namespaces with no installed version are skipped — the resulting
+// extracted forma will fail to evaluate with a clear "missing import" PKL
+// error, which is the right surface for "this fixture references a plugin
+// not installed on the agent".
+func buildRemoteDependencyStrings(forma *pkgmodel.Forma, versions map[string]string) []string {
+	var deps []string
+	if formae.Version != "0.0.0" {
+		deps = append(deps, "pkl.formae@"+formae.Version)
+	}
+
+	seen := make(map[string]bool)
+	for _, r := range forma.Resources {
+		ns := strings.ToLower(r.Namespace())
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		if v, ok := versions[ns]; ok && v != "" {
+			deps = append(deps, fmt.Sprintf("%s.%s@%s", ns, ns, v))
+		}
+	}
+
+	sort.Strings(deps)
+	return deps
 }
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
@@ -690,12 +763,12 @@ func (p *Plugins) SupportedSchemas() []string {
 
 // Projects
 
-func (p *Projects) Init(path string, format string, include []string, pluginsDir string) error {
+func (p *Projects) Init(path string, format string, include []string, pluginsDir string, installedVersions map[string]string) error {
 	// TODO(discount-elf) think about this namespace issue, since different packages can be included in plugins we currently
 	// need plugin.package for download delivery
 	switch format {
 	case "pkl":
-		includes, err := p.formatIncludes(format, include, pluginsDir)
+		includes, err := p.formatIncludes(format, include, pluginsDir, installedVersions)
 		if err != nil {
 			return err
 		}
@@ -731,7 +804,7 @@ func (p *Projects) Init(path string, format string, include []string, pluginsDir
 	return nil
 }
 
-func (p *Projects) formatIncludes(format string, include []string, pluginsDir string) ([]string, error) {
+func (p *Projects) formatIncludes(format string, include []string, pluginsDir string, installedVersions map[string]string) ([]string, error) {
 	var includes []string
 	switch format {
 	case "pkl":
@@ -744,25 +817,27 @@ func (p *Projects) formatIncludes(format string, include []string, pluginsDir st
 		for _, inc := range include {
 			ns, isLocal := parseIncludeSpec(inc)
 
-			// Find installed plugin info (handles case-insensitive lookup)
-			localPath, installedVersion := p.findInstalledPlugin(ns, pluginsDir)
-
-			// If @local suffix specified, must resolve locally
+			// @local: must resolve locally — pluginsDir is the dev plugin
+			// install dir (typically ~/.pel/formae/plugins, populated by
+			// `make install` in plugin repos).
 			if isLocal {
+				localPath, _ := p.findInstalledPlugin(ns, pluginsDir)
 				if localPath == "" {
-					return nil, fmt.Errorf("plugin %q not installed locally. Install with: formae plugin install %s", ns, ns)
+					return nil, fmt.Errorf("plugin %q not installed locally for @local resolution. Install it from a plugin repo with `make install`", ns)
 				}
 				includes = append(includes, fmt.Sprintf("local:%s:%s", ns, localPath))
 				continue
 			}
 
-			// Default: resolve from hub (remote)
-			if installedVersion != "" {
-				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, installedVersion))
-			} else {
-				// No version info available, add as plain namespace (will fail at resolve time)
-				includes = append(includes, ns)
+			// Default: resolve from hub (remote). Version comes from the
+			// agent's installed-plugins view rather than scanning local
+			// disk, since orbital-installed plugins live with the agent
+			// and may not be present on the CLI box.
+			version, ok := installedVersions[ns]
+			if !ok || version == "" {
+				return nil, fmt.Errorf("plugin %q not installed on the agent. Install it with: formae plugin install %s", ns, ns)
 			}
+			includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, version))
 		}
 	default:
 		return nil, nil
