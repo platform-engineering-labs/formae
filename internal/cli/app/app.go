@@ -423,6 +423,38 @@ func (a *App) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.
 // on the agent box, not on the CLI box, so the local-scan approach broke for
 // any deployment where agent and CLI are separate.
 func (a *App) InstalledResourcePluginVersions() (map[string]string, error) {
+	plugins, err := a.installedResourcePlugins()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(plugins))
+	for ns, info := range plugins {
+		if info.Version != "" {
+			result[ns] = info.Version
+		}
+	}
+	return result, nil
+}
+
+// PluginInfo is a CLI-side view of an installed plugin, combining the
+// agent-reported version with its on-disk PklProject location (when the
+// agent and CLI share a filesystem). Used by the --schema-location local
+// flow to build local PKL import strings.
+type PluginInfo struct {
+	Version   string
+	LocalPath string
+}
+
+// InstalledResourcePlugins returns the agent's view of installed
+// resource plugins, keyed by lowercase namespace (falling back to
+// lowercase name when namespace is empty). Includes both version and
+// the agent-reported on-disk PklProject path so callers can pick
+// local vs remote URI emission.
+func (a *App) InstalledResourcePlugins() (map[string]PluginInfo, error) {
+	return a.installedResourcePlugins()
+}
+
+func (a *App) installedResourcePlugins() (map[string]PluginInfo, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, err
@@ -434,7 +466,7 @@ func (a *App) InstalledResourcePluginVersions() (map[string]string, error) {
 		return nil, err
 	}
 
-	result := make(map[string]string, len(resp.Plugins))
+	result := make(map[string]PluginInfo, len(resp.Plugins))
 	for _, p := range resp.Plugins {
 		if p.Type != "resource" {
 			continue
@@ -443,8 +475,9 @@ func (a *App) InstalledResourcePluginVersions() (map[string]string, error) {
 		if key == "" {
 			key = strings.ToLower(p.Name)
 		}
-		if p.InstalledVersion != "" {
-			result[key] = p.InstalledVersion
+		result[key] = PluginInfo{
+			Version:   p.InstalledVersion,
+			LocalPath: p.LocalPath,
 		}
 	}
 	return result, nil
@@ -626,42 +659,94 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOpt
 		return "", err
 	}
 
-	// Resolve plugin schema URIs from the agent rather than scanning the CLI
-	// box's local plugin dir. After the multi-source plugin-discovery refactor,
-	// orbital-installed plugins live alongside the agent and are not present on
-	// the CLI machine in any deployment where the two are separate. Same
-	// pattern as GenerateSourceCode.
-	versions, err := a.InstalledResourcePluginVersions()
+	deps, err := a.buildDependencyStrings(forma, options.SchemaLocation)
 	if err != nil {
-		return "", fmt.Errorf("listing installed plugins: %w", err)
+		return "", err
 	}
-	options.SchemaLocation = schema.SchemaLocationRemote
-	options.Dependencies = buildRemoteDependencyStrings(forma, versions)
+	if options.SchemaLocation == "" {
+		options.SchemaLocation = schema.SchemaLocationRemote
+	}
+	options.Dependencies = deps
 
 	return schemaPlugin.SerializeForma(forma, options)
 }
 
-func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (schema.GenerateSourcesResult, error) {
+func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
 	schemaPlugin, err := schema.DefaultRegistry.Get(outputSchema)
 	if err != nil {
 		return schema.GenerateSourcesResult{}, err
 	}
 
-	// Resolve plugin schema URIs from the agent rather than scanning the CLI
-	// box's local plugin dir. After the multi-source plugin-discovery refactor,
-	// orbital-installed plugins live alongside the agent and are not present on
-	// the CLI machine in any deployment where the two are separate.
-	versions, err := a.InstalledResourcePluginVersions()
+	deps, err := a.buildDependencyStrings(forma, schemaLocation)
 	if err != nil {
-		return schema.GenerateSourcesResult{}, fmt.Errorf("listing installed plugins: %w", err)
+		return schema.GenerateSourcesResult{}, err
+	}
+	if schemaLocation == "" {
+		schemaLocation = schema.SchemaLocationRemote
 	}
 
 	options := &schema.SerializeOptions{
 		Schema:         outputSchema,
-		SchemaLocation: schema.SchemaLocationRemote,
-		Dependencies:   buildRemoteDependencyStrings(forma, versions),
+		SchemaLocation: schemaLocation,
+		Dependencies:   deps,
 	}
 	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
+}
+
+// buildDependencyStrings asks the agent for installed plugin info and
+// emits PklProjectTemplate-formatted dep strings for every namespace
+// present in the forma, plus formae core.
+//
+// SchemaLocationRemote (default) emits `<plugin>.<name>@<version>` strings;
+// PKL fetches these from hub.platform.engineering. SchemaLocationLocal
+// emits `local:<name>:<path>` strings pointing at the agent's on-disk
+// PklProject; PKL imports them directly. Formae core is always remote
+// (the agent does not surface its own PKL schema as a local path).
+//
+// SchemaLocationLocal requires the CLI and agent to share a filesystem.
+// Each agent-reported localPath is statted; the first unreadable path
+// (or first plugin missing from the agent's local view entirely) fails
+// the call with a clear error pointing the operator at the same-box
+// constraint.
+func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.SchemaLocation) ([]string, error) {
+	plugins, err := a.InstalledResourcePlugins()
+	if err != nil {
+		return nil, fmt.Errorf("listing installed plugins: %w", err)
+	}
+
+	var deps []string
+	if formae.Version != "0.0.0" {
+		deps = append(deps, "pkl.formae@"+formae.Version)
+	}
+
+	seen := make(map[string]bool)
+	for _, r := range forma.Resources {
+		ns := strings.ToLower(r.Namespace())
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+
+		info, ok := plugins[ns]
+		if !ok || info.Version == "" {
+			continue
+		}
+
+		if location == schema.SchemaLocationLocal {
+			if info.LocalPath == "" {
+				return nil, fmt.Errorf("--schema-location local requires plugin %q to be installed on the agent's local filesystem; the agent reports no on-disk path. Install with `formae plugin install %s` and retry, or omit --schema-location to use remote schemas", ns, ns)
+			}
+			if _, statErr := os.Stat(info.LocalPath); statErr != nil {
+				return nil, fmt.Errorf("--schema-location local requires the CLI and agent to share a filesystem; the agent reports plugin %q at %s but that path is not readable from the CLI host (%v). Run the CLI on the agent's host, or omit --schema-location to use remote schemas", ns, info.LocalPath, statErr)
+			}
+			deps = append(deps, fmt.Sprintf("local:%s:%s", ns, info.LocalPath))
+		} else {
+			deps = append(deps, fmt.Sprintf("%s.%s@%s", ns, ns, info.Version))
+		}
+	}
+
+	sort.Strings(deps)
+	return deps, nil
 }
 
 // buildRemoteDependencyStrings produces PklProjectTemplate-formatted dep

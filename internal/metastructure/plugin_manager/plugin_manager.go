@@ -7,11 +7,14 @@ package plugin_manager
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/opsmgr"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/orbital/opm/records"
 	"github.com/platform-engineering-labs/orbital/ops"
 )
@@ -49,7 +52,14 @@ type Plugin struct {
 	Channel           string
 	Frozen            bool
 	ManagedBy         string // "standard" | ""
-	Metadata          map[string]map[string]string
+	// LocalPath is the absolute path to the plugin's PklProject file on
+	// the agent's filesystem, populated from the discovery scan. Empty
+	// when no on-disk install is found (e.g. orbital recorded the
+	// package but the binary tree was wiped, or the plugin is only
+	// visible in an unscanned location). Surfaced via the API so the
+	// CLI can build local schema URIs for --schema-location local.
+	LocalPath string
+	Metadata  map[string]map[string]string
 }
 
 // AvailableFilter constrains the set of plugins returned by Available.
@@ -111,10 +121,18 @@ type orbitalFactory func(channel string) (orbitalClient, error)
 // packages (List/Uninstall) — those operations are channel-agnostic. Per-call
 // factory invocations build channel-specific clients for queries that depend
 // on a remote channel (Available/Info/Install/Upgrade).
+//
+// pluginDirs are the directories the agent scans for on-disk plugin
+// installs. The same dirs the agent scans at startup to populate the
+// PluginProcessSupervisor; the manager re-scans them on List() to
+// attach LocalPath to each plugin. Order matters: dirs earlier in the
+// slice take priority when the same plugin is found in multiple dirs
+// (mirrors discovery.DiscoverPluginsMulti).
 type PluginManager struct {
-	logger  *slog.Logger
-	listOrb orbitalClient
-	factory orbitalFactory
+	logger     *slog.Logger
+	listOrb    orbitalClient
+	factory    orbitalFactory
+	pluginDirs []string
 }
 
 // New creates a PluginManager backed by the orbital repositories in repos.
@@ -128,7 +146,7 @@ type PluginManager struct {
 // derived tree-root path. The agent treats this as a fatal startup error so
 // the operator gets a clear log line rather than CLI users seeing opaque
 // 503s on every plugin command.
-func New(logger *slog.Logger, repos []pkgmodel.Repository) (*PluginManager, error) {
+func New(logger *slog.Logger, repos []pkgmodel.Repository, pluginDirs []string) (*PluginManager, error) {
 	factory := func(channel string) (orbitalClient, error) {
 		return opsmgr.NewFromRepositories(logger, repos, channel)
 	}
@@ -147,7 +165,7 @@ func New(logger *slog.Logger, repos []pkgmodel.Repository) (*PluginManager, erro
 	if err := listOrb.Refresh(); err != nil {
 		logger.Warn("orbital cache refresh failed at startup; plugin operations will rely on cached data until the next refresh", "error", err)
 	}
-	return &PluginManager{logger: logger, listOrb: listOrb, factory: factory}, nil
+	return &PluginManager{logger: logger, listOrb: listOrb, factory: factory, pluginDirs: pluginDirs}, nil
 }
 
 // clientFor returns an orbitalClient configured for the given channel. An
@@ -198,11 +216,18 @@ func versionString(v *ops.Version) string {
 
 // List returns every installed plugin. Packages without "plugin" metadata
 // (e.g. the formae binary itself, pkl tooling) are filtered out.
+//
+// Each plugin's LocalPath is populated from a fresh discovery scan of the
+// configured pluginDirs. A plugin known to orbital but missing from the
+// scan dirs (e.g. a record persisted before the binary tree moved) gets
+// LocalPath="" — consumers should treat that as "no on-disk install
+// available".
 func (pm *PluginManager) List() ([]Plugin, error) {
 	pkgs, err := pm.listOrb.List()
 	if err != nil {
 		return nil, fmt.Errorf("listing installed packages: %w", err)
 	}
+	localPaths := pm.discoverLocalPaths()
 	plugins := make([]Plugin, 0, len(pkgs))
 	for _, pkg := range pkgs {
 		if !isPluginPackage(pkg) {
@@ -212,9 +237,41 @@ func (pm *PluginManager) List() ([]Plugin, error) {
 		if pkg.Version != nil {
 			p.InstalledVersion = versionString(pkg.Version)
 		}
+		if path, ok := localPaths[strings.ToLower(p.Name)]; ok {
+			p.LocalPath = path
+		}
 		plugins = append(plugins, p)
 	}
 	return plugins, nil
+}
+
+// discoverLocalPaths scans the configured plugin dirs and returns a map
+// from lowercase plugin name to the absolute path of the plugin's
+// PklProject file. Errors during scanning are logged and the partial
+// result is returned; an empty map means no on-disk plugins were found
+// (which is a valid state, not an error).
+func (pm *PluginManager) discoverLocalPaths() map[string]string {
+	if len(pm.pluginDirs) == 0 {
+		return map[string]string{}
+	}
+	infos := discovery.DiscoverPluginsMulti(pm.pluginDirs, discovery.Resource)
+	authInfos := discovery.DiscoverPluginsMulti(pm.pluginDirs, discovery.Auth)
+	infos = append(infos, authInfos...)
+	out := make(map[string]string, len(infos))
+	for _, info := range infos {
+		// info.BinaryPath is `<dir>/<name>/v<ver>/<binary>`; the schema
+		// PklProject lives at `<dir>/<name>/v<ver>/schema/pkl/PklProject`.
+		base := filepath.Dir(info.BinaryPath)
+		pklProject := filepath.Join(base, "schema", "pkl", "PklProject")
+		if _, err := os.Stat(pklProject); err != nil {
+			// Plugin binary exists but no PKL schema next to it (rare;
+			// some auth plugins, or a half-broken install). Skip — the
+			// CLI will fall back to remote URIs for this namespace.
+			continue
+		}
+		out[strings.ToLower(info.Name)] = pklProject
+	}
+	return out
 }
 
 // Available returns plugins available for installation, filtered by f.

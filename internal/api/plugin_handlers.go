@@ -180,6 +180,7 @@ func toAPIPlugin(p plugin_manager.Plugin) apimodel.Plugin {
 		License:           p.License,
 		InstalledVersion:  p.InstalledVersion,
 		AvailableVersions: p.AvailableVersions,
+		LocalPath:         p.LocalPath,
 		Channel:           p.Channel,
 		Frozen:            p.Frozen,
 		ManagedBy:         p.ManagedBy,

@@ -201,7 +201,7 @@ func (a *Agent) Start() error {
 		// host than the agent) would only see opaque 503s instead of this
 		// log line. Fail loudly here so the operator fixes config or the
 		// orbital tree before retrying.
-		pm, err := plugin_manager.New(slog.Default(), a.cfg.Artifacts.Repositories)
+		pm, err := plugin_manager.New(slog.Default(), a.cfg.Artifacts.Repositories, []string{devPluginDir, systemPluginDir})
 		if err != nil {
 			slog.Error("Plugin manager initialization failed; refusing to start", "error", err)
 			return

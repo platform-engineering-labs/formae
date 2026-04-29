@@ -23,10 +23,11 @@ import (
 )
 
 type ExtractOptions struct {
-	TargetPath   string
-	Query        string
-	Yes          bool
-	OutputSchema string
+	TargetPath     string
+	Query          string
+	Yes            bool
+	OutputSchema   string
+	SchemaLocation schema.SchemaLocation
 }
 
 func ExtractCmd() *cobra.Command {
@@ -42,6 +43,12 @@ func ExtractCmd() *cobra.Command {
 			opts.Query, _ = command.Flags().GetString("query")
 			opts.Yes, _ = command.Flags().GetBool("yes")
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
+			schemaLocation, _ := command.Flags().GetString("schema-location")
+			loc, err := parseSchemaLocation(schemaLocation)
+			if err != nil {
+				return err
+			}
+			opts.SchemaLocation = loc
 
 			configFile, _ := command.Flags().GetString("config")
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
@@ -64,9 +71,24 @@ func ExtractCmd() *cobra.Command {
 	command.Flags().String("query", " ", "Query that allows to find resources by their attributes")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
 	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
+	command.Flags().String("schema-location", "remote", "How plugin PKL schemas are referenced in the generated PklProject. 'remote' (default) emits package:// URIs that PKL fetches from the hub. 'local' emits local file imports against the agent's on-disk PklProject paths; requires CLI and agent to share a filesystem.")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
+}
+
+// parseSchemaLocation maps the --schema-location flag value to the
+// internal SchemaLocation enum. Returns a clear error for unsupported
+// values rather than silently accepting them.
+func parseSchemaLocation(s string) (schema.SchemaLocation, error) {
+	switch s {
+	case "", "remote":
+		return schema.SchemaLocationRemote, nil
+	case "local":
+		return schema.SchemaLocationLocal, nil
+	default:
+		return "", cmd.FlagErrorf("invalid --schema-location %q; must be one of 'remote' or 'local'", s)
+	}
 }
 
 func runExtract(app *app.App, opts *ExtractOptions) error {
@@ -108,7 +130,7 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 		}
 	}
 
-	res, err := app.GenerateSourceCode(forma, opts.TargetPath, opts.OutputSchema)
+	res, err := app.GenerateSourceCode(forma, opts.TargetPath, opts.OutputSchema, opts.SchemaLocation)
 	if errors.Is(err, schema.ErrFailedToGenerateSources) {
 		logFilePath := fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory())
 		return fmt.Errorf("something went wrong during the extraction. This is our fault. Please contact us and send over the error logs from '%s'", logFilePath)

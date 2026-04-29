@@ -209,6 +209,15 @@ type Plugin struct {
 	License           string                       `json:"license,omitempty"`
 	InstalledVersion  string                       `json:"installedVersion,omitempty"`
 	AvailableVersions []string                     `json:"availableVersions,omitempty"`
+	// LocalPath is the absolute path on the agent's filesystem to the
+	// plugin's PklProject file (containing the plugin's PKL schema).
+	// Populated by the discovery scan when the plugin is installed
+	// locally; empty when no on-disk install is found. Used by the CLI's
+	// --schema-location local flow to import schemas via PklProject.deps
+	// rather than fetching from the hub. Same-box only — the path is
+	// only meaningful when the CLI shares a filesystem with the agent.
+	LocalPath string                       `json:"localPath,omitempty"`
+
 	Channel           string                       `json:"channel,omitempty"`
 	Frozen            bool                         `json:"frozen,omitempty"`
 	ManagedBy         string                       `json:"managedBy,omitempty"`
