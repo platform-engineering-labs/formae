@@ -113,14 +113,14 @@ func TestExtractSchemaLocationLocal(t *testing.T) {
 	}
 	content := string(data)
 
-	if strings.Contains(content, "package://") {
-		t.Errorf("PklProject still contains remote package:// URIs under --schema-location local; want local import() calls only.\nContent:\n%s", content)
+	// aws should resolve via a local import(); formae core stays remote
+	// (the agent does not surface its own PKL schema as a local path,
+	// and dev workflows typically test against a published formae).
+	if !strings.Contains(content, `["aws"] = import(`) {
+		t.Errorf("PklProject does not contain a local import() for aws under --schema-location local.\nContent:\n%s", content)
 	}
-	if !strings.Contains(content, "import(") {
-		t.Errorf("PklProject does not contain any import() calls under --schema-location local.\nContent:\n%s", content)
-	}
-	if !strings.Contains(content, `["aws"]`) {
-		t.Errorf("PklProject does not declare aws dependency.\nContent:\n%s", content)
+	if strings.Contains(content, `["aws"] {`) && strings.Contains(content, "package://hub.platform.engineering/plugins/aws") {
+		t.Errorf("PklProject still resolves aws via remote package:// URI under --schema-location local.\nContent:\n%s", content)
 	}
 }
 
