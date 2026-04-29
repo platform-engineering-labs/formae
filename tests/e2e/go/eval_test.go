@@ -39,8 +39,8 @@ func TestEvalDefault(t *testing.T) {
 		t.Fatalf("eval output is not valid JSON: %v\noutput: %s", err, string(stdout))
 	}
 
-	if _, ok := parsed["Stack"]; !ok {
-		t.Errorf("eval output missing Stack field; got keys: %v", keysOf(parsed))
+	if _, ok := parsed["Stacks"]; !ok {
+		t.Errorf("eval output missing Stacks field; got keys: %v", keysOf(parsed))
 	}
 	if _, ok := parsed["Resources"]; !ok {
 		t.Errorf("eval output missing Resources field; got keys: %v", keysOf(parsed))
@@ -71,8 +71,8 @@ func TestEvalSchemaLocationLocal(t *testing.T) {
 		t.Fatalf("eval output is not valid JSON: %v\noutput: %s", err, string(stdout))
 	}
 
-	if _, ok := parsed["Stack"]; !ok {
-		t.Errorf("eval output missing Stack field; got keys: %v", keysOf(parsed))
+	if _, ok := parsed["Stacks"]; !ok {
+		t.Errorf("eval output missing Stacks field; got keys: %v", keysOf(parsed))
 	}
 }
 
