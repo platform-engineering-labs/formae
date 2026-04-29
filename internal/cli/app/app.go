@@ -749,34 +749,6 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 	return deps, nil
 }
 
-// buildRemoteDependencyStrings produces PklProjectTemplate-formatted dep
-// strings (`<plugin>.<name>@<version>`) for every namespace present in the
-// forma, plus formae core. Versions come from the agent's installed-plugins
-// view; namespaces with no installed version are skipped — the resulting
-// extracted forma will fail to evaluate with a clear "missing import" PKL
-// error, which is the right surface for "this fixture references a plugin
-// not installed on the agent".
-func buildRemoteDependencyStrings(forma *pkgmodel.Forma, versions map[string]string) []string {
-	var deps []string
-	if formae.Version != "0.0.0" {
-		deps = append(deps, "pkl.formae@"+formae.Version)
-	}
-
-	seen := make(map[string]bool)
-	for _, r := range forma.Resources {
-		ns := strings.ToLower(r.Namespace())
-		if ns == "" || seen[ns] {
-			continue
-		}
-		seen[ns] = true
-		if v, ok := versions[ns]; ok && v != "" {
-			deps = append(deps, fmt.Sprintf("%s.%s@%s", ns, ns, v))
-		}
-	}
-
-	sort.Strings(deps)
-	return deps
-}
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
