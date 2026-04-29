@@ -236,12 +236,36 @@ class ApiConfig {
     port: Port = 49684
 }
 
+class Repository {
+  /// Orbital repository URI (optionally with #channel fragment).
+  uri: Uri
+
+  /// Discriminator: "binary" for the formae binary / tooling repo;
+  /// "formae-plugin" for a plugin repo consulted by `formae plugin *`.
+  type: "binary"|"formae-plugin"
+}
+
 class ArtifactConfig {
+  @Deprecated { message = "Use artifacts.repositories instead" }
   url: Uri = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
 
+  @Deprecated { message = "Use repository-specific credentials" }
   username: String?
 
+  @Deprecated { message = "Use repository-specific credentials" }
   password: String?
+
+  /// List of orbital repositories to consult for binary and plugin packages.
+  repositories: Listing<Repository> = new {
+    new {
+      uri  = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
+      type = "binary"
+    }
+    new {
+      uri  = "https://hub.platform.engineering/repos/platform.engineering/community#stable"
+      type = "formae-plugin"
+    }
+  }
 }
 
 class CliConfig {

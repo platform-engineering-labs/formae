@@ -323,13 +323,3 @@ func (r *PackageResolver) GetPackages() []Package {
 func (r *PackageResolver) IsUsingLocalSchemas() bool {
 	return r.useLocalSchemas
 }
-
-// HasRemotePackages returns true if any packages are remote (need pkl project resolve)
-func (r *PackageResolver) HasRemotePackages() bool {
-	for _, pkg := range r.packages {
-		if !pkg.IsLocal {
-			return true
-		}
-	}
-	return false
-}

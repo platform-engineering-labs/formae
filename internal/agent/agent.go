@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/util"
@@ -194,9 +195,23 @@ func (a *Agent) Start() error {
 			}
 		}
 
+		// Construct the plugin manager before announcing startup. Plugin
+		// distribution is the only install/upgrade path in 0.85, so an agent
+		// without one is not useful — and CLI users (often on a different
+		// host than the agent) would only see opaque 503s instead of this
+		// log line. Fail loudly here so the operator fixes config or the
+		// orbital tree before retrying.
+		pm, err := plugin_manager.New(slog.Default(), a.cfg.Artifacts.Repositories, []string{devPluginDir, systemPluginDir})
+		if err != nil {
+			slog.Error("Plugin manager initialization failed; refusing to start", "error", err)
+			return
+		}
+
 		slog.Info("Agent started")
 
 		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, a.cfg.Network, metricsHandler)
+		apiServer.SetPluginManager(pm)
+
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()

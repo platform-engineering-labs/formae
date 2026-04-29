@@ -17,6 +17,7 @@ func init() {
 	pkl.RegisterMapping("formae.Config#LabelConfig", LabelConfig{})
 	pkl.RegisterMapping("formae.Config#MatchFilter", MatchFilter{})
 	pkl.RegisterMapping("formae.Config#FilterCondition", FilterCondition{})
+	pkl.RegisterMapping("formae.Config#Repository", Repository{})
 }
 
 // ResourcePlugin nested types used when decoding BaseResourcePluginConfig
@@ -174,10 +175,16 @@ type APIConfig struct {
 	Port int32  `pkl:"port"`
 }
 
+type Repository struct {
+	URI  url.URL `pkl:"uri"`
+	Type string  `pkl:"type"`
+}
+
 type ArtifactConfig struct {
-	URL      url.URL `pkl:"url"`
-	Username string  `pkl:"username"`
-	Password string  `pkl:"password"`
+	URL          url.URL       `pkl:"url"`
+	Username     string        `pkl:"username"`
+	Password     string        `pkl:"password"`
+	Repositories []*Repository `pkl:"repositories"`
 }
 
 type CliConfig struct {

@@ -195,3 +195,86 @@ type ForceCheckTTLResponse struct {
 	ExpiredStacks []string `json:"expired_stacks"`
 	CommandIDs    []string `json:"command_ids,omitempty"`
 }
+
+// Plugin describes a single plugin, used by the list and info endpoints.
+type Plugin struct {
+	Name              string                       `json:"name"`
+	Kind              string                       `json:"kind,omitempty"`
+	Type              string                       `json:"type"`
+	Namespace         string                       `json:"namespace,omitempty"`
+	Category          string                       `json:"category,omitempty"`
+	Summary           string                       `json:"summary,omitempty"`
+	Description       string                       `json:"description,omitempty"`
+	Publisher         string                       `json:"publisher,omitempty"`
+	License           string                       `json:"license,omitempty"`
+	InstalledVersion  string                       `json:"installedVersion,omitempty"`
+	AvailableVersions []string                     `json:"availableVersions,omitempty"`
+	// LocalPath is the absolute path on the agent's filesystem to the
+	// plugin's PklProject file (containing the plugin's PKL schema).
+	// Populated by the discovery scan when the plugin is installed
+	// locally; empty when no on-disk install is found. Used by the CLI's
+	// --schema-location local flow to import schemas via PklProject.deps
+	// rather than fetching from the hub. Same-box only — the path is
+	// only meaningful when the CLI shares a filesystem with the agent.
+	LocalPath string                       `json:"localPath,omitempty"`
+
+	Channel           string                       `json:"channel,omitempty"`
+	Frozen            bool                         `json:"frozen,omitempty"`
+	ManagedBy         string                       `json:"managedBy,omitempty"`
+	LoadStatus        string                       `json:"loadStatus,omitempty"`
+	Metadata          map[string]map[string]string `json:"metadata,omitempty"`
+}
+
+// PluginOperation describes a single operation performed on a plugin.
+type PluginOperation struct {
+	Name    string `json:"name"`
+	Type    string `json:"type,omitempty"`
+	Version string `json:"version,omitempty"`
+	Action  string `json:"action"` // "install" | "remove" | "noop"
+}
+
+// PackageRef identifies a plugin package, optionally at a specific version.
+type PackageRef struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
+
+type ListPluginsResponse struct {
+	Plugins []Plugin `json:"plugins"`
+}
+
+type GetPluginResponse struct {
+	Plugin Plugin `json:"plugin"`
+}
+
+type InstallPluginsRequest struct {
+	Packages []PackageRef `json:"packages"`
+	Channel  string       `json:"channel,omitempty"`
+}
+
+type InstallPluginsResponse struct {
+	Operations      []PluginOperation `json:"operations"`
+	RequiresRestart bool              `json:"requiresRestart"`
+	Warnings        []string          `json:"warnings,omitempty"`
+}
+
+type UninstallPluginsRequest struct {
+	Packages []PackageRef `json:"packages"`
+}
+
+type UninstallPluginsResponse struct {
+	Operations      []PluginOperation `json:"operations"`
+	RequiresRestart bool              `json:"requiresRestart"`
+	Warnings        []string          `json:"warnings,omitempty"`
+}
+
+type UpgradePluginsRequest struct {
+	Packages []PackageRef `json:"packages,omitempty"`
+	Channel  string       `json:"channel,omitempty"`
+}
+
+type UpgradePluginsResponse struct {
+	Operations      []PluginOperation `json:"operations"`
+	RequiresRestart bool              `json:"requiresRestart"`
+	Warnings        []string          `json:"warnings,omitempty"`
+}

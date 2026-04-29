@@ -359,12 +359,10 @@ github.com/pierrec/lz4/v4 v4.1.22 h1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU
 github.com/pierrec/lz4/v4 v4.1.22/go.mod h1:gZWDp/Ze/IJXGXf23ltt2EXimqmTUXEy0GFuRQyBid4=
 github.com/pkg/sftp v1.13.6 h1:JFZT4XbOU7l77xGSpOdW+pwIMqP044IyjXX6FGyEKFo=
 github.com/pkg/sftp v1.13.6/go.mod h1:tz1ryNURKu77RL+GuCzmoJYxQczL3wLNNpPWagdg4Qk=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20260319010158-0bb81e14e83f h1:ZVwQGlGa5zFLuyTYiDL57KMlZQWM5zqvZFhHA6tTBPQ=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20260319010158-0bb81e14e83f/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
 github.com/platform-engineering-labs/jsonpatch v0.0.0-20260421221004-fb6f96b174b5 h1:WRE1Dm9G920XZ+QPQBmwwU52WDJFf0bXQ1nnFFxfXuc=
 github.com/platform-engineering-labs/jsonpatch v0.0.0-20260421221004-fb6f96b174b5/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
-github.com/platform-engineering-labs/orbital v0.1.36 h1:nPMLxDbwDrjlhJoMQXAE86HtVhQHC2A6BJlWYmNM75c=
-github.com/platform-engineering-labs/orbital v0.1.36/go.mod h1:wwVPqOmW5RO78dDzL/G5CN1Ioao0P/aUsOZVrPVx64s=
+github.com/platform-engineering-labs/orbital v0.1.38 h1:YRAYL9OWb+uiJc/qlPCB1u5wYpT6VUdHMUOnl2oQUV8=
+github.com/platform-engineering-labs/orbital v0.1.38/go.mod h1:wwVPqOmW5RO78dDzL/G5CN1Ioao0P/aUsOZVrPVx64s=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=

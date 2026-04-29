@@ -6,12 +6,15 @@ package project
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
+	"github.com/platform-engineering-labs/formae/internal/util"
 )
 
 func ProjectCmd() *cobra.Command {
@@ -40,6 +43,7 @@ func ProjectInitCmd() *cobra.Command {
 			schema, _ := command.Flags().GetString("schema")
 			include, _ := command.Flags().GetStringArray("include")
 			yes, _ := command.Flags().GetBool("yes")
+			pluginDir, _ := command.Flags().GetString("plugin-dir")
 
 			// Confirm with user if no plugins specified
 			if len(include) == 0 && !yes {
@@ -55,12 +59,25 @@ func ProjectInitCmd() *cobra.Command {
 				fmt.Println()
 			}
 
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
-			if err != nil {
-				return err
+			// Non-@local includes need plugin versions from the agent —
+			// after the multi-source plugin-discovery refactor, plugins
+			// live on the agent box, not the CLI box. Skip the agent
+			// query if every include is @local (no version needed).
+			var installedVersions map[string]string
+			if needsAgent(include) {
+				configFile, _ := command.Flags().GetString("config")
+				appCtx, err := cmd.AppFromContext(command.Context(), configFile, "", command)
+				if err != nil {
+					return err
+				}
+				installedVersions, err = appCtx.InstalledResourcePluginVersions()
+				if err != nil {
+					return fmt.Errorf("listing installed plugins: %w", err)
+				}
 			}
 
-			return app.Projects.Init(command.Flags().Arg(0), schema, include)
+			projects := &app.Projects{}
+			return projects.Init(command.Flags().Arg(0), schema, include, util.ExpandHomePath(pluginDir), installedVersions)
 		},
 		SilenceErrors: true,
 	}
@@ -68,6 +85,20 @@ func ProjectInitCmd() *cobra.Command {
 	command.Flags().String("schema", "pkl", "Schema to use for the project (pkl)")
 	command.Flags().StringArray("include", []string{}, "Packages to include (use @local suffix for local plugins, e.g. myplugin@local)")
 	command.Flags().BoolP("yes", "y", false, "Skip confirmation prompts")
+	command.Flags().String("plugin-dir", "~/.pel/formae/plugins", "Directory to scan for @local plugin schemas")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
+}
+
+// needsAgent reports whether resolving the given include list requires asking
+// the agent for installed plugin versions. Includes ending in @local resolve
+// against pluginsDir on disk and don't need an agent.
+func needsAgent(include []string) bool {
+	for _, inc := range include {
+		if !strings.HasSuffix(strings.ToLower(inc), "@local") {
+			return true
+		}
+	}
+	return false
 }

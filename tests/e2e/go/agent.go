@@ -146,12 +146,21 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
     }`, options.authUsername, options.authPassword)
 	}
 
+	// Intentionally no pluginDir override. cfg.PluginDir defaults to
+	// ~/.pel/formae/plugins (empty in CI) and the multi-source plugin
+	// discovery added in the discovery refactor finds orbital-installed
+	// plugins via SystemPluginDir(binPath) without help. The CLI's
+	// extract / project init paths now query the agent for installed
+	// plugin versions instead of scanning local dirs, so a single
+	// pluginDir on the CLI box no longer matters.
+	pluginDirBlock := ""
+
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
  */
 
 amends "formae:/Config.pkl"
-%s
+%s%s
 agent {
     server {
         port = %d
@@ -182,7 +191,7 @@ cli {
     }
     disableUsageReporting = true%s
 }
-`, options.pklImports, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
+`, options.pklImports, pluginDirBlock, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)

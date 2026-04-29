@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FIXTURES_DIR="$SCRIPT_DIR/fixtures"
-PLUGINS_DIR="$HOME/.pel/formae/plugins"
+PLUGINS_DIR="${FORMAE_PLUGIN_DIR:-$HOME/.pel/formae/plugins}"
 PKLPROJECT_PATH="$FIXTURES_DIR/PklProject"
 
 # Ensure version.semver exists (needed by formae PklProject).
@@ -51,11 +51,11 @@ hub_uri() {
 
     if [[ -z "$plugin_dir" ]] || [[ ! -f "$plugin_dir/schema/pkl/PklProject" ]]; then
         if [[ "$required" == "true" ]]; then
-            echo "ERROR: $alias plugin not found at $PLUGINS_DIR/$ns_dir/"
-            echo "Run 'make install-external-plugins' first."
+            echo "ERROR: $alias plugin not found at $PLUGINS_DIR/$ns_dir/" >&2
+            echo "Install plugins via 'formae plugin install $alias' against an agent whose orbital tree shares this directory, or set FORMAE_PLUGIN_DIR to a tree that has it." >&2
             exit 1
         else
-            echo "WARN: $alias plugin not found at $PLUGINS_DIR/$ns_dir/ — related E2E tests will be skipped" >&2
+            echo "WARN: $alias plugin not found at $PLUGINS_DIR/$ns_dir/ — fixtures importing this plugin will fail to evaluate" >&2
             return
         fi
     fi
@@ -67,25 +67,29 @@ hub_uri() {
     echo "  [\"$alias\"] { uri = \"$base_uri@$version\" }"
 }
 
-# Resolve plugin schemas from the hub. AWS and Azure are required;
-# compose and grafana are optional (needed for target resolvable tests).
-AWS_DEP=$(hub_uri "aws" "aws" true)
-AZURE_DEP=$(hub_uri "azure" "azure" true)
-COMPOSE_DEP=$(hub_uri "docker" "compose" false)
+# Resolve plugin schemas from the hub. All plugins are optional at this
+# level — the e2e workflow installs only the plugins each test needs (matrix
+# .plugins), so a single setup_pkl.sh run is shared across tests with
+# different plugin sets. Fixtures that import a plugin not installed will
+# fail to evaluate with a clear PKL error, which is the right failure mode.
+AWS_DEP=$(hub_uri "aws" "aws" false)
+AZURE_DEP=$(hub_uri "azure" "azure" false)
+COMPOSE_DEP=$(hub_uri "compose" "compose" false)
 GRAFANA_DEP=$(hub_uri "grafana" "grafana" false)
 
 # Generate PklProject. Both formae core and plugins are pinned via hub URIs
 # — matches a real user's setup, and avoids the PKL type-identity split that
 # would happen if the fixture's formae and a plugin's formae were declared
-# at different URIs.
+# at different URIs. Each plugin dep is included only if its hub_uri call
+# returned non-empty (i.e. the plugin is installed in $PLUGINS_DIR).
 cat > "$PKLPROJECT_PATH" << EOF
 amends "pkl:Project"
 
 dependencies {
   ["formae"] { uri = "$FORMAE_URI" }
-$AWS_DEP
-$AZURE_DEP
-${COMPOSE_DEP:+$COMPOSE_DEP
+${AWS_DEP:+$AWS_DEP
+}${AZURE_DEP:+$AZURE_DEP
+}${COMPOSE_DEP:+$COMPOSE_DEP
 }${GRAFANA_DEP:+$GRAFANA_DEP
 }}
 EOF

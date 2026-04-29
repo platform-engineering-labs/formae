@@ -14,6 +14,8 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/opsmgr"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/orbital/mgr"
 	"github.com/platform-engineering-labs/orbital/opm/records"
 	"github.com/platform-engineering-labs/orbital/ops"
 	"github.com/spf13/cobra"
@@ -41,7 +43,12 @@ func UpdateCmd() *cobra.Command {
 				return err
 			}
 
-			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
+			var orb *mgr.Manager
+			if len(app.Config.Artifacts.Repositories) > 0 {
+				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, pkgmodel.RepositoryTypeBinary)
+			} else {
+				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
+			}
 			if err != nil {
 				return err
 			}
@@ -143,7 +150,12 @@ func UpdateListCmd() *cobra.Command {
 				return err
 			}
 
-			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
+			var orb *mgr.Manager
+			if len(app.Config.Artifacts.Repositories) > 0 {
+				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, pkgmodel.RepositoryTypeBinary)
+			} else {
+				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
+			}
 			if err != nil {
 				return err
 			}

@@ -27,6 +27,7 @@ type EvalOptions struct {
 	Beautify       bool
 	Colorize       bool
 	Properties     map[string]string
+	SchemaLocation schema.SchemaLocation
 }
 
 func validateEvalOptions(opts *EvalOptions) error {
@@ -65,6 +66,12 @@ func EvalCmd() *cobra.Command {
 			opts.Beautify, _ = command.Flags().GetBool("beautify")
 			opts.Colorize, _ = command.Flags().GetBool("colorize")
 			opts.Properties = cmd.PropertiesFromCmd(command)
+			schemaLocation, _ := command.Flags().GetString("schema-location")
+			loc, err := parseSchemaLocation(schemaLocation)
+			if err != nil {
+				return err
+			}
+			opts.SchemaLocation = loc
 
 			configFile, _ := command.Flags().GetString("config")
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
@@ -89,9 +96,23 @@ func EvalCmd() *cobra.Command {
 	command.Flags().Bool("beautify", true, "beautify output (human consumer only)")
 	command.Flags().Bool("colorize", true, "colorize output (human consumer only)")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
+	command.Flags().String("schema-location", "remote", "How plugin PKL schemas are referenced when serializing the evaluated forma. 'remote' (default) emits package:// URIs that PKL fetches from the hub. 'local' emits local file imports against the agent's on-disk PklProject paths; requires CLI and agent to share a filesystem.")
 	command.Flags().String("config", "", "Path to config file")
 
 	return command
+}
+
+// parseSchemaLocation maps the --schema-location flag value to the
+// internal SchemaLocation enum.
+func parseSchemaLocation(s string) (schema.SchemaLocation, error) {
+	switch s {
+	case "", "remote":
+		return schema.SchemaLocationRemote, nil
+	case "local":
+		return schema.SchemaLocationLocal, nil
+	default:
+		return "", cmd.FlagErrorf("invalid --schema-location %q; must be one of 'remote' or 'local'", s)
+	}
 }
 
 func runEval(app *app.App, opts *EvalOptions) error {
@@ -113,9 +134,10 @@ func runEvalForHumans(app *app.App, opts *EvalOptions) error {
 		return fmt.Errorf("cannot evaluate forma: %v", err)
 	}
 	output, err := app.SerializeForma(result, &schema.SerializeOptions{
-		Schema:   opts.OutputSchema,
-		Beautify: opts.Beautify,
-		Colorize: opts.Colorize,
+		Schema:         opts.OutputSchema,
+		Beautify:       opts.Beautify,
+		Colorize:       opts.Colorize,
+		SchemaLocation: opts.SchemaLocation,
 	})
 	if err != nil {
 		return fmt.Errorf("cannot serialize eval result: %v", err)

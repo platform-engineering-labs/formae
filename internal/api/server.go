@@ -26,6 +26,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -51,6 +52,12 @@ const (
 	DiscoverRoute = AdminBasePath + "/discover"
 	CheckTTLRoute = AdminBasePath + "/check-ttl"
 
+	PluginsRoute         = BasePath + "/plugins"
+	PluginRoute          = BasePath + "/plugins/:name"
+	PluginInstallRoute   = BasePath + "/plugins/install"
+	PluginUninstallRoute = BasePath + "/plugins/uninstall"
+	PluginUpgradeRoute   = BasePath + "/plugins/upgrade"
+
 	HealthRoute  = BasePath + "/health"
 	MetricsRoute = "/metrics"
 	APIDocsRoute = "/swagger/*"
@@ -59,11 +66,19 @@ const (
 type Server struct {
 	echo           *echo.Echo
 	metastructure  metastructure.MetastructureAPI
+	pluginManager  *plugin_manager.PluginManager // nil if not configured
 	ctx            context.Context
 	authHandle     *auth.AuthPluginHandle
 	serverConfig   *pkgmodel.ServerConfig
 	networkConfig  *pkgmodel.NetworkConfig
 	metricsHandler http.Handler
+}
+
+// SetPluginManager configures the optional plugin manager for the server.
+// When set, the plugin management REST endpoints become active; otherwise
+// they return 503 Service Unavailable.
+func (s *Server) SetPluginManager(pm *plugin_manager.PluginManager) {
+	s.pluginManager = pm
 }
 
 func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, networkConfig *pkgmodel.NetworkConfig, metricsHandler http.Handler) *Server {
@@ -208,6 +223,13 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.POST(SyncRoute, s.ForceSync)
 	e.POST(DiscoverRoute, s.ForceDiscover)
 	e.POST(CheckTTLRoute, s.ForceCheckTTL)
+
+	// Plugin management endpoints
+	e.GET(PluginsRoute, s.listPluginsHandler)
+	e.POST(PluginInstallRoute, s.installPluginsHandler)
+	e.POST(PluginUninstallRoute, s.uninstallPluginsHandler)
+	e.POST(PluginUpgradeRoute, s.upgradePluginsHandler)
+	e.GET(PluginRoute, s.getPluginHandler)
 
 	// Prometheus metrics endpoint (if enabled)
 	if s.metricsHandler != nil {

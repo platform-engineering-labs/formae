@@ -32,7 +32,7 @@ func (m *mockSchemaPlugin) Evaluate(_ string, _ model.Command, _ model.FormaAppl
 func (m *mockSchemaPlugin) SerializeForma(_ *model.Forma, _ *SerializeOptions) (string, error) {
 	panic("not implemented")
 }
-func (m *mockSchemaPlugin) GenerateSourceCode(_ *model.Forma, _ string, _ []string, _ SchemaLocation) (GenerateSourcesResult, error) {
+func (m *mockSchemaPlugin) GenerateSourceCode(_ *model.Forma, _ string, _ []string, _ *SerializeOptions) (GenerateSourcesResult, error) {
 	panic("not implemented")
 }
 func (m *mockSchemaPlugin) ProjectInit(_ string, _ []string, _ SchemaLocation) error {

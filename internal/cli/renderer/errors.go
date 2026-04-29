@@ -94,6 +94,14 @@ func RenderErrorMessage(err error) (string, error) {
 		msg = renderNonPortableResourcesError(&errResp.Data)
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.PluginNotFoundError]); ok {
+		msg = display.Redf("plugin '%s' not found\n", errResp.Data.Name)
+	}
+
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.PluginDependencyConflictError]); ok {
+		msg = display.Redf("plugin dependency conflict: %s\n", errResp.Data.Message)
+	}
+
 	if msg == "" {
 		return "", err
 	}

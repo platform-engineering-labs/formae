@@ -2,13 +2,6 @@ name: formae-e2e-tests
 
 on:
   workflow_dispatch:
-    inputs:
-      plugin_refs:
-        description: >-
-          Plugin ref overrides as comma-separated name=ref pairs
-          (e.g., aws=feat/msgpack,azure=feat/msgpack). Leave empty for main.
-        required: false
-        default: ''
   pull_request:
     branches: [ "main" ]
 
@@ -85,23 +78,45 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test:
-          - TestReconcileApply
-          - TestPatchApply
-          - TestDiscovery
-          - TestSoftReconcile
-          - TestHardReconcile
-          - TestReplace
-          - TestAutoReconcile
-          - TestTTL
-          - TestCancelCommand
-          - TestCascadeDelete
-          - TestTargetResolvable
-          - TestProjectInit
-          - TestSimulateApply
-          - TestExtractAndReapply
-          - TestAuthBasic
-          - TestPluginConfig
+        include:
+          - test: TestReconcileApply
+            plugins: aws azure
+          - test: TestPatchApply
+            plugins: aws azure
+          - test: TestDiscovery
+            plugins: aws azure
+          - test: TestSoftReconcile
+            plugins: aws azure
+          - test: TestHardReconcile
+            plugins: aws azure
+          - test: TestReplace
+            plugins: aws azure
+          - test: TestAutoReconcile
+            plugins: aws
+          - test: TestTTL
+            plugins: aws
+          - test: TestCancelCommand
+            plugins: aws
+          - test: TestCascadeDelete
+            plugins: aws
+          - test: TestTargetResolvable
+            plugins: compose grafana
+          - test: TestProjectInit
+            plugins: aws azure
+          - test: TestSimulateApply
+            plugins: aws
+          - test: TestExtractAndReapply
+            plugins: aws
+          - test: TestEvalDefault
+            plugins: aws
+          - test: TestEvalSchemaLocationLocal
+            plugins: aws
+          - test: TestExtractSchemaLocationLocal
+            plugins: aws
+          - test: TestAuthBasic
+            plugins: auth-basic
+          - test: TestPluginConfig
+            plugins: sftp
 
     steps:
       - uses: actions/checkout@v4
@@ -155,33 +170,84 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build plugin repo list with ref overrides
+      - name: Install plugins via orbital
         run: |
-          # Start with default repos from Makefile
-          REPOS="$(grep -A 20 '^EXTERNAL_PLUGIN_REPOS' Makefile | grep '\.git' | sed 's/\\$//' | xargs)"
+          set -euo pipefail
 
-          # Apply ref overrides from input (e.g., "aws=feat/msgpack,azure=feat/msgpack")
-          REFS="${{ github.event.inputs.plugin_refs }}"
-          if [ -n "$REFS" ]; then
-            IFS=',' read -ra PAIRS <<< "$REFS"
-            for pair in "${PAIRS[@]}"; do
-              name="${pair%%=*}"
-              ref="${pair##*=}"
-              REPOS=$(echo "$REPOS" | sed "s|formae-plugin-${name}.git\(@[^ ]*\)\{0,1\}|formae-plugin-${name}.git@${ref}|g")
-              echo "Pinning ${name} to ref: ${ref}"
-            done
+          # Build the formae binary and stage it in an installer-shaped tree
+          # so orbital (in Embedded mode, derives treeRoot from binary path)
+          # uses dist/e2e/ as the install root. The bootstrap agent below
+          # installs plugins through the same orbital tree the test agents
+          # will later read from (via the SystemPluginDir scan added in
+          # the multi-source plugin discovery refactor).
+          make build
+          mkdir -p dist/e2e/bin dist/e2e/.ops
+          cp formae dist/e2e/bin/formae
+
+          # Minimal bootstrap config — uses the default artifacts.repositories
+          # (pel#stable + community#stable), no auth, no discovery, no sync.
+          cat > /tmp/bootstrap.conf.pkl <<'EOF'
+          amends "formae:/Config.pkl"
+
+          agent {
+              server { port = 49684 }
+              datastore {
+                  datastoreType = "sqlite"
+                  sqlite { filePath = "/tmp/bootstrap.db" }
+              }
+              synchronization { enabled = false }
+              discovery { enabled = false }
+              logging { consoleLogLevel = "info" }
+          }
+
+          cli {
+              api { port = 49684 }
+              disableUsageReporting = true
+          }
+          EOF
+
+          # Start the bootstrap agent in the background.
+          FORMAE_PID_FILE=/tmp/bootstrap.pid \
+            dist/e2e/bin/formae agent start --config /tmp/bootstrap.conf.pkl \
+            > /tmp/bootstrap-agent.log 2>&1 &
+          AGENT_PID=$!
+
+          # Wait up to 30s for the agent to come up.
+          for i in $(seq 1 30); do
+              if curl -sf http://localhost:49684/api/v1/health >/dev/null 2>&1; then
+                  echo "Bootstrap agent ready after ${i}s"
+                  break
+              fi
+              sleep 1
+          done
+          if ! curl -sf http://localhost:49684/api/v1/health >/dev/null 2>&1; then
+              echo "::error::Bootstrap agent did not become healthy"
+              cat /tmp/bootstrap-agent.log || true
+              exit 1
           fi
 
-          echo "EXTERNAL_PLUGIN_REPOS=${REPOS}" >> "$GITHUB_ENV"
+          # Install only the plugins this test needs. The agent refreshes
+          # orbital's repository cache at startup, so the install candidate
+          # solver has fresh metadata to work with.
+          dist/e2e/bin/formae plugin install ${{ matrix.plugins }} --channel stable
+
+          # Stop the bootstrap agent so the test harness can spawn its own.
+          kill -TERM "$AGENT_PID" || true
+          wait "$AGENT_PID" 2>/dev/null || true
+          rm -f /tmp/bootstrap.pid /tmp/bootstrap.db /tmp/bootstrap.conf.pkl
 
       - name: Running ${{ matrix.test }}
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # Point setup_pkl.sh at the orbital-installed plugins. The agent's
+          # own multi-source discovery already finds them via the binary's
+          # SystemPluginDir, but setup_pkl.sh is a shell script that needs
+          # an explicit dir to read PklProject manifests from.
+          FORMAE_PLUGIN_DIR: ${{ github.workspace }}/dist/e2e/formae/plugins
         run: >-
           make test-e2e
           E2E_RUN_FLAGS="-run ${{ matrix.test }}"
-          EXTERNAL_PLUGIN_REPOS="${EXTERNAL_PLUGIN_REPOS}"
 
   cleanup:
     runs-on: ubuntu-latest
