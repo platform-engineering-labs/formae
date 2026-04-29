@@ -749,7 +749,6 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 	return deps, nil
 }
 
-
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
