@@ -152,7 +152,7 @@ func (s *Store) List() ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if !e.Type().IsRegular() {
 			continue
 		}
 		n := e.Name()

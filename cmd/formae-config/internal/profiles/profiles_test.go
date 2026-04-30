@@ -190,3 +190,27 @@ func TestList_NotInitialized(t *testing.T) {
 		t.Errorf("List uninitialized: %v, want ErrNotInitialized", err)
 	}
 }
+
+func TestList_FiltersNonRegularEntries(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// Plant a stray symlink with a .pkl name in profiles/.
+	link := filepath.Join(root, "profiles", "stray.pkl")
+	if err := os.Symlink(s.ProfilePath("default"), link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	got, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, n := range got {
+		if n == "stray" {
+			t.Errorf("List included symlink-only entry %q", n)
+		}
+	}
+}
