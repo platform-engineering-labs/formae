@@ -16,7 +16,7 @@ description: Use when the user wants to switch, list, save, edit, delete, or com
 - `fcfg save <name> [--force]` — snapshot the active profile under a new name. Does not switch. `--force` overwrites an existing profile.
 - `fcfg edit [<name>]` — open `$EDITOR` on a profile (or the active one). Skip from agent contexts; edit the file directly instead.
 - `fcfg delete <name>` — delete a profile. Refuses if it is the active one — switch first.
-- `fcfg diff <a> [<b>]` — `diff -u` between two profiles, or `<a>` vs the active profile.
+- `fcfg diff <a> [<b>]` — `diff -u` between two profiles, or `<a>` vs the active profile. Exit code 1 from this command means "files differ" (not an error); only codes >1 are errors.
 
 ## Exit codes
 
