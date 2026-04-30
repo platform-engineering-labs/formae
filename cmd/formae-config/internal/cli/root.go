@@ -24,6 +24,9 @@ func NewRootCmd() *cobra.Command {
 		newInitCmd(),
 		newCurrentCmd(),
 		newListCmd(),
+		newUseCmd(),
+		newSaveCmd(),
+		newDeleteCmd(),
 	)
 	return root
 }
