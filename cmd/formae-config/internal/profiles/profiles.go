@@ -15,6 +15,7 @@ package profiles
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 )
@@ -69,4 +70,42 @@ func (s *Store) ProfilePath(name string) string {
 
 func (s *Store) profilesDir() string {
 	return filepath.Join(s.root, profilesSubdir)
+}
+
+// Init converts a regular file at ConfigPath() into profiles/<name>.pkl and
+// replaces the original path with a relative symlink. It is idempotent: if
+// ConfigPath() is already a symlink, it returns ErrAlreadyInitialized.
+// It returns ErrNoConfigFile if no file exists at ConfigPath().
+func (s *Store) Init(name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	cfg := s.ConfigPath()
+	info, err := os.Lstat(cfg)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrNoConfigFile, cfg)
+		}
+		return fmt.Errorf("stat config: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return ErrAlreadyInitialized
+	}
+	if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+		return fmt.Errorf("mkdir profiles: %w", err)
+	}
+	dst := s.ProfilePath(name)
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("%w: %s", ErrAlreadyExists, name)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat target: %w", err)
+	}
+	if err := os.Rename(cfg, dst); err != nil {
+		return fmt.Errorf("move config to profile: %w", err)
+	}
+	rel := filepath.Join(profilesSubdir, name+profileExt)
+	if err := os.Symlink(rel, cfg); err != nil {
+		return fmt.Errorf("create symlink: %w", err)
+	}
+	return nil
 }
