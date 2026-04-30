@@ -6,6 +6,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 
@@ -28,23 +29,28 @@ func newDiffCmd() *cobra.Command {
 				return err
 			}
 			pathA := s.ProfilePath(a)
-			var pathB string
+			var b, pathB string
 			if len(args) == 2 {
 				if err := profiles.ValidateName(args[1]); err != nil {
 					return err
 				}
-				pathB = s.ProfilePath(args[1])
+				b = args[1]
+				pathB = s.ProfilePath(b)
 			} else {
 				active, err := s.Active()
 				if err != nil {
 					return err
 				}
-				pathB = s.ProfilePath(active)
+				b = active
+				pathB = s.ProfilePath(b)
 			}
-			for _, p := range []string{pathA, pathB} {
-				if _, err := os.Stat(p); err != nil {
+			for _, pair := range []struct {
+				name string
+				path string
+			}{{a, pathA}, {b, pathB}} {
+				if _, err := os.Stat(pair.path); err != nil {
 					if os.IsNotExist(err) {
-						return profiles.ErrNotFound
+						return fmt.Errorf("%w: %s", profiles.ErrNotFound, pair.name)
 					}
 					return err
 				}

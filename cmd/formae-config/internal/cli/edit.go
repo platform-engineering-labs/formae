@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 
@@ -31,7 +32,7 @@ func newEditCmd() *cobra.Command {
 				// Confirm the profile exists; fail with ErrNotFound otherwise.
 				if _, err := os.Stat(path); err != nil {
 					if os.IsNotExist(err) {
-						return profiles.ErrNotFound
+						return fmt.Errorf("%w: %s", profiles.ErrNotFound, args[0])
 					}
 					return err
 				}
