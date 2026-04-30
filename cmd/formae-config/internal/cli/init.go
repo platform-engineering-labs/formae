@@ -34,7 +34,7 @@ func newInitCmd() *cobra.Command {
 				line, _ := r.ReadString('\n')
 				line = strings.ToLower(strings.TrimSpace(line))
 				if line != "" && line != "y" && line != "yes" {
-					return errors.New("aborted")
+					return errAborted
 				}
 			}
 			if err := s.Init(name); err != nil {

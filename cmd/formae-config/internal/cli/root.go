@@ -41,7 +41,8 @@ func ExitCodeFor(err error) int {
 		return 0
 	case errors.Is(err, profiles.ErrNotInitialized):
 		return 3
-	case errors.Is(err, profiles.ErrInvalidName),
+	case errors.Is(err, errAborted),
+		errors.Is(err, profiles.ErrInvalidName),
 		errors.Is(err, profiles.ErrNotFound),
 		errors.Is(err, profiles.ErrAlreadyExists),
 		errors.Is(err, profiles.ErrIsActive),

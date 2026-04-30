@@ -5,9 +5,15 @@
 package cli
 
 import (
+	"errors"
+
 	"github.com/platform-engineering-labs/formae/cmd/formae-config/internal/paths"
 	"github.com/platform-engineering-labs/formae/cmd/formae-config/internal/profiles"
 )
+
+// errAborted is returned by interactive subcommands when the user declines
+// a confirmation prompt. ExitCodeFor maps it to exit 1 (user error).
+var errAborted = errors.New("aborted")
 
 // openStore resolves the formae config dir and returns a profiles.Store.
 func openStore() (*profiles.Store, error) {
