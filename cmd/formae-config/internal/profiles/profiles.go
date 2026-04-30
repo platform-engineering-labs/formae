@@ -196,7 +196,8 @@ func (s *Store) Use(name string) error {
 
 // Save copies the resolved active profile to profiles/<name>.pkl. It does not
 // switch to the new profile. Returns ErrAlreadyExists if the destination
-// already exists and force is false.
+// already exists and force is false. Saving the active profile under its own
+// name is a no-op.
 func (s *Store) Save(name string, force bool) error {
 	if err := ValidateName(name); err != nil {
 		return err
@@ -207,6 +208,9 @@ func (s *Store) Save(name string, force bool) error {
 	}
 	src := s.ProfilePath(active)
 	dst := s.ProfilePath(name)
+	if src == dst {
+		return nil
+	}
 	if _, err := os.Lstat(dst); err == nil {
 		if !force {
 			return fmt.Errorf("%w: %s", ErrAlreadyExists, name)

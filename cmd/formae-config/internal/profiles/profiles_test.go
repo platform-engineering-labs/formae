@@ -302,10 +302,34 @@ func TestSave_RefusesOverwriteWithoutForce(t *testing.T) {
 	if err := s.Init("default"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
+	// Plant a separate profile; saving over it without --force must fail.
+	writeFile(t, root, filepath.Join("profiles", "snapshot.pkl"), "old")
 
-	err := s.Save("default", false)
+	err := s.Save("snapshot", false)
 	if !errors.Is(err, profiles.ErrAlreadyExists) {
 		t.Errorf("Save existing: %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestSave_ActiveOverItselfWithForceIsNoOp(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "important-content")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Saving the active profile under its own name with --force used to
+	// truncate the file via os.Create on the same inode. Now it is a no-op.
+	if err := s.Save("default", true); err != nil {
+		t.Fatalf("Save active=force: %v", err)
+	}
+	got, err := os.ReadFile(s.ProfilePath("default"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "important-content" {
+		t.Errorf("active profile content lost: got %q", string(got))
 	}
 }
 
