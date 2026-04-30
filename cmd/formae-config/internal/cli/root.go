@@ -5,10 +5,14 @@
 // Package cli wires the fcfg subcommands.
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"errors"
 
-// NewRootCmd returns the fcfg root command. Subcommands are added in subsequent
-// tasks via init() blocks in their respective files.
+	"github.com/platform-engineering-labs/formae/cmd/formae-config/internal/profiles"
+	"github.com/spf13/cobra"
+)
+
+// NewRootCmd returns the fcfg root command with all subcommands attached.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "fcfg",
@@ -20,10 +24,26 @@ func NewRootCmd() *cobra.Command {
 }
 
 // ExitCodeFor maps an error returned from a subcommand to the documented
-// exit code. Subsequent tasks expand this as new error sentinels are added.
+// fcfg exit code:
+//
+//	0 success
+//	1 user error (invalid name, missing profile, overwrite without --force, etc.)
+//	2 filesystem / permission / unexpected error
+//	3 not initialized
 func ExitCodeFor(err error) int {
-	if err == nil {
+	switch {
+	case err == nil:
 		return 0
+	case errors.Is(err, profiles.ErrNotInitialized):
+		return 3
+	case errors.Is(err, profiles.ErrInvalidName),
+		errors.Is(err, profiles.ErrNotFound),
+		errors.Is(err, profiles.ErrAlreadyExists),
+		errors.Is(err, profiles.ErrIsActive),
+		errors.Is(err, profiles.ErrNoConfigFile),
+		errors.Is(err, profiles.ErrAlreadyInitialized):
+		return 1
+	default:
+		return 2
 	}
-	return 1
 }
