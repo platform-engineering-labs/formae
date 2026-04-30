@@ -107,7 +107,7 @@ func TestFullLifecycle(t *testing.T) {
 		t.Errorf("use missing: code=%d, want 1", code)
 	}
 
-	// `save` to a new name (default content), then `list --json`.
+	// `save` snapshots the active profile (prod) under a new name, then `list --json`.
 	_, _, code = run(t, bin, cfgDir, "save", "snapshot")
 	if code != 0 {
 		t.Errorf("save: code=%d", code)
