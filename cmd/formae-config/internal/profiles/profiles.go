@@ -217,6 +217,30 @@ func (s *Store) Save(name string, force bool) error {
 	return copyFile(src, dst)
 }
 
+// Delete removes profiles/<name>.pkl. Returns ErrIsActive if name is the
+// currently active profile (the caller should switch first), or ErrNotFound
+// if it does not exist.
+func (s *Store) Delete(name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	active, err := s.Active()
+	if err != nil {
+		return err
+	}
+	if name == active {
+		return fmt.Errorf("%w: %s", ErrIsActive, name)
+	}
+	dst := s.ProfilePath(name)
+	if err := os.Remove(dst); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrNotFound, name)
+		}
+		return fmt.Errorf("remove profile: %w", err)
+	}
+	return nil
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {

@@ -340,3 +340,48 @@ func TestSave_NotInitialized(t *testing.T) {
 		t.Errorf("Save uninitialized: %v, want ErrNotInitialized", err)
 	}
 }
+
+func TestDelete_RemovesProfile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	writeFile(t, root, filepath.Join("profiles", "prod.pkl"), "x")
+
+	if err := s.Delete("prod"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(s.ProfilePath("prod")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("profile still exists after delete: %v", err)
+	}
+}
+
+func TestDelete_RefusesActive(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	err := s.Delete("default")
+	if !errors.Is(err, profiles.ErrIsActive) {
+		t.Errorf("Delete active: %v, want ErrIsActive", err)
+	}
+}
+
+func TestDelete_NotFound(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	err := s.Delete("nope")
+	if !errors.Is(err, profiles.ErrNotFound) {
+		t.Errorf("Delete missing: %v, want ErrNotFound", err)
+	}
+}
