@@ -28,6 +28,7 @@ clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
+	rm -rf fcfg
 	rm -rf version.semver
 
 clean-pel:
