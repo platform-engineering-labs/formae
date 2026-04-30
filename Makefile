@@ -6,23 +6,19 @@
 
 DEBUG_GOFLAGS := -gcflags="all=-N -l"
 
-# The latest tag, possibly carrying a `-channel` suffix (e.g., 0.85.0-dev).
+# The latest tag, possibly carrying a `-channel` suffix (e.g., 0.85.0-dev.2).
 RAW_VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
 # Canonical semver — everything before the first `-`. Used as the artifact
 # version for binaries and the PKL package. Mirrors the convention already
 # in justfile and container.yml.
 VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
-# Channel — everything after the first `-`, or `stable` if the tag has no
-# suffix. Used for orbital channel routing. PKL schemas are always published
-# to a flat URL regardless of channel; channel only affects binary/container
-# release routing.
-#
-# Implemented in pure Make builtins so it parses on GNU make 3.81 (the
-# macOS-default in CI) as well as 4.x (Linux). `subst` turns "0.85.0-dev"
-# into "0.85.0 dev"; `word 2` extracts "dev". `or` returns the first
-# non-empty arg, defaulting to "stable" when there is no `-channel`
-# suffix.
-CHANNEL := $(or $(word 2,$(subst -, ,$(RAW_VERSION))),stable)
+# Channel — `stable` for tags shaped X.Y.Z, `dev` for tags shaped
+# X.Y.Z-dev[.N]. Used for orbital channel routing. Mirrors the regex in
+# formae-actions/plugin-build.yml and container.yml: an earlier shape that
+# took everything after the first `-` produced literal `dev.2` for
+# `0.85.0-dev.2`, which orbital writes as a real channel name and breaks
+# downstream installs.
+CHANNEL := $(shell echo "$(RAW_VERSION)" | grep -q -- '-' && echo dev || echo stable)
 
 clean:
 	rm -rf .out/
