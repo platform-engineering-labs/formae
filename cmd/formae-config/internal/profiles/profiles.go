@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 )
 
 const (
@@ -112,4 +114,53 @@ func (s *Store) Init(name string) error {
 		return fmt.Errorf("create symlink: %w", err)
 	}
 	return nil
+}
+
+// Active returns the name of the active profile, or ErrNotInitialized if
+// ConfigPath() is missing or is not a symlink.
+func (s *Store) Active() (string, error) {
+	info, err := os.Lstat(s.ConfigPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", ErrNotInitialized
+		}
+		return "", fmt.Errorf("stat config: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return "", ErrNotInitialized
+	}
+	target, err := os.Readlink(s.ConfigPath())
+	if err != nil {
+		return "", fmt.Errorf("readlink: %w", err)
+	}
+	base := filepath.Base(target)
+	if !strings.HasSuffix(base, profileExt) {
+		return "", fmt.Errorf("symlink target has unexpected extension: %s", target)
+	}
+	return strings.TrimSuffix(base, profileExt), nil
+}
+
+// List returns all profile names in sorted order.
+// Returns ErrNotInitialized if the profiles directory does not exist.
+func (s *Store) List() ([]string, error) {
+	entries, err := os.ReadDir(s.profilesDir())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNotInitialized
+		}
+		return nil, fmt.Errorf("read profiles: %w", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if !strings.HasSuffix(n, profileExt) {
+			continue
+		}
+		names = append(names, strings.TrimSuffix(n, profileExt))
+	}
+	sort.Strings(names)
+	return names, nil
 }

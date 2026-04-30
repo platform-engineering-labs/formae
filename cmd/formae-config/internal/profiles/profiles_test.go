@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae/cmd/formae-config/internal/profiles"
@@ -119,5 +120,73 @@ func TestInit_RejectsInvalidName(t *testing.T) {
 	err := s.Init("bad name")
 	if !errors.Is(err, profiles.ErrInvalidName) {
 		t.Errorf("Init bad name: %v, want ErrInvalidName", err)
+	}
+}
+
+func TestActive_AfterInit(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	got, err := s.Active()
+	if err != nil {
+		t.Fatalf("Active: %v", err)
+	}
+	if got != "default" {
+		t.Errorf("Active = %q, want default", got)
+	}
+}
+
+func TestActive_NotInitialized(t *testing.T) {
+	root := t.TempDir()
+	s := profiles.New(root)
+
+	_, err := s.Active()
+	if !errors.Is(err, profiles.ErrNotInitialized) {
+		t.Errorf("Active uninitialized: %v, want ErrNotInitialized", err)
+	}
+
+	// Also: regular file (not a symlink) is treated as not-initialized.
+	writeFile(t, root, "formae.conf.pkl", "x")
+	_, err = s.Active()
+	if !errors.Is(err, profiles.ErrNotInitialized) {
+		t.Errorf("Active on regular file: %v, want ErrNotInitialized", err)
+	}
+}
+
+func TestList_ReturnsSortedNames(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// Plant a few additional profiles.
+	for _, n := range []string{"prod", "load-test", "local-dev"} {
+		writeFile(t, root, filepath.Join("profiles", n+".pkl"), "x")
+	}
+	// Plant a non-pkl file to confirm filtering.
+	writeFile(t, root, filepath.Join("profiles", "README.md"), "x")
+
+	got, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := []string{"default", "load-test", "local-dev", "prod"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("List = %v, want %v", got, want)
+	}
+}
+
+func TestList_NotInitialized(t *testing.T) {
+	root := t.TempDir()
+	s := profiles.New(root)
+
+	_, err := s.List()
+	if !errors.Is(err, profiles.ErrNotInitialized) {
+		t.Errorf("List uninitialized: %v, want ErrNotInitialized", err)
 	}
 }
