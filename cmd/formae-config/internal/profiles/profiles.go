@@ -15,6 +15,7 @@ package profiles
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -189,6 +190,49 @@ func (s *Store) Use(name string) error {
 	if err := os.Rename(tmp, cfg); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename symlink: %w", err)
+	}
+	return nil
+}
+
+// Save copies the resolved active profile to profiles/<name>.pkl. It does not
+// switch to the new profile. Returns ErrAlreadyExists if the destination
+// already exists and force is false.
+func (s *Store) Save(name string, force bool) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	active, err := s.Active()
+	if err != nil {
+		return err
+	}
+	src := s.ProfilePath(active)
+	dst := s.ProfilePath(name)
+	if _, err := os.Lstat(dst); err == nil {
+		if !force {
+			return fmt.Errorf("%w: %s", ErrAlreadyExists, name)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat target: %w", err)
+	}
+	return copyFile(src, dst)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("create destination: %w", err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("copy: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close destination: %w", err)
 	}
 	return nil
 }

@@ -265,3 +265,78 @@ func TestUse_RejectsInvalidName(t *testing.T) {
 		t.Errorf("Use bad name: %v, want ErrInvalidName", err)
 	}
 }
+
+func TestSave_CopiesActiveAndDoesNotSwitch(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "default-content")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if err := s.Save("snapshot", false); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// New profile exists with copied contents.
+	got, err := os.ReadFile(s.ProfilePath("snapshot"))
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if string(got) != "default-content" {
+		t.Errorf("snapshot content = %q", string(got))
+	}
+	// Active is still default.
+	active, err := s.Active()
+	if err != nil {
+		t.Fatalf("Active: %v", err)
+	}
+	if active != "default" {
+		t.Errorf("Active = %q, want default", active)
+	}
+}
+
+func TestSave_RefusesOverwriteWithoutForce(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	err := s.Save("default", false)
+	if !errors.Is(err, profiles.ErrAlreadyExists) {
+		t.Errorf("Save existing: %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestSave_ForceOverwrites(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "new-content")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// Plant another profile we will overwrite.
+	writeFile(t, root, filepath.Join("profiles", "snapshot.pkl"), "old-snapshot")
+
+	if err := s.Save("snapshot", true); err != nil {
+		t.Fatalf("Save force: %v", err)
+	}
+	got, err := os.ReadFile(s.ProfilePath("snapshot"))
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if string(got) != "new-content" {
+		t.Errorf("snapshot content after force = %q", string(got))
+	}
+}
+
+func TestSave_NotInitialized(t *testing.T) {
+	root := t.TempDir()
+	s := profiles.New(root)
+
+	err := s.Save("snapshot", false)
+	if !errors.Is(err, profiles.ErrNotInitialized) {
+		t.Errorf("Save uninitialized: %v, want ErrNotInitialized", err)
+	}
+}
