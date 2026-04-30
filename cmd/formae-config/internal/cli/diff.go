@@ -41,6 +41,14 @@ func newDiffCmd() *cobra.Command {
 				}
 				pathB = s.ProfilePath(active)
 			}
+			for _, p := range []string{pathA, pathB} {
+				if _, err := os.Stat(p); err != nil {
+					if os.IsNotExist(err) {
+						return profiles.ErrNotFound
+					}
+					return err
+				}
+			}
 			c := exec.Command("diff", "-u", pathA, pathB)
 			c.Stdout, c.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 			err = c.Run()
