@@ -214,3 +214,54 @@ func TestList_FiltersNonRegularEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestUse_SwitchesActive(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "default-content")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	writeFile(t, root, filepath.Join("profiles", "prod.pkl"), "prod-content")
+
+	if err := s.Use("prod"); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	got, err := s.Active()
+	if err != nil {
+		t.Fatalf("Active: %v", err)
+	}
+	if got != "prod" {
+		t.Errorf("Active = %q, want prod", got)
+	}
+	// Reading the config path should yield the prod content.
+	data, err := os.ReadFile(s.ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if string(data) != "prod-content" {
+		t.Errorf("active content = %q, want prod-content", string(data))
+	}
+}
+
+func TestUse_ErrorsOnMissingProfile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	err := s.Use("does-not-exist")
+	if !errors.Is(err, profiles.ErrNotFound) {
+		t.Errorf("Use missing: %v, want ErrNotFound", err)
+	}
+}
+
+func TestUse_RejectsInvalidName(t *testing.T) {
+	s := profiles.New(t.TempDir())
+	err := s.Use("bad name")
+	if !errors.Is(err, profiles.ErrInvalidName) {
+		t.Errorf("Use bad name: %v, want ErrInvalidName", err)
+	}
+}

@@ -164,3 +164,31 @@ func (s *Store) List() ([]string, error) {
 	sort.Strings(names)
 	return names, nil
 }
+
+// Use atomically points the active config symlink at profiles/<name>.pkl.
+// Returns ErrNotFound if the profile does not exist.
+func (s *Store) Use(name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	dst := s.ProfilePath(name)
+	if _, err := os.Stat(dst); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrNotFound, name)
+		}
+		return fmt.Errorf("stat profile: %w", err)
+	}
+	cfg := s.ConfigPath()
+	rel := filepath.Join(profilesSubdir, name+profileExt)
+	tmp := cfg + ".tmp." + name
+	// Clean up any stale temp from a previous failed run.
+	_ = os.Remove(tmp)
+	if err := os.Symlink(rel, tmp); err != nil {
+		return fmt.Errorf("create temp symlink: %w", err)
+	}
+	if err := os.Rename(tmp, cfg); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename symlink: %w", err)
+	}
+	return nil
+}
