@@ -409,3 +409,27 @@ func TestDelete_NotFound(t *testing.T) {
 		t.Errorf("Delete missing: %v, want ErrNotFound", err)
 	}
 }
+
+func TestList_EmptyDirReturnsEmptySlice(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "x")
+	s := profiles.New(root)
+	if err := s.Init("default"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// Remove the default profile so the directory is empty of .pkl files.
+	if err := os.Remove(s.ProfilePath("default")); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	got, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got == nil {
+		t.Errorf("List() returned nil; want empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("List() = %v; want empty", got)
+	}
+}

@@ -151,7 +151,7 @@ func (s *Store) List() ([]string, error) {
 		}
 		return nil, fmt.Errorf("read profiles: %w", err)
 	}
-	var names []string
+	names := make([]string, 0)
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
 			continue
