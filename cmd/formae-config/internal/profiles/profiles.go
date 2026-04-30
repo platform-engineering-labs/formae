@@ -105,6 +105,10 @@ func (s *Store) Init(name string) error {
 	}
 	rel := filepath.Join(profilesSubdir, name+profileExt)
 	if err := os.Symlink(rel, cfg); err != nil {
+		// Best-effort rollback so the user can retry Init.
+		if rbErr := os.Rename(dst, cfg); rbErr != nil {
+			return fmt.Errorf("create symlink: %w (rollback also failed: %v)", err, rbErr)
+		}
 		return fmt.Errorf("create symlink: %w", err)
 	}
 	return nil
