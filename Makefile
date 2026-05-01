@@ -50,6 +50,7 @@ pkg-bin: clean build
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/bin
 	cp -Rp ./formae ./dist/pel/bin
+	cp -Rp ./fcfg ./dist/pel/bin
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
