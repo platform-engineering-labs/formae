@@ -24,7 +24,7 @@ func newSaveCmd() *cobra.Command {
 			if err := s.Save(args[0], force); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "saved %s\n", args[0])
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "saved %s\n", args[0])
 			return nil
 		},
 	}

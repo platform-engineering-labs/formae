@@ -23,7 +23,7 @@ func newUseCmd() *cobra.Command {
 			if err := s.Use(args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "switched to %s\n", args[0])
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "switched to %s\n", args[0])
 			return nil
 		},
 	}

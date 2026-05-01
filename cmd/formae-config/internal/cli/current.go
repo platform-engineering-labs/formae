@@ -24,7 +24,7 @@ func newCurrentCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), active)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), active)
 			return nil
 		},
 	}

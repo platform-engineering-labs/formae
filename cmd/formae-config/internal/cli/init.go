@@ -28,7 +28,7 @@ func newInitCmd() *cobra.Command {
 				return err
 			}
 			if !yes {
-				fmt.Fprintf(cmd.OutOrStdout(),
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"Convert %s into profile %q? [Y/n] ", s.ConfigPath(), name)
 				r := bufio.NewReader(os.Stdin)
 				line, _ := r.ReadString('\n')
@@ -39,12 +39,12 @@ func newInitCmd() *cobra.Command {
 			}
 			if err := s.Init(name); err != nil {
 				if errors.Is(err, profiles.ErrAlreadyInitialized) {
-					fmt.Fprintln(cmd.OutOrStdout(), "already initialized")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "already initialized")
 					return nil
 				}
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(),
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 				"initialized: %s -> profiles/%s.pkl\n", s.ConfigPath(), name)
 			return nil
 		},

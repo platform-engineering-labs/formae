@@ -48,7 +48,7 @@ func newListCmd() *cobra.Command {
 				if n == active {
 					marker = "* "
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s%s\n", marker, n)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s%s\n", marker, n)
 			}
 			return nil
 		},
