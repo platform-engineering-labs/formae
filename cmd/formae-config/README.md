@@ -46,9 +46,9 @@ fcfg use load-test     # switch
 | 2 | Filesystem / permission error |
 | 3 | Not initialized — run `fcfg init --yes` first |
 
-## Claude Code integration
+## AI assistant integration
 
-If you use Claude Code, this directory is paired with a skill at `.superpowers/skills/formae-config/SKILL.md` that teaches Claude how to drive `fcfg`. No setup needed; Claude Code picks it up automatically when the skill is loaded.
+The [formae-mcp](https://github.com/platform-engineering-labs/formae-mcp) repo ships a `formae-config` skill that teaches AI coding assistants (Claude Code, Codex, OpenCode) how to drive `fcfg`. Install formae-mcp per its README; the skill is loaded automatically.
 
 ## License
 
