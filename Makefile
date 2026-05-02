@@ -24,6 +24,7 @@ clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
+	rm -rf fcfg
 	rm -rf version.semver
 
 clean-pel:
@@ -31,6 +32,7 @@ clean-pel:
 
 build:
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
+	go build -o fcfg cmd/formae-config/main.go
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
@@ -38,11 +40,13 @@ install-gremlins:
 
 build-debug:
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
+	go build ${DEBUG_GOFLAGS} -o fcfg cmd/formae-config/main.go
 
 pkg-bin: clean build
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/bin
 	cp -Rp ./formae ./dist/pel/bin
+	cp -Rp ./fcfg ./dist/pel/bin
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
