@@ -29,7 +29,19 @@ RUN apt-get update &&  \
     apt-get clean && \
     /opt/pel/bin/formae clean --all
 
-RUN chown -R pel:pel /home/pel
+# Make the install tree owned by `pel`. Orbital's tree library considers any
+# path owned by uid 0 "Privileged" and tries to escalate via sudo on every
+# read/write — but the image runs as `pel` and sudo is not installed, so the
+# agent fails to start with:
+#
+#   privileged user required to manage path: /opt/pel
+#   Plugin manager initialization failed; refusing to start
+#   exec: "sudo": executable file not found in $PATH
+#
+# Once /opt/pel is owned by `pel`, orbital's privileged() check returns false,
+# no sudo is invoked, and runtime plugin install/upgrade/uninstall continue
+# to work because new files inherit the pel ownership.
+RUN chown -R pel:pel /home/pel /opt/pel
 
 USER pel
 WORKDIR /home/pel
