@@ -1256,6 +1256,16 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 		}
 		res.Properties = resolvedProps
 
+		// Unwrap any remaining formae.Value wrappers (`{ "$value": ..., "$strategy": ... }`)
+		// to the bare scalar — the apply path does this in resolver.ConvertToPluginFormat,
+		// and without it cloud APIs typed against the inner scalar (e.g. OVH's
+		// cloud.kube.VersionEnum) reject the wrapper as an InvalidRequest.
+		flattenedProps, err := h.flattenFormaeValuesInProperties(res.Properties)
+		if err != nil {
+			return createdResources, fmt.Errorf("failed to flatten formae.Value wrappers for %s: %w", res.Label, err)
+		}
+		res.Properties = flattenedProps
+
 		// Strip nested empty collections ({}/[]) that PKL renders for unset
 		// nullable Listing/Mapping fields. Without this, K8S rejects resources
 		// with empty probe objects (e.g. livenessProbe: {}).
@@ -1464,6 +1474,69 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 	}
 
 	return json.RawMessage(propsStr), nil
+}
+
+// flattenFormaeValuesInProperties unwraps `formae.Value` PKL objects (which
+// serialise to {"$value": ..., "$strategy": ..., "$visibility": ...}) into
+// their scalar payload. The agent's resolver.ConvertToPluginFormat does this
+// in the apply path so plugins only ever see the resolved value; without an
+// equivalent step here, the discovery harness's CreateUnmanagedResource
+// forwards the wrapper object verbatim to the plugin and the plugin then
+// forwards it to the cloud API, which rejects it as a type-mismatch (e.g.
+// "Given data is not valid for type cloud.kube.VersionEnum" on OVH).
+//
+// Walks the JSON recursively and replaces every object that carries a
+// "$value" key with that key's payload. Other resolvable objects ($res
+// markers) are left intact — they are handled separately by
+// resolveResolvablesInProperties before this runs.
+func (h *TestHarness) flattenFormaeValuesInProperties(properties json.RawMessage) (json.RawMessage, error) {
+	if len(properties) == 0 {
+		return properties, nil
+	}
+	var root any
+	if err := json.Unmarshal(properties, &root); err != nil {
+		return properties, fmt.Errorf("failed to unmarshal properties for value flattening: %w", err)
+	}
+	flattened := flattenFormaeValueWalk(root)
+	out, err := json.Marshal(flattened)
+	if err != nil {
+		return properties, fmt.Errorf("failed to marshal flattened properties: %w", err)
+	}
+	return out, nil
+}
+
+// flattenFormaeValueWalk is the recursive worker for flattenFormaeValuesInProperties.
+func flattenFormaeValueWalk(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		// A formae.Value carries "$value" and never sets "$res" (the latter
+		// marks resolvable references, which are resolved separately). If the
+		// object also carries "$res": true, leave it alone — the resolver pass
+		// has already touched it (or chosen not to).
+		if res, isRes := val["$res"].(bool); isRes && res {
+			out := make(map[string]any, len(val))
+			for k, child := range val {
+				out[k] = flattenFormaeValueWalk(child)
+			}
+			return out
+		}
+		if inner, has := val["$value"]; has {
+			return flattenFormaeValueWalk(inner)
+		}
+		out := make(map[string]any, len(val))
+		for k, child := range val {
+			out[k] = flattenFormaeValueWalk(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, child := range val {
+			out[i] = flattenFormaeValueWalk(child)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // findResolvablesRecursive recursively finds all resolvable objects in a JSON structure
