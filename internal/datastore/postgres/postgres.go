@@ -547,35 +547,100 @@ func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) 
 	return commands[0], nil
 }
 
+// extendPostgresQueryString appends a WHERE clause to queryStr for the given
+// query item.
+//
+// sqlPart is a template that takes two %-verbs — the comparison operator and
+// the positional parameter index — e.g. " AND command_id %s $%d".
+//
+// For multi-valued items the inner clause is replicated once per value and
+// joined with OR (or AND when the constraint is Excluded). String values may
+// carry leading or trailing `*` for wildcard matching, which becomes a SQL
+// LIKE pattern.
 func extendPostgresQueryString[T any](queryStr string, queryItem *datastore.QueryItem[T], sqlPart string, args *[]any) string {
-	if queryItem != nil {
-		var operator string
+	if queryItem == nil {
+		return queryStr
+	}
 
-		if queryItem.Constraint == datastore.Excluded {
-			operator = "!="
-		} else if queryItem.Constraint == datastore.Required || queryItem.Constraint == datastore.Optional {
-			operator = "="
-		}
+	values := allQueryItemValues(queryItem)
+	if len(values) == 0 {
+		return queryStr
+	}
 
-		queryStr += fmt.Sprintf(sqlPart, operator, len(*args)+1)
-		operand := ""
-		switch v := any(queryItem.Item).(type) {
-		case bool:
-			if v {
-				operand = "1"
-			} else {
-				operand = "0"
-			}
-		case string:
-			operand = v
-		default:
-			operand = fmt.Sprintf("%v", v)
-		}
+	isExcluded := queryItem.Constraint == datastore.Excluded
 
+	if len(values) == 1 {
+		op, operand, _ := pgOpAndOperand(values[0], isExcluded)
+		queryStr += fmt.Sprintf(sqlPart, op, len(*args)+1)
+		*args = append(*args, operand)
+		return queryStr
+	}
+
+	innerTemplate := strings.TrimPrefix(sqlPart, " AND ")
+	clauses := make([]string, 0, len(values))
+	for _, v := range values {
+		op, operand, _ := pgOpAndOperand(v, isExcluded)
+		clauses = append(clauses, fmt.Sprintf(innerTemplate, op, len(*args)+1))
 		*args = append(*args, operand)
 	}
 
-	return queryStr
+	glue := " OR "
+	if isExcluded {
+		glue = " AND "
+	}
+	return queryStr + " AND (" + strings.Join(clauses, glue) + ")"
+}
+
+// allQueryItemValues flattens Item + ExtraItems into a single []any.
+func allQueryItemValues[T any](qi *datastore.QueryItem[T]) []any {
+	values := make([]any, 0, 1+len(qi.ExtraItems))
+	values = append(values, any(qi.Item))
+	for _, e := range qi.ExtraItems {
+		values = append(values, any(e))
+	}
+	return values
+}
+
+// pgOpAndOperand resolves the operator and bound value for one term,
+// accounting for exclusion and `*` wildcards on strings. Any `*` in the
+// value (anywhere) flips the operator to LIKE and translates to `%`.
+func pgOpAndOperand(v any, isExcluded bool) (op string, operand any, isLike bool) {
+	s, isString := v.(string)
+	if !isString {
+		if b, ok := v.(bool); ok {
+			if b {
+				return pgEqOp(isExcluded), "1", false
+			}
+			return pgEqOp(isExcluded), "0", false
+		}
+		return pgEqOp(isExcluded), fmt.Sprintf("%v", v), false
+	}
+
+	if !strings.Contains(s, "*") {
+		return pgEqOp(isExcluded), s, false
+	}
+
+	likeOp := "LIKE"
+	if isExcluded {
+		likeOp = "NOT LIKE"
+	}
+	return likeOp, pgLikePattern(s), true
+}
+
+func pgEqOp(isExcluded bool) string {
+	if isExcluded {
+		return "!="
+	}
+	return "="
+}
+
+// pgLikePattern translates every `*` in s into a SQL LIKE `%`. Literal `%`,
+// `_`, and `\` are escaped so they match as themselves.
+func pgLikePattern(s string) string {
+	escaped := strings.ReplaceAll(s, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "%", "\\%")
+	escaped = strings.ReplaceAll(escaped, "_", "\\_")
+	return strings.ReplaceAll(escaped, "*", "%")
 }
 
 func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {

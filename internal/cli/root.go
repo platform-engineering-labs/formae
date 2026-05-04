@@ -101,6 +101,21 @@ func init() {
 		return strings.ReplaceAll(replaced, "{{.Command}}", cmdName)
 	})
 
+	// formatExamplesMultiline renders pipe-separated examples one per line
+	// for the leaf-command help view. Subcommand listing keeps the single-
+	// line form via formatExamples.
+	cobra.AddTemplateFunc("formatExamplesMultiline", func(examples string, cmd *cobra.Command) string {
+		cliName := cmd.Root().Name()
+		cmdName := cmd.Name()
+		replaced := strings.ReplaceAll(examples, "{{.Name}}", cliName)
+		replaced = strings.ReplaceAll(replaced, "{{.Command}}", cmdName)
+		parts := strings.Split(replaced, "|")
+		for i, p := range parts {
+			parts[i] = strings.TrimSpace(p)
+		}
+		return strings.Join(parts, "\n  ")
+	})
+
 	cobra.AddTemplateFunc("formatDoc", func(doc string, cmd *cobra.Command) string {
 		lines := strings.Split(doc, "\n")
 		for i, line := range lines {

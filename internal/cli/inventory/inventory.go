@@ -67,12 +67,15 @@ func resourcesCmd() *cobra.Command {
 			return runResources(app, opts)
 		},
 		Annotations: map[string]string{
-			"examples": "{{.Name}} {{.Command}} inventory resources --query 'type:AWS::S3::Bucket' --max-results 50",
+			"examples": "formae inventory resources --query 'type:AWS::S3::Bucket'" +
+				" | formae inventory resources --query 'type:GCP::Compute::* stack:prod'" +
+				" | formae inventory resources --query 'target:eu target:us managed:false'" +
+				" | formae inventory resources --max-results 50",
 		},
 		SilenceErrors: true,
 	}
 
-	command.Flags().String("query", "", "Query that allows to find resources by their attributes")
+	command.Flags().String("query", "", "Query that allows to find resources by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of resources to display in the table (0 = unlimited)")
@@ -172,12 +175,14 @@ func targetsCmd() *cobra.Command {
 			return runTargets(app, opts)
 		},
 		Annotations: map[string]string{
-			"examples": "{{.Name}} {{.Command}} inventory targets --query 'discoverable:true' --max-results 50",
+			"examples": "formae inventory targets --query 'discoverable:true'" +
+				" | formae inventory targets --query 'namespace:AWS label:prod-*'" +
+				" | formae inventory targets --max-results 50",
 		},
 		SilenceErrors: true,
 	}
 
-	command.Flags().String("query", "", "Query that allows to find targets by their attributes (e.g., 'namespace:AWS', 'discoverable:true', 'label:prod-us-east-1')")
+	command.Flags().String("query", "", "Query that allows to find targets by their attributes (e.g., 'namespace:AWS', 'discoverable:true', 'label:prod-us-east-1'). Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of targets to display in the table (0 = unlimited)")
@@ -242,7 +247,8 @@ func stacksCmd() *cobra.Command {
 			return runStacks(app, opts)
 		},
 		Annotations: map[string]string{
-			"examples": "{{.Name}} {{.Command}} inventory stacks --max-results 50",
+			"examples": "formae inventory stacks" +
+				" | formae inventory stacks --max-results 50",
 		},
 		SilenceErrors: true,
 	}
@@ -289,7 +295,8 @@ func policiesCmd() *cobra.Command {
 			return runPolicies(app, opts)
 		},
 		Annotations: map[string]string{
-			"examples": "{{.Name}} {{.Command}} inventory policies --max-results 50",
+			"examples": "formae inventory policies" +
+				" | formae inventory policies --max-results 50",
 		},
 		SilenceErrors: true,
 	}

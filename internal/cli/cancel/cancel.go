@@ -71,7 +71,7 @@ before transitioning to 'Canceled' state to avoid orphaned resources.`,
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
-	command.Flags().String("query", "", "Query to select commands to cancel. If not provided, cancels the most recent command.")
+	command.Flags().String("query", "", "Query to select commands to cancel. If not provided, cancels the most recent command. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().BoolP("watch", "w", false, "Watch the status of canceled commands until they complete")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")

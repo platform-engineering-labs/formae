@@ -44,6 +44,147 @@ func init() {
 	})
 }
 
+// appendAuroraStringClause appends a WHERE clause for a string-valued query
+// item (with optional multi-value via ExtraItems and `*` wildcards). column
+// is the SQL column name; paramPrefix is used for the named-parameter labels
+// (`:<paramPrefix>_N`). lowerWrap wraps both column and placeholder in
+// LOWER() for case-insensitive matching. Returns the extended query string,
+// extended params, and the next paramIdx.
+func appendAuroraStringClause(
+	queryStr string,
+	params []types.SqlParameter,
+	paramIdx int,
+	column, paramPrefix string,
+	lowerWrap bool,
+	qi *datastore.QueryItem[string],
+) (string, []types.SqlParameter, int) {
+	if qi == nil {
+		return queryStr, params, paramIdx
+	}
+
+	values := append([]string{qi.Item}, qi.ExtraItems...)
+	isExcluded := qi.Constraint == datastore.Excluded
+
+	clauses := make([]string, 0, len(values))
+	for _, v := range values {
+		op, operand, _ := auroraOpAndOperand(v, isExcluded)
+		paramName := fmt.Sprintf("%s_%d", paramPrefix, paramIdx)
+		paramIdx++
+
+		lhs := column
+		rhs := ":" + paramName
+		if lowerWrap {
+			lhs = "LOWER(" + lhs + ")"
+			rhs = "LOWER(" + rhs + ")"
+		}
+		clauses = append(clauses, fmt.Sprintf("%s %s %s", lhs, op, rhs))
+		params = append(params, types.SqlParameter{
+			Name:  aws.String(paramName),
+			Value: &types.FieldMemberStringValue{Value: operand},
+		})
+	}
+
+	glue := " OR "
+	if isExcluded {
+		glue = " AND "
+	}
+	if len(clauses) == 1 {
+		queryStr += " AND " + clauses[0]
+	} else {
+		queryStr += " AND (" + strings.Join(clauses, glue) + ")"
+	}
+	return queryStr, params, paramIdx
+}
+
+// appendAuroraExistsClause appends a WHERE clause whose check is wrapped in
+// an EXISTS sub-query — used for `stack:` filtering against resource_updates
+// in QueryFormaCommands. existsBody is the SQL between EXISTS ( and the
+// `<op> :<param>)` tail. Multi-value support emits multiple OR'd EXISTS
+// sub-queries; for typical single-value queries it produces one.
+func appendAuroraExistsClause(
+	queryStr string,
+	params []types.SqlParameter,
+	paramIdx int,
+	existsBody, paramPrefix string,
+	qi *datastore.QueryItem[string],
+) (string, []types.SqlParameter, int) {
+	if qi == nil {
+		return queryStr, params, paramIdx
+	}
+	values := append([]string{qi.Item}, qi.ExtraItems...)
+	isExcluded := qi.Constraint == datastore.Excluded
+
+	clauses := make([]string, 0, len(values))
+	for _, v := range values {
+		op, operand, _ := auroraOpAndOperand(v, isExcluded)
+		paramName := fmt.Sprintf("%s_%d", paramPrefix, paramIdx)
+		paramIdx++
+		clauses = append(clauses, fmt.Sprintf("EXISTS (%s %s :%s)", existsBody, op, paramName))
+		params = append(params, types.SqlParameter{
+			Name:  aws.String(paramName),
+			Value: &types.FieldMemberStringValue{Value: operand},
+		})
+	}
+
+	glue := " OR "
+	if isExcluded {
+		glue = " AND "
+	}
+	if len(clauses) == 1 {
+		queryStr += " AND " + clauses[0]
+	} else {
+		queryStr += " AND (" + strings.Join(clauses, glue) + ")"
+	}
+	return queryStr, params, paramIdx
+}
+
+// appendAuroraBoolClause appends a WHERE clause for a bool-valued query item.
+// Bool fields don't support multi-value or wildcards, so this is the simple
+// equality/inequality form. Returns the extended query string, extended
+// params, and the next paramIdx.
+func appendAuroraBoolClause(
+	queryStr string,
+	params []types.SqlParameter,
+	paramIdx int,
+	column, paramPrefix string,
+	qi *datastore.QueryItem[bool],
+) (string, []types.SqlParameter, int) {
+	if qi == nil {
+		return queryStr, params, paramIdx
+	}
+	op := "="
+	if qi.Constraint == datastore.Excluded {
+		op = "!="
+	}
+	paramName := fmt.Sprintf("%s_%d", paramPrefix, paramIdx)
+	queryStr += fmt.Sprintf(" AND %s %s :%s", column, op, paramName)
+	params = append(params, types.SqlParameter{
+		Name:  aws.String(paramName),
+		Value: &types.FieldMemberBooleanValue{Value: qi.Item},
+	})
+	return queryStr, params, paramIdx + 1
+}
+
+// auroraOpAndOperand resolves the SQL operator and bound value for one
+// string term, accounting for exclusion and `*` wildcards. Any `*` in the
+// value (anywhere) flips the operator to LIKE and translates to `%`.
+func auroraOpAndOperand(s string, isExcluded bool) (op string, operand string, isLike bool) {
+	if !strings.Contains(s, "*") {
+		if isExcluded {
+			return "!=", s, false
+		}
+		return "=", s, false
+	}
+	likeOp := "LIKE"
+	if isExcluded {
+		likeOp = "NOT LIKE"
+	}
+	escaped := strings.ReplaceAll(s, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "%", "\\%")
+	escaped = strings.ReplaceAll(escaped, "_", "\\_")
+	return likeOp, strings.ReplaceAll(escaped, "*", "%"), true
+}
+
 type DatastoreAuroraDataAPI struct {
 	client     *rdsdata.Client
 	clusterARN string
@@ -891,71 +1032,26 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	params := []types.SqlParameter{}
 	paramIdx := 1
 
-	if statusQuery.CommandID != nil {
-		paramName := fmt.Sprintf("command_id_%d", paramIdx)
-		op := "="
-		if statusQuery.CommandID.Constraint == datastore.Excluded {
-			op = "!="
-		}
-		queryStr += fmt.Sprintf(" AND command_id %s :%s", op, paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: statusQuery.CommandID.Item},
-		})
-		paramIdx++
-	}
-
-	if statusQuery.ClientID != nil {
-		paramName := fmt.Sprintf("client_id_%d", paramIdx)
-		op := "="
-		if statusQuery.ClientID.Constraint == datastore.Excluded {
-			op = "!="
-		}
-		queryStr += fmt.Sprintf(" AND client_id %s :%s", op, paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: statusQuery.ClientID.Item},
-		})
-		paramIdx++
-	}
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command_id", "command_id", false, statusQuery.CommandID)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "client_id", "client_id", false, statusQuery.ClientID)
 
 	if statusQuery.Command != nil {
-		paramName := fmt.Sprintf("command_%d", paramIdx)
-		op := "="
-		if statusQuery.Command.Constraint == datastore.Excluded {
-			op = "!="
-		}
-		queryStr += fmt.Sprintf(" AND LOWER(command) %s LOWER(:%s)", op, paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: statusQuery.Command.Item},
-		})
-		paramIdx++
+		queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command", "command", true, statusQuery.Command)
 	} else {
 		queryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
 	}
 
+	// stack filter routes through a sub-EXISTS against resource_updates.
 	if statusQuery.Stack != nil {
-		paramName := fmt.Sprintf("stack_%d", paramIdx)
-		op := "="
-		if statusQuery.Stack.Constraint == datastore.Excluded {
-			op = "!="
-		}
-		queryStr += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s :%s)", op, paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: statusQuery.Stack.Item},
-		})
-		paramIdx++
+		queryStr, params, paramIdx = appendAuroraExistsClause(
+			queryStr, params, paramIdx,
+			"SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label",
+			"stack",
+			statusQuery.Stack,
+		)
 	}
 
-	if statusQuery.Status != nil {
-		paramName := fmt.Sprintf("status_%d", paramIdx)
-		op := "="
-		if statusQuery.Status.Constraint == datastore.Excluded {
-			op = "!="
-		}
-		queryStr += fmt.Sprintf(" AND LOWER(state) %s LOWER(:%s)", op, paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: statusQuery.Status.Item},
-		})
-	}
+	queryStr, params, _ = appendAuroraStringClause(queryStr, params, paramIdx, "state", "status", true, statusQuery.Status)
 
 	queryStr += " ORDER BY timestamp DESC"
 
@@ -1007,83 +1103,14 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *datastore.ResourceQuery) 
 	params := []types.SqlParameter{
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
 	}
-
-	// Build dynamic query with named parameters
 	paramIdx := 1
-	if query.NativeID != nil && query.NativeID.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("native_id_%d", paramIdx)
-		if query.NativeID.Constraint == datastore.Required {
-			queryStr += fmt.Sprintf(" AND native_id = :%s", paramName)
-		} else {
-			queryStr += fmt.Sprintf(" AND (native_id = :%s OR native_id IS NULL)", paramName)
-		}
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: query.NativeID.Item},
-		})
-		paramIdx++
-	}
 
-	if query.Stack != nil && query.Stack.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("stack_%d", paramIdx)
-		if query.Stack.Constraint == datastore.Required {
-			queryStr += fmt.Sprintf(" AND stack = :%s", paramName)
-		} else {
-			queryStr += fmt.Sprintf(" AND (stack = :%s OR stack IS NULL)", paramName)
-		}
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: query.Stack.Item},
-		})
-		paramIdx++
-	}
-
-	if query.Type != nil && query.Type.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("type_%d", paramIdx)
-		if query.Type.Constraint == datastore.Required {
-			queryStr += fmt.Sprintf(" AND LOWER(type) = LOWER(:%s)", paramName)
-		} else {
-			queryStr += fmt.Sprintf(" AND (LOWER(type) = LOWER(:%s) OR type IS NULL)", paramName)
-		}
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: query.Type.Item},
-		})
-		paramIdx++
-	}
-
-	if query.Label != nil && query.Label.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("label_%d", paramIdx)
-		if query.Label.Constraint == datastore.Required {
-			queryStr += fmt.Sprintf(" AND label = :%s", paramName)
-		} else {
-			queryStr += fmt.Sprintf(" AND (label = :%s OR label IS NULL)", paramName)
-		}
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: query.Label.Item},
-		})
-		paramIdx++
-	}
-
-	if query.Target != nil && query.Target.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("target_%d", paramIdx)
-		if query.Target.Constraint == datastore.Required {
-			queryStr += fmt.Sprintf(" AND target = :%s", paramName)
-		} else {
-			queryStr += fmt.Sprintf(" AND (target = :%s OR target IS NULL)", paramName)
-		}
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: query.Target.Item},
-		})
-		paramIdx++
-	}
-
-	if query.Managed != nil && query.Managed.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("managed_%d", paramIdx)
-		if query.Managed.Constraint == datastore.Required {
-			queryStr += fmt.Sprintf(" AND managed = :%s", paramName)
-		}
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberBooleanValue{Value: query.Managed.Item},
-		})
-	}
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "native_id", "native_id", false, query.NativeID)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "stack", "stack", false, query.Stack)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "type", "type", true, query.Type)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "label", "label", false, query.Label)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "target", "target", false, query.Target)
+	queryStr, params, _ = appendAuroraBoolClause(queryStr, params, paramIdx, "managed", "managed", query.Managed)
 
 	queryStr += " ORDER BY type, label"
 
@@ -2447,31 +2474,9 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 	params := []types.SqlParameter{}
 	paramIdx := 1
 
-	if targetQuery.Label != nil && targetQuery.Label.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("label_%d", paramIdx)
-		queryStr += fmt.Sprintf(" AND label = :%s", paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: targetQuery.Label.Item},
-		})
-		paramIdx++
-	}
-
-	if targetQuery.Namespace != nil && targetQuery.Namespace.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("namespace_%d", paramIdx)
-		queryStr += fmt.Sprintf(" AND namespace = :%s", paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: targetQuery.Namespace.Item},
-		})
-		paramIdx++
-	}
-
-	if targetQuery.Discoverable != nil && targetQuery.Discoverable.Constraint != datastore.Excluded {
-		paramName := fmt.Sprintf("discoverable_%d", paramIdx)
-		queryStr += fmt.Sprintf(" AND discoverable = :%s", paramName)
-		params = append(params, types.SqlParameter{
-			Name: aws.String(paramName), Value: &types.FieldMemberBooleanValue{Value: targetQuery.Discoverable.Item},
-		})
-	}
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "label", "label", false, targetQuery.Label)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "namespace", "namespace", false, targetQuery.Namespace)
+	queryStr, params, _ = appendAuroraBoolClause(queryStr, params, paramIdx, "discoverable", "discoverable", targetQuery.Discoverable)
 
 	queryStr += " ORDER BY label"
 

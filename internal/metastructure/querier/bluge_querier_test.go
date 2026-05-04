@@ -258,6 +258,155 @@ func TestBlugeQuerier_resourceQuery_ExcludedStack(t *testing.T) {
 	assert.Equal(t, expectedResourceQuery, resourceQuery)
 }
 
+func TestBlugeQuerier_resourceQuery_RepeatedFieldIsMultiValue(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "stack:alpha stack:beta"
+	expected := &datastore.ResourceQuery{
+		Stack: &datastore.QueryItem[string]{
+			Item:       "alpha",
+			ExtraItems: []string{"beta"},
+			Constraint: datastore.Optional,
+		},
+	}
+
+	got, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
+func TestBlugeQuerier_resourceQuery_RepeatedExcludedField(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "-stack:alpha -stack:beta"
+	expected := &datastore.ResourceQuery{
+		Stack: &datastore.QueryItem[string]{
+			Item:       "alpha",
+			ExtraItems: []string{"beta"},
+			Constraint: datastore.Excluded,
+		},
+	}
+
+	got, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
+// Bluge's query_string library wraps any term containing `*` or `?` in a
+// *bluge.WildcardQuery before our walker sees it. The walker has to unwrap
+// it back to a plain field/value with the `*` preserved so the SQL renderer
+// can translate to LIKE.
+func TestBlugeQuerier_resourceQuery_TrailingWildcard(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "label:prod-*"
+	expected := &datastore.ResourceQuery{
+		Label: &datastore.QueryItem[string]{
+			Item:       "prod-*",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	got, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
+// `::` in resource type values needs the QueryResources escape to survive
+// Bluge's tokenizer, then come back out alongside the wildcard. Verify the
+// full path end-to-end.
+func TestBlugeQuerier_QueryResources_TypeWithWildcardSurvivesColonEscape(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		ds := newTestDatastoreSQLite()
+		querier := NewBlugeQuerier(ds)
+
+		stack := &pkgmodel.Forma{
+			Resources: []pkgmodel.Resource{
+				{Label: "bucket-a", Type: "AWS::S3::Bucket", Stack: "test", Properties: json.RawMessage(`{}`)},
+				{Label: "instance-a", Type: "AWS::EC2::Instance", Stack: "test", Properties: json.RawMessage(`{}`)},
+			},
+		}
+		for i := range stack.Resources {
+			_, err := ds.StoreResource(&stack.Resources[i], "test")
+			assert.NoError(t, err)
+		}
+
+		results, err := querier.QueryResources("type:AWS::S3::*")
+		assert.NoError(t, err)
+		assert.Len(t, results, 1)
+		if len(results) == 1 {
+			assert.Equal(t, "bucket-a", results[0].Label)
+		}
+	})
+}
+
+func TestBlugeQuerier_resourceQuery_LeadingWildcard(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "label:*-prod"
+	expected := &datastore.ResourceQuery{
+		Label: &datastore.QueryItem[string]{
+			Item:       "*-prod",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	got, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
+// `?` (single-char wildcard) has no clean SQL LIKE equivalent (would need _
+// which conflicts with the literal-character escape). Reject it.
+func TestBlugeQuerier_resourceQuery_QuestionMarkRejected(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	_, err := querier.resourceQuery("label:foo?")
+	assert.Error(t, err)
+}
+
+// Bare `*` alone matches everything, almost always user error — reject it.
+func TestBlugeQuerier_resourceQuery_BareWildcardRejected(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	_, err := querier.resourceQuery("label:*")
+	assert.Error(t, err)
+}
+
+// `*foo*` (substring), `foo*bar` (middle), and other multi-star patterns map
+// cleanly to SQL LIKE (`%foo%`, `foo%bar`). Accept them.
+func TestBlugeQuerier_resourceQuery_SubstringWildcard(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "label:*foo*"
+	expected := &datastore.ResourceQuery{
+		Label: &datastore.QueryItem[string]{
+			Item:       "*foo*",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	got, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
+func TestBlugeQuerier_resourceQuery_MiddleWildcard(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "label:foo*bar"
+	expected := &datastore.ResourceQuery{
+		Label: &datastore.QueryItem[string]{
+			Item:       "foo*bar",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	got, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
 func newTestCfg() *pkgmodel.DatastoreConfig {
 	return &pkgmodel.DatastoreConfig{
 		DatastoreType: pkgmodel.SqliteDatastore,
