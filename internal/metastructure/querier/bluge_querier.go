@@ -86,9 +86,43 @@ func (b *BlugeQuerier) processStatusQueryNode(q bluge.Query, sq *datastore.Statu
 		return nil
 	case *bluge.MatchQuery:
 		return b.assignTermToStatusQuery(v.Field(), v.Match(), sq, clientID, constraint)
+	case *bluge.WildcardQuery:
+		field, value, err := unwrapWildcard(v)
+		if err != nil {
+			return err
+		}
+		return b.assignTermToStatusQuery(field, value, sq, clientID, constraint)
 	default:
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unsupported query type: %T", q)}
 	}
+}
+
+// unwrapWildcard validates a Bluge WildcardQuery and returns the field plus
+// the wildcard string with `*` preserved. The SQL renderer translates `foo*`
+// or `*foo` into a LIKE pattern.
+//
+// Only leading or trailing `*` is supported. Single-char `?`, middle `*`, and
+// multi-`*` patterns are rejected at parse time — these are documented as
+// "coming soon" in the --query flag annotations and silently mistranslating
+// them would surprise users.
+func unwrapWildcard(w *bluge.WildcardQuery) (string, string, error) {
+	value := w.Wildcard()
+	if strings.Contains(value, "?") {
+		return "", "", apimodel.InvalidQueryError{Reason: fmt.Sprintf("'?' wildcard is not yet supported: %q", value)}
+	}
+	starCount := strings.Count(value, "*")
+	if starCount == 0 {
+		// No wildcard char — Bluge shouldn't have produced WildcardQuery,
+		// but be defensive.
+		return w.Field(), value, nil
+	}
+	if starCount > 1 {
+		return "", "", apimodel.InvalidQueryError{Reason: fmt.Sprintf("only a single leading or trailing '*' is supported: %q", value)}
+	}
+	if !strings.HasPrefix(value, "*") && !strings.HasSuffix(value, "*") {
+		return "", "", apimodel.InvalidQueryError{Reason: fmt.Sprintf("'*' is only supported at the start or end of a value: %q", value)}
+	}
+	return w.Field(), value, nil
 }
 
 func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *datastore.StatusQuery, clientID string, constraint datastore.QueryItemConstraint) error {
@@ -98,18 +132,18 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 
 	switch strings.ToLower(field) {
 	case "id":
-		sq.CommandID = queryItem(value.(string), constraint)
+		sq.CommandID = appendStringValue(sq.CommandID, value.(string), constraint)
 	case "client":
 		if value == "me" {
 			value = clientID
 		}
-		sq.ClientID = queryItem(value.(string), constraint)
+		sq.ClientID = appendStringValue(sq.ClientID, value.(string), constraint)
 	case "command":
-		sq.Command = queryItem(value.(string), constraint)
+		sq.Command = appendStringValue(sq.Command, value.(string), constraint)
 	case "status":
-		sq.Status = queryItem(value.(string), constraint)
+		sq.Status = appendStringValue(sq.Status, value.(string), constraint)
 	case "stack":
-		sq.Stack = queryItem(value.(string), constraint)
+		sq.Stack = appendStringValue(sq.Stack, value.(string), constraint)
 	case "managed":
 		sq.Managed = queryItem(value.(bool), constraint)
 	default:
@@ -194,6 +228,12 @@ func (b *BlugeQuerier) processResourceQueryNode(q bluge.Query, rq *datastore.Res
 		return nil
 	case *bluge.MatchQuery:
 		return b.assignTermToResourceQuery(v.Field(), v.Match(), rq, constraint)
+	case *bluge.WildcardQuery:
+		field, value, err := unwrapWildcard(v)
+		if err != nil {
+			return err
+		}
+		return b.assignTermToResourceQuery(field, value, rq, constraint)
 	default:
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unsupported query type: %T", q)}
 	}
@@ -206,11 +246,11 @@ func (b *BlugeQuerier) assignTermToResourceQuery(field string, value any, rq *da
 
 	switch strings.ToLower(field) {
 	case "stack":
-		rq.Stack = queryItem(value.(string), constraint)
+		rq.Stack = appendStringValue(rq.Stack, value.(string), constraint)
 	case "type":
-		rq.Type = queryItem(value.(string), constraint)
+		rq.Type = appendStringValue(rq.Type, value.(string), constraint)
 	case "label":
-		rq.Label = queryItem(value.(string), constraint)
+		rq.Label = appendStringValue(rq.Label, value.(string), constraint)
 	case "managed":
 		boolVal, err := strconv.ParseBool(fmt.Sprintf("%v", value))
 		if err != nil {
@@ -221,6 +261,21 @@ func (b *BlugeQuerier) assignTermToResourceQuery(field string, value any, rq *da
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unknown field for ResourceQuery: '%s'", field)}
 	}
 	return nil
+}
+
+// appendStringValue accumulates string values for a single field. The first
+// occurrence sets Item; subsequent occurrences with the same constraint
+// append to ExtraItems. This is how multi-value queries like
+// `target:eu target:us` (target IN ('eu','us')) are captured.
+//
+// A new constraint replaces the prior QueryItem entirely — `stack:a +stack:b`
+// is treated as the user replacing their previous filter, not mixing them.
+func appendStringValue(existing *datastore.QueryItem[string], value string, constraint datastore.QueryItemConstraint) *datastore.QueryItem[string] {
+	if existing == nil || existing.Constraint != constraint {
+		return queryItem(value, constraint)
+	}
+	existing.ExtraItems = append(existing.ExtraItems, value)
+	return existing
 }
 
 func (b *BlugeQuerier) QueryResourcesForDestroy(queryString string) ([]*pkgmodel.Resource, error) {
@@ -288,6 +343,12 @@ func (b *BlugeQuerier) processDestroyResourcesQueryNode(q bluge.Query, dq *datas
 		return nil
 	case *bluge.MatchQuery:
 		return b.assignTermToDestroyResourcesQuery(v.Field(), v.Match(), dq, constraint)
+	case *bluge.WildcardQuery:
+		field, value, err := unwrapWildcard(v)
+		if err != nil {
+			return err
+		}
+		return b.assignTermToDestroyResourcesQuery(field, value, dq, constraint)
 	default:
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unsupported query type: %T", q)}
 	}
@@ -300,15 +361,15 @@ func (b *BlugeQuerier) assignTermToDestroyResourcesQuery(field string, value any
 
 	switch strings.ToLower(field) {
 	case "stack":
-		dq.Stack = queryItem(value.(string), constraint)
+		dq.Stack = appendStringValue(dq.Stack, value.(string), constraint)
 	case "type":
-		dq.Type = queryItem(value.(string), constraint)
+		dq.Type = appendStringValue(dq.Type, value.(string), constraint)
 	case "label":
-		dq.Label = queryItem(value.(string), constraint)
+		dq.Label = appendStringValue(dq.Label, value.(string), constraint)
 	case "target":
-		dq.Target = queryItem(value.(string), constraint)
+		dq.Target = appendStringValue(dq.Target, value.(string), constraint)
 	case "native_id":
-		dq.NativeID = queryItem(value.(string), constraint)
+		dq.NativeID = appendStringValue(dq.NativeID, value.(string), constraint)
 	case "managed":
 		return apimodel.InvalidQueryError{Reason: "managed field cannot be used in destroy queries"}
 	default:

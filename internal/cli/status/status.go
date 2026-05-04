@@ -83,7 +83,7 @@ func CommandCmd() *cobra.Command {
 
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().String("query", " ", "Query that allows to find past and current commands by their attributes")
+	command.Flags().String("query", " ", "Query that allows to find past and current commands by their attributes. Use * as wildcard at start or end. ?, regex, and middle-wildcards are not yet supported and coming soon.")
 	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("output-layout", string(StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", StatusOutputSummary, StatusOutputDetailed))
 	command.Flags().Int("max-results", 10, "Maximum number of command results to return when using a query")

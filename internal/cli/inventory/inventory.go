@@ -72,7 +72,7 @@ func resourcesCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	command.Flags().String("query", "", "Query that allows to find resources by their attributes")
+	command.Flags().String("query", "", "Query that allows to find resources by their attributes. Use * as wildcard at start or end. ?, regex, and middle-wildcards are not yet supported and coming soon.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of resources to display in the table (0 = unlimited)")
@@ -177,7 +177,7 @@ func targetsCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	command.Flags().String("query", "", "Query that allows to find targets by their attributes (e.g., 'namespace:AWS', 'discoverable:true', 'label:prod-us-east-1')")
+	command.Flags().String("query", "", "Query that allows to find targets by their attributes (e.g., 'namespace:AWS', 'discoverable:true', 'label:prod-us-east-1'). Use * as wildcard at start or end. ?, regex, and middle-wildcards are not yet supported and coming soon.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of targets to display in the table (0 = unlimited)")

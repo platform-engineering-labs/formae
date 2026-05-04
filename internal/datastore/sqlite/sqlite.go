@@ -621,35 +621,135 @@ func closeRows(rows *sql.Rows) {
 	}
 }
 
+// extendSQLiteQueryString appends a WHERE clause to queryStr for the given
+// query item.
+//
+// sqlPart is a template that takes one %s — the comparison operator — and
+// includes a literal `?` placeholder. Examples:
+//
+//	" AND command_id %s ?"
+//	" AND LOWER(command) %s LOWER(?)"
+//	" AND EXISTS (SELECT 1 FROM resource_updates ru ... AND ru.stack_label %s ?)"
+//
+// For multi-valued items (Item + ExtraItems) the inner clause is replicated
+// once per value and joined with OR (or AND when the constraint is Excluded
+// — i.e. -stack:a -stack:b means "neither a nor b").
+//
+// String values may carry leading or trailing `*` for wildcard matching:
+// `foo*` → `LIKE 'foo%'`, `*foo` → `LIKE '%foo'`. Internal `_` and `%` in the
+// matched value are escaped with `\` (paired with `ESCAPE '\'` on the LIKE).
 func extendSQLiteQueryString[T any](queryStr string, queryItem *datastore.QueryItem[T], sqlPart string, args *[]any) string {
-	if queryItem != nil {
-		var operator string
+	if queryItem == nil {
+		return queryStr
+	}
 
-		if queryItem.Constraint == datastore.Excluded {
-			operator = "!="
-		} else if queryItem.Constraint == datastore.Required || queryItem.Constraint == datastore.Optional {
-			operator = "="
-		}
+	values := allQueryItemValues(queryItem)
+	if len(values) == 0 {
+		return queryStr
+	}
 
-		queryStr += fmt.Sprintf(sqlPart, operator)
-		operand := ""
-		switch v := any(queryItem.Item).(type) {
-		case bool:
-			if v {
-				operand = "1"
-			} else {
-				operand = "0"
-			}
-		case string:
-			operand = v
-		default:
-			operand = fmt.Sprintf("%v", v)
-		}
+	isExcluded := queryItem.Constraint == datastore.Excluded
 
+	// Single value: keep the original template-driven path. Avoids reformatting
+	// when no multi-value or wildcard handling is needed.
+	if len(values) == 1 {
+		op, operand, _ := sqlOpAndOperand(values[0], isExcluded)
+		queryStr += fmt.Sprintf(sqlPart, op)
+		*args = append(*args, operand)
+		return queryStr
+	}
+
+	// Multi-value: replicate the template's inner clause once per value, join
+	// with OR (or AND for Excluded), wrap in parens, and re-prepend " AND ".
+	innerTemplate := strings.TrimPrefix(sqlPart, " AND ")
+	clauses := make([]string, 0, len(values))
+	for _, v := range values {
+		op, operand, _ := sqlOpAndOperand(v, isExcluded)
+		clauses = append(clauses, fmt.Sprintf(innerTemplate, op))
 		*args = append(*args, operand)
 	}
 
-	return queryStr
+	glue := " OR "
+	if isExcluded {
+		glue = " AND "
+	}
+	return queryStr + " AND (" + strings.Join(clauses, glue) + ")"
+}
+
+// allQueryItemValues flattens a QueryItem's Item and ExtraItems into a single
+// slice. Returns []any to handle both string and bool fields uniformly.
+func allQueryItemValues[T any](qi *datastore.QueryItem[T]) []any {
+	values := make([]any, 0, 1+len(qi.ExtraItems))
+	values = append(values, any(qi.Item))
+	for _, e := range qi.ExtraItems {
+		values = append(values, any(e))
+	}
+	return values
+}
+
+// sqlOpAndOperand resolves the SQL operator and bound value for one query
+// term, accounting for exclusion and wildcard `*` prefix/suffix on strings.
+// The third return value is whether the operator uses LIKE (vs =) — useful
+// for callers that need to know.
+func sqlOpAndOperand(v any, isExcluded bool) (op string, operand any, isLike bool) {
+	s, isString := v.(string)
+	if !isString {
+		// Bool path mirrors the original switch: true→"1", false→"0".
+		if b, ok := v.(bool); ok {
+			if b {
+				return eqOp(isExcluded), "1", false
+			}
+			return eqOp(isExcluded), "0", false
+		}
+		return eqOp(isExcluded), fmt.Sprintf("%v", v), false
+	}
+
+	prefix := strings.HasPrefix(s, "*")
+	suffix := strings.HasSuffix(s, "*") && len(s) > 1
+	if !prefix && !suffix {
+		return eqOp(isExcluded), s, false
+	}
+
+	likeOp := "LIKE"
+	if isExcluded {
+		likeOp = "NOT LIKE"
+	}
+	return likeOp, sqlLikePattern(s, prefix, suffix), true
+}
+
+func eqOp(isExcluded bool) string {
+	if isExcluded {
+		return "!="
+	}
+	return "="
+}
+
+// sqlLikePattern translates a value with leading/trailing `*` into a SQL LIKE
+// pattern: `foo*` → `foo%`, `*foo` → `%foo`, `*foo*` → `%foo%`. Internal `%`
+// and `_` (LIKE special chars) are escaped with `\`. Callers should use
+// LIKE ... ESCAPE '\' if user-supplied values can contain those characters,
+// but for the values formae stores (resource types, stack labels, etc.) this
+// is defensive.
+func sqlLikePattern(s string, prefix, suffix bool) string {
+	inner := s
+	if prefix {
+		inner = strings.TrimPrefix(inner, "*")
+	}
+	if suffix {
+		inner = strings.TrimSuffix(inner, "*")
+	}
+	inner = strings.ReplaceAll(inner, "\\", "\\\\")
+	inner = strings.ReplaceAll(inner, "%", "\\%")
+	inner = strings.ReplaceAll(inner, "_", "\\_")
+
+	out := inner
+	if prefix {
+		out = "%" + out
+	}
+	if suffix {
+		out = out + "%"
+	}
+	return out
 }
 
 func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {

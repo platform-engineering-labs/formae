@@ -89,7 +89,7 @@ func DestroyCmd() *cobra.Command {
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
-	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Only used when no forma file is provided.")
+	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Only used when no forma file is provided. Use * as wildcard at start or end. ?, regex, and middle-wildcards are not yet supported and coming soon.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the result output (json | yaml)")
 	command.Flags().Bool("simulate", false, "Simulate the command rather than make actual changes")

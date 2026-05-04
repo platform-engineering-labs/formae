@@ -68,7 +68,7 @@ func ExtractCmd() *cobra.Command {
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
-	command.Flags().String("query", " ", "Query that allows to find resources by their attributes")
+	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Use * as wildcard at start or end. ?, regex, and middle-wildcards are not yet supported and coming soon.")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
 	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
 	command.Flags().String("schema-location", "remote", "How plugin PKL schemas are referenced in the generated PklProject. 'remote' (default) emits package:// URIs that PKL fetches from the hub. 'local' emits local file imports against the agent's on-disk PklProject paths; requires CLI and agent to share a filesystem.")
