@@ -259,6 +259,11 @@ func getOOBDeleteTimeout() time.Duration {
 //   - FORMAE_TEST_OOB_DELETE_TIMEOUT: Timeout in minutes for the OOB-delete phase's
 //     wait-for-inventory-removal step (optional). Default is 2 minutes. Raise
 //     for slow backends (e.g. managed Kubernetes).
+//   - FORMAE_TEST_TESTDATA_DIR: Override the directory containing test PKL files
+//     (optional). Absolute paths are used as-is; relative paths are resolved
+//     against the plugin directory. Defaults to "testdata". When the override
+//     points at a subdirectory without its own PklProject, the nearest ancestor
+//     containing one is used for `pkl project resolve`.
 //
 // This function should be called from a plugin's conformance_test.go:
 //
