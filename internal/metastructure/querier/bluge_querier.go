@@ -211,6 +211,8 @@ func (b *BlugeQuerier) assignTermToResourceQuery(field string, value any, rq *da
 		rq.Type = queryItem(value.(string), constraint)
 	case "label":
 		rq.Label = queryItem(value.(string), constraint)
+	case "target":
+		rq.Target = queryItem(value.(string), constraint)
 	case "managed":
 		boolVal, err := strconv.ParseBool(fmt.Sprintf("%v", value))
 		if err != nil {
