@@ -2016,3 +2016,169 @@ func TestGeneratePatch_NestedListContentChange_StillReplaces(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, createOnlyPatch, "real content change inside a nested list must still trigger replacement")
 }
+
+// TestGeneratePatch_HasProviderDefault_PlainListing_FieldAbsent demonstrates
+// the fix for the TargetGroup.targets drift bug
+// (~/dev/personal/engineering-notes/formae/2026-04-25-targetgroup-attributes-spurious-update.md).
+//
+// When a hasProviderDefault Listing is omitted by the user, the strip pass
+// (removeProviderDefaultFields) must drop the field from the document so
+// jsonpatch sees nothing on either side. This test simulates the post-revert
+// PKL output (no "Targets" key at all in the patch JSON).
+//
+// Pre-revert, PKL emitted "Targets": []. The strip pass observed Targets
+// "present" in the patch and skipped, so the diff emitted a spurious remove
+// for runtime-registered entries (ECS-managed targets).
+func TestGeneratePatch_HasProviderDefault_PlainListing_FieldAbsent(t *testing.T) {
+	document := []byte(`{
+		"Name": "my-tg",
+		"Targets": [
+			{"Id": "10.100.2.47", "Port": 3000, "AvailabilityZone": "us-west-2b"}
+		]
+	}`)
+
+	// Simulates the reverted renderer: user omitted Targets, so it's absent
+	// from the patch JSON (not present as []).
+	patch := []byte(`{
+		"Name": "my-tg"
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Targets"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Targets": {HasProviderDefault: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "user omitted hasProviderDefault Listing — strip pass must suppress remove ops for runtime-registered entries")
+}
+
+// TestGeneratePatch_HasProviderDefault_PlainListing_PR269Rendering pins the
+// pre-revert (broken) rendering. With "Targets": [] in the patch, the strip
+// pass cannot fire, and a spurious remove op is emitted for the runtime
+// entry. Asserts the bug shape so we don't accidentally re-introduce the PKL
+// rendering. After the revert + correct PKL output, generatePatch should
+// never receive this shape — but if some other caller did, this is what
+// would happen.
+func TestGeneratePatch_HasProviderDefault_PlainListing_PR269Rendering(t *testing.T) {
+	document := []byte(`{
+		"Name": "my-tg",
+		"Targets": [
+			{"Id": "10.100.2.47", "Port": 3000, "AvailabilityZone": "us-west-2b"}
+		]
+	}`)
+
+	// Simulates the pre-revert renderer: explicit empty Listing in the patch.
+	patch := []byte(`{
+		"Name": "my-tg",
+		"Targets": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Targets"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Targets": {HasProviderDefault: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+
+	// Document the bug shape: explicit empty Listing in patch + runtime entry
+	// in document → spurious remove op.
+	require.NotEmpty(t, patchDoc, "explicit empty Listing in patch is interpreted as 'user wants to clear' — remove op IS emitted")
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1)
+	assert.Equal(t, "remove", ops[0].Operation, "with explicit empty in patch, jsonpatch emits a remove for the live entry")
+}
+
+// TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserOmits_PostRevert
+// pins the current (post-revert) behavior of removeProviderDefaultEntitySetElements
+// when the user omits an EntitySet+hasProviderDefault field entirely.
+//
+// PR #337's filter has a branch (patch_document.go:320-326) that deletes the
+// entire docMap[field] when the desired-side has no array under that key. With
+// the revert, "user omits tags" produces a patch JSON with no "Tags" key, so
+// the entire live tag array is dropped before jsonpatch sees it — meaning
+// OOB-added tags are NOT removed during reconcile.
+//
+// PR #269 was originally justified by enabling exactly this remove. With this
+// test passing as written, the post-revert behavior matches pre-#269 behavior
+// (OOB tags persist when user omits the field).
+//
+// If we want OOB tag drift removal back, the fix is NOT in PKL rendering — it
+// requires either (a) removing hasProviderDefault from the Tags annotation in
+// the AWS plugin, (b) changing PR #337's empty-desired branch, or (c) a new
+// hint that distinguishes "API-limit suppression" from "drift tolerance."
+func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserOmits_PostRevert(t *testing.T) {
+	document := []byte(`{
+		"Name": "my-tg",
+		"Tags": [
+			{"Key": "oob-tag", "Value": "added-out-of-band"}
+		]
+	}`)
+
+	// Simulates the post-revert renderer: user omitted tags, so no "Tags" key
+	// in the patch JSON.
+	patch := []byte(`{
+		"Name": "my-tg"
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {
+				HasProviderDefault: true,
+				UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+				IndexField:         "Key",
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "characterization: with hasProviderDefault on an EntitySet, OOB-added entries are NOT removed when user omits — see test docstring for the open question")
+}
+
+// TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserDeclaresOne pins
+// behavior when the user declares some elements but the live side has extras.
+// PR #337's filter strips the unmatched live entries before jsonpatch — so
+// user-declared OOB tags are tolerated, not removed. Documenting the shape so
+// follow-up work has a clear before/after.
+func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserDeclaresOne(t *testing.T) {
+	document := []byte(`{
+		"Name": "my-tg",
+		"Tags": [
+			{"Key": "user-declared", "Value": "kept"},
+			{"Key": "oob-tag", "Value": "added-out-of-band"}
+		]
+	}`)
+	patch := []byte(`{
+		"Name": "my-tg",
+		"Tags": [
+			{"Key": "user-declared", "Value": "kept"}
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {
+				HasProviderDefault: true,
+				UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+				IndexField:         "Key",
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "characterization: with hasProviderDefault on an EntitySet, OOB-added entries are tolerated even when user declares others")
+}
