@@ -15,15 +15,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func writeFakePlugin(t *testing.T, root, name, version string) {
+	t.Helper()
+	configDir := filepath.Join(root, name, version, "schema")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(configDir, "Config.pkl"),
+		[]byte("open module "+name+".Config\n"),
+		0644,
+	))
+}
+
 func TestGeneratePluginWrappers_CreatesWrapperForPluginWithSchema(t *testing.T) {
 	pluginDir := t.TempDir()
+	writeFakePlugin(t, pluginDir, "auth-basic", "v0.1.0")
 
-	// Create a fake plugin with schema/Config.pkl
-	configDir := filepath.Join(pluginDir, "auth-basic", "v0.1.0", "schema")
-	require.NoError(t, os.MkdirAll(configDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "Config.pkl"), []byte("open module authBasic.Config\n"), 0644))
-
-	err := GeneratePluginWrappers(pluginDir)
+	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
 	require.NoError(t, err)
 
 	wrapperPath := filepath.Join(pluginDir, "AuthBasic.pkl")
@@ -37,11 +44,9 @@ func TestGeneratePluginWrappers_CreatesWrapperForPluginWithSchema(t *testing.T) 
 func TestGeneratePluginWrappers_SkipsPluginsWithoutSchema(t *testing.T) {
 	pluginDir := t.TempDir()
 
-	// Create a plugin directory without schema/Config.pkl
 	require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, "aws", "v0.1.3", "schema"), 0755))
-	// No Config.pkl written
 
-	err := GeneratePluginWrappers(pluginDir)
+	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
 	require.NoError(t, err)
 
 	wrapperPath := filepath.Join(pluginDir, "Aws.pkl")
@@ -52,7 +57,7 @@ func TestGeneratePluginWrappers_SkipsPluginsWithoutSchema(t *testing.T) {
 func TestGeneratePluginWrappers_EmptyDir(t *testing.T) {
 	pluginDir := t.TempDir()
 
-	err := GeneratePluginWrappers(pluginDir)
+	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
 	require.NoError(t, err)
 
 	entries, err := os.ReadDir(pluginDir)
@@ -63,14 +68,11 @@ func TestGeneratePluginWrappers_EmptyDir(t *testing.T) {
 func TestGeneratePluginWrappers_PicksHighestVersion(t *testing.T) {
 	pluginDir := t.TempDir()
 
-	// Create two versions — only v0.2.0 has Config.pkl but both are version dirs
 	for _, ver := range []string{"v0.1.0", "v0.2.0"} {
-		configDir := filepath.Join(pluginDir, "my-plugin", ver, "schema")
-		require.NoError(t, os.MkdirAll(configDir, 0755))
-		require.NoError(t, os.WriteFile(filepath.Join(configDir, "Config.pkl"), []byte("open module myPlugin.Config\n"), 0644))
+		writeFakePlugin(t, pluginDir, "my-plugin", ver)
 	}
 
-	err := GeneratePluginWrappers(pluginDir)
+	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
 	require.NoError(t, err)
 
 	content, err := os.ReadFile(filepath.Join(pluginDir, "MyPlugin.pkl"))
@@ -82,12 +84,86 @@ func TestGeneratePluginWrappers_PicksHighestVersion(t *testing.T) {
 func TestGeneratePluginWrappers_SkipsNonDirectoryEntries(t *testing.T) {
 	pluginDir := t.TempDir()
 
-	// Create a regular file in the plugin directory
 	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "readme.txt"), []byte("not a plugin"), 0644))
 
-	err := GeneratePluginWrappers(pluginDir)
+	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
 	require.NoError(t, err)
-	// No panic, no error — just skipped
+}
+
+func TestGeneratePluginWrappers_FollowsSymlinkedPluginDir(t *testing.T) {
+	wrapperDir := t.TempDir()
+	source := t.TempDir()
+
+	writeFakePlugin(t, source, "aws", "v0.1.6")
+	require.NoError(t, os.Symlink(filepath.Join(source, "aws"), filepath.Join(wrapperDir, "aws")))
+
+	err := GeneratePluginWrappers(wrapperDir, []string{wrapperDir})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(wrapperDir, "Aws.pkl"))
+	require.NoError(t, err, "wrapper must be generated even when the plugin dir is a symlink")
+	assert.Contains(t, string(content), `extends "./aws/v0.1.6/schema/Config.pkl"`)
+}
+
+func TestGeneratePluginWrappers_MergesMultipleDirsDevWins(t *testing.T) {
+	wrapperDir := t.TempDir()
+	systemDir := t.TempDir()
+
+	writeFakePlugin(t, wrapperDir, "aws", "v0.1.6")
+	writeFakePlugin(t, systemDir, "aws", "v9.9.9")
+	writeFakePlugin(t, systemDir, "azure", "v0.2.0")
+
+	err := GeneratePluginWrappers(wrapperDir, []string{wrapperDir, systemDir})
+	require.NoError(t, err)
+
+	awsContent, err := os.ReadFile(filepath.Join(wrapperDir, "Aws.pkl"))
+	require.NoError(t, err)
+	assert.Contains(t, string(awsContent), `extends "./aws/v0.1.6/schema/Config.pkl"`,
+		"dev plugin under wrapperDir must win over the system version")
+
+	azureContent, err := os.ReadFile(filepath.Join(wrapperDir, "Azure.pkl"))
+	require.NoError(t, err)
+	expected := "file://" + filepath.Join(systemDir, "azure", "v0.2.0", "schema", "Config.pkl")
+	assert.Contains(t, string(azureContent), `extends "`+expected+`"`,
+		"plugins outside wrapperDir must use absolute file:// URIs")
+}
+
+func TestGeneratePluginWrappers_SkipsEmptyAndMissingDirs(t *testing.T) {
+	wrapperDir := t.TempDir()
+	writeFakePlugin(t, wrapperDir, "aws", "v0.1.6")
+
+	err := GeneratePluginWrappers(wrapperDir, []string{"", "/does/not/exist", wrapperDir})
+	require.NoError(t, err)
+
+	_, err = os.Stat(filepath.Join(wrapperDir, "Aws.pkl"))
+	require.NoError(t, err)
+}
+
+func TestGeneratePluginWrappers_RemovesStaleAutoGeneratedWrappers(t *testing.T) {
+	wrapperDir := t.TempDir()
+	writeFakePlugin(t, wrapperDir, "aws", "v0.1.6")
+
+	// First run produces Aws.pkl.
+	require.NoError(t, GeneratePluginWrappers(wrapperDir, []string{wrapperDir}))
+	require.FileExists(t, filepath.Join(wrapperDir, "Aws.pkl"))
+
+	// Plugin disappears; a second run must remove the stale wrapper.
+	require.NoError(t, os.RemoveAll(filepath.Join(wrapperDir, "aws")))
+	require.NoError(t, GeneratePluginWrappers(wrapperDir, []string{wrapperDir}))
+
+	_, err := os.Stat(filepath.Join(wrapperDir, "Aws.pkl"))
+	assert.True(t, os.IsNotExist(err), "stale auto-generated wrapper should have been removed")
+}
+
+func TestGeneratePluginWrappers_PreservesHandWrittenWrappers(t *testing.T) {
+	wrapperDir := t.TempDir()
+	handWritten := filepath.Join(wrapperDir, "Custom.pkl")
+	require.NoError(t, os.WriteFile(handWritten, []byte("amends \"foo:/Bar.pkl\"\n"), 0644))
+
+	require.NoError(t, GeneratePluginWrappers(wrapperDir, []string{wrapperDir}))
+
+	_, err := os.Stat(handWritten)
+	assert.NoError(t, err, "hand-written wrapper without auto-generated header must not be deleted")
 }
 
 func TestToPascalCase(t *testing.T) {
@@ -112,10 +188,8 @@ func TestToPascalCase(t *testing.T) {
 func TestFindHighestVersionDir(t *testing.T) {
 	dir := t.TempDir()
 
-	// No version dirs
 	assert.Equal(t, "", findHighestVersionDir(dir))
 
-	// Add some version dirs
 	for _, v := range []string{"v0.1.0", "v0.2.0", "v0.1.5"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, v), 0755))
 	}
