@@ -330,7 +330,8 @@ type model struct {
 	queryText    string  // current active query
 	queryEdit    string  // query being edited (when focused)
 	queryFocused bool    // is the query bar focused for editing
-	spinner    spinner.Model
+	spinner    spinner.Model // calm fade pulse — for healthy in-progress
+	failSpin   spinner.Model // harsh blink — for failing in-progress
 	vp         viewport.Model
 	width      int
 	height     int
@@ -340,9 +341,22 @@ type model struct {
 
 func newModel() *model {
 	th := theme.New("formae")
+
+	// Healthy spinner: gentle fade pulse — solid → outlined → empty → outlined
 	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(th.Palette.InProgress)
+	s.Spinner = spinner.Spinner{
+		Frames: []string{"●", "◉", "○", "◉"},
+		FPS:    time.Second / 3,
+	}
+	s.Style = lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
+
+	// Failing spinner: harsh blink — demands attention
+	fs := spinner.New()
+	fs.Spinner = spinner.Spinner{
+		Frames: []string{"●", "●", " ", " "},
+		FPS:    time.Second / 4,
+	}
+	fs.Style = lipgloss.NewStyle().Foreground(th.Palette.Error)
 
 	cmds := fakeCommands()
 	sortCommands(cmds, 0, sortAsc) // default: status ascending (failed first, done last)
@@ -359,13 +373,14 @@ func newModel() *model {
 		groupVisibleCount:  map[updateKind]int{kindTarget: 10, kindStack: 10, kindPolicy: 10, kindResource: 10},
 		expanded:           make(map[int]bool),
 		spinner:  s,
+		failSpin: fs,
 		width:      80,
 		height:     24,
 	}
 }
 
 func (m *model) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(m.spinner.Tick, m.failSpin.Tick)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -586,9 +601,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	var cmd tea.Cmd
-	m.spinner, cmd = m.spinner.Update(msg)
-	return m, cmd
+	var cmd1, cmd2 tea.Cmd
+	m.spinner, cmd1 = m.spinner.Update(msg)
+	m.failSpin, cmd2 = m.failSpin.Update(msg)
+	return m, tea.Batch(cmd1, cmd2)
 }
 
 func (m *model) View() string {
@@ -850,36 +866,41 @@ func (m *model) renderCommandRow(cmd fakeCommand, w int, isCursor bool) string {
 			statusSym = padSym(withBg(lipgloss.NewStyle().Foreground(p.TextSecondary)).Render("✓"), 2)
 		}
 	case "InProgress":
-		// Get the raw frame character from the spinner
-		frames := m.spinner.Spinner.Frames
-		frameIdx := int(m.spinner.Style.GetWidth()) // hack: just use View and strip
-		_ = frameIdx
-		// Extract the visible character from the spinner view
-		spinView := m.spinner.View()
-		// Strip all ANSI escapes to get the raw character
-		raw := lipgloss.NewStyle().Render(spinView)
-		rawRunes := []rune{}
-		for _, r := range raw {
-			if r != '\033' {
-				rawRunes = append(rawRunes, r)
-			}
-		}
-		// Just use the frames directly based on a simple counter
-		frame := frames[0]
-		if len(frames) > 0 {
-			// The spinner view contains the styled frame - we need to find which frame
-			// Just render fresh with our own style
-			for _, f := range frames {
-				if strings.Contains(spinView, f) {
-					frame = f
-					break
-				}
-			}
-		}
-		style := lipgloss.NewStyle().Foreground(p.InProgress)
+		// Pick spinner: failing = harsh blink, healthy = calm fade pulse
+		// Extract the current frame from the right spinner view
+		var spinView string
+		var frames []string
 		if isFailing {
-			style = lipgloss.NewStyle().Foreground(p.Error)
+			spinView = m.failSpin.View()
+			frames = m.failSpin.Spinner.Frames
+		} else {
+			spinView = m.spinner.View()
+			frames = m.spinner.Spinner.Frames
 		}
+		frame := frames[0]
+		for _, f := range frames {
+			if strings.Contains(spinView, f) {
+				frame = f
+				break
+			}
+		}
+		// Color matches the row's first text column (ID = PrimaryAccent for healthy,
+		// Error for failing). Brighter when cursor.
+		var fg lipgloss.TerminalColor
+		if isFailing {
+			if isCursor {
+				fg = lipgloss.Color("#FCA5A5")
+			} else {
+				fg = p.Error
+			}
+		} else {
+			if isCursor {
+				fg = lipgloss.Color("#93C5FD")
+			} else {
+				fg = p.PrimaryAccent
+			}
+		}
+		style := lipgloss.NewStyle().Foreground(fg)
 		if isCursor {
 			style = style.Background(bg)
 		}
@@ -1356,7 +1377,7 @@ func (m *model) renderUpdateRowHighlightElastic(u fakeUpdate, w int, isCursor bo
 		case stateDone:
 			stateStr = lipgloss.NewStyle().Foreground(p.Done).Background(bg).Render("✓")
 		case stateInProgress:
-			// Extract spinner frame and render with proper color
+			// Calm fade pulse for resource in-progress, color matches label (blue)
 			spinView := m.spinner.View()
 			frames := m.spinner.Spinner.Frames
 			frame := frames[0]
@@ -1366,7 +1387,7 @@ func (m *model) renderUpdateRowHighlightElastic(u fakeUpdate, w int, isCursor bo
 					break
 				}
 			}
-			stateStr = lipgloss.NewStyle().Foreground(p.InProgress).Background(bg).Render(frame)
+			stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD")).Background(bg).Render(frame)
 		case statePending:
 			stateStr = lipgloss.NewStyle().Foreground(p.Pending).Background(bg).Render("○")
 		case stateFailed:
@@ -1821,7 +1842,17 @@ func (m *model) renderStateSymbol(u fakeUpdate) string {
 	case stateDone:
 		return lipgloss.NewStyle().Foreground(p.Done).Render("✓")
 	case stateInProgress:
-		return lipgloss.NewStyle().Foreground(p.InProgress).Render(m.spinner.View())
+		// Extract calm fade pulse frame and color it blue (matches Label color)
+		spinView := m.spinner.View()
+		frames := m.spinner.Spinner.Frames
+		frame := frames[0]
+		for _, f := range frames {
+			if strings.Contains(spinView, f) {
+				frame = f
+				break
+			}
+		}
+		return lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(frame)
 	case statePending:
 		return lipgloss.NewStyle().Foreground(p.Pending).Render("○")
 	case stateFailed:
