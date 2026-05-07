@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	pklgo "github.com/apple/pkl-go/pkl"
@@ -82,7 +83,10 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	}
 
 	// Step 2: Generate imports.pkl from PklProject dependencies
-	if err := p.generatePklFile(generatorDir, "ImportsGenerator.pkl", "imports.pkl"); err != nil {
+	importsProps := map[string]string{
+		"schemaVersions": formatSchemaVersions(options),
+	}
+	if err := p.generatePklFileWithProps(generatorDir, "ImportsGenerator.pkl", "imports.pkl", importsProps); err != nil {
 		return "", fmt.Errorf("failed to generate imports.pkl: %w", err)
 	}
 
@@ -147,6 +151,25 @@ func resolveIncludes(data *model.Forma, options *schema.SerializeOptions) []stri
 	return resolver.GetPackageStrings()
 }
 
+// formatSchemaVersions encodes options.SchemaVersions as a comma-separated
+// "pkg=ver,pkg=ver" string for the ImportsGenerator Pkl property. Returns ""
+// when no versions are set, in which case ImportsGenerator falls back to the
+// unrestricted "@<pkg>/**/*.pkl" glob.
+func formatSchemaVersions(options *schema.SerializeOptions) string {
+	if options == nil || len(options.SchemaVersions) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(options.SchemaVersions))
+	for k, v := range options.SchemaVersions {
+		if k == "" || v == "" {
+			continue
+		}
+		parts = append(parts, strings.ToLower(k)+"="+v)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
 // extractNamespaces extracts unique namespaces from the data.
 // It handles both *model.Resource and *model.Forma types.
 func extractNamespaces(data any) map[string]struct{} {
@@ -169,12 +192,27 @@ func extractNamespaces(data any) map[string]struct{} {
 // generatePklFile evaluates a PKL generator file and writes the output to a target file.
 // This is used in the multi-stage generation pipeline to create imports.pkl, resources.pkl, etc.
 func (p PKL) generatePklFile(generatorDir, generatorName, outputName string) error {
+	return p.generatePklFileWithProps(generatorDir, generatorName, outputName, nil)
+}
+
+// generatePklFileWithProps is generatePklFile but also injects external Pkl
+// properties into the evaluator. Used to thread per-call inputs (e.g. the
+// active schema version per package) into generator templates.
+func (p PKL) generatePklFileWithProps(generatorDir, generatorName, outputName string, props map[string]string) error {
 	evaluator, cleanup, err := newSafeProjectEvaluator(
 		context.Background(),
 		&url.URL{Scheme: "file", Path: generatorDir},
 		pklgo.PreconfiguredOptions,
 		func(opts *pklgo.EvaluatorOptions) {
 			opts.Logger = pklgo.NoopLogger
+			if len(props) > 0 {
+				if opts.Properties == nil {
+					opts.Properties = map[string]string{}
+				}
+				for k, v := range props {
+					opts.Properties[k] = v
+				}
+			}
 		},
 	)
 	if err != nil {
