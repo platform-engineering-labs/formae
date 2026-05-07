@@ -2017,19 +2017,16 @@ func TestGeneratePatch_NestedListContentChange_StillReplaces(t *testing.T) {
 	assert.NotEmpty(t, createOnlyPatch, "real content change inside a nested list must still trigger replacement")
 }
 
-// TestGeneratePatch_HasProviderDefault_PlainListing_FieldAbsent demonstrates
-// the fix for the TargetGroup.targets drift bug
-// (~/dev/personal/engineering-notes/formae/2026-04-25-targetgroup-attributes-spurious-update.md).
-//
-// When a hasProviderDefault Listing is omitted by the user, the strip pass
-// (removeProviderDefaultFields) must drop the field from the document so
-// jsonpatch sees nothing on either side. This test simulates the post-revert
-// PKL output (no "Targets" key at all in the patch JSON).
+// TestGeneratePatch_HasProviderDefault_PlainListing_NullDesired covers the
+// TargetGroup.targets drift case: when a hasProviderDefault Listing is omitted
+// by the user, the reverted PKL renderer emits the field as null. hasValue
+// drops the null, removeProviderDefaultFields then sees the field absent in
+// the patch and strips the matching live entries, leaving an empty diff.
 //
 // Pre-revert, PKL emitted "Targets": []. The strip pass observed Targets
 // "present" in the patch and skipped, so the diff emitted a spurious remove
 // for runtime-registered entries (ECS-managed targets).
-func TestGeneratePatch_HasProviderDefault_PlainListing_FieldAbsent(t *testing.T) {
+func TestGeneratePatch_HasProviderDefault_PlainListing_NullDesired(t *testing.T) {
 	document := []byte(`{
 		"Name": "my-tg",
 		"Targets": [
@@ -2037,10 +2034,10 @@ func TestGeneratePatch_HasProviderDefault_PlainListing_FieldAbsent(t *testing.T)
 		]
 	}`)
 
-	// Simulates the reverted renderer: user omitted Targets, so it's absent
-	// from the patch JSON (not present as []).
+	// Reverted renderer emits unset nullable Listing as null.
 	patch := []byte(`{
-		"Name": "my-tg"
+		"Name": "my-tg",
+		"Targets": null
 	}`)
 
 	schema := pkgmodel.Schema{
@@ -2123,10 +2120,10 @@ func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserOmits_PostRevert(t 
 		]
 	}`)
 
-	// Simulates the post-revert renderer: user omitted tags, so no "Tags" key
-	// in the patch JSON.
+	// Reverted renderer emits unset nullable Listing as null; hasValue drops it.
 	patch := []byte(`{
-		"Name": "my-tg"
+		"Name": "my-tg",
+		"Tags": null
 	}`)
 
 	schema := pkgmodel.Schema{
