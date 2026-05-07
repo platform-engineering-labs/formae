@@ -82,9 +82,14 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 		return "", fmt.Errorf("failed to initialize project: %w", err)
 	}
 
-	// Step 2: Generate imports.pkl from PklProject dependencies
+	// Step 2: Generate imports.pkl from PklProject dependencies. Resolve the
+	// per-namespace schema-version selection here (rather than in the App
+	// layer) so every caller of SerializeForma — CLI, tests, agents — gets
+	// versioned dispatch consistently without having to thread it through
+	// SerializeOptions explicitly.
+	versions := resolveSchemaVersions(data, options)
 	importsProps := map[string]string{
-		"schemaVersions": formatSchemaVersions(options),
+		"schemaVersions": formatVersionsForProperty(versions),
 	}
 	if err := p.generatePklFileWithProps(generatorDir, "ImportsGenerator.pkl", "imports.pkl", importsProps); err != nil {
 		return "", fmt.Errorf("failed to generate imports.pkl: %w", err)
@@ -151,16 +156,82 @@ func resolveIncludes(data *model.Forma, options *schema.SerializeOptions) []stri
 	return resolver.GetPackageStrings()
 }
 
-// formatSchemaVersions encodes options.SchemaVersions as a comma-separated
-// "pkg=ver,pkg=ver" string for the ImportsGenerator Pkl property. Returns ""
-// when no versions are set, in which case ImportsGenerator falls back to the
-// unrestricted "@<pkg>/**/*.pkl" glob.
-func formatSchemaVersions(options *schema.SerializeOptions) string {
-	if options == nil || len(options.SchemaVersions) == 0 {
+// resolveSchemaVersions computes the per-namespace schema-version map used
+// by ImportsGenerator's glob narrowing. Resolution per namespace, in order:
+//
+//  1. Caller-supplied options.SchemaVersions (treated as authoritative,
+//     used by tests and any caller that already knows which version to use).
+//  2. FORMAE_SCHEMA_VERSIONS env var entry — comma-separated "pkg=ver,pkg=ver",
+//     intended for development and CI overrides.
+//  3. Forma.Targets[].SchemaVersion when the target's namespace matches.
+//  4. The plugin's installed PLUGINSCHEMAVERSIONS manifest's "default",
+//     read via PackageResolver from options.LocalPluginDir.
+//
+// A namespace with no version source is omitted; ImportsGenerator falls back
+// to the unrestricted "@<pkg>/**/*.pkl" glob for that package. Plugins that
+// don't ship a PLUGINSCHEMAVERSIONS manifest behave as before — no manifest,
+// no entry, legacy unrestricted glob.
+func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) map[string]string {
+	out := map[string]string{}
+
+	if options != nil {
+		for k, v := range options.SchemaVersions {
+			if k != "" && v != "" {
+				out[strings.ToLower(k)] = v
+			}
+		}
+	}
+
+	if data != nil {
+		for _, t := range data.Targets {
+			if t.SchemaVersion == "" || t.Namespace == "" {
+				continue
+			}
+			ns := strings.ToLower(t.Namespace)
+			if _, ok := out[ns]; !ok {
+				out[ns] = t.SchemaVersion
+			}
+		}
+	}
+
+	if data != nil && options != nil && options.LocalPluginDir != "" {
+		resolver := NewPackageResolver().WithLocalSchemas(options.LocalPluginDir)
+		for ns := range extractNamespaces(data) {
+			if _, ok := out[ns]; ok {
+				continue
+			}
+			if m := resolver.SchemaManifestForNamespace(ns); m != nil && m.Default != "" {
+				out[ns] = m.Default
+			}
+		}
+	}
+
+	if env := os.Getenv("FORMAE_SCHEMA_VERSIONS"); env != "" {
+		for _, entry := range strings.Split(env, ",") {
+			kv := strings.SplitN(strings.TrimSpace(entry), "=", 2)
+			if len(kv) != 2 || kv[0] == "" || kv[1] == "" {
+				continue
+			}
+			out[strings.ToLower(strings.TrimSpace(kv[0]))] = strings.TrimSpace(kv[1])
+		}
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// formatVersionsForProperty encodes a versions map as a comma-separated
+// "pkg=ver,pkg=ver" string for the ImportsGenerator Pkl property. Returns
+// the empty string when no versions are selected; ImportsGenerator then
+// falls back to the unrestricted "@<pkg>/**/*.pkl" glob.
+func formatVersionsForProperty(versions map[string]string) string {
+	if len(versions) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(options.SchemaVersions))
-	for k, v := range options.SchemaVersions {
+	parts := make([]string, 0, len(versions))
+	for k, v := range versions {
 		if k == "" || v == "" {
 			continue
 		}

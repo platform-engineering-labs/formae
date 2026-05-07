@@ -23,7 +23,6 @@ import (
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
-	"github.com/platform-engineering-labs/formae/internal/schema/pkl"
 	"github.com/platform-engineering-labs/formae/internal/usage"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -686,68 +685,19 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 		schemaLocation = schema.SchemaLocationRemote
 	}
 
+	// SerializeOptions.SchemaVersions intentionally left unset here: the PKL
+	// schema plugin resolves per-namespace schema versions internally from
+	// the Forma's targets, the plugin's PLUGINSCHEMAVERSIONS manifest, and
+	// the FORMAE_SCHEMA_VERSIONS env override. Keeping the resolution local
+	// to the plugin means every SerializeForma caller — CLI, tests, agent —
+	// gets versioned dispatch consistently without app-layer plumbing.
 	options := &schema.SerializeOptions{
 		Schema:         outputSchema,
 		SchemaLocation: schemaLocation,
 		Dependencies:   deps,
-		SchemaVersions: a.collectSchemaVersions(forma),
+		LocalPluginDir: util.ExpandHomePath(a.Config.PluginDir),
 	}
 	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
-}
-
-// collectSchemaVersions builds the per-namespace schema-version map for
-// SerializeOptions. Resolution per namespace, in order:
-//
-//  1. FORMAE_SCHEMA_VERSIONS env var entry (testing override).
-//  2. Forma.Targets[].SchemaVersion when the target's namespace matches.
-//  3. The plugin's installed schema/pkl/VERSION manifest's "default".
-//
-// A namespace with no version source omitted from the result; ImportsGenerator
-// falls back to the unrestricted glob for that package. Plugins that don't
-// ship a VERSION manifest behave as before.
-func (a *App) collectSchemaVersions(forma *pkgmodel.Forma) map[string]string {
-	if forma == nil {
-		return nil
-	}
-	out := map[string]string{}
-
-	for _, t := range forma.Targets {
-		if t.SchemaVersion == "" || t.Namespace == "" {
-			continue
-		}
-		out[strings.ToLower(t.Namespace)] = t.SchemaVersion
-	}
-
-	resolver := pkl.NewPackageResolver().WithLocalSchemas(util.ExpandHomePath(a.Config.PluginDir))
-	namespaces := map[string]struct{}{}
-	for _, r := range forma.Resources {
-		if ns := strings.ToLower(r.Namespace()); ns != "" {
-			namespaces[ns] = struct{}{}
-		}
-	}
-	for ns := range namespaces {
-		if _, ok := out[ns]; ok {
-			continue
-		}
-		if m := resolver.SchemaManifestForNamespace(ns); m != nil && m.Default != "" {
-			out[ns] = m.Default
-		}
-	}
-
-	if env := os.Getenv("FORMAE_SCHEMA_VERSIONS"); env != "" {
-		for _, entry := range strings.Split(env, ",") {
-			kv := strings.SplitN(strings.TrimSpace(entry), "=", 2)
-			if len(kv) != 2 || kv[0] == "" || kv[1] == "" {
-				continue
-			}
-			out[strings.ToLower(strings.TrimSpace(kv[0]))] = strings.TrimSpace(kv[1])
-		}
-	}
-
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // buildDependencyStrings asks the agent for installed plugin info and

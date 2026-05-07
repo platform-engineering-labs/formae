@@ -5,9 +5,14 @@
 package pkl
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -49,45 +54,136 @@ func TestResolveIncludes_RemoteOnlyWhenNoDirAndNoDeps(t *testing.T) {
 	assert.Contains(t, got, "aws.aws@")
 }
 
-func TestFormatSchemaVersions_Nil(t *testing.T) {
-	assert.Equal(t, "", formatSchemaVersions(nil))
-	assert.Equal(t, "", formatSchemaVersions(&schema.SerializeOptions{}))
+// installVersionedPluginForSerialize mirrors installVersionedPlugin from the
+// package_resolver test; duplicated here only because helpers in
+// _test.go files don't cross test files in build-tag splits.
+func installVersionedPluginForSerialize(t *testing.T, namespace, pkgName, manifestJSON string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	versionDir := filepath.Join(tmpDir, pkgName, "v0.1.1")
+	pklDir := filepath.Join(versionDir, "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pklDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(fmt.Sprintf("namespace = %q", namespace)), 0644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pklDir, "PklProject"),
+		[]byte(fmt.Sprintf("amends \"pkl:Project\"\npackage { name = %q }\n", pkgName)), 0644))
+	if manifestJSON != "" {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(pklDir, "PLUGINSCHEMAVERSIONS"),
+			[]byte(manifestJSON), 0644))
+	}
+	return tmpDir
 }
 
-func TestFormatSchemaVersions_SingleEntry(t *testing.T) {
+func TestResolveSchemaVersions_NilForma(t *testing.T) {
+	assert.Nil(t, resolveSchemaVersions(nil, nil))
+	assert.Nil(t, resolveSchemaVersions(nil, &schema.SerializeOptions{}))
+}
+
+func TestResolveSchemaVersions_OptionsTakePrecedence(t *testing.T) {
+	forma := &model.Forma{
+		Targets: []model.Target{{Namespace: "K8S", SchemaVersion: "v1.20"}},
+	}
 	options := &schema.SerializeOptions{
 		SchemaVersions: map[string]string{"k8s": "v1.30"},
 	}
-	assert.Equal(t, "k8s=v1.30", formatSchemaVersions(options))
+	got := resolveSchemaVersions(forma, options)
+	assert.Equal(t, "v1.30", got["k8s"], "explicit options.SchemaVersions wins over Target stamp")
 }
 
-func TestFormatSchemaVersions_StableOrderAcrossKeys(t *testing.T) {
-	options := &schema.SerializeOptions{
-		SchemaVersions: map[string]string{
-			"k8s": "v1.30",
-			"aws": "v2024-01-01",
-		},
+func TestResolveSchemaVersions_TargetStampUsedWhenOptionsEmpty(t *testing.T) {
+	forma := &model.Forma{
+		Targets: []model.Target{{Namespace: "K8S", SchemaVersion: "v1.27"}},
 	}
+	got := resolveSchemaVersions(forma, &schema.SerializeOptions{})
+	assert.Equal(t, "v1.27", got["k8s"])
+}
+
+func TestResolveSchemaVersions_ManifestDefaultUsedWhenStampEmpty(t *testing.T) {
+	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
+		`{"versions":["v1.21","v1.30","v1.34"],"default":"v1.30"}`)
+	forma := &model.Forma{
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
+	assert.Equal(t, "v1.30", got["k8s"], "manifest default fills in when no Target stamp present")
+}
+
+func TestResolveSchemaVersions_EnvOverrideWinsOverEverything(t *testing.T) {
+	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
+		`{"versions":["v1.21","v1.30","v1.34"],"default":"v1.34"}`)
+	t.Setenv("FORMAE_SCHEMA_VERSIONS", "k8s=v1.21")
+	forma := &model.Forma{
+		Targets:   []model.Target{{Namespace: "K8S", SchemaVersion: "v1.30"}},
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	options := &schema.SerializeOptions{
+		LocalPluginDir: tmpDir,
+		SchemaVersions: map[string]string{"k8s": "v1.27"},
+	}
+	got := resolveSchemaVersions(forma, options)
+	assert.Equal(t, "v1.21", got["k8s"], "env var override is the topmost layer")
+}
+
+func TestResolveSchemaVersions_NamespaceWithNoSourceOmitted(t *testing.T) {
+	forma := &model.Forma{
+		Resources: []model.Resource{{Type: "AWS::S3::Bucket"}},
+	}
+	got := resolveSchemaVersions(forma, &schema.SerializeOptions{})
+	assert.Nil(t, got, "no target stamp, no manifest, no env override → nil so ImportsGenerator falls back to unrestricted glob")
+}
+
+// keep the JSON shape stable when nothing is set
+func TestResolveSchemaVersions_ManifestPlumbedViaPackageResolver(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Lay down a plugin with a manifest that provides only `versions`,
+	// no `default`. Package resolver should fall back to last entry.
+	versionDir := filepath.Join(tmpDir, "k8s", "v0.1.1")
+	pklDir := filepath.Join(versionDir, "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pklDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(`namespace = "K8S"`), 0644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pklDir, "PklProject"),
+		[]byte(`amends "pkl:Project"`+"\n"+`package { name = "k8s" }`+"\n"), 0644))
+	manifest, _ := json.Marshal(map[string]any{"versions": []string{"v1.21", "v1.30", "v1.34"}})
+	require.NoError(t, os.WriteFile(filepath.Join(pklDir, "PLUGINSCHEMAVERSIONS"), manifest, 0644))
+
+	forma := &model.Forma{Resources: []model.Resource{{Type: "K8S::Core::Pod"}}}
+	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
+	assert.Equal(t, "v1.34", got["k8s"], "missing manifest default falls back to last versions[]")
+}
+
+func TestFormatVersionsForProperty_Empty(t *testing.T) {
+	assert.Equal(t, "", formatVersionsForProperty(nil))
+	assert.Equal(t, "", formatVersionsForProperty(map[string]string{}))
+}
+
+func TestFormatVersionsForProperty_SingleEntry(t *testing.T) {
+	assert.Equal(t, "k8s=v1.30", formatVersionsForProperty(map[string]string{"k8s": "v1.30"}))
+}
+
+func TestFormatVersionsForProperty_StableOrderAcrossKeys(t *testing.T) {
 	// Sorted ascending so the property string is deterministic for caching
 	// and reproducible test output.
-	assert.Equal(t, "aws=v2024-01-01,k8s=v1.30", formatSchemaVersions(options))
+	assert.Equal(t, "aws=v2024-01-01,k8s=v1.30", formatVersionsForProperty(map[string]string{
+		"k8s": "v1.30",
+		"aws": "v2024-01-01",
+	}))
 }
 
-func TestFormatSchemaVersions_LowercasesNamespace(t *testing.T) {
-	options := &schema.SerializeOptions{
-		SchemaVersions: map[string]string{"K8S": "v1.30"},
-	}
-	assert.Equal(t, "k8s=v1.30", formatSchemaVersions(options),
+func TestFormatVersionsForProperty_LowercasesNamespace(t *testing.T) {
+	assert.Equal(t, "k8s=v1.30", formatVersionsForProperty(map[string]string{"K8S": "v1.30"}),
 		"namespace is lowercased so ImportsGenerator's pkg-name comparison hits regardless of casing in the source map")
 }
 
-func TestFormatSchemaVersions_DropsBlankEntries(t *testing.T) {
-	options := &schema.SerializeOptions{
-		SchemaVersions: map[string]string{
-			"k8s": "v1.30",
-			"":    "v9",
-			"aws": "",
-		},
-	}
-	assert.Equal(t, "k8s=v1.30", formatSchemaVersions(options))
+func TestFormatVersionsForProperty_DropsBlankEntries(t *testing.T) {
+	assert.Equal(t, "k8s=v1.30", formatVersionsForProperty(map[string]string{
+		"k8s": "v1.30",
+		"":    "v9",
+		"aws": "",
+	}))
 }
