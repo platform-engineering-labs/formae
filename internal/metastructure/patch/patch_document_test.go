@@ -2017,28 +2017,24 @@ func TestGeneratePatch_NestedListContentChange_StillReplaces(t *testing.T) {
 	assert.NotEmpty(t, createOnlyPatch, "real content change inside a nested list must still trigger replacement")
 }
 
-// TestGeneratePatch_HasProviderDefault_PlainListing_NullDesired covers the
+// TestGeneratePatch_HasProviderDefault_PlainListing_OmittedDesired covers the
 // TargetGroup.targets drift case: when a hasProviderDefault Listing is omitted
-// by the user, the reverted PKL renderer emits the field as null. hasValue
-// drops the null, removeProviderDefaultFields then sees the field absent in
-// the patch and strips the matching live entries, leaving an empty diff.
+// by the user, the renderer drops the field from the rendered Properties (no
+// JSON key), so removeProviderDefaultFields sees the field absent and strips
+// matching live entries before the diff runs.
 //
-// Pre-revert, PKL emitted "Targets": []. The strip pass observed Targets
-// "present" in the patch and skipped, so the diff emitted a spurious remove
-// for runtime-registered entries (ECS-managed targets).
-func TestGeneratePatch_HasProviderDefault_PlainListing_NullDesired(t *testing.T) {
+// Pre-#269, PKL emitted "Targets": null which produced a spurious replace op.
+// PR #269 changed it to "Targets": [] which the strip pass observed as
+// "present" and skipped, producing a spurious remove of runtime-registered
+// entries (ECS-managed targets). This PR omits the field entirely.
+func TestGeneratePatch_HasProviderDefault_PlainListing_OmittedDesired(t *testing.T) {
 	document := []byte(`{
 		"Name": "my-tg",
 		"Targets": [
 			{"Id": "10.100.2.47", "Port": 3000, "AvailabilityZone": "us-west-2b"}
 		]
 	}`)
-
-	// Reverted renderer emits unset nullable Listing as null.
-	patch := []byte(`{
-		"Name": "my-tg",
-		"Targets": null
-	}`)
+	patch := []byte(`{"Name": "my-tg"}`)
 
 	schema := pkgmodel.Schema{
 		Fields: []string{"Name", "Targets"},
@@ -2051,6 +2047,25 @@ func TestGeneratePatch_HasProviderDefault_PlainListing_NullDesired(t *testing.T)
 	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "user omitted hasProviderDefault Listing — strip pass must suppress remove ops for runtime-registered entries")
+}
+
+// TestGeneratePatch_HasProviderDefault_NullDesired_Defensive pins the
+// fieldExistsInMap nil treatment for non-renderer call sites that may still
+// produce {"Field": null} (older clients, hand-built JSON, scalar
+// hasProviderDefault). The strip pass must drop the leaf from both sides so
+// the diff stays empty.
+func TestGeneratePatch_HasProviderDefault_NullDesired_Defensive(t *testing.T) {
+	document := []byte(`{"Name": "x", "Region": "us-west-2"}`)
+	patch := []byte(`{"Name": "x", "Region": null}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Region"},
+		Hints:  map[string]pkgmodel.FieldHint{"Region": {HasProviderDefault: true}},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc)
 }
 
 // TestGeneratePatch_HasProviderDefault_PlainListing_PR269Rendering pins the
@@ -2120,10 +2135,9 @@ func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserOmits_PostRevert(t 
 		]
 	}`)
 
-	// Reverted renderer emits unset nullable Listing as null; hasValue drops it.
+	// Renderer omits unset nullable Listing entirely (no JSON key).
 	patch := []byte(`{
-		"Name": "my-tg",
-		"Tags": null
+		"Name": "my-tg"
 	}`)
 
 	schema := pkgmodel.Schema{

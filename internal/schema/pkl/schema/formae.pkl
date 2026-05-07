@@ -594,33 +594,52 @@ class Fq {
         else
             false
 
+    /// Reports whether a property should be omitted from the rendered output
+    /// because the user did not declare it AND its type is a nullable Listing
+    /// or Mapping. Without this, an unset nullable collection renders as a
+    /// JSON null, which the patch pipeline cannot distinguish from a scalar
+    /// `null` (intended to clear a previously-set value); omitting the key
+    /// instead lets the diff treat it as absent on both sides.
+    function isUnsetNullableCollection(propType: reflect.Type, rawValue: Any?): Boolean =
+        rawValue == null && (isNullableListingType(propType) || isNullableMappingType(propType))
+
     function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
         let(subResourceHint = findSubResourceHint(resourceClass))
-        resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(rawValue = subResource.getPropertyOrNull(k))
-            if (fieldHint != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
-                let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
-                if (fieldHint.outputTransformation != null)
-                    Pair(key, fieldHint.outputTransformation.apply(rawValue))
+        resourceClass.properties
+            .filter((k, v) ->
+                !v.modifiers.contains("hidden")
+                && !isUnsetNullableCollection(v.type, subResource.getPropertyOrNull(k))
+            )
+            .map((k, v) ->
+                let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+                let(rawValue = subResource.getPropertyOrNull(k))
+                if (fieldHint != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
+                    let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
+                    if (fieldHint.outputTransformation != null)
+                        Pair(key, fieldHint.outputTransformation.apply(rawValue))
+                    else
+                        Pair(key, rawValue)
                 else
+                    let(key = subResourceHint.outputKeyTransformation.apply(k))
                     Pair(key, rawValue)
-            else
-                let(key = subResourceHint.outputKeyTransformation.apply(k))
-                Pair(key, rawValue)
-        ).toDynamic()
+            ).toDynamic()
 
     function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
         let(resourceHint = findResourceHint(resourceClass))
-        resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
-            let(rawValue = resource.getPropertyOrNull(k))
-            if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
-                Pair(key, fieldHint.outputTransformation.apply(rawValue))
-            else
-                Pair(key, rawValue)
-        ).toDynamic()
+        resourceClass.properties
+            .filter((k, v) ->
+                v.allAnnotations.filterIsInstance(FieldHint).length > 0
+                && !isUnsetNullableCollection(v.type, resource.getPropertyOrNull(k))
+            )
+            .map((k, v) ->
+                let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+                let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+                let(rawValue = resource.getPropertyOrNull(k))
+                if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
+                    Pair(key, fieldHint.outputTransformation.apply(rawValue))
+                else
+                    Pair(key, rawValue)
+            ).toDynamic()
 
     function configHints(configClass: reflect.Class): Mapping<String, ConfigFieldHint> =
         configClass.properties

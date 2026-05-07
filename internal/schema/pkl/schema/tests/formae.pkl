@@ -476,10 +476,16 @@ facts {
         rendered.Label == "test-bucket"
     }
 
-    ["Nullable Listing renders as null when not set"] {
+    ["Unset nullable Listing is omitted from Properties"] {
         let (rendered = testBucketNoTags.render())
         let (props = rendered.Properties)
-        props.Tags == null
+        !props.toMap().containsKey("Tags")
+    }
+
+    ["Unset nullable scalar still renders as null"] {
+        let (rendered = testBucketNoTags.render())
+        let (props = rendered.Properties)
+        props.toMap().containsKey("Region") && props.Region == null
     }
 
     ["Hints propagate through Listing<SubResource>"] {
@@ -506,20 +512,20 @@ facts {
         hints["Volumes.EfsVolumeConfiguration.RootDirectory"].HasProviderDefault == true
     }
 
-    ["Nullable Mapping renders as null when not set"] {
+    ["Nullable Mapping is omitted from sub-resource when not set"] {
         let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.DockerLabels == null
+        !containerProps.toMap().containsKey("DockerLabels")
     }
 
-    ["Nullable Listing renders as null in sub-resource when not set"] {
+    ["Nullable Listing is omitted from sub-resource when not set"] {
         let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.Ports == null
+        !containerProps.toMap().containsKey("Ports")
     }
 
-    ["Nullable Listing<SubResource> renders as null when not set"] {
+    ["Nullable Listing<SubResource> is omitted from Properties when not set"] {
         let (rendered = testTaskDefNoContainers.render())
         let (props = rendered.Properties)
-        props.ContainerDefinitions == null
+        !props.toMap().containsKey("ContainerDefinitions")
     }
 
     ["ConfigSchema generated for annotated config"] {
