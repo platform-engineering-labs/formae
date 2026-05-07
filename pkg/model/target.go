@@ -31,10 +31,6 @@ type Target struct {
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
 
-	// SchemaVersion identifies which versioned schema subtree of the plugin
-	// applies to this target (e.g. "v1.30" for a K8s 1.30 cluster). Set by
-	// the agent during extract when the plugin implements
-	// SchemaVersionResolver. Empty = use the plugin's full unversioned glob.
 	SchemaVersion string `json:"SchemaVersion,omitempty" pkl:"SchemaVersion,omitempty"`
 }
 
