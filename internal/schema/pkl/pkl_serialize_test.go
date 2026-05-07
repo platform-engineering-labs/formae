@@ -48,3 +48,46 @@ func TestResolveIncludes_RemoteOnlyWhenNoDirAndNoDeps(t *testing.T) {
 	// added as a plain namespace.
 	assert.Contains(t, got, "aws.aws@")
 }
+
+func TestFormatSchemaVersions_Nil(t *testing.T) {
+	assert.Equal(t, "", formatSchemaVersions(nil))
+	assert.Equal(t, "", formatSchemaVersions(&schema.SerializeOptions{}))
+}
+
+func TestFormatSchemaVersions_SingleEntry(t *testing.T) {
+	options := &schema.SerializeOptions{
+		SchemaVersions: map[string]string{"k8s": "v1.30"},
+	}
+	assert.Equal(t, "k8s=v1.30", formatSchemaVersions(options))
+}
+
+func TestFormatSchemaVersions_StableOrderAcrossKeys(t *testing.T) {
+	options := &schema.SerializeOptions{
+		SchemaVersions: map[string]string{
+			"k8s": "v1.30",
+			"aws": "v2024-01-01",
+		},
+	}
+	// Sorted ascending so the property string is deterministic for caching
+	// and reproducible test output.
+	assert.Equal(t, "aws=v2024-01-01,k8s=v1.30", formatSchemaVersions(options))
+}
+
+func TestFormatSchemaVersions_LowercasesNamespace(t *testing.T) {
+	options := &schema.SerializeOptions{
+		SchemaVersions: map[string]string{"K8S": "v1.30"},
+	}
+	assert.Equal(t, "k8s=v1.30", formatSchemaVersions(options),
+		"namespace is lowercased so ImportsGenerator's pkg-name comparison hits regardless of casing in the source map")
+}
+
+func TestFormatSchemaVersions_DropsBlankEntries(t *testing.T) {
+	options := &schema.SerializeOptions{
+		SchemaVersions: map[string]string{
+			"k8s": "v1.30",
+			"":    "v9",
+			"aws": "",
+		},
+	}
+	assert.Equal(t, "k8s=v1.30", formatSchemaVersions(options))
+}

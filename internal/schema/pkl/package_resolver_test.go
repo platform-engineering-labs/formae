@@ -366,3 +366,80 @@ func TestPackageResolver_WithLocalSchemas_MissingPklProject(t *testing.T) {
 	assert.Len(t, packages, 1)
 	assert.False(t, packages[0].IsLocal) // Should fall back to remote
 }
+
+// installVersionedPlugin creates a fake versioned-schema install layout for
+// the given namespace and writes the supplied PLUGINSCHEMAVERSIONS payload.
+// Returns the plugins-dir base path the resolver should be pointed at.
+func installVersionedPlugin(t *testing.T, namespace, pkgName, manifestJSON string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	versionDir := filepath.Join(tmpDir, pkgName, "v0.1.1")
+	pklDir := filepath.Join(versionDir, "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pklDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(fmt.Sprintf("namespace = %q", namespace)), 0644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pklDir, "PklProject"),
+		[]byte(fmt.Sprintf("amends \"pkl:Project\"\npackage { name = %q }\n", pkgName)), 0644))
+	if manifestJSON != "" {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(pklDir, "PLUGINSCHEMAVERSIONS"),
+			[]byte(manifestJSON), 0644))
+	}
+	return tmpDir
+}
+
+func TestPackageResolver_SchemaManifest_ReadsVersionsAndDefault(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", `{
+		"versions": ["v1.21","v1.30","v1.34"],
+		"default": "v1.30"
+	}`)
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, []string{"v1.21", "v1.30", "v1.34"}, m.Versions)
+	assert.Equal(t, "v1.30", m.Default)
+}
+
+func TestPackageResolver_SchemaManifest_FallsBackToLastWhenDefaultMissing(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", `{
+		"versions": ["v1.21","v1.30","v1.34"]
+	}`)
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, "v1.34", m.Default,
+		"Default should fall back to the last entry when the manifest omits it")
+}
+
+func TestPackageResolver_SchemaManifest_AbsentReturnsNil(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", "")
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	assert.Nil(t, resolver.SchemaManifestForNamespace("k8s"),
+		"No PLUGINSCHEMAVERSIONS file should yield nil, not a partial struct")
+}
+
+func TestPackageResolver_SchemaManifest_RemoteOnlyReturnsNil(t *testing.T) {
+	resolver := NewPackageResolver()
+	assert.Nil(t, resolver.SchemaManifestForNamespace("k8s"),
+		"Remote-only resolver has no local install to read")
+}
+
+func TestPackageResolver_SchemaManifest_UnknownNamespaceReturnsNil(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", `{"versions":["v1.30"],"default":"v1.30"}`)
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	assert.Nil(t, resolver.SchemaManifestForNamespace("aws"))
+}
+
+func TestPackageResolver_SchemaManifest_MalformedJSONReturnsNil(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", `{not valid json`)
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	assert.Nil(t, resolver.SchemaManifestForNamespace("k8s"),
+		"Malformed manifest must not poison extract; resolver swallows the parse error")
+}
