@@ -182,14 +182,23 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 		}
 	}
 
-	if data != nil && options != nil && options.LocalPluginDir != "" {
-		resolver := NewPackageResolver().WithLocalSchemas(options.LocalPluginDir)
-		for ns := range extractNamespaces(data) {
-			if _, ok := out[ns]; ok {
-				continue
-			}
-			if m := resolver.SchemaManifestForNamespace(ns); m != nil && m.Default != "" {
-				out[ns] = m.Default
+	if data != nil {
+		pluginDir := ""
+		if options != nil {
+			pluginDir = options.LocalPluginDir
+		}
+		if pluginDir == "" {
+			pluginDir = defaultPluginDir()
+		}
+		if pluginDir != "" {
+			resolver := NewPackageResolver().WithLocalSchemas(pluginDir)
+			for ns := range extractNamespaces(data) {
+				if _, ok := out[ns]; ok {
+					continue
+				}
+				if m := resolver.SchemaManifestForNamespace(ns); m != nil && m.Default != "" {
+					out[ns] = m.Default
+				}
 			}
 		}
 	}

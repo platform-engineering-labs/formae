@@ -685,16 +685,10 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 		schemaLocation = schema.SchemaLocationRemote
 	}
 
-	// LocalPluginDir is set so the PKL schema plugin can scan installed
-	// plugins for v*/ subdirs and pick a default schema version when no
-	// per-target ApiVersion is stamped. Resolution lives entirely in the
-	// schema plugin so every SerializeForma caller — CLI, tests, agent —
-	// gets versioned dispatch consistently without app-layer plumbing.
 	options := &schema.SerializeOptions{
 		Schema:         outputSchema,
 		SchemaLocation: schemaLocation,
 		Dependencies:   deps,
-		LocalPluginDir: util.ExpandHomePath(a.Config.PluginDir),
 	}
 	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
 }
