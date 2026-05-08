@@ -227,7 +227,7 @@ func (pm *PluginManager) List() ([]Plugin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing installed packages: %w", err)
 	}
-	localPaths := pm.discoverLocalPaths()
+	localPaths := pm.DiscoverLocalPaths()
 	plugins := make([]Plugin, 0, len(pkgs))
 	for _, pkg := range pkgs {
 		if !isPluginPackage(pkg) {
@@ -245,12 +245,16 @@ func (pm *PluginManager) List() ([]Plugin, error) {
 	return plugins, nil
 }
 
-// discoverLocalPaths scans the configured plugin dirs and returns a map
+// DiscoverLocalPaths scans the configured plugin dirs and returns a map
 // from lowercase plugin name to the absolute path of the plugin's
 // PklProject file. Errors during scanning are logged and the partial
 // result is returned; an empty map means no on-disk plugins were found
 // (which is a valid state, not an error).
-func (pm *PluginManager) discoverLocalPaths() map[string]string {
+//
+// Public so the API layer can attach LocalPath to plugins surfaced from
+// the runtime registry that orbital does not know about (the `make
+// install` from a plugin repo case).
+func (pm *PluginManager) DiscoverLocalPaths() map[string]string {
 	if len(pm.pluginDirs) == 0 {
 		return map[string]string{}
 	}

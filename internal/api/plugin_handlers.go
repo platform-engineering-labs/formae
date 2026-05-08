@@ -6,9 +6,11 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
@@ -35,6 +37,17 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 	switch scope {
 	case "installed":
 		plugins, err = pm.List()
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		registered, regErr := s.metastructure.RegisteredPlugins()
+		if regErr != nil {
+			// A registry hiccup shouldn't fail the listing; orbital
+			// data is still useful. Log and continue.
+			c.Logger().Warnf("plugin registry lookup failed: %v", regErr)
+			registered = nil
+		}
+		plugins = mergeRegisteredPlugins(plugins, registered, pm.DiscoverLocalPaths())
 	case "available":
 		plugins, err = pm.Available(plugin_manager.AvailableFilter{
 			Query:    c.QueryParam("q"),
@@ -42,11 +55,11 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 			Type:     c.QueryParam("type"),
 			Channel:  c.QueryParam("channel"),
 		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid scope: must be 'installed' or 'available'")
-	}
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
 	return c.JSON(http.StatusOK, apimodel.ListPluginsResponse{
@@ -207,4 +220,43 @@ func toManagerPackageRefs(refs []apimodel.PackageRef) []plugin_manager.PackageRe
 		result = append(result, plugin_manager.PackageRef{Name: r.Name, Version: r.Version})
 	}
 	return result
+}
+
+// mergeRegisteredPlugins appends synthetic Plugin entries for any
+// registered namespace not already represented in the orbital list. This
+// is the `make install` from a plugin repo case: the agent has loaded
+// the plugin but orbital has no record. LocalPath is filled from disk
+// discovery so extract --schema-location local can resolve the schema.
+//
+// Orbital wins on overlap because it carries display-quality metadata
+// (Name, Category, Channel) the registry doesn't track. Empty namespaces
+// are skipped — they have nothing to route on and would collide on the
+// empty-string dedupe key.
+func mergeRegisteredPlugins(orbital []plugin_manager.Plugin, registered []messages.RegisteredPluginInfo, paths map[string]string) []plugin_manager.Plugin {
+	seen := make(map[string]bool, len(orbital))
+	for _, p := range orbital {
+		if ns := strings.ToLower(p.Namespace); ns != "" {
+			seen[ns] = true
+		}
+	}
+	for _, r := range registered {
+		ns := strings.ToLower(r.Namespace)
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		orbital = append(orbital, plugin_manager.Plugin{
+			Name:             r.Namespace,
+			Kind:             "plugin",
+			Type:             "resource",
+			Namespace:        r.Namespace,
+			InstalledVersion: r.Version,
+			LocalPath:        paths[ns],
+			Metadata: map[string]map[string]string{
+				"display": {"kind": "plugin"},
+				"plugin":  {"type": "resource", "namespace": r.Namespace},
+			},
+		})
+	}
+	return orbital
 }
