@@ -23,10 +23,10 @@ import (
 
 // e2e test: drives the full pkl serialization pipeline against a real
 // installed K8s plugin schema layout that ships per-version subtrees under
-// one PklProject (k8s.pkl + v1.21/.../v1.34/ + PLUGINSCHEMAVERSIONS).
+// one PklProject (k8s.pkl + v1.21/.../v1.34/).
 //
 // What it proves end-to-end:
-//   - SerializeOptions.SchemaVersions threads through to ImportsGenerator
+//   - Target.SchemaVersion threads through to ImportsGenerator
 //   - ImportsGenerator narrows @k8s/**/*.pkl -> @k8s/<ver>/**/*.pkl
 //   - ResourcesGenerator dedups: with narrowing, exactly one Pod module
 //     wins; without narrowing 14 versions would collide
@@ -42,9 +42,8 @@ func TestSerializeForma_VersionedSchema_K8sPodPicksRightSubtree(t *testing.T) {
 		t.Skip("K8s plugin not installed via `make install-versioned`; skipping e2e")
 	}
 
-	manifestPath := filepath.Join(pluginDir, "schema", "pkl", "PLUGINSCHEMAVERSIONS")
-	if _, err := os.Stat(manifestPath); err != nil {
-		t.Skip("K8s plugin lacks PLUGINSCHEMAVERSIONS — likely installed via legacy `make install`; skipping")
+	if !hasVersionSubdirs(t, pluginDir) {
+		t.Skip("K8s plugin install lacks v*/ subdirs — likely installed via legacy `make install`; skipping")
 	}
 
 	pluginsRoot := filepath.Dir(filepath.Dir(pluginDir))
@@ -81,7 +80,6 @@ func TestSerializeForma_VersionedSchema_K8sPodPicksRightSubtree(t *testing.T) {
 		SchemaLocation: schema.SchemaLocationLocal,
 		LocalPluginDir: pluginsRoot,
 		Dependencies:   deps,
-		SchemaVersions: map[string]string{"k8s": "v1.30"},
 	}
 
 	out, err := PKL{}.SerializeForma(forma, options)
@@ -113,8 +111,8 @@ func TestSerializeForma_VersionedSchema_NarrowingIsDeterministic(t *testing.T) {
 	if !ok {
 		t.Skip("K8s plugin not installed; skipping")
 	}
-	if _, err := os.Stat(filepath.Join(pluginDir, "schema", "pkl", "PLUGINSCHEMAVERSIONS")); err != nil {
-		t.Skip("K8s plugin lacks PLUGINSCHEMAVERSIONS; skipping")
+	if !hasVersionSubdirs(t, pluginDir) {
+		t.Skip("K8s plugin install lacks v*/ subdirs; skipping")
 	}
 	pluginsRoot := filepath.Dir(filepath.Dir(pluginDir))
 
@@ -123,7 +121,8 @@ func TestSerializeForma_VersionedSchema_NarrowingIsDeterministic(t *testing.T) {
 			Stacks: []model.Stack{{Label: "default"}},
 			Targets: []model.Target{{
 				Label: "orbstack", Namespace: "K8S",
-				Config: json.RawMessage(`{"context":"orbstack"}`),
+				SchemaVersion: version,
+				Config:        json.RawMessage(`{"context":"orbstack"}`),
 			}},
 			Resources: []model.Resource{{
 				Label: "test-pod", Type: "K8S::Core::Pod", Stack: "default", Target: "orbstack", NativeID: "abc",
@@ -138,7 +137,6 @@ func TestSerializeForma_VersionedSchema_NarrowingIsDeterministic(t *testing.T) {
 			SchemaLocation: schema.SchemaLocationLocal,
 			LocalPluginDir: pluginsRoot,
 			Dependencies:   resolver.GetPackageStrings(),
-			SchemaVersions: map[string]string{"k8s": version},
 		}
 		out, err := PKL{}.SerializeForma(forma, options)
 		require.NoErrorf(t, err, "version %s should serialize", version)
@@ -148,7 +146,24 @@ func TestSerializeForma_VersionedSchema_NarrowingIsDeterministic(t *testing.T) {
 	v130 := build("v1.30")
 	v130Again := build("v1.30")
 	assert.Equal(t, v130, v130Again,
-		"Repeated serialization with same SchemaVersions must be byte-identical (proves the dispatch isn't introducing nondeterminism)")
+		"Repeated serialization with the same Target.SchemaVersion must be byte-identical (proves the dispatch isn't introducing nondeterminism)")
+}
+
+// hasVersionSubdirs reports whether the installed plugin's schema/pkl/
+// directory has at least one v*/ subdir — the signal that this install
+// uses the unified versioned-schema layout.
+func hasVersionSubdirs(t *testing.T, pluginDir string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(pluginDir, "schema", "pkl"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "v") {
+			return true
+		}
+	}
+	return false
 }
 
 func installedK8sPluginDir(t *testing.T) (string, bool) {

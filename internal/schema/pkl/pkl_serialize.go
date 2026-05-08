@@ -159,28 +159,16 @@ func resolveIncludes(data *model.Forma, options *schema.SerializeOptions) []stri
 // resolveSchemaVersions computes the per-namespace schema-version map used
 // by ImportsGenerator's glob narrowing. Resolution per namespace, in order:
 //
-//  1. Caller-supplied options.SchemaVersions (treated as authoritative,
-//     used by tests and any caller that already knows which version to use).
-//  2. FORMAE_SCHEMA_VERSIONS env var entry — comma-separated "pkg=ver,pkg=ver",
-//     intended for development and CI overrides.
-//  3. Forma.Targets[].SchemaVersion when the target's namespace matches.
-//  4. The plugin's installed PLUGINSCHEMAVERSIONS manifest's "default",
-//     read via PackageResolver from options.LocalPluginDir.
+//  1. Forma.Targets[].SchemaVersion when the target's namespace matches.
+//  2. Filesystem scan — lexically-highest `v*/` subdir under the plugin's
+//     installed schema/pkl/, derived via PackageResolver.
 //
 // A namespace with no version source is omitted; ImportsGenerator falls back
 // to the unrestricted "@<pkg>/**/*.pkl" glob for that package. Plugins that
-// don't ship a PLUGINSCHEMAVERSIONS manifest behave as before — no manifest,
-// no entry, legacy unrestricted glob.
+// don't ship a versioned schema layout behave as before — no `v*/` subdirs,
+// no scan match, legacy unrestricted glob.
 func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) map[string]string {
 	out := map[string]string{}
-
-	if options != nil {
-		for k, v := range options.SchemaVersions {
-			if k != "" && v != "" {
-				out[strings.ToLower(k)] = v
-			}
-		}
-	}
 
 	if data != nil {
 		for _, t := range data.Targets {
@@ -203,16 +191,6 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 			if m := resolver.SchemaManifestForNamespace(ns); m != nil && m.Default != "" {
 				out[ns] = m.Default
 			}
-		}
-	}
-
-	if env := os.Getenv("FORMAE_SCHEMA_VERSIONS"); env != "" {
-		for _, entry := range strings.Split(env, ",") {
-			kv := strings.SplitN(strings.TrimSpace(entry), "=", 2)
-			if len(kv) != 2 || kv[0] == "" || kv[1] == "" {
-				continue
-			}
-			out[strings.ToLower(strings.TrimSpace(kv[0]))] = strings.TrimSpace(kv[1])
 		}
 	}
 

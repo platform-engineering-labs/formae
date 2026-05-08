@@ -50,13 +50,6 @@ type SerializeOptions struct {
 	// "local:name:/abs/path" for local). Schema plugins MUST use these directly
 	// instead of doing their own discovery.
 	Dependencies []string
-
-	// SchemaVersions selects which versioned subtree to import per package
-	// namespace (lowercase, e.g. "k8s" -> "v1.30"). When set, the import glob
-	// for that package narrows to "@<pkg>/*.pkl" (shared root) plus
-	// "@<pkg>/<ver>/**/*.pkl" (version subtree only). Packages without an
-	// entry use the default "@<pkg>/**/*.pkl" glob.
-	SchemaVersions map[string]string
 }
 
 // ErrFailedToGenerateSources is returned when source code generation fails.
