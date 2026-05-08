@@ -204,21 +204,106 @@ func TestPluginsSchemeOption_PrunesSymlinksToRemovedSystemPlugins(t *testing.T) 
 	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
 	systemDir := filepath.Join(tmp, "opt", "pel", "formae", "plugins")
 	writeFakePlugin(t, systemDir, "aws", "v0.1.6")
+	writeFakePlugin(t, systemDir, "ovh", "v0.1.0")
 
 	exe := fakeExeForSystemDir(t, systemDir)
 
-	require.NoError(t, os.MkdirAll(wrapperDir, 0755))
-	require.NoError(t, os.Symlink(filepath.Join(systemDir, "ovh"), filepath.Join(wrapperDir, "ovh")))
-
+	// First run mirrors both plugins and records them in the manifest.
 	_, err := pluginsSchemeOption(wrapperDir, exe)
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(wrapperDir, "ovh"))
+
+	// ovh disappears from the system tree. Second run must reclaim our symlink.
+	require.NoError(t, os.RemoveAll(filepath.Join(systemDir, "ovh")))
+	_, err = pluginsSchemeOption(wrapperDir, exe)
 	require.NoError(t, err)
 
 	_, err = os.Lstat(filepath.Join(wrapperDir, "ovh"))
-	assert.True(t, os.IsNotExist(err), "broken symlink to a removed system plugin must be pruned")
+	assert.True(t, os.IsNotExist(err), "managed symlink to a removed system plugin must be pruned")
 
 	awsLink, err := os.Readlink(filepath.Join(wrapperDir, "aws"))
 	require.NoError(t, err, "still-present system plugin must remain symlinked")
 	assert.Equal(t, filepath.Join(systemDir, "aws"), awsLink)
+}
+
+func TestPluginsSchemeOption_RemirrorsAcrossInstallRootUpgrade(t *testing.T) {
+	tmp := t.TempDir()
+	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
+	oldSystemDir := filepath.Join(tmp, "opt", "pel-v1", "formae", "plugins")
+	newSystemDir := filepath.Join(tmp, "opt", "pel-v2", "formae", "plugins")
+	writeFakePlugin(t, oldSystemDir, "aws", "v0.1.6")
+	writeFakePlugin(t, newSystemDir, "aws", "v0.1.7")
+
+	// Simulate first run with the old install root.
+	_, err := pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, oldSystemDir))
+	require.NoError(t, err)
+
+	link := filepath.Join(wrapperDir, "aws")
+	target, err := os.Readlink(link)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(oldSystemDir, "aws"), target)
+
+	// Now the binary moves to a new install root. The old symlink survives
+	// from the previous run and would silently keep importing old plugins.
+	_, err = pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, newSystemDir))
+	require.NoError(t, err)
+
+	target, err = os.Readlink(link)
+	require.NoError(t, err, "symlink should be repointed at the new install root")
+	assert.Equal(t, filepath.Join(newSystemDir, "aws"), target)
+
+	wrapperContent, err := os.ReadFile(filepath.Join(wrapperDir, "Aws.pkl"))
+	require.NoError(t, err)
+	assert.Contains(t, string(wrapperContent), `extends "./aws/v0.1.7/schema/Config.pkl"`,
+		"wrapper must reflect the version found via the refreshed symlink")
+}
+
+func TestPluginsSchemeOption_LeavesUserSymlinkToOtherFormaeTreeAlone(t *testing.T) {
+	tmp := t.TempDir()
+	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
+	systemDir := filepath.Join(tmp, "opt", "pel", "formae", "plugins")
+	require.NoError(t, os.MkdirAll(systemDir, 0755))
+
+	require.NoError(t, os.MkdirAll(wrapperDir, 0755))
+	// User intentionally points wrapperDir/aws at a *different* formae tree
+	// (e.g. a checkout). The target shape matches our system-mirror layout,
+	// but the link is not in our manifest, so we must leave it alone.
+	otherTree := filepath.Join(tmp, "checkout", "formae", "plugins", "aws")
+	require.NoError(t, os.MkdirAll(otherTree, 0755))
+	require.NoError(t, os.Symlink(otherTree, filepath.Join(wrapperDir, "aws")))
+
+	_, err := pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, systemDir))
+	require.NoError(t, err)
+
+	target, err := os.Readlink(filepath.Join(wrapperDir, "aws"))
+	require.NoError(t, err, "user-managed symlink must not be pruned, even when it has system-mirror shape")
+	assert.Equal(t, otherTree, target)
+}
+
+func TestPluginsSchemeOption_DropsOwnershipWhenUserOverwritesOurSymlink(t *testing.T) {
+	tmp := t.TempDir()
+	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
+	systemDir := filepath.Join(tmp, "opt", "pel", "formae", "plugins")
+	writeFakePlugin(t, systemDir, "aws", "v0.1.6")
+
+	// First run mirrors and records aws.
+	_, err := pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, systemDir))
+	require.NoError(t, err)
+
+	// User replaces our symlink with their own pointing somewhere else.
+	custom := filepath.Join(tmp, "custom", "aws")
+	require.NoError(t, os.MkdirAll(custom, 0755))
+	require.NoError(t, os.Remove(filepath.Join(wrapperDir, "aws")))
+	require.NoError(t, os.Symlink(custom, filepath.Join(wrapperDir, "aws")))
+
+	// Second run must observe the divergence, drop ownership, and leave the link alone.
+	_, err = pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, systemDir))
+	require.NoError(t, err)
+
+	target, err := os.Readlink(filepath.Join(wrapperDir, "aws"))
+	require.NoError(t, err)
+	assert.Equal(t, custom, target,
+		"once the on-disk target diverges from the manifest, we treat the entry as user-managed")
 }
 
 func TestPluginsSchemeOption_LeavesUnrelatedSymlinksAlone(t *testing.T) {

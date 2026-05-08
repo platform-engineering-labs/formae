@@ -65,17 +65,29 @@ func executablePath() string {
 	return exe
 }
 
-// mirrorSystemPlugins ensures every plugin under any systemDir is visible
-// from wrapperDir, by creating a symlink wrapperDir/<name> -> systemDir/<name>
-// for each plugin name not already present in wrapperDir. Stale symlinks
-// previously created by us (i.e. symlinks whose target lives inside one of
-// the systemDirs but no longer points at an existing plugin) are removed.
+// mirrorManifestFile is the sidecar that records every symlink
+// mirrorSystemPlugins has placed under wrapperDir. Format: one
+// `<name>\t<absolute target>` line per managed symlink. The manifest is the
+// sole source of ownership — any wrapperDir entry not listed here is
+// considered user-managed and is never touched.
+const mirrorManifestFile = ".system-mirrors"
+
+// mirrorSystemPlugins ensures every plugin under any systemDir is reachable
+// from wrapperDir as a symlink, so configs can `import "plugins:/<X>.pkl"`
+// without falling foul of PKL's cross-scheme trust rules.
 //
-// Names already present in wrapperDir as anything other than a system-pointing
-// symlink are left untouched, so dev plugins win and user-managed symlinks
-// to other locations are preserved.
+// Symlinks recorded in the manifest are reclaimed when their recorded target
+// no longer matches the current symlink target, the target is no longer a
+// directory, or the target sits outside the current systemDirs (e.g. the
+// formae binary moved to a new install root across an upgrade). Symlinks
+// that aren't in the manifest — including dev plugins and user-managed
+// links — are left alone.
 func mirrorSystemPlugins(wrapperDir string, systemDirs []string) error {
-	if err := pruneSystemSymlinks(wrapperDir, systemDirs); err != nil {
+	managed, err := readMirrorManifest(wrapperDir)
+	if err != nil {
+		return err
+	}
+	if err := pruneSystemSymlinks(wrapperDir, systemDirs, managed); err != nil {
 		return err
 	}
 	for _, sys := range systemDirs {
@@ -96,42 +108,96 @@ func mirrorSystemPlugins(wrapperDir string, systemDirs []string) error {
 			if err := os.Symlink(target, link); err != nil {
 				return fmt.Errorf("symlink %s -> %s: %w", link, target, err)
 			}
+			managed[name] = target
 		}
 	}
-	return nil
+	return writeMirrorManifest(wrapperDir, managed)
 }
 
-// pruneSystemSymlinks removes symlinks under wrapperDir whose target lives
-// inside any of systemDirs but no longer points at an existing directory.
-// Symlinks targeting locations outside systemDirs are user-managed and are
-// left alone.
-func pruneSystemSymlinks(wrapperDir string, systemDirs []string) error {
-	if len(systemDirs) == 0 {
-		return nil
-	}
-	entries, err := os.ReadDir(wrapperDir)
-	if err != nil {
-		return nil
-	}
-	for _, entry := range entries {
-		path := filepath.Join(wrapperDir, entry.Name())
+// pruneSystemSymlinks removes managed symlinks whose recorded target either
+// no longer exists, no longer matches the on-disk symlink target (the user
+// took over the entry), or sits outside the current systemDirs (the install
+// root changed). Entries owned by us but reclaimed for any of those reasons
+// are dropped from the managed map so the manifest reflects the true state.
+func pruneSystemSymlinks(wrapperDir string, systemDirs []string, managed map[string]string) error {
+	for name, recordedTarget := range managed {
+		path := filepath.Join(wrapperDir, name)
 		linkTarget, err := os.Readlink(path)
 		if err != nil {
+			delete(managed, name)
 			continue
 		}
 		absTarget := linkTarget
 		if !filepath.IsAbs(linkTarget) {
 			absTarget = filepath.Join(wrapperDir, linkTarget)
 		}
-		if !pathInsideAny(absTarget, systemDirs) {
+		// User replaced our link with their own — drop from manifest, leave alone.
+		if absTarget != recordedTarget {
+			delete(managed, name)
 			continue
 		}
-		if _, err := os.Stat(path); err == nil {
-			continue
+		// Recorded link still in place. Keep it only if it points into the
+		// current system tree AND the target plugin still exists.
+		if pathInsideAny(absTarget, systemDirs) {
+			if _, err := os.Stat(path); err == nil {
+				continue
+			}
 		}
 		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("removing stale plugin symlink %s: %w", path, err)
 		}
+		delete(managed, name)
+	}
+	return nil
+}
+
+// readMirrorManifest loads the symlinks-we-own ledger from wrapperDir. A
+// missing file is treated as an empty ledger so first runs work without
+// special-casing.
+func readMirrorManifest(wrapperDir string) (map[string]string, error) {
+	managed := make(map[string]string)
+	data, err := os.ReadFile(filepath.Join(wrapperDir, mirrorManifestFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return managed, nil
+		}
+		return nil, fmt.Errorf("reading mirror manifest: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			continue
+		}
+		managed[parts[0]] = parts[1]
+	}
+	return managed, nil
+}
+
+// writeMirrorManifest persists the symlinks-we-own ledger atomically. Empty
+// ledgers are kept on disk (rather than removed) so future runs can tell the
+// difference between "we own nothing" and "first run".
+func writeMirrorManifest(wrapperDir string, managed map[string]string) error {
+	names := make([]string, 0, len(managed))
+	for name := range managed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	b.WriteString("# Auto-generated. Tracks symlinks created by formae's plugin mirror.\n")
+	for _, name := range names {
+		fmt.Fprintf(&b, "%s\t%s\n", name, managed[name])
+	}
+	manifestPath := filepath.Join(wrapperDir, mirrorManifestFile)
+	tmp := manifestPath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(b.String()), 0644); err != nil {
+		return fmt.Errorf("writing mirror manifest: %w", err)
+	}
+	if err := os.Rename(tmp, manifestPath); err != nil {
+		return fmt.Errorf("rotating mirror manifest: %w", err)
 	}
 	return nil
 }
