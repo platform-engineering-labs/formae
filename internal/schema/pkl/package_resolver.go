@@ -105,11 +105,10 @@ func (r *PackageResolver) findLocalSchema(namespace string) (string, string) {
 	targetNamespace := strings.ToUpper(namespace)
 
 	for _, pluginEntry := range pluginDirs {
-		if !pluginEntry.IsDir() {
+		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
+		if !isDirFollowingSymlinks(pluginDir) {
 			continue
 		}
-
-		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
 
 		// Find the highest version for this plugin
 		versionPath, _ := r.findHighestVersion(pluginDir)
@@ -148,7 +147,7 @@ func (r *PackageResolver) findHighestVersion(pluginDir string) (string, string) 
 
 	var versions []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !isDirFollowingSymlinks(filepath.Join(pluginDir, entry.Name())) {
 			continue
 		}
 		name := entry.Name()
@@ -238,11 +237,11 @@ func (r *PackageResolver) InstalledVersion(namespace string) string {
 	targetNamespace := strings.ToUpper(namespace)
 
 	for _, pluginEntry := range pluginDirs {
-		if !pluginEntry.IsDir() {
+		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
+		if !isDirFollowingSymlinks(pluginDir) {
 			continue
 		}
 
-		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
 		versionPath, _ := r.findHighestVersion(pluginDir)
 		if versionPath == "" {
 			continue

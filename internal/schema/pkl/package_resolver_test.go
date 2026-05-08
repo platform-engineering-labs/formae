@@ -366,3 +366,52 @@ func TestPackageResolver_WithLocalSchemas_MissingPklProject(t *testing.T) {
 	assert.Len(t, packages, 1)
 	assert.False(t, packages[0].IsLocal) // Should fall back to remote
 }
+
+func TestPackageResolver_WithLocalSchemas_FollowsSymlinkedPluginDir(t *testing.T) {
+	wrapperDir := t.TempDir()
+	systemRoot := t.TempDir()
+
+	versionDir := filepath.Join(systemRoot, "aws", "v0.1.6")
+	pkldir := filepath.Join(versionDir, "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pkldir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(`namespace = "AWS"`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkldir, "PklProject"), []byte(`amends "pkl:Project"
+
+package {
+  name = "aws"
+}
+`), 0644))
+
+	require.NoError(t, os.Symlink(filepath.Join(systemRoot, "aws"), filepath.Join(wrapperDir, "aws")))
+
+	resolver := NewPackageResolver().WithLocalSchemas(wrapperDir)
+	resolver.Add("aws", "aws", "0.1.6")
+
+	packages := resolver.GetPackages()
+	require.Len(t, packages, 1)
+	assert.True(t, packages[0].IsLocal,
+		"plugin reachable via symlink in basePath must be resolved as a local schema")
+	assert.Equal(t, filepath.Join(wrapperDir, "aws", "v0.1.6", "schema", "pkl", "PklProject"),
+		packages[0].LocalPath)
+}
+
+func TestPackageResolver_InstalledVersion_FollowsSymlinkedPluginDir(t *testing.T) {
+	wrapperDir := t.TempDir()
+	systemRoot := t.TempDir()
+
+	versionDir := filepath.Join(systemRoot, "aws", "v0.1.6")
+	require.NoError(t, os.MkdirAll(versionDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(`namespace = "AWS"
+version = "0.1.6"
+`), 0644))
+
+	require.NoError(t, os.Symlink(filepath.Join(systemRoot, "aws"), filepath.Join(wrapperDir, "aws")))
+
+	resolver := NewPackageResolver().WithLocalSchemas(wrapperDir)
+	assert.Equal(t, "0.1.6", resolver.InstalledVersion("aws"),
+		"InstalledVersion must follow symlinked plugin directories")
+}
