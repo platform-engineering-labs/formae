@@ -765,6 +765,8 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	}
 
 	if message.Failed() {
+		proc.Log().Info("PR450_DEBUG plugin operation failed status=%v errorCode=%v statusMessage=%q",
+			message.OperationStatus, message.ErrorCode, message.StatusMessage)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
