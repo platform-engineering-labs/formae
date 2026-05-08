@@ -126,8 +126,16 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		t.Fatalf("failed to get working directory: %v", err)
 	}
 	schemaDir := filepath.Join(pluginDir, "schema", "pkl")
-	testdataDir := filepath.Join(pluginDir, "testdata")
-	restorePKL := ResolvePKLDependencies(t, "", schemaDir, testdataDir)
+	testdataDir := ResolveTestDataDir(pluginDir)
+	// Find the nearest PklProject for the testdata dir. When a custom
+	// FORMAE_TEST_TESTDATA_DIR points at a subdir without its own PklProject,
+	// walk up to the parent project root (typically <pluginDir>/testdata) so
+	// `pkl project resolve` runs against the correct project.
+	testdataProject := FindPklProjectRoot(testdataDir)
+	if testdataProject == "" {
+		testdataProject = testdataDir
+	}
+	restorePKL := ResolvePKLDependencies(t, "", schemaDir, testdataProject)
 	t.Cleanup(restorePKL)
 
 	// Set up test environment (temp dir and config)

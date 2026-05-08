@@ -21,10 +21,49 @@ type TestCase struct {
 	ResourceType string // e.g., "s3-bucket"
 }
 
+// ResolveTestDataDir returns the directory containing test PKL files for a plugin.
+//
+// Resolution order:
+//   - If FORMAE_TEST_TESTDATA_DIR is set, that value is used. Absolute paths are
+//     used as-is; relative paths are resolved against pluginPath.
+//   - Otherwise, defaults to <pluginPath>/testdata.
+func ResolveTestDataDir(pluginPath string) string {
+	if custom := os.Getenv("FORMAE_TEST_TESTDATA_DIR"); custom != "" {
+		if filepath.IsAbs(custom) {
+			return custom
+		}
+		return filepath.Join(pluginPath, custom)
+	}
+	return filepath.Join(pluginPath, "testdata")
+}
+
+// FindPklProjectRoot walks up from dir (inclusive) and returns the first
+// ancestor that contains a PklProject file. Returns "" if none is found
+// before reaching the filesystem root.
+func FindPklProjectRoot(dir string) string {
+	cur, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(cur, "PklProject")); err == nil {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return ""
+		}
+		cur = parent
+	}
+}
+
 // DiscoverTestData finds all PKL files in a plugin's testdata directory
-// and their optional -update.pkl and -replace.pkl variants
+// and their optional -update.pkl and -replace.pkl variants.
+//
+// The directory is resolved via ResolveTestDataDir, which honors
+// FORMAE_TEST_TESTDATA_DIR.
 func DiscoverTestData(pluginPath string) ([]TestCase, error) {
-	testDataDir := filepath.Join(pluginPath, "testdata")
+	testDataDir := ResolveTestDataDir(pluginPath)
 
 	// Check if testdata directory exists
 	if _, err := os.Stat(testDataDir); os.IsNotExist(err) {
