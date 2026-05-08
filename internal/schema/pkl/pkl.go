@@ -24,7 +24,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 )
 
 const ProjectFile = "PklProject"
@@ -101,29 +100,17 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		pklgo.PreconfiguredOptions,
 	}
 
-	// If the plugin directory exists, generate wrappers and mount as plugins:/ scheme.
-	// Wrappers cover plugins under the user's writable plugin dir AND plugins
-	// installed system-wide (derived from the formae binary location). Dev plugins
-	// in the user dir win over system installs of the same name, mirroring the
-	// agent's discovery.DiscoverPluginsMulti semantics.
-	pluginDir := defaultPluginDir()
-	if pluginDir != "" {
-		if _, statErr := os.Stat(pluginDir); statErr == nil {
-			scanDirs := []string{pluginDir}
-			if exe, exeErr := os.Executable(); exeErr == nil {
-				if real, evalErr := filepath.EvalSymlinks(exe); evalErr == nil {
-					exe = real
-				}
-				if sys := discovery.SystemPluginDir(exe); sys != "" && sys != pluginDir {
-					scanDirs = append(scanDirs, sys)
-				}
-			}
-			if wrapErr := GeneratePluginWrappers(pluginDir, scanDirs); wrapErr != nil {
-				slog.Warn("failed to generate plugin wrappers", "error", wrapErr)
-			} else {
-				opts = append(opts, pklgo.WithFs(os.DirFS(pluginDir), "plugins"))
-			}
-		}
+	// Set up the plugins:/ FS scheme so configs can import wrapper modules
+	// for installed plugins. The wrapper dir is the writable mount point and
+	// is created on demand — system-installed plugins must be importable on
+	// a clean machine where ~/.pel/formae/plugins doesn't exist yet. The scan
+	// covers the user's dev/override dir plus the system dir derived from the
+	// formae binary location, mirroring discovery.DiscoverPluginsMulti (first
+	// wins, so dev plugins override system plugins of the same name).
+	if pluginsOpt, err := pluginsSchemeOption(defaultPluginDir(), executablePath()); err != nil {
+		slog.Warn("failed to set up plugins:/ scheme", "error", err)
+	} else if pluginsOpt != nil {
+		opts = append(opts, pluginsOpt)
 	}
 
 	var evaluator pklgo.Evaluator

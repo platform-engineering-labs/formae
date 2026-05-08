@@ -26,12 +26,21 @@ func writeFakePlugin(t *testing.T, root, name, version string) {
 	))
 }
 
+// fakeExeForSystemDir fabricates an executable path such that
+// discovery.SystemPluginDir(exe) returns systemDir, by following the inverse
+// of installRoot/bin/<name> -> installRoot/formae/plugins. The returned path
+// does not need to exist on disk.
+func fakeExeForSystemDir(t *testing.T, systemDir string) string {
+	t.Helper()
+	installRoot := filepath.Dir(filepath.Dir(systemDir))
+	return filepath.Join(installRoot, "bin", "formae")
+}
+
 func TestGeneratePluginWrappers_CreatesWrapperForPluginWithSchema(t *testing.T) {
 	pluginDir := t.TempDir()
 	writeFakePlugin(t, pluginDir, "auth-basic", "v0.1.0")
 
-	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
-	require.NoError(t, err)
+	require.NoError(t, GeneratePluginWrappers(pluginDir))
 
 	wrapperPath := filepath.Join(pluginDir, "AuthBasic.pkl")
 	content, err := os.ReadFile(wrapperPath)
@@ -46,23 +55,20 @@ func TestGeneratePluginWrappers_SkipsPluginsWithoutSchema(t *testing.T) {
 
 	require.NoError(t, os.MkdirAll(filepath.Join(pluginDir, "aws", "v0.1.3", "schema"), 0755))
 
-	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
-	require.NoError(t, err)
+	require.NoError(t, GeneratePluginWrappers(pluginDir))
 
-	wrapperPath := filepath.Join(pluginDir, "Aws.pkl")
-	_, err = os.Stat(wrapperPath)
-	assert.True(t, os.IsNotExist(err), "expected no wrapper to be created for plugin without Config.pkl")
+	_, err := os.Stat(filepath.Join(pluginDir, "Aws.pkl"))
+	assert.True(t, os.IsNotExist(err), "expected no wrapper for plugin without Config.pkl")
 }
 
 func TestGeneratePluginWrappers_EmptyDir(t *testing.T) {
 	pluginDir := t.TempDir()
 
-	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
-	require.NoError(t, err)
+	require.NoError(t, GeneratePluginWrappers(pluginDir))
 
 	entries, err := os.ReadDir(pluginDir)
 	require.NoError(t, err)
-	assert.Empty(t, entries, "expected no files in an empty plugin directory")
+	assert.Empty(t, entries)
 }
 
 func TestGeneratePluginWrappers_PicksHighestVersion(t *testing.T) {
@@ -72,12 +78,10 @@ func TestGeneratePluginWrappers_PicksHighestVersion(t *testing.T) {
 		writeFakePlugin(t, pluginDir, "my-plugin", ver)
 	}
 
-	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
-	require.NoError(t, err)
+	require.NoError(t, GeneratePluginWrappers(pluginDir))
 
 	content, err := os.ReadFile(filepath.Join(pluginDir, "MyPlugin.pkl"))
 	require.NoError(t, err)
-
 	assert.Contains(t, string(content), `extends "./my-plugin/v0.2.0/schema/Config.pkl"`)
 }
 
@@ -86,8 +90,7 @@ func TestGeneratePluginWrappers_SkipsNonDirectoryEntries(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "readme.txt"), []byte("not a plugin"), 0644))
 
-	err := GeneratePluginWrappers(pluginDir, []string{pluginDir})
-	require.NoError(t, err)
+	require.NoError(t, GeneratePluginWrappers(pluginDir))
 }
 
 func TestGeneratePluginWrappers_FollowsSymlinkedPluginDir(t *testing.T) {
@@ -97,59 +100,22 @@ func TestGeneratePluginWrappers_FollowsSymlinkedPluginDir(t *testing.T) {
 	writeFakePlugin(t, source, "aws", "v0.1.6")
 	require.NoError(t, os.Symlink(filepath.Join(source, "aws"), filepath.Join(wrapperDir, "aws")))
 
-	err := GeneratePluginWrappers(wrapperDir, []string{wrapperDir})
-	require.NoError(t, err)
+	require.NoError(t, GeneratePluginWrappers(wrapperDir))
 
 	content, err := os.ReadFile(filepath.Join(wrapperDir, "Aws.pkl"))
 	require.NoError(t, err, "wrapper must be generated even when the plugin dir is a symlink")
 	assert.Contains(t, string(content), `extends "./aws/v0.1.6/schema/Config.pkl"`)
 }
 
-func TestGeneratePluginWrappers_MergesMultipleDirsDevWins(t *testing.T) {
-	wrapperDir := t.TempDir()
-	systemDir := t.TempDir()
-
-	writeFakePlugin(t, wrapperDir, "aws", "v0.1.6")
-	writeFakePlugin(t, systemDir, "aws", "v9.9.9")
-	writeFakePlugin(t, systemDir, "azure", "v0.2.0")
-
-	err := GeneratePluginWrappers(wrapperDir, []string{wrapperDir, systemDir})
-	require.NoError(t, err)
-
-	awsContent, err := os.ReadFile(filepath.Join(wrapperDir, "Aws.pkl"))
-	require.NoError(t, err)
-	assert.Contains(t, string(awsContent), `extends "./aws/v0.1.6/schema/Config.pkl"`,
-		"dev plugin under wrapperDir must win over the system version")
-
-	azureContent, err := os.ReadFile(filepath.Join(wrapperDir, "Azure.pkl"))
-	require.NoError(t, err)
-	expected := "file://" + filepath.Join(systemDir, "azure", "v0.2.0", "schema", "Config.pkl")
-	assert.Contains(t, string(azureContent), `extends "`+expected+`"`,
-		"plugins outside wrapperDir must use absolute file:// URIs")
-}
-
-func TestGeneratePluginWrappers_SkipsEmptyAndMissingDirs(t *testing.T) {
-	wrapperDir := t.TempDir()
-	writeFakePlugin(t, wrapperDir, "aws", "v0.1.6")
-
-	err := GeneratePluginWrappers(wrapperDir, []string{"", "/does/not/exist", wrapperDir})
-	require.NoError(t, err)
-
-	_, err = os.Stat(filepath.Join(wrapperDir, "Aws.pkl"))
-	require.NoError(t, err)
-}
-
 func TestGeneratePluginWrappers_RemovesStaleAutoGeneratedWrappers(t *testing.T) {
 	wrapperDir := t.TempDir()
 	writeFakePlugin(t, wrapperDir, "aws", "v0.1.6")
 
-	// First run produces Aws.pkl.
-	require.NoError(t, GeneratePluginWrappers(wrapperDir, []string{wrapperDir}))
+	require.NoError(t, GeneratePluginWrappers(wrapperDir))
 	require.FileExists(t, filepath.Join(wrapperDir, "Aws.pkl"))
 
-	// Plugin disappears; a second run must remove the stale wrapper.
 	require.NoError(t, os.RemoveAll(filepath.Join(wrapperDir, "aws")))
-	require.NoError(t, GeneratePluginWrappers(wrapperDir, []string{wrapperDir}))
+	require.NoError(t, GeneratePluginWrappers(wrapperDir))
 
 	_, err := os.Stat(filepath.Join(wrapperDir, "Aws.pkl"))
 	assert.True(t, os.IsNotExist(err), "stale auto-generated wrapper should have been removed")
@@ -160,10 +126,117 @@ func TestGeneratePluginWrappers_PreservesHandWrittenWrappers(t *testing.T) {
 	handWritten := filepath.Join(wrapperDir, "Custom.pkl")
 	require.NoError(t, os.WriteFile(handWritten, []byte("amends \"foo:/Bar.pkl\"\n"), 0644))
 
-	require.NoError(t, GeneratePluginWrappers(wrapperDir, []string{wrapperDir}))
+	require.NoError(t, GeneratePluginWrappers(wrapperDir))
 
 	_, err := os.Stat(handWritten)
 	assert.NoError(t, err, "hand-written wrapper without auto-generated header must not be deleted")
+}
+
+func TestPluginsSchemeOption_CreatesWrapperDirOnFreshInstall(t *testing.T) {
+	tmp := t.TempDir()
+	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
+	systemDir := filepath.Join(tmp, "opt", "pel", "formae", "plugins")
+	writeFakePlugin(t, systemDir, "aws", "v0.1.6")
+
+	opt, err := pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, systemDir))
+	require.NoError(t, err)
+	require.NotNil(t, opt, "expected a plugins:/ FS option even when wrapperDir didn't pre-exist")
+
+	info, err := os.Stat(wrapperDir)
+	require.NoError(t, err, "wrapperDir must be created on demand")
+	assert.True(t, info.IsDir())
+
+	// System plugin must be mirrored as a symlink so it resolves through plugins:/.
+	link := filepath.Join(wrapperDir, "aws")
+	target, err := os.Readlink(link)
+	require.NoError(t, err, "system plugin must be symlinked into wrapperDir")
+	assert.Equal(t, filepath.Join(systemDir, "aws"), target)
+
+	// Wrapper must use a relative path (PKL refuses cross-scheme imports).
+	wrapperContent, err := os.ReadFile(filepath.Join(wrapperDir, "Aws.pkl"))
+	require.NoError(t, err)
+	assert.Contains(t, string(wrapperContent), `extends "./aws/v0.1.6/schema/Config.pkl"`)
+}
+
+func TestPluginsSchemeOption_NoWrapperDirHint(t *testing.T) {
+	opt, err := pluginsSchemeOption("", "/opt/pel/bin/formae")
+	require.NoError(t, err)
+	assert.Nil(t, opt, "no wrapperDir means no plugins:/ scheme")
+}
+
+func TestPluginsSchemeOption_DevPluginsOverrideSystem(t *testing.T) {
+	tmp := t.TempDir()
+	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
+	systemDir := filepath.Join(tmp, "opt", "pel", "formae", "plugins")
+	require.NoError(t, os.MkdirAll(wrapperDir, 0755))
+
+	writeFakePlugin(t, wrapperDir, "aws", "v0.1.6")
+	writeFakePlugin(t, systemDir, "aws", "v9.9.9")
+	writeFakePlugin(t, systemDir, "azure", "v0.2.0")
+
+	opt, err := pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, systemDir))
+	require.NoError(t, err)
+	require.NotNil(t, opt)
+
+	// aws was already a real dir under wrapperDir, so it must NOT have been
+	// turned into a symlink to systemDir.
+	awsInfo, err := os.Lstat(filepath.Join(wrapperDir, "aws"))
+	require.NoError(t, err)
+	assert.False(t, awsInfo.Mode()&os.ModeSymlink != 0,
+		"dev plugin under wrapperDir must not be replaced with a system symlink")
+
+	awsContent, err := os.ReadFile(filepath.Join(wrapperDir, "Aws.pkl"))
+	require.NoError(t, err)
+	assert.Contains(t, string(awsContent), `extends "./aws/v0.1.6/schema/Config.pkl"`)
+
+	// azure was only in systemDir, so it should have been mirrored.
+	azureLink, err := os.Readlink(filepath.Join(wrapperDir, "azure"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(systemDir, "azure"), azureLink)
+
+	azureContent, err := os.ReadFile(filepath.Join(wrapperDir, "Azure.pkl"))
+	require.NoError(t, err)
+	assert.Contains(t, string(azureContent), `extends "./azure/v0.2.0/schema/Config.pkl"`)
+}
+
+func TestPluginsSchemeOption_PrunesSymlinksToRemovedSystemPlugins(t *testing.T) {
+	tmp := t.TempDir()
+	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
+	systemDir := filepath.Join(tmp, "opt", "pel", "formae", "plugins")
+	writeFakePlugin(t, systemDir, "aws", "v0.1.6")
+
+	exe := fakeExeForSystemDir(t, systemDir)
+
+	require.NoError(t, os.MkdirAll(wrapperDir, 0755))
+	require.NoError(t, os.Symlink(filepath.Join(systemDir, "ovh"), filepath.Join(wrapperDir, "ovh")))
+
+	_, err := pluginsSchemeOption(wrapperDir, exe)
+	require.NoError(t, err)
+
+	_, err = os.Lstat(filepath.Join(wrapperDir, "ovh"))
+	assert.True(t, os.IsNotExist(err), "broken symlink to a removed system plugin must be pruned")
+
+	awsLink, err := os.Readlink(filepath.Join(wrapperDir, "aws"))
+	require.NoError(t, err, "still-present system plugin must remain symlinked")
+	assert.Equal(t, filepath.Join(systemDir, "aws"), awsLink)
+}
+
+func TestPluginsSchemeOption_LeavesUnrelatedSymlinksAlone(t *testing.T) {
+	tmp := t.TempDir()
+	wrapperDir := filepath.Join(tmp, "home", ".pel", "formae", "plugins")
+	systemDir := filepath.Join(tmp, "opt", "pel", "formae", "plugins")
+	require.NoError(t, os.MkdirAll(systemDir, 0755))
+
+	require.NoError(t, os.MkdirAll(wrapperDir, 0755))
+	customTarget := filepath.Join(tmp, "elsewhere")
+	require.NoError(t, os.Symlink(customTarget, filepath.Join(wrapperDir, "custom")))
+
+	_, err := pluginsSchemeOption(wrapperDir, fakeExeForSystemDir(t, systemDir))
+	require.NoError(t, err)
+
+	target, err := os.Readlink(filepath.Join(wrapperDir, "custom"))
+	require.NoError(t, err, "user-managed symlink to a non-system path must be preserved")
+	assert.Equal(t, customTarget, target)
 }
 
 func TestToPascalCase(t *testing.T) {
