@@ -5,7 +5,6 @@
 package pkl
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,15 +14,13 @@ import (
 	"github.com/masterminds/semver"
 )
 
-// SchemaManifest mirrors the optional VERSION file at the root of a versioned
-// plugin's installed schema dir (e.g.
-// ~/.pel/formae/plugins/k8s/v0.1.1/schema/pkl/VERSION). Plugins that ship a
-// per-version subtree layout (PklProject + k8s.pkl + v1.21/.../v1.34/) emit
-// this manifest so formae knows the supported version keys and which one to
-// fall back to when no per-target SchemaVersion is set.
+// SchemaManifest describes the per-version subtrees a plugin ships under
+// schema/pkl/. Derived from filesystem layout — the `v*/` subdirectories
+// at the install root. Used by formae to pick a default schema version
+// when no per-target SchemaVersion is set.
 type SchemaManifest struct {
-	Versions []string `json:"versions"`
-	Default  string   `json:"default"`
+	Versions []string
+	Default  string
 }
 
 // Package represents a PKL schema package dependency
@@ -270,9 +267,13 @@ func (r *PackageResolver) InstalledVersion(namespace string) string {
 	return ""
 }
 
-// SchemaManifestForNamespace reads the optional VERSION manifest from the
-// installed plugin's schema/pkl/ dir. Returns nil when local schemas are
-// disabled, the plugin isn't installed locally, or the file is absent.
+// SchemaManifestForNamespace inspects the installed plugin's schema/pkl/
+// dir for `v*/` subdirectories and returns them as a sorted version list
+// with the lexically-highest entry as the default.
+//
+// Returns nil when local schemas are disabled, the plugin isn't installed
+// locally, or the install dir has no `v*/` subdirs (i.e. the plugin
+// doesn't ship a versioned schema layout — legacy unrestricted glob applies).
 //
 // Used by callers (CLI extract path) to pick a default schema version when
 // the Forma's per-target SchemaVersion field is unset.
@@ -284,21 +285,24 @@ func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaMa
 	if pklProjectPath == "" {
 		return nil
 	}
-	manifestPath := filepath.Join(filepath.Dir(pklProjectPath), "PLUGINSCHEMAVERSIONS")
-	data, err := os.ReadFile(manifestPath)
+	entries, err := os.ReadDir(filepath.Dir(pklProjectPath))
 	if err != nil {
 		return nil
 	}
-	var m SchemaManifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	var versions []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "v") {
+			versions = append(versions, e.Name())
+		}
+	}
+	if len(versions) == 0 {
 		return nil
 	}
-	if m.Default == "" && len(m.Versions) > 0 {
-		// Defensive: when default is missing, prefer the last entry — the
-		// VERSION generator is expected to emit it sorted ascending.
-		m.Default = m.Versions[len(m.Versions)-1]
+	sort.Strings(versions)
+	return &SchemaManifest{
+		Versions: versions,
+		Default:  versions[len(versions)-1],
 	}
-	return &m
 }
 
 // readPackageNameFromPklProject reads the package name from a PklProject file.

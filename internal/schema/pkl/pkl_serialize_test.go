@@ -5,7 +5,6 @@
 package pkl
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,7 +56,7 @@ func TestResolveIncludes_RemoteOnlyWhenNoDirAndNoDeps(t *testing.T) {
 // installVersionedPluginForSerialize mirrors installVersionedPlugin from the
 // package_resolver test; duplicated here only because helpers in
 // _test.go files don't cross test files in build-tag splits.
-func installVersionedPluginForSerialize(t *testing.T, namespace, pkgName, manifestJSON string) string {
+func installVersionedPluginForSerialize(t *testing.T, namespace, pkgName string, versionSubdirs []string) string {
 	t.Helper()
 	tmpDir := t.TempDir()
 	versionDir := filepath.Join(tmpDir, pkgName, "v0.1.1")
@@ -69,10 +68,8 @@ func installVersionedPluginForSerialize(t *testing.T, namespace, pkgName, manife
 	require.NoError(t, os.WriteFile(
 		filepath.Join(pklDir, "PklProject"),
 		[]byte(fmt.Sprintf("amends \"pkl:Project\"\npackage { name = %q }\n", pkgName)), 0644))
-	if manifestJSON != "" {
-		require.NoError(t, os.WriteFile(
-			filepath.Join(pklDir, "PLUGINSCHEMAVERSIONS"),
-			[]byte(manifestJSON), 0644))
+	for _, sub := range versionSubdirs {
+		require.NoError(t, os.MkdirAll(filepath.Join(pklDir, sub), 0755))
 	}
 	return tmpDir
 }
@@ -103,17 +100,17 @@ func TestResolveSchemaVersions_TargetStampUsedWhenOptionsEmpty(t *testing.T) {
 
 func TestResolveSchemaVersions_ManifestDefaultUsedWhenStampEmpty(t *testing.T) {
 	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
-		`{"versions":["v1.21","v1.30","v1.34"],"default":"v1.30"}`)
+		[]string{"v1.21", "v1.30", "v1.34"})
 	forma := &model.Forma{
 		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
 	}
 	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
-	assert.Equal(t, "v1.30", got["k8s"], "manifest default fills in when no Target stamp present")
+	assert.Equal(t, "v1.34", got["k8s"], "filesystem-derived default = lexically-highest v* subdir")
 }
 
 func TestResolveSchemaVersions_EnvOverrideWinsOverEverything(t *testing.T) {
 	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
-		`{"versions":["v1.21","v1.30","v1.34"],"default":"v1.34"}`)
+		[]string{"v1.21", "v1.30", "v1.34"})
 	t.Setenv("FORMAE_SCHEMA_VERSIONS", "k8s=v1.21")
 	forma := &model.Forma{
 		Targets:   []model.Target{{Namespace: "K8S", SchemaVersion: "v1.30"}},
@@ -136,25 +133,15 @@ func TestResolveSchemaVersions_NamespaceWithNoSourceOmitted(t *testing.T) {
 }
 
 // keep the JSON shape stable when nothing is set
-func TestResolveSchemaVersions_ManifestPlumbedViaPackageResolver(t *testing.T) {
-	tmpDir := t.TempDir()
-	// Lay down a plugin with a manifest that provides only `versions`,
-	// no `default`. Package resolver should fall back to last entry.
-	versionDir := filepath.Join(tmpDir, "k8s", "v0.1.1")
-	pklDir := filepath.Join(versionDir, "schema", "pkl")
-	require.NoError(t, os.MkdirAll(pklDir, 0755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(versionDir, "formae-plugin.pkl"),
-		[]byte(`namespace = "K8S"`), 0644))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(pklDir, "PklProject"),
-		[]byte(`amends "pkl:Project"`+"\n"+`package { name = "k8s" }`+"\n"), 0644))
-	manifest, _ := json.Marshal(map[string]any{"versions": []string{"v1.21", "v1.30", "v1.34"}})
-	require.NoError(t, os.WriteFile(filepath.Join(pklDir, "PLUGINSCHEMAVERSIONS"), manifest, 0644))
-
+func TestResolveSchemaVersions_PlumbedViaPackageResolver(t *testing.T) {
+	// Confirms the resolver hits the filesystem scan path when only the
+	// LocalPluginDir is set — no Target stamp, no env override, no
+	// caller-supplied SchemaVersions.
+	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
+		[]string{"v1.21", "v1.30", "v1.34"})
 	forma := &model.Forma{Resources: []model.Resource{{Type: "K8S::Core::Pod"}}}
 	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
-	assert.Equal(t, "v1.34", got["k8s"], "missing manifest default falls back to last versions[]")
+	assert.Equal(t, "v1.34", got["k8s"])
 }
 
 func TestFormatVersionsForProperty_Empty(t *testing.T) {
