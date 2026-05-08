@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -43,6 +44,21 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	schemaLocation := schema.SchemaLocationRemote
 	if options != nil && options.SchemaLocation != "" {
 		schemaLocation = options.SchemaLocation
+	}
+
+	// Resolve schema versions early — needed before ProjectInit so the
+	// generated PklProject can swap remote deps to local for namespaces
+	// that have a resolved version. Hub-published packages don't ship
+	// v*/ subtrees today; narrowing only resolves against the on-disk
+	// install.
+	versions := resolveSchemaVersions(data, options)
+	includes = swapVersionedDepsToLocal(includes, versions, options)
+	if len(versions) > 0 {
+		// At least one package needs local resolution — flip the
+		// SchemaLocation hint so ProjectInit emits an `import(...)`
+		// dep block instead of a remote `uri = "package://..."` for
+		// these. The non-narrowed packages keep their original spec.
+		schemaLocation = schema.SchemaLocationLocal
 	}
 
 	err = fs.WalkDir(generator, ".", func(path string, d fs.DirEntry, err error) error {
@@ -82,12 +98,20 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 		return "", fmt.Errorf("failed to initialize project: %w", err)
 	}
 
-	// Step 2: Generate imports.pkl from PklProject dependencies. Resolve the
-	// per-namespace schema-version selection here (rather than in the App
-	// layer) so every caller of SerializeForma — CLI, tests, agents — gets
-	// versioned dispatch consistently without having to thread it through
-	// SerializeOptions explicitly.
-	versions := resolveSchemaVersions(data, options)
+	// Re-resolve project deps to ensure deps.json reflects the
+	// (possibly swapped-to-local) deps. ProjectInit's resolve runs but
+	// in observed cases the pkl-go evaluator's first-pass project load
+	// returns an empty package mapping for newly-added local deps; an
+	// explicit second resolve normalizes deps.json so the evaluator
+	// picks up the local v*/ subtrees.
+	if len(versions) > 0 {
+		_ = os.Remove(filepath.Join(generatorDir, "PklProject.deps.json"))
+		if cmd := exec.Command("pkl", "project", "resolve", generatorDir); cmd != nil {
+			_ = cmd.Run()
+		}
+	}
+
+	// Step 2: Generate imports.pkl from PklProject dependencies.
 	importsProps := map[string]string{
 		"schemaVersions": formatVersionsForProperty(versions),
 	}
@@ -159,7 +183,9 @@ func resolveIncludes(data *model.Forma, options *schema.SerializeOptions) []stri
 // resolveSchemaVersions computes the per-namespace schema-version map used
 // by ImportsGenerator's glob narrowing. Resolution per namespace, in order:
 //
-//  1. Forma.Targets[].ApiVersion when the target's namespace matches.
+//  1. `ApiVersion` field inside Forma.Targets[].Config (the plugin's own
+//     Config schema declares it; formae just reads the JSON blob and
+//     looks for the convention key). When set, narrows to that subtree.
 //  2. Filesystem scan — lexically-highest `v*/` subdir under the plugin's
 //     installed schema/pkl/, derived via PackageResolver.
 //
@@ -172,12 +198,16 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 
 	if data != nil {
 		for _, t := range data.Targets {
-			if t.ApiVersion == "" || t.Namespace == "" {
+			if t.Namespace == "" || len(t.Config) == 0 {
+				continue
+			}
+			ver := apiVersionFromConfig(t.Config)
+			if ver == "" {
 				continue
 			}
 			ns := strings.ToLower(t.Namespace)
 			if _, ok := out[ns]; !ok {
-				out[ns] = t.ApiVersion
+				out[ns] = ver
 			}
 		}
 	}
@@ -207,6 +237,105 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 		return nil
 	}
 	return out
+}
+
+// swapVersionedDepsToLocal rewrites the PklProject dep specs so that any
+// namespace with a resolved schema version is pulled from its local
+// install (where v*/ subtrees live) instead of a hub-published package
+// (which today ships only the unified, unnarrowed schema). For each ns
+// in `versions`, look up the local install via PackageResolver:
+//   - If the namespace already has a remote `<plugin>.<name>@<ver>`
+//     entry in `includes`, replace it with `local:<name>:<path>`.
+//   - If the namespace isn't represented in `includes` at all (e.g. the
+//     App layer queried the agent for installed plugins and got an
+//     empty list — common for ephemeral test agents that don't have
+//     orbital-installed plugins), append a `local:<name>:<path>` entry
+//     so the temp PklProject can resolve `@<name>/v*/...` imports.
+// Other deps pass through unchanged.
+func swapVersionedDepsToLocal(includes []string, versions map[string]string, options *schema.SerializeOptions) []string {
+	if len(versions) == 0 {
+		return includes
+	}
+	pluginDir := ""
+	if options != nil {
+		pluginDir = options.LocalPluginDir
+	}
+	if pluginDir == "" {
+		pluginDir = defaultPluginDir()
+	}
+	if pluginDir == "" {
+		return includes
+	}
+	resolver := NewPackageResolver().WithLocalSchemas(pluginDir)
+
+	out := make([]string, 0, len(includes))
+	swapped := map[string]bool{}
+	for _, inc := range includes {
+		entry := inc
+		for ns := range versions {
+			localPath, pkgName := resolver.findLocalSchema(ns)
+			if localPath == "" {
+				continue
+			}
+			name := pkgName
+			if name == "" {
+				name = strings.ToLower(ns)
+			}
+			prefix := strings.ToLower(ns) + "." + strings.ToLower(name) + "@"
+			if strings.HasPrefix(strings.ToLower(inc), prefix) {
+				entry = "local:" + name + ":" + localPath
+				swapped[strings.ToLower(ns)] = true
+				break
+			}
+		}
+		out = append(out, entry)
+	}
+
+	// Append any versioned namespace that wasn't already represented.
+	for ns := range versions {
+		nsLower := strings.ToLower(ns)
+		if swapped[nsLower] {
+			continue
+		}
+		localPath, pkgName := resolver.findLocalSchema(ns)
+		if localPath == "" {
+			continue
+		}
+		name := pkgName
+		if name == "" {
+			name = nsLower
+		}
+		out = append(out, "local:"+name+":"+localPath)
+	}
+	return out
+}
+
+// apiVersionFromConfig extracts the schema-version key (e.g. "v1.30")
+// from a target's Config blob. Plugins opt in by emitting `ApiVersion`
+// (or lowercase `apiVersion`) at the top level of their Config schema.
+// Both casings are accepted — Pkl tends to render `fixed` properties
+// with the original casing (PascalCase by formae convention) while raw
+// user input may be lowercase.
+//
+// Returns "" when the blob is empty, malformed, or doesn't carry the
+// key. Malformed JSON is treated as missing rather than fatal — drift
+// in plugin Config shape must not poison extract.
+func apiVersionFromConfig(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	for _, key := range []string{"ApiVersion", "apiVersion"} {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // formatVersionsForProperty encodes a versions map as a comma-separated

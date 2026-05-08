@@ -8,6 +8,7 @@ package pkl
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,10 +56,9 @@ func TestSerializeForma_VersionedSchema_K8sPodPicksRightSubtree(t *testing.T) {
 	forma := &model.Forma{
 		Stacks: []model.Stack{{Label: "default"}},
 		Targets: []model.Target{{
-			Label:         "orbstack",
-			Namespace:     "K8S",
-			ApiVersion: "v1.30",
-			Config:        json.RawMessage(`{"context":"orbstack"}`),
+			Label:     "orbstack",
+			Namespace: "K8S",
+			Config:    json.RawMessage(`{"context":"orbstack","ApiVersion":"v1.30"}`),
 		}},
 		Resources: []model.Resource{{
 			Label:      "test-pod",
@@ -121,8 +121,7 @@ func TestSerializeForma_VersionedSchema_NarrowingIsDeterministic(t *testing.T) {
 			Stacks: []model.Stack{{Label: "default"}},
 			Targets: []model.Target{{
 				Label: "orbstack", Namespace: "K8S",
-				ApiVersion: version,
-				Config:     json.RawMessage(`{"context":"orbstack"}`),
+				Config: json.RawMessage(fmt.Sprintf(`{"context":"orbstack","ApiVersion":"%s"}`, version)),
 			}},
 			Resources: []model.Resource{{
 				Label: "test-pod", Type: "K8S::Core::Pod", Stack: "default", Target: "orbstack", NativeID: "abc",

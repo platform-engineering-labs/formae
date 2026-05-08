@@ -30,8 +30,6 @@ type Target struct {
 	ConfigSchema ConfigSchema    `json:"ConfigSchema,omitzero" pkl:"ConfigSchema,omitempty"`
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
-
-	ApiVersion string `json:"ApiVersion,omitempty" pkl:"apiVersion,omitempty"`
 }
 
 func NewTargetFromString(target string) Target {

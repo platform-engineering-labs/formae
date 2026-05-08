@@ -73,7 +73,6 @@ examples {
       }
       ConfigSchema = null
       Discoverable = true
-      ApiVersion = null
     }
   }
   ["Test Resource - fields()"] {
