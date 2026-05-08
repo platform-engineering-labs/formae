@@ -17,7 +17,7 @@ import (
 // SchemaManifest describes the per-version subtrees a plugin ships under
 // schema/pkl/. Derived from filesystem layout — the `v*/` subdirectories
 // at the install root. Used by formae to pick a default schema version
-// when no per-target SchemaVersion is set.
+// when no per-target ApiVersion is set.
 type SchemaManifest struct {
 	Versions []string
 	Default  string
@@ -276,7 +276,7 @@ func (r *PackageResolver) InstalledVersion(namespace string) string {
 // doesn't ship a versioned schema layout — legacy unrestricted glob applies).
 //
 // Used by callers (CLI extract path) to pick a default schema version when
-// the Forma's per-target SchemaVersion field is unset.
+// the Forma's per-target ApiVersion field is unset.
 func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaManifest {
 	if !r.useLocalSchemas || r.localSchemaBasePath == "" {
 		return nil

@@ -159,7 +159,7 @@ func resolveIncludes(data *model.Forma, options *schema.SerializeOptions) []stri
 // resolveSchemaVersions computes the per-namespace schema-version map used
 // by ImportsGenerator's glob narrowing. Resolution per namespace, in order:
 //
-//  1. Forma.Targets[].SchemaVersion when the target's namespace matches.
+//  1. Forma.Targets[].ApiVersion when the target's namespace matches.
 //  2. Filesystem scan — lexically-highest `v*/` subdir under the plugin's
 //     installed schema/pkl/, derived via PackageResolver.
 //
@@ -172,12 +172,12 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 
 	if data != nil {
 		for _, t := range data.Targets {
-			if t.SchemaVersion == "" || t.Namespace == "" {
+			if t.ApiVersion == "" || t.Namespace == "" {
 				continue
 			}
 			ns := strings.ToLower(t.Namespace)
 			if _, ok := out[ns]; !ok {
-				out[ns] = t.SchemaVersion
+				out[ns] = t.ApiVersion
 			}
 		}
 	}

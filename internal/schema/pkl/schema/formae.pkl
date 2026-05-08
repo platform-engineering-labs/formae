@@ -233,6 +233,14 @@ open class Target {
     hidden config: Any?
     hidden discoverable: Boolean = true
 
+    /// Schema-subtree key the plugin should serialize this target with
+    /// (e.g. "v1.30" for a K8s 1.30 cluster). Hidden because most users
+    /// don't set it directly — plugin-specific Target subclasses derive
+    /// it from a domain-friendly field (e.g. K8s sets apiVersion from
+    /// kubernetesVersion). When unset, formae falls back to the
+    /// lexically-highest v*/ subdir in the plugin's installed schema.
+    hidden apiVersion: String?
+
     local self = this
     hidden res: TargetResolvable = new {
         label = self.label
@@ -250,6 +258,7 @@ open class Target {
             else null
         else null
     fixed Discoverable: Boolean = discoverable
+    fixed ApiVersion: String? = apiVersion
 }
 
 open class TargetResolvable extends Resolvable {

@@ -685,11 +685,10 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 		schemaLocation = schema.SchemaLocationRemote
 	}
 
-	// SerializeOptions.SchemaVersions intentionally left unset here: the PKL
-	// schema plugin resolves per-namespace schema versions internally from
-	// the Forma's targets, the plugin's PLUGINSCHEMAVERSIONS manifest, and
-	// the FORMAE_SCHEMA_VERSIONS env override. Keeping the resolution local
-	// to the plugin means every SerializeForma caller — CLI, tests, agent —
+	// LocalPluginDir is set so the PKL schema plugin can scan installed
+	// plugins for v*/ subdirs and pick a default schema version when no
+	// per-target ApiVersion is stamped. Resolution lives entirely in the
+	// schema plugin so every SerializeForma caller — CLI, tests, agent —
 	// gets versioned dispatch consistently without app-layer plumbing.
 	options := &schema.SerializeOptions{
 		Schema:         outputSchema,

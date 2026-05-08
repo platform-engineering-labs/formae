@@ -31,7 +31,7 @@ type Target struct {
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
 
-	SchemaVersion string `json:"SchemaVersion,omitempty" pkl:"SchemaVersion,omitempty"`
+	ApiVersion string `json:"ApiVersion,omitempty" pkl:"apiVersion,omitempty"`
 }
 
 func NewTargetFromString(target string) Target {

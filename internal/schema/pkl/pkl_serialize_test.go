@@ -83,7 +83,7 @@ func TestResolveSchemaVersions_TargetStampWinsOverFilesystemDefault(t *testing.T
 	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
 		[]string{"v1.21", "v1.30", "v1.34"})
 	forma := &model.Forma{
-		Targets:   []model.Target{{Namespace: "K8S", SchemaVersion: "v1.27"}},
+		Targets:   []model.Target{{Namespace: "K8S", ApiVersion: "v1.27"}},
 		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
 	}
 	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
@@ -116,7 +116,7 @@ func TestResolveSchemaVersions_TargetStampOnlyForMatchingNamespace(t *testing.T)
 	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
 		[]string{"v1.21", "v1.30", "v1.34"})
 	forma := &model.Forma{
-		Targets: []model.Target{{Namespace: "K8S", SchemaVersion: "v1.27"}},
+		Targets: []model.Target{{Namespace: "K8S", ApiVersion: "v1.27"}},
 		Resources: []model.Resource{
 			{Type: "K8S::Core::Pod"},
 			{Type: "AWS::S3::Bucket"},
