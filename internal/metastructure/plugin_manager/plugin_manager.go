@@ -223,11 +223,17 @@ func versionString(v *ops.Version) string {
 // LocalPath="" — consumers should treat that as "no on-disk install
 // available".
 func (pm *PluginManager) List() ([]Plugin, error) {
+	return pm.ListWithLocalPaths(pm.DiscoverLocalPaths())
+}
+
+// ListWithLocalPaths is List() with caller-provided disk-discovery paths.
+// Used by callers that already need the paths map (e.g. the API handler
+// attaching LocalPath to registered-only plugins) to avoid a second scan.
+func (pm *PluginManager) ListWithLocalPaths(localPaths map[string]string) ([]Plugin, error) {
 	pkgs, err := pm.listOrb.List()
 	if err != nil {
 		return nil, fmt.Errorf("listing installed packages: %w", err)
 	}
-	localPaths := pm.DiscoverLocalPaths()
 	plugins := make([]Plugin, 0, len(pkgs))
 	for _, pkg := range pkgs {
 		if !isPluginPackage(pkg) {
