@@ -659,14 +659,21 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOpt
 		return "", err
 	}
 
-	deps, err := a.buildDependencyStrings(forma, options.SchemaLocation)
-	if err != nil {
-		return "", err
+	// Plain data renders (json, yaml) don't need the agent's installed-plugin
+	// list — they only walk the forma struct. Skip the agent round-trip so
+	// `formae eval --output-consumer machine --output-schema json` works
+	// without an agent (used by conformance discovery tests where eval runs
+	// before the agent is up).
+	if options.Schema == "pkl" {
+		deps, err := a.buildDependencyStrings(forma, options.SchemaLocation)
+		if err != nil {
+			return "", err
+		}
+		options.Dependencies = deps
 	}
 	if options.SchemaLocation == "" {
 		options.SchemaLocation = schema.SchemaLocationRemote
 	}
-	options.Dependencies = deps
 
 	return schemaPlugin.SerializeForma(forma, options)
 }
