@@ -251,6 +251,7 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 //     empty list — common for ephemeral test agents that don't have
 //     orbital-installed plugins), append a `local:<name>:<path>` entry
 //     so the temp PklProject can resolve `@<name>/v*/...` imports.
+//
 // Other deps pass through unchanged.
 func swapVersionedDepsToLocal(includes []string, versions map[string]string, options *schema.SerializeOptions) []string {
 	if len(versions) == 0 {
@@ -284,6 +285,13 @@ func swapVersionedDepsToLocal(includes []string, versions map[string]string, opt
 			prefix := strings.ToLower(ns) + "." + strings.ToLower(name) + "@"
 			if strings.HasPrefix(strings.ToLower(inc), prefix) {
 				entry = "local:" + name + ":" + localPath
+				swapped[strings.ToLower(ns)] = true
+				break
+			}
+			// Already a local: entry for this namespace — keep as-is, mark
+			// swapped so the bottom loop doesn't append a duplicate.
+			localPrefix := "local:" + strings.ToLower(name) + ":"
+			if strings.HasPrefix(strings.ToLower(inc), localPrefix) {
 				swapped[strings.ToLower(ns)] = true
 				break
 			}

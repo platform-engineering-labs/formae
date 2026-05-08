@@ -159,3 +159,65 @@ func TestFormatVersionsForProperty_DropsBlankEntries(t *testing.T) {
 		"aws": "",
 	}))
 }
+
+// Regression: when caller pre-resolves an include as `local:k8s:<path>` (e.g.
+// resolveIncludes via resolver.WithLocalSchemas), the previous swap pass
+// failed to recognize it and appended a duplicate `local:k8s:<path>` entry,
+// producing `Duplicate definition of member "k8s"` from `pkl project resolve`.
+func TestSwapVersionedDepsToLocal_DoesNotDuplicateExistingLocalEntry(t *testing.T) {
+	pluginDir := installVersionedPluginForSerialize(t, "K8S", "k8s", []string{"v1.34"})
+	localPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
+
+	includes := []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + localPath,
+	}
+	versions := map[string]string{"k8s": "v1.34"}
+	options := &schema.SerializeOptions{LocalPluginDir: pluginDir}
+
+	got := swapVersionedDepsToLocal(includes, versions, options)
+
+	assert.ElementsMatch(t, []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + localPath,
+	}, got, "existing local: entry must pass through without a duplicate appended")
+}
+
+// When the include list has a remote `<ns>.<name>@<ver>` entry, the swap pass
+// should rewrite it in place to `local:<name>:<path>` (not append).
+func TestSwapVersionedDepsToLocal_RewritesRemoteToLocal(t *testing.T) {
+	pluginDir := installVersionedPluginForSerialize(t, "K8S", "k8s", []string{"v1.34"})
+	expectedPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
+
+	includes := []string{
+		"pkl.formae@0.85.0",
+		"k8s.k8s@0.1.1",
+	}
+	versions := map[string]string{"k8s": "v1.34"}
+	options := &schema.SerializeOptions{LocalPluginDir: pluginDir}
+
+	got := swapVersionedDepsToLocal(includes, versions, options)
+
+	assert.ElementsMatch(t, []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + expectedPath,
+	}, got)
+}
+
+// When the namespace is missing from includes entirely, the swap pass must
+// append a fresh `local:<name>:<path>` so the temp PklProject can resolve it.
+func TestSwapVersionedDepsToLocal_AppendsWhenNamespaceMissing(t *testing.T) {
+	pluginDir := installVersionedPluginForSerialize(t, "K8S", "k8s", []string{"v1.34"})
+	expectedPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
+
+	includes := []string{"pkl.formae@0.85.0"}
+	versions := map[string]string{"k8s": "v1.34"}
+	options := &schema.SerializeOptions{LocalPluginDir: pluginDir}
+
+	got := swapVersionedDepsToLocal(includes, versions, options)
+
+	assert.ElementsMatch(t, []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + expectedPath,
+	}, got)
+}

@@ -484,6 +484,16 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// Case 2: no existing PklProject — discover deps from options.LocalPluginDir
 		// and pin them so the generator and target ProjectInit use identical specs.
 		deps := resolveIncludes(forma, options)
+		// Apply schema-version dispatch so the written PklProject points
+		// versioned namespaces at their local install (where v*/ subtrees
+		// live). Without this, the on-disk PklProject misses any namespace
+		// that schema-version dispatch would resolve, and a later eval of
+		// the generated .pkl can't resolve `@<ns>/v*/...` imports.
+		versions := resolveSchemaVersions(forma, options)
+		deps = swapVersionedDepsToLocal(deps, versions, options)
+		if len(versions) > 0 {
+			schemaLocation = schema.SchemaLocationLocal
+		}
 		options.Dependencies = deps
 
 		if err := p.ProjectInit(parentDir, deps, schemaLocation); err != nil {
