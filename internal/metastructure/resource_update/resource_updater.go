@@ -571,6 +571,8 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		PatchDocument:     string(data.resourceUpdate.DesiredState.PatchDocument),
 		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,
 	}
+	proc.Log().Info("PR450_DEBUG update operation resource=%s patchDocument=%s desired=%s prior=%s",
+		convertedResource.Label, updateOperation.PatchDocument, string(convertedResource.Properties), string(convertedExisting.Properties))
 
 	// First we check if progress already was made on the update operation. This can happen for example if the node crashed while the
 	// update operation was in progress. If so, we try to recover from the previous progress.
