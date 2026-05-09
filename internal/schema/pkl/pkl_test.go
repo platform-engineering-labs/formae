@@ -8,6 +8,8 @@ package pkl
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -111,6 +113,37 @@ func TestPkl_TFVarsIntegration(t *testing.T) {
 	assert.Equal(t, "us-west-2", gjson.Get(jsonString, "Targets.0.Config.Region").String())
 	// The queue name should interpolate the region from tfvars
 	assert.Equal(t, "demo-us-west-2-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
+}
+
+func TestPkl_TFVarsIntegration_AbsolutePathOutsidePklFolder(t *testing.T) {
+	// Place a .tfvars file at an absolute path OUTSIDE the testdata/forma
+	// directory (where the .pkl lives) and outside the internal/schema/pkl
+	// tree entirely. This verifies that tfvarsReader.Read accepts absolute
+	// paths and does not reject them or re-anchor them on baseDir.
+	tmpDir := t.TempDir()
+	absTfvars := filepath.Join(tmpDir, "external.tfvars")
+	content := []byte(`region         = "eu-west-1"
+instance_count = 2
+enable_logging = false
+instance_type  = "t3.small"
+
+tags = {
+  Name        = "abs-path"
+  Environment = "test"
+}
+
+availability_zones = ["eu-west-1a"]
+`)
+	require.NoError(t, os.WriteFile(absTfvars, content, 0644))
+
+	p := PKL{}
+	props := map[string]string{"tfvarsAbsPath": absTfvars}
+	forma, err := p.Evaluate("./testdata/forma/tfvars_absolute_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+	assert.Equal(t, "eu-west-1", gjson.Get(jsonString, "Targets.0.Config.Region").String())
+	assert.Equal(t, "demo-eu-west-1-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
 }
 
 func TestPkl_FormaeConfig(t *testing.T) {
