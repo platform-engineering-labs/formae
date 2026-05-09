@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
+//go:build unit
+
 package pkl
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -54,34 +53,13 @@ func TestResolveIncludes_RemoteOnlyWhenNoDirAndNoDeps(t *testing.T) {
 	assert.Contains(t, got, "aws.aws@")
 }
 
-// installVersionedPluginForSerialize mirrors installVersionedPlugin from the
-// package_resolver test; duplicated here only because helpers in
-// _test.go files don't cross test files in build-tag splits.
-func installVersionedPluginForSerialize(t *testing.T, namespace, pkgName string, versionSubdirs []string) string {
-	t.Helper()
-	tmpDir := t.TempDir()
-	versionDir := filepath.Join(tmpDir, pkgName, "v0.1.1")
-	pklDir := filepath.Join(versionDir, "schema", "pkl")
-	require.NoError(t, os.MkdirAll(pklDir, 0755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(versionDir, "formae-plugin.pkl"),
-		[]byte(fmt.Sprintf("namespace = %q", namespace)), 0644))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(pklDir, "PklProject"),
-		[]byte(fmt.Sprintf("amends \"pkl:Project\"\npackage { name = %q }\n", pkgName)), 0644))
-	for _, sub := range versionSubdirs {
-		require.NoError(t, os.MkdirAll(filepath.Join(pklDir, sub), 0755))
-	}
-	return tmpDir
-}
-
 func TestResolveSchemaVersions_NilForma(t *testing.T) {
 	assert.Nil(t, resolveSchemaVersions(nil, nil))
 	assert.Nil(t, resolveSchemaVersions(nil, &schema.SerializeOptions{}))
 }
 
 func TestResolveSchemaVersions_TargetStampWinsOverFilesystemDefault(t *testing.T) {
-	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
 		[]string{"v1.21", "v1.30", "v1.34"})
 	forma := &model.Forma{
 		Targets:   []model.Target{{Namespace: "K8S", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)}},
@@ -93,7 +71,7 @@ func TestResolveSchemaVersions_TargetStampWinsOverFilesystemDefault(t *testing.T
 }
 
 func TestResolveSchemaVersions_FilesystemDefaultUsedWhenNoStamp(t *testing.T) {
-	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
 		[]string{"v1.21", "v1.30", "v1.34"})
 	forma := &model.Forma{
 		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
@@ -114,7 +92,7 @@ func TestResolveSchemaVersions_NamespaceWithNoSourceOmitted(t *testing.T) {
 func TestResolveSchemaVersions_TargetStampOnlyForMatchingNamespace(t *testing.T) {
 	// Stamp lives on the K8S target; AWS resources in the same Forma
 	// must not pick it up.
-	tmpDir := installVersionedPluginForSerialize(t, "K8S", "k8s",
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
 		[]string{"v1.21", "v1.30", "v1.34"})
 	forma := &model.Forma{
 		Targets: []model.Target{{Namespace: "K8S", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)}},
@@ -165,7 +143,7 @@ func TestFormatVersionsForProperty_DropsBlankEntries(t *testing.T) {
 // failed to recognize it and appended a duplicate `local:k8s:<path>` entry,
 // producing `Duplicate definition of member "k8s"` from `pkl project resolve`.
 func TestSwapVersionedDepsToLocal_DoesNotDuplicateExistingLocalEntry(t *testing.T) {
-	pluginDir := installVersionedPluginForSerialize(t, "K8S", "k8s", []string{"v1.34"})
+	pluginDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.34"})
 	localPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
 
 	includes := []string{
@@ -186,7 +164,7 @@ func TestSwapVersionedDepsToLocal_DoesNotDuplicateExistingLocalEntry(t *testing.
 // When the include list has a remote `<ns>.<name>@<ver>` entry, the swap pass
 // should rewrite it in place to `local:<name>:<path>` (not append).
 func TestSwapVersionedDepsToLocal_RewritesRemoteToLocal(t *testing.T) {
-	pluginDir := installVersionedPluginForSerialize(t, "K8S", "k8s", []string{"v1.34"})
+	pluginDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.34"})
 	expectedPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
 
 	includes := []string{
@@ -207,7 +185,7 @@ func TestSwapVersionedDepsToLocal_RewritesRemoteToLocal(t *testing.T) {
 // When the namespace is missing from includes entirely, the swap pass must
 // append a fresh `local:<name>:<path>` so the temp PklProject can resolve it.
 func TestSwapVersionedDepsToLocal_AppendsWhenNamespaceMissing(t *testing.T) {
-	pluginDir := installVersionedPluginForSerialize(t, "K8S", "k8s", []string{"v1.34"})
+	pluginDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.34"})
 	expectedPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
 
 	includes := []string{"pkl.formae@0.85.0"}
