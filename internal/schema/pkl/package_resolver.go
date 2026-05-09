@@ -268,7 +268,11 @@ func (r *PackageResolver) InstalledVersion(namespace string) string {
 
 // SchemaManifestForNamespace inspects the installed plugin's schema/pkl/
 // dir for `v*/` subdirectories and returns them as a sorted version list
-// with the lexically-highest entry as the default.
+// with the highest entry as the default.
+//
+// Sort order: semver-aware when every key parses as semver (e.g. v1.9 <
+// v1.10 < v1.30); falls back to lexical otherwise so opaque keys like
+// date-style v2024-01-01 still sort sensibly when zero-padded.
 //
 // Returns nil when local schemas are disabled, the plugin isn't installed
 // locally, or the install dir has no `v*/` subdirs (i.e. the plugin
@@ -297,10 +301,35 @@ func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaMa
 	if len(versions) == 0 {
 		return nil
 	}
-	sort.Strings(versions)
+	sortVersionKeys(versions)
 	return &SchemaManifest{
 		Versions: versions,
 		Default:  versions[len(versions)-1],
+	}
+}
+
+// sortVersionKeys sorts in-place. When every key parses as semver,
+// orders by semver (so v1.9 < v1.10). Falls back to lexical otherwise so
+// date-style or other opaque keys keep their existing behavior.
+func sortVersionKeys(keys []string) {
+	type pair struct {
+		raw    string
+		parsed *semver.Version
+	}
+	pairs := make([]pair, len(keys))
+	for i, k := range keys {
+		v, err := semver.NewVersion(strings.TrimPrefix(k, "v"))
+		if err != nil {
+			sort.Strings(keys)
+			return
+		}
+		pairs[i] = pair{raw: k, parsed: v}
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].parsed.LessThan(pairs[j].parsed)
+	})
+	for i, p := range pairs {
+		keys[i] = p.raw
 	}
 }
 

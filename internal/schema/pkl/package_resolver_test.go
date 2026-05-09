@@ -432,6 +432,22 @@ func TestPackageResolver_SchemaManifest_OpaqueVersionKeysSort(t *testing.T) {
 		"Lexical sort works for date-style version keys when zero-padded")
 }
 
+// Regression: lexical sort picks v1.9 as the default when v1.10 is also
+// present (because "v1.10" < "v1.9" lexically). Default selection must be
+// semver-aware when all keys parse as semver.
+func TestPackageResolver_SchemaManifest_SemverDefaultBeatsLexical(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.9", "v1.10", "v1.30"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, "v1.30", m.Default,
+		"semver-aware sort: v1.30 > v1.10 > v1.9 (lexical would pick v1.9)")
+	assert.Equal(t, []string{"v1.9", "v1.10", "v1.30"}, m.Versions,
+		"Versions are returned in ascending semver order so callers see a stable shape")
+}
+
 func TestPackageResolver_SchemaManifest_NonVersionDirsIgnored(t *testing.T) {
 	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.21", "v1.30", "v1.34"})
 	// Add some noise that should NOT be treated as a version subtree.

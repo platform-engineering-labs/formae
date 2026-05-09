@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -54,8 +55,13 @@ func TestResolveIncludes_RemoteOnlyWhenNoDirAndNoDeps(t *testing.T) {
 }
 
 func TestResolveSchemaVersions_NilForma(t *testing.T) {
-	assert.Nil(t, resolveSchemaVersions(nil, nil))
-	assert.Nil(t, resolveSchemaVersions(nil, &schema.SerializeOptions{}))
+	got, err := resolveSchemaVersions(nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	got, err = resolveSchemaVersions(nil, &schema.SerializeOptions{})
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestResolveSchemaVersions_TargetStampWinsOverFilesystemDefault(t *testing.T) {
@@ -65,7 +71,11 @@ func TestResolveSchemaVersions_TargetStampWinsOverFilesystemDefault(t *testing.T
 		Targets:   []model.Target{{Namespace: "K8S", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)}},
 		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
 	}
-	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
 	assert.Equal(t, "v1.27", got["k8s"],
 		"per-target stamp pins the version; filesystem default is the fallback")
 }
@@ -76,16 +86,23 @@ func TestResolveSchemaVersions_FilesystemDefaultUsedWhenNoStamp(t *testing.T) {
 	forma := &model.Forma{
 		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
 	}
-	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
 	assert.Equal(t, "v1.34", got["k8s"],
-		"no target stamp → lexically-highest v*/ subdir wins")
+		"no target stamp → highest v*/ subdir wins (semver-aware)")
 }
 
 func TestResolveSchemaVersions_NamespaceWithNoSourceOmitted(t *testing.T) {
 	forma := &model.Forma{
 		Resources: []model.Resource{{Type: "AWS::S3::Bucket"}},
 	}
-	got := resolveSchemaVersions(forma, &schema.SerializeOptions{})
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+	})
+	require.NoError(t, err)
 	assert.Nil(t, got, "no target stamp, no installed plugin → nil so ImportsGenerator falls back to unrestricted glob")
 }
 
@@ -101,10 +118,73 @@ func TestResolveSchemaVersions_TargetStampOnlyForMatchingNamespace(t *testing.T)
 			{Type: "AWS::S3::Bucket"},
 		},
 	}
-	got := resolveSchemaVersions(forma, &schema.SerializeOptions{LocalPluginDir: tmpDir})
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
 	assert.Equal(t, "v1.27", got["k8s"])
 	_, awsHas := got["aws"]
 	assert.False(t, awsHas, "no AWS plugin install + no AWS target stamp → no entry")
+}
+
+// Two K8S targets at different ApiVersions cannot both be honored by a
+// single ImportsGenerator pass (one PklProject resolves a package one way).
+// Reject up front so users get an actionable error instead of a silent
+// first-target-wins selection that misrenders resources bound to the other
+// target. Per-target dispatch is a future redesign; this gate buys time.
+func TestResolveSchemaVersions_RejectsConflictingApiVersionsWithinNamespace(t *testing.T) {
+	forma := &model.Forma{
+		Targets: []model.Target{
+			{Namespace: "K8S", Label: "prod", Config: json.RawMessage(`{"ApiVersion":"v1.30"}`)},
+			{Namespace: "K8S", Label: "dr", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)},
+		},
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	_, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "K8S")
+	assert.Contains(t, err.Error(), "v1.30")
+	assert.Contains(t, err.Error(), "v1.27")
+	assert.Contains(t, err.Error(), "prod")
+	assert.Contains(t, err.Error(), "dr")
+}
+
+// Two targets in the same namespace with the same ApiVersion are fine —
+// they collapse to one entry and resolve the same way.
+func TestResolveSchemaVersions_AllowsSameApiVersionAcrossTargets(t *testing.T) {
+	forma := &model.Forma{
+		Targets: []model.Target{
+			{Namespace: "K8S", Label: "prod", Config: json.RawMessage(`{"ApiVersion":"v1.30"}`)},
+			{Namespace: "K8S", Label: "dr", Config: json.RawMessage(`{"ApiVersion":"v1.30"}`)},
+		},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{SchemaLocation: schema.SchemaLocationLocal})
+	require.NoError(t, err)
+	assert.Equal(t, "v1.30", got["k8s"])
+}
+
+// When the user explicitly requests --schema-location remote, versioned
+// dispatch must be a no-op even if targets carry ApiVersion stamps or a
+// local plugin tree is reachable. Otherwise an explicit remote extract gets
+// silently flipped to local, and output starts depending on the CLI host's
+// plugin install instead of the agent-reported remote packages.
+func TestResolveSchemaVersions_NoDispatchInRemoteMode(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.21", "v1.30", "v1.34"})
+	forma := &model.Forma{
+		Targets:   []model.Target{{Namespace: "K8S", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)}},
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationRemote,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got,
+		"explicit remote mode opts out of versioned dispatch — even when a local plugin tree is reachable and a target stamps ApiVersion")
 }
 
 func TestFormatVersionsForProperty_Empty(t *testing.T) {

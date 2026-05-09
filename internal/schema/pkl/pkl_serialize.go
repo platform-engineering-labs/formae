@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,16 +49,13 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	// generated PklProject can swap remote deps to local for namespaces
 	// that have a resolved version. Hub-published packages don't ship
 	// v*/ subtrees today; narrowing only resolves against the on-disk
-	// install.
-	versions := resolveSchemaVersions(data, options)
-	includes = swapVersionedDepsToLocal(includes, versions, options)
-	if len(versions) > 0 {
-		// At least one package needs local resolution — flip the
-		// SchemaLocation hint so ProjectInit emits an `import(...)`
-		// dep block instead of a remote `uri = "package://..."` for
-		// these. The non-narrowed packages keep their original spec.
-		schemaLocation = schema.SchemaLocationLocal
+	// install. resolveSchemaVersions is a no-op outside SchemaLocationLocal,
+	// so versions is non-empty only when schemaLocation is already Local.
+	versions, err := resolveSchemaVersions(data, options)
+	if err != nil {
+		return "", err
 	}
+	includes = swapVersionedDepsToLocal(includes, versions, options)
 
 	err = fs.WalkDir(generator, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -105,9 +101,12 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	// explicit second resolve normalizes deps.json so the evaluator
 	// picks up the local v*/ subtrees.
 	if len(versions) > 0 {
-		_ = os.Remove(filepath.Join(generatorDir, "PklProject.deps.json"))
-		if cmd := exec.Command("pkl", "project", "resolve", generatorDir); cmd != nil {
-			_ = cmd.Run()
+		depsJSON := filepath.Join(generatorDir, "PklProject.deps.json")
+		if err := os.Remove(depsJSON); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("failed to clear stale deps.json: %w", err)
+		}
+		if err := runPklProjectResolve(generatorDir); err != nil {
+			return "", fmt.Errorf("re-resolve after dep swap: %w", err)
 		}
 	}
 
@@ -186,57 +185,84 @@ func resolveIncludes(data *model.Forma, options *schema.SerializeOptions) []stri
 //  1. `ApiVersion` field inside Forma.Targets[].Config (the plugin's own
 //     Config schema declares it; formae just reads the JSON blob and
 //     looks for the convention key). When set, narrows to that subtree.
-//  2. Filesystem scan — lexically-highest `v*/` subdir under the plugin's
-//     installed schema/pkl/, derived via PackageResolver.
+//  2. Filesystem scan — highest `v*/` subdir under the plugin's installed
+//     schema/pkl/ (semver-aware when keys parse, lexical otherwise).
 //
 // A namespace with no version source is omitted; ImportsGenerator falls back
 // to the unrestricted "@<pkg>/**/*.pkl" glob for that package. Plugins that
 // don't ship a versioned schema layout behave as before — no `v*/` subdirs,
 // no scan match, legacy unrestricted glob.
-func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) map[string]string {
+//
+// Errors when two targets in the same namespace declare different
+// ApiVersion values: ImportsGenerator can only narrow a package one way per
+// extract pass, so honoring both stamps would silently corrupt resources
+// bound to the losing target. Per-target dispatch is a future redesign;
+// this gate prevents the silent-wrong case in the meantime.
+//
+// Returns nil when SchemaLocation is anything other than
+// SchemaLocationLocal: versioned dispatch is a local-plugin-development
+// feature, and remote (the production default) must never be silently
+// flipped to local just because a CLI-host plugin tree happens to exist.
+func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) (map[string]string, error) {
+	if data == nil {
+		return nil, nil
+	}
+	if options == nil || options.SchemaLocation != schema.SchemaLocationLocal {
+		return nil, nil
+	}
 	out := map[string]string{}
+	// Track which target first set each namespace's version so we can name
+	// the conflicting targets in the error message.
+	firstTargetLabel := map[string]string{}
 
-	if data != nil {
-		for _, t := range data.Targets {
-			if t.Namespace == "" || len(t.Config) == 0 {
-				continue
-			}
-			ver := apiVersionFromConfig(t.Config)
-			if ver == "" {
-				continue
-			}
-			ns := strings.ToLower(t.Namespace)
-			if _, ok := out[ns]; !ok {
-				out[ns] = ver
-			}
+	for _, t := range data.Targets {
+		if t.Namespace == "" || len(t.Config) == 0 {
+			continue
 		}
+		ver := apiVersionFromConfig(t.Config)
+		if ver == "" {
+			continue
+		}
+		ns := strings.ToLower(t.Namespace)
+		if existing, ok := out[ns]; ok {
+			if existing != ver {
+				return nil, fmt.Errorf(
+					"namespace %s has conflicting ApiVersion across targets "+
+						"(target %q: %s, target %q: %s); split into separate "+
+						"formae or align versions — per-target schema "+
+						"dispatch is not yet supported",
+					t.Namespace, firstTargetLabel[ns], existing, t.Label, ver,
+				)
+			}
+			continue
+		}
+		out[ns] = ver
+		firstTargetLabel[ns] = t.Label
 	}
 
-	if data != nil {
-		pluginDir := ""
-		if options != nil {
-			pluginDir = options.LocalPluginDir
-		}
-		if pluginDir == "" {
-			pluginDir = defaultPluginDir()
-		}
-		if pluginDir != "" {
-			resolver := NewPackageResolver().WithLocalSchemas(pluginDir)
-			for ns := range extractNamespaces(data) {
-				if _, ok := out[ns]; ok {
-					continue
-				}
-				if m := resolver.SchemaManifestForNamespace(ns); m != nil && m.Default != "" {
-					out[ns] = m.Default
-				}
+	pluginDir := ""
+	if options != nil {
+		pluginDir = options.LocalPluginDir
+	}
+	if pluginDir == "" {
+		pluginDir = defaultPluginDir()
+	}
+	if pluginDir != "" {
+		resolver := NewPackageResolver().WithLocalSchemas(pluginDir)
+		for ns := range extractNamespaces(data) {
+			if _, ok := out[ns]; ok {
+				continue
+			}
+			if m := resolver.SchemaManifestForNamespace(ns); m != nil && m.Default != "" {
+				out[ns] = m.Default
 			}
 		}
 	}
 
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 // swapVersionedDepsToLocal rewrites the PklProject dep specs so that any
