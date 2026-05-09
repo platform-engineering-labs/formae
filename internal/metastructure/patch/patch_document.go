@@ -362,9 +362,15 @@ func stripProviderDefaultPath(doc, patch map[string]any, path []string) {
 	}
 
 	// Last segment — conditional strip on document only, to preserve user overrides.
+	// fieldExistsInMap treats a nil patch value as absent: the reverted PKL
+	// renderer emits unset nullable Listing/Mapping fields as null. In that case
+	// we also drop the leaf from the patch so the diff doesn't see a spurious
+	// `add /<field>: null`. An explicit empty Listing {} / Mapping {} renders as
+	// []/{}, stays in the patch, and continues to mean "user-initiated clear".
 	if len(path) == 1 {
 		if !fieldExistsInMap(patch, path) {
 			delete(doc, path[0])
+			delete(patch, path[0])
 		}
 		return
 	}
@@ -527,13 +533,18 @@ func removeProviderDefaultEntitySetElements(document []byte, patch []byte, entit
 // For example, path ["BucketEncryption", "Rules"] checks if obj["BucketEncryption"]["Rules"] exists.
 // Handles array traversal: if a path segment resolves to an array, checks whether
 // the remaining path exists in any map element of that array.
+//
+// A nil value is treated as absent: the reverted PKL renderer emits unset nullable
+// Listing/Mapping fields as null, while explicit empty Listing {} / Mapping {}
+// renders as []/{}. removeProviderDefaultFields uses this distinction to suppress
+// drift only when the user omitted the field, not when they explicitly cleared it.
 func fieldExistsInMap(obj map[string]any, path []string) bool {
 	if len(path) == 0 {
 		return false
 	}
 
 	val, exists := obj[path[0]]
-	if !exists {
+	if !exists || val == nil {
 		return false
 	}
 

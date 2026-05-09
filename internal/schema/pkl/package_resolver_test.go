@@ -436,12 +436,61 @@ func TestPackageResolver_SchemaManifest_NonVersionDirsIgnored(t *testing.T) {
 	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.21", "v1.30", "v1.34"})
 	// Add some noise that should NOT be treated as a version subtree.
 	pklDir := filepath.Join(tmpDir, "k8s", "v0.1.1", "schema", "pkl")
-	require.NoError(t, os.MkdirAll(filepath.Join(pklDir, "core"), 0755))         // api-group dir under root, only present in non-versioned plugins
-	require.NoError(t, os.MkdirAll(filepath.Join(pklDir, "_backup"), 0755))      // editor backup
+	require.NoError(t, os.MkdirAll(filepath.Join(pklDir, "core"), 0755))    // api-group dir under root, only present in non-versioned plugins
+	require.NoError(t, os.MkdirAll(filepath.Join(pklDir, "_backup"), 0755)) // editor backup
 	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
 
 	m := resolver.SchemaManifestForNamespace("k8s")
 	require.NotNil(t, m)
 	assert.Equal(t, []string{"v1.21", "v1.30", "v1.34"}, m.Versions,
 		"Only `v*` prefixed subdirs are treated as schema versions")
+}
+
+func TestPackageResolver_WithLocalSchemas_FollowsSymlinkedPluginDir(t *testing.T) {
+	wrapperDir := t.TempDir()
+	systemRoot := t.TempDir()
+
+	versionDir := filepath.Join(systemRoot, "aws", "v0.1.6")
+	pkldir := filepath.Join(versionDir, "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pkldir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(`namespace = "AWS"`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkldir, "PklProject"), []byte(`amends "pkl:Project"
+
+package {
+  name = "aws"
+}
+`), 0644))
+
+	require.NoError(t, os.Symlink(filepath.Join(systemRoot, "aws"), filepath.Join(wrapperDir, "aws")))
+
+	resolver := NewPackageResolver().WithLocalSchemas(wrapperDir)
+	resolver.Add("aws", "aws", "0.1.6")
+
+	packages := resolver.GetPackages()
+	require.Len(t, packages, 1)
+	assert.True(t, packages[0].IsLocal,
+		"plugin reachable via symlink in basePath must be resolved as a local schema")
+	assert.Equal(t, filepath.Join(wrapperDir, "aws", "v0.1.6", "schema", "pkl", "PklProject"),
+		packages[0].LocalPath)
+}
+
+func TestPackageResolver_InstalledVersion_FollowsSymlinkedPluginDir(t *testing.T) {
+	wrapperDir := t.TempDir()
+	systemRoot := t.TempDir()
+
+	versionDir := filepath.Join(systemRoot, "aws", "v0.1.6")
+	require.NoError(t, os.MkdirAll(versionDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(`namespace = "AWS"
+version = "0.1.6"
+`), 0644))
+
+	require.NoError(t, os.Symlink(filepath.Join(systemRoot, "aws"), filepath.Join(wrapperDir, "aws")))
+
+	resolver := NewPackageResolver().WithLocalSchemas(wrapperDir)
+	assert.Equal(t, "0.1.6", resolver.InstalledVersion("aws"),
+		"InstalledVersion must follow symlinked plugin directories")
 }
