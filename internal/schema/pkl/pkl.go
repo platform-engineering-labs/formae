@@ -121,6 +121,12 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		projectDir = WalkForProjectFile(filepath.Dir(path))
 	}
 
+	tfvarsBaseDir := ""
+	if path != "" {
+		tfvarsBaseDir = filepath.Dir(path)
+	}
+	opts = append(opts, pklgo.WithResourceReader(tfvarsReader{baseDir: tfvarsBaseDir}))
+
 	var cleanup func()
 	if projectDir != "" {
 		evaluator, cleanup, err = newSafeProjectEvaluator(
@@ -391,7 +397,8 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 
 	addSchemaContextProperties(cmd, mode, props)
 
-	projectDir := WalkForProjectFile(filepath.Dir(path))
+	formaDir := filepath.Dir(path)
+	projectDir := WalkForProjectFile(formaDir)
 
 	var cleanup func()
 	if projectDir != "" {
@@ -400,6 +407,7 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 			&url.URL{Scheme: "file", Path: projectDir},
 			pklgo.PreconfiguredOptions,
 			pklgo.WithResourceReader(libExtension{}),
+			pklgo.WithResourceReader(tfvarsReader{baseDir: formaDir}),
 			func(opts *pklgo.EvaluatorOptions) {
 				opts.Properties = props
 				opts.OutputFormat = "json"
@@ -412,6 +420,7 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 		evalOpts := []func(*pklgo.EvaluatorOptions){
 			pklgo.PreconfiguredOptions,
 			pklgo.WithResourceReader(libExtension{}),
+			pklgo.WithResourceReader(tfvarsReader{baseDir: formaDir}),
 			func(opts *pklgo.EvaluatorOptions) {
 				opts.Properties = props
 				opts.OutputFormat = "json"
