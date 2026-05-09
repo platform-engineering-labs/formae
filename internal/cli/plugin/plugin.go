@@ -6,10 +6,14 @@ package plugin
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/opsmgr"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 func PluginCmd() *cobra.Command {
@@ -39,24 +43,41 @@ func PluginCmd() *cobra.Command {
 func PluginListCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "list",
-		Short: "List installed plugins",
+		Short: "List installed plugins (agent + local)",
 		RunE: func(command *cobra.Command, args []string) error {
 			app, err := cmd.AppFromContext(command.Context(), "", "", command)
 			if err != nil {
 				return err
 			}
 
-			client, err := app.NewClient()
-			if err != nil {
-				return err
+			// Agent-side view: best-effort. The agent may be unreachable
+			// (e.g., on a CLI-only host), in which case we still want to
+			// show what's installed locally rather than fail outright.
+			var agentPlugins []apimodel.Plugin
+			if client, cerr := app.NewClient(); cerr == nil {
+				if resp, lerr := client.ListPlugins("installed", "", "", "", ""); lerr == nil {
+					agentPlugins = resp.Plugins
+				}
 			}
 
-			resp, err := client.ListPlugins("installed", "", "", "", "")
-			if err != nil {
-				return err
+			// CLI-side view: read straight from the local orbital tree.
+			// Skipped when the tree is root-owned and we're not — orbital
+			// would re-exec under sudo just to read, and a read-only `list`
+			// shouldn't force a privilege prompt. The agent already covers
+			// the same view on a single-host setup; we surface a hint so
+			// users on split deployments know how to see the local arm.
+			var localPlugins []apimodel.Plugin
+			localSkipped := false
+			if opsmgr.TreeRequiresElevation() {
+				localSkipped = true
+			} else if mgr, merr := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, ""); merr == nil && mgr != nil {
+				localPlugins, _ = mgr.ListInstalled()
 			}
 
-			fmt.Print(renderPluginList(resp.Plugins))
+			fmt.Print(renderPluginList(agentPlugins, localPlugins))
+			if localSkipped {
+				fmt.Printf("\n  %s Local view skipped (tree is root-owned). Re-run under sudo to include this host's /opt/pel.\n", display.Grey("ℹ"))
+			}
 			return nil
 		},
 		SilenceErrors: true,

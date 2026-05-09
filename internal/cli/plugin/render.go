@@ -6,37 +6,80 @@ package plugin
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
-func renderPluginList(agentPlugins []apimodel.Plugin) string {
-	if len(agentPlugins) == 0 {
+// mergedPlugin tracks where a plugin is installed and the version on
+// each side. When agent and CLI report the same plugin at the same
+// version, the renderer collapses both into a single `(agent + cli)`
+// row; when versions differ, it surfaces the mismatch inline so
+// dual-install drift on auth plugins is visible at a glance.
+type mergedPlugin struct {
+	plugin       apimodel.Plugin
+	agentVersion string
+	cliVersion   string
+}
+
+func (m mergedPlugin) onAgent() bool { return m.agentVersion != "" }
+func (m mergedPlugin) onCLI() bool   { return m.cliVersion != "" }
+
+func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin) string {
+	if len(agentPlugins) == 0 && len(localPlugins) == 0 {
 		return "No plugins installed.\n"
 	}
 
-	var sb strings.Builder
+	// Merge by name. Agent-reported metadata wins for the descriptor
+	// fields (Type, Kind, Category, ManagedBy) since the agent
+	// canonicalizes those; CLI-only plugins fall back to whatever the
+	// local orbital records carry.
+	merged := map[string]*mergedPlugin{}
+	for _, p := range agentPlugins {
+		m := merged[p.Name]
+		if m == nil {
+			m = &mergedPlugin{plugin: p}
+			merged[p.Name] = m
+		}
+		m.plugin = p
+		m.agentVersion = p.InstalledVersion
+	}
+	for _, p := range localPlugins {
+		m := merged[p.Name]
+		if m == nil {
+			m = &mergedPlugin{plugin: p}
+			merged[p.Name] = m
+		}
+		m.cliVersion = p.InstalledVersion
+	}
 
 	// Group by kind/type. Bundles get their own section so users can see
 	// what curated collections they have installed alongside the
 	// individual plugins those bundles pulled in. Internally orbital
 	// calls these "metapackages"; we render them as "bundles" in the CLI
 	// for friendlier vocabulary.
-	var resource, auth, bundles []apimodel.Plugin
-	for _, p := range agentPlugins {
+	var resource, auth, bundles []*mergedPlugin
+	for _, m := range merged {
 		switch {
-		case p.Kind == "metapackage":
-			bundles = append(bundles, p)
-		case p.Type == "auth":
-			auth = append(auth, p)
+		case m.plugin.Kind == "metapackage":
+			bundles = append(bundles, m)
+		case m.plugin.Type == "auth":
+			auth = append(auth, m)
 		default:
-			resource = append(resource, p)
+			resource = append(resource, m)
 		}
 	}
+	sortByName := func(s []*mergedPlugin) {
+		sort.Slice(s, func(i, j int) bool { return s[i].plugin.Name < s[j].plugin.Name })
+	}
+	sortByName(resource)
+	sortByName(auth)
+	sortByName(bundles)
 
-	emit := func(header string, plugins []apimodel.Plugin, addLeadingNewline bool) {
+	var sb strings.Builder
+	emit := func(header string, plugins []*mergedPlugin, addLeadingNewline bool) {
 		if len(plugins) == 0 {
 			return
 		}
@@ -44,15 +87,8 @@ func renderPluginList(agentPlugins []apimodel.Plugin) string {
 			sb.WriteString("\n")
 		}
 		sb.WriteString(display.LightBlue(header) + "\n")
-		for _, p := range plugins {
-			line := fmt.Sprintf("  %s %s  %s",
-				display.Green("✓"),
-				padRight(p.Name, 14),
-				display.Grey(p.InstalledVersion))
-			if p.ManagedBy != "" {
-				line += display.Grey("  (" + p.ManagedBy + ")")
-			}
-			sb.WriteString(line + "\n")
+		for _, m := range plugins {
+			sb.WriteString(renderMergedRow(m) + "\n")
 		}
 	}
 
@@ -61,6 +97,33 @@ func renderPluginList(agentPlugins []apimodel.Plugin) string {
 	emit("Bundles:", bundles, len(resource) > 0 || len(auth) > 0)
 
 	return sb.String()
+}
+
+func renderMergedRow(m *mergedPlugin) string {
+	name := padRight(m.plugin.Name, 14)
+	managedBy := ""
+	if m.plugin.ManagedBy != "" {
+		managedBy = display.Grey("  (" + m.plugin.ManagedBy + ")")
+	}
+	switch {
+	case m.onAgent() && m.onCLI() && m.agentVersion == m.cliVersion:
+		return fmt.Sprintf("  %s %s  %s  %s%s",
+			display.Green("✓"), name, display.Grey(m.agentVersion),
+			display.Grey("(agent + cli)"), managedBy)
+	case m.onAgent() && m.onCLI() && m.agentVersion != m.cliVersion:
+		return fmt.Sprintf("  %s %s  %s  %s%s",
+			display.Gold("⚠"), name,
+			display.Grey(fmt.Sprintf("agent %s / cli %s", m.agentVersion, m.cliVersion)),
+			display.Gold("version mismatch"), managedBy)
+	case m.onAgent():
+		return fmt.Sprintf("  %s %s  %s  %s%s",
+			display.Green("✓"), name, display.Grey(m.agentVersion),
+			display.Grey("(agent)"), managedBy)
+	default:
+		return fmt.Sprintf("  %s %s  %s  %s%s",
+			display.Green("✓"), name, display.Grey(m.cliVersion),
+			display.Grey("(cli)"), managedBy)
+	}
 }
 
 func renderPluginSearch(plugins []apimodel.Plugin) string {
