@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -56,11 +57,21 @@ type DatastorePostgres struct {
 // BuildConnStr constructs a PostgreSQL connection string from config fields.
 // Unix socket hosts (starting with /) use DSN key-value format to avoid
 // URI parsing issues with colons in paths like /cloudsql/project:region:instance.
+//
+// User and password are percent-encoded per RFC 3986 userinfo rules so that
+// passwords containing reserved characters (e.g. RDS-managed master passwords
+// with `!`, `<`, `(`, `:`, `#`, `*`) round-trip cleanly through pgx's URL parser.
 func BuildConnStr(host string, port int, user, password, database string) string {
 	if strings.HasPrefix(host, "/") {
 		return fmt.Sprintf("host=%s user=%s password=%s dbname=%s", host, user, password, database)
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", user, password, host, port, database)
+	u := url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(user, password),
+		Host:   fmt.Sprintf("%s:%d", host, port),
+		Path:   "/" + database,
+	}
+	return u.String()
 }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
