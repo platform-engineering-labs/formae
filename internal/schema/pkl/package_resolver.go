@@ -14,6 +14,15 @@ import (
 	"github.com/masterminds/semver"
 )
 
+// SchemaManifest describes the per-version subtrees a plugin ships under
+// schema/pkl/. Derived from filesystem layout — the `v*/` subdirectories
+// at the install root. Used by formae to pick a default schema version
+// when no per-target ApiVersion is set.
+type SchemaManifest struct {
+	Versions []string
+	Default  string
+}
+
 // Package represents a PKL schema package dependency
 type Package struct {
 	Name      string // Package name (e.g., "formae", "aws", "gcp")
@@ -255,6 +264,73 @@ func (r *PackageResolver) InstalledVersion(namespace string) string {
 	}
 
 	return ""
+}
+
+// SchemaManifestForNamespace inspects the installed plugin's schema/pkl/
+// dir for `v*/` subdirectories and returns them as a sorted version list
+// with the highest entry as the default.
+//
+// Sort order: semver-aware when every key parses as semver (e.g. v1.9 <
+// v1.10 < v1.30); falls back to lexical otherwise so opaque keys like
+// date-style v2024-01-01 still sort sensibly when zero-padded.
+//
+// Returns nil when local schemas are disabled, the plugin isn't installed
+// locally, or the install dir has no `v*/` subdirs (i.e. the plugin
+// doesn't ship a versioned schema layout — legacy unrestricted glob applies).
+//
+// Used by callers (CLI extract path) to pick a default schema version when
+// the Forma's per-target ApiVersion field is unset.
+func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaManifest {
+	if !r.useLocalSchemas || r.localSchemaBasePath == "" {
+		return nil
+	}
+	pklProjectPath, _ := r.findLocalSchema(namespace)
+	if pklProjectPath == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Dir(pklProjectPath))
+	if err != nil {
+		return nil
+	}
+	var versions []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "v") {
+			versions = append(versions, e.Name())
+		}
+	}
+	if len(versions) == 0 {
+		return nil
+	}
+	sortVersionKeys(versions)
+	return &SchemaManifest{
+		Versions: versions,
+		Default:  versions[len(versions)-1],
+	}
+}
+
+// sortVersionKeys sorts in-place. When every key parses as semver,
+// orders by semver (so v1.9 < v1.10). Falls back to lexical otherwise so
+// date-style or other opaque keys keep their existing behavior.
+func sortVersionKeys(keys []string) {
+	type pair struct {
+		raw    string
+		parsed *semver.Version
+	}
+	pairs := make([]pair, len(keys))
+	for i, k := range keys {
+		v, err := semver.NewVersion(strings.TrimPrefix(k, "v"))
+		if err != nil {
+			sort.Strings(keys)
+			return
+		}
+		pairs[i] = pair{raw: k, parsed: v}
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].parsed.LessThan(pairs[j].parsed)
+	})
+	for i, p := range pairs {
+		keys[i] = p.raw
+	}
 }
 
 // readPackageNameFromPklProject reads the package name from a PklProject file.

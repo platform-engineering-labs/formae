@@ -367,6 +367,101 @@ func TestPackageResolver_WithLocalSchemas_MissingPklProject(t *testing.T) {
 	assert.False(t, packages[0].IsLocal) // Should fall back to remote
 }
 
+// installVersionedPlugin creates a fake versioned-schema install layout for
+// the given namespace, with the listed `v*/` subdirectories present (each as
+// an empty dir — sufficient for the resolver's filesystem scan). Returns the
+// plugins-dir base path the resolver should be pointed at.
+func installVersionedPlugin(t *testing.T, namespace, pkgName string, versionSubdirs []string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	versionDir := filepath.Join(tmpDir, pkgName, "v0.1.1")
+	pklDir := filepath.Join(versionDir, "schema", "pkl")
+	require.NoError(t, os.MkdirAll(pklDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(versionDir, "formae-plugin.pkl"),
+		[]byte(fmt.Sprintf("namespace = %q", namespace)), 0644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pklDir, "PklProject"),
+		[]byte(fmt.Sprintf("amends \"pkl:Project\"\npackage { name = %q }\n", pkgName)), 0644))
+	for _, sub := range versionSubdirs {
+		require.NoError(t, os.MkdirAll(filepath.Join(pklDir, sub), 0755))
+	}
+	return tmpDir
+}
+
+func TestPackageResolver_SchemaManifest_ReadsVersionsFromSubdirs(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.21", "v1.30", "v1.34"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, []string{"v1.21", "v1.30", "v1.34"}, m.Versions)
+	assert.Equal(t, "v1.34", m.Default,
+		"Default is the lexically-highest v* subdir")
+}
+
+func TestPackageResolver_SchemaManifest_NoVersionSubdirsReturnsNil(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", nil)
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	assert.Nil(t, resolver.SchemaManifestForNamespace("k8s"),
+		"No v*/ subdirs means the plugin doesn't ship a versioned schema; resolver returns nil so legacy unrestricted glob fires")
+}
+
+func TestPackageResolver_SchemaManifest_RemoteOnlyReturnsNil(t *testing.T) {
+	resolver := NewPackageResolver()
+	assert.Nil(t, resolver.SchemaManifestForNamespace("k8s"),
+		"Remote-only resolver has no local install to scan")
+}
+
+func TestPackageResolver_SchemaManifest_UnknownNamespaceReturnsNil(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.30"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	assert.Nil(t, resolver.SchemaManifestForNamespace("aws"))
+}
+
+func TestPackageResolver_SchemaManifest_OpaqueVersionKeysSort(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "AWS", "aws",
+		[]string{"v2024-01-01", "v2024-09-15", "v2025-03-01"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("aws")
+	require.NotNil(t, m)
+	assert.Equal(t, "v2025-03-01", m.Default,
+		"Lexical sort works for date-style version keys when zero-padded")
+}
+
+// Regression: lexical sort picks v1.9 as the default when v1.10 is also
+// present (because "v1.10" < "v1.9" lexically). Default selection must be
+// semver-aware when all keys parse as semver.
+func TestPackageResolver_SchemaManifest_SemverDefaultBeatsLexical(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.9", "v1.10", "v1.30"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, "v1.30", m.Default,
+		"semver-aware sort: v1.30 > v1.10 > v1.9 (lexical would pick v1.9)")
+	assert.Equal(t, []string{"v1.9", "v1.10", "v1.30"}, m.Versions,
+		"Versions are returned in ascending semver order so callers see a stable shape")
+}
+
+func TestPackageResolver_SchemaManifest_NonVersionDirsIgnored(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.21", "v1.30", "v1.34"})
+	// Add some noise that should NOT be treated as a version subtree.
+	pklDir := filepath.Join(tmpDir, "k8s", "v0.1.1", "schema", "pkl")
+	require.NoError(t, os.MkdirAll(filepath.Join(pklDir, "core"), 0755))    // api-group dir under root, only present in non-versioned plugins
+	require.NoError(t, os.MkdirAll(filepath.Join(pklDir, "_backup"), 0755)) // editor backup
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, []string{"v1.21", "v1.30", "v1.34"}, m.Versions,
+		"Only `v*` prefixed subdirs are treated as schema versions")
+}
+
 func TestPackageResolver_WithLocalSchemas_FollowsSymlinkedPluginDir(t *testing.T) {
 	wrapperDir := t.TempDir()
 	systemRoot := t.TempDir()

@@ -64,6 +64,29 @@ func bundledPklCommand() []string {
 	return nil
 }
 
+// runPklProjectResolve invokes `pkl project resolve <dir>` using the
+// sibling-of-formae binary when present, falling back to PATH. Combined
+// stdout/stderr is included in the returned error so failures (missing
+// binary, malformed PklProject, network issues fetching remote deps) are
+// surfaced at the call site instead of silently dropped.
+func runPklProjectResolve(dir string) error {
+	args := []string{"project", "resolve", dir}
+	var cmd *exec.Cmd
+	if pklCmd := bundledPklCommand(); pklCmd != nil {
+		cmd = exec.Command(pklCmd[0], append(append([]string{}, pklCmd[1:]...), args...)...)
+	} else {
+		cmd = exec.Command("pkl", args...)
+	}
+	if errors.Is(cmd.Err, exec.ErrDot) {
+		cmd.Err = nil
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pkl project resolve failed in %s: %w\nOutput: %s", dir, err, string(output))
+	}
+	return nil
+}
+
 func (p PKL) Name() string {
 	return "pkl"
 }
@@ -494,6 +517,19 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// Case 2: no existing PklProject — discover deps from options.LocalPluginDir
 		// and pin them so the generator and target ProjectInit use identical specs.
 		deps := resolveIncludes(forma, options)
+		// Apply schema-version dispatch so the written PklProject points
+		// versioned namespaces at their local install (where v*/ subtrees
+		// live). Without this, the on-disk PklProject misses any namespace
+		// that schema-version dispatch would resolve, and a later eval of
+		// the generated .pkl can't resolve `@<ns>/v*/...` imports.
+		// resolveSchemaVersions is a no-op outside SchemaLocationLocal,
+		// so versions is non-empty only when schemaLocation is already
+		// Local — no flip needed here.
+		versions, err := resolveSchemaVersions(forma, options)
+		if err != nil {
+			return schema.GenerateSourcesResult{}, err
+		}
+		deps = swapVersionedDepsToLocal(deps, versions, options)
 		options.Dependencies = deps
 
 		if err := p.ProjectInit(parentDir, deps, schemaLocation); err != nil {
@@ -601,13 +637,8 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.Sc
 	}
 
 	if hasRemotePackages {
-		cmd := exec.Command("pkl", "project", "resolve", path)
-		if errors.Is(cmd.Err, exec.ErrDot) {
-			cmd.Err = nil
-		}
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("project resolve failed: %w\nOutput: %s", err, string(output))
+		if err := runPklProjectResolve(path); err != nil {
+			return err
 		}
 	}
 

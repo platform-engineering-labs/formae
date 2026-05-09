@@ -2,12 +2,17 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
+//go:build unit
+
 package pkl
 
 import (
+	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -47,4 +52,230 @@ func TestResolveIncludes_RemoteOnlyWhenNoDirAndNoDeps(t *testing.T) {
 	// remote aws entry — and since aws version is "" (no installed version), it's
 	// added as a plain namespace.
 	assert.Contains(t, got, "aws.aws@")
+}
+
+func TestResolveSchemaVersions_NilForma(t *testing.T) {
+	got, err := resolveSchemaVersions(nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	got, err = resolveSchemaVersions(nil, &schema.SerializeOptions{})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestResolveSchemaVersions_TargetStampWinsOverFilesystemDefault(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.21", "v1.30", "v1.34"})
+	forma := &model.Forma{
+		Targets:   []model.Target{{Namespace: "K8S", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)}},
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "v1.27", got["k8s"],
+		"per-target stamp pins the version; filesystem default is the fallback")
+}
+
+func TestResolveSchemaVersions_FilesystemDefaultUsedWhenNoStamp(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.21", "v1.30", "v1.34"})
+	forma := &model.Forma{
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "v1.34", got["k8s"],
+		"no target stamp → highest v*/ subdir wins (semver-aware)")
+}
+
+func TestResolveSchemaVersions_NamespaceWithNoSourceOmitted(t *testing.T) {
+	forma := &model.Forma{
+		Resources: []model.Resource{{Type: "AWS::S3::Bucket"}},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got, "no target stamp, no installed plugin → nil so ImportsGenerator falls back to unrestricted glob")
+}
+
+func TestResolveSchemaVersions_TargetStampOnlyForMatchingNamespace(t *testing.T) {
+	// Stamp lives on the K8S target; AWS resources in the same Forma
+	// must not pick it up.
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.21", "v1.30", "v1.34"})
+	forma := &model.Forma{
+		Targets: []model.Target{{Namespace: "K8S", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)}},
+		Resources: []model.Resource{
+			{Type: "K8S::Core::Pod"},
+			{Type: "AWS::S3::Bucket"},
+		},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "v1.27", got["k8s"])
+	_, awsHas := got["aws"]
+	assert.False(t, awsHas, "no AWS plugin install + no AWS target stamp → no entry")
+}
+
+// Two K8S targets at different ApiVersions cannot both be honored by a
+// single ImportsGenerator pass (one PklProject resolves a package one way).
+// Reject up front so users get an actionable error instead of a silent
+// first-target-wins selection that misrenders resources bound to the other
+// target. Per-target dispatch is a future redesign; this gate buys time.
+func TestResolveSchemaVersions_RejectsConflictingApiVersionsWithinNamespace(t *testing.T) {
+	forma := &model.Forma{
+		Targets: []model.Target{
+			{Namespace: "K8S", Label: "prod", Config: json.RawMessage(`{"ApiVersion":"v1.30"}`)},
+			{Namespace: "K8S", Label: "dr", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)},
+		},
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	_, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationLocal,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "K8S")
+	assert.Contains(t, err.Error(), "v1.30")
+	assert.Contains(t, err.Error(), "v1.27")
+	assert.Contains(t, err.Error(), "prod")
+	assert.Contains(t, err.Error(), "dr")
+}
+
+// Two targets in the same namespace with the same ApiVersion are fine —
+// they collapse to one entry and resolve the same way.
+func TestResolveSchemaVersions_AllowsSameApiVersionAcrossTargets(t *testing.T) {
+	forma := &model.Forma{
+		Targets: []model.Target{
+			{Namespace: "K8S", Label: "prod", Config: json.RawMessage(`{"ApiVersion":"v1.30"}`)},
+			{Namespace: "K8S", Label: "dr", Config: json.RawMessage(`{"ApiVersion":"v1.30"}`)},
+		},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{SchemaLocation: schema.SchemaLocationLocal})
+	require.NoError(t, err)
+	assert.Equal(t, "v1.30", got["k8s"])
+}
+
+// When the user explicitly requests --schema-location remote, versioned
+// dispatch must be a no-op even if targets carry ApiVersion stamps or a
+// local plugin tree is reachable. Otherwise an explicit remote extract gets
+// silently flipped to local, and output starts depending on the CLI host's
+// plugin install instead of the agent-reported remote packages.
+func TestResolveSchemaVersions_NoDispatchInRemoteMode(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.21", "v1.30", "v1.34"})
+	forma := &model.Forma{
+		Targets:   []model.Target{{Namespace: "K8S", Config: json.RawMessage(`{"ApiVersion":"v1.27"}`)}},
+		Resources: []model.Resource{{Type: "K8S::Core::Pod"}},
+	}
+	got, err := resolveSchemaVersions(forma, &schema.SerializeOptions{
+		SchemaLocation: schema.SchemaLocationRemote,
+		LocalPluginDir: tmpDir,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got,
+		"explicit remote mode opts out of versioned dispatch — even when a local plugin tree is reachable and a target stamps ApiVersion")
+}
+
+func TestFormatVersionsForProperty_Empty(t *testing.T) {
+	assert.Equal(t, "", formatVersionsForProperty(nil))
+	assert.Equal(t, "", formatVersionsForProperty(map[string]string{}))
+}
+
+func TestFormatVersionsForProperty_SingleEntry(t *testing.T) {
+	assert.Equal(t, "k8s=v1.30", formatVersionsForProperty(map[string]string{"k8s": "v1.30"}))
+}
+
+func TestFormatVersionsForProperty_StableOrderAcrossKeys(t *testing.T) {
+	// Sorted ascending so the property string is deterministic for caching
+	// and reproducible test output.
+	assert.Equal(t, "aws=v2024-01-01,k8s=v1.30", formatVersionsForProperty(map[string]string{
+		"k8s": "v1.30",
+		"aws": "v2024-01-01",
+	}))
+}
+
+func TestFormatVersionsForProperty_LowercasesNamespace(t *testing.T) {
+	assert.Equal(t, "k8s=v1.30", formatVersionsForProperty(map[string]string{"K8S": "v1.30"}),
+		"namespace is lowercased so ImportsGenerator's pkg-name comparison hits regardless of casing in the source map")
+}
+
+func TestFormatVersionsForProperty_DropsBlankEntries(t *testing.T) {
+	assert.Equal(t, "k8s=v1.30", formatVersionsForProperty(map[string]string{
+		"k8s": "v1.30",
+		"":    "v9",
+		"aws": "",
+	}))
+}
+
+// Regression: when caller pre-resolves an include as `local:k8s:<path>` (e.g.
+// resolveIncludes via resolver.WithLocalSchemas), the previous swap pass
+// failed to recognize it and appended a duplicate `local:k8s:<path>` entry,
+// producing `Duplicate definition of member "k8s"` from `pkl project resolve`.
+func TestSwapVersionedDepsToLocal_DoesNotDuplicateExistingLocalEntry(t *testing.T) {
+	pluginDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.34"})
+	localPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
+
+	includes := []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + localPath,
+	}
+	versions := map[string]string{"k8s": "v1.34"}
+	options := &schema.SerializeOptions{LocalPluginDir: pluginDir}
+
+	got := swapVersionedDepsToLocal(includes, versions, options)
+
+	assert.ElementsMatch(t, []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + localPath,
+	}, got, "existing local: entry must pass through without a duplicate appended")
+}
+
+// When the include list has a remote `<ns>.<name>@<ver>` entry, the swap pass
+// should rewrite it in place to `local:<name>:<path>` (not append).
+func TestSwapVersionedDepsToLocal_RewritesRemoteToLocal(t *testing.T) {
+	pluginDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.34"})
+	expectedPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
+
+	includes := []string{
+		"pkl.formae@0.85.0",
+		"k8s.k8s@0.1.1",
+	}
+	versions := map[string]string{"k8s": "v1.34"}
+	options := &schema.SerializeOptions{LocalPluginDir: pluginDir}
+
+	got := swapVersionedDepsToLocal(includes, versions, options)
+
+	assert.ElementsMatch(t, []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + expectedPath,
+	}, got)
+}
+
+// When the namespace is missing from includes entirely, the swap pass must
+// append a fresh `local:<name>:<path>` so the temp PklProject can resolve it.
+func TestSwapVersionedDepsToLocal_AppendsWhenNamespaceMissing(t *testing.T) {
+	pluginDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.34"})
+	expectedPath := filepath.Join(pluginDir, "k8s", "v0.1.1", "schema", "pkl", "PklProject")
+
+	includes := []string{"pkl.formae@0.85.0"}
+	versions := map[string]string{"k8s": "v1.34"}
+	options := &schema.SerializeOptions{LocalPluginDir: pluginDir}
+
+	got := swapVersionedDepsToLocal(includes, versions, options)
+
+	assert.ElementsMatch(t, []string{
+		"pkl.formae@0.85.0",
+		"local:k8s:" + expectedPath,
+	}, got)
 }
