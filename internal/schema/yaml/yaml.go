@@ -140,7 +140,7 @@ func highlight(code []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (j YAML) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+func (j YAML) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, options *schema.SerializeOptions) (schema.GenerateSourcesResult, error) {
 	return schema.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 

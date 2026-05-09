@@ -53,53 +53,6 @@ func discoverCmd() *cobra.Command {
 	}
 }
 
-func awsSupportedTypes() *cobra.Command {
-	return &cobra.Command{
-		Use:   "aws-support [type]",
-		Short: "List AWS plugin supported resource types or get schema for specific type",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			app, err := cmd.AppFromContext(command.Context(), "", "", command)
-			if err != nil {
-				return err
-			}
-
-			// Get the AWS resource plugin
-			awsPlugin, err := app.PluginManager.ResourcePlugin("aws")
-			if err != nil {
-				return fmt.Errorf("failed to get AWS plugin: %w", err)
-			}
-
-			// If a specific type is provided, get its schema
-			if len(args) == 1 {
-				resourceType := args[0]
-				schema, err := (*awsPlugin).SchemaForResourceType(resourceType)
-				if err != nil {
-					return fmt.Errorf("failed to get schema for resource type %s: %w", resourceType, err)
-				}
-
-				fmt.Printf("Schema for AWS resource type '%s':\n\n", resourceType)
-				fmt.Printf("Identifier: %s\n", schema.Identifier)
-				fmt.Printf("CreateOnly: %v\n", schema.CreateOnly())
-				fmt.Printf("Fields: %v\n", schema.Fields)
-
-				return nil
-			}
-
-			// Otherwise, list all supported resources
-			resources := (*awsPlugin).SupportedResources()
-			fmt.Printf("AWS Plugin supports %d resource types:\n\n", len(resources))
-
-			for i, resource := range resources {
-				fmt.Printf("%d. %s\n", i+1, resource.Type)
-			}
-
-			return nil
-		},
-		SilenceErrors: true,
-	}
-}
-
 func DevCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "dev",
@@ -114,11 +67,9 @@ func DevCmd() *cobra.Command {
 
 	sync := syncCmd()
 	discover := discoverCmd()
-	awsSupport := awsSupportedTypes()
 
 	command.AddCommand(sync)
 	command.AddCommand(discover)
-	command.AddCommand(awsSupport)
 
 	return command
 }

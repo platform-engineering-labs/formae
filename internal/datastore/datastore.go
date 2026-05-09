@@ -283,4 +283,9 @@ type Datastore interface {
 	// without re-writing all ResourceUpdates. This is a performance optimization for
 	// progress updates where the ResourceUpdate is already updated via UpdateResourceUpdateProgress.
 	UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error
+
+	// UpdateFormaCommandTargetUpdates updates the target_updates JSON blob and command metadata
+	// (state, modified_ts) without re-writing ResourceUpdates. Used by markTargetUpdateAsComplete
+	// to persist target state changes that would otherwise only live in the in-memory cache.
+	UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error
 }

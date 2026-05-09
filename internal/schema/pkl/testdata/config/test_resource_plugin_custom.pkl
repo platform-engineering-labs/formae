@@ -1,0 +1,23 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+amends "formae:/Config.pkl"
+
+import "formae:/Config.pkl"
+
+local class SftpConfig extends Config.BaseResourcePluginConfig {
+    defaultTimeoutSeconds: Int = 30
+    defaultFilePermissions: String = "0644"
+}
+
+agent {
+    resourcePlugins {
+        new SftpConfig {
+            type = "sftp"
+            defaultTimeoutSeconds = 60
+            defaultFilePermissions = "0755"
+        }
+    }
+}

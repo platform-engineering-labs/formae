@@ -28,6 +28,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -89,7 +90,6 @@ const (
 )
 
 type DiscoveryData struct {
-	pluginManager                 *plugin.Manager
 	ds                            datastore.Datastore
 	serverCfg                     *pkgmodel.ServerConfig
 	discoveryCfg                  *pkgmodel.DiscoveryConfig
@@ -140,12 +140,6 @@ type ListOperation struct {
 }
 
 func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryData], error) {
-	pluginManager, ok := d.Env("PluginManager")
-	if !ok {
-		d.Log().Error("Discovery: missing 'PluginManager' environment variable")
-		return statemachine.StateMachineSpec[DiscoveryData]{}, fmt.Errorf("discovery: missing 'PluginManager' environment variable")
-	}
-
 	dsEnv, ok := d.Env("Datastore")
 	if !ok {
 		d.Log().Error("Discovery: missing 'Datastore' environment variable")
@@ -170,7 +164,6 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 	ds := dsEnv.(datastore.Datastore)
 
 	data := DiscoveryData{
-		pluginManager:                 pluginManager.(*plugin.Manager),
 		ds:                            ds,
 		discoveryCfg:                  &discoveryCfg,
 		serverCfg:                     &serverCfg,
@@ -217,11 +210,11 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, proc gen.Process) (gen.Atom, DiscoveryData, error) {
 	if oldState == StateDiscovering && newState == StateIdle {
-		proc.Log().Debug("Discovery finished. The following resources have been discovered:\n"+renderSummary(data.summary), "duration", time.Since(data.timeStarted))
+		proc.Log().Debug("Discovery finished (duration=%s). The following resources have been discovered:\n%s", time.Since(data.timeStarted), renderSummary(data.summary))
 		if data.isScheduledDiscovery {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return newState, data, gen.TerminateReasonPanic
 			}
 		}
@@ -235,7 +228,7 @@ func pauseDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message me
 	}
 
 	data.pauseCount++
-	proc.Log().Debug("Discovery paused", "pauseCount", data.pauseCount, "outstandingListOps", len(data.outstandingListOperations), "outstandingSyncCmds", len(data.outstandingSyncCommands))
+	proc.Log().Debug("Discovery paused pauseCount=%d outstandingListOps=%d outstandingSyncCmds=%d", data.pauseCount, len(data.outstandingListOperations), len(data.outstandingSyncCommands))
 	return state, data, messages.PauseDiscoveryResponse{}, nil, nil
 }
 
@@ -247,13 +240,13 @@ func resumeDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message m
 	if data.pauseCount > 0 {
 		data.pauseCount--
 	}
-	proc.Log().Debug("Discovery resume requested", "pauseCount", data.pauseCount)
+	proc.Log().Debug("Discovery resume requested pauseCount=%d", data.pauseCount)
 
 	// If we're no longer paused and have queued operations, resume scanning
 	if data.pauseCount == 0 && len(data.queuedListOperations) > 0 {
 		err := proc.Send(proc.PID(), ResumeScanning{})
 		if err != nil {
-			proc.Log().Error("Failed to send ResumeScanning after unpause", "error", err)
+			proc.Log().Error("Failed to send ResumeScanning after unpause: %v", err)
 			return state, data, nil, gen.TerminateReasonPanic
 		}
 	}
@@ -297,11 +290,11 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// Clear per-cycle state at start of each discovery cycle
 	data.pluginInfoCache = make(map[string]*messages.PluginInfoResponse)
 	data.typesWithChildrenQueued = make(map[string]struct{})
-	proc.Log().Debug("Starting resource discovery", "timestamp", data.timeStarted)
+	proc.Log().Debug("Starting resource discovery timestamp=%v", data.timeStarted)
 
 	allTargets, err := data.ds.LoadDiscoverableTargets()
 	if err != nil {
-		proc.Log().Error("Discovery: failed to load targets from datastore", "error", err)
+		proc.Log().Error("Discovery: failed to load targets from datastore: %v", err)
 		allTargets = []*pkgmodel.Target{}
 	}
 	data.SetTargets(allTargets)
@@ -313,10 +306,10 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 		if data.isScheduledDiscovery {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return StateIdle, data, nil, gen.TerminateReasonPanic
 			}
-			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
+			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
 		}
 
 		return StateIdle, data, nil, nil
@@ -335,9 +328,15 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 
 		discoverableResources := pluginInfo.SupportedResources
 		supportedResources := make([]plugin.ResourceDescriptor, 0)
+
+		// Per-plugin resourceTypesToDiscover takes precedence over global
+		typesToDiscover := pluginInfo.ResourceTypesToDiscover
+		if len(typesToDiscover) == 0 {
+			typesToDiscover = data.discoveryCfg.ResourceTypesToDiscover
+		}
+
 		for _, desc := range discoverableResources {
-			if len(data.discoveryCfg.ResourceTypesToDiscover) == 0 ||
-				slices.Contains(data.discoveryCfg.ResourceTypesToDiscover, desc.Type) {
+			if len(typesToDiscover) == 0 || slices.Contains(typesToDiscover, desc.Type) {
 				supportedResources = append(supportedResources, desc)
 				data.resourceDescriptors[desc.Type] = desc
 			}
@@ -366,10 +365,10 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 		if data.isScheduledDiscovery {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run", "error", err)
+				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return StateIdle, data, nil, gen.TerminateReasonPanic
 			}
-			proc.Log().Debug("Scheduled next discovery run", "interval", data.discoveryCfg.Interval)
+			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
 		}
 		return StateIdle, data, nil, nil
 	}
@@ -392,7 +391,7 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 
 	// Don't start new list operations if Discovery is paused
 	if data.pauseCount > 0 {
-		proc.Log().Debug("Discovery is paused, skipping resumeScanning", "pauseCount", data.pauseCount)
+		proc.Log().Debug("Discovery is paused, skipping resumeScanning pauseCount=%d", data.pauseCount)
 		return state, data, nil, nil
 	}
 
@@ -404,7 +403,7 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 		remaining := len(data.queuedListOperations[namespace])
 		tokens, err := proc.Call(actornames.RateLimiter, changeset.RequestTokens{Namespace: namespace, N: remaining})
 		if err != nil {
-			proc.Log().Error("Failed to fetch tokens for namespace.", "namespace", namespace, "error", err)
+			proc.Log().Error("Failed to fetch tokens for namespace=%s: %v", namespace, err)
 			return state, data, nil, gen.TerminateReasonPanic
 		}
 		n := tokens.(changeset.TokensGranted).N
@@ -481,11 +480,18 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 		return fmt.Errorf("failed to spawn PluginOperator: %s", spawnRes.Error)
 	}
 
+	// Strip resolvable metadata ($ref/$value wrappers) from target config before
+	// sending to plugin — plugins expect plain JSON values, not resolvable objects.
+	pluginConfig := target.Config
+	if cleanConfig, err := resolver.ConvertToPluginFormat(target.Config); err == nil {
+		pluginConfig = cleanConfig
+	}
+
 	err = proc.Send(spawnRes.PID, plugin.ListResources{
 		Namespace:      target.Namespace,
 		TargetLabel:    target.Label,
 		ResourceType:   op.ResourceType,
-		TargetConfig:   target.Config,
+		TargetConfig:   pluginConfig,
 		ListParameters: listParameters,
 	})
 	if err != nil {
@@ -506,24 +512,16 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	delete(data.outstandingListOperations, mapKey)
 
 	// Remove the operation from remaining work if the plugin reported an error
-	if message.Error != nil {
-		proc.Log().Error("Failed to list resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, message.Error)
+	if message.Error != "" {
+		proc.Log().Error("Failed to list resources for %s in target %s: %s", message.ResourceType, message.TargetLabel, message.Error)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
 		}
 		return state, data, nil, nil
 	}
 
-	// Decompress the resources from the gzip-compressed message
-	listedResources, err := plugin.DecompressListedResources(message.Resources)
-	if err != nil {
-		proc.Log().Error("Failed to decompress resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
-		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
-		}
-		return state, data, nil, nil
-	}
-	proc.Log().Debug("Decompressed %d resources for %s in target %s", len(listedResources), message.ResourceType, message.TargetLabel)
+	listedResources := message.Resources
+	proc.Log().Debug("Received %d resources for %s in target %s", len(listedResources), message.ResourceType, message.TargetLabel)
 
 	// De-duplicate resources already under management
 	var newResources []plugin.ListedResource
@@ -604,7 +602,7 @@ func getSchemaFromCache(data *DiscoveryData, namespace, resourceType string) (pk
 }
 
 // getMatchFiltersFromCache retrieves MatchFilters from the cached plugin info
-func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []plugin.MatchFilter {
+func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []pkgmodel.MatchFilter {
 	pluginInfo, ok := data.pluginInfoCache[namespace]
 	if !ok {
 		return nil
@@ -613,8 +611,8 @@ func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []plugin.Ma
 }
 
 // findMatchFiltersForType finds all MatchFilters that apply to the given resource type
-func findMatchFiltersForType(filters []plugin.MatchFilter, resourceType string) []plugin.MatchFilter {
-	var result []plugin.MatchFilter
+func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
+	var result []pkgmodel.MatchFilter
 	for i := range filters {
 		if slices.Contains(filters[i].ResourceTypes, resourceType) {
 			result = append(result, filters[i])
@@ -689,14 +687,15 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		Command: *syncCommand,
 	})
 	if err != nil {
-		proc.Log().Error("failed to store sync command", "error", err)
+		proc.Log().Error("failed to store sync command: %v", err)
 		return "", err
 	}
 
-	// Sync commands (READs) will never contain cycles so we can safely ignore the error here.
-	cs, _ := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandApply)
+	// Pass CommandSync so the DAG skips buildOperationRelationships — discovery
+	// sync reads are independent and one failed read must not cascade to others.
+	cs, _ := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync)
 
-	proc.Log().Debug("Ensuring ChangesetExecutor for sync command", "commandID", syncCommand.ID)
+	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
 		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: proc.Node().Name()},
 		changeset.EnsureChangesetExecutor{CommandID: syncCommand.ID},
@@ -706,7 +705,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		return "", err
 	}
 
-	proc.Log().Debug("Starting ChangesetExecutor for sync command", "commandID", syncCommand.ID)
+	proc.Log().Debug("Starting ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	err = proc.Send(
 		gen.ProcessID{Name: actornames.ChangesetExecutor(syncCommand.ID), Node: proc.Node().Name()},
 		changeset.Start{Changeset: cs, NotifyOnComplete: true},
@@ -740,7 +739,7 @@ func discoverChildrenOnce(op ListOperation, data DiscoveryData, proc gen.Process
 	}
 	parents, err := data.ds.QueryResources(&query)
 	if err != nil {
-		proc.Log().Error("Failed to load parent resources", "type", op.ResourceType, "target", op.TargetLabel, "error", err)
+		proc.Log().Error("Failed to load parent resources type=%s target=%s: %v", op.ResourceType, op.TargetLabel, err)
 		return fmt.Errorf("failed to load parent resources: %w", err)
 	}
 
@@ -771,7 +770,7 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 						ListValue:      actualValue,
 					}
 				} else {
-					proc.Log().Error("Missing parent property", "property", param.ParentProperty, "parent_id", parent.NativeID)
+					proc.Log().Error("Missing parent property property=%s parent_id=%s", param.ParentProperty, parent.NativeID)
 				}
 			}
 			data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(data.queuedListOperations[data.targets[op.TargetLabel].Namespace], ListOperation{
@@ -784,7 +783,7 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 			// If a delayed message is pending, it will process the queued work when it arrives.
 			if !data.hasPendingResumeScan {
 				if err := proc.Send(proc.PID(), ResumeScanning{}); err != nil {
-					proc.Log().Error("Failed to send ResumeScanning", "error", err)
+					proc.Log().Error("Failed to send ResumeScanning: %v", err)
 					return fmt.Errorf("failed to send ResumeScanning: %w", err)
 				}
 			}
@@ -797,13 +796,13 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message changeset.ChangesetCompleted, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	op, exists := data.outstandingSyncCommands[message.CommandID]
 	if !exists {
-		proc.Log().Error("Discovery received ChangesetCompleted for unknown command ID", "commandID", message.CommandID)
+		proc.Log().Error("Discovery received ChangesetCompleted for unknown command ID commandID=%s", message.CommandID)
 		return state, data, nil, nil
 	}
 	delete(data.outstandingSyncCommands, message.CommandID)
 
 	if message.State == changeset.ChangeSetStateFinishedWithErrors {
-		proc.Log().Error("Discovery failed to synchronize discovered resources", "resourceType", op.ResourceType, "listParams", op.ListParams, "commandID", message.CommandID)
+		proc.Log().Error("Discovery failed to synchronize discovered resources resourceType=%s listParams=%s commandID=%s", op.ResourceType, op.ListParams, message.CommandID)
 		delete(data.nativeIDsByCommand, message.CommandID)
 		if !data.HasOutstandingWork() {
 			return StateIdle, data, nil, nil
@@ -822,7 +821,7 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		}
 		allParents, err := data.ds.QueryResources(&query)
 		if err != nil {
-			proc.Log().Error("Failed to load parent resources for child discovery", "type", op.ResourceType, "target", op.TargetLabel, "error", err)
+			proc.Log().Error("Failed to load parent resources for child discovery type=%s target=%s: %v", op.ResourceType, op.TargetLabel, err)
 			if !data.HasOutstandingWork() {
 				return StateIdle, data, nil, nil
 			}

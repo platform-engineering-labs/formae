@@ -19,6 +19,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
@@ -1192,5 +1193,213 @@ func TestSynchronizer_SyncPicksUpNewSchemaFields(t *testing.T) {
 			assert.NotContains(t, roProps, "VersioningConfiguration",
 				"VersioningConfiguration should NOT be in ReadOnlyProperties")
 		}
+	})
+}
+
+// TestSynchronizer_SyncCleansUpOrphanedResources_TargetDeleted reproduces a
+// real cross-cloud scenario:
+//
+//  1. Deploy: static target → EKS cluster → nested K8S target ($ref to
+//     cluster endpoint) → K8S resource on the nested target
+//  2. Discovery finds an additional unmanaged resource on the nested target
+//  3. Destroy the stack — managed resources + nested target are deleted
+//  4. Sync cycle runs — the orphaned unmanaged resource (whose target no
+//     longer exists) should be cleaned up via the "deleted OOB" path
+//
+// Without the fix, the sync generator panics on nil target dereference or the
+// ResourceUpdater sends an empty target config to the plugin, producing
+// repeated UnforeseenError logs on every sync tick.
+func TestSynchronizer_SyncCleansUpOrphanedResources_TargetDeleted(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		clusterProps := `{"BucketName":"eks-cluster","Endpoint":"https://eks.example.com"}`
+		clusterKsuid := "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
+
+		// isConsumerTarget distinguishes the nested target (consumer) from the
+		// static target (provider) by checking whether the plugin-format config
+		// contains "endpoint" (resolved from $ref) vs "region" (plain value).
+		isConsumerTarget := func(targetConfig json.RawMessage) bool {
+			var cfg map[string]any
+			if err := json.Unmarshal(targetConfig, &cfg); err != nil {
+				return false
+			}
+			_, hasEndpoint := cfg["endpoint"]
+			return hasEndpoint
+		}
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          request.Label,
+					NativeID:           "native-" + request.Label,
+					ResourceProperties: request.Properties,
+				}}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				switch request.NativeID {
+				case "native-cluster":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   clusterProps,
+					}, nil
+				case "native-app":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   `{"BucketName":"my-app"}`,
+					}, nil
+				case "discovered-ns":
+					return &resource.ReadResult{
+						ResourceType: "FakeAWS::S3::Bucket",
+						Properties:   `{"BucketName":"discovered-ns"}`,
+					}, nil
+				default:
+					return &resource.ReadResult{
+						ResourceType: request.ResourceType,
+						Properties:   fmt.Sprintf(`{"BucketName":"%s"}`, request.NativeID),
+					}, nil
+				}
+			},
+			List: func(request *resource.ListRequest) (*resource.ListResult, error) {
+				if request.ResourceType != "FakeAWS::S3::Bucket" {
+					return &resource.ListResult{}, nil
+				}
+				// Only the consumer target should yield a discovered resource.
+				if isConsumerTarget(request.TargetConfig) {
+					return &resource.ListResult{
+						NativeIDs:     []string{"discovered-ns"},
+						NextPageToken: nil,
+					}, nil
+				}
+				return &resource.ListResult{}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return &resource.DeleteResult{ProgressResult: &resource.ProgressResult{
+					Operation:       resource.OperationDelete,
+					OperationStatus: resource.OperationStatusSuccess,
+					NativeID:        request.NativeID,
+				}}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		cfg.Agent.Retry.MaxRetries = 0
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		// ── Step 1: Apply ───────────────────────────────────────────────
+		// provider (static target) → cluster resource → consumer (nested
+		// target with $ref to cluster's Endpoint) → app resource
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "infra"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label: "cluster", Type: "FakeAWS::S3::Bucket", Stack: "infra", Target: "provider",
+					Managed: true, Ksuid: clusterKsuid,
+					Schema:     pkgmodel.Schema{Identifier: "BucketName", Fields: []string{"BucketName", "Endpoint"}, Portable: true},
+					Properties: json.RawMessage(clusterProps),
+				},
+				{
+					Label: "app", Type: "FakeAWS::S3::Bucket", Stack: "infra", Target: "consumer",
+					Managed: true,
+					Schema:     pkgmodel.Schema{Identifier: "BucketName", Fields: []string{"BucketName"}, Portable: true},
+					Properties: json.RawMessage(`{"BucketName":"my-app"}`),
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{Label: "provider", Namespace: "FakeAWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+				{
+					Label:        "consumer",
+					Namespace:    "FakeAWS",
+					Discoverable: true,
+					Config: json.RawMessage(fmt.Sprintf(`{
+						"endpoint": {"$ref": "formae://%s#/Endpoint"}
+					}`, clusterKsuid)),
+				},
+			},
+		}
+
+		_, err = m.ApplyForma(forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			return len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "apply should complete")
+
+		// Verify managed resources exist
+		infraResources, err := m.Datastore.LoadResourcesByStack("infra")
+		require.NoError(t, err)
+		require.Len(t, infraResources, 2, "cluster + app should exist after apply")
+
+		// ── Step 2: Discovery ───────────────────────────────────────────
+		// Discover an unmanaged resource on the consumer target.
+		incoming := make(chan any, 1)
+		_, err = testutil.StartTestHelperActor(m.Node, incoming)
+		require.NoError(t, err)
+
+		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			unmanaged, err := m.Datastore.LoadResourcesByStack("$unmanaged")
+			if err != nil {
+				return false
+			}
+			return len(unmanaged) >= 1
+		}, 10*time.Second, 100*time.Millisecond, "discovery should find unmanaged resource")
+
+		// ── Step 3: Destroy ─────────────────────────────────────────────
+		// Destroy the forma. This deletes:
+		// - managed resources (cluster, app)
+		// - consumer target (has $ref dependency → eligible for deletion)
+		// But leaves:
+		// - provider target (no $ref → survives)
+		// - unmanaged discovered resource (not in forma → not destroyed)
+		_, err = m.DestroyForma(forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			cmds, _ := m.Datastore.LoadFormaCommands()
+			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
+			// apply + destroy = 2 commands (discovery doesn't create forma commands)
+			return len(cmds) >= 2 && len(incomplete) == 0
+		}, 10*time.Second, 100*time.Millisecond, "destroy should complete")
+
+		// ── Step 4: Verify post-destroy state ───────────────────────────
+		// Managed resources and consumer target are gone.
+		infraResources, err = m.Datastore.LoadResourcesByStack("infra")
+		require.NoError(t, err)
+		assert.Empty(t, infraResources, "managed resources should be destroyed")
+
+		consumerTarget, err := m.Datastore.LoadTarget("consumer")
+		require.NoError(t, err)
+		assert.Nil(t, consumerTarget, "consumer target should be deleted (has $ref)")
+
+		// The discovered resource is still in the DB — orphaned.
+		unmanaged, err := m.Datastore.LoadResourcesByStack("$unmanaged")
+		require.NoError(t, err)
+		require.NotEmpty(t, unmanaged, "discovered resource should still exist (orphaned)")
+
+		// ── Step 5: Sync ────────────────────────────────────────────────
+		// The sync cycle encounters the orphaned resource whose target no
+		// longer exists. It should detect the missing target and clean up
+		// the resource via the "deleted out-of-band" path.
+		err = m.ForceSync()
+		require.NoError(t, err)
+
+		// ── Step 6: Verify cleanup ──────────────────────────────────────
+		assert.Eventually(t, func() bool {
+			unmanaged, err := m.Datastore.LoadResourcesByStack("$unmanaged")
+			if err != nil {
+				return false
+			}
+			return len(unmanaged) == 0
+		}, 10*time.Second, 100*time.Millisecond,
+			"orphaned unmanaged resource should be cleaned up by sync after target deletion")
 	})
 }

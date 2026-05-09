@@ -1,8 +1,8 @@
 module github.com/platform-engineering-labs/formae/pkg/model
 
-go 1.24
+go 1.26
 
-toolchain go1.24.2
+toolchain go1.26.2
 
 require (
 	github.com/stretchr/testify v1.11.1

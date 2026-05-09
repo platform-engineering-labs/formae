@@ -6,12 +6,11 @@ package clean
 
 import (
 	"fmt"
+	"log/slog"
 
+	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	"github.com/platform-engineering-labs/formae/internal/opsmgr"
 	"github.com/spf13/cobra"
-
-	"github.com/platform-engineering-labs/formae"
-	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/pkg/ppm"
 )
 
 func CleanCmd() *cobra.Command {
@@ -23,22 +22,35 @@ func CleanCmd() *cobra.Command {
 			"examples": "{{.Name}} {{.Command}}",
 		},
 		SilenceErrors: true,
-		RunE: func(command *cobra.Command, args []string) error {
-			if !ppm.Sys.IsPrivilegedUser() {
-				fmt.Println("this command requires a privileged user: authentication may be required")
+		RunE: func(cmd *cobra.Command, args []string) error {
+			all, _ := cmd.Flags().GetBool("all")
+			configFile, _ := cmd.Flags().GetString("config")
 
-				err := ppm.Sys.InvokeSelfWithSudo(command.Name())
-				if err != nil {
-					return fmt.Errorf("could not escalate to privileged user: %w", err)
-				}
-			}
-
-			manager, err := ppm.NewManager(&ppm.Config{Repo: &ppm.RepoConfig{}}, formae.DefaultInstallPrefix)
+			app, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
 			if err != nil {
 				return err
 			}
 
-			manager.Clean()
+			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, "")
+			if err != nil {
+				return err
+			}
+
+			if !orb.Ready() {
+				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path)
+			}
+
+			if all {
+				err := orb.Clear()
+				if err != nil {
+					return err
+				}
+			} else {
+				err := orb.Clean()
+				if err != nil {
+					return err
+				}
+			}
 
 			fmt.Println("done.")
 
@@ -46,7 +58,9 @@ func CleanCmd() *cobra.Command {
 		},
 	}
 
-	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
+	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
+	command.Flags().Bool("all", false, "Also remove update metadata")
+	command.Flags().String("config", "", "Path to config file")
 
 	return command
 }

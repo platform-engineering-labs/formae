@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: FSL-1.1-ALv2
  */
 
-module formae.Config
+open module formae.Config
 
 typealias Port = Int(this >= 0 && this <= 65535)
 
@@ -95,6 +95,12 @@ class SynchronizationConfig {
     interval: Duration = 5.min
 }
 
+class StackExpirerConfig {
+    enabled: Boolean = true
+
+    interval: Duration = 5.s
+}
+
 class Target {
     label: String
 
@@ -150,6 +156,56 @@ class OTelConfig {
     prometheus: PrometheusConfig = new PrometheusConfig{}
 }
 
+class TailscaleConfig {
+    tls: Boolean = false
+    authKey: String
+    hostname: String?
+    advertiseTags: Listing<String>?
+}
+
+class NetworkConfig {
+    type: String
+    tailscale: TailscaleConfig?
+}
+
+class RateLimitConfig {
+    scope: String = "Namespace"
+    maxRequestsPerSecondForNamespace: Int = 10
+}
+
+class LabelConfig {
+    defaultQuery: String?
+    resourceOverrides: Mapping<String, String>?
+}
+
+class FilterCondition {
+    propertyPath: String
+    propertyValue: String?
+}
+
+class MatchFilter {
+    resourceTypes: Listing<String>
+    conditions: Listing<FilterCondition>
+}
+
+open class BaseResourcePluginConfig {
+    type: String
+    enabled: Boolean = true
+    rateLimit: RateLimitConfig?
+    labelConfig: LabelConfig?
+    discoveryFilters: Listing<MatchFilter>?
+    resourceTypesToDiscover: Listing<String>?
+    retry: RetryConfig?
+}
+
+open class BaseAgentAuthConfig {
+    type: String
+}
+
+open class BaseCliAuthConfig {
+    type: String
+}
+
 class AgentConfig {
     server: ServerConfig = new ServerConfig{}
 
@@ -164,6 +220,14 @@ class AgentConfig {
     logging: LoggingConfig = new LoggingConfig{}
 
     oTel: OTelConfig = new OTelConfig{}
+
+    stackExpirer: StackExpirerConfig = new StackExpirerConfig{}
+
+    auth: (BaseAgentAuthConfig|Dynamic)?
+
+    resourcePlugins: Listing<BaseResourcePluginConfig>(
+        this.toList().map((it) -> it.type).isDistinct
+    )?
 }
 
 class ApiConfig {
@@ -172,20 +236,47 @@ class ApiConfig {
     port: Port = 49684
 }
 
-class ArtifactConfig {
-  url: String = "https://hub.platform.engineering/binaries"
+class Repository {
+  /// Orbital repository URI (optionally with #channel fragment).
+  uri: Uri
 
+  /// Discriminator: "binary" for the formae binary / tooling repo;
+  /// "formae-plugin" for a plugin repo consulted by `formae plugin *`.
+  type: "binary"|"formae-plugin"
+}
+
+class ArtifactConfig {
+  @Deprecated { message = "Use artifacts.repositories instead" }
+  url: Uri = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
+
+  @Deprecated { message = "Use repository-specific credentials" }
   username: String?
 
+  @Deprecated { message = "Use repository-specific credentials" }
   password: String?
+
+  /// List of orbital repositories to consult for binary and plugin packages.
+  repositories: Listing<Repository> = new {
+    new {
+      uri  = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
+      type = "binary"
+    }
+    new {
+      uri  = "https://hub.platform.engineering/repos/platform.engineering/community#stable"
+      type = "formae-plugin"
+    }
+  }
 }
 
 class CliConfig {
     api: ApiConfig
 
     disableUsageReporting: Boolean = false
+
+    auth: (BaseCliAuthConfig|Dynamic)?
 }
 
+/// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.
 class PluginConfig {
     pluginDir: String = "~/.pel/formae/plugins"
 
@@ -197,7 +288,7 @@ class PluginConfig {
         )
     Authentication: Dynamic? =
         if (authentication != null)
-            authentication.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+            authentication
         else
             null
 
@@ -209,7 +300,7 @@ class PluginConfig {
     )
     Network: Dynamic? =
         if (network != null)
-            network.toMap().mapKeys((k, _) -> k.capitalize()).toDynamic()
+            network
         else
             null
 }
@@ -220,4 +311,9 @@ artifacts: ArtifactConfig = new ArtifactConfig{}
 
 cli: CliConfig = new CliConfig{}
 
-plugins: PluginConfig = new PluginConfig{}
+network: NetworkConfig?
+
+pluginDir: String = "~/.pel/formae/plugins"
+
+/// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.
+plugins: PluginConfig?

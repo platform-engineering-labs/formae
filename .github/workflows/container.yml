@@ -32,6 +32,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set VERSION and CHANNEL
+        # Tag-to-channel mapping mirrors formae-actions/plugin-build.yml:
+        #   X.Y.Z         -> stable
+        #   X.Y.Z-dev[.N] -> dev
+        # The channel must match an orbital channel exactly; an earlier
+        # version of this script forwarded `dev.N` verbatim, which orbital
+        # rejects ("No install candidates found").
+        shell: bash
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+          version="${tag#v}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "CHANNEL=stable" >> "$GITHUB_ENV"
+            echo "VERSION=$version" >> "$GITHUB_ENV"
+          elif [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-dev(\.[0-9]+)?$ ]]; then
+            echo "CHANNEL=dev" >> "$GITHUB_ENV"
+            echo "VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+          else
+            echo "::error::unsupported tag pattern '${tag}'; expected X.Y.Z or X.Y.Z-dev[.N]"
+            exit 1
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -48,10 +70,11 @@ jobs:
         id: push
         uses: docker/build-push-action@v6
         with:
-          context: ./packaging/container
+          context: ./
           platforms: linux/amd64, linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ env.VERSION }}
+            CHANNEL=${{ env.CHANNEL }}

@@ -4,10 +4,43 @@
 
 package model
 
-import "github.com/apple/pkl-go/pkl"
+import (
+	"net/url"
+
+	"github.com/apple/pkl-go/pkl"
+)
 
 func init() {
 	pkl.RegisterMapping("formae.Config#User", User{})
+	pkl.RegisterMapping("formae.Config#RateLimitConfig", RateLimitConfig{})
+	pkl.RegisterMapping("formae.Config#RetryConfig", RetryConfig{})
+	pkl.RegisterMapping("formae.Config#LabelConfig", LabelConfig{})
+	pkl.RegisterMapping("formae.Config#MatchFilter", MatchFilter{})
+	pkl.RegisterMapping("formae.Config#FilterCondition", FilterCondition{})
+	pkl.RegisterMapping("formae.Config#Repository", Repository{})
+}
+
+// ResourcePlugin nested types used when decoding BaseResourcePluginConfig
+// subclasses from pkl.Object properties.
+
+type RateLimitConfig struct {
+	Scope                            string `pkl:"scope"`
+	MaxRequestsPerSecondForNamespace int32  `pkl:"maxRequestsPerSecondForNamespace"`
+}
+
+type LabelConfig struct {
+	DefaultQuery      string      `pkl:"defaultQuery"`
+	ResourceOverrides *pkl.Object `pkl:"resourceOverrides"`
+}
+
+type MatchFilter struct {
+	ResourceTypes []string           `pkl:"resourceTypes"`
+	Conditions    []*FilterCondition `pkl:"conditions"`
+}
+
+type FilterCondition struct {
+	PropertyPath  string `pkl:"propertyPath"`
+	PropertyValue string `pkl:"propertyValue"`
 }
 
 type ServerConfig struct {
@@ -62,6 +95,11 @@ type SynchronizationConfig struct {
 	Interval *pkl.Duration `pkl:"interval"`
 }
 
+type StackExpirerConfig struct {
+	Enabled  bool          `pkl:"enabled"`
+	Interval *pkl.Duration `pkl:"interval"`
+}
+
 type LoggingConfig struct {
 	FilePath        string `pkl:"filePath"`
 	FileLogLevel    string `pkl:"fileLogLevel"`
@@ -107,14 +145,29 @@ type OTelConfig struct {
 	Prometheus  PrometheusConfig `pkl:"prometheus"`
 }
 
+type TailscaleConfig struct {
+	TLS           bool     `pkl:"tls"`
+	AuthKey       string   `pkl:"authKey"`
+	Hostname      string   `pkl:"hostname"`
+	AdvertiseTags []string `pkl:"advertiseTags"`
+}
+
+type NetworkConfig struct {
+	Type      string           `pkl:"type"`
+	Tailscale *TailscaleConfig `pkl:"tailscale"`
+}
+
 type AgentConfig struct {
 	Server          ServerConfig          `pkl:"server"`
 	Datastore       DatastoreConfig       `pkl:"datastore"`
-	Retry           RetryConfig           `pkl:"retry"`
+	Retry           *RetryConfig          `pkl:"retry"`
 	Synchronization SynchronizationConfig `pkl:"synchronization"`
 	Discovery       DiscoveryConfig       `pkl:"discovery"`
 	Logging         LoggingConfig         `pkl:"logging"`
 	OTel            OTelConfig            `pkl:"oTel"`
+	StackExpirer    StackExpirerConfig    `pkl:"stackExpirer"`
+	Auth            pkl.Object            `pkl:"auth"`
+	ResourcePlugins []pkl.Object          `pkl:"resourcePlugins"`
 }
 
 type APIConfig struct {
@@ -122,20 +175,27 @@ type APIConfig struct {
 	Port int32  `pkl:"port"`
 }
 
+type Repository struct {
+	URI  url.URL `pkl:"uri"`
+	Type string  `pkl:"type"`
+}
+
 type ArtifactConfig struct {
-	URL      string `pkl:"url"`
-	Username string `pkl:"username"`
-	Password string `pkl:"password"`
+	URL          url.URL       `pkl:"url"`
+	Username     string        `pkl:"username"`
+	Password     string        `pkl:"password"`
+	Repositories []*Repository `pkl:"repositories"`
 }
 
 type CliConfig struct {
-	API                   APIConfig `pkl:"api"`
-	DisableUsageReporting bool      `pkl:"disableUsageReporting"`
+	API                   APIConfig  `pkl:"api"`
+	DisableUsageReporting bool       `pkl:"disableUsageReporting"`
+	Auth                  pkl.Object `pkl:"auth"`
 }
 
+// PluginConfig is deprecated. Use top-level pluginDir, network, and agent.auth / cli.auth.
 type PluginConfig struct {
-	PluginDir string `pkl:"pluginDir"`
-	// Output is postprocessed, hence the key case difference
+	PluginDir      string      `pkl:"pluginDir"`
 	Network        *pkl.Object `pkl:"Network"`
 	Authentication *pkl.Object `pkl:"Authentication"`
 }
@@ -144,5 +204,7 @@ type Config struct {
 	Agent     AgentConfig    `pkl:"agent"`
 	Artifacts ArtifactConfig `pkl:"artifacts"`
 	Cli       CliConfig      `pkl:"cli"`
-	Plugins   PluginConfig   `pkl:"plugins"`
+	Network   *NetworkConfig `pkl:"network"`
+	PluginDir string         `pkl:"pluginDir"`
+	Plugins   *PluginConfig  `pkl:"plugins"`
 }

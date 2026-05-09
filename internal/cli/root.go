@@ -28,7 +28,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/plugin"
 	"github.com/platform-engineering-labs/formae/internal/cli/project"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
-	"github.com/platform-engineering-labs/formae/internal/cli/upgrade"
+	"github.com/platform-engineering-labs/formae/internal/cli/update"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -209,7 +209,7 @@ func init() {
 	rootCmd.AddCommand(destroy.DestroyCmd())
 	rootCmd.AddCommand(status.StatusCmd())
 	rootCmd.AddCommand(extract.ExtractCmd())
-	rootCmd.AddCommand(upgrade.UpgradeCmd())
+	rootCmd.AddCommand(update.UpdateCmd())
 	rootCmd.AddCommand(inventory.InventoryCmd())
 
 	if !strings.HasSuffix(os.Args[0], "formae") {

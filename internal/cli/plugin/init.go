@@ -574,8 +574,9 @@ func transformContent(content string, config *PluginConfig) string {
 	// Module path
 	content = strings.ReplaceAll(content, "github.com/your-org/formae-plugin-example", config.ModulePath)
 
-	// Plugin name (lowercase)
+	// Plugin name and type (lowercase)
 	content = strings.ReplaceAll(content, `name = "example"`, fmt.Sprintf(`name = "%s"`, config.Name))
+	content = strings.ReplaceAll(content, `type = "example"`, fmt.Sprintf(`type = "%s"`, config.Name))
 
 	// Namespace (uppercase in resource types)
 	upperNamespace := strings.ToUpper(config.Namespace)
@@ -603,6 +604,13 @@ func transformContent(content string, config *PluginConfig) string {
 
 	// PKL import paths - @<packageName>/<packageName>.pkl
 	content = strings.ReplaceAll(content, `@example/example.pkl`, fmt.Sprintf(`@%s/%s.pkl`, config.Name, config.Name))
+
+	// PKL module name in Config.pkl
+	content = strings.ReplaceAll(content, "module example.Config", fmt.Sprintf("module %s.Config", config.Name))
+
+	// <PluginName> placeholder in doc comments (capitalize first letter for display)
+	displayName := strings.ToUpper(config.Name[:1]) + config.Name[1:]
+	content = strings.ReplaceAll(content, "<PluginName>", displayName)
 
 	return content
 }

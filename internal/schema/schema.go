@@ -38,6 +38,18 @@ type SerializeOptions struct {
 	Colorize       bool
 	Simplified     bool
 	SchemaLocation SchemaLocation
+
+	// LocalPluginDir is the directory to scan when SchemaLocation == SchemaLocationLocal
+	// and Dependencies is empty. Populated by the App from the loaded config (Config.PluginDir),
+	// not from an env var. Forward-compat note: PR #410 will eventually replace this single
+	// dir with a multi-dir list backed by discovery.SystemPluginDir + DiscoverPluginsMulti.
+	LocalPluginDir string
+
+	// Dependencies, when non-empty, is a pre-resolved list of package specs (in the
+	// same format that PackageResolver emits — "plugin.name@version" for remote,
+	// "local:name:/abs/path" for local). Schema plugins MUST use these directly
+	// instead of doing their own discovery.
+	Dependencies []string
 }
 
 // ErrFailedToGenerateSources is returned when source code generation fails.
@@ -51,7 +63,7 @@ type SchemaPlugin interface {
 	FormaeConfig(path string) (*model.Config, error)
 	Evaluate(path string, cmd model.Command, mode model.FormaApplyMode, props map[string]string) (*model.Forma, error)
 	SerializeForma(resources *model.Forma, options *SerializeOptions) (string, error)
-	GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation SchemaLocation) (GenerateSourcesResult, error)
+	GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, options *SerializeOptions) (GenerateSourcesResult, error)
 	ProjectInit(path string, include []string, schemaLocation SchemaLocation) error
 	ProjectProperties(path string) (map[string]model.Prop, error)
 }

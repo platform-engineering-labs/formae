@@ -71,6 +71,7 @@ examples {
         Region = "us-east-1"
         AccessKey = "test-key"
       }
+      ConfigSchema = null
       Discoverable = true
     }
   }
@@ -89,6 +90,7 @@ examples {
         Required = true
         RequiredOnCreate = false
         HasProviderDefault = false
+        AttachesTo = false
         UpdateMethod = ""
         IndexField = ""
       }
@@ -98,6 +100,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        AttachesTo = false
         UpdateMethod = ""
         IndexField = ""
       }
@@ -107,6 +110,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        AttachesTo = false
         UpdateMethod = ""
         IndexField = ""
       }
@@ -127,6 +131,7 @@ examples {
           Required = true
           RequiredOnCreate = false
           HasProviderDefault = false
+          AttachesTo = false
           UpdateMethod = ""
           IndexField = ""
         }
@@ -136,6 +141,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          AttachesTo = false
           UpdateMethod = ""
           IndexField = ""
         }
@@ -145,6 +151,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          AttachesTo = false
           UpdateMethod = ""
           IndexField = ""
         }
@@ -193,6 +200,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -202,6 +210,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -211,6 +220,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -267,6 +277,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -276,6 +287,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -285,6 +297,7 @@ examples {
             Required = false
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -296,7 +309,6 @@ examples {
       Properties {
         bucketName = "my-bucket-no-tags"
         Region = null
-        Tags {}
       }
     }
   }
@@ -326,6 +338,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -335,6 +348,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -344,6 +358,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -353,6 +368,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -362,6 +378,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -371,6 +388,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -380,6 +398,7 @@ examples {
             Required = true
             RequiredOnCreate = false
             HasProviderDefault = false
+            AttachesTo = false
             UpdateMethod = ""
             IndexField = ""
           }
@@ -416,6 +435,7 @@ examples {
         Required = true
         RequiredOnCreate = false
         HasProviderDefault = false
+        AttachesTo = false
         UpdateMethod = ""
         IndexField = ""
       }
@@ -425,6 +445,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        AttachesTo = false
         UpdateMethod = ""
         IndexField = ""
       }
@@ -434,6 +455,7 @@ examples {
         Required = false
         RequiredOnCreate = false
         HasProviderDefault = false
+        AttachesTo = false
         UpdateMethod = ""
         IndexField = ""
       }
@@ -454,6 +476,7 @@ examples {
           Required = true
           RequiredOnCreate = false
           HasProviderDefault = false
+          AttachesTo = false
           UpdateMethod = ""
           IndexField = ""
         }
@@ -463,6 +486,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          AttachesTo = false
           UpdateMethod = ""
           IndexField = ""
         }
@@ -472,6 +496,7 @@ examples {
           Required = false
           RequiredOnCreate = false
           HasProviderDefault = false
+          AttachesTo = false
           UpdateMethod = ""
           IndexField = ""
         }

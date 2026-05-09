@@ -5,139 +5,48 @@
 .DEFAULT_GOAL := all
 
 DEBUG_GOFLAGS := -gcflags="all=-N -l"
-VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
 
-PKL_BUNDLE_VERSION := 0.30.0
-PKL_BIN_URL := https://github.com/apple/pkl/releases/download/${PKL_BUNDLE_VERSION}/pkl-$(shell ./scripts/baduname.sh)
-
-# External plugin Git repositories to bundle
-EXTERNAL_PLUGIN_REPOS ?= \
-    https://github.com/platform-engineering-labs/formae-plugin-aws.git \
-    https://github.com/platform-engineering-labs/formae-plugin-azure.git \
-    https://github.com/platform-engineering-labs/formae-plugin-compose.git \
-    https://github.com/platform-engineering-labs/formae-plugin-gcp.git \
-    https://github.com/platform-engineering-labs/formae-plugin-grafana.git \
-    https://github.com/platform-engineering-labs/formae-plugin-oci.git \
-    https://github.com/platform-engineering-labs/formae-plugin-ovh.git
-
-# Directory for cloned plugins
-PLUGINS_CACHE := .plugins
-
-# Optional: override plugin branches for testing (e.g., AZURE_PLUGIN_REF=fix/remove-nativeid-encoding)
-AZURE_PLUGIN_REF ?=
-AWS_PLUGIN_REF ?=
+# The latest tag, possibly carrying a `-channel` suffix (e.g., 0.85.0-dev.2).
+RAW_VERSION := $(shell git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+# Canonical semver — everything before the first `-`. Used as the artifact
+# version for binaries and the PKL package. Mirrors the convention already
+# in justfile and container.yml.
+VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
+# Channel — `stable` for tags shaped X.Y.Z, `dev` for tags shaped
+# X.Y.Z-dev[.N]. Used for orbital channel routing. Mirrors the regex in
+# formae-actions/plugin-build.yml and container.yml: an earlier shape that
+# took everything after the first `-` produced literal `dev.2` for
+# `0.85.0-dev.2`, which orbital writes as a real channel name and breaks
+# downstream installs.
+CHANNEL := $(shell echo "$(RAW_VERSION)" | grep -q -- '-' && echo dev || echo stable)
 
 clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
-	rm -rf ppm
+	rm -rf fcfg
 	rm -rf version.semver
-	rm -rf $(PLUGINS_CACHE)
-	find ./plugins -name '*.so' -delete
 
 clean-pel:
 	rm -rf ~/.pel/*
 
 build:
-	go build -C plugins/auth-basic -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic.so
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
-
-build-tools:
-	go build -C ./tools/ppm/cmd -o ../../../ppm
+	go build -o fcfg cmd/formae-config/main.go
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
 
-## fetch-external-plugins: Clone/update external plugin repositories
-fetch-external-plugins:
-	@mkdir -p $(PLUGINS_CACHE)
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
-		name=$$(basename $$repo .git); \
-		if [ -d "$(PLUGINS_CACHE)/$$name" ]; then \
-			echo "Updating $$name..."; \
-			git -C "$(PLUGINS_CACHE)/$$name" pull --ff-only; \
-		else \
-			echo "Cloning $$name..."; \
-			git clone --depth 1 $$repo "$(PLUGINS_CACHE)/$$name"; \
-			. ./scripts/ci/track-event.sh && formae_track_event "ci_repo_clone" "cloned_repo=$$name"; \
-		fi \
-	done
-	@if [ -n "$(AZURE_PLUGIN_REF)" ]; then \
-		echo "Checking out Azure plugin ref: $(AZURE_PLUGIN_REF)"; \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" fetch origin $(AZURE_PLUGIN_REF); \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-azure" checkout FETCH_HEAD; \
-	fi
-	@if [ -n "$(AWS_PLUGIN_REF)" ]; then \
-		echo "Checking out AWS plugin ref: $(AWS_PLUGIN_REF)"; \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" fetch origin $(AWS_PLUGIN_REF); \
-		git -C "$(PLUGINS_CACHE)/formae-plugin-aws" checkout FETCH_HEAD; \
-	fi
-
-## build-external-plugins: Build all external plugins
-build-external-plugins: fetch-external-plugins
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
-		name=$$(basename $$repo .git); \
-		echo "Building $$name..."; \
-		$(MAKE) -C "$(PLUGINS_CACHE)/$$name" build; \
-	done
-
-## install-external-plugins: Install external plugins to user directory (wipes existing versions)
-install-external-plugins: build-external-plugins
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
-		name=$$(basename $$repo .git); \
-		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
-		namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
-		version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
-		plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
-		dest="$$HOME/.pel/formae/plugins/$$namespace/v$$version"; \
-		echo "Installing resource plugin: $$namespace v$$version to $$dest"; \
-		rm -rf "$$HOME/.pel/formae/plugins/$$namespace"; \
-		mkdir -p "$$dest/schema"; \
-		cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
-		cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
-		cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
-	done
-	@echo "External plugins installed successfully."
-
 build-debug:
-	go build -C plugins/auth-basic ${DEBUG_GOFLAGS} -ldflags="-X 'main.Version=${VERSION}'" -buildmode=plugin -o auth-basic-debug.so
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
+	go build ${DEBUG_GOFLAGS} -o fcfg cmd/formae-config/main.go
 
-pkg-bin: clean build build-tools build-external-plugins
+pkg-bin: clean build
 	echo '${VERSION}' > ./version.semver
-	mkdir -p ./dist/pel/formae/bin
-	mkdir -p ./dist/pel/formae/plugins
-	cp -Rp ./formae ./dist/pel/formae/bin
-	for f in ./plugins/*/*.so; do \
-		if [ -f "$$f" ] && file "$$f" | grep -qE "ELF|Mach-O"; then \
-			cp "$$f" ./dist/pel/formae/plugins/; \
-		fi \
-	done
-	rm -f ./dist/pel/formae/plugins/fake-*.so
-	# Package external resource plugins
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
-		name=$$(basename $$repo .git); \
-		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
-		namespace=$$(pkl eval -x 'namespace' "$$plugin_dir/formae-plugin.pkl" | tr '[:upper:]' '[:lower:]'); \
-		version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
-		plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
-		dest="./dist/pel/formae/resource-plugins/$$namespace/v$$version"; \
-		echo "Packaging resource plugin: $$namespace v$$version"; \
-		mkdir -p "$$dest/schema"; \
-		cp "$$plugin_dir/bin/$$plugin_name" "$$dest/$$namespace"; \
-		cp "$$plugin_dir/formae-plugin.pkl" "$$dest/"; \
-		cp -r "$$plugin_dir/schema/pkl" "$$dest/schema/"; \
-		mkdir -p "./dist/pel/formae/examples/$$plugin_name"; \
-		cp -r "$$plugin_dir/examples/"* "./dist/pel/formae/examples/$$plugin_name/" 2>/dev/null || true; \
-	done
-	curl -L -o ./dist/pel/formae/bin/pkl ${PKL_BIN_URL}
-	chmod 755 ./dist/pel/formae/bin/pkl
-	./ppm pkg build --name formae --version ${VERSION} ./dist/pel/formae
-
-publish-bin: pkg-bin
-	./ppm repo publish ./dist/packages/*.tgz
+	mkdir -p ./dist/pel/bin
+	cp -Rp ./formae ./dist/pel/bin
+	cp -Rp ./fcfg ./dist/pel/bin
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
@@ -154,49 +63,6 @@ pkg-pkl:
 publish-pkl:
 	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
 
-## gen-external-pkl: Resolve external plugin PKL schemas (requires formae to be published first)
-gen-external-pkl: fetch-external-plugins
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
-		name=$$(basename $$repo .git); \
-		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
-		schema_dir="$$plugin_dir/schema/pkl"; \
-		if [ -d "$$schema_dir" ] && [ -f "$$schema_dir/PklProject" ]; then \
-			version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
-			echo "$$version" > "$$schema_dir/VERSION"; \
-			echo "Resolving PKL schema for $$name (v$$version)..."; \
-			pkl project resolve "$$schema_dir"; \
-		fi \
-	done
-
-## pkg-external-pkl: Package external plugin PKL schemas
-pkg-external-pkl: gen-external-pkl
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
-		name=$$(basename $$repo .git); \
-		schema_dir="$(PLUGINS_CACHE)/$$name/schema/pkl"; \
-		if [ -d "$$schema_dir" ] && [ -f "$$schema_dir/PklProject" ]; then \
-			echo "Packaging PKL schema for $$name..."; \
-			pkl project package "$$schema_dir" --skip-publish-check; \
-		fi \
-	done
-
-## publish-external-pkl: Publish external plugin PKL schemas to S3
-publish-external-pkl:
-	@for repo in $(EXTERNAL_PLUGIN_REPOS); do \
-		name=$$(basename $$repo .git); \
-		plugin_dir="$(PLUGINS_CACHE)/$$name"; \
-		schema_dir="$$plugin_dir/schema/pkl"; \
-		if [ -d "$$schema_dir" ] && [ -f "$$schema_dir/PklProject" ]; then \
-			plugin_name=$$(pkl eval -x 'name' "$$plugin_dir/formae-plugin.pkl"); \
-			version=$$(pkl eval -x 'version' "$$plugin_dir/formae-plugin.pkl"); \
-			echo "Publishing PKL schema for $$plugin_name@$$version..."; \
-			aws s3 sync ".out/$${plugin_name}@$${version}" \
-				"s3://hub.platform.engineering/plugins/$${plugin_name}/schema/pkl/$${plugin_name}/"; \
-		fi \
-	done
-
-publish-setup:
-	aws s3 cp ./scripts/setup.sh s3://hub.platform.engineering/setup/formae.sh
-
 run:
 	go run cmd/formae/main.go
 
@@ -206,13 +72,13 @@ test-build:
 		done
 
 test-all: test-build test-pkl
-	go test -C ./plugins/auth-basic -tags="unit integration" -count=1 -failfast ./...
+	go test -C ./pkg/auth -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./...
 	go test -tags="unit integration" -count=1 -failfast ./...
 
 test-unit:
-	go test -C ./plugins/auth-basic -tags="unit" -count=1 -failfast ./...
+	go test -C ./pkg/auth -tags=unit -failfast ./...
 	go test -C ./pkg/model -tags=unit -failfast ./...
 	go test -C ./pkg/plugin -tags=unit -failfast ./...
 	go test -tags=unit -failfast ./...
@@ -296,17 +162,21 @@ test-unit-summary:
 	go test -tags=unit -count=1 -json  ./... | jq 'select(.Action == "fail")'
 
 test-integration:
-	go test -C ./plugins/auth-basic -tags=integration -failfast ./...
 	go test -tags=integration -failfast ./...
 
-test-e2e: build install-external-plugins
+test-e2e: build
 	echo "Setting up e2e PKL dependencies..."
 	bash ./tests/e2e/go/setup_pkl.sh
+	echo "Staging formae binary in installer-shaped tree (.../bin/formae + .../.ops)..."
+	mkdir -p $(CURDIR)/dist/e2e/bin $(CURDIR)/dist/e2e/.ops
+	cp $(CURDIR)/formae $(CURDIR)/dist/e2e/bin/formae
 	echo "Running e2e tests..."
-	E2E_FORMAE_BINARY=$(CURDIR)/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
+	E2E_FORMAE_BINARY=$(CURDIR)/dist/e2e/bin/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
 
+## test-property: Run property tests (FullChaos 100 iterations, others 50)
 test-property:
-	go test -tags=property -failfast ./internal/workflow_tests/local -run 'TestMetastructure_Property.*'
+	go test -C tests/blackbox -tags=property -run 'TestProperty_Sequential|TestProperty_Concurrent' -v -count=1 -rapid.checks=50 -timeout=60m
+	go test -C tests/blackbox -tags=property -run TestProperty_FullChaos -v -count=1 -rapid.checks=100 -timeout=60m
 
 ## mutation-test: Run mutation testing across all unit-tested packages and generate report
 mutation-test: build
@@ -349,11 +219,9 @@ test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 
 tidy-all:
 	go mod tidy
-	cd ./plugins/auth-basic && go mod tidy
-	cd ./tools/ppm && go mod tidy
+	cd ./pkg/auth && go mod tidy
 	cd ./pkg/model && go mod tidy
 	cd ./pkg/plugin && go mod tidy
-	cd ./pkg/ppm && go mod tidy
 
 version:
 	@echo ${VERSION}
@@ -374,6 +242,6 @@ lint-reuse:
 add-license:
 	./scripts/add_license.sh
 
-all: clean build build-tools gen-pkl api-docs
+all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build build-tools install-gremlins build-debug fetch-external-plugins build-external-plugins install-external-plugins pkg-bin publish-bin gen-pkl gen-external-pkl pkg-pkl pkg-external-pkl publish-pkl publish-external-pkl publish-setup run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all

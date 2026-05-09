@@ -57,7 +57,7 @@ func TestPluginRestart_AfterCrash(t *testing.T) {
 
 		// Step 9: Wait for plugin to be detected as terminated and restarted
 		// Look for the restart log message
-		foundRestart := logCapture.WaitForLog("Plugin restarted successfully", 10*time.Second)
+		foundRestart := logCapture.WaitForLog("Resource plugin restarted successfully", 10*time.Second)
 		require.True(t, foundRestart, "Plugin should have been restarted by PluginProcessSupervisor")
 		t.Logf("✓ Plugin restart initiated")
 

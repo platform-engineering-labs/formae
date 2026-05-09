@@ -7,4 +7,3 @@ package formae
 var Version = "0.0.0"
 
 const DefaultInstallPrefix = "/opt/pel"
-const DefaultInstallPath = "/opt/pel/formae"

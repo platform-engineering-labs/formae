@@ -13,7 +13,6 @@ import (
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +29,7 @@ func tagsToProperties(tags []pkgmodel.Tag) json.RawMessage {
 func TestLabelForUnmanagedResource_UsesJSONPathQuery(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"MyInstance"}]}`)
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 	}
 
@@ -42,7 +41,7 @@ func TestLabelForUnmanagedResource_UsesJSONPathQuery(t *testing.T) {
 func TestLabelForUnmanagedResource_UsesResourceOverride(t *testing.T) {
 	nativeId := "arn:aws:iam::123456789012:policy/MyPolicy"
 	properties := json.RawMessage(`{"PolicyName":"MyPolicy","Tags":[{"Key":"Name","Value":"ShouldNotUseThis"}]}`)
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 		ResourceOverrides: map[string]string{
 			"AWS::IAM::Policy": "$.PolicyName",
@@ -57,7 +56,7 @@ func TestLabelForUnmanagedResource_UsesResourceOverride(t *testing.T) {
 func TestLabelForUnmanagedResource_FallsBackToNativeID_WhenQueryReturnsNoResult(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{"Tags":[{"Key":"Environment","Value":"Production"}]}`)
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 	}
 
@@ -69,7 +68,7 @@ func TestLabelForUnmanagedResource_FallsBackToNativeID_WhenQueryReturnsNoResult(
 func TestLabelForUnmanagedResource_FallsBackToNativeID_WhenNoLabelConfig(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"MyInstance"}]}`)
-	labelConfig := plugin.LabelConfig{} // Empty config
+	labelConfig := pkgmodel.LabelConfig{} // Empty config
 
 	l := newResourceLabelerForTest(t)
 	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
@@ -79,7 +78,7 @@ func TestLabelForUnmanagedResource_FallsBackToNativeID_WhenNoLabelConfig(t *test
 func TestLabelForUnmanagedResource_HandlesEmptyProperties(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{}`)
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 	}
 
@@ -90,7 +89,7 @@ func TestLabelForUnmanagedResource_HandlesEmptyProperties(t *testing.T) {
 
 func TestLabelForUnmanagedResource_HandlesNilProperties(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 	}
 
@@ -103,7 +102,7 @@ func TestLabelForUnmanagedResource_ConcatenatesMultipleQueryResults(t *testing.T
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"MyInstance"},{"Key":"Environment","Value":"Production"},{"Key":"Owner","Value":"Alice"}]}`)
 	// Query that matches multiple tags using OR condition
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name' || @.Key=='Environment')].Value`,
 	}
 
@@ -121,7 +120,7 @@ func TestLabelForUnmanagedResource_FallsBackToLegacyTagKeys(t *testing.T) {
 		{Key: "Name", Value: "MyInstance"},
 		{Key: "Project", Value: "Alpha"},
 	})
-	labelConfig := plugin.LabelConfig{} // Empty config, should fall back to legacy
+	labelConfig := pkgmodel.LabelConfig{} // Empty config, should fall back to legacy
 	legacyTagKeys := []string{"Name", "Project"}
 
 	l := newResourceLabelerForTest(t)
@@ -135,7 +134,7 @@ func TestLabelForUnmanagedResource_ReturnsNativeIdWhenNoTagKeysAreFound(t *testi
 		{Key: "Environment", Value: "Production"},
 		{Key: "Owner", Value: "Alice"},
 	})
-	labelConfig := plugin.LabelConfig{}
+	labelConfig := pkgmodel.LabelConfig{}
 	legacyTagKeys := []string{"Name", "Project"}
 
 	l := newResourceLabelerForTest(t)
@@ -149,7 +148,7 @@ func TestLabelForUnmanagedResource_HandlesMissingTagValuesGracefully(t *testing.
 		{Key: "Name", Value: "MyInstance"},
 		{Key: "Environment", Value: "Production"},
 	})
-	labelConfig := plugin.LabelConfig{}
+	labelConfig := pkgmodel.LabelConfig{}
 	legacyTagKeys := []string{"Name", "Project"}
 
 	l := newResourceLabelerForTest(t)
@@ -162,7 +161,7 @@ func TestLabelForUnmanagedResource_HandlesMissingTagValuesGracefully(t *testing.
 func TestLabelForUnmanagedResource_AppendsIncrementingNumberForDuplicates(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"MyInstance"}]}`)
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 	}
 
@@ -178,7 +177,7 @@ func TestLabelForUnmanagedResource_AppendsIncrementingNumberForDuplicates(t *tes
 func TestLabelForUnmanagedResource_IncrementsExistingVersion(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"MyInstance"}]}`)
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 	}
 
@@ -196,7 +195,7 @@ func TestLabelForUnmanagedResource_IncrementsExistingVersion(t *testing.T) {
 func TestLabelForUnmanagedResource_JSONPathQueryTakesPrecedenceOverLegacyTagKeys(t *testing.T) {
 	nativeId := "i-1234567890abcdef0"
 	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"FromJSONPath"},{"Key":"LegacyTag","Value":"FromLegacy"}]}`)
-	labelConfig := plugin.LabelConfig{
+	labelConfig := pkgmodel.LabelConfig{
 		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
 	}
 	legacyTagKeys := []string{"LegacyTag"}

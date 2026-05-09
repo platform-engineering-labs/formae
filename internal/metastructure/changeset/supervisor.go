@@ -55,7 +55,7 @@ func (s *ChangesetSupervisor) HandleMessage(from gen.PID, message any) error {
 	case EnsureChangesetExecutor:
 		err := s.ensureChangesetExecutor(from, msg)
 		if err != nil {
-			s.Log().Error("Failed to ensure ChangesetExecutor", "commandID", msg.CommandID, "error", err)
+			s.Log().Error("Failed to ensure ChangesetExecutor commandID=%s: %v", msg.CommandID, err)
 			return fmt.Errorf("failed to ensure ChangesetExecutor for %s: %w", msg.CommandID, err)
 		}
 		s.Log().Debug("ChangesetSupervisor ensured ChangesetExecutor for %s", msg.CommandID)

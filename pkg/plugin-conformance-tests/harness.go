@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests/testutil"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
@@ -70,7 +72,7 @@ type TestHarness struct {
 	agentPort     int    // Random port for agent API
 	ergoPort      int    // Random port for Ergo actor framework (enables parallel test execution)
 	registrarPort int    // Random port for Ergo registrar (isolates parallel agents)
-	pluginManager *plugin.Manager
+	externalResourcePlugins []plugin.ResourcePluginInfo
 
 	// Ergo actor system for direct plugin communication (discovery tests)
 	ergoNode          gen.Node
@@ -101,22 +103,8 @@ func getFreePort() (int, error) {
 
 // NewTestHarness creates a new test harness instance
 func NewTestHarness(t *testing.T) *TestHarness {
-	// Check for FORMAE_BINARY env var first
-	formaeBinary := os.Getenv("FORMAE_BINARY")
-	if formaeBinary == "" {
-		// Fall back to default path relative to repo root
-		// When running with `go test -C`, we need to go up to repo root
-		binPath := filepath.Join("..", "..", "..", "formae")
-		absPath, err := filepath.Abs(binPath)
-		if err != nil {
-			t.Fatalf("failed to get absolute path for formae binary: %v", err)
-		}
-		formaeBinary = absPath
-	}
-
-	if _, err := os.Stat(formaeBinary); os.IsNotExist(err) {
-		t.Fatalf("formae binary not found at %s. Set FORMAE_BINARY env var or run 'make build' first", formaeBinary)
-	}
+	// Acquire the formae binary, downloading via orbital if needed
+	formaeBinary, binaryCleanup := EnsureFormaeBinary(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -129,14 +117,35 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		agentStarted: false,
 	}
 
+	// Register binary cleanup so any temp download directory is removed on teardown
+	h.RegisterCleanup(binaryCleanup)
+
+	// Resolve PKL dependencies for the plugin under test
+	pluginDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+	schemaDir := filepath.Join(pluginDir, "schema", "pkl")
+	testdataDir := ResolveTestDataDir(pluginDir)
+	// Find the nearest PklProject for the testdata dir. When a custom
+	// FORMAE_TEST_TESTDATA_DIR points at a subdir without its own PklProject,
+	// walk up to the parent project root (typically <pluginDir>/testdata) so
+	// `pkl project resolve` runs against the correct project.
+	testdataProject := FindPklProjectRoot(testdataDir)
+	if testdataProject == "" {
+		testdataProject = testdataDir
+	}
+	restorePKL := ResolvePKLDependencies(t, "", schemaDir, testdataProject)
+	t.Cleanup(restorePKL)
+
 	// Set up test environment (temp dir and config)
 	if err := h.setupTestEnvironment(); err != nil {
 		t.Fatalf("failed to setup test environment: %v", err)
 	}
 
-	// Initialize plugin manager
-	if err := h.setupPluginManager(); err != nil {
-		t.Fatalf("failed to setup plugin manager: %v", err)
+	// Discover external plugins
+	if err := h.setupPluginDiscovery(); err != nil {
+		t.Fatalf("failed to discover plugins: %v", err)
 	}
 
 	return h
@@ -242,9 +251,7 @@ cli {
 	disableUsageReporting = true
 }
 
-plugins {
-	pluginDir = "~/.pel/formae/plugins"
-}
+pluginDir = "~/.pel/formae/plugins"
 `, agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, logPath, agentPort)
 
 	// Write config to temp directory
@@ -259,25 +266,20 @@ plugins {
 	return nil
 }
 
-// setupPluginManager initializes the plugin manager and loads plugins
-func (h *TestHarness) setupPluginManager() error {
-	// Find plugin directory similar to how we find the formae binary
-	// Plugins should be at ../../../plugins relative to the test directory
-	pluginPath := filepath.Join("..", "..", "..", "plugins")
-	absPluginPath, err := filepath.Abs(pluginPath)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for plugins: %w", err)
+// setupPluginDiscovery discovers external resource plugins from the user
+// plugin directory (~/.pel/formae/plugins).
+func (h *TestHarness) setupPluginDiscovery() error {
+	pluginDir := ExpandHomePath("~/.pel/formae/plugins")
+	h.t.Logf("Discovering external plugins from: %s", pluginDir)
+
+	for _, p := range plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource) {
+		h.externalResourcePlugins = append(h.externalResourcePlugins, p.ToResourcePluginInfo())
 	}
 
-	h.t.Logf("Loading plugins from: %s", absPluginPath)
-
-	// Create plugin manager with the plugin path
-	h.pluginManager = plugin.NewManager(ExpandHomePath("~/.pel/formae/plugins"), absPluginPath)
-
-	// Load all plugins
-	h.pluginManager.Load()
-
-	h.t.Logf("Plugin manager initialized successfully")
+	h.t.Logf("Discovered %d external resource plugin(s)", len(h.externalResourcePlugins))
+	for _, p := range h.externalResourcePlugins {
+		h.t.Logf("  - %s (namespace=%s, version=%s)", p.Name, p.Namespace, p.Version)
+	}
 	return nil
 }
 
@@ -510,14 +512,9 @@ func (h *TestHarness) waitForOperationProgress(operatorPID gen.PID, initialProgr
 // ConfigureDiscovery updates the config file
 
 // GetPluginBinaryPath returns the path to an external plugin binary.
-// It uses the plugin manager to find installed plugins.
+// It looks up the binary in the discovered external resource plugins.
 func (h *TestHarness) GetPluginBinaryPath(namespace string) (string, error) {
-	if h.pluginManager == nil {
-		return "", fmt.Errorf("plugin manager not initialized")
-	}
-
-	// Look up in external resource plugins
-	for _, p := range h.pluginManager.ListExternalResourcePlugins() {
+	for _, p := range h.externalResourcePlugins {
 		if strings.EqualFold(p.Namespace, namespace) {
 			h.t.Logf("Found plugin binary for %s: %s", namespace, p.BinaryPath)
 			return p.BinaryPath, nil
@@ -539,14 +536,26 @@ func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
 	// Create database path in temp directory
 	dbPath := filepath.Join(h.tempDir, "formae-test.db")
 
-	// Build the resourceTypesToDiscover listing
+	// Build the resourceTypesToDiscover listing for per-plugin config
 	resourceTypesList := ""
 	for _, rt := range resourceTypes {
-		resourceTypesList += fmt.Sprintf("        %q\n", rt)
+		resourceTypesList += fmt.Sprintf("            %q\n", rt)
 	}
+
+	// Determine plugin name and PascalCase alias from discovered plugins
+	pluginName := ""
+	if len(h.externalResourcePlugins) > 0 {
+		pluginName = h.externalResourcePlugins[0].Name
+	}
+	if pluginName == "" {
+		return fmt.Errorf("no external resource plugins discovered; cannot configure per-plugin discovery")
+	}
+	pluginAlias := pluginNameToPascalCase(pluginName)
 
 	// Generate updated config file with discovery enabled
 	// Use unique nodename per test to enable parallel test execution
+	// resourceTypesToDiscover is configured per-plugin via agent.resourcePlugins
+	// using the typed PluginConfig from the plugin's schema/Config.pkl
 	configContent := fmt.Sprintf(`/*
  * © 2025 Platform Engineering Labs Inc.
  *
@@ -556,17 +565,19 @@ func (h *TestHarness) ConfigureDiscovery(resourceTypes []string) error {
 // Auto-generated test configuration
 amends "formae:/Config.pkl"
 
+import "plugins:/%s.pkl" as %s
+
 agent {
     server {
-        port = %d
-        ergoPort = %d
-        registrarPort = %d
-        secret = %q
-        nodename = "formae-%s"
+        port = %%d
+        ergoPort = %%d
+        registrarPort = %%d
+        secret = %%q
+        nodename = "formae-%%s"
     }
     datastore {
         sqlite {
-            filePath = %q
+            filePath = %%q
         }
     }
     synchronization {
@@ -574,23 +585,31 @@ agent {
     }
     discovery {
         enabled = true
-        resourceTypesToDiscover {
-%s        }
     }
     logging {
         consoleLogLevel = "debug"
-        filePath = %q
+        filePath = %%q
         fileLogLevel = "debug"
+    }
+    resourcePlugins {
+        new %s.PluginConfig {
+            resourceTypesToDiscover {
+%%s            }
+        }
     }
 }
 
 cli {
     api {
-        port = %d
+        port = %%d
     }
 	disableUsageReporting = true
 }
-`, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, resourceTypesList, h.logFile, h.agentPort)
+
+pluginDir = "~/.pel/formae/plugins"
+`, pluginAlias, pluginAlias, pluginAlias)
+
+	configContent = fmt.Sprintf(configContent, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, h.logFile, resourceTypesList, h.agentPort)
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {
@@ -1604,6 +1623,29 @@ type pluginOperationResult struct {
 	err             string // non-empty if the coordinator returned an error
 }
 
+// oobOperationTimeout caps how long retryOnRecoverable will wait on a single
+// OOB Create or Delete RPC attempt to the plugin (via waitForOperationProgress).
+// Slow cloud resources — AWS::EKS::Cluster is ~10–15 min to reach ACTIVE,
+// RDS clusters and managed Kubernetes clusters on other providers are
+// similar — need a generous budget, so the default is 30 min. Plugin
+// authors can override via FORMAE_TEST_OOB_TIMEOUT (integer minutes,
+// matching FORMAE_TEST_TIMEOUT / FORMAE_TEST_DISCOVERY_TIMEOUT).
+//
+// This is distinct from FORMAE_TEST_OOB_DELETE_TIMEOUT, which bounds the
+// *post-sync inventory tombstone wait* after an OOB delete has already
+// returned from the plugin — a separate, much shorter wait handled in
+// runner.go's Step 24.
+const defaultOOBOperationTimeoutMinutes = 30
+
+func oobOperationTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_OOB_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return defaultOOBOperationTimeoutMinutes * time.Minute
+}
+
 // retryOnRecoverable executes a plugin operation (create/delete) with retries on recoverable errors.
 // The opFn performs the actor call and returns the initial result. The caller's label is used for logging.
 func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOperationResult, error)) (resource.ProgressResult, error) {
@@ -1621,8 +1663,8 @@ func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOpera
 
 		progress := res.initialProgress
 		if progress.OperationStatus == resource.OperationStatusInProgress {
-			h.t.Logf("%s in progress, waiting for completion...", label)
-			progress, err = h.waitForOperationProgress(res.operatorPID, progress, 10*time.Minute)
+			h.t.Logf("%s in progress, waiting for completion (timeout %s)...", label, oobOperationTimeout())
+			progress, err = h.waitForOperationProgress(res.operatorPID, progress, oobOperationTimeout())
 			if err != nil {
 				return resource.ProgressResult{}, fmt.Errorf("waiting for %s to complete: %w", label, err)
 			}
@@ -1830,33 +1872,6 @@ func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, er
 	return submitResponse.CommandID, nil
 }
 
-// GetResourceDescriptor returns the ResourceDescriptor for a given resource type by querying the plugin
-func (h *TestHarness) GetResourceDescriptor(resourceType string) (*plugin.ResourceDescriptor, error) {
-	// Extract namespace from resource type (e.g., "AWS::S3::Bucket" -> "aws")
-	parts := strings.Split(resourceType, "::")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid resource type format: %s", resourceType)
-	}
-	namespace := strings.ToLower(parts[0])
-
-	// Get the resource plugin
-	resourcePlugin, err := h.pluginManager.ResourcePlugin(namespace)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get resource plugin for namespace %s: %w", namespace, err)
-	}
-
-	// Get all supported resources from the plugin
-	supportedResources := (*resourcePlugin).SupportedResources()
-
-	// Find the descriptor for the requested resource type
-	for i := range supportedResources {
-		if supportedResources[i].Type == resourceType {
-			return &supportedResources[i], nil
-		}
-	}
-
-	return nil, fmt.Errorf("resource type %s not found in plugin %s", resourceType, namespace)
-}
 
 // GetResourceDescriptorFromCoordinator returns the ResourceDescriptor for a given resource type
 // by querying the TestPluginCoordinator. This requires the Ergo node to be started and the
@@ -2015,4 +2030,21 @@ func (h *TestHarness) WaitForResourceRemovedFromInventory(resourceType, nativeID
 	}
 
 	return fmt.Errorf("timeout waiting for resource %s (type: %s) to be removed from inventory after %v", nativeID, resourceType, timeout)
+}
+
+// pluginNameToPascalCase converts a hyphenated plugin name to PascalCase
+// for use in PKL import aliases. For example: "aws" -> "Aws", "auth-basic" -> "AuthBasic".
+func pluginNameToPascalCase(name string) string {
+	parts := strings.Split(name, "-")
+	var b strings.Builder
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		b.WriteString(strings.ToUpper(part[:1]))
+		if len(part) > 1 {
+			b.WriteString(part[1:])
+		}
+	}
+	return b.String()
 }

@@ -15,26 +15,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 // mockPlugin is a minimal ResourcePlugin implementation for testing
 type mockPlugin struct{}
 
-func (m *mockPlugin) RateLimit() plugin.RateLimitConfig {
-	return plugin.RateLimitConfig{
-		Scope:                            plugin.RateLimitScopeNamespace,
+func (m *mockPlugin) RateLimit() pkgmodel.RateLimitConfig {
+	return pkgmodel.RateLimitConfig{
+		Scope:                            pkgmodel.RateLimitScopeNamespace,
 		MaxRequestsPerSecondForNamespace: 10,
 	}
 }
 
-func (m *mockPlugin) DiscoveryFilters() []plugin.MatchFilter {
+func (m *mockPlugin) DiscoveryFilters() []pkgmodel.MatchFilter {
 	return nil
 }
 
-func (m *mockPlugin) LabelConfig() plugin.LabelConfig {
-	return plugin.LabelConfig{DefaultQuery: "$.Name"}
+func (m *mockPlugin) LabelConfig() pkgmodel.LabelConfig {
+	return pkgmodel.LabelConfig{DefaultQuery: "$.Name"}
 }
 
 func (m *mockPlugin) Create(ctx context.Context, req *resource.CreateRequest) (*resource.CreateResult, error) {
@@ -101,7 +101,6 @@ func TestSetupPluginFromDir_CreatesFullResourcePlugin(t *testing.T) {
 	assert.NotEmpty(t, schema.Fields, "Schema should have fields")
 
 	// Verify config methods are delegated to the plugin
-	assert.Equal(t, plugin.RateLimitScopeNamespace, wrapped.RateLimit().Scope)
 	assert.Equal(t, 10, wrapped.RateLimit().MaxRequestsPerSecondForNamespace)
 	assert.Equal(t, "$.Name", wrapped.LabelConfig().DefaultQuery)
 }

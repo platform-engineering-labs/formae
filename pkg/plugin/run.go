@@ -5,10 +5,7 @@
 package plugin
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -20,6 +17,7 @@ import (
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/registrar"
+	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 
 	"go.opentelemetry.io/contrib/instrumentation/host"
@@ -39,64 +37,50 @@ import (
 type PluginCapabilities struct {
 	SupportedResources []ResourceDescriptor
 	ResourceSchemas    map[string]model.Schema // key = resource type
-	MatchFilters       []MatchFilter
-	LabelConfig        LabelConfig
+	MatchFilters       []model.MatchFilter
+	LabelConfig        model.LabelConfig
 }
 
 // PluginAnnouncement is sent by plugins to PluginCoordinator on startup.
 // It contains all information needed for the agent to interact with the plugin.
 type PluginAnnouncement struct {
+	Name                 string // Plugin name from manifest (e.g., "compose", "aws")
 	Namespace            string
 	Version              string
 	NodeName             string
 	MaxRequestsPerSecond int
-
-	// Capabilities contains gzip-compressed JSON of PluginCapabilities.
-	// Use CompressCapabilities() and DecompressCapabilities() helpers.
-	// This compression is required because Ergo has a hardcoded 64KB buffer
-	// limit that cannot be configured via MaxMessageSize.
-	Capabilities []byte
+	Capabilities         PluginCapabilities
 }
 
-// CompressCapabilities compresses PluginCapabilities to gzip-compressed JSON.
-func CompressCapabilities(caps PluginCapabilities) ([]byte, error) {
-	jsonData, err := json.Marshal(caps)
+// CheckAgentCompatibility verifies that the given agent version is compatible
+// with this SDK. Returns an error if the agent version is older than MinFormaeVersion.
+// Returns nil for empty or unparseable versions to avoid crashing when the env
+// var is not set or contains an unexpected format.
+func CheckAgentCompatibility(agentVersion string) error {
+	if agentVersion == "" || agentVersion == "0.0.0" {
+		return nil
+	}
+
+	agentVer, err := semver.NewVersion(agentVersion)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal capabilities: %w", err)
+		// Don't crash on unparseable versions
+		return nil
 	}
 
-	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	minVer, err := semver.NewVersion(MinFormaeVersion)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
+		// MinFormaeVersion is a compile-time constant; if it's invalid, don't crash
+		return nil
 	}
 
-	if _, err := gz.Write(jsonData); err != nil {
-		return nil, fmt.Errorf("failed to write compressed data: %w", err)
+	if agentVer.LessThan(minVer) {
+		return fmt.Errorf(
+			"agent version %s is older than the minimum required by this plugin SDK (%s); please upgrade the formae agent",
+			agentVersion, MinFormaeVersion,
+		)
 	}
 
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// DecompressCapabilities decompresses gzip-compressed JSON to PluginCapabilities.
-func DecompressCapabilities(data []byte) (PluginCapabilities, error) {
-	var caps PluginCapabilities
-
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return caps, fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer gz.Close()
-
-	if err := json.NewDecoder(gz).Decode(&caps); err != nil {
-		return caps, fmt.Errorf("failed to decode capabilities: %w", err)
-	}
-
-	return caps, nil
+	return nil
 }
 
 // Run starts the plugin process and announces it to the agent's PluginRegistry.
@@ -106,6 +90,11 @@ func DecompressCapabilities(data []byte) (PluginCapabilities, error) {
 // a simplified ResourcePlugin. For built-in plugins that implement FullResourcePlugin
 // directly, use this function.
 func Run(fp FullResourcePlugin) {
+	// Check that the agent is compatible with this SDK version
+	if err := CheckAgentCompatibility(os.Getenv("FORMAE_VERSION")); err != nil {
+		log.Fatal(err)
+	}
+
 	// Register message types for network serialization
 	registerEDFTypes()
 
@@ -138,6 +127,8 @@ func Run(fp FullResourcePlugin) {
 	options.Network.Cookie = cookie
 	options.Security.ExposeEnvRemoteSpawn = true
 	options.Log.Level = gen.LogLevelDebug
+	options.Log.DefaultLogger.Disable = true
+	options.Log.DefaultLogger.DisableBanner = true
 
 	// Configure plugin's own Ergo acceptor on a random free port.
 	// The plugin needs its own acceptor for the agent to spawn remote PluginOperator processes.

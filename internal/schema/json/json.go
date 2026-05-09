@@ -127,7 +127,7 @@ func highlight(code []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, options *schema.SerializeOptions) (schema.GenerateSourcesResult, error) {
 	return schema.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 

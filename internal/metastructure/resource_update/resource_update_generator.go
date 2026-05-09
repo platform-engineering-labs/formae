@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"strings"
 
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -385,13 +385,29 @@ func generateResourceUpdatesForApply(
 
 			// Skip raw config comparison when config contains resolvables ($ref).
 			// The TargetUpdateGenerator handles resolvable-aware comparison.
-			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 &&
-				!util.JsonEqualRaw(existingTarget.Config, target.Config) {
-				return nil, apimodel.TargetAlreadyExistsError{
-					TargetLabel:    target.Label,
-					MismatchType:   "config",
-					ExistingConfig: existingTarget.Config,
-					FormaConfig:    target.Config,
+			if len(resolver.ExtractResolvableURIsFromJSON(target.Config)) == 0 {
+				// Strip $ref metadata from existing config so that a stored
+				// value with $ref wrappers compares correctly against a plain
+				// value in the new config.
+				existingResolved, err := resolver.ConvertToPluginFormat(existingTarget.Config)
+				if err != nil {
+					existingResolved = existingTarget.Config
+				}
+				// Prefer the incoming schema — it represents the current plugin
+				// version and may have new or updated hints. Fall back to the
+				// existing schema only when the incoming has none.
+				schema := target.ConfigSchema
+				if len(schema.Hints) == 0 {
+					schema = existingTarget.ConfigSchema
+				}
+				configChange := target_update.ClassifyConfigChange(existingResolved, target.Config, schema)
+				if configChange == target_update.ConfigImmutableChange {
+					return nil, apimodel.TargetAlreadyExistsError{
+						TargetLabel:    target.Label,
+						MismatchType:   "config",
+						ExistingConfig: existingTarget.Config,
+						FormaConfig:    target.Config,
+					}
 				}
 			}
 		}
@@ -425,7 +441,16 @@ func generateResourceUpdatesForSync(
 		if source == FormaCommandSourceDiscovery {
 			for _, r := range forma.Resources {
 				if r.Stack == stack.SingleStackLabel() {
-					ru, err := NewResourceUpdateForSyncWithFilter(r, *existingTargetMap[r.Target], source)
+					// When a target has been deleted but resources referencing it
+					// remain in the DB (e.g., unmanaged resources from discovery),
+					// pass an empty sentinel Target. The ResourceUpdater will
+					// detect the nil Config and short-circuit to NotFound, causing
+					// the resource to be cleaned up via the "deleted OOB" path.
+					target := existingTargetMap[r.Target]
+					if target == nil {
+						target = &pkgmodel.Target{Label: r.Target}
+					}
+					ru, err := NewResourceUpdateForSyncWithFilter(r, *target, source)
 					if err != nil {
 						return nil, fmt.Errorf("failed to create resource update sync for %s: %w", r.Label, err)
 					}
@@ -448,9 +473,14 @@ func generateResourceUpdatesForSync(
 					// from the plugin) rather than the stale schema stored in the DB
 					existingResource.Schema = resource.Schema
 
+					// See comment above: pass empty sentinel when target is gone.
+					target := existingTargetMap[existingResource.Target]
+					if target == nil {
+						target = &pkgmodel.Target{Label: existingResource.Target}
+					}
 					resourceUpdate, err := NewResourceUpdateForSync(
 						*existingResource,
-						*existingTargetMap[existingResource.Target],
+						*target,
 						source,
 					)
 					if err != nil {
@@ -500,6 +530,7 @@ func generateResourceUpdatesForReconcile(
 		checkAllResources := len(formaResourceKeys) == 0
 
 		var nonPortable []string
+		var nonPortableTarget string
 		for stackLabel, resources := range allResourcesByStack {
 			if stackLabel == constants.UnmanagedStack {
 				continue
@@ -512,13 +543,18 @@ func generateResourceUpdatesForReconcile(
 					key := fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label)
 					if checkAllResources || formaResourceKeys[key] {
 						nonPortable = append(nonPortable, fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label))
+						if nonPortableTarget == "" {
+							nonPortableTarget = resource.Target
+						}
 					}
 				}
 			}
 		}
 		if len(nonPortable) > 0 {
-			return nil, fmt.Errorf("cannot replace target: the following resources are not portable across targets and cannot be recreated:\n  - %s\nUse 'formae destroy' to remove these resources first, then apply with the new target",
-				strings.Join(nonPortable, "\n  - "))
+			return nil, apimodel.NonPortableResourcesError{
+				TargetLabel: nonPortableTarget,
+				Resources:   nonPortable,
+			}
 		}
 	}
 
@@ -726,7 +762,7 @@ func generateResourceUpdatesForReconcile(
 			if update.Operation == OperationUpdate && replacedTargets[update.DesiredState.Target] {
 				replaceOps, err := NewResourceUpdateForReplace(
 					update.PriorState, update.DesiredState,
-					update.ExistingTarget, update.ResourceTarget, source,
+					update.ExistingTarget, update.ResourceTarget, source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for target replace: %w", err)
@@ -771,7 +807,7 @@ func generateResourceUpdatesForReconcile(
 				replaceOps, err := NewResourceUpdateForReplace(
 					*resource, *resource,
 					*existingTargetMap[resource.Target], *desiredTargetMap[resource.Target],
-					source,
+					source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for non-forma resource: %w", err)
@@ -841,6 +877,7 @@ func generateResourceUpdatesForPatch(
 	// In patch mode, ALL managed resources on replaced targets will be recreated, so check all
 	if len(replacedTargets) > 0 {
 		var nonPortable []string
+		var nonPortableTarget string
 		for stackLabel, resources := range allResourcesByStack {
 			if stackLabel == constants.UnmanagedStack {
 				continue
@@ -851,12 +888,17 @@ func generateResourceUpdatesForPatch(
 				}
 				if !resource.Schema.Portable {
 					nonPortable = append(nonPortable, fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label))
+					if nonPortableTarget == "" {
+						nonPortableTarget = resource.Target
+					}
 				}
 			}
 		}
 		if len(nonPortable) > 0 {
-			return nil, fmt.Errorf("cannot replace target: the following resources are not portable across targets and cannot be recreated:\n  - %s\nUse 'formae destroy' to remove these resources first, then apply with the new target",
-				strings.Join(nonPortable, "\n  - "))
+			return nil, apimodel.NonPortableResourcesError{
+				TargetLabel: nonPortableTarget,
+				Resources:   nonPortable,
+			}
 		}
 	}
 
@@ -963,7 +1005,7 @@ func generateResourceUpdatesForPatch(
 			if update.Operation == OperationUpdate && replacedTargets[update.DesiredState.Target] {
 				replaceOps, err := NewResourceUpdateForReplace(
 					update.PriorState, update.DesiredState,
-					update.ExistingTarget, update.ResourceTarget, source,
+					update.ExistingTarget, update.ResourceTarget, source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for target replace: %w", err)
@@ -1002,7 +1044,7 @@ func generateResourceUpdatesForPatch(
 				replaceOps, err := NewResourceUpdateForReplace(
 					*resource, *resource,
 					*existingTargetMap[resource.Target], *desiredTargetMap[resource.Target],
-					source,
+					source, nil,
 				)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create replace for non-forma resource: %w", err)
@@ -1125,6 +1167,7 @@ func convertUpdatesToReplacementsForDependencies(allResourceUpdates []ResourceUp
 					update.ExistingTarget,
 					update.ResourceTarget,
 					source,
+					nil,
 				)
 				if err != nil {
 					slog.Error("Failed to create replacement updates for resource",
@@ -1203,6 +1246,7 @@ func convertDependencyDeletesToReplacements(allResourceUpdates []ResourceUpdate,
 					depDelete.ResourceTarget,
 					*desiredTargetMap[formaResource.Target],
 					source,
+					nil,
 				)
 				if err != nil {
 					slog.Error("Failed to create replacement updates for dependency delete",

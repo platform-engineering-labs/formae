@@ -1,21 +1,24 @@
 module github.com/platform-engineering-labs/formae/pkg/plugin
 
-go 1.25
+go 1.26
 
-toolchain go1.25.1
+toolchain go1.26.2
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../model
 
+replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
+
 require (
-	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
-	ergo.services/ergo v1.999.310
+	ergo.services/actor/statemachine v0.0.0-00010101000000-000000000000
+	ergo.services/ergo v1.999.320
 	github.com/apple/pkl-go v0.12.0
 	github.com/hashicorp/hcl/v2 v2.24.0
+	github.com/klauspost/compress v1.18.5
 	github.com/masterminds/semver v1.5.0
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/stretchr/testify v1.11.1
-	github.com/tidwall/gjson v1.18.0
-	github.com/zclconf/go-cty v1.18.0
+	github.com/vmihailenco/msgpack/v5 v5.4.1
+	github.com/zclconf/go-cty v1.18.1
 	go.opentelemetry.io/contrib/instrumentation/host v0.65.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.65.0
 	go.opentelemetry.io/otel v1.40.0
@@ -46,11 +49,11 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.1 // indirect
 	github.com/theory/jsonpath v0.10.2 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
-	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -68,3 +71,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.1

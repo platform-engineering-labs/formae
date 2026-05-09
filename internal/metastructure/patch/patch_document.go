@@ -16,7 +16,18 @@ import (
 
 var defaultIgnoredFields = []jsonpatch.Path{}
 
-func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
+// GeneratePatch returns the JSON-patch documents describing the diff between
+// document (actual state) and patch (desired state):
+//
+//   - patchDocument holds the mutable-field ops; this is what gets sent to
+//     the plugin for an in-place update.
+//   - createOnlyPatch holds the ops that target createOnly (immutable)
+//     fields. When non-empty, the caller must plan a destroy+create rather
+//     than an update; the ops are used purely for CLI rendering ("because
+//     these immutable properties changed: …") and are never sent to plugins.
+//
+// The two slices are disjoint. Either can be nil.
+func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
 	return generatePatch(document, patch, properties, schema, mode)
 }
 
@@ -52,10 +63,10 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, bool, error) {
+func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, properties)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to flatten and resolve refs: %w", err)
+		return nil, nil, fmt.Errorf("failed to flatten and resolve refs: %w", err)
 	}
 
 	var strategy jsonpatch.PatchStrategy
@@ -65,12 +76,26 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	case pkgmodel.FormaApplyModePatch:
 		strategy = jsonpatch.PatchStrategyEnsureExists
 	default:
-		return nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
+		return nil, nil, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
+	}
+
+	// Strip fields that are both writeOnly AND createOnly from the desired
+	// state (patch) before comparison. writeOnly fields are never returned by
+	// the provider's Read, so they're always absent from the document. If the
+	// field is also createOnly, the "add" op that jsonpatch generates triggers
+	// a resource replacement even though nothing actually changed. Stripping
+	// them from the patch prevents phantom replacements on re-apply.
+	writeOnlyCreateOnly := intersectFields(schema.WriteOnly(), schema.CreateOnly())
+	if len(writeOnlyCreateOnly) > 0 {
+		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, writeOnlyCreateOnly)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
+		}
 	}
 
 	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to create patch document: %w", err)
+		return nil, nil, fmt.Errorf("failed to create patch document: %w", err)
 	}
 
 	// Remove spurious patch operations that add empty arrays or maps.
@@ -88,27 +113,37 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	patchOps = stripEmptyCollectionsFromOps(patchOps)
 
 	if len(patchOps) == 0 {
-		return nil, false, nil
+		return nil, nil, nil
 	}
 
 	// Separate createOnly operations from mutable operations. CreateOnly
 	// fields cannot be updated in-place via the cloud API — if they changed,
-	// the resource needs a full replacement (destroy + create). We detect
-	// this and strip createOnly ops from the patch sent to the plugin.
+	// the resource needs a full replacement (destroy + create). The createOnly
+	// ops are returned separately so the CLI can render which immutable
+	// properties triggered the replacement; they are not sent to the plugin.
 	createOnlyFields := schema.CreateOnly()
-	needsReplacement, _ := containsCreateOnlyFields(patchOps, createOnlyFields)
-	patchOps = filterCreateOnlyFields(patchOps, createOnlyFields)
+	createOnlyOps := extractCreateOnlyFields(patchOps, createOnlyFields)
+	mutableOps := filterCreateOnlyFields(patchOps, createOnlyFields)
 
-	if len(patchOps) == 0 && !needsReplacement {
-		return nil, false, nil
+	if len(mutableOps) == 0 && len(createOnlyOps) == 0 {
+		return nil, nil, nil
 	}
 
-	patchJson, err := json.Marshal(patchOps)
+	patchJson, err := json.Marshal(mutableOps)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to serialize patch document: %w", err)
+		return nil, nil, fmt.Errorf("failed to serialize patch document: %w", err)
 	}
 
-	return json.RawMessage(patchJson), needsReplacement, nil
+	var createOnlyJson json.RawMessage
+	if len(createOnlyOps) > 0 {
+		createOnlyBytes, err := json.Marshal(createOnlyOps)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to serialize createOnly patch: %w", err)
+		}
+		createOnlyJson = json.RawMessage(createOnlyBytes)
+	}
+
+	return json.RawMessage(patchJson), createOnlyJson, nil
 }
 
 func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
@@ -127,12 +162,17 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 		return nil, err
 	}
 
-	// Remove provider default fields from the document (existing state) if they are not in the desired state (patch).
-	// Provider default fields are optional fields that cloud providers assign default values to.
-	// If the user didn't specify the field in their PKL, we don't want to generate a "remove" operation
-	// that would delete the provider-assigned default. By removing these fields from the document
-	// before comparison (only when they're not in the desired state), we prevent oscillation.
-	documentWithoutProviderDefaults, err := removeProviderDefaultFields(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, hasProviderDefaultFields)
+	// Remove provider default fields. For top-level paths we only strip from the
+	// document when the field is absent from the patch (preserves user
+	// overrides). For paths that traverse a list — e.g. `ContainerDefinitions.Cpu`
+	// — we strip the leaf key from BOTH sides in every array element, because
+	// jsonpatch's default set-based array comparison cannot reliably pair a
+	// document element that carries the provider-populated value with a patch
+	// element that omits it. Symmetric stripping makes those sub-fields
+	// invisible to the diff regardless of their value, which is the behavior we
+	// want for a hasProviderDefault annotation on a sub-field of a list
+	// element. See removeProviderDefaultFields for details.
+	patchWithSchemaFieldsOnly, documentWithoutProviderDefaults, err := removeProviderDefaultFieldsBoth(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, hasProviderDefaultFields)
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +208,21 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 	}
 
 	return patchDoc, nil
+}
+
+// intersectFields returns fields present in both slices.
+func intersectFields(a, b []string) []string {
+	set := make(map[string]struct{}, len(b))
+	for _, f := range b {
+		set[f] = struct{}{}
+	}
+	var result []string
+	for _, f := range a {
+		if _, ok := set[f]; ok {
+			result = append(result, f)
+		}
+	}
+	return result
 }
 
 // removeWriteOnlyFields removes writeOnly fields from the document.
@@ -229,38 +284,181 @@ func removeNestedField(obj map[string]any, path []string) {
 	}
 }
 
-// removeProviderDefaultFields removes fields from the document (actual state) that have provider defaults,
-// but only if those fields are NOT present in the patch (desired state).
-// This prevents "remove" operations for fields where the cloud provider assigns default values.
+// removeProviderDefaultFields removes fields with provider defaults from the
+// document (actual state) — and, for fields nested inside array elements,
+// symmetrically from the patch (desired state) too.
+//
+// Two regimes are at play:
+//
+//  1. Pure-object paths (e.g. "BucketEncryption" or "Config.Encryption"):
+//     the field is removed from the document only when it is absent from the
+//     patch. This preserves a user's explicit override of the provider
+//     default — their desired value remains in the patch and diffs normally.
+//
+//  2. Array-traversing paths (e.g. "ContainerDefinitions.Cpu" or
+//     "ContainerDefinitions.PortMappings.HostPort"): the leaf key is stripped
+//     from BOTH sides, in every reachable array element. This is necessary
+//     because jsonpatch compares array elements as opaque JSON blobs under
+//     its default set semantics, so a document element that carries the
+//     provider-populated value (e.g. Cpu:0) won't match a patch element that
+//     omits it — even though the user-intended shape is identical. The mixed
+//     case (one element sets the field, the other doesn't) cannot be fixed
+//     by stripping the document alone, because set-comparison has no stable
+//     pairing between elements. Symmetric stripping makes the provider-
+//     populated sub-field invisible to the diff regardless of value, which
+//     is the correct semantic for a hasProviderDefault annotation inside a
+//     collection of heterogeneous sub-resources.
 func removeProviderDefaultFields(document []byte, patch []byte, hasProviderDefaultFields []string) ([]byte, error) {
+	_, stripped, err := removeProviderDefaultFieldsBoth(document, patch, hasProviderDefaultFields)
+	return stripped, err
+}
+
+// removeProviderDefaultFieldsBoth is the two-sided counterpart used by the
+// patch pipeline: it returns the stripped patch as well as the stripped
+// document so that array-nested provider defaults are removed symmetrically.
+// Callers that only need the document side can use removeProviderDefaultFields.
+func removeProviderDefaultFieldsBoth(document []byte, patch []byte, hasProviderDefaultFields []string) ([]byte, []byte, error) {
 	if len(hasProviderDefaultFields) == 0 {
-		return document, nil
+		return patch, document, nil
 	}
 
 	var docMap map[string]any
 	if err := json.Unmarshal(document, &docMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal document: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal document: %w", err)
 	}
 
 	var patchMap map[string]any
 	if err := json.Unmarshal(patch, &patchMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal patch: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal patch: %w", err)
 	}
 
 	for _, fieldPath := range hasProviderDefaultFields {
 		pathParts := strings.Split(fieldPath, ".")
-		// Only remove from document if the field is NOT in the desired state (patch)
-		if !fieldExistsInMap(patchMap, pathParts) {
-			removeNestedField(docMap, pathParts)
+		stripProviderDefaultPath(docMap, patchMap, pathParts)
+	}
+
+	patchSerialized, err := json.Marshal(patchMap)
+	if err != nil {
+		return nil, nil, err
+	}
+	docSerialized, err := json.Marshal(docMap)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return patchSerialized, docSerialized, nil
+}
+
+// stripProviderDefaultPath walks a dotted field path through parallel document
+// and patch maps. Whenever the walk descends through an array, it iterates the
+// array on BOTH sides and applies the remaining path to every element,
+// dropping the leaf key symmetrically (see the comment on
+// removeProviderDefaultFields for the rationale). For walks that never enter
+// an array, it falls back to the original conditional behavior: the leaf is
+// stripped from the document only when it is absent in the patch.
+func stripProviderDefaultPath(doc, patch map[string]any, path []string) {
+	if len(path) == 0 || doc == nil {
+		return
+	}
+
+	// Last segment — conditional strip on document only, to preserve user overrides.
+	// fieldExistsInMap treats a nil patch value as absent: the reverted PKL
+	// renderer emits unset nullable Listing/Mapping fields as null. In that case
+	// we also drop the leaf from the patch so the diff doesn't see a spurious
+	// `add /<field>: null`. An explicit empty Listing {} / Mapping {} renders as
+	// []/{}, stays in the patch, and continues to mean "user-initiated clear".
+	if len(path) == 1 {
+		if !fieldExistsInMap(patch, path) {
+			delete(doc, path[0])
+			delete(patch, path[0])
+		}
+		return
+	}
+
+	head, tail := path[0], path[1:]
+
+	docVal, docHas := doc[head]
+	patchVal := any(nil)
+	if patch != nil {
+		patchVal = patch[head]
+	}
+
+	// Array on either side: walk into each element symmetrically.
+	if docArr, ok := docVal.([]any); ok {
+		patchArr, _ := patchVal.([]any)
+		stripProviderDefaultInsideArray(docArr, patchArr, tail)
+		return
+	}
+	if patchArr, ok := patchVal.([]any); ok {
+		// Document doesn't have this key (or has it as a non-array).
+		// Still strip from every patch element to keep both sides symmetric.
+		stripProviderDefaultInsideArray(nil, patchArr, tail)
+		return
+	}
+
+	// Pure object traversal — recurse.
+	if !docHas {
+		return
+	}
+	docNested, ok := docVal.(map[string]any)
+	if !ok {
+		return
+	}
+	var patchNested map[string]any
+	if p, ok := patchVal.(map[string]any); ok {
+		patchNested = p
+	}
+	stripProviderDefaultPath(docNested, patchNested, tail)
+}
+
+// stripProviderDefaultInsideArray walks the remaining path into each element
+// of the doc and patch arrays in parallel (by position where available, else
+// independently) and removes the leaf key from BOTH sides in every reachable
+// element. Elements that aren't objects (or don't match the expected shape)
+// are left alone.
+func stripProviderDefaultInsideArray(docArr, patchArr []any, path []string) {
+	if len(path) == 0 {
+		return
+	}
+
+	for _, elem := range docArr {
+		if elemMap, ok := elem.(map[string]any); ok {
+			stripProviderDefaultInArrayElem(elemMap, path)
 		}
 	}
+	for _, elem := range patchArr {
+		if elemMap, ok := elem.(map[string]any); ok {
+			stripProviderDefaultInArrayElem(elemMap, path)
+		}
+	}
+}
 
-	serialized, err := json.Marshal(docMap)
-	if err != nil {
-		return nil, err
+// stripProviderDefaultInArrayElem handles the remaining path INSIDE an array
+// element. Any further array traversal recurses via
+// stripProviderDefaultInsideArray; object traversal continues into the
+// nested map; the leaf key is deleted unconditionally, because once we are
+// inside an array element the provider-populated value cannot be reliably
+// matched to a counterpart on the other side (set semantics).
+func stripProviderDefaultInArrayElem(elem map[string]any, path []string) {
+	if len(path) == 0 || elem == nil {
+		return
+	}
+	if len(path) == 1 {
+		delete(elem, path[0])
+		return
 	}
 
-	return serialized, nil
+	head, tail := path[0], path[1:]
+	val, has := elem[head]
+	if !has {
+		return
+	}
+	switch v := val.(type) {
+	case map[string]any:
+		stripProviderDefaultInArrayElem(v, tail)
+	case []any:
+		stripProviderDefaultInsideArray(v, nil, tail)
+	}
 }
 
 // removeProviderDefaultEntitySetElements filters EntitySet arrays in the document (actual state)
@@ -335,13 +533,18 @@ func removeProviderDefaultEntitySetElements(document []byte, patch []byte, entit
 // For example, path ["BucketEncryption", "Rules"] checks if obj["BucketEncryption"]["Rules"] exists.
 // Handles array traversal: if a path segment resolves to an array, checks whether
 // the remaining path exists in any map element of that array.
+//
+// A nil value is treated as absent: the reverted PKL renderer emits unset nullable
+// Listing/Mapping fields as null, while explicit empty Listing {} / Mapping {}
+// renders as []/{}. removeProviderDefaultFields uses this distinction to suppress
+// drift only when the user omitted the field, not when they explicitly cleared it.
 func fieldExistsInMap(obj map[string]any, path []string) bool {
 	if len(path) == 0 {
 		return false
 	}
 
 	val, exists := obj[path[0]]
-	if !exists {
+	if !exists || val == nil {
 		return false
 	}
 
@@ -440,7 +643,14 @@ func stripEmptyCollectionsFromValue(val any) any {
 			if isEmptyCollection(elem) {
 				continue
 			}
-			cleaned[k] = stripEmptyCollectionsFromValue(elem)
+			stripped := stripEmptyCollectionsFromValue(elem)
+			// Re-check after recursive stripping — a map whose children
+			// were all empty collections is itself now empty and should
+			// be removed (e.g. DestinationConfig: {OnSuccess: {}, OnFailure: {}}).
+			if isEmptyCollection(stripped) {
+				continue
+			}
+			cleaned[k] = stripped
 		}
 		return cleaned
 	case []any:
@@ -465,17 +675,6 @@ func isEmptyCollection(val any) bool {
 	}
 }
 
-func containsCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) (bool, error) {
-	for _, patch := range patchOps {
-		path := cleanPath(patch.Path)
-		if isCreateOnlyPath(path, createOnlyFields) {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
 // filterCreateOnlyFields removes patch operations that target createOnly fields.
 // These operations cannot be sent to the cloud API — createOnly fields are
 // immutable after creation. If they changed, the caller uses needsReplacement
@@ -492,6 +691,23 @@ func filterCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyF
 		}
 	}
 	return filtered
+}
+
+// extractCreateOnlyFields returns the subset of patch operations that target
+// createOnly fields — the inverse of filterCreateOnlyFields. Used to preserve
+// the triggering ops for CLI rendering when a replacement is required.
+func extractCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnlyFields []string) []jsonpatch.JsonPatchOperation {
+	if len(createOnlyFields) == 0 {
+		return nil
+	}
+	var extracted []jsonpatch.JsonPatchOperation
+	for _, op := range patchOps {
+		path := cleanPath(op.Path)
+		if isCreateOnlyPath(path, createOnlyFields) {
+			extracted = append(extracted, op)
+		}
+	}
+	return extracted
 }
 
 // isCreateOnlyPath checks if a patch path targets a createOnly field.

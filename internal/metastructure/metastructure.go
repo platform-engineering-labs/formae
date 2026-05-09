@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -49,7 +50,7 @@ type MetastructureAPI interface {
 	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	CancelCommand(commandID string, clientID string) error
+	CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error)
 	CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
@@ -58,22 +59,28 @@ type MetastructureAPI interface {
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
+	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
+	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
 }
 
 type Metastructure struct {
-	nodeName      string
-	options       gen.NodeOptions
-	Node          gen.Node
-	Datastore     datastore.Datastore
-	PluginManager *plugin.Manager
-	Cfg           *pkgmodel.Config
-	AgentID       string
+	nodeName  string
+	options   gen.NodeOptions
+	Node      gen.Node
+	Datastore datastore.Datastore
+	Cfg       *pkgmodel.Config
+	AgentID   string
 
 	// TestResourcePlugin is a test-only field for injecting a resource plugin (e.g. FakeAWS)
-	// directly into the actor system, bypassing PluginManager. Must be nil in production.
+	// directly into the actor system. Must be nil in production.
 	TestResourcePlugin plugin.FullResourcePlugin
+
+	// AuthPluginHandle is the pre-created handle for the auth plugin process.
+	// Set by the agent before Start(). Passed to both the supervisor (which spawns
+	// the process) and the API server (which uses it for request validation).
+	AuthPluginHandle *auth.AuthPluginHandle
 
 	// commandMu serializes Apply/Destroy/ForceAutoReconcile to prevent TOCTOU
 	// races between the conflict check and command storage. This will be
@@ -81,7 +88,7 @@ type Metastructure struct {
 	commandMu sync.Mutex
 }
 
-func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *plugin.Manager, agentID string) (*Metastructure, error) {
+func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, agentID string) (*Metastructure, error) {
 	datastoreType := cfg.Agent.Datastore.DatastoreType
 	if datastoreType == "" {
 		datastoreType = "sqlite"
@@ -92,15 +99,14 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, pluginManager *
 		return nil, err
 	}
 
-	return NewMetastructureWithDataStoreAndContext(ctx, cfg, pluginManager, ds, agentID)
+	return NewMetastructureWithDataStoreAndContext(ctx, cfg, externalResourcePlugins, ds, agentID)
 }
 
-func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, pluginManager *plugin.Manager, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
+func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
 	metastructure := &Metastructure{}
 
 	metastructure.Datastore = datastore
 	metastructure.Cfg = cfg
-	metastructure.PluginManager = pluginManager
 
 	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
@@ -123,27 +129,28 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.options.Applications = apps
 
 	metastructure.options.Env = map[gen.Env]any{
-		gen.Env("PluginManager"):         metastructure.PluginManager,
-		gen.Env("Datastore"):             metastructure.Datastore,
-		gen.Env("Context"):               ctx,
-		gen.Env("disable_metrics"):       true,
-		gen.Env("ServerConfig"):          cfg.Agent.Server,
-		gen.Env("DatastoreConfig"):       cfg.Agent.Datastore,
-		gen.Env("RetryConfig"):           cfg.Agent.Retry,
-		gen.Env("PluginConfig"):          cfg.Plugins,
-		gen.Env("SynchronizationConfig"): cfg.Agent.Synchronization,
-		gen.Env("DiscoveryConfig"):       cfg.Agent.Discovery,
-		gen.Env("LoggingConfig"):         cfg.Agent.Logging,
-		gen.Env("OTelConfig"):            cfg.Agent.OTel,
-		gen.Env("AgentID"):               agentID,
+		gen.Env("ExternalResourcePlugins"): externalResourcePlugins,
+		gen.Env("Datastore"):               metastructure.Datastore,
+		gen.Env("Context"):                 ctx,
+		gen.Env("disable_metrics"):         true,
+		gen.Env("ServerConfig"):            cfg.Agent.Server,
+		gen.Env("DatastoreConfig"):         cfg.Agent.Datastore,
+		gen.Env("RetryConfig"):             cfg.Agent.Retry,
+		gen.Env("SynchronizationConfig"):   cfg.Agent.Synchronization,
+		gen.Env("DiscoveryConfig"):         cfg.Agent.Discovery,
+		gen.Env("LoggingConfig"):           cfg.Agent.Logging,
+		gen.Env("OTelConfig"):              cfg.Agent.OTel,
+		gen.Env("StackExpirerConfig"):      cfg.Agent.StackExpirer,
+		gen.Env("AgentID"):                 agentID,
+		gen.Env("ResourcePluginConfigs"):   cfg.Agent.ResourcePlugins,
 	}
 
 	// Enable Ergo networking for distributed plugin architecture
 	metastructure.options.Network.Mode = gen.NetworkModeEnabled
 
 	// Disable environment sharing for RemoteSpawn because the agent's environment contains
-	// non-serializable types (Datastore, PluginManager, Context). We inject the relevant
-	// (serializable) parts of the environment during remote spawn in the PluginCoordinator actor.
+	// non-serializable types (Datastore, Context). We inject the relevant (serializable)
+	// parts of the environment during remote spawn in the PluginCoordinator actor.
 	metastructure.options.Security.ExposeEnvRemoteSpawn = false
 
 	//FIXME(discount-elf): enable real TLS if we want it
@@ -193,6 +200,12 @@ func (m *Metastructure) Start() error {
 	// is set after construction but before Start() is called.
 	if m.TestResourcePlugin != nil {
 		m.options.Env[gen.Env("TestResourcePlugin")] = m.TestResourcePlugin
+	}
+
+	// Inject auth plugin handle for the supervisor to spawn the auth process.
+	// Set after construction but before Start(), same pattern as TestResourcePlugin.
+	if m.AuthPluginHandle != nil {
+		m.options.Env[gen.Env("AuthPluginHandle")] = m.AuthPluginHandle
 	}
 
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
@@ -274,6 +287,9 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 		if targetExistsErr, ok := err.(apimodel.TargetAlreadyExistsError); ok {
 			return nil, targetExistsErr
+		}
+		if nonPortableErr, ok := err.(apimodel.NonPortableResourcesError); ok {
+			return nil, nonPortableErr
 		}
 		slog.Error("Failed to create apply from forma", "error", err)
 		return nil, err
@@ -380,7 +396,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}, nil
 	}
 
-	m.Node.Log().Debug("Storing forma command", "commandID", fa.ID)
+	m.Node.Log().Debug("Storing forma command commandID=%s", fa.ID)
 	_, err = m.callActor(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 		forma_persister.StoreNewFormaCommand{Command: *fa},
@@ -402,7 +418,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			slog.Error("Failed to persist stack updates", "error", err)
 			return nil, fmt.Errorf("failed to persist stack updates: %w", err)
 		}
-		m.Node.Log().Debug("Successfully persisted stack updates", "count", len(fa.StackUpdates))
+		m.Node.Log().Debug("Successfully persisted stack updates count=%d", len(fa.StackUpdates))
 
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
@@ -453,7 +469,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								Operation: ru.Operation,
 							}
 						}
-						_, err = m.callActor(
+						_, markErr := m.callActor(
 							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 							forma_persister.MarkResourcesAsFailed{
 								CommandID:          fa.ID,
@@ -461,9 +477,9 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 								ResourceModifiedTs: time.Now(),
 							},
 						)
-						if err != nil {
+						if markErr != nil {
 							slog.Error("Failed to mark resources as failed after stack deletion",
-								"error", err, "commandID", fa.ID)
+								"commandID", fa.ID, "stackLabel", pu.StackLabel, "error", markErr)
 						}
 						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
 					}
@@ -483,7 +499,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			slog.Error("Failed to persist policy updates", "error", err)
 			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
 		}
-		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+		m.Node.Log().Debug("Successfully persisted policy updates count=%d", len(fa.PolicyUpdates))
 
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
@@ -499,7 +515,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	}
 
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
+		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
 			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
@@ -509,7 +525,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			return nil, fmt.Errorf("failed to ensure ChangesetExecutor: %w", err)
 		}
 
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
+		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
 			changeset.Start{Changeset: cs},
@@ -545,24 +561,26 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		}
 
 		apiCommand.ResourceUpdates = append(apiCommand.ResourceUpdates, apimodel.ResourceUpdate{
-			ResourceID:     ru.DesiredState.Ksuid,
-			ResourceType:   ru.DesiredState.Type,
-			ResourceLabel:  ru.DesiredState.Label,
-			StackName:      ru.StackLabel,
-			OldStackName:   ru.PriorState.Stack,
-			Properties:     ru.DesiredState.Properties,
-			OldProperties:  ru.PreviousProperties,
-			PatchDocument:  ru.DesiredState.PatchDocument,
-			Operation:      string(ru.Operation),
-			State:          string(ru.State),
-			Duration:       dur.Milliseconds(),
-			CurrentAttempt: ru.MostRecentProgressResult.Attempts,
-			MaxAttempts:    ru.MostRecentProgressResult.MaxAttempts,
-			ErrorMessage:   ru.MostRecentFailureMessage(),
-			StatusMessage:  ru.MostRecentStatusMessage(),
-			GroupID:        ru.GroupID,
-			IsCascade:      ru.IsCascade,
-			CascadeSource:  ru.CascadeSource,
+			ResourceID:      ru.DesiredState.Ksuid,
+			ResourceType:    ru.DesiredState.Type,
+			ResourceLabel:   ru.DesiredState.Label,
+			StackName:       ru.StackLabel,
+			OldStackName:    ru.PriorState.Stack,
+			Properties:      ru.DesiredState.Properties,
+			OldProperties:   ru.PreviousProperties,
+			PatchDocument:   ru.DesiredState.PatchDocument,
+			CreateOnlyPatch: ru.CreateOnlyPatch,
+			Operation:       string(ru.Operation),
+			State:           string(ru.State),
+			Duration:        dur.Milliseconds(),
+			CurrentAttempt:  ru.MostRecentProgressResult.Attempts,
+			MaxAttempts:     ru.MostRecentProgressResult.MaxAttempts,
+			ErrorMessage:    ru.MostRecentFailureMessage(),
+			StatusMessage:   ru.MostRecentStatusMessage(),
+			NativeID:        ru.DesiredState.NativeID,
+			GroupID:         ru.GroupID,
+			IsCascade:       ru.IsCascade,
+			CascadeSource:   ru.CascadeSource,
 		})
 	}
 
@@ -572,17 +590,24 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			dur = tu.ModifiedTs.Sub(tu.StartTs)
 		}
 
+		var existingConfig json.RawMessage
+		if tu.ExistingTarget != nil {
+			existingConfig = tu.ExistingTarget.Config
+		}
+
 		apiCommand.TargetUpdates = append(apiCommand.TargetUpdates, apimodel.TargetUpdate{
-			TargetLabel:   tu.Target.Label,
-			Operation:     string(tu.Operation),
-			State:         string(tu.State),
-			Duration:      dur.Milliseconds(),
-			ErrorMessage:  tu.ErrorMessage,
-			Discoverable:  tu.Target.Discoverable,
-			StartTs:       tu.StartTs,
-			ModifiedTs:    tu.ModifiedTs,
-			IsCascade:     tu.IsCascade,
-			CascadeSource: tu.CascadeSource,
+			TargetLabel:    tu.Target.Label,
+			Operation:      string(tu.Operation),
+			State:          string(tu.State),
+			Duration:       dur.Milliseconds(),
+			ErrorMessage:   tu.ErrorMessage,
+			Discoverable:   tu.Target.Discoverable,
+			ExistingConfig: existingConfig,
+			DesiredConfig:  tu.Target.Config,
+			StartTs:        tu.StartTs,
+			ModifiedTs:     tu.ModifiedTs,
+			IsCascade:      tu.IsCascade,
+			CascadeSource:  tu.CascadeSource,
 		})
 	}
 
@@ -697,7 +722,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}, nil
 	}
 
-	m.Node.Log().Debug("Storing forma command", "commandID", fa.ID)
+	m.Node.Log().Debug("Storing forma command commandID=%s", fa.ID)
 	_, err = m.callActor(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
 		forma_persister.StoreNewFormaCommand{Command: *fa},
@@ -720,7 +745,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			slog.Error("Failed to persist policy updates", "error", err)
 			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
 		}
-		m.Node.Log().Debug("Successfully persisted policy updates", "count", len(fa.PolicyUpdates))
+		m.Node.Log().Debug("Successfully persisted policy updates count=%d", len(fa.PolicyUpdates))
 
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
@@ -741,7 +766,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			return nil, err
 		}
 
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command", "commandID", fa.ID)
+		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
 			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
@@ -751,7 +776,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			return nil, fmt.Errorf("failed to ensure ChangesetExecutor: %w", err)
 		}
 
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
+		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
 			changeset.Start{Changeset: cs},
@@ -792,24 +817,28 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 	return m.DestroyForma(forma, config, clientID)
 }
 
-func (m *Metastructure) CancelCommand(commandID string, clientID string) error {
+func (m *Metastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
 	slog.Info("Canceling command", "commandID", commandID, "clientID", clientID)
 
-	// Send Cancel message to the ChangesetExecutor for this command
 	changesetExecutorPID := gen.ProcessID{
 		Name: actornames.ChangesetExecutor(commandID),
 		Node: m.Node.Name(),
 	}
 
-	err := m.Node.Send(changesetExecutorPID, changeset.Cancel{
+	result, err := m.callActor(changesetExecutorPID, changeset.Cancel{
 		CommandID: commandID,
 	})
 	if err != nil {
-		slog.Error("Failed to send cancel message to changeset executor", "commandID", commandID, "error", err)
-		return fmt.Errorf("failed to send cancel message: %w", err)
+		slog.Error("Failed to cancel command", "commandID", commandID, "error", err)
+		return nil, fmt.Errorf("failed to cancel command: %w", err)
 	}
 
-	return nil
+	cancelResp, ok := result.(changeset.CancelResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type from changeset executor: %T", result)
+	}
+
+	return &cancelResp, nil
 }
 
 func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
@@ -836,20 +865,27 @@ func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*a
 
 	// Filter to only InProgress commands
 	var canceledCommandIDs []string
+	allResourceStates := make(map[string]apimodel.CancelResourceState)
 	for _, cmd := range commandsToCancel {
 		if cmd.State == forma_command.CommandStateInProgress {
-			err := m.CancelCommand(cmd.ID, clientID)
+			cancelResp, err := m.CancelCommand(cmd.ID, clientID)
 			if err != nil {
 				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
 				// Continue with other commands even if one fails
 				continue
 			}
 			canceledCommandIDs = append(canceledCommandIDs, cmd.ID)
+			if cancelResp != nil {
+				for uri, state := range cancelResp.ResourceStates {
+					allResourceStates[uri] = apimodel.CancelResourceState{State: state}
+				}
+			}
 		}
 	}
 
 	return &apimodel.CancelCommandResponse{
-		CommandIDs: canceledCommandIDs,
+		CommandIDs:           canceledCommandIDs,
+		ResourceUpdateStates: allResourceStates,
 	}, nil
 }
 
@@ -1183,6 +1219,152 @@ func (m *Metastructure) ForceDiscovery() error {
 	return nil
 }
 
+func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
+	// Check if stack has active commands
+	hasActive, err := m.Datastore.StackHasActiveCommands(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check active commands: %w", err)
+	}
+	if hasActive {
+		// Build a conflicting commands error so mapError maps it to 409
+		incompleteCommands, listErr := m.Datastore.LoadIncompleteFormaCommands()
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to load incomplete commands: %w", listErr)
+		}
+		conflicting := make([]apimodel.Command, 0)
+		targetStacks := []string{stackLabel}
+		for _, cmd := range incompleteCommands {
+			if formaTouchesStacks(cmd, targetStacks) {
+				conflicting = append(conflicting, translateToAPICommand(cmd))
+			}
+		}
+		return nil, apimodel.FormaConflictingCommandsError{
+			ConflictingCommands: conflicting,
+		}
+	}
+
+	// Verify the stack has an auto-reconcile policy attached.
+	// Force-reconcile is a destructive operation that reverts all resources to
+	// their last-known desired state. Require explicit opt-in via policy.
+	reconcileInfos, err := m.Datastore.GetStacksWithAutoReconcilePolicy()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check auto-reconcile policies: %w", err)
+	}
+	hasPolicy := false
+	for _, info := range reconcileInfos {
+		if info.StackLabel == stackLabel {
+			hasPolicy = true
+			break
+		}
+	}
+	if !hasPolicy {
+		return nil, apimodel.ReconcilePolicyRequiredError{StackLabel: stackLabel}
+	}
+
+	// Prepare the reconcile command and changeset
+	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile")
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return &apimodel.ForceReconcileResponse{Message: "no drift detected"}, nil
+	}
+
+	// Store the forma command via the FormaCommandPersister actor
+	_, err = m.callActor(
+		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+		forma_persister.StoreNewFormaCommand{Command: *result.command},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store reconcile command: %w", err)
+	}
+
+	// Ensure ChangesetExecutor exists
+	_, err = m.callActor(
+		gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
+		changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure changeset executor: %w", err)
+	}
+
+	// Start the changeset execution (no notification needed for force reconcile)
+	err = m.Node.Send(
+		gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: m.Node.Name()},
+		changeset.Start{Changeset: result.changeset},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start changeset executor: %w", err)
+	}
+
+	return &apimodel.ForceReconcileResponse{CommandID: result.command.ID}, nil
+}
+
+func (m *Metastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+
+	expiredStacks, err := m.Datastore.GetExpiredStacks()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query expired stacks: %w", err)
+	}
+
+	expiredLabels := make([]string, 0)
+	commandIDs := make([]string, 0)
+
+	for _, stackInfo := range expiredStacks {
+		slog.Info("Force TTL check: expiring stack", "stack", stackInfo.StackLabel, "onDependents", stackInfo.OnDependents)
+
+		result, err := prepareDestroyExpiredStack(m.Datastore, stackInfo, "force-check-ttl", "force-check-ttl-cleanup")
+		if err != nil {
+			slog.Error("Force TTL check: failed to prepare destroy for expired stack", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+		if result == nil {
+			// Stack was empty (and cleaned up), aborted due to dependents, or no updates needed
+			continue
+		}
+
+		// Store the forma command via the FormaCommandPersister actor
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			forma_persister.StoreNewFormaCommand{Command: *result.command},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to store destroy command", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		// Ensure ChangesetExecutor exists
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
+			changeset.EnsureChangesetExecutor{CommandID: result.command.ID},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to ensure changeset executor", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		// Start the changeset execution
+		err = m.Node.Send(
+			gen.ProcessID{Name: actornames.ChangesetExecutor(result.command.ID), Node: m.Node.Name()},
+			changeset.Start{Changeset: result.changeset},
+		)
+		if err != nil {
+			slog.Error("Force TTL check: failed to start changeset executor", "stack", stackInfo.StackLabel, "error", err)
+			continue
+		}
+
+		expiredLabels = append(expiredLabels, stackInfo.StackLabel)
+		commandIDs = append(commandIDs, result.command.ID)
+	}
+
+	return &apimodel.ForceCheckTTLResponse{ExpiredStacks: expiredLabels, CommandIDs: commandIDs}, nil
+}
+
 func (m *Metastructure) ReRunIncompleteCommands() error {
 	commands, err := m.Datastore.LoadIncompleteFormaCommands()
 	if err != nil {
@@ -1240,6 +1422,21 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			continue
 		}
 
+		// If all resource updates already reached a terminal state, the command
+		// just needs its own state updated — no changeset execution needed.
+		// This happens when the agent crashed after all CRUD ops completed but
+		// before the command transitioned to a final state.
+		if len(pendingUpdates) == 0 {
+			_, err := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
+			)
+			if err != nil {
+				slog.Error("Failed to finalize incomplete command", "commandID", fa.ID, "error", err)
+			}
+			continue
+		}
+
 		var pendingTargetUpdates []target_update.TargetUpdate
 		for _, tu := range fa.TargetUpdates {
 			if tu.State == target_update.TargetUpdateStateNotStarted {
@@ -1252,7 +1449,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// phantom dependency links in the new changeset's pipeline.
 		cs, _ := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply)
 
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command", "commandID", fa.ID)
+		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
 			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
 			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
@@ -1262,7 +1459,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			return err
 		}
 
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor", "commandID", fa.ID)
+		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
 		err = m.Node.Send(
 			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
 			changeset.Start{Changeset: cs},
@@ -1734,11 +1931,15 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		if pluginsResult, ok := result.(messages.GetRegisteredPluginsResult); ok {
 			for _, p := range pluginsResult.Plugins {
 				plugins = append(plugins, apimodel.PluginInfo{
-					Namespace:            p.Namespace,
-					Version:              p.Version,
-					NodeName:             p.NodeName,
-					MaxRequestsPerSecond: p.MaxRequestsPerSecond,
-					ResourceCount:        p.ResourceCount,
+					Namespace:               p.Namespace,
+					Version:                 p.Version,
+					NodeName:                p.NodeName,
+					MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
+					ResourceCount:           p.ResourceCount,
+					ResourceTypesToDiscover: p.ResourceTypesToDiscover,
+					RetryConfig:             p.RetryConfig,
+					LabelConfig:             &p.LabelConfig,
+					DiscoveryFilters:        p.DiscoveryFilters,
 				})
 			}
 		}

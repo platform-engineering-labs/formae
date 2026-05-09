@@ -2,9 +2,20 @@
 #
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
-export VERSION := `git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*"`
+set shell := ["bash", "-cu"]
+
+export VERSION := `git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*" | cut -d'-' -f1`
+
+export CHANNEL := ```
+    # Channel — `stable` for X.Y.Z tags, `dev` for X.Y.Z-dev[.N] tags.
+    # An earlier shape took everything after the first `-` (cut -d'-' -f2-)
+    # and produced literal `dev.2` for `0.85.0-dev.2`, which orbital wrote
+    # as a real channel name and broke downstream installs.
+    version=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+    if echo "$version" | grep -q -- '-'; then echo dev; else echo stable; fi
+```
+
 GITHUB := env("GITHUB_ACTIONS", "false")
-CHANNEL := env("OPS_CHANNEL", "dev")
 
 default: clean build setup
 
@@ -13,8 +24,6 @@ clean:
 
 build:
     make pkg-bin
-    mkdir -p dist/pel/bin
-    mv dist/pel/formae/bin/formae dist/pel/bin
     rm -rf dist/pel/formae/bin
 
 setup:

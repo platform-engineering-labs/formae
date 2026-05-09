@@ -26,6 +26,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -247,9 +248,8 @@ func newDistributedTestConfig(t *testing.T) *pkgmodel.Config {
 				Enabled: false,
 			},
 		},
-		Plugins: pkgmodel.PluginConfig{
-			// PluginCoordinator will scan ~/.pel/formae/plugins/ for plugins
-		},
+		// PluginCoordinator will scan ~/.pel/formae/plugins/ for plugins
+		PluginDir: "~/.pel/formae/plugins",
 	}
 }
 
@@ -261,17 +261,19 @@ func newDistributedMetastructure(t *testing.T, cfg *pkgmodel.Config, pluginsDir 
 	db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 	require.NoError(t, err, "Failed to create datastore")
 
-	// Create plugin manager with isolated plugins directory
-	// Load() discovers both in-process plugins and external resource plugins
-	pluginManager := plugin.NewManager(pluginsDir)
-	pluginManager.Load()
+	// Discover external resource plugins from isolated plugins directory
+	resourceInfos := plugindiscovery.DiscoverPlugins(pluginsDir, plugindiscovery.Resource)
+	externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
+	for i, p := range resourceInfos {
+		externalResourcePlugins[i] = p.ToResourcePluginInfo()
+	}
 
 	// Create metastructure
 	ctx := context.Background()
 	m, err := metastructure.NewMetastructureWithDataStoreAndContext(
 		ctx,
 		cfg,
-		pluginManager,
+		externalResourcePlugins,
 		db,
 		"test",
 	)

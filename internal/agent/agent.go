@@ -8,26 +8,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/api"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/util"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
+	"github.com/tidwall/gjson"
 )
 
 // getPidFile returns the PID file path, configurable via FORMAE_PID_FILE env var.
@@ -90,24 +92,88 @@ func (a *Agent) Start() error {
 		// Setup logging with OTel handler
 		logging.SetupBackendLogging(&a.cfg.Agent.Logging, otelLogHandler)
 
-		// Migrate resource plugins (with manifest and schema) from system directory.
-		// This handles backwards compatibility when OLD upgrade command didn't know
-		// about resource plugins. Also wipes existing plugins since interface changed.
-		if err := migrateResourcePlugins(a.cfg.Plugins.PluginDir); err != nil {
-			slog.Warn("Failed to migrate resource plugins", "error", err)
-			// Non-fatal - continue anyway, plugins might already be in place
+		devPluginDir := util.ExpandHomePath(a.cfg.PluginDir)
+
+		binPath, err := os.Executable()
+		if err != nil {
+			slog.Error("Failed to determine binary path", "error", err)
+			return
+		}
+		systemPluginDir := plugindiscovery.SystemPluginDir(binPath)
+
+		// One-time migration: remove stale dev plugins that are now bundled
+		if err := plugindiscovery.CleanStaleDevPlugins(systemPluginDir, devPluginDir); err != nil {
+			slog.Warn("Failed to clean stale dev plugins", "error", err)
 		}
 
-		pluginManager := plugin.NewManager(util.ExpandHomePath(a.cfg.Plugins.PluginDir))
-		pluginManager.Load()
+		resourceInfos := plugindiscovery.DiscoverPluginsMulti(
+			[]string{devPluginDir, systemPluginDir}, plugindiscovery.Resource,
+		)
+		resourceInfos = plugindiscovery.FilterCompatiblePlugins(
+			resourceInfos, formae.Version, plugin.MinFormaeVersion, plugin.SDKVersion,
+		)
+		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
+		for i, p := range resourceInfos {
+			externalResourcePlugins[i] = p.ToResourcePluginInfo()
+		}
+
+		// Create auth plugin handle if auth is configured and a matching
+		// external auth plugin binary was discovered.
+		// If auth is explicitly configured but cannot be loaded, the agent
+		// refuses to start — running without auth when auth was requested
+		// is a security misconfiguration.
+		var authHandle *auth.AuthPluginHandle
+		if a.cfg.Agent.Auth != nil {
+			authType := gjson.GetBytes(a.cfg.Agent.Auth, "type").String()
+			if authType == "" {
+				slog.Error("Agent auth config missing 'type' field — refusing to start without auth")
+				return
+			}
+			authPlugins := plugindiscovery.DiscoverPluginsMulti(
+				[]string{devPluginDir, systemPluginDir}, plugindiscovery.Auth,
+			)
+			// For auth plugins, check compatibility separately so we can give a
+			// specific error message (not just "not installed").
+			var matchedPlugin *plugindiscovery.PluginInfo
+			for i, p := range authPlugins {
+				if p.Name == authType {
+					matchedPlugin = &authPlugins[i]
+					break
+				}
+			}
+			if matchedPlugin == nil {
+				slog.Error("Auth plugin not installed — refusing to start without auth", "type", authType)
+				return
+			}
+			compatibleAuth := plugindiscovery.FilterCompatiblePlugins(
+				[]plugindiscovery.PluginInfo{*matchedPlugin}, formae.Version, pkgauth.MinFormaeVersion, pkgauth.SDKVersion,
+			)
+			if len(compatibleAuth) == 0 {
+				slog.Error("Auth plugin installed but incompatible — refusing to start",
+					"type", authType,
+					"version", matchedPlugin.Version,
+					"pluginMinFormaeVersion", matchedPlugin.MinFormaeVersion,
+					"agentMinFormaeVersion", pkgauth.MinFormaeVersion,
+					"upgradeSDK", pkgauth.SDKVersion)
+				return
+			}
+			authHandle = auth.NewAuthPluginHandle(matchedPlugin.Name, matchedPlugin.BinaryPath, a.cfg.Agent.Auth)
+			slog.Info("Auth plugin configured", "name", matchedPlugin.Name, "version", matchedPlugin.Version, "path", matchedPlugin.BinaryPath)
+		}
 
 		slog.Info("Starting agent", "id", a.id)
 
-		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, pluginManager, a.id)
+		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, externalResourcePlugins, a.id)
 		if err != nil {
 			slog.Error("Failed to create ms", "error", err)
 			return
 		}
+
+		// Pass auth handle to metastructure for supervisor injection
+		if authHandle != nil {
+			ms.AuthPluginHandle = authHandle
+		}
+
 		imwg.Add(ms)
 
 		if err := ms.Start(); err != nil {
@@ -129,9 +195,23 @@ func (a *Agent) Start() error {
 			}
 		}
 
+		// Construct the plugin manager before announcing startup. Plugin
+		// distribution is the only install/upgrade path in 0.85, so an agent
+		// without one is not useful — and CLI users (often on a different
+		// host than the agent) would only see opaque 503s instead of this
+		// log line. Fail loudly here so the operator fixes config or the
+		// orbital tree before retrying.
+		pm, err := plugin_manager.New(slog.Default(), a.cfg.Artifacts.Repositories, []string{devPluginDir, systemPluginDir})
+		if err != nil {
+			slog.Error("Plugin manager initialization failed; refusing to start", "error", err)
+			return
+		}
+
 		slog.Info("Agent started")
 
-		apiServer := api.NewServer(a.ctx, ms, pluginManager, &a.cfg.Agent.Server, &a.cfg.Plugins, metricsHandler)
+		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, a.cfg.Network, metricsHandler)
+		apiServer.SetPluginManager(pm)
+
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()
@@ -277,122 +357,4 @@ func waitForPidFileRemoval(timeout time.Duration) bool {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return false
-}
-
-// copyFile copies a file from src to dst, preserving the executable permission.
-func copyFile(src, dst string) (err error) {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = srcFile.Close() }()
-
-	srcInfo, err := srcFile.Stat()
-	if err != nil {
-		return err
-	}
-
-	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := dstFile.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-	}()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
-}
-
-// migrateResourcePlugins checks for resource plugins in the system install
-// directory and copies them to the user's plugin directory. This handles
-// backwards compatibility when OLD upgrade command didn't know about resource
-// plugins. The user plugin directory is wiped first since the plugin interface
-// changed and old plugins are incompatible.
-func migrateResourcePlugins(userPluginDir string) error {
-	systemResourcePluginsDir := filepath.Join(formae.DefaultInstallPath, "resource-plugins")
-
-	namespaces, err := os.ReadDir(systemResourcePluginsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No resource-plugins directory in system location
-		}
-		return fmt.Errorf("failed to read system resource-plugins directory: %w", err)
-	}
-
-	userPluginDir = util.ExpandHomePath(userPluginDir)
-
-	for _, nsEntry := range namespaces {
-		if !nsEntry.IsDir() {
-			continue
-		}
-		namespace := strings.ToLower(nsEntry.Name())
-		nsPath := filepath.Join(systemResourcePluginsDir, nsEntry.Name())
-
-		// Remove existing namespace directory before installing new versions
-		existingNamespaceDir := filepath.Join(userPluginDir, namespace)
-		if err := os.RemoveAll(existingNamespaceDir); err != nil {
-			return fmt.Errorf("failed to remove existing plugin directory %s: %w", existingNamespaceDir, err)
-		}
-		slog.Info("Removed existing plugin directory for migration", "path", existingNamespaceDir)
-
-		versions, err := os.ReadDir(nsPath)
-		if err != nil {
-			continue
-		}
-
-		for _, vEntry := range versions {
-			if !vEntry.IsDir() {
-				continue
-			}
-			version := vEntry.Name()
-			srcDir := filepath.Join(nsPath, version)
-			destDir := filepath.Join(userPluginDir, namespace, version)
-
-			// Create destination and copy entire directory
-			if err := copyDir(srcDir, destDir); err != nil {
-				return fmt.Errorf("failed to copy resource plugin %s/%s: %w", namespace, version, err)
-			}
-
-			slog.Info("Migrated resource plugin", "namespace", namespace, "version", version, "dest", destDir)
-		}
-	}
-
-	return nil
-}
-
-// copyDir recursively copies a directory from src to dst.
-func copyDir(src, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }

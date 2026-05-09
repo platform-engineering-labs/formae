@@ -34,6 +34,13 @@ local class ComplexBar extends formae.Resource {
 }
 
 @formae.ResourceHint
+local class FloatResource extends formae.Resource {
+    percentage: Float
+    count: Int
+    name: String
+}
+
+@formae.ResourceHint
 local class TestResource extends formae.Resource {
     type = "FakePlugin::Service::TestResource"
 
@@ -62,6 +69,13 @@ local complexProperties: Dynamic = new Dynamic {
     //}
     optional = "optional value"
     label = "complex"
+}
+
+local floatProperties: Dynamic = new Dynamic {
+    percentage = 0.75
+    count = 10
+    name = "float-test"
+    label = "float-res"
 }
 
 local resourceProperties: Dynamic = new Dynamic {
@@ -131,6 +145,11 @@ facts {
     ["Simple class application preserves values"] {
         let (result = gen.apply(SimpleFoo, simpleProperties))
         result.x == 42 && result.name == "test"
+    }
+
+    ["Float class application preserves float values"] {
+        let (result = gen.apply(FloatResource, floatProperties))
+        result.percentage == 0.75 && result.count == 10 && result.name == "float-test"
     }
 
     ["Complex class handles collections"] {

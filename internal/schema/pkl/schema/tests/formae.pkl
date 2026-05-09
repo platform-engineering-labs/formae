@@ -204,6 +204,113 @@ local testTaskDefNoContainers = new TestTaskDef {
     family = "my-family"
 }
 
+// Test that hints propagate through a sub-resource whose field
+// declaration carries NO @FieldHint on the parent sub-resource.
+// Mirrors AWS::ECS::TaskDefinition's Volumes.EFSVolumeConfiguration.RootDirectory
+// pattern: the outer field (Volumes) is annotated, the inner SubResource
+// type (EFSVolumeConfiguration) has @SubResourceHint on its class but no
+// @FieldHint on the Volume.eFSVolumeConfiguration declaration, and the
+// deepest field (rootDirectory) carries @FieldHint{hasProviderDefault=true}.
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDeepLeaf extends formae.SubResource {
+    @formae.FieldHint{hasProviderDefault = true}
+    rootDirectory: String?
+}
+
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestVolume extends formae.SubResource {
+    // Intentionally no @formae.FieldHint on this declaration.
+    // The inner SubResource class carries @SubResourceHint itself, and
+    // its fields carry @FieldHint, so their hints MUST still propagate.
+    efsVolumeConfiguration: TestDeepLeaf?
+
+    @formae.FieldHint
+    name: String
+}
+
+@formae.ResourceHint {
+    type = "Test::DeepNested"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDeepNested extends formae.Resource {
+    @formae.FieldHint{
+        createOnly = true
+        hasProviderDefault = true
+    }
+    volumes: Listing<TestVolume>?
+}
+
+local testDeepNested = new TestDeepNested {
+    label = "test-deep-nested"
+    volumes = new Listing {
+        new TestVolume {
+            name = "wal"
+            efsVolumeConfiguration = new TestDeepLeaf {
+                rootDirectory = "/"
+            }
+        }
+    }
+}
+
+// Test config class with ConfigFieldHint annotations
+local class TestConfig {
+    hidden fixed type: String = "TestProvider"
+
+    @formae.ConfigFieldHint { createOnly = true }
+    hidden region: String
+
+    @formae.ConfigFieldHint { createOnly = false }
+    hidden profile: String?
+
+    // No annotation — should not appear in hints
+    hidden accountId: String?
+
+    fixed Type: String = type
+    fixed Region: String = region
+    fixed Profile: String? = profile
+    fixed AccountId: String? = accountId
+}
+
+// Config class with no ConfigFieldHint annotations
+local class PlainConfig {
+    hidden fixed type: String = "Plain"
+    hidden region: String
+
+    fixed Type: String = type
+    fixed Region: String = region
+}
+
+local testTargetWithSchema = new formae.Target {
+    label = "annotated-target"
+    namespace = "TEST"
+    discoverable = true
+    config = new TestConfig {
+        region = "us-east-1"
+        profile = "prod"
+        accountId = "123456"
+    }
+}
+
+local testTargetPlainConfig = new formae.Target {
+    label = "plain-target"
+    namespace = "PLAIN"
+    discoverable = true
+    config = new PlainConfig {
+        region = "us-east-1"
+    }
+}
+
+local testTargetNoConfig = new formae.Target {
+    label = "no-config-target"
+    namespace = "NONE"
+    discoverable = false
+}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -369,12 +476,16 @@ facts {
         rendered.Label == "test-bucket"
     }
 
-    ["Nullable Listing renders as empty list when null"] {
+    ["Unset nullable Listing is omitted from Properties"] {
         let (rendered = testBucketNoTags.render())
         let (props = rendered.Properties)
-        // Tags should be an empty Listing, not null
-        props.Tags != null &&
-        props.Tags.length == 0
+        !props.toMap().containsKey("Tags")
+    }
+
+    ["Unset nullable scalar still renders as null"] {
+        let (rendered = testBucketNoTags.render())
+        let (props = rendered.Properties)
+        props.toMap().containsKey("Region") && props.Region == null
     }
 
     ["Hints propagate through Listing<SubResource>"] {
@@ -389,25 +500,68 @@ facts {
         hints.containsKey("ContainerDefinitions.Image")
     }
 
-    ["Nullable Mapping renders as empty map when null"] {
-        // Test subresource rendering directly - nullable Mapping type alias should render as empty Mapping
-        let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.DockerLabels != null &&
-        containerProps.DockerLabels.length == 0
+    ["Hints propagate through SubResource nested inside SubResource without intermediate FieldHint"] {
+        let (hints = testDeepNested.hints())
+        // Top-level and 2-level hints still work
+        hints.containsKey("Volumes") &&
+        hints["Volumes"].CreateOnly == true &&
+        hints.containsKey("Volumes.Name") &&
+        // 3-level hint must emit even though TestVolume.efsVolumeConfiguration
+        // has no @FieldHint on its declaration.
+        hints.containsKey("Volumes.EfsVolumeConfiguration.RootDirectory") &&
+        hints["Volumes.EfsVolumeConfiguration.RootDirectory"].HasProviderDefault == true
     }
 
-    ["Nullable Listing renders as empty list in sub-resource when null"] {
-        // Test subresource rendering directly - nullable Listing should render as empty Listing
+    ["Nullable Mapping is omitted from sub-resource when not set"] {
         let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.Ports != null &&
-        containerProps.Ports.length == 0
+        !containerProps.toMap().containsKey("DockerLabels")
     }
 
-    ["Nullable Listing<SubResource> renders as empty list when null"] {
+    ["Nullable Listing is omitted from sub-resource when not set"] {
+        let (containerProps = testTaskDef.containerDefinitions[0].props())
+        !containerProps.toMap().containsKey("Ports")
+    }
+
+    ["Nullable Listing<SubResource> is omitted from Properties when not set"] {
         let (rendered = testTaskDefNoContainers.render())
         let (props = rendered.Properties)
-        props.ContainerDefinitions != null &&
-        props.ContainerDefinitions.length == 0
+        !props.toMap().containsKey("ContainerDefinitions")
+    }
+
+    ["ConfigSchema generated for annotated config"] {
+        testTargetWithSchema.ConfigSchema != null &&
+        testTargetWithSchema.ConfigSchema.Hints != null &&
+        testTargetWithSchema.ConfigSchema.Hints.length == 2
+    }
+
+    ["ConfigSchema includes immutable field hint"] {
+        testTargetWithSchema.ConfigSchema.Hints.containsKey("Region") &&
+        testTargetWithSchema.ConfigSchema.Hints["Region"].CreateOnly == true
+    }
+
+    ["ConfigSchema includes mutable field hint"] {
+        testTargetWithSchema.ConfigSchema.Hints.containsKey("Profile") &&
+        testTargetWithSchema.ConfigSchema.Hints["Profile"].CreateOnly == false
+    }
+
+    ["ConfigSchema excludes unannotated fields"] {
+        !testTargetWithSchema.ConfigSchema.Hints.containsKey("AccountId") &&
+        !testTargetWithSchema.ConfigSchema.Hints.containsKey("Type")
+    }
+
+    ["ConfigSchema is null for config without annotations"] {
+        testTargetPlainConfig.ConfigSchema == null
+    }
+
+    ["ConfigSchema is null when config is null"] {
+        testTargetNoConfig.ConfigSchema == null
+    }
+
+    ["configHints extracts only annotated fields"] {
+        let (hints = formae.fq.configHints(reflect.Class(TestConfig)))
+        hints.length == 2 &&
+        hints.containsKey("Region") &&
+        hints.containsKey("Profile")
     }
 
     ["Fq functions work at module level"] {
@@ -420,5 +574,21 @@ facts {
         hints.containsKey("bucketName") &&
         schema.Identifier == "BucketName" &&
         type == "AWS::S3::Bucket"
+    }
+
+    ["FieldHint exposes AttachesTo"] {
+        testAttachesToSchema.Hints["F1"].AttachesTo == true
+    }
+
+    ["FieldHint AttachesTo defaults to false"] {
+        (new formae.FieldHint {}).AttachesTo == false
+    }
+}
+
+local testAttachesToSchema = new formae.Schema {
+    Identifier = "AWS::Test::Thing"
+    Fields = new Listing { "F1" }
+    Hints = new Mapping {
+        ["F1"] = new formae.FieldHint { attachesTo = true }
     }
 }

@@ -5,6 +5,7 @@
 package changeset
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1951,4 +1952,291 @@ func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
 	assert.Empty(t, vpcNode.Dependents)
 	assert.Empty(t, subnetNode.Dependencies)
 	assert.Empty(t, subnetNode.Dependents)
+}
+
+// TestChangeset_CrashRecovery_SuccessParentBlocksChildren demonstrates the bug
+// where including already-completed resources in a recovery changeset creates
+// unresolvable dependency links. When a parent resource (VPC) already succeeded
+// before a crash, it must be excluded from the recovery changeset so its
+// children (Subnets) are immediately executable.
+func TestChangeset_CrashRecovery_SuccessParentBlocksChildren(t *testing.T) {
+	var (
+		vpcKsuidURI    = pkgmodel.NewFormaeURI(util.NewID(), "")
+		subnetKsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
+	)
+
+	// Simulate crash recovery: VPC already succeeded, Subnet was interrupted.
+	// If we include both in the changeset, the Subnet's dependency on the
+	// VPC creates a link that can never be resolved (VPC is Success so it's
+	// never returned by GetExecutableUpdates, and thus never processed
+	// through UpdatePipeline to unlink its dependents).
+	allUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "test-vpc",
+				Type:  "AWS::EC2::VPC",
+				Stack: "test-stack",
+				Ksuid: vpcKsuidURI.KSUID(),
+			},
+			Operation:  resource_update.OperationCreate,
+			State:      resource_update.ResourceUpdateStateSuccess,
+			StartTs:    util.TimeNow(),
+			StackLabel: "test-stack",
+		},
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "test-subnet",
+				Type:  "AWS::EC2::Subnet",
+				Stack: "test-stack",
+				Ksuid: subnetKsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StartTs:              util.TimeNow(),
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
+		},
+	}
+
+	cs, err := NewChangeset(allUpdates, nil, "test-crash-bug", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// BUG: Subnet is blocked because VPC (Success) is in the pipeline as an
+	// upstream dependency but will never be processed.
+	updates := cs.GetExecutableUpdates("AWS", 5)
+	assert.Empty(t, updates, "Subnet should be blocked when Success parent is in the changeset")
+}
+
+// TestChangeset_CrashRecovery_FilteredPendingUpdatesOnly verifies the fix:
+// when only pending (non-terminal) resource updates are included in the
+// recovery changeset, dependent resources are immediately executable because
+// their parent's resolved dependency reference points to a resource that
+// doesn't exist in the changeset (so no link is created).
+func TestChangeset_CrashRecovery_FilteredPendingUpdatesOnly(t *testing.T) {
+	var (
+		vpcKsuidURI    = pkgmodel.NewFormaeURI(util.NewID(), "")
+		subnetKsuidURI = pkgmodel.NewFormaeURI(util.NewID(), "")
+	)
+
+	// Only include the pending Subnet — VPC (Success) is filtered out,
+	// exactly as ReRunIncompleteCommands should do.
+	pendingOnly := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{
+				Label: "test-subnet",
+				Type:  "AWS::EC2::Subnet",
+				Stack: "test-stack",
+				Ksuid: subnetKsuidURI.KSUID(),
+			},
+			Operation:            resource_update.OperationCreate,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StartTs:              util.TimeNow(),
+			StackLabel:           "test-stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcKsuidURI},
+		},
+	}
+
+	cs, err := NewChangeset(pendingOnly, nil, "test-crash-fix", pkgmodel.CommandApply)
+	require.NoError(t, err)
+
+	// VPC URI is in RemainingResolvables but not in the changeset, so no
+	// dependency link is created. Subnet is immediately executable.
+	updates := cs.GetExecutableUpdates("AWS", 5)
+	require.Len(t, updates, 1, "Subnet should be immediately executable")
+	assert.Equal(t, "test-subnet", updates[0].(*resource_update.ResourceUpdate).DesiredState.Label)
+}
+
+func TestChangeset_SyncReadFailureDoesNotCascade(t *testing.T) {
+	vpcURI := pkgmodel.NewFormaeURI("vpc-ksuid", "")
+	subnetURI := pkgmodel.NewFormaeURI("subnet-ksuid", "")
+
+	updates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Ksuid: vpcURI.KSUID(), Stack: "stack", Label: "vpc", Type: "AWS::EC2::VPC"},
+			Operation:    resource_update.OperationRead,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "stack",
+		},
+		{
+			DesiredState:         pkgmodel.Resource{Ksuid: subnetURI.KSUID(), Stack: "stack", Label: "subnet", Type: "AWS::EC2::Subnet"},
+			Operation:            resource_update.OperationRead,
+			State:                resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:           "stack",
+			RemainingResolvables: []pkgmodel.FormaeURI{vpcURI},
+		},
+	}
+
+	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
+	require.NoError(t, err)
+
+	opURI := createOperationURI(vpcURI, resource_update.OperationRead)
+	failed := cs.DAG.Nodes[opURI].Update
+	failed.MarkFailed()
+	failedUpdates, err := cs.UpdateDAG(opURI, failed)
+	require.NoError(t, err)
+	assert.Len(t, failedUpdates, 1)
+	assert.Equal(t, failed.NodeURI(), failedUpdates[0].NodeURI())
+	remaining := cs.GetExecutableUpdates("AWS", 10)
+	require.Len(t, remaining, 1)
+	assert.NotEqual(t, failed.NodeURI(), remaining[0].NodeURI())
+}
+
+// dagNodeForOp returns the DAG node for (URI, operation).
+func dagNodeForOp(t *testing.T, dag *ExecutionDAG, uri pkgmodel.FormaeURI, op resource_update.OperationType) *DAGNode {
+	t.Helper()
+	opURI := createOperationURI(uri, op)
+	node, ok := dag.Nodes[opURI]
+	if !ok {
+		t.Fatalf("DAG missing node %s", opURI)
+	}
+	return node
+}
+
+// hasDependency reports whether `child` has `parent` in its Dependencies list.
+func hasDependency(child, parent *DAGNode) bool {
+	for _, d := range child.Dependencies {
+		if d == parent {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildDeleteDependencies_AttachesToInvertsEdgeDirection(t *testing.T) {
+	var (
+		aURI = pkgmodel.NewFormaeURI("A1", "")
+		bURI = pkgmodel.NewFormaeURI("B1", "")
+	)
+
+	build := func(t *testing.T, hint pkgmodel.FieldHint) *ExecutionDAG {
+		t.Helper()
+		aResource := pkgmodel.Resource{
+			Ksuid: "A1", Label: "a", Type: "Test::A", Stack: "s",
+			Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"f1": hint}},
+			Properties: json.RawMessage(`{
+				"f1": {"$ref":"formae://B1#/Out","$value":"v"}
+			}`),
+		}
+		bResource := pkgmodel.Resource{
+			Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s",
+			Properties: json.RawMessage(`{}`),
+		}
+
+		aDelete := resource_update.ResourceUpdate{
+			DesiredState:         aResource,
+			Operation:            resource_update.OperationDelete,
+			RemainingResolvables: []pkgmodel.FormaeURI{bURI},
+		}
+		bDelete := resource_update.ResourceUpdate{
+			DesiredState: bResource,
+			Operation:    resource_update.OperationDelete,
+		}
+		cs, err := NewChangeset([]resource_update.ResourceUpdate{aDelete, bDelete}, nil, "c1", pkgmodel.CommandApply)
+		if err != nil {
+			t.Fatalf("NewChangeset: %v", err)
+		}
+		return cs.DAG
+	}
+
+	t.Run("no hint: B.delete waits for A.delete (reverse construction)", func(t *testing.T) {
+		dag := build(t, pkgmodel.FieldHint{})
+		bNode := dagNodeForOp(t, dag, bURI, resource_update.OperationDelete)
+		aNode := dagNodeForOp(t, dag, aURI, resource_update.OperationDelete)
+		if !hasDependency(bNode, aNode) {
+			t.Fatalf("expected B.delete to depend on A.delete")
+		}
+		if hasDependency(aNode, bNode) {
+			t.Fatalf("did not expect A.delete to depend on B.delete without AttachesTo")
+		}
+	})
+
+	t.Run("AttachesTo: A.delete waits for B.delete (reachability order)", func(t *testing.T) {
+		dag := build(t, pkgmodel.FieldHint{AttachesTo: true})
+		bNode := dagNodeForOp(t, dag, bURI, resource_update.OperationDelete)
+		aNode := dagNodeForOp(t, dag, aURI, resource_update.OperationDelete)
+		if !hasDependency(aNode, bNode) {
+			t.Fatalf("expected A.delete to depend on B.delete under AttachesTo")
+		}
+		if hasDependency(bNode, aNode) {
+			t.Fatalf("did not expect B.delete to depend on A.delete under AttachesTo")
+		}
+	})
+}
+
+func TestBuildDeleteDependencies_MixedRefsOnOneResourceGetIndependentDirections(t *testing.T) {
+	// A has two refs: f1 → B (AttachesTo), f2 → C (no hint).
+	// Expected: A.delete waits for B.delete (AttachesTo) AND C.delete waits for A.delete (reverse construction).
+	var (
+		aURI = pkgmodel.NewFormaeURI("A1", "")
+		bURI = pkgmodel.NewFormaeURI("B1", "")
+		cURI = pkgmodel.NewFormaeURI("C1", "")
+	)
+	aResource := pkgmodel.Resource{
+		Ksuid: "A1", Label: "a", Type: "Test::A", Stack: "s",
+		Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+			"f1": {AttachesTo: true},
+			// "f2" intentionally absent → plain construction
+		}},
+		Properties: json.RawMessage(`{
+			"f1": {"$ref":"formae://B1#/Out","$value":"v"},
+			"f2": {"$ref":"formae://C1#/Out","$value":"v"}
+		}`),
+	}
+	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
+	cResource := pkgmodel.Resource{Ksuid: "C1", Label: "c", Type: "Test::C", Stack: "s", Properties: json.RawMessage(`{}`)}
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{
+			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI, cURI}},
+			{DesiredState: bResource, Operation: resource_update.OperationDelete},
+			{DesiredState: cResource, Operation: resource_update.OperationDelete},
+		}, nil, "c2", pkgmodel.CommandApply)
+	if err != nil {
+		t.Fatalf("NewChangeset: %v", err)
+	}
+
+	aNode := dagNodeForOp(t, cs.DAG, aURI, resource_update.OperationDelete)
+	bNode := dagNodeForOp(t, cs.DAG, bURI, resource_update.OperationDelete)
+	cNode := dagNodeForOp(t, cs.DAG, cURI, resource_update.OperationDelete)
+
+	if !hasDependency(aNode, bNode) {
+		t.Errorf("A.delete should depend on B.delete (AttachesTo edge)")
+	}
+	if !hasDependency(cNode, aNode) {
+		t.Errorf("C.delete should depend on A.delete (reverse construction edge)")
+	}
+	if hasDependency(bNode, aNode) {
+		t.Errorf("B.delete should not depend on A.delete (AttachesTo inverts this edge)")
+	}
+}
+
+func TestBuildDeleteDependencies_MissingHintFallsBackToConstructionReverse(t *testing.T) {
+	// A refs B via f1 but A's Schema.Hints is empty/nil. Expected: default
+	// construction-reverse behavior (B.delete waits for A.delete). No panic
+	// when the hint map is nil for the stripped path.
+	var (
+		aURI = pkgmodel.NewFormaeURI("A1", "")
+		bURI = pkgmodel.NewFormaeURI("B1", "")
+	)
+	aResource := pkgmodel.Resource{
+		Ksuid: "A1", Label: "a", Type: "Test::A", Stack: "s",
+		Schema:     pkgmodel.Schema{}, // no Hints map at all
+		Properties: json.RawMessage(`{"f1": {"$ref":"formae://B1#/Out","$value":"v"}}`),
+	}
+	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{
+			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI}},
+			{DesiredState: bResource, Operation: resource_update.OperationDelete},
+		}, nil, "c3", pkgmodel.CommandApply)
+	if err != nil {
+		t.Fatalf("NewChangeset: %v", err)
+	}
+
+	aNode := dagNodeForOp(t, cs.DAG, aURI, resource_update.OperationDelete)
+	bNode := dagNodeForOp(t, cs.DAG, bURI, resource_update.OperationDelete)
+	if !hasDependency(bNode, aNode) {
+		t.Fatalf("missing hint should fall through to construction-reverse: B.delete must depend on A.delete")
+	}
 }

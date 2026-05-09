@@ -12,9 +12,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -223,6 +225,19 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 	assert.Contains(t, subnetDelete.RemainingResolvables, expectedVpcUri)
 	assert.Empty(t, vpcDelete.RemainingResolvables, "VPC delete should have no dependencies")
 	assert.Empty(t, vpcCreate.RemainingResolvables, "VPC create should have no dependencies")
+
+	// The VPC delete half of the replace pair carries the createOnly patch
+	// ops that triggered the replacement, so the CLI can render the reason.
+	// The create half must not carry it (otherwise the group coalescer would
+	// pick it up from the wrong side).
+	assert.NotEmpty(t, vpcDelete.CreateOnlyPatch,
+		"VPC delete must carry createOnly patch ops triggering the replace")
+	assert.Contains(t, string(vpcDelete.CreateOnlyPatch), "/CidrBlock",
+		"createOnly patch must reference the immutable field that triggered it")
+	assert.Empty(t, vpcCreate.CreateOnlyPatch,
+		"VPC create must NOT carry createOnly patch ops — only the delete half does")
+	assert.Empty(t, subnetDelete.CreateOnlyPatch,
+		"implicit delete (not a replacement) must NOT carry createOnly patch ops")
 }
 
 func TestGenerateResourceUpdatesForApply_PatchMode(t *testing.T) {
@@ -541,7 +556,9 @@ func TestTargetReplace_Patch_NonPortable_Rejected(t *testing.T) {
 		replacedTargets,
 	)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not portable")
-	assert.Contains(t, err.Error(), "AWS::EC2::Subnet")
+	require.Error(t, err)
+	var nonPortableErr apimodel.NonPortableResourcesError
+	require.ErrorAs(t, err, &nonPortableErr)
+	assert.Equal(t, "aws-prod", nonPortableErr.TargetLabel)
+	assert.NotEmpty(t, nonPortableErr.Resources)
 }

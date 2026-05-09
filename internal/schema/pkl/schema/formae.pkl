@@ -176,6 +176,7 @@ open class FieldHint extends Annotation {
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
     hidden hasProviderDefault: Boolean = false
+    hidden attachesTo: Boolean = false
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
 
@@ -189,8 +190,22 @@ open class FieldHint extends Annotation {
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed AttachesTo: Boolean = attachesTo
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
+}
+
+/// Annotation for target config fields to declare mutability.
+/// Fields without this annotation are treated as immutable (createOnly).
+open class ConfigFieldHint extends Annotation {
+    hidden createOnly: Boolean = true
+
+    fixed CreateOnly: Boolean = createOnly
+}
+
+/// Schema describing per-field mutability of a target's config.
+open class ConfigSchema {
+    Hints: Mapping<String, ConfigFieldHint>?
 }
 
 // Schema output class
@@ -227,6 +242,13 @@ open class Target {
     fixed Label: String = label
     fixed Namespace: String = namespace
     fixed Config: Any? = config
+    fixed ConfigSchema: ConfigSchema? =
+        if (config != null)
+            let (hints = module.fq.configHints(reflect.Class(config.getClass())))
+            if (hints.length > 0)
+                new ConfigSchema { Hints = hints }
+            else null
+        else null
     fixed Discoverable: Boolean = discoverable
 }
 
@@ -252,6 +274,41 @@ open class Resolvable {
 
     $res: Boolean = true
     $visibility: String = visibility
+}
+
+/// Resolvable that resolves to a Mapping. Supports key-based access via at().
+/// Usage: stack.res.endpoints.at("service:3000")
+open class MappingResolvable extends Resolvable {
+    local _self = this
+    /// Access a value by its key in the resolved Mapping.
+    /// Special characters (colons, dots) are escaped automatically for gjson.
+    function at(key: String): Resolvable = new Resolvable {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = if (_self.property != null)
+            _self.property + "." + key.replaceAll(":", "\\:").replaceAll(".", "\\.")
+            else key.replaceAll(":", "\\:").replaceAll(".", "\\.")
+        visibility = _self.visibility
+    }
+}
+
+/// Resolvable that resolves to a Listing. Supports index-based access via at().
+/// Returns MappingResolvable by default. Plugin authors can subclass and
+/// override at() to return a typed element resolvable for ergonomic field
+/// access (e.g., svc.res.endpoints.at(0).uri).
+open class ListingResolvable extends Resolvable {
+    local _self = this
+    /// Access an element by its index in the resolved Listing.
+    function at(index: Int): MappingResolvable = new MappingResolvable {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = if (_self.property != null)
+            _self.property + "." + index.toString()
+            else index.toString()
+        visibility = _self.visibility
+    }
 }
 
 open class Value {
@@ -413,13 +470,9 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = resourceClass.properties.filter((_, v) ->
-            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
-            isSubResourceType(v.type)
-        ).flatMap((k, v) ->
-
+        let(nestedHints = resourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+            let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(subResourceClass = getSubResourceClass(v.type))
 
             let(subHintsMap = subHints(subResourceClass))
@@ -451,12 +504,9 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = subResourceClass.properties.filter((_, v) ->
-            v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
-            isSubResourceType(v.type)
-        ).flatMap((k, v) ->
+        let(nestedHints = subResourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(parentKey = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
+            let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(nestedSubResourceClass = getSubResourceClass(v.type))
             let(nestedSubHints = subHintsWithVisited(nestedSubResourceClass, nextVisited))
 
@@ -544,41 +594,61 @@ class Fq {
         else
             false
 
+    /// Reports whether a property should be omitted from the rendered output
+    /// because the user did not declare it AND its type is a nullable Listing
+    /// or Mapping. Without this, an unset nullable collection renders as a
+    /// JSON null, which the patch pipeline cannot distinguish from a scalar
+    /// `null` (intended to clear a previously-set value); omitting the key
+    /// instead lets the diff treat it as absent on both sides.
+    function isUnsetNullableCollection(propType: reflect.Type, rawValue: Any?): Boolean =
+        rawValue == null && (isNullableListingType(propType) || isNullableMappingType(propType))
+
     function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
         let(subResourceHint = findSubResourceHint(resourceClass))
-        resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(rawValue = subResource.getPropertyOrNull(k))
-            if (fieldHint != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
-                let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
-                if (fieldHint.outputTransformation != null)
-                    Pair(key, fieldHint.outputTransformation.apply(rawValue))
+        resourceClass.properties
+            .filter((k, v) ->
+                !v.modifiers.contains("hidden")
+                && !isUnsetNullableCollection(v.type, subResource.getPropertyOrNull(k))
+            )
+            .map((k, v) ->
+                let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+                let(rawValue = subResource.getPropertyOrNull(k))
+                if (fieldHint != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
+                    let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
+                    if (fieldHint.outputTransformation != null)
+                        Pair(key, fieldHint.outputTransformation.apply(rawValue))
+                    else
+                        Pair(key, rawValue)
                 else
+                    let(key = subResourceHint.outputKeyTransformation.apply(k))
                     Pair(key, rawValue)
-            else
-                let(key = subResourceHint.outputKeyTransformation.apply(k))
-                let(value =
-                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
-                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
-                    else rawValue)
-                Pair(key, value)
-        ).toDynamic()
+            ).toDynamic()
 
     function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
         let(resourceHint = findResourceHint(resourceClass))
-        resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
-            let(rawValue = resource.getPropertyOrNull(k))
-            if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
-                Pair(key, fieldHint.outputTransformation.apply(rawValue))
-            else
-                let(value =
-                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
-                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
-                    else rawValue)
-                Pair(key, value)
-        ).toDynamic()
+        resourceClass.properties
+            .filter((k, v) ->
+                v.allAnnotations.filterIsInstance(FieldHint).length > 0
+                && !isUnsetNullableCollection(v.type, resource.getPropertyOrNull(k))
+            )
+            .map((k, v) ->
+                let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+                let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+                let(rawValue = resource.getPropertyOrNull(k))
+                if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
+                    Pair(key, fieldHint.outputTransformation.apply(rawValue))
+                else
+                    Pair(key, rawValue)
+            ).toDynamic()
+
+    function configHints(configClass: reflect.Class): Mapping<String, ConfigFieldHint> =
+        configClass.properties
+            .filter((_, v) -> v.allAnnotations.filterIsInstance(ConfigFieldHint).length > 0)
+            .map((k, v) ->
+                let(hint = v.allAnnotations.filterIsInstance(ConfigFieldHint).firstOrNull)
+                Pair(k.capitalize(), hint)
+            )
+            .toMapping()
 
     function schema(resourceClass: reflect.Class): Schema =
         let (hint = findResourceHint(resourceClass))
@@ -619,6 +689,16 @@ class Fq {
         (directMapping.toMap() + nestedMapping.toMap()).toMapping()
 
     function reverseSubResourceFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
+        reverseSubResourceFieldMappingWithVisited(resourceClass, Set())
+
+    /// Internal recursive helper that tracks visited classes to prevent infinite
+    /// recursion on self-referencing sub-resource types (e.g., BigQuery SchemaField).
+    function reverseSubResourceFieldMappingWithVisited(resourceClass: reflect.Class, visited: Set<String>): Mapping<String, String> =
+        let(className = resourceClass.name)
+        if (visited.contains(className))
+            new Mapping {}  // cycle detected — stop recursion
+        else
+        let(nextVisited = visited.add(className))
         let(subResourceHint = findSubResourceHint(resourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
         // Include ALL properties, not just those with @FieldHint
@@ -644,7 +724,7 @@ class Fq {
                     outputKeyTransformation.apply(k)
             )
             let(nestedSubResourceClass = getSubResourceClass(v.type))
-            let(nestedSubMapping = reverseSubResourceFieldMapping(nestedSubResourceClass))
+            let(nestedSubMapping = reverseSubResourceFieldMappingWithVisited(nestedSubResourceClass, nextVisited))
 
             nestedSubMapping.toMap().map((outputKey, pklKey) ->
                 Pair(parentKey + "." + outputKey, k + "." + pklKey)

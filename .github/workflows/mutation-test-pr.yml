@@ -17,12 +17,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.25.1'
+          go-version: '1.26.2'
 
-      - name: Install pkl
-        uses: pkl-community/setup-pkl@v0
-        with:
-          pkl-version: 0.30.0
+      - name: Install Pkl
+        run: |
+          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes pkl@0.31.0
+
+      - name: Add PEL to PATH
+        run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
       - name: Install gremlins
         run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest

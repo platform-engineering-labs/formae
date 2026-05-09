@@ -6,10 +6,28 @@ package model
 
 import "encoding/json"
 
+// ConfigFieldHint describes mutability characteristics of a target config field.
+// Mirrors FieldHint but scoped to target configuration.
+type ConfigFieldHint struct {
+	CreateOnly bool `json:"CreateOnly" pkl:"CreateOnly"`
+}
+
+// ConfigSchema describes the structure and mutability of a target's config fields.
+type ConfigSchema struct {
+	Hints map[string]ConfigFieldHint `json:"Hints,omitempty" pkl:"Hints,omitempty"`
+}
+
+// IsZero reports whether the schema has no hints, used by omitzero to suppress
+// the field in JSON output for targets without schema annotations.
+func (cs ConfigSchema) IsZero() bool {
+	return len(cs.Hints) == 0
+}
+
 type Target struct {
 	Label        string          `json:"Label" pkl:"Label"`
 	Namespace    string          `json:"Namespace" pkl:"Namespace"`
 	Config       json.RawMessage `json:"Config,omitempty" pkl:"Config,omitempty"`
+	ConfigSchema ConfigSchema    `json:"ConfigSchema,omitzero" pkl:"ConfigSchema,omitempty"`
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
 }

@@ -26,6 +26,13 @@ const (
 	TargetReferenceNotFound      APIError = "TargetReferenceNotFound"
 	InvalidQuery                 APIError = "InvalidQueryError"
 	StackDeletedDuringApply      APIError = "StackDeletedDuringApply"
+	ReconcilePolicyRequired      APIError = "ReconcilePolicyRequired"
+	NonPortableResources         APIError = "NonPortableResources"
+	PluginNotFound               APIError = "PluginNotFound"
+	PluginVersionNotFound        APIError = "PluginVersionNotFound"
+	PluginDependencyConflict     APIError = "PluginDependencyConflict"
+	PluginRepositoryUnreachable  APIError = "PluginRepositoryUnreachable"
+	PluginSignatureInvalid       APIError = "PluginSignatureInvalid"
 )
 
 type ErrorResponse[T any] struct {
@@ -164,6 +171,24 @@ func (e StackDeletedDuringApplyError) Error() string {
 	return fmt.Sprintf("stack %q was deleted during apply setup", e.StackLabel)
 }
 
+type ReconcilePolicyRequiredError struct {
+	StackLabel string `json:"StackLabel"`
+}
+
+func (e ReconcilePolicyRequiredError) Error() string {
+	return fmt.Sprintf("stack '%s' does not have an auto-reconcile policy attached; force-reconcile is not allowed without one", e.StackLabel)
+}
+
+type NonPortableResourcesError struct {
+	TargetLabel string   `json:"TargetLabel"`
+	Resources   []string `json:"Resources"` // e.g. "test-stack/AWS::S3::Bucket/test-bucket"
+}
+
+func (e NonPortableResourcesError) Error() string {
+	return fmt.Sprintf("cannot replace target %q: %d non-portable resource(s) cannot be recreated on a different target",
+		e.TargetLabel, len(e.Resources))
+}
+
 type TargetHasResourcesError struct {
 	TargetLabel   string `json:"TargetLabel"`
 	ResourceCount int    `json:"ResourceCount"`
@@ -171,4 +196,20 @@ type TargetHasResourcesError struct {
 
 func (e TargetHasResourcesError) Error() string {
 	return fmt.Sprintf("target %s cannot be deleted: has %d deployed resources", e.TargetLabel, e.ResourceCount)
+}
+
+type PluginNotFoundError struct {
+	Name string `json:"Name"`
+}
+
+func (e PluginNotFoundError) Error() string {
+	return fmt.Sprintf("plugin %q not found", e.Name)
+}
+
+type PluginDependencyConflictError struct {
+	Message string `json:"Message"`
+}
+
+func (e PluginDependencyConflictError) Error() string {
+	return fmt.Sprintf("plugin dependency conflict: %s", e.Message)
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/theory/jsonpath/registry"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 const labelSeparator = "-"
@@ -45,7 +44,7 @@ func (l *ResourceLabeler) LabelForUnmanagedResource(
 	nativeID string,
 	resourceType string,
 	properties json.RawMessage,
-	labelConfig plugin.LabelConfig,
+	labelConfig pkgmodel.LabelConfig,
 	legacyTagKeys []string,
 ) string {
 	// Try JSONPath query first (from LabelConfig)

@@ -36,6 +36,15 @@ func NewClient(cfg pkgmodel.APIConfig, auth http.Header, net *http.Client) *Clie
 		client.SetHeader("Authorization", auth.Get("Authorization"))
 	}
 
+	// Return a clear error for 401 responses instead of letting each method
+	// report "unexpected status code: 401".
+	client.AddResponseMiddleware(func(_ *resty.Client, resp *resty.Response) error {
+		if resp.StatusCode() == http.StatusUnauthorized {
+			return AuthenticationError{}
+		}
+		return nil
+	})
+
 	return &Client{
 		endpoint: formatEndpoint(cfg.URL, cfg.Port),
 		resty:    client,
@@ -127,7 +136,7 @@ func (c *Client) ApplyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode,
 	case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -166,7 +175,7 @@ func (c *Client) DestroyForma(forma *pkgmodel.Forma, simulate bool, clientID str
 	case http.StatusBadRequest, http.StatusConflict:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -197,7 +206,7 @@ func (c *Client) DestroyByQuery(query string, simulate bool, clientID string) (*
 	case http.StatusBadRequest, http.StatusConflict:
 		return c.parseSubmitCommandErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -228,7 +237,7 @@ func (c *Client) CancelCommands(query string, clientID string) (*apimodel.Cancel
 	case http.StatusBadRequest:
 		return c.parseCancelCommandsErrorResponse(resp.Body)
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -293,6 +302,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		var errResp apimodel.ErrorResponse[apimodel.TargetAlreadyExistsError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
 			return nil, fmt.Errorf("failed to parse TargetAlreadyExists error: %w", err)
+		}
+		return nil, &errResp
+
+	case apimodel.NonPortableResources:
+		var errResp apimodel.ErrorResponse[apimodel.NonPortableResourcesError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse NonPortableResources error: %w", err)
 		}
 		return nil, &errResp
 
@@ -465,7 +481,7 @@ func (c *Client) ExtractResources(query string) (*pkgmodel.Forma, error) {
 		return c.parseListResourcesErrorResponse(resp.Body)
 
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -488,7 +504,7 @@ func (c *Client) ListTargets(query string) ([]*pkgmodel.Target, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -510,7 +526,7 @@ func (c *Client) ListStacks() ([]*pkgmodel.Stack, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -532,7 +548,7 @@ func (c *Client) ListPolicies() ([]apimodel.PolicyInventoryItem, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("unexpected response code from the forma agent: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
 }
 
@@ -552,4 +568,182 @@ func (c *Client) ForceDiscover() error {
 		return fmt.Errorf("failed to force discovery: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) ForceReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+	resp, err := c.resty.R().
+		Post(c.endpoint + "/api/v1/stacks/" + stackLabel + "/reconcile")
+	if err != nil {
+		return nil, fmt.Errorf("failed to force reconcile: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	switch resp.StatusCode() {
+	case http.StatusOK, http.StatusAccepted:
+		var result apimodel.ForceReconcileResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &result, nil
+	case http.StatusConflict:
+		return nil, fmt.Errorf("stack has active commands, reconcile skipped")
+	case http.StatusForbidden:
+		return nil, fmt.Errorf("stack does not have an auto-reconcile policy attached; force-reconcile requires one")
+	default:
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
+func (c *Client) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	resp, err := c.resty.R().
+		Post(c.endpoint + "/api/v1/admin/check-ttl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to force TTL check: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var result apimodel.ForceCheckTTLResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &result, nil
+	default:
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
+func (c *Client) ListPlugins(scope string, query, category, pluginType, channel string) (*apimodel.ListPluginsResponse, error) {
+	req := c.resty.R()
+	params := map[string]string{"scope": scope}
+	if query != "" {
+		params["q"] = query
+	}
+	if category != "" {
+		params["category"] = category
+	}
+	if pluginType != "" {
+		params["type"] = pluginType
+	}
+	if channel != "" {
+		params["channel"] = channel
+	}
+	req.SetQueryParams(params)
+
+	resp, err := req.Get(c.endpoint + "/api/v1/plugins")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+	}
+
+	var result apimodel.ListPluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) GetPlugin(name, channel string) (*apimodel.GetPluginResponse, error) {
+	r := c.resty.R()
+	if channel != "" {
+		r = r.SetQueryParam("channel", channel)
+	}
+	resp, err := r.Get(c.endpoint + "/api/v1/plugins/" + name)
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+	}
+
+	var result apimodel.GetPluginResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) InstallPlugins(req apimodel.InstallPluginsRequest) (*apimodel.InstallPluginsResponse, error) {
+	resp, err := c.resty.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(req).
+		Post(c.endpoint + "/api/v1/plugins/install")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("plugin install failed: %d - %s", resp.StatusCode(), resp.String())
+	}
+
+	var result apimodel.InstallPluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.UninstallPluginsResponse, error) {
+	resp, err := c.resty.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(req).
+		Post(c.endpoint + "/api/v1/plugins/uninstall")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("plugin uninstall failed: %d - %s", resp.StatusCode(), resp.String())
+	}
+
+	var result apimodel.UninstallPluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.UpgradePluginsResponse, error) {
+	resp, err := c.resty.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(req).
+		Post(c.endpoint + "/api/v1/plugins/upgrade")
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:errcheck
+	defer resp.Body.Close()
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("plugin upgrade failed: %d - %s", resp.StatusCode(), resp.String())
+	}
+
+	var result apimodel.UpgradePluginsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
 }

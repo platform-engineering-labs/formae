@@ -1,6 +1,13 @@
 name: formae-property-tests
 
 on:
+  pull_request:
+    paths:
+    - 'internal/**'
+    - 'pkg/**'
+    - 'tests/blackbox/**'
+    - 'tests/testcontrol/**'
+    - 'tests/testplugin/**'
   workflow_dispatch:
   # Run 1x a day at midnight UTC
   schedule:
@@ -8,26 +15,29 @@ on:
 
 jobs:
   property-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
+    timeout-minutes: 90
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         fetch-tags: true
-    
+
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.25.1'
+        go-version: '1.26.2'
 
-    - name: Install pkl
-      uses: pkl-community/setup-pkl@v0
-      with:
-        pkl-version: 0.30.0
+    - name: Install Pkl
+      run: |
+        bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes pkl@0.31.0
+
+    - name: Add PEL to PATH
+      run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
     - name: Build Project
       run: make build
-        
+
     - name: Run Property Tests
       run: make test-property

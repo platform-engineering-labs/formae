@@ -124,7 +124,7 @@ func validateApplyOptions(opts *ApplyOptions) error {
 }
 
 func runApplyForHumans(app *app.App, opts *ApplyOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	// always simulate first for humans
 	res, _, err := app.Apply(opts.FormaFile, opts.Properties, opts.Mode, true, opts.Force)

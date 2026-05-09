@@ -6,6 +6,7 @@ package fakeaws
 
 import (
 	"context"
+	"sync"
 
 	"github.com/masterminds/semver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -13,36 +14,43 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-type FakeAWS struct{}
+type FakeAWS struct {
+	// pendingCreates tracks in-progress creates by RequestID so Status can
+	// return the original properties when the resource "completes".
+	mu             sync.Mutex
+	pendingCreates map[string][]byte
+}
 
 // Compile time checks to satisfy protocol
-var _ plugin.FullResourcePlugin = FakeAWS{}
+var _ plugin.FullResourcePlugin = &FakeAWS{}
 
 // RateLimitMaxRPS allows tests to control the rate limit
 var RateLimitMaxRPS int = 5
 
 // NewFakeAWS creates a new FakeAWS test plugin instance.
-func NewFakeAWS() FakeAWS {
-	return FakeAWS{}
+func NewFakeAWS() *FakeAWS {
+	return &FakeAWS{
+		pendingCreates: make(map[string][]byte),
+	}
 }
 
-func (s FakeAWS) Name() string {
+func (s *FakeAWS) Name() string {
 	return "fake-aws"
 }
 
-func (s FakeAWS) Version() *semver.Version {
+func (s *FakeAWS) Version() *semver.Version {
 	return semver.MustParse("0.0.1")
 }
 
-func (s FakeAWS) Type() plugin.Type {
+func (s *FakeAWS) Type() plugin.Type {
 	return plugin.Resource
 }
 
-func (s FakeAWS) Namespace() string {
+func (s *FakeAWS) Namespace() string {
 	return "FakeAWS"
 }
 
-func (s FakeAWS) overrides(context context.Context) *plugin.ResourcePluginOverrides {
+func (s *FakeAWS) overrides(context context.Context) *plugin.ResourcePluginOverrides {
 	if f, ok := context.Value(plugin.ResourcePluginOverridesContextKey).(*plugin.ResourcePluginOverrides); ok {
 		return f
 	}
@@ -50,7 +58,7 @@ func (s FakeAWS) overrides(context context.Context) *plugin.ResourcePluginOverri
 	return nil
 }
 
-func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
+func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	return []plugin.ResourceDescriptor{
 		{
 			Type: "FakeAWS::S3::Bucket",
@@ -75,14 +83,14 @@ func (s FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 	}
 }
 
-func (s FakeAWS) RateLimit() plugin.RateLimitConfig {
-	return plugin.RateLimitConfig{
-		Scope:                            plugin.RateLimitScopeNamespace,
+func (s *FakeAWS) RateLimit() model.RateLimitConfig {
+	return model.RateLimitConfig{
+		Scope:                            model.RateLimitScopeNamespace,
 		MaxRequestsPerSecondForNamespace: RateLimitMaxRPS,
 	}
 }
 
-func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error) {
+func (s *FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error) {
 	switch resourceType {
 	case "FakeAWS::EC2::VPCCidrBlock":
 		return model.Schema{
@@ -98,6 +106,9 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 				"Ipv6NetmaskLength",
 				"Ipv6Pool",
 				"VpcId"},
+			Hints: map[string]model.FieldHint{
+				"VpcId": {AttachesTo: true},
+			},
 		}, nil
 	default:
 		return model.Schema{
@@ -136,7 +147,7 @@ func (s FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, error
 	}
 }
 
-func (s FakeAWS) Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
+func (s *FakeAWS) Create(context context.Context, request *resource.CreateRequest) (*resource.CreateResult, error) {
 	overrides := s.overrides(context)
 	if overrides != nil && overrides.Create != nil {
 		ret, err := (overrides.Create)(request)
@@ -149,18 +160,20 @@ func (s FakeAWS) Create(context context.Context, request *resource.CreateRequest
 		}
 	}
 
+	requestID := "1234"
+	s.mu.Lock()
+	s.pendingCreates[requestID] = request.Properties
+	s.mu.Unlock()
 	return &resource.CreateResult{
 		ProgressResult: &resource.ProgressResult{
-			Operation:          resource.OperationCreate,
-			OperationStatus:    resource.OperationStatusSuccess,
-			RequestID:          "1234",
-			NativeID:           "5678",
-			ResourceProperties: request.Properties,
+			Operation:       resource.OperationCreate,
+			OperationStatus: resource.OperationStatusInProgress,
+			RequestID:       requestID,
 		},
 	}, nil
 }
 
-func (s FakeAWS) Update(context context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+func (s *FakeAWS) Update(context context.Context, request *resource.UpdateRequest) (*resource.UpdateResult, error) {
 	overrides := s.overrides(context)
 	if overrides != nil && overrides.Update != nil {
 		ret, err := (overrides.Update)(request)
@@ -176,7 +189,7 @@ func (s FakeAWS) Update(context context.Context, request *resource.UpdateRequest
 	return nil, nil
 }
 
-func (s FakeAWS) Delete(context context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+func (s *FakeAWS) Delete(context context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
 	overrides := s.overrides(context)
 	if overrides != nil && overrides.Delete != nil {
 		ret, err := (overrides.Delete)(request)
@@ -204,8 +217,8 @@ func (s FakeAWS) Delete(context context.Context, request *resource.DeleteRequest
 	return nil, nil
 }
 
-func (s FakeAWS) Status(context context.Context, request *resource.StatusRequest) (*resource.StatusResult, error) {
-	overrides := s.overrides(context)
+func (s *FakeAWS) Status(ctx context.Context, request *resource.StatusRequest) (*resource.StatusResult, error) {
+	overrides := s.overrides(ctx)
 	if overrides != nil && overrides.Status != nil {
 		ret, err := (overrides.Status)(request)
 		if err != nil {
@@ -216,10 +229,22 @@ func (s FakeAWS) Status(context context.Context, request *resource.StatusRequest
 			return ret, nil
 		}
 	}
-	return nil, nil
+	s.mu.Lock()
+	props := s.pendingCreates[request.RequestID]
+	delete(s.pendingCreates, request.RequestID)
+	s.mu.Unlock()
+	return &resource.StatusResult{
+		ProgressResult: &resource.ProgressResult{
+			Operation:          resource.OperationCreate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			RequestID:          request.RequestID,
+			NativeID:           "5678",
+			ResourceProperties: props,
+		},
+	}, nil
 }
 
-func (s FakeAWS) Read(context context.Context, request *resource.ReadRequest) (*resource.ReadResult, error) {
+func (s *FakeAWS) Read(context context.Context, request *resource.ReadRequest) (*resource.ReadResult, error) {
 	overrides := s.overrides(context)
 	if overrides != nil && overrides.Read != nil {
 		ret, err := (overrides.Read)(request)
@@ -242,7 +267,7 @@ func (s FakeAWS) Read(context context.Context, request *resource.ReadRequest) (*
 	return nil, nil
 }
 
-func (s FakeAWS) List(context context.Context, request *resource.ListRequest) (*resource.ListResult, error) {
+func (s *FakeAWS) List(context context.Context, request *resource.ListRequest) (*resource.ListResult, error) {
 	overrides := s.overrides(context)
 	if overrides != nil && overrides.List != nil {
 		ret, err := (overrides.List)(request)
@@ -261,12 +286,12 @@ func (s FakeAWS) List(context context.Context, request *resource.ListRequest) (*
 }
 
 // DiscoveryFilters returns declarative filters for testing discovery exclusion
-func (s FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
-	return []plugin.MatchFilter{
+func (s *FakeAWS) DiscoveryFilters() []model.MatchFilter {
+	return []model.MatchFilter{
 		{
 			// Filter 1: Exclude by top-level property
 			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-			Conditions: []plugin.FilterCondition{
+			Conditions: []model.FilterCondition{
 				{
 					PropertyPath:  "$.SkipDiscovery",
 					PropertyValue: "true",
@@ -276,7 +301,7 @@ func (s FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
 		{
 			// Filter 2: Exclude by tag in array format [{"Key": "...", "Value": "..."}]
 			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-			Conditions: []plugin.FilterCondition{
+			Conditions: []model.FilterCondition{
 				{
 					PropertyPath:  `$.Tags[?(@.Key=="SkipDiscovery")].Value`,
 					PropertyValue: "true",
@@ -286,7 +311,7 @@ func (s FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
 		{
 			// Filter 3: Exclude by tag in map format {"key": "value"}
 			ResourceTypes: []string{"FakeAWS::S3::Bucket"},
-			Conditions: []plugin.FilterCondition{
+			Conditions: []model.FilterCondition{
 				{
 					PropertyPath:  "$.Tags.SkipDiscovery",
 					PropertyValue: "true",
@@ -298,8 +323,8 @@ func (s FakeAWS) DiscoveryFilters() []plugin.MatchFilter {
 
 // LabelConfig returns the label extraction configuration for discovered FakeAWS resources.
 // Uses the same pattern as the real AWS plugin for testing.
-func (s FakeAWS) LabelConfig() plugin.LabelConfig {
-	return plugin.LabelConfig{
+func (s *FakeAWS) LabelConfig() model.LabelConfig {
+	return model.LabelConfig{
 		DefaultQuery:      `$.Tags[?(@.Key=='Name')].Value`,
 		ResourceOverrides: map[string]string{},
 	}

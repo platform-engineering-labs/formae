@@ -1,0 +1,86 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Tests for MappingResolvable and ListingResolvable.
+/// Run with: pkl test internal/schema/pkl/schema/tests/collection_resolvable_test.pkl
+amends "pkl:test"
+
+import "../formae.pkl"
+
+// Simulate a compose stack resolvable with a Mapping property
+local open class TestStackResolvable extends formae.Resolvable {
+    local _self = this
+    hidden endpoints: formae.MappingResolvable = new formae.MappingResolvable {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = "endpoints"
+    }
+    hidden projectName: formae.Resolvable = new formae.Resolvable {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = "projectName"
+    }
+}
+
+// Simulate an OVH service resolvable with a Listing property
+local open class TestServiceResolvable extends formae.Resolvable {
+    local _self = this
+    hidden endpoints: formae.ListingResolvable = new formae.ListingResolvable {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = "endpoints"
+    }
+}
+
+local stack = new TestStackResolvable {
+    label = "lgtm"
+    type = "Docker::Compose::Stack"
+}
+
+local svc = new TestServiceResolvable {
+    label = "db"
+    type = "OVH::Database::Service"
+}
+
+facts {
+    ["MappingResolvable.at() builds correct property path"] {
+        stack.endpoints.at("lgtm:3000").$property == "endpoints.lgtm\\:3000"
+    }
+
+    ["MappingResolvable.at() preserves label and type"] {
+        stack.endpoints.at("key").$label == "lgtm"
+        stack.endpoints.at("key").$type == "Docker::Compose::Stack"
+    }
+
+    ["MappingResolvable.at() escapes dots in keys"] {
+        stack.endpoints.at("host.name").$property == "endpoints.host\\.name"
+    }
+
+    ["MappingResolvable.at() returns a resolvable"] {
+        stack.endpoints.at("key").$res == true
+    }
+
+    ["ListingResolvable.at() builds correct property path"] {
+        svc.endpoints.at(0).$property == "endpoints.0"
+    }
+
+    ["ListingResolvable.at() chains with MappingResolvable.at() for nested access"] {
+        svc.endpoints.at(0).at("uri").$property == "endpoints.0.uri"
+    }
+
+    ["ListingResolvable.at() preserves label and type"] {
+        svc.endpoints.at(0).$label == "db"
+        svc.endpoints.at(0).$type == "OVH::Database::Service"
+    }
+
+    ["Scalar resolvable has correct property path"] {
+        stack.projectName.$property == "projectName"
+        stack.projectName.$label == "lgtm"
+    }
+}

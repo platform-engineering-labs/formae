@@ -22,13 +22,14 @@ import (
 	echoSwagger "github.com/swaggo/echo-swagger"
 
 	_ "github.com/platform-engineering-labs/formae/docs"
+	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
 
 const (
@@ -43,11 +44,19 @@ const (
 	ListPoliciesRoute                   = BasePath + "/policies"
 	StackDriftRoute                     = BasePath + "/stacks/:stack/drift"
 	StackChangesSinceLastReconcileRoute = BasePath + "/stacks/:stack/changes-since-last-reconcile"
+	StackReconcileRoute                 = BasePath + "/stacks/:stack/reconcile"
 	StatsRoute                          = BasePath + "/stats"
 
 	AdminBasePath = BasePath + "/admin"
 	SyncRoute     = AdminBasePath + "/synchronize"
 	DiscoverRoute = AdminBasePath + "/discover"
+	CheckTTLRoute = AdminBasePath + "/check-ttl"
+
+	PluginsRoute         = BasePath + "/plugins"
+	PluginRoute          = BasePath + "/plugins/:name"
+	PluginInstallRoute   = BasePath + "/plugins/install"
+	PluginUninstallRoute = BasePath + "/plugins/uninstall"
+	PluginUpgradeRoute   = BasePath + "/plugins/upgrade"
 
 	HealthRoute  = BasePath + "/health"
 	MetricsRoute = "/metrics"
@@ -57,20 +66,28 @@ const (
 type Server struct {
 	echo           *echo.Echo
 	metastructure  metastructure.MetastructureAPI
+	pluginManager  *plugin_manager.PluginManager // nil if not configured
 	ctx            context.Context
-	pluginManager  *plugin.Manager
+	authHandle     *auth.AuthPluginHandle
 	serverConfig   *pkgmodel.ServerConfig
-	pluginConfig   *pkgmodel.PluginConfig
+	networkConfig  *pkgmodel.NetworkConfig
 	metricsHandler http.Handler
 }
 
-func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, pluginManager *plugin.Manager, serverConfig *pkgmodel.ServerConfig, pluginConfig *pkgmodel.PluginConfig, metricsHandler http.Handler) *Server {
+// SetPluginManager configures the optional plugin manager for the server.
+// When set, the plugin management REST endpoints become active; otherwise
+// they return 503 Service Unavailable.
+func (s *Server) SetPluginManager(pm *plugin_manager.PluginManager) {
+	s.pluginManager = pm
+}
+
+func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, networkConfig *pkgmodel.NetworkConfig, metricsHandler http.Handler) *Server {
 	server := &Server{
 		metastructure:  metastructure,
 		ctx:            ctx,
-		pluginManager:  pluginManager,
+		authHandle:     authHandle,
 		serverConfig:   serverConfig,
-		pluginConfig:   pluginConfig,
+		networkConfig:  networkConfig,
 		metricsHandler: metricsHandler,
 	}
 
@@ -79,33 +96,34 @@ func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI
 	return server
 }
 
-func (s *Server) configureAuth() error {
-	if s.pluginConfig.Authentication != nil {
-		auth, err := s.pluginManager.AuthPlugin(s.pluginConfig.Authentication)
-		if err != nil {
-			return err
-		}
-
-		handler, err := (*auth).Handler(s.pluginConfig.Authentication)
-		if err != nil {
-			return err
-		}
-
-		s.echo.Use(echo.WrapMiddleware(handler))
+func (s *Server) configureAuth() {
+	if s.authHandle != nil {
+		s.echo.Use(auth.NewAuthMiddleware(s.authHandle, auth.NewAuthCache()))
 	}
-
-	return nil
 }
 
 // configureNetwork sets up the network listener by loading the appropriate network plugin based on the configuration.
 func (s *Server) configureNetwork() (string, error) {
-	if s.pluginConfig.Network != nil {
-		net, err := network.DefaultRegistry.GetByConfig(s.pluginConfig.Network)
+	if s.networkConfig != nil {
+		netPlugin, err := network.DefaultRegistry.Get(s.networkConfig.Type)
 		if err != nil {
 			return "", err
 		}
 
-		s.echo.Listener, err = net.Listen(s.pluginConfig.Network, s.serverConfig.Port)
+		// Use legacy raw JSON if present (from deprecated plugins.network),
+		// otherwise marshal the typed tailscale config.
+		var configJSON []byte
+		if len(s.networkConfig.LegacyRawJSON) > 0 {
+			configJSON = s.networkConfig.LegacyRawJSON
+		} else {
+			var marshalErr error
+			configJSON, marshalErr = json.Marshal(s.networkConfig.Tailscale)
+			if marshalErr != nil {
+				return "", fmt.Errorf("failed to marshal network config: %w", marshalErr)
+			}
+		}
+
+		s.echo.Listener, err = netPlugin.Listen(configJSON, s.serverConfig.Port)
 		if err != nil {
 			return "", err
 		}
@@ -119,11 +137,7 @@ func (s *Server) configureNetwork() (string, error) {
 // Start launches the server in a separate goroutine
 func (s *Server) Start() {
 	go func() {
-		err := s.configureAuth()
-		if err != nil {
-			s.echo.Logger.Fatal(err)
-			return
-		}
+		s.configureAuth()
 
 		listen, err := s.configureNetwork()
 		if err != nil {
@@ -197,6 +211,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.GET(ListPoliciesRoute, s.ListPolicies)
 	e.GET(StackDriftRoute, s.ListDrift)
 	e.GET(StackChangesSinceLastReconcileRoute, s.ListDrift)
+	e.POST(StackReconcileRoute, s.ForceReconcile)
 
 	// Usage stats endpoint
 	e.GET(StatsRoute, s.Stats)
@@ -207,6 +222,14 @@ func (s *Server) configureEcho() *echo.Echo {
 	// Admin endpoints
 	e.POST(SyncRoute, s.ForceSync)
 	e.POST(DiscoverRoute, s.ForceDiscover)
+	e.POST(CheckTTLRoute, s.ForceCheckTTL)
+
+	// Plugin management endpoints
+	e.GET(PluginsRoute, s.listPluginsHandler)
+	e.POST(PluginInstallRoute, s.installPluginsHandler)
+	e.POST(PluginUninstallRoute, s.uninstallPluginsHandler)
+	e.POST(PluginUpgradeRoute, s.upgradePluginsHandler)
+	e.GET(PluginRoute, s.getPluginHandler)
 
 	// Prometheus metrics endpoint (if enabled)
 	if s.metricsHandler != nil {
@@ -473,6 +496,37 @@ func (s *Server) ListDrift(c echo.Context) error {
 	return c.JSON(http.StatusOK, drift)
 }
 
+// @Summary Force stack reconcile
+// @Description Triggers a one-shot reconcile for a specific stack. This creates and executes a
+// @Description reconcile command that reverts any out-of-band changes to managed resources on the
+// @Description stack back to their last-known desired state. The reconcile is equivalent to
+// @Description re-applying the last reconcile snapshot. The command executes asynchronously —
+// @Description use the returned command_id to poll for completion via GET /commands/:id/status.
+// @Description
+// @Description Side effects: This endpoint creates real infrastructure changes. Any resources that
+// @Description have been modified outside of formae since the last reconcile will be reverted to
+// @Description their managed state. This is a destructive operation for out-of-band changes.
+// @Tags stacks
+// @Produce json
+// @Param stack path string true "The stack label to reconcile."
+// @Success 202 {object} apimodel.ForceReconcileResponse "Accepted: Reconcile command created and executing."
+// @Success 200 {object} apimodel.ForceReconcileResponse "OK: No drift detected, nothing to reconcile."
+// @Failure 403 {object} apimodel.ReconcilePolicyRequiredError "Forbidden: Stack does not have an auto-reconcile policy."
+// @Failure 409 {object} apimodel.ForceReconcileResponse "Conflict: Stack has active commands, reconcile skipped."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /stacks/{stack}/reconcile [post]
+func (s *Server) ForceReconcile(c echo.Context) error {
+	stackLabel := c.Param("stack")
+	result, err := s.metastructure.ForceAutoReconcile(stackLabel)
+	if err != nil {
+		return mapError(c, err)
+	}
+	if result.CommandID != "" {
+		return c.JSON(http.StatusAccepted, result)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
 // @Summary Get usage statistics
 // @Description Retrieves usage statistics of the Formae agent.
 // @Tags stats
@@ -524,6 +578,25 @@ func (s *Server) ForceDiscover(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError)
 	}
 	return c.JSON(http.StatusOK, "")
+}
+
+// @Summary Force TTL expiry check
+// @Description Triggers a one-shot TTL expiry check. Identifies stacks with expired TTL policies
+// @Description and initiates their destruction. Stacks with active commands are skipped.
+// @Description
+// @Description Side effects: This endpoint destroys infrastructure. Any stack whose TTL has expired
+// @Description will have all its resources destroyed. This is irreversible.
+// @Tags admin
+// @Produce json
+// @Success 200 {object} apimodel.ForceCheckTTLResponse "OK: TTL check complete."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /admin/check-ttl [post]
+func (s *Server) ForceCheckTTL(c echo.Context) error {
+	result, err := s.metastructure.ForceCheckTTL()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, result)
 }
 
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic
@@ -629,6 +702,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusConflict, apimodel.TargetAlreadyExists, targetExistsError)
 	}
 
+	var nonPortableError apimodel.NonPortableResourcesError
+	if errors.As(err, &nonPortableError) {
+		return apiError(c, http.StatusConflict, apimodel.NonPortableResources, nonPortableError)
+	}
+
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError
 	if errors.As(err, &requiredFieldMissingError) {
 		return apiError(c, http.StatusBadRequest, apimodel.RequiredFieldMissingOnCreate, requiredFieldMissingError)
@@ -652,6 +730,11 @@ func mapError(c echo.Context, err error) error {
 	var targetReferenceNotFoundError apimodel.TargetReferenceNotFoundError
 	if errors.As(err, &targetReferenceNotFoundError) {
 		return apiError(c, http.StatusBadRequest, apimodel.TargetReferenceNotFound, targetReferenceNotFoundError)
+	}
+
+	var reconcilePolicyError apimodel.ReconcilePolicyRequiredError
+	if errors.As(err, &reconcilePolicyError) {
+		return apiError(c, http.StatusForbidden, apimodel.ReconcilePolicyRequired, reconcilePolicyError)
 	}
 
 	if err != nil {

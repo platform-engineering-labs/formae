@@ -54,7 +54,7 @@ func (p *PluginActor) Init(args ...any) error {
 		return fmt.Errorf("PluginActor: 'AgentNode' has wrong type")
 	}
 
-	// Build and compress capabilities
+	// Build capabilities
 	caps := PluginCapabilities{
 		SupportedResources: p.plugin.SupportedResources(),
 		ResourceSchemas:    buildSchemaMap(p.plugin),
@@ -62,13 +62,7 @@ func (p *PluginActor) Init(args ...any) error {
 		LabelConfig:        p.plugin.LabelConfig(),
 	}
 
-	compressedCaps, err := CompressCapabilities(caps)
-	if err != nil {
-		p.Log().Error("Failed to compress capabilities: %s", err)
-		return fmt.Errorf("failed to compress capabilities: %w", err)
-	}
-
-	p.Log().Debug("Compressed capabilities: %d resources, %d schemas, %d bytes compressed", len(caps.SupportedResources), len(caps.ResourceSchemas), len(compressedCaps))
+	p.Log().Debug("Plugin capabilities: %d resources, %d schemas", len(caps.SupportedResources), len(caps.ResourceSchemas))
 
 	// Send announcement to PluginCoordinator on agent node
 	registryPID := gen.ProcessID{
@@ -76,11 +70,12 @@ func (p *PluginActor) Init(args ...any) error {
 		Node: p.agentNode,
 	}
 	announcement := PluginAnnouncement{
+		Name:                 p.plugin.Name(),
 		Namespace:            p.namespace,
 		Version:              p.plugin.Version().String(),
 		NodeName:             string(p.Node().Name()),
 		MaxRequestsPerSecond: p.plugin.RateLimit().MaxRequestsPerSecondForNamespace,
-		Capabilities:         compressedCaps,
+		Capabilities:         caps,
 	}
 
 	if err := p.Send(registryPID, announcement); err != nil {

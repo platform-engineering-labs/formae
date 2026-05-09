@@ -44,6 +44,13 @@ type agentOptions struct {
 	discoveryEnabled        bool
 	discoveryInterval       string   // PKL duration, e.g. "30.s"
 	discoveryResourceTypes  []string // resource types to discover (empty = all)
+	extraEnv                []string // additional KEY=VALUE env vars for the agent process
+	authEnabled             bool
+	authUsername            string
+	authPassword            string
+	authBcryptHash         string
+	resourcePluginsBlock    string   // raw PKL block for agent.resourcePlugins
+	pklImports              string   // raw PKL import statements (top-level)
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -52,6 +59,33 @@ func WithDiscovery(interval string, resourceTypes ...string) AgentOption {
 		o.discoveryEnabled = true
 		o.discoveryInterval = interval
 		o.discoveryResourceTypes = resourceTypes
+	}
+}
+
+// WithEnv adds environment variables to the agent process.
+func WithEnv(envVars ...string) AgentOption {
+	return func(o *agentOptions) {
+		o.extraEnv = append(o.extraEnv, envVars...)
+	}
+}
+
+// WithResourcePlugins adds a raw PKL block for agent.resourcePlugins.
+// imports is optional top-level PKL import statements (e.g., `import "plugins:/Sftp.pkl" as Sftp`).
+func WithResourcePlugins(imports, pklBlock string) AgentOption {
+	return func(o *agentOptions) {
+		o.pklImports = imports
+		o.resourcePluginsBlock = pklBlock
+	}
+}
+
+// WithAuth enables HTTP Basic Authentication on the agent.
+// The bcryptHash must be a valid bcrypt hash of password.
+func WithAuth(username, password, bcryptHash string) AgentOption {
+	return func(o *agentOptions) {
+		o.authEnabled = true
+		o.authUsername = username
+		o.authPassword = password
+		o.authBcryptHash = bcryptHash
 	}
 }
 
@@ -91,12 +125,42 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
 		resourceTypesBlock = fmt.Sprintf("\n        resourceTypesToDiscover {\n%s\n        }", strings.Join(lines, "\n"))
 	}
 
+	agentAuthBlock := ""
+	cliAuthBlock := ""
+	if options.authEnabled {
+		agentAuthBlock = fmt.Sprintf(`
+    auth {
+        type = "auth-basic"
+        authorizedUsers = new Listing {
+            new Mapping {
+                ["Username"] = %q
+                ["Password"] = %q
+            }
+        }
+    }`, options.authUsername, options.authBcryptHash)
+		cliAuthBlock = fmt.Sprintf(`
+    auth {
+        type = "auth-basic"
+        username = %q
+        password = %q
+    }`, options.authUsername, options.authPassword)
+	}
+
+	// Intentionally no pluginDir override. cfg.PluginDir defaults to
+	// ~/.pel/formae/plugins (empty in CI) and the multi-source plugin
+	// discovery added in the discovery refactor finds orbital-installed
+	// plugins via SystemPluginDir(binPath) without help. The CLI's
+	// extract / project init paths now query the agent for installed
+	// plugin versions instead of scanning local dirs, so a single
+	// pluginDir on the CLI box no longer matters.
+	pluginDirBlock := ""
+
 	configContent := fmt.Sprintf(`/*
  * Auto-generated e2e test configuration
  */
 
 amends "formae:/Config.pkl"
-
+%s%s
 agent {
     server {
         port = %d
@@ -118,16 +182,16 @@ agent {
         consoleLogLevel = "debug"
         filePath = %q
         fileLogLevel = "debug"
-    }
+    }%s%s
 }
 
 cli {
     api {
         port = %d
     }
-    disableUsageReporting = true
+    disableUsageReporting = true%s
 }
-`, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, port)
+`, options.pklImports, pluginDirBlock, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)
@@ -141,6 +205,9 @@ cli {
 	// Use a unique PID file to allow parallel test execution.
 	pidFile := filepath.Join(dataDir, "formae.pid")
 	cmd.Env = append(cmd.Env, fmt.Sprintf("FORMAE_PID_FILE=%s", pidFile))
+
+	// Add any extra env vars (e.g. GRAFANA_AUTH for plugin credentials).
+	cmd.Env = append(cmd.Env, options.extraEnv...)
 
 	// Log agent output to a file for debugging on failure.
 	logFile, err := os.Create(filepath.Join(dataDir, "agent-stdout.log"))
@@ -253,6 +320,16 @@ func (a *Agent) Port() int {
 // ConfigPath returns the path to the agent's configuration file.
 func (a *Agent) ConfigPath() string {
 	return a.config.ConfigPath
+}
+
+// LogFile returns the path to the agent's log file.
+func (a *Agent) LogFile() string {
+	return a.config.LogFile
+}
+
+// StdoutLogFile returns the path to the agent's stdout/stderr capture.
+func (a *Agent) StdoutLogFile() string {
+	return filepath.Join(a.config.DataDir, "agent-stdout.log")
 }
 
 // pickFreePort asks the OS for a free TCP port by listening on :0 and

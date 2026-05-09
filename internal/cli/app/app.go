@@ -5,6 +5,8 @@
 package app
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,31 +26,45 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/usage"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
+	"github.com/tidwall/gjson"
 )
 
 type App struct {
-	PluginManager *plugin.Manager
-
 	Config *pkgmodel.Config
 
 	Plugins  Plugins
 	Projects Projects
 
 	Usage usage.Sender
+
+	authClient *pkgauth.Client
 }
 
-type Plugins struct {
-	pluginManager *plugin.Manager
+// Close cleans up resources held by the App, including any auth plugin subprocess.
+func (a *App) Close() {
+	if a.authClient != nil {
+		_ = a.authClient.Close()
+	}
 }
 
-type Projects struct {
-	pluginManager *plugin.Manager
+// NewClient creates a new API client using the App's configuration,
+// auth, and network settings.
+func (a *App) NewClient() (*api.Client, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	return api.NewClient(a.Config.Cli.API, auth, net), nil
 }
+
+type Plugins struct{}
+
+type Projects struct{}
 
 func NewApp() *App {
-	mgr := plugin.NewManager(util.ExpandHomePath("~/.pel/formae/plugins"))
 	u, err := usage.NewPostHogSender()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
@@ -56,14 +72,14 @@ func NewApp() *App {
 	}
 
 	app := &App{
-		PluginManager: mgr,
-		Config:        &pkgmodel.Config{},
-		Plugins:       Plugins{mgr},
-		Projects:      Projects{mgr},
-		Usage:         u,
+		// Default PluginDir matches the PKL Config.pkl default so that CLI
+		// commands invoked without --config still get sane plugin discovery.
+		// LoadConfig overwrites this when a config file is present.
+		Config:   &pkgmodel.Config{PluginDir: "~/.pel/formae/plugins"},
+		Plugins:  Plugins{},
+		Projects: Projects{},
+		Usage:    u,
 	}
-
-	app.PluginManager.Load()
 
 	err = config.Config.EnsureClientID()
 	if err != nil {
@@ -136,6 +152,20 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	}
 
 	return nil
+}
+
+// PrintBanner prints the formae banner followed by any config warnings
+// (e.g. deprecation notices for the old plugins block). Call this instead
+// of display.PrintBanner() in human-readable command flows so that
+// warnings are never emitted in machine-readable (JSON) output.
+func (a *App) PrintBanner() {
+	display.PrintBanner()
+	if a.Config != nil && len(a.Config.Warnings) > 0 {
+		for _, w := range a.Config.Warnings {
+			fmt.Fprintf(os.Stderr, "%s %s\n", display.Gold("Warning:"), w)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
 }
 
 func (a *App) SupportedOutputSchemas() []string {
@@ -358,6 +388,115 @@ func (a *App) ForceDiscover() error {
 	return client.ForceDiscover()
 }
 
+func (a *App) InstallPlugins(req apimodel.InstallPluginsRequest) (*apimodel.InstallPluginsResponse, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+		return nil, err
+	}
+
+	return client.InstallPlugins(req)
+}
+
+func (a *App) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.UninstallPluginsResponse, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+		return nil, err
+	}
+
+	return client.UninstallPlugins(req)
+}
+
+// InstalledResourcePluginVersions queries the agent for installed resource
+// plugins and returns a map of lowercase namespace to installed version. Used
+// by `formae extract` and `formae project init` to pin remote schema URIs
+// without scanning local plugin directories — orbital-installed plugins live
+// on the agent box, not on the CLI box, so the local-scan approach broke for
+// any deployment where agent and CLI are separate.
+func (a *App) InstalledResourcePluginVersions() (map[string]string, error) {
+	plugins, err := a.installedResourcePlugins()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(plugins))
+	for ns, info := range plugins {
+		if info.Version != "" {
+			result[ns] = info.Version
+		}
+	}
+	return result, nil
+}
+
+// PluginInfo is a CLI-side view of an installed plugin, combining the
+// agent-reported version with its on-disk PklProject location (when the
+// agent and CLI share a filesystem). Used by the --schema-location local
+// flow to build local PKL import strings.
+type PluginInfo struct {
+	Version   string
+	LocalPath string
+}
+
+// InstalledResourcePlugins returns the agent's view of installed
+// resource plugins, keyed by lowercase namespace (falling back to
+// lowercase name when namespace is empty). Includes both version and
+// the agent-reported on-disk PklProject path so callers can pick
+// local vs remote URI emission.
+func (a *App) InstalledResourcePlugins() (map[string]PluginInfo, error) {
+	return a.installedResourcePlugins()
+}
+
+func (a *App) installedResourcePlugins() (map[string]PluginInfo, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	resp, err := client.ListPlugins("installed", "", "", "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]PluginInfo, len(resp.Plugins))
+	for _, p := range resp.Plugins {
+		if p.Type != "resource" {
+			continue
+		}
+		key := strings.ToLower(p.Namespace)
+		if key == "" {
+			key = strings.ToLower(p.Name)
+		}
+		result[key] = PluginInfo{
+			Version:   p.InstalledVersion,
+			LocalPath: p.LocalPath,
+		}
+	}
+	return result, nil
+}
+
+func (a *App) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.UpgradePluginsResponse, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+		return nil, err
+	}
+
+	return client.UpgradePlugins(req)
+}
+
 func (a *App) Stats() (*apimodel.Stats, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
@@ -384,13 +523,17 @@ func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *a
 	if err != nil {
 		if err == syscall.ECONNREFUSED {
 			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", display.Gold("Getting started:"), display.DocRoot)
-		} else {
-			return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 		}
+		if errors.Is(err, api.AuthenticationError{}) {
+			return false, nil, nil, fmt.Errorf("%s\n\n%s",
+				display.Red("authentication failed"),
+				display.Gold("Check your cli.auth and agent.auth configuration."))
+		}
+		return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 	}
 
 	if stats.Version != formae.Version {
-		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s%s", formae.Version, stats.Version, display.Gold("Configuration documentation:"), display.DocRoot, "operations")
+		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, display.Gold("Configuration documentation:"), display.DocRoot)
 	}
 
 	if transmitStats && !a.Config.Cli.DisableUsageReporting {
@@ -423,34 +566,69 @@ func (a *App) calculateNags(stats *apimodel.Stats) []string {
 }
 
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
-	var auth http.Header
+	var authHeader http.Header
 	var net *http.Client
 
-	if a.Config.Plugins.Authentication != nil {
-		authPlugin, err := a.PluginManager.AuthPlugin(a.Config.Plugins.Authentication)
+	if a.Config.Cli.Auth != nil {
+		if a.authClient == nil {
+			authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
+			devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
+			binPath, err := os.Executable()
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to determine binary path: %w", err)
+			}
+			systemPluginDir := discovery.SystemPluginDir(binPath)
+			authPlugins := discovery.DiscoverPluginsMulti(
+				[]string{devPluginDir, systemPluginDir}, discovery.Auth,
+			)
+			var matched *discovery.PluginInfo
+			for i, p := range authPlugins {
+				if p.Name == authType {
+					matched = &authPlugins[i]
+					break
+				}
+			}
+			if matched == nil {
+				return nil, nil, fmt.Errorf("auth plugin %q not installed", authType)
+			}
+			client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to start auth plugin: %w", err)
+			}
+			a.authClient = client
+		}
+
+		resp, err := a.authClient.GetAuthHeader()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get auth header: %w", err)
+		}
+		authHeader = http.Header(resp.Headers)
+	}
+
+	if a.Config.Network != nil {
+		netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		auth, err = (*authPlugin).Authorization(a.Config.Plugins.Authentication)
+		var configJSON []byte
+		if len(a.Config.Network.LegacyRawJSON) > 0 {
+			configJSON = a.Config.Network.LegacyRawJSON
+		} else {
+			var marshalErr error
+			configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
+			if marshalErr != nil {
+				return nil, nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
+			}
+		}
+
+		net, err = netPlugin.Client(configJSON)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	if a.Config.Plugins.Network != nil {
-		netPlugin, err := network.DefaultRegistry.GetByConfig(a.Config.Plugins.Network)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		net, err = netPlugin.Client(a.Config.Plugins.Network)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	return auth, net, nil
+	return authHeader, net, nil
 }
 
 func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {
@@ -481,18 +659,94 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOpt
 		return "", err
 	}
 
+	deps, err := a.buildDependencyStrings(forma, options.SchemaLocation)
+	if err != nil {
+		return "", err
+	}
+	if options.SchemaLocation == "" {
+		options.SchemaLocation = schema.SchemaLocationRemote
+	}
+	options.Dependencies = deps
+
 	return schemaPlugin.SerializeForma(forma, options)
 }
 
-func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (schema.GenerateSourcesResult, error) {
+func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
 	schemaPlugin, err := schema.DefaultRegistry.Get(outputSchema)
 	if err != nil {
 		return schema.GenerateSourcesResult{}, err
 	}
-	// Extract always uses local schema resolution
-	includes, _ := a.Projects.formatIncludes(outputSchema, []string{"aws@local"})
 
-	return schemaPlugin.GenerateSourceCode(forma, targetPath, includes, schema.SchemaLocationLocal)
+	deps, err := a.buildDependencyStrings(forma, schemaLocation)
+	if err != nil {
+		return schema.GenerateSourcesResult{}, err
+	}
+	if schemaLocation == "" {
+		schemaLocation = schema.SchemaLocationRemote
+	}
+
+	options := &schema.SerializeOptions{
+		Schema:         outputSchema,
+		SchemaLocation: schemaLocation,
+		Dependencies:   deps,
+	}
+	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
+}
+
+// buildDependencyStrings asks the agent for installed plugin info and
+// emits PklProjectTemplate-formatted dep strings for every namespace
+// present in the forma, plus formae core.
+//
+// SchemaLocationRemote (default) emits `<plugin>.<name>@<version>` strings;
+// PKL fetches these from hub.platform.engineering. SchemaLocationLocal
+// emits `local:<name>:<path>` strings pointing at the agent's on-disk
+// PklProject; PKL imports them directly. Formae core is always remote
+// (the agent does not surface its own PKL schema as a local path).
+//
+// SchemaLocationLocal requires the CLI and agent to share a filesystem.
+// Each agent-reported localPath is statted; the first unreadable path
+// (or first plugin missing from the agent's local view entirely) fails
+// the call with a clear error pointing the operator at the same-box
+// constraint.
+func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.SchemaLocation) ([]string, error) {
+	plugins, err := a.InstalledResourcePlugins()
+	if err != nil {
+		return nil, fmt.Errorf("listing installed plugins: %w", err)
+	}
+
+	var deps []string
+	if formae.Version != "0.0.0" {
+		deps = append(deps, "pkl.formae@"+formae.Version)
+	}
+
+	seen := make(map[string]bool)
+	for _, r := range forma.Resources {
+		ns := strings.ToLower(r.Namespace())
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+
+		info, ok := plugins[ns]
+		if !ok || info.Version == "" {
+			continue
+		}
+
+		if location == schema.SchemaLocationLocal {
+			if info.LocalPath == "" {
+				return nil, fmt.Errorf("--schema-location local requires plugin %q to be installed on the agent's local filesystem; the agent reports no on-disk path. Install with `formae plugin install %s` and retry, or omit --schema-location to use remote schemas", ns, ns)
+			}
+			if _, statErr := os.Stat(info.LocalPath); statErr != nil {
+				return nil, fmt.Errorf("--schema-location local requires the CLI and agent to share a filesystem; the agent reports plugin %q at %s but that path is not readable from the CLI host (%v). Run the CLI on the agent's host, or omit --schema-location to use remote schemas", ns, info.LocalPath, statErr)
+			}
+			deps = append(deps, fmt.Sprintf("local:%s:%s", ns, info.LocalPath))
+		} else {
+			deps = append(deps, fmt.Sprintf("%s.%s@%s", ns, ns, info.Version))
+		}
+	}
+
+	sort.Strings(deps)
+	return deps, nil
 }
 
 func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
@@ -569,22 +823,18 @@ func (a *App) ExtractPolicies() ([]apimodel.PolicyInventoryItem, []string, error
 
 // Plugins
 
-func (p *Plugins) List() []*plugin.Plugin {
-	return p.pluginManager.List()
-}
-
 func (p *Plugins) SupportedSchemas() []string {
 	return schema.DefaultRegistry.SupportedSchemas()
 }
 
 // Projects
 
-func (p *Projects) Init(path string, format string, include []string) error {
+func (p *Projects) Init(path string, format string, include []string, pluginsDir string, installedVersions map[string]string) error {
 	// TODO(discount-elf) think about this namespace issue, since different packages can be included in plugins we currently
 	// need plugin.package for download delivery
 	switch format {
 	case "pkl":
-		includes, err := p.formatIncludes(format, include)
+		includes, err := p.formatIncludes(format, include, pluginsDir, installedVersions)
 		if err != nil {
 			return err
 		}
@@ -620,7 +870,7 @@ func (p *Projects) Init(path string, format string, include []string) error {
 	return nil
 }
 
-func (p *Projects) formatIncludes(format string, include []string) ([]string, error) {
+func (p *Projects) formatIncludes(format string, include []string, pluginsDir string, installedVersions map[string]string) ([]string, error) {
 	var includes []string
 	switch format {
 	case "pkl":
@@ -633,33 +883,27 @@ func (p *Projects) formatIncludes(format string, include []string) ([]string, er
 		for _, inc := range include {
 			ns, isLocal := parseIncludeSpec(inc)
 
-			// Find installed plugin info (handles case-insensitive lookup)
-			localPath, installedVersion := p.findInstalledPlugin(ns)
-
-			// If @local suffix specified, must resolve locally
+			// @local: must resolve locally — pluginsDir is the dev plugin
+			// install dir (typically ~/.pel/formae/plugins, populated by
+			// `make install` in plugin repos).
 			if isLocal {
+				localPath, _ := p.findInstalledPlugin(ns, pluginsDir)
 				if localPath == "" {
-					return nil, fmt.Errorf("plugin %q not installed locally. Install with: formae plugin install %s", ns, ns)
+					return nil, fmt.Errorf("plugin %q not installed locally for @local resolution. Install it from a plugin repo with `make install`", ns)
 				}
 				includes = append(includes, fmt.Sprintf("local:%s:%s", ns, localPath))
 				continue
 			}
 
-			// Default: resolve from hub (remote)
-			// Prefer installed version, then plugin manager version
-			var version string
-			if installedVersion != "" {
-				version = installedVersion
-			} else if v := p.pluginManager.PluginVersion(ns); v != nil {
-				version = v.String()
+			// Default: resolve from hub (remote). Version comes from the
+			// agent's installed-plugins view rather than scanning local
+			// disk, since orbital-installed plugins live with the agent
+			// and may not be present on the CLI box.
+			version, ok := installedVersions[ns]
+			if !ok || version == "" {
+				return nil, fmt.Errorf("plugin %q not installed on the agent. Install it with: formae plugin install %s", ns, ns)
 			}
-
-			if version != "" {
-				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, version))
-			} else {
-				// No version info available, add as plain namespace (will fail at resolve time)
-				includes = append(includes, ns)
-			}
+			includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, version))
 		}
 	default:
 		return nil, nil
@@ -683,8 +927,10 @@ func parseIncludeSpec(include string) (namespace string, isLocal bool) {
 // It performs case-insensitive directory lookup.
 // Returns (schemaPath, version) where schemaPath is the path to PklProject (empty if no schema),
 // and version is the highest installed version (empty if plugin not installed).
-func (p *Projects) findInstalledPlugin(namespace string) (schemaPath string, version string) {
-	pluginsDir := util.ExpandHomePath("~/.pel/formae/plugins")
+func (p *Projects) findInstalledPlugin(namespace, pluginsDir string) (schemaPath string, version string) {
+	if pluginsDir == "" {
+		return "", ""
+	}
 
 	// Case-insensitive lookup: list plugins dir and find matching name
 	pluginEntries, err := os.ReadDir(pluginsDir)

@@ -105,7 +105,7 @@ func runCancel(app *app.App, opts *CancelOptions) error {
 }
 
 func runCancelForHumans(app *app.App, opts *CancelOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	res, err := app.CancelCommand(opts.Query)
 	if err != nil {

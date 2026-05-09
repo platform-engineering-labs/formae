@@ -13,7 +13,6 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -55,7 +54,6 @@ func (b *TokenBucket) replenish() {
 type RateLimiter struct {
 	act.Actor
 
-	pluginManager *plugin.Manager
 	// buckets maps namespace to buckets. Each plugin can define its own rate limit.
 	buckets map[string]*TokenBucket
 
@@ -82,23 +80,8 @@ func NewRateLimiter() gen.ProcessBehavior {
 func (l *RateLimiter) Init(args ...any) error {
 	l.buckets = make(map[string]*TokenBucket)
 
-	// PluginManager is optional - in distributed mode, namespaces are registered
-	// dynamically via RegisterNamespace messages from PluginCoordinator
-	mgr, ok := l.Env("PluginManager")
-	if ok {
-		l.pluginManager = mgr.(*plugin.Manager)
-		// Register in-process plugins
-		for _, plugin := range l.pluginManager.ListResourcePlugins() {
-			ns := (*plugin).Namespace()
-			rateLimit := (*plugin).RateLimit().MaxRequestsPerSecondForNamespace
-			l.buckets[ns] = &TokenBucket{
-				Tokens:     rateLimit,
-				Capacity:   rateLimit,
-				LastRefill: time.Now(),
-			}
-			l.Log().Debug("Registered in-process plugin", "namespace", ns, "rateLimit", rateLimit)
-		}
-	}
+	// Namespaces are registered dynamically via RegisterNamespace messages
+	// from PluginCoordinator when plugins announce themselves.
 
 	// Initialize OTel metrics
 	if err := l.setupMetrics(); err != nil {
@@ -162,7 +145,7 @@ func (l *RateLimiter) HandleMessage(from gen.PID, message any) error {
 		}
 		l.Log().Debug("Registered namespace %s with rate limit %d", msg.Namespace, msg.MaxRequestsPerSecond)
 	default:
-		l.Log().Debug("Received unknown message", "type", fmt.Sprintf("%T", message))
+		l.Log().Debug("Received unknown message type=%s", fmt.Sprintf("%T", message))
 	}
 	return nil
 }

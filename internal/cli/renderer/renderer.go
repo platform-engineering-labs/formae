@@ -348,6 +348,18 @@ func createDisplayUpdateFromGroup(group []apimodel.ResourceUpdate) apimodel.Reso
 
 	if hasDelete && hasCreate {
 		displayUpdate.Operation = apimodel.OperationReplace
+		// Merge the fields needed to render the replacement reason. The
+		// delete half carries CreateOnlyPatch and the old property values;
+		// the create half carries the new property values.
+		for _, update := range group {
+			switch update.Operation {
+			case apimodel.OperationDelete:
+				displayUpdate.CreateOnlyPatch = update.CreateOnlyPatch
+				displayUpdate.OldProperties = update.Properties
+			case apimodel.OperationCreate:
+				displayUpdate.Properties = update.Properties
+			}
+		}
 	} else if hasDelete {
 		displayUpdate.Operation = apimodel.OperationDelete
 	} else if hasCreate {
@@ -410,6 +422,15 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 			refLabels = make(map[string]string)
 		}
 		FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+	}
+
+	if rc.Operation == apimodel.OperationReplace && len(rc.CreateOnlyPatch) > 0 {
+		propertiesNode := node.Add(display.Grey("because these immutable properties changed:"))
+		refLabels := rc.ReferenceLabels
+		if refLabels == nil {
+			refLabels = make(map[string]string)
+		}
+		FormatPatchDocument(propertiesNode, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
 	}
 }
 
@@ -543,12 +564,19 @@ func formatSimulatedTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	var line string
 	if tu.Operation == "create" {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
-	} else if tu.Operation == "update" {
-		discoverableText := "discoverable"
-		if !tu.Discoverable {
-			discoverableText = "not discoverable"
+	} else if tu.Operation == "update" || tu.Operation == "replace" {
+		configDiffs := diffConfigs(tu.ExistingConfig, tu.DesiredConfig)
+		if len(configDiffs) > 0 {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
+		} else if tu.Operation == "update" {
+			discoverableText := "discoverable"
+			if !tu.Discoverable {
+				discoverableText = "not discoverable"
+			}
+			line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
+		} else {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
 		}
-		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
 	} else {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
 	}
@@ -562,6 +590,13 @@ func formatSimulatedTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	if tu.IsCascade && tu.CascadeSource != "" {
 		node.Add(display.Grey("because it depends on ") + display.LightBlue(tu.CascadeSource))
 	}
+
+	// Show config field diffs for update and replace operations
+	if tu.Operation == "update" || tu.Operation == "replace" {
+		for _, diff := range diffConfigs(tu.ExistingConfig, tu.DesiredConfig) {
+			node.Add(display.Grey(diff))
+		}
+	}
 }
 
 // formatTargetUpdate formats a target update for status view
@@ -571,12 +606,19 @@ func formatTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	var line string
 	if tu.Operation == "create" {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
-	} else if tu.Operation == "update" {
-		discoverableText := "discoverable"
-		if !tu.Discoverable {
-			discoverableText = "not discoverable"
+	} else if tu.Operation == "update" || tu.Operation == "replace" {
+		configDiffs := diffConfigs(tu.ExistingConfig, tu.DesiredConfig)
+		if len(configDiffs) > 0 {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
+		} else if tu.Operation == "update" {
+			discoverableText := "discoverable"
+			if !tu.Discoverable {
+				discoverableText = "not discoverable"
+			}
+			line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
+		} else {
+			line = display.Greyf("%s target %s", op, tu.TargetLabel)
 		}
-		line = display.Greyf("%s target %s to %s", op, tu.TargetLabel, discoverableText)
 	} else {
 		line = display.Greyf("%s target %s", op, tu.TargetLabel)
 	}
@@ -584,6 +626,13 @@ func formatTargetUpdate(root *gtree.Node, tu apimodel.TargetUpdate) {
 	line = line + fmt.Sprintf(": %s", coloredUpdateState(tu.State))
 
 	node := root.Add(line)
+
+	// Show config field diffs for update and replace operations
+	if tu.Operation == "update" || tu.Operation == "replace" {
+		for _, diff := range diffConfigs(tu.ExistingConfig, tu.DesiredConfig) {
+			node.Add(display.Grey(diff))
+		}
+	}
 
 	// Use unified status details function (targets don't have attempt counts or status messages currently)
 	addUpdateStatusDetails(node, tu.State, tu.ErrorMessage, "", 0, 0)
@@ -972,6 +1021,81 @@ func RenderInventoryResources(resources []pkgmodel.Resource, maxRows int) (strin
 }
 
 // RenderInventoryTargets renders a list of targets in a table format
+// diffConfigs compares two JSON config objects and returns formatted lines
+// describing the field-level differences, consistent with resource property formatting.
+func diffConfigs(existing, desired json.RawMessage) []string {
+	if len(existing) == 0 || len(desired) == 0 {
+		return nil
+	}
+
+	var existingMap, desiredMap map[string]json.RawMessage
+	if err := json.Unmarshal(existing, &existingMap); err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(desired, &desiredMap); err != nil {
+		return nil
+	}
+
+	allKeys := make(map[string]bool)
+	for k := range existingMap {
+		allKeys[k] = true
+	}
+	for k := range desiredMap {
+		allKeys[k] = true
+	}
+
+	var diffs []string
+	for key := range allKeys {
+		oldVal, oldOK := existingMap[key]
+		newVal, newOK := desiredMap[key]
+
+		oldStr := formatConfigFieldValue(oldVal, oldOK)
+		newStr := formatConfigFieldValue(newVal, newOK)
+
+		if oldStr == newStr {
+			continue
+		}
+
+		if !oldOK {
+			diffs = append(diffs, display.Green(fmt.Sprintf(`add config field "%s" with the value "%s"`, key, newStr)))
+		} else if !newOK {
+			diffs = append(diffs, display.Red(fmt.Sprintf(`remove config field "%s"`, key)))
+		} else {
+			diffs = append(diffs, display.Gold(fmt.Sprintf(`change config field "%s" from "%s" to "%s"`, key, oldStr, newStr)))
+		}
+	}
+
+	sort.Strings(diffs)
+	return diffs
+}
+
+func formatConfigFieldValue(raw json.RawMessage, exists bool) string {
+	if !exists {
+		return ""
+	}
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return string(raw)
+	}
+	if s, ok := val.(string); ok {
+		return s
+	}
+	// Handle $ref/$value wrapper objects: extract the resolved $value
+	// so the diff shows the actual value, not the resolvable metadata.
+	if m, ok := val.(map[string]any); ok {
+		if v, hasValue := m["$value"]; hasValue {
+			if s, ok := v.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		if _, hasRef := m["$ref"]; hasRef {
+			return "(unresolved reference)"
+		}
+	}
+	return string(raw)
+}
+
 func RenderInventoryTargets(targets []*pkgmodel.Target, maxRows int) (string, error) {
 	var buf strings.Builder
 	table := tablewriter.NewTable(&buf,

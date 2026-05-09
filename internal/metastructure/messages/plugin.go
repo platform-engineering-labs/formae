@@ -54,25 +54,31 @@ type GetPluginInfo struct {
 
 // PluginInfoResponse contains plugin capabilities
 type PluginInfoResponse struct {
-	Found              bool
-	Namespace          string
-	SupportedResources []plugin.ResourceDescriptor
-	ResourceSchemas    map[string]model.Schema
-	MatchFilters       []plugin.MatchFilter
-	LabelConfig        plugin.LabelConfig
-	Error              string // Set if Found is false
+	Found                   bool
+	Namespace               string
+	SupportedResources      []plugin.ResourceDescriptor
+	ResourceSchemas         map[string]model.Schema
+	MatchFilters            []model.MatchFilter
+	LabelConfig             model.LabelConfig
+	ResourceTypesToDiscover []string
+	Error                   string // Set if Found is false
 }
 
 // GetRegisteredPlugins requests a list of all registered plugins from PluginCoordinator
 type GetRegisteredPlugins struct{}
 
 // RegisteredPluginInfo contains basic information about a registered plugin
+// including the merged config (plugin defaults + user overrides).
 type RegisteredPluginInfo struct {
-	Namespace            string
-	Version              string
-	NodeName             string
-	MaxRequestsPerSecond int
-	ResourceCount        int
+	Namespace               string
+	Version                 string
+	NodeName                string
+	MaxRequestsPerSecond    int
+	ResourceCount           int
+	ResourceTypesToDiscover []string
+	RetryConfig             *model.RetryConfig
+	LabelConfig             model.LabelConfig
+	DiscoveryFilters        []model.MatchFilter
 }
 
 // GetRegisteredPluginsResult is the response to GetRegisteredPlugins

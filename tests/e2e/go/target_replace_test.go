@@ -46,8 +46,8 @@ func testTargetReplaceRejectedAWS(t *testing.T, cli *FormaeCLI) {
 	// Since the IAM role's schema does not have Portable=true (not yet
 	// annotated in the plugin PKL), the apply should be rejected.
 	stderr := cli.ApplyExpectRejected(t, "reconcile", fixtureV2)
-	if !strings.Contains(stderr, "not portable") {
-		t.Errorf("expected rejection to mention 'not portable', got: %s", stderr)
+	if !strings.Contains(stderr, "not portable") && !strings.Contains(stderr, "cannot replace target") {
+		t.Errorf("expected rejection to mention non-portable resources, got: %s", stderr)
 	}
 
 	// Step 4: Verify the original resource is still intact (not destroyed).

@@ -13,11 +13,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -156,5 +157,61 @@ func TestAutoReconciler_ReconcileAfterSyncChange(t *testing.T) {
 			500*time.Millisecond,
 			"Auto-reconciler should trigger and create a reconcile command",
 		)
+	})
+}
+
+// TestForceReconcile_RejectedWithoutPolicy verifies that ForceAutoReconcile
+// returns a ReconcilePolicyRequiredError when the stack does not have an
+// auto-reconcile policy attached. This prevents accidental destructive
+// reconciles on stacks that were not explicitly configured for it.
+func TestForceReconcile_RejectedWithoutPolicy(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		m, cleanup, err := test_helpers.NewTestMetastructure(t, nil)
+		defer cleanup()
+		require.NoError(t, err)
+
+		// Apply a forma with a stack but NO auto-reconcile policy
+		f := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{
+				{Label: "no-policy-stack"},
+			},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "test-resource",
+					Type:       "FakeAWS::S3::Bucket",
+					Properties: json.RawMessage(`{"foo":"bar"}`),
+					Stack:      "no-policy-stack",
+					Target:     "test-target",
+				},
+			},
+			Targets: []pkgmodel.Target{
+				{Label: "test-target"},
+			},
+		}
+
+		m.ApplyForma(f, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test-client")
+
+		// Wait for the apply to complete
+		r := require.New(t)
+		r.Eventually(
+			func() bool {
+				resources, err := m.Datastore.LoadResourcesByStack("no-policy-stack")
+				return err == nil && len(resources) == 1
+			},
+			5*time.Second,
+			100*time.Millisecond,
+			"Initial apply should complete",
+		)
+
+		// Attempt force-reconcile — should be rejected
+		resp, err := m.ForceAutoReconcile("no-policy-stack")
+		r.Error(err, "ForceAutoReconcile should return an error when no auto-reconcile policy is attached")
+		r.Nil(resp)
+
+		var policyErr apimodel.ReconcilePolicyRequiredError
+		r.ErrorAs(err, &policyErr, "Error should be ReconcilePolicyRequiredError")
+		r.Equal("no-policy-stack", policyErr.StackLabel)
 	})
 }

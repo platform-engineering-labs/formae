@@ -136,7 +136,7 @@ func runDestroy(app *app.App, opts *DestroyOptions) error {
 }
 
 func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
-	display.PrintBanner()
+	app.PrintBanner()
 
 	if opts.FormaFile != "" {
 		fmt.Print(display.Gold("Destroying resources defined by forma:\n ") + display.Green("File: ") + fmt.Sprintf("%s\n\n", opts.FormaFile))

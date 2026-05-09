@@ -158,8 +158,8 @@ var PluginOperationCallTimeout = 60
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
 	commandID       string
-	labelConfig     plugin.LabelConfig // JSONPath-based label extraction config from plugin
-	labelTagKeys    []string           // Legacy tag-based label keys for backwards compatibility
+	labelConfig     pkgmodel.LabelConfig // JSONPath-based label extraction config from plugin
+	labelTagKeys    []string             // Legacy tag-based label keys for backwards compatibility
 	resourceLabeler *ResourceLabeler
 	retryConfig     pkgmodel.RetryConfig
 	requestedBy     gen.PID
@@ -255,7 +255,7 @@ func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Sh
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, error) {
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
-		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister", "state", newState, "commandID", data.commandID)
+		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister state=%s commandID=%s", newState, data.commandID)
 		_, err := proc.Call(
 			formaCommandPersisterProcess(proc),
 			messages.MarkResourceUpdateAsComplete{
@@ -271,11 +271,15 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 			},
 		)
 		if err != nil {
-			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister", "error", err)
+			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister commandID=%s ksuid=%s operation=%s: %v",
+				data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation, err)
+		} else {
+			proc.Log().Debug("ResourceUpdater: MarkAsComplete call succeeded commandID=%s ksuid=%s operation=%s",
+				data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation)
 		}
 
 		// Send a ResourceUpdateFinished message to the requester to inform it about the final state of the resource update.
-		proc.Log().Debug("ResourceUpdater: sending ResourceUpdateFinished message to requester", "state", newState, "uri", data.originalResourceKsuidURI)
+		proc.Log().Debug("ResourceUpdater: sending ResourceUpdateFinished message to requester state=%s uri=%v", newState, data.originalResourceKsuidURI)
 		err = proc.Send(
 			data.requestedBy,
 			ResourceUpdateFinished{
@@ -283,11 +287,11 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 				State: data.resourceUpdate.State,
 			})
 		if err != nil {
-			proc.Log().Error("failed to send ResourceUpdateFinished message to requester", "error", err)
+			proc.Log().Error("failed to send ResourceUpdateFinished message to requester: %v", err)
 		}
 
 		// Send ourselves a shutdown message to terminate the process.
-		proc.Log().Debug("ResourceUpdater: sending shutdown message to self", "state", newState)
+		proc.Log().Debug("ResourceUpdater: sending shutdown message to self state=%s", newState)
 		err = proc.Send(proc.PID(), Shutdown{})
 		if err != nil {
 			proc.Log().Error("ResourceUpdater: failed to send terminate message: %v", err)
@@ -330,6 +334,28 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 }
 
 func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	// When a resource's target has been deleted (e.g., unmanaged resources
+	// orphaned after a destroy), the target config will be nil. We can't
+	// call the plugin without a target config, so short-circuit to NotFound.
+	// The "deleted OOB" path in the ResourcePersister will then remove the
+	// resource from the DB.
+	if data.resourceUpdate.ResourceTarget.Config == nil {
+		proc.Log().Debug("ResourceUpdater: target config is nil for resource %v (target %s was likely deleted), treating as NotFound",
+			data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.ResourceTarget.Label)
+		now := util.TimeNow()
+		notFound := plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:       resource.OperationRead,
+				OperationStatus: resource.OperationStatusSuccess,
+				ErrorCode:       resource.OperationErrorCodeNotFound,
+			},
+			ResourceType: data.resourceUpdate.DesiredState.Type,
+			StartTs:      now,
+			ModifiedTs:   now,
+		}
+		return handleProgressUpdate(gen.PID{}, state, data, notFound, proc)
+	}
+
 	// Convert properties to plugin format (extracts $value from opaque structures)
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {
@@ -344,25 +370,12 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	compResource, err := plugin.CompressResource(convertedResource)
-	if err != nil {
-		proc.Log().Error("failed to compress resource for plugin: %v", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
-	compExisting, err := plugin.CompressResource(convertedExisting)
-	if err != nil {
-		proc.Log().Error("failed to compress existing resource for plugin: %v", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
-
 	progress, err := doPluginOperation(data.resourceUpdate.DesiredState.URI(), plugin.ReadResource{
 		Namespace:         convertedExisting.Namespace(),
 		ResourceType:      convertedResource.Type,
 		ResourceNamespace: convertedResource.Namespace(),
-		ExistingResource:  compExisting,
-		Resource:          compResource,
+		ExistingResource:  convertedExisting,
+		Resource:          convertedResource,
 		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,
 		NativeID:          data.resourceUpdate.DesiredState.NativeID,
 		IsSync:            data.resourceUpdate.IsSync(),
@@ -372,7 +385,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		RedactSensitive: data.commandSource == FormaCommandSourceDiscovery,
 	}, proc)
 	if err != nil {
-		proc.Log().Error("failed to synchronize resource", "error", err, "resourceURI", data.resourceUpdate.DesiredState.URI())
+		proc.Log().Error("failed to synchronize resource resourceURI=%v: %v", data.resourceUpdate.DesiredState.URI(), err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -388,16 +401,10 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
-	compDeleteResource, err := plugin.CompressResource(convertedResource)
-	if err != nil {
-		proc.Log().Error("failed to compress resource for delete: %v", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
 	deleteOperation := plugin.DeleteResource{
 		Namespace:    convertedResource.Namespace(),
 		NativeID:     convertedResource.NativeID,
-		Resource:     compDeleteResource,
+		Resource:     convertedResource,
 		ResourceType: convertedResource.Type,
 		TargetConfig: data.resourceUpdate.ResourceTarget.Config,
 	}
@@ -414,7 +421,7 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		deleteOperation,
 		proc)
 	if err != nil {
-		proc.Log().Error("failed to start delete operation", "error", err, "resourceURI", data.resourceUpdate.DesiredState.URI())
+		proc.Log().Error("failed to start delete operation resourceURI=%v: %v", data.resourceUpdate.DesiredState.URI(), err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -453,7 +460,7 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value)
 	if err != nil {
-		proc.Log().Error("failed to resolve value for resource update", "error", err, "resourceURI", message.ResourceURI)
+		proc.Log().Error("failed to resolve value for resource update resourceURI=%v: %v", message.ResourceURI, err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -470,19 +477,12 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	compressedProps, err := plugin.CompressJSON(convertedResource.Properties)
-	if err != nil {
-		proc.Log().Error("failed to compress resource properties: %v", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
-
 	createOperation := plugin.CreateResource{
-		Namespace:            convertedResource.Namespace(),
-		ResourceType:         convertedResource.Type,
-		Label:                convertedResource.Label,
-		CompressedProperties: compressedProps,
-		TargetConfig:         data.resourceUpdate.ResourceTarget.Config,
+		Namespace:    convertedResource.Namespace(),
+		ResourceType: convertedResource.Type,
+		Label:        convertedResource.Label,
+		Properties:   convertedResource.Properties,
+		TargetConfig: data.resourceUpdate.ResourceTarget.Config,
 	}
 
 	// First we check if progress already was made on the create operation. This can happen for example if the node crashed while the
@@ -496,7 +496,7 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		createOperation,
 		proc)
 	if err != nil {
-		proc.Log().Error("failed to start create operation", "error", err)
+		proc.Log().Error("failed to start create operation: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -516,10 +516,8 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.DesiredState.Stack != constants.UnmanagedStack
 
 	if isBringingUnderManagement && hasEmptyPatch {
-		proc.Log().Debug("Bringing resource under management without property changes",
-			"resourceURI", data.resourceUpdate.DesiredState.URI(),
-			"oldStack", data.resourceUpdate.PriorState.Stack,
-			"newStack", data.resourceUpdate.DesiredState.Stack)
+		proc.Log().Debug("Bringing resource under management without property changes resourceURI=%v oldStack=%s newStack=%s",
+			data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Stack, data.resourceUpdate.DesiredState.Stack)
 
 		// Merge Properties and ReadOnlyProperties to get complete cloud state
 		completeProperties, err := util.MergeJSON(
@@ -527,7 +525,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			data.resourceUpdate.PriorState.ReadOnlyProperties,
 		)
 		if err != nil {
-			proc.Log().Error("failed to merge properties when bringing resource under management", "error", err)
+			proc.Log().Error("failed to merge properties when bringing resource under management: %v", err)
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
 		}
@@ -563,29 +561,18 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	compressedDesired, err := plugin.CompressJSON(convertedResource.Properties)
-	if err != nil {
-		proc.Log().Error("failed to compress desired properties: %v", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
-	compressedPrior, err := plugin.CompressJSON(convertedExisting.Properties)
-	if err != nil {
-		proc.Log().Error("failed to compress prior properties: %v", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
-
 	updateOperation := plugin.UpdateResource{
-		Namespace:                   convertedResource.Namespace(),
-		NativeID:                    convertedResource.NativeID,
-		ResourceType:                convertedResource.Type,
-		Label:                       convertedResource.Label,
-		CompressedPriorProperties:   compressedPrior,
-		CompressedDesiredProperties: compressedDesired,
-		PatchDocument:               string(data.resourceUpdate.DesiredState.PatchDocument),
-		TargetConfig:                data.resourceUpdate.ResourceTarget.Config,
+		Namespace:         convertedResource.Namespace(),
+		NativeID:          convertedResource.NativeID,
+		ResourceType:      convertedResource.Type,
+		Label:             convertedResource.Label,
+		PriorProperties:   convertedExisting.Properties,
+		DesiredProperties: convertedResource.Properties,
+		PatchDocument:     string(data.resourceUpdate.DesiredState.PatchDocument),
+		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,
 	}
+	proc.Log().Info("PR450_DEBUG update operation resource=%s patchDocument=%s desired=%s prior=%s",
+		convertedResource.Label, updateOperation.PatchDocument, string(convertedResource.Properties), string(convertedExisting.Properties))
 
 	// First we check if progress already was made on the update operation. This can happen for example if the node crashed while the
 	// update operation was in progress. If so, we try to recover from the previous progress.
@@ -598,7 +585,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		updateOperation,
 		proc)
 	if err != nil {
-		proc.Log().Error("failed to start update operation", "error", err)
+		proc.Log().Error("failed to start update operation: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -616,7 +603,7 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 	// Pass the previous attempts count so the PluginOperator can continue from where it left off.
 	actualProgress, err := resumeWaitingForResource(state, data, lastKnownProgress.ProgressResult, lastKnownProgress.Attempts, operation, proc)
 	if err != nil {
-		proc.Log().Error("failed to resume waiting for resource", "error", err)
+		proc.Log().Error("failed to resume waiting for resource: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -644,7 +631,7 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 		PreviousAttempts:  previousAttempts,
 	}, proc)
 	if err != nil {
-		proc.Log().Error("failed to resume waiting for resource", "error", err)
+		proc.Log().Error("failed to resume waiting for resource: %v", err)
 		return nil, fmt.Errorf("failed to resume waiting for resource: %w", err)
 	}
 
@@ -655,44 +642,16 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 // state machine to the next state when the plugin operation finished successfully. After the last plugin operation, or
 // after the first error, it reports the final state to the stack updater and exits.
 func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData, message plugin.TrackedProgress, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	// Decompress resource properties if sent compressed over Ergo
-	if len(message.CompressedResourceProperties) > 0 && len(message.ResourceProperties) == 0 {
-		decompressed, err := plugin.DecompressJSON(message.CompressedResourceProperties)
-		if err != nil {
-			proc.Log().Error("failed to decompress resource properties", "error", err)
-			data.resourceUpdate.MarkAsFailed()
-			return StateFinishedWithError, data, nil, nil
-		}
-		message.ResourceProperties = decompressed
-	}
-
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
-		proc.Log().Error("failed to record progress for resource update", "error", err)
+		proc.Log().Error("failed to record progress for resource update: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	proc.Log().Debug("ResourceUpdater: sending progress update to the forma command persister", "state", state, "resourceURI", data.resourceUpdate.DesiredState.URI(), "progress", message.Operation)
-	_, err = proc.Call(
-		formaCommandPersisterProcess(proc),
-		messages.UpdateResourceProgress{
-			CommandID:          data.commandID,
-			ResourceURI:        data.resourceUpdate.DesiredState.URI(),
-			Operation:          data.resourceUpdate.Operation,
-			ResourceStartTs:    data.resourceUpdate.StartTs,
-			ResourceModifiedTs: data.resourceUpdate.ModifiedTs, // Updated by RecordProgress above
-			ResourceState:      data.resourceUpdate.State,
-			Progress:           message,
-		},
-	)
-	if err != nil {
-		proc.Log().Error("failed to send UpdateResourceProgress message to forma command persister", "error", err)
-		data.resourceUpdate.MarkAsFailed()
-		return StateFinishedWithError, data, nil, nil
-	}
-
-	// If the plugin operation has finished successfully, we persist the resource update to the stack, inform the stack updater and exit
+	// If the plugin operation has finished successfully, persist the resource
+	// BEFORE recording the progress as Success. This prevents a crash window
+	// where the command record shows Success but the resource was never written.
 	if message.FinishedSuccessfully() {
 		if data.commandSource == FormaCommandSourceDiscovery {
 			// Merge Properties and ReadOnlyProperties to get complete cloud state for filtering
@@ -701,7 +660,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 				data.resourceUpdate.DesiredState.ReadOnlyProperties,
 			)
 			if mergeErr != nil {
-				proc.Log().Warning("failed to merge properties for filter, using Properties only", "error", mergeErr)
+				proc.Log().Warning("failed to merge properties for filter, using Properties only: %v", mergeErr)
 				completeProperties = data.resourceUpdate.DesiredState.Properties
 			}
 
@@ -714,9 +673,8 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 				}
 			}
 			if shouldFilter {
-				proc.Log().Debug("Skipping discovered resource",
-					"resourceType", data.resourceUpdate.DesiredState.Type,
-					"nativeID", data.resourceUpdate.DesiredState.NativeID)
+				proc.Log().Debug("Skipping discovered resource resourceType=%s nativeID=%s",
+					data.resourceUpdate.DesiredState.Type, data.resourceUpdate.DesiredState.NativeID)
 				data.resourceUpdate.MarkAsSuccess()
 				return StateFinishedSuccessfully, data, nil, nil
 			}
@@ -740,7 +698,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		})
 
 		if err != nil {
-			proc.Log().Error("failed to persist resource update", "error", err)
+			proc.Log().Error("failed to persist resource update: %v", err)
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
 		}
@@ -749,19 +707,66 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		// If we successfully persisted the read operation in the Synchronizing state, we should reject the resource update
 		// and exit the state machine.
 		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && hash != "" && !data.resourceUpdate.IsDelete() {
-			proc.Log().Debug("Resource update rejected as a change to the resource was detected",
-				"previousProperties", string(data.resourceUpdate.PreviousProperties),
-				"currentProperties", string(data.resourceUpdate.DesiredState.Properties),
-			)
+			proc.Log().Debug("Resource update rejected as a change to the resource was detected previousProperties=%s currentProperties=%s",
+				string(data.resourceUpdate.PreviousProperties), string(data.resourceUpdate.DesiredState.Properties))
 			data.resourceUpdate.Reject()
 
 			return StateRejected, data, nil, nil
 		}
 
+		// Now that the resource is persisted, record the success progress in
+		// the command record. This ordering ensures that if we crash between
+		// the resource persist and this call, the resource exists and the
+		// command re-run will handle it correctly (idempotent).
+		proc.Log().Debug("ResourceUpdater: persisting success progress after resource persist state=%s resourceURI=%v",
+			state, data.resourceUpdate.DesiredState.URI())
+		_, err = proc.Call(
+			formaCommandPersisterProcess(proc),
+			messages.UpdateResourceProgress{
+				CommandID:          data.commandID,
+				ResourceURI:        data.resourceUpdate.DesiredState.URI(),
+				Operation:          data.resourceUpdate.Operation,
+				ResourceStartTs:    data.resourceUpdate.StartTs,
+				ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
+				ResourceState:      data.resourceUpdate.State,
+				Progress:           message,
+			},
+		)
+		if err != nil {
+			proc.Log().Error("failed to send UpdateResourceProgress after resource persist: %v", err)
+			// Resource is already persisted; don't fail the update for a
+			// progress bookkeeping error — the onStateChange handler will
+			// send MarkResourceUpdateAsComplete anyway.
+		}
+
 		return nextState(state, data, proc)
 	}
 
+	// For non-success progress (in-progress or failed), persist progress
+	// to the command record immediately.
+	proc.Log().Debug("ResourceUpdater: sending progress update to the forma command persister state=%s resourceURI=%v progress=%s",
+		state, data.resourceUpdate.DesiredState.URI(), message.Operation)
+	_, err = proc.Call(
+		formaCommandPersisterProcess(proc),
+		messages.UpdateResourceProgress{
+			CommandID:          data.commandID,
+			ResourceURI:        data.resourceUpdate.DesiredState.URI(),
+			Operation:          data.resourceUpdate.Operation,
+			ResourceStartTs:    data.resourceUpdate.StartTs,
+			ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
+			ResourceState:      data.resourceUpdate.State,
+			Progress:           message,
+		},
+	)
+	if err != nil {
+		proc.Log().Error("failed to send UpdateResourceProgress message to forma command persister: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
 	if message.Failed() {
+		proc.Log().Info("PR450_DEBUG plugin operation failed status=%v errorCode=%v statusMessage=%q",
+			message.OperationStatus, message.ErrorCode, message.StatusMessage)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -822,7 +827,7 @@ func nextState(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.A
 		return StateFinishedSuccessfully, data, nil, nil
 	default:
 		// We should never reach this point, so if we do we exit the state machine with an error.
-		proc.Log().Error("ResourceUpdater reached an unexpected state", "state", state, "data", data)
+		proc.Log().Error("ResourceUpdater reached an unexpected state state=%s data=%v", state, data)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, gen.TerminateReasonPanic
 	}
@@ -833,10 +838,8 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 	operationID := uuid.New().String()
 
 	// Spawn a PluginOperator via PluginCoordinator
-	proc.Log().Debug("Spawning plugin operator via PluginCoordinator",
-		"resourceURI", resourceURI,
-		"operation", string(operation.Operation()),
-		"namespace", operation.PluginNamespace())
+	proc.Log().Debug("Spawning plugin operator via PluginCoordinator resourceURI=%v operation=%s namespace=%s",
+		resourceURI, string(operation.Operation()), operation.PluginNamespace())
 
 	spawnResult, err := proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
@@ -848,7 +851,7 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 			RequestedBy: proc.PID(),
 		})
 	if err != nil {
-		proc.Log().Error("failed to spawn plugin operator", "error", err)
+		proc.Log().Error("failed to spawn plugin operator: %v", err)
 		return nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
 	}
 
@@ -861,10 +864,8 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 	}
 
 	// Call the spawned PluginOperator with the operation
-	proc.Log().Debug("Resource updater: calling plugin operator process",
-		"resourceURI", resourceURI,
-		"operation", operation.Operation(),
-		"pid", result.PID)
+	proc.Log().Debug("Resource updater: calling plugin operator process resourceURI=%v operation=%s pid=%v",
+		resourceURI, operation.Operation(), result.PID)
 
 	response, err := proc.CallWithTimeout(result.PID, operation, PluginOperationCallTimeout)
 	if err != nil {
@@ -876,39 +877,30 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 		return nil, fmt.Errorf("expected TrackedProgress, got %T", response)
 	}
 
-	// Decompress resource properties if sent compressed over Ergo (64KB limit)
-	if len(progressResult.CompressedResourceProperties) > 0 && len(progressResult.ResourceProperties) == 0 {
-		decompressed, err := plugin.DecompressJSON(progressResult.CompressedResourceProperties)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decompress resource properties: %w", err)
-		}
-		progressResult.ResourceProperties = decompressed
-	}
-
 	return &progressResult, nil
 }
 
 func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	proc.Log().Error("Plugin operator is missing in action", "state", state, "data", data)
+	proc.Log().Error("Plugin operator is missing in action state=%s data=%v", state, data)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
 func resolveCacheMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	proc.Log().Error("Resolve cache is missing in action", "state", state, "data", data)
+	proc.Log().Error("Resolve cache is missing in action state=%s data=%v", state, data)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
 func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.FailedToResolveValue, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	proc.Log().Error("Failed to resolve resource property", "resourceUri", message.ResourceURI)
+	proc.Log().Error("Failed to resolve resource property resourceUri=%v", message.ResourceURI)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
 // shouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter.
 // Returns true if all conditions match (AND logic), indicating the resource should be excluded.
-func shouldFilterByMatchFilter(filter *plugin.MatchFilter, properties json.RawMessage) bool {
+func shouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.RawMessage) bool {
 	if filter == nil {
 		return false
 	}
@@ -926,7 +918,7 @@ func shouldFilterByMatchFilter(filter *plugin.MatchFilter, properties json.RawMe
 // evaluateCondition evaluates a single filter condition using JSONPath.
 // PropertyPath is a JSONPath expression to query properties.
 // PropertyValue: empty = existence check, non-empty = exact string match.
-func evaluateCondition(cond plugin.FilterCondition, properties json.RawMessage) bool {
+func evaluateCondition(cond pkgmodel.FilterCondition, properties json.RawMessage) bool {
 	var data any
 	if err := json.Unmarshal(properties, &data); err != nil {
 		return false

@@ -37,32 +37,12 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
-	// Build package dependencies using PackageResolver
-	resolver := NewPackageResolver()
+	includes := resolveIncludes(data, options)
 
-	// Configure local schema resolution if requested
 	schemaLocation := schema.SchemaLocationRemote
 	if options != nil && options.SchemaLocation != "" {
 		schemaLocation = options.SchemaLocation
 	}
-	if schemaLocation == schema.SchemaLocationLocal {
-		homeDir, err := os.UserHomeDir()
-		if err == nil {
-			pluginsDir := filepath.Join(homeDir, ".pel", "formae", "plugins")
-			resolver.WithLocalSchemas(pluginsDir)
-		}
-	}
-
-	resolver.Add("formae", "pkl", formae.Version)
-
-	// Extract namespaces from the data and add them as dependencies
-	namespaces := extractNamespaces(data)
-	for ns := range namespaces {
-		// Each namespace uses itself as the plugin name (e.g., aws uses aws plugin)
-		resolver.Add(ns, ns, resolver.InstalledVersion(ns))
-	}
-
-	includes := resolver.GetPackageStrings()
 
 	err = fs.WalkDir(generator, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -139,6 +119,32 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	}
 
 	return Format(textOutput), nil
+}
+
+// resolveIncludes returns the package specs to use for the PKL generator's temp
+// PklProject. Caller-supplied options.Dependencies take priority; otherwise we
+// build the spec list from options.LocalPluginDir (when SchemaLocation == Local
+// and dir is non-empty) or fall back to remote-only.
+func resolveIncludes(data *model.Forma, options *schema.SerializeOptions) []string {
+	if options != nil && len(options.Dependencies) > 0 {
+		return options.Dependencies
+	}
+
+	resolver := NewPackageResolver()
+
+	schemaLocation := schema.SchemaLocationRemote
+	if options != nil && options.SchemaLocation != "" {
+		schemaLocation = options.SchemaLocation
+	}
+	if schemaLocation == schema.SchemaLocationLocal && options != nil && options.LocalPluginDir != "" {
+		resolver.WithLocalSchemas(options.LocalPluginDir)
+	}
+
+	resolver.Add("formae", "pkl", formae.Version)
+	for ns := range extractNamespaces(data) {
+		resolver.Add(ns, ns, resolver.InstalledVersion(ns))
+	}
+	return resolver.GetPackageStrings()
 }
 
 // extractNamespaces extracts unique namespaces from the data.

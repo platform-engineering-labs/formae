@@ -234,6 +234,9 @@ func (m *mockExtractDatastore) BatchUpdateResourceUpdateState(_ string, _ []data
 func (m *mockExtractDatastore) UpdateFormaCommandProgress(_ string, _ forma_command.CommandState, _ time.Time) error {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) UpdateFormaCommandTargetUpdates(_ string, _ json.RawMessage, _ forma_command.CommandState, _ time.Time) error {
+	panic("not implemented")
+}
 
 func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	managedStack := &pkgmodel.Stack{
