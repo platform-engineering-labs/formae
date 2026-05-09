@@ -884,7 +884,20 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 	return stdout.String(), nil
 }
 
-// Extract runs `formae extract` with the given query and output file
+// Extract runs `formae extract` with the given query and output file.
+//
+// `--schema-location local` is required: the conformance harness installs
+// the plugin under test into the agent's local plugin tree (no published
+// hub package), so versioned schema dispatch
+// (internal/schema/pkl.resolveSchemaVersions) only fires when the CLI is
+// told to read schemas from disk. Without the flag, extract emits an
+// unrestricted `@<ns>/**` glob that matches zero modules under the
+// install's `v*/` subtree layout, and every K8s resource type lookup
+// fails with `Cannot find key "K8S::..."`.
+//
+// TODO: drop this once the formae CLI distinguishes "user passed
+// --schema-location remote" from "no flag, default to remote" so
+// versioned dispatch can keep working in the unset case.
 func (h *TestHarness) Extract(query string, outputFile string) error {
 	h.t.Logf("Running formae extract with query '%s' to %s", query, outputFile)
 
@@ -892,6 +905,7 @@ func (h *TestHarness) Extract(query string, outputFile string) error {
 		h.formaeBinary,
 		"extract",
 		"--config", h.configFile,
+		"--schema-location", "local",
 		"--query", query,
 		outputFile,
 	)
