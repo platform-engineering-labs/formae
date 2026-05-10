@@ -274,11 +274,12 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           # Point setup_pkl.sh at whichever tree has plugins. system_plugins
           # land in dist/e2e/formae/plugins (orbital's SystemPluginDir);
-          # user_plugins land in ~/.pel/formae/plugins (make install
-          # default), which is also setup_pkl.sh's default — leave the
-          # var unset so the script's default applies.
+          # user_plugins land in /home/runner/.pel/formae/plugins (make
+          # install default on ubuntu-latest). Hardcoded paths because
+          # GHA expressions can't read $HOME, and the empty-string
+          # alternative is falsy in `&& ''`/`|| ...` chains.
           FORMAE_PLUGIN_DIR: >-
-            ${{ matrix.user_plugins && ''
+            ${{ matrix.user_plugins && '/home/runner/.pel/formae/plugins'
                 || format('{0}/dist/e2e/formae/plugins', github.workspace) }}
         run: >-
           make test-e2e
