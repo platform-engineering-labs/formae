@@ -37,6 +37,7 @@ __debug*
 # bin
 /formae
 !*/formae
+/cmd/formae/formae
 
 # tools
 /ppm
