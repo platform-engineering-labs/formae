@@ -7,6 +7,7 @@
 package plugin
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -311,5 +312,54 @@ func TestResolveHubURL(t *testing.T) {
 		require.Error(t, err)
 		var flagErr *cmd.FlagError
 		assert.True(t, errors.As(err, &flagErr))
+	})
+}
+
+type fakeHubClient struct {
+	res   AvailabilityResult
+	err   error
+	calls int
+}
+
+func (f *fakeHubClient) CheckPluginAvailability(ctx context.Context, name string) (AvailabilityResult, error) {
+	f.calls++
+	return f.res, f.err
+}
+
+func TestRunAvailabilityCheck(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("conflict, no allowConflict, returns plain error mentioning name and url and --allow-conflict", func(t *testing.T) {
+		fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
+		err := runAvailabilityCheck(ctx, fc, "foo", false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "foo")
+		assert.Contains(t, err.Error(), "https://github.com/x/y")
+		assert.Contains(t, err.Error(), "--allow-conflict")
+	})
+
+	t.Run("conflict, allowConflict=true, returns nil", func(t *testing.T) {
+		fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
+		err := runAvailabilityCheck(ctx, fc, "foo", true)
+		assert.NoError(t, err)
+	})
+
+	t.Run("available returns nil", func(t *testing.T) {
+		fc := &fakeHubClient{res: AvailabilityResult{Available: true}}
+		err := runAvailabilityCheck(ctx, fc, "foo", false)
+		assert.NoError(t, err)
+	})
+
+	t.Run("HubUnreachableError downgrades to nil", func(t *testing.T) {
+		fc := &fakeHubClient{err: &HubUnreachableError{Cause: errors.New("dial tcp: timeout")}}
+		err := runAvailabilityCheck(ctx, fc, "foo", false)
+		assert.NoError(t, err)
+	})
+
+	t.Run("plain error (trust/protocol) is hard-fail", func(t *testing.T) {
+		fc := &fakeHubClient{err: errors.New("hub TLS validation failed: x")}
+		err := runAvailabilityCheck(ctx, fc, "foo", false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "TLS")
 	})
 }

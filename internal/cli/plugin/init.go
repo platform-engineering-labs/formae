@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -405,6 +406,37 @@ func resolveHubURL(opts *PluginInitOptions) (string, error) {
 		return "", cmd.FlagErrorf("invalid hub URL: %s", err)
 	}
 	return normalized, nil
+}
+
+func runAvailabilityCheck(
+	ctx context.Context,
+	client HubClient,
+	name string,
+	allowConflict bool,
+) error {
+	res, err := client.CheckPluginAvailability(ctx, name)
+	if err != nil {
+		var unreachable *HubUnreachableError
+		if errors.As(err, &unreachable) {
+			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+				"Hub availability check skipped: %s. Hub will re-validate at registration time.",
+				unreachable.Cause)))
+			return nil
+		}
+		return fmt.Errorf("hub availability check failed: %w", err)
+	}
+	if !res.Available {
+		if allowConflict {
+			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+				"Warning: plugin name %q is already registered by %s. Continuing because --allow-conflict was set; registration will fail at confirm time.",
+				name, res.GitHubRepoURL)))
+			return nil
+		}
+		return fmt.Errorf(
+			"plugin name %q is already registered by %s. Pick a different name (or pass --allow-conflict to scaffold anyway)",
+			name, res.GitHubRepoURL)
+	}
+	return nil
 }
 
 // expandTilde expands ~ to the user's home directory
