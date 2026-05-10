@@ -235,17 +235,26 @@ func runPluginInit(opts *PluginInitOptions) error {
 	}
 
 	// License (optional, default: Apache-2.0)
+	//
+	// The formae Hub only accepts plugins under one of four SPDX
+	// licenses (Apache-2.0, BSD-3-Clause, MIT, MPL-2.0). We surface
+	// those four as the prompt options plus an "Other" escape hatch,
+	// and warn explicitly when the user picks Other so they don't
+	// learn at registration time that their plugin can't publish.
 	if opts.License != "" {
 		config.License = opts.License
 	} else {
+		fmt.Println()
+		fmt.Println(display.Grey("The formae Hub only accepts plugins under one of these four"))
+		fmt.Println(display.Grey("licenses. Pick 'Other' to use a different license — your plugin"))
+		fmt.Println(display.Grey("will still build and run locally, but will not be publishable to"))
+		fmt.Println(display.Grey("the Hub."))
+		fmt.Println()
 		licenseOptions := []string{
 			"Apache-2.0",
-			"MIT",
-			"GPL-3.0-only",
 			"BSD-3-Clause",
+			"MIT",
 			"MPL-2.0",
-			"AGPL-3.0-only",
-			"FSL-1.1-ALv2",
 			"Other",
 		}
 		license, err := p.PromptChoice("Plugin license", licenseOptions, 0)
@@ -257,6 +266,13 @@ func runPluginInit(opts *PluginInitOptions) error {
 			if err != nil {
 				return err
 			}
+			fmt.Println()
+			display.Warning(fmt.Sprintf(
+				"'%s' is not on the formae Hub's allowlist; this plugin will not be publishable to hub.platform.engineering.",
+				license,
+			))
+			fmt.Println(display.Grey("  To publish later, switch to Apache-2.0, BSD-3-Clause, MIT, or MPL-2.0."))
+			fmt.Println()
 		}
 		config.License = license
 	}
