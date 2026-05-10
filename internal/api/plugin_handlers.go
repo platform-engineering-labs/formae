@@ -41,12 +41,10 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
-		registered, regErr := s.metastructure.RegisteredPlugins()
-		if regErr != nil {
-			c.Logger().Warnf("plugin registry lookup failed: %v", regErr)
-			registered = nil
-		}
-		plugins = mergeRegisteredPlugins(plugins, registered, localPaths)
+		// VERIFY-RED: merge call disabled to confirm e2e catches the bug.
+		// _, _ = s.metastructure.RegisteredPlugins()
+		// plugins = mergeRegisteredPlugins(plugins, registered, localPaths)
+		_ = localPaths
 	case "available":
 		plugins, err = pm.Available(plugin_manager.AvailableFilter{
 			Query:    c.QueryParam("q"),
