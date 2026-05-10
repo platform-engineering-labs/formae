@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -361,5 +362,26 @@ func TestRunAvailabilityCheck(t *testing.T) {
 		err := runAvailabilityCheck(ctx, fc, "foo", false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "TLS")
+	})
+
+	t.Run("context.Canceled propagates as-is (not wrapped in cmd.FlagError)", func(t *testing.T) {
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel() // immediately cancel so ctx.Err() == context.Canceled
+		fc := &fakeHubClient{err: context.Canceled}
+		err := runAvailabilityCheck(canceledCtx, fc, "foo", false)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, context.Canceled))
+		// Must not be wrapped under "hub availability check failed: ..."
+		assert.NotContains(t, err.Error(), "hub availability check failed")
+	})
+
+	t.Run("context.DeadlineExceeded propagates as-is", func(t *testing.T) {
+		expiredCtx, cancel := context.WithTimeout(context.Background(), 1)
+		defer cancel()
+		time.Sleep(1 * time.Millisecond) // ensure the deadline has passed
+		fc := &fakeHubClient{err: context.DeadlineExceeded}
+		err := runAvailabilityCheck(expiredCtx, fc, "foo", false)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, context.DeadlineExceeded))
 	})
 }

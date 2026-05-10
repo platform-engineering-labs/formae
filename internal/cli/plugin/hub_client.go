@@ -78,8 +78,21 @@ func (c *httpHubClient) CheckPluginAvailability(ctx context.Context, name string
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// Caller-driven cancellation: propagate unchanged so the wider
+		// command flow can react to it (interactive Ctrl-C, parent
+		// deadline). We check ctx.Err() rather than errors.Is on the
+		// network error because http.Client's own timeout also surfaces
+		// as context.DeadlineExceeded — distinguishable by whether the
+		// caller's context has itself errored.
+		if ctx.Err() != nil {
+			return AvailabilityResult{}, ctx.Err()
+		}
 		if isTrustError(err) {
 			return AvailabilityResult{}, fmt.Errorf("hub TLS validation failed: %w", err)
+		}
+		if isProtocolMismatchError(err) {
+			return AvailabilityResult{}, fmt.Errorf(
+				"hub protocol mismatch (is --hub using the right scheme?): %w", err)
 		}
 		return AvailabilityResult{}, &HubUnreachableError{Cause: err}
 	}
@@ -143,6 +156,15 @@ func isTrustError(err error) bool {
 	return errors.As(err, &verifyErr) ||
 		errors.As(err, &unknownAuth) ||
 		errors.As(err, &hostErr)
+}
+
+// isProtocolMismatchError detects deterministic protocol mismatches
+// (e.g. --hub points HTTPS at a plain-HTTP server, surfaced by the
+// stdlib as http.ErrSchemeMismatch). These are not transient and must
+// hard-fail so the user fixes their config rather than silently
+// scaffolding.
+func isProtocolMismatchError(err error) bool {
+	return errors.Is(err, http.ErrSchemeMismatch)
 }
 
 // validateHubURL normalizes and validates a hub base URL. Used by

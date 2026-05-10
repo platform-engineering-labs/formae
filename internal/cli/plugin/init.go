@@ -525,6 +525,13 @@ func runAvailabilityCheck(
 ) error {
 	res, err := client.CheckPluginAvailability(ctx, name)
 	if err != nil {
+		// Propagate cancellation as-is so cobra surfaces the right exit.
+		// The hub client returns ctx.Err() directly for caller-driven
+		// cancellation, so checking ctx.Err() here correctly distinguishes
+		// caller cancellation from hub-client-internal timeouts.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		var unreachable *HubUnreachableError
 		if errors.As(err, &unreachable) {
 			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(

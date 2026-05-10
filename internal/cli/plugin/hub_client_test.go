@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,4 +346,69 @@ func TestNewHubClient_HonorsProxyEnv(t *testing.T) {
 	got := reflect.ValueOf(transport.Proxy).Pointer()
 	want := reflect.ValueOf(http.ProxyFromEnvironment).Pointer()
 	assert.Equal(t, want, got, "transport.Proxy must be http.ProxyFromEnvironment")
+}
+
+func TestHubClient_ContextCanceled_PropagatesAsIs(t *testing.T) {
+	// Use a server that sleeps so the request is in-flight when we cancel.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	c := newTestClient(srv.URL, 5*time.Second)
+	_, err := c.CheckPluginAvailability(ctx, "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"context.Canceled must NOT be wrapped in HubUnreachableError")
+	assert.True(t, errors.Is(err, context.Canceled),
+		"underlying error must remain context.Canceled")
+}
+
+func TestHubClient_DeadlineExceeded_PropagatesAsIs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	c := newTestClient(srv.URL, 5*time.Second)
+	_, err := c.CheckPluginAvailability(ctx, "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.True(t, errors.Is(err, context.DeadlineExceeded),
+		"underlying error must remain context.DeadlineExceeded")
+}
+
+func TestHubClient_ProtocolMismatch_HTTPSAtPlainHTTPServer_HardFail(t *testing.T) {
+	// Start a plain-HTTP server, then point an HTTPS client at it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	httpsURL := strings.Replace(srv.URL, "http://", "https://", 1)
+
+	// Use the real NewHubClient so we exercise the production transport
+	// (including the timeouts and Proxy resolver).
+	c := NewHubClient(httpsURL).(*httpHubClient)
+
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"protocol mismatch must NOT be wrapped in HubUnreachableError")
+	assert.Contains(t, err.Error(), "protocol mismatch")
 }
