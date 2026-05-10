@@ -129,3 +129,93 @@ func TestHubClient_ReadTimeout_Transient(t *testing.T) {
 	var unreachable *HubUnreachableError
 	assert.True(t, errors.As(err, &unreachable))
 }
+
+func TestHubClient_401_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestHubClient_403_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "403")
+}
+
+func TestHubClient_405_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "405")
+}
+
+func TestHubClient_400_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+}
+
+func TestHubClient_200_NonJSON_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>not the right hub</html>"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "not valid JSON")
+}
+
+func TestHubClient_200_MissingFields_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"foo":"bar"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "missing required fields")
+}
