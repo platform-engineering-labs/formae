@@ -159,12 +159,25 @@ func isTrustError(err error) bool {
 }
 
 // isProtocolMismatchError detects deterministic protocol mismatches
-// (e.g. --hub points HTTPS at a plain-HTTP server, surfaced by the
-// stdlib as http.ErrSchemeMismatch). These are not transient and must
-// hard-fail so the user fixes their config rather than silently
-// scaffolding.
+// where --hub points at the wrong scheme.
+//
+//   - HTTPS client → HTTP server: net/http returns http.ErrSchemeMismatch.
+//   - HTTP client → HTTPS server: net/http has no exported sentinel;
+//     the transport surfaces strings like "malformed HTTP response"
+//     when it tries to parse TLS handshake bytes as an HTTP response.
+//     We match on the prefix as a deliberate string-coupling to the
+//     stdlib for this specific case.
+//
+// These are not transient and must hard-fail so the user fixes their
+// config rather than silently scaffolding.
 func isProtocolMismatchError(err error) bool {
-	return errors.Is(err, http.ErrSchemeMismatch)
+	if errors.Is(err, http.ErrSchemeMismatch) {
+		return true
+	}
+	if err != nil && strings.Contains(err.Error(), "malformed HTTP response") {
+		return true
+	}
+	return false
 }
 
 // validateHubURL normalizes and validates a hub base URL. Used by

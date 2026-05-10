@@ -9,6 +9,7 @@ package plugin
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -389,6 +390,51 @@ func TestHubClient_DeadlineExceeded_PropagatesAsIs(t *testing.T) {
 	assert.False(t, errors.As(err, &unreachable))
 	assert.True(t, errors.Is(err, context.DeadlineExceeded),
 		"underlying error must remain context.DeadlineExceeded")
+}
+
+func TestHubClient_ProtocolMismatch_HTTPAtHTTPSServer_HardFail(t *testing.T) {
+	// Simulate an HTTPS server by opening a raw TCP listener that writes back
+	// TLS ServerHello bytes when an HTTP client connects. Go's httptest.NewTLSServer
+	// cannot be used here because it detects the plain HTTP request before the
+	// TLS handshake and replies with HTTP 400 — the transport never sees malformed
+	// bytes. A raw TCP server that immediately echoes a TLS record header causes
+	// net/http to emit "malformed HTTP response" exactly as a real HTTPS server
+	// (nginx, etc.) would when it receives an unencrypted request.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				_, _ = c.Read(buf)
+				// TLS record header bytes — what a real HTTPS server returns to an
+				// HTTP client. The net/http transport tries to parse this as
+				// "HTTP/1.x ..." and emits: malformed HTTP response "\x16\x03..."
+				_, _ = c.Write([]byte{0x16, 0x03, 0x03, 0x00, 0x59})
+			}(conn)
+		}
+	}()
+
+	httpURL := "http://" + ln.Addr().String()
+
+	// Use the real NewHubClient so the production transport (with
+	// timeouts and the Proxy resolver) is exercised.
+	c := NewHubClient(httpURL).(*httpHubClient)
+
+	_, err = c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"HTTP request against HTTPS server must NOT be HubUnreachableError")
+	assert.Contains(t, err.Error(), "protocol mismatch")
 }
 
 func TestHubClient_ProtocolMismatch_HTTPSAtPlainHTTPServer_HardFail(t *testing.T) {
