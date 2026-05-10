@@ -219,3 +219,24 @@ func TestHubClient_200_MissingFields_HardFail(t *testing.T) {
 	assert.False(t, errors.As(err, &unreachable))
 	assert.Contains(t, err.Error(), "missing required fields")
 }
+
+func TestHubClient_TLSHostnameMismatch_HardFail(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Use the real NewHubClient so the production TLS verification is
+	// exercised — the test client used elsewhere lacks a Transport and
+	// would inherit DefaultTransport, which does verify TLS by default
+	// but doesn't carry our other phase timeouts. Casting back to the
+	// concrete type just to keep the call path identical.
+	c := NewHubClient(srv.URL).(*httpHubClient)
+
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "TLS validation failure must NOT be HubUnreachableError")
+	assert.Contains(t, err.Error(), "TLS validation failed")
+}
