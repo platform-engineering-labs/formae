@@ -27,7 +27,14 @@ type mergedPlugin struct {
 func (m mergedPlugin) onAgent() bool { return m.agentVersion != "" }
 func (m mergedPlugin) onCLI() bool   { return m.cliVersion != "" }
 
-func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin) string {
+// renderPluginList merges the agent and local views into a single
+// listing. Annotations are driven by *divergence*: when both arms
+// returned data, matching rows render plain — the typical single-host
+// install where agent and CLI share the orbital tree by definition is
+// not noisy. Only one arm reachable: every row carries that arm's
+// label ((agent) or (cli)) for consistency, and the caller surfaces a
+// hint explaining why the other arm is missing.
+func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin, agentReached, localScanned bool) string {
 	if len(agentPlugins) == 0 && len(localPlugins) == 0 {
 		return "No plugins installed.\n"
 	}
@@ -88,7 +95,7 @@ func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin) string {
 		}
 		sb.WriteString(display.LightBlue(header) + "\n")
 		for _, m := range plugins {
-			sb.WriteString(renderMergedRow(m) + "\n")
+			sb.WriteString(renderMergedRow(m, agentReached, localScanned) + "\n")
 		}
 	}
 
@@ -99,31 +106,63 @@ func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin) string {
 	return sb.String()
 }
 
-func renderMergedRow(m *mergedPlugin) string {
+func renderMergedRow(m *mergedPlugin, agentReached, localScanned bool) string {
 	name := padRight(m.plugin.Name, 14)
 	managedBy := ""
 	if m.plugin.ManagedBy != "" {
 		managedBy = display.Grey("  (" + m.plugin.ManagedBy + ")")
 	}
-	switch {
-	case m.onAgent() && m.onCLI() && m.agentVersion == m.cliVersion:
-		return fmt.Sprintf("  %s %s  %s  %s%s",
-			display.Green("✓"), name, display.Grey(m.agentVersion),
-			display.Grey("(agent + cli)"), managedBy)
-	case m.onAgent() && m.onCLI() && m.agentVersion != m.cliVersion:
+
+	// Both arms reached + version mismatch is the only case that
+	// breaks the single-version rendering: surface both versions
+	// inline, mark with a warning glyph.
+	if agentReached && localScanned && m.onAgent() && m.onCLI() && m.agentVersion != m.cliVersion {
 		return fmt.Sprintf("  %s %s  %s  %s%s",
 			display.Gold("⚠"), name,
 			display.Grey(fmt.Sprintf("agent %s / cli %s", m.agentVersion, m.cliVersion)),
 			display.Gold("version mismatch"), managedBy)
-	case m.onAgent():
-		return fmt.Sprintf("  %s %s  %s  %s%s",
-			display.Green("✓"), name, display.Grey(m.agentVersion),
-			display.Grey("(agent)"), managedBy)
-	default:
-		return fmt.Sprintf("  %s %s  %s  %s%s",
-			display.Green("✓"), name, display.Grey(m.cliVersion),
-			display.Grey("(cli)"), managedBy)
 	}
+
+	version := m.agentVersion
+	if version == "" {
+		version = m.cliVersion
+	}
+	annotation := annotateRow(m, agentReached, localScanned)
+
+	line := fmt.Sprintf("  %s %s  %s",
+		display.Green("✓"), name, display.Grey(version))
+	if annotation != "" {
+		line += "  " + display.Grey(annotation)
+	}
+	return line + managedBy
+}
+
+// annotateRow decides what to put after the version, encoding the
+// "annotate only what's notable" rule:
+//
+//	both arms reached, plugin on both:    no annotation (boring case)
+//	both arms reached, agent only:        (agent only)
+//	both arms reached, cli only:          (cli only)
+//	only agent reached:                   (agent)         — every row
+//	only local scanned:                   (cli)           — every row
+//
+// The version-mismatch case is handled by the caller because it also
+// changes the version display.
+func annotateRow(m *mergedPlugin, agentReached, localScanned bool) string {
+	if agentReached && localScanned {
+		switch {
+		case m.onAgent() && !m.onCLI():
+			return "(agent only)"
+		case m.onCLI() && !m.onAgent():
+			return "(cli only)"
+		default:
+			return ""
+		}
+	}
+	if agentReached {
+		return "(agent)"
+	}
+	return "(cli)"
 }
 
 func renderPluginSearch(plugins []apimodel.Plugin) string {
