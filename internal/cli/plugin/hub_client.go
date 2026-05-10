@@ -47,6 +47,7 @@ func (e *HubUnreachableError) Unwrap() error { return e.Cause }
 
 func NewHubClient(baseURL string) HubClient {
 	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
 			Timeout: hubDialTimeout,
 		}).DialContext,
@@ -86,6 +87,21 @@ func (c *httpHubClient) CheckPluginAvailability(ctx context.Context, name string
 
 	switch resp.StatusCode {
 	case http.StatusNotFound:
+		var body struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return AvailabilityResult{}, fmt.Errorf(
+				"hub returned 404 but body is not valid JSON: %w — is --hub pointing at the right service?",
+				err)
+		}
+		if body.Error.Code != "plugin_not_found" {
+			return AvailabilityResult{}, fmt.Errorf(
+				"hub returned 404 with error.code=%q (expected plugin_not_found) — is --hub pointing at the right service?",
+				body.Error.Code)
+		}
 		return AvailabilityResult{Available: true}, nil
 	case http.StatusOK:
 		var body struct {

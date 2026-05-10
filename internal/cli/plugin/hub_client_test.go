@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -280,4 +281,68 @@ func TestValidateHubURL(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "https://hub.platform.engineering", got)
 	})
+}
+
+func TestHubClient_404_NonJSON_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("404 page not found"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"404 with non-JSON body must NOT be HubUnreachableError")
+	assert.Contains(t, err.Error(), "not valid JSON")
+}
+
+func TestHubClient_404_WrongErrorCode_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"code":"route_not_found"}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "route_not_found")
+}
+
+func TestHubClient_404_MissingErrorObject_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"nope"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	// Empty code → message should reference the empty value
+	assert.Contains(t, err.Error(), "expected plugin_not_found")
+}
+
+func TestNewHubClient_HonorsProxyEnv(t *testing.T) {
+	c := NewHubClient("https://example.com").(*httpHubClient)
+	transport, ok := c.http.Transport.(*http.Transport)
+	require.True(t, ok, "expected *http.Transport")
+	require.NotNil(t, transport.Proxy, "transport must have a Proxy resolver set")
+
+	// Compare the function pointer to http.ProxyFromEnvironment so a
+	// future refactor that swaps in a no-op resolver fails this test.
+	got := reflect.ValueOf(transport.Proxy).Pointer()
+	want := reflect.ValueOf(http.ProxyFromEnvironment).Pointer()
+	assert.Equal(t, want, got, "transport.Proxy must be http.ProxyFromEnvironment")
 }
