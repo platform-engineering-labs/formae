@@ -534,7 +534,6 @@ func expandTilde(path string) string {
 	return path
 }
 
-
 func transformTemplateFiles(config *PluginConfig) error {
 	// Walk the output directory and transform files
 	return filepath.Walk(config.OutputDir, func(path string, info os.FileInfo, err error) error {
