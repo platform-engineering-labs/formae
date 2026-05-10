@@ -385,3 +385,17 @@ func TestRunAvailabilityCheck(t *testing.T) {
 		assert.True(t, errors.Is(err, context.DeadlineExceeded))
 	})
 }
+
+func TestRunPluginInit_FlagNameValidatedInInteractiveMode(t *testing.T) {
+	opts := &PluginInitOptions{
+		Name:                "Foo", // uppercase: violates the lowercase-only rule
+		NoInput:             false, // interactive mode
+		NoAvailabilityCheck: true,  // skip hub call for this test
+	}
+	err := runPluginInit(context.Background(), opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "lowercase")
+	var flagErr *cmd.FlagError
+	assert.True(t, errors.As(err, &flagErr),
+		"flag-supplied name validation error should be a *cmd.FlagError so cobra prints usage")
+}

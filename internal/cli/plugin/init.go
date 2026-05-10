@@ -283,6 +283,9 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 
 	// Plugin name (required)
 	if opts.Name != "" {
+		if err := validatePluginName(opts.Name); err != nil {
+			return cmd.FlagErrorf("invalid plugin name: %s", err.Error())
+		}
 		config.Name = opts.Name
 	} else {
 		name, err := p.PromptString("Plugin name")
