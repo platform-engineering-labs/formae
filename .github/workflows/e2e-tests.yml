@@ -78,45 +78,58 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each matrix entry installs plugins via one or both of:
+        #   system_plugins: orbital install (`formae plugin install`) — lands
+        #                   in the binary's SystemPluginDir.
+        #   user_plugins:   make install from the plugin repo — lands in
+        #                   ~/.pel/formae/plugins (cfg.PluginDir).
+        # The agent's multi-source discovery finds plugins from both dirs.
         include:
           - test: TestReconcileApply
-            plugins: aws azure
+            system_plugins: aws azure
           - test: TestPatchApply
-            plugins: aws azure
+            system_plugins: aws azure
           - test: TestDiscovery
-            plugins: aws azure
+            system_plugins: aws azure
           - test: TestSoftReconcile
-            plugins: aws azure
+            system_plugins: aws azure
           - test: TestHardReconcile
-            plugins: aws azure
+            system_plugins: aws azure
           - test: TestReplace
-            plugins: aws azure
+            system_plugins: aws azure
           - test: TestAutoReconcile
-            plugins: aws
+            system_plugins: aws
           - test: TestTTL
-            plugins: aws
+            system_plugins: aws
           - test: TestCancelCommand
-            plugins: aws
+            system_plugins: aws
           - test: TestCascadeDelete
-            plugins: aws
+            system_plugins: aws
           - test: TestTargetResolvable
-            plugins: compose grafana
+            system_plugins: compose grafana
           - test: TestProjectInit
-            plugins: aws azure
+            system_plugins: aws azure
           - test: TestSimulateApply
-            plugins: aws
+            system_plugins: aws
           - test: TestExtractAndReapply
-            plugins: aws
+            system_plugins: aws
           - test: TestEvalDefault
-            plugins: aws
+            system_plugins: aws
           - test: TestEvalSchemaLocationLocal
-            plugins: aws
+            system_plugins: aws
           - test: TestExtractSchemaLocationLocal
-            plugins: aws
+            system_plugins: aws
+          # User-install variant: aws is `make install`'d from its repo
+          # (not in orbital's tree) so the merge code path in
+          # listPluginsHandler is the only thing that can surface its
+          # LocalPath for --schema-location local. Catches regressions in
+          # the orbital-vs-registered union.
+          - test: TestExtractSchemaLocationLocal
+            user_plugins: aws
           - test: TestAuthBasic
-            plugins: auth-basic
+            system_plugins: auth-basic
           - test: TestPluginConfig
-            plugins: sftp
+            system_plugins: sftp
 
     steps:
       - uses: actions/checkout@v4
@@ -170,7 +183,8 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Install plugins via orbital
+      - name: Install system plugins via orbital
+        if: ${{ matrix.system_plugins }}
         run: |
           set -euo pipefail
 
@@ -229,22 +243,44 @@ jobs:
           # Install only the plugins this test needs. The agent refreshes
           # orbital's repository cache at startup, so the install candidate
           # solver has fresh metadata to work with.
-          dist/e2e/bin/formae plugin install ${{ matrix.plugins }} --channel stable
+          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} --channel stable
 
           # Stop the bootstrap agent so the test harness can spawn its own.
           kill -TERM "$AGENT_PID" || true
           wait "$AGENT_PID" 2>/dev/null || true
           rm -f /tmp/bootstrap.pid /tmp/bootstrap.db /tmp/bootstrap.conf.pkl
 
+      - name: Install user plugins via make install
+        if: ${{ matrix.user_plugins }}
+        run: |
+          set -euo pipefail
+
+          # Mirror the dev workflow: clone the plugin repo, run `make install`.
+          # Lands in ~/.pel/formae/plugins/<name>/v<version>/, which is
+          # cfg.PluginDir's default — the test agent's multi-source discovery
+          # finds it without any config override. Crucially, orbital has no
+          # record of these plugins, so the agent surfaces them only via the
+          # PluginCoordinator-registered merge path in listPluginsHandler.
+          for plugin in ${{ matrix.user_plugins }}; do
+            git clone --depth=1 \
+              "https://github.com/platform-engineering-labs/formae-plugin-${plugin}.git" \
+              "/tmp/formae-plugin-${plugin}"
+            (cd "/tmp/formae-plugin-${plugin}" && make install)
+          done
+
       - name: Running ${{ matrix.test }}
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          # Point setup_pkl.sh at the orbital-installed plugins. The agent's
-          # own multi-source discovery already finds them via the binary's
-          # SystemPluginDir, but setup_pkl.sh is a shell script that needs
-          # an explicit dir to read PklProject manifests from.
-          FORMAE_PLUGIN_DIR: ${{ github.workspace }}/dist/e2e/formae/plugins
+          # Point setup_pkl.sh at whichever tree has plugins. system_plugins
+          # land in dist/e2e/formae/plugins (orbital's SystemPluginDir);
+          # user_plugins land in /home/runner/.pel/formae/plugins (make
+          # install default on ubuntu-latest). Hardcoded paths because
+          # GHA expressions can't read $HOME, and the empty-string
+          # alternative is falsy in `&& ''`/`|| ...` chains.
+          FORMAE_PLUGIN_DIR: >-
+            ${{ matrix.user_plugins && '/home/runner/.pel/formae/plugins'
+                || format('{0}/dist/e2e/formae/plugins', github.workspace) }}
         run: >-
           make test-e2e
           E2E_RUN_FLAGS="-run ${{ matrix.test }}"

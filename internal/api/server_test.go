@@ -19,6 +19,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -65,15 +66,15 @@ type WrappedCheckTTLResponse struct {
 }
 
 type FakeMetastructure struct {
-	applyResponses      []WrappedCommandResponse
-	destroyResponses    []WrappedCommandResponse
-	extractResponses    []WrappedExtractResponse
-	targetResponses     []WrappedTargetResponse
-	listResponses       []WrappedListResponse
-	cancelResponses     []WrappedCancelResponse
-	driftResponses      []WrappedDriftResponse
-	reconcileResponses  []WrappedReconcileResponse
-	checkTTLResponses   []WrappedCheckTTLResponse
+	applyResponses     []WrappedCommandResponse
+	destroyResponses   []WrappedCommandResponse
+	extractResponses   []WrappedExtractResponse
+	targetResponses    []WrappedTargetResponse
+	listResponses      []WrappedListResponse
+	cancelResponses    []WrappedCancelResponse
+	driftResponses     []WrappedDriftResponse
+	reconcileResponses []WrappedReconcileResponse
+	checkTTLResponses  []WrappedCheckTTLResponse
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
@@ -172,6 +173,10 @@ func (m *FakeMetastructure) Stats() (*apimodel.Stats, error) {
 		Version: "1.0.0",
 		AgentID: "test-agent",
 	}, nil
+}
+
+func (m *FakeMetastructure) RegisteredPlugins() ([]messages.RegisteredPluginInfo, error) {
+	return nil, nil
 }
 
 func TestServer_ApplyFormaSuccessResponse(t *testing.T) {

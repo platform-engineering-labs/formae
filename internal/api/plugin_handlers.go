@@ -6,9 +6,11 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
@@ -34,7 +36,17 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 	var plugins []plugin_manager.Plugin
 	switch scope {
 	case "installed":
-		plugins, err = pm.List()
+		localPaths := pm.DiscoverLocalPaths()
+		plugins, err = pm.ListWithLocalPaths(localPaths)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		registered, regErr := s.metastructure.RegisteredPlugins()
+		if regErr != nil {
+			c.Logger().Warnf("plugin registry lookup failed: %v", regErr)
+			registered = nil
+		}
+		plugins = mergeRegisteredPlugins(plugins, registered, localPaths)
 	case "available":
 		plugins, err = pm.Available(plugin_manager.AvailableFilter{
 			Query:    c.QueryParam("q"),
@@ -42,11 +54,11 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 			Type:     c.QueryParam("type"),
 			Channel:  c.QueryParam("channel"),
 		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid scope: must be 'installed' or 'available'")
-	}
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
 	return c.JSON(http.StatusOK, apimodel.ListPluginsResponse{
@@ -207,4 +219,33 @@ func toManagerPackageRefs(refs []apimodel.PackageRef) []plugin_manager.PackageRe
 		result = append(result, plugin_manager.PackageRef{Name: r.Name, Version: r.Version})
 	}
 	return result
+}
+
+// mergeRegisteredPlugins appends synthetic Plugin entries for any
+// registered plugin not already represented in the orbital list — the
+// `make install` case. Dedupe is by plugin name (multiple plugins may
+// share a namespace).
+func mergeRegisteredPlugins(orbital []plugin_manager.Plugin, registered []messages.RegisteredPluginInfo, paths map[string]string) []plugin_manager.Plugin {
+	seen := make(map[string]bool, len(orbital))
+	for _, p := range orbital {
+		if name := strings.ToLower(p.Name); name != "" {
+			seen[name] = true
+		}
+	}
+	for _, r := range registered {
+		name := strings.ToLower(r.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		orbital = append(orbital, plugin_manager.Plugin{
+			Name:             r.Name,
+			Kind:             "plugin",
+			Type:             "resource",
+			Namespace:        r.Namespace,
+			InstalledVersion: r.Version,
+			LocalPath:        paths[name],
+		})
+	}
+	return orbital
 }

@@ -63,6 +63,7 @@ type MetastructureAPI interface {
 	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
+	RegisteredPlugins() ([]messages.RegisteredPluginInfo, error)
 }
 
 type Metastructure struct {
@@ -1918,31 +1919,47 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	), nil
 }
 
+// RegisteredPlugins returns plugins currently registered with the
+// PluginCoordinator. Used by Stats() and by the plugins API handler to
+// surface plugins the agent has loaded but orbital has no record of
+// (the `make install` from a plugin repo case).
+func (m *Metastructure) RegisteredPlugins() ([]messages.RegisteredPluginInfo, error) {
+	result, err := m.callActor(gen.ProcessID{Name: actornames.PluginCoordinator, Node: m.Node.Name()}, messages.GetRegisteredPlugins{})
+	if err != nil {
+		return nil, err
+	}
+	r, ok := result.(messages.GetRegisteredPluginsResult)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type %T from PluginCoordinator", result)
+	}
+	return r.Plugins, nil
+}
+
 func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 	stats, err := m.Datastore.Stats()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stats from datastore: %w", err)
 	}
 
-	// Get registered plugins from PluginCoordinator
-	var plugins []apimodel.PluginInfo
-	result, err := m.callActor(gen.ProcessID{Name: actornames.PluginCoordinator, Node: m.Node.Name()}, messages.GetRegisteredPlugins{})
-	if err == nil {
-		if pluginsResult, ok := result.(messages.GetRegisteredPluginsResult); ok {
-			for _, p := range pluginsResult.Plugins {
-				plugins = append(plugins, apimodel.PluginInfo{
-					Namespace:               p.Namespace,
-					Version:                 p.Version,
-					NodeName:                p.NodeName,
-					MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
-					ResourceCount:           p.ResourceCount,
-					ResourceTypesToDiscover: p.ResourceTypesToDiscover,
-					RetryConfig:             p.RetryConfig,
-					LabelConfig:             &p.LabelConfig,
-					DiscoveryFilters:        p.DiscoveryFilters,
-				})
-			}
-		}
+	registered, regErr := m.RegisteredPlugins()
+	if regErr != nil {
+		// A registry hiccup shouldn't take down /stats; the rest of the
+		// payload is still useful. Log and continue with no plugins.
+		slog.Warn("plugin registry lookup failed; stats response will omit plugins", "error", regErr)
+	}
+	plugins := make([]apimodel.PluginInfo, 0, len(registered))
+	for _, p := range registered {
+		plugins = append(plugins, apimodel.PluginInfo{
+			Namespace:               p.Namespace,
+			Version:                 p.Version,
+			NodeName:                p.NodeName,
+			MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
+			ResourceCount:           p.ResourceCount,
+			ResourceTypesToDiscover: p.ResourceTypesToDiscover,
+			RetryConfig:             p.RetryConfig,
+			LabelConfig:             &p.LabelConfig,
+			DiscoveryFilters:        p.DiscoveryFilters,
+		})
 	}
 
 	return &apimodel.Stats{

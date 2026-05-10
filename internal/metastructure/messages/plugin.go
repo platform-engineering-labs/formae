@@ -70,6 +70,7 @@ type GetRegisteredPlugins struct{}
 // RegisteredPluginInfo contains basic information about a registered plugin
 // including the merged config (plugin defaults + user overrides).
 type RegisteredPluginInfo struct {
+	Name                    string
 	Namespace               string
 	Version                 string
 	NodeName                string

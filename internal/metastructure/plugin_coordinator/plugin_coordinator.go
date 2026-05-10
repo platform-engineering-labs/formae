@@ -36,6 +36,7 @@ type PluginCoordinator struct {
 
 // RegisteredPlugin contains information about a registered plugin
 type RegisteredPlugin struct {
+	Name                 string
 	Namespace            string
 	Version              string
 	NodeName             gen.Atom // Ergo node where plugin runs (for remote spawn)
@@ -204,6 +205,7 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 		c.Log().Debug("Received capabilities for namespace %s: %d resources, %d schemas", msg.Namespace, len(caps.SupportedResources), len(caps.ResourceSchemas))
 
 		announced := RegisteredPlugin{
+			Name:                 msg.Name,
 			Namespace:            msg.Namespace,
 			Version:              msg.Version,
 			NodeName:             from.Node,
@@ -419,6 +421,7 @@ func (c *PluginCoordinator) getRegisteredPlugins() messages.GetRegisteredPlugins
 
 	for _, registered := range c.plugins {
 		plugins = append(plugins, messages.RegisteredPluginInfo{
+			Name:                    registered.Name,
 			Namespace:               registered.Namespace,
 			Version:                 registered.Version,
 			NodeName:                string(registered.NodeName),
