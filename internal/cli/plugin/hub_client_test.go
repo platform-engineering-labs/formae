@@ -72,3 +72,60 @@ func TestHubClient_NameMismatch_HardFail(t *testing.T) {
 	assert.Contains(t, err.Error(), "foo")
 	assert.Contains(t, err.Error(), "otherplugin")
 }
+
+func TestHubClient_500_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "500")
+}
+
+func TestHubClient_429_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable))
+}
+
+func TestHubClient_408_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestTimeout)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable))
+}
+
+func TestHubClient_ReadTimeout_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 50*time.Millisecond)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable))
+}
