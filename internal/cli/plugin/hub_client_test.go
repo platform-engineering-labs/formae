@@ -240,3 +240,44 @@ func TestHubClient_TLSHostnameMismatch_HardFail(t *testing.T) {
 	assert.False(t, errors.As(err, &unreachable), "TLS validation failure must NOT be HubUnreachableError")
 	assert.Contains(t, err.Error(), "TLS validation failed")
 }
+
+func TestValidateHubURL(t *testing.T) {
+	t.Run("empty rejected", func(t *testing.T) {
+		_, err := validateHubURL("")
+		assert.Error(t, err)
+	})
+
+	t.Run("whitespace-only rejected", func(t *testing.T) {
+		_, err := validateHubURL("   ")
+		assert.Error(t, err)
+	})
+
+	t.Run("parse error rejected", func(t *testing.T) {
+		_, err := validateHubURL("not a url://")
+		assert.Error(t, err)
+	})
+
+	t.Run("unsupported scheme rejected", func(t *testing.T) {
+		_, err := validateHubURL("ftp://hub.example.com")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "scheme")
+	})
+
+	t.Run("credentials rejected", func(t *testing.T) {
+		_, err := validateHubURL("https://user:pass@hub.example.com")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "credentials")
+	})
+
+	t.Run("trailing slash trimmed", func(t *testing.T) {
+		got, err := validateHubURL("https://hub.example.com/")
+		require.NoError(t, err)
+		assert.Equal(t, "https://hub.example.com", got)
+	})
+
+	t.Run("valid URL passes through", func(t *testing.T) {
+		got, err := validateHubURL("https://hub.platform.engineering")
+		require.NoError(t, err)
+		assert.Equal(t, "https://hub.platform.engineering", got)
+	})
+}
