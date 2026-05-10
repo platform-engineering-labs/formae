@@ -7,12 +7,16 @@
 package plugin
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 )
 
 func TestValidatePluginInitOptions(t *testing.T) {
@@ -265,4 +269,47 @@ open module example.Config
 	if !strings.Contains(result, `type = "sftp"`) {
 		t.Errorf("expected type = sftp")
 	}
+}
+
+func TestResolveHubURL(t *testing.T) {
+	t.Run("flag set with valid URL wins", func(t *testing.T) {
+		t.Setenv("FORMAE_HUB_URL", "https://env.example.com")
+		opts := &PluginInitOptions{Hub: "https://flag.example.com"}
+		got, err := resolveHubURL(opts)
+		require.NoError(t, err)
+		assert.Equal(t, "https://flag.example.com", got)
+	})
+
+	t.Run("flag empty falls back to env", func(t *testing.T) {
+		t.Setenv("FORMAE_HUB_URL", "https://env.example.com")
+		opts := &PluginInitOptions{}
+		got, err := resolveHubURL(opts)
+		require.NoError(t, err)
+		assert.Equal(t, "https://env.example.com", got)
+	})
+
+	t.Run("flag and env empty falls back to default", func(t *testing.T) {
+		t.Setenv("FORMAE_HUB_URL", "")
+		opts := &PluginInitOptions{}
+		got, err := resolveHubURL(opts)
+		require.NoError(t, err)
+		assert.Equal(t, DefaultHubURL, got)
+	})
+
+	t.Run("flag with bad scheme returns FlagError", func(t *testing.T) {
+		opts := &PluginInitOptions{Hub: "ftp://hub.example.com"}
+		_, err := resolveHubURL(opts)
+		require.Error(t, err)
+		var flagErr *cmd.FlagError
+		assert.True(t, errors.As(err, &flagErr))
+	})
+
+	t.Run("env with bad scheme returns FlagError", func(t *testing.T) {
+		t.Setenv("FORMAE_HUB_URL", "ftp://hub.example.com")
+		opts := &PluginInitOptions{}
+		_, err := resolveHubURL(opts)
+		require.Error(t, err)
+		var flagErr *cmd.FlagError
+		assert.True(t, errors.As(err, &flagErr))
+	})
 }

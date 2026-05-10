@@ -7,6 +7,7 @@ package plugin
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,6 +45,22 @@ type PluginInitOptions struct {
 	License     string
 	OutputDir   string
 	NoInput     bool
+
+	// Hub availability check
+	Hub                 string
+	NoAvailabilityCheck bool
+	AllowConflict       bool
+
+	// Test seams — nil in production paths
+	HubClient          HubClient
+	TemplateDownloader TemplateDownloader
+}
+
+// TemplateDownloader is a placeholder; the full definition with
+// httpTemplateDownloader lands in Task 9 of the plan. Defined here
+// only so PluginInitOptions can carry the test seam.
+type TemplateDownloader interface {
+	Download(ctx context.Context, outputDir string) error
 }
 
 // validatePluginInitOptions validates the options and applies defaults.
@@ -373,6 +390,21 @@ func validateOutputDir(dir string) error {
 	}
 
 	return nil
+}
+
+func resolveHubURL(opts *PluginInitOptions) (string, error) {
+	candidate := opts.Hub
+	if candidate == "" {
+		candidate = os.Getenv("FORMAE_HUB_URL")
+	}
+	if candidate == "" {
+		candidate = DefaultHubURL
+	}
+	normalized, err := validateHubURL(candidate)
+	if err != nil {
+		return "", cmd.FlagErrorf("invalid hub URL: %s", err)
+	}
+	return normalized, nil
 }
 
 // expandTilde expands ~ to the user's home directory
