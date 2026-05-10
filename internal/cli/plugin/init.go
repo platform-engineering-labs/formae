@@ -57,11 +57,87 @@ type PluginInitOptions struct {
 	TemplateDownloader TemplateDownloader
 }
 
-// TemplateDownloader is a placeholder; the full definition with
-// httpTemplateDownloader lands in Task 9 of the plan. Defined here
-// only so PluginInitOptions can carry the test seam.
+// TemplateDownloader fetches the plugin template tarball and extracts
+// it into outputDir. Production uses httpTemplateDownloader; tests
+// inject a spy via PluginInitOptions.TemplateDownloader.
 type TemplateDownloader interface {
 	Download(ctx context.Context, outputDir string) error
+}
+
+type httpTemplateDownloader struct{}
+
+func (httpTemplateDownloader) Download(ctx context.Context, outputDir string) error {
+	branch := DefaultBranch
+	url := getTemplateTarballURL(branch)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build template request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download template: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download template: HTTP %d", resp.StatusCode)
+	}
+
+	gzr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer func() { _ = gzr.Close() }()
+
+	tr := tar.NewReader(gzr)
+
+	rootPrefix := fmt.Sprintf("%s-%s/", TemplateRepoName, branch)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar entry: %w", err)
+		}
+
+		if !strings.HasPrefix(header.Name, rootPrefix) {
+			continue
+		}
+
+		relPath := strings.TrimPrefix(header.Name, rootPrefix)
+		if relPath == "" {
+			continue
+		}
+
+		targetPath := filepath.Join(outputDir, relPath)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", targetPath, err)
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return fmt.Errorf("failed to create parent directory for %s: %w", targetPath, err)
+			}
+			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				_ = outFile.Close()
+				return fmt.Errorf("failed to write file %s: %w", targetPath, err)
+			}
+			if err := outFile.Close(); err != nil {
+				return fmt.Errorf("failed to close file %s: %w", targetPath, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // validatePluginInitOptions validates the options and applies defaults.
@@ -318,7 +394,7 @@ func runPluginInit(opts *PluginInitOptions) error {
 
 	// Download and extract the template
 	fmt.Printf("%s\n", display.Grey("Downloading template from GitHub..."))
-	if err := downloadAndExtractTemplate(config.OutputDir); err != nil {
+	if err := (httpTemplateDownloader{}).Download(context.Background(), config.OutputDir); err != nil {
 		return fmt.Errorf("failed to download template: %w", err)
 	}
 
@@ -458,86 +534,6 @@ func expandTilde(path string) string {
 	return path
 }
 
-func downloadAndExtractTemplate(outputDir string) error {
-	branch := DefaultBranch
-	url := getTemplateTarballURL(branch)
-
-	// Download the tarball
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to download template: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download template: HTTP %d", resp.StatusCode)
-	}
-
-	// Create a gzip reader
-	gzr, err := gzip.NewReader(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer func() { _ = gzr.Close() }()
-
-	// Create a tar reader
-	tr := tar.NewReader(gzr)
-
-	// GitHub tarballs have a root directory named "{repo}-{branch}/"
-	// We need to strip this prefix when extracting
-	rootPrefix := fmt.Sprintf("%s-%s/", TemplateRepoName, branch)
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to read tar entry: %w", err)
-		}
-
-		// Skip entries that don't start with the expected prefix
-		if !strings.HasPrefix(header.Name, rootPrefix) {
-			continue
-		}
-
-		// Strip the root directory prefix
-		relPath := strings.TrimPrefix(header.Name, rootPrefix)
-		if relPath == "" {
-			continue
-		}
-
-		targetPath := filepath.Join(outputDir, relPath)
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("failed to create directory %s: %w", targetPath, err)
-			}
-		case tar.TypeReg:
-			// Ensure parent directory exists
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				return fmt.Errorf("failed to create parent directory for %s: %w", targetPath, err)
-			}
-
-			// Create the file
-			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
-			if err != nil {
-				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
-			}
-
-			if _, err := io.Copy(outFile, tr); err != nil {
-				_ = outFile.Close()
-				return fmt.Errorf("failed to write file %s: %w", targetPath, err)
-			}
-			if err := outFile.Close(); err != nil {
-				return fmt.Errorf("failed to close file %s: %w", targetPath, err)
-			}
-		}
-	}
-
-	return nil
-}
 
 func transformTemplateFiles(config *PluginConfig) error {
 	// Walk the output directory and transform files
