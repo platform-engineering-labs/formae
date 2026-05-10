@@ -12,57 +12,41 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
-	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 func PluginUninstallCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:     "uninstall <name>...",
 		Aliases: []string{"remove"},
-		Short:   "Uninstall plugins from the agent (and locally for auth plugins)",
-		Args:    cobra.MinimumNArgs(1),
+		Short:   "Uninstall plugins from this host",
+		Long: `Remove plugins from this host's local orbital tree.
+
+formae plugin uninstall runs orbital locally — it does not call the
+agent. Run it on the host where the plugin is installed; for auth
+plugins, run it on every host where the plugin lives.`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cc *cobra.Command, args []string) error {
 			app, err := cmd.AppFromContext(cc.Context(), "", "", cc)
 			if err != nil {
 				return err
 			}
 
-			refs := make([]apimodel.PackageRef, 0, len(args))
-			for _, name := range args {
-				refs = append(refs, apimodel.PackageRef{Name: name})
-			}
-
-			resp, err := app.UninstallPlugins(apimodel.UninstallPluginsRequest{Packages: refs})
+			mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
 			if err != nil {
 				return err
 			}
-
-			// Build the CLI-local manager before printing the agent results
-			// to avoid duplicated output if orbital re-execs us under sudo.
-			// See install.go for the full explanation.
-			authNames := filterAuthOps(resp.Operations)
-			var localMgr *CLIPluginManager
-			if len(authNames) > 0 {
-				localMgr, _ = NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories)
+			if mgr == nil {
+				return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
 			}
 
-			for _, op := range resp.Operations {
-				fmt.Printf("  %s Removed %s from agent\n", display.Green("✓"), op.Name)
+			if err := mgr.LocalUninstall(args); err != nil {
+				return err
 			}
 
-			if localMgr != nil {
-				if localErr := localMgr.LocalUninstall(authNames); localErr != nil {
-					fmt.Printf("  %s CLI-side uninstall failed: %s\n", display.Gold("!"), localErr.Error())
-				} else {
-					for _, name := range authNames {
-						fmt.Printf("  %s Removed %s from cli\n", display.Green("✓"), name)
-					}
-				}
+			for _, name := range args {
+				fmt.Printf("  %s Removed %s\n", display.Green("✓"), name)
 			}
-
-			if resp.RequiresRestart {
-				fmt.Printf("\n  %s Restart the agent to unload the plugins: formae agent restart\n", display.Gold("!"))
-			}
+			fmt.Printf("\n  %s If this host runs the formae agent, restart it to unload the plugins: formae agent restart\n", display.Gold("!"))
 			return nil
 		},
 		SilenceErrors: true,

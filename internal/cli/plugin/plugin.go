@@ -6,10 +6,15 @@ package plugin
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/opsmgr"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 func PluginCmd() *cobra.Command {
@@ -46,22 +51,77 @@ func PluginListCmd() *cobra.Command {
 				return err
 			}
 
-			client, err := app.NewClient()
-			if err != nil {
-				return err
+			// Two best-effort sources of truth for what's installed on
+			// this host: the agent (free, no sudo) and a local read of
+			// the orbital tree. On a single-host deployment they're
+			// reading the same store and agree by definition; on a CLI
+			// box the agent may be unreachable; on a split deployment
+			// the auth-plugin set may diverge across hosts. The renderer
+			// only annotates rows when the two arms disagree — matching
+			// rows render plain so the typical single-host case isn't
+			// noisy.
+			agentPlugins, agentNote := fetchAgentPlugins(app)
+			localPlugins, localNote := fetchLocalPlugins(app)
+
+			agentReached := agentNote == ""
+			localScanned := localNote == ""
+
+			if !agentReached && !localScanned {
+				return fmt.Errorf("couldn't list installed plugins:\n  - agent: %s\n  - local: %s", agentNote, localNote)
 			}
 
-			resp, err := client.ListPlugins("installed", "", "", "", "")
-			if err != nil {
-				return err
+			fmt.Print(renderPluginList(agentPlugins, localPlugins, agentReached, localScanned))
+			if agentReached && !localScanned {
+				fmt.Printf("\n  %s Local view skipped: %s\n", display.Grey("ℹ"), localNote)
 			}
-
-			fmt.Print(renderPluginList(resp.Plugins))
+			if !agentReached && localScanned {
+				fmt.Printf("\n  %s Agent unreachable; showing local view only: %s\n", display.Grey("ℹ"), agentNote)
+			}
 			return nil
 		},
 		SilenceErrors: true,
 	}
 	return command
+}
+
+// fetchAgentPlugins returns (plugins, "") on success, or (nil, reason)
+// when the agent is unreachable or the API call failed. Agent-side
+// listing is read-only and works without sudo, so it's the cheap
+// path; the local arm is a fallback for hosts where no agent is
+// reachable.
+func fetchAgentPlugins(app *app.App) ([]apimodel.Plugin, string) {
+	client, cerr := app.NewClient()
+	if cerr != nil {
+		return nil, cerr.Error()
+	}
+	resp, lerr := client.ListPlugins("installed", "", "", "", "")
+	if lerr != nil {
+		return nil, lerr.Error()
+	}
+	return resp.Plugins, ""
+}
+
+// fetchLocalPlugins reads the local orbital tree directly. Skipped
+// when the tree is root-owned and we're not — orbital would re-exec
+// under sudo just to read, and `list` shouldn't force a privilege
+// prompt. Returns ("re-run under sudo …") in that case so the caller
+// can surface a clear hint.
+func fetchLocalPlugins(app *app.App) ([]apimodel.Plugin, string) {
+	if opsmgr.TreeRequiresElevation() {
+		return nil, "tree is root-owned, re-run under sudo to read /opt/pel"
+	}
+	mgr, merr := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
+	if merr != nil {
+		return nil, merr.Error()
+	}
+	if mgr == nil {
+		return nil, "no artifact repositories configured"
+	}
+	plugins, lerr := mgr.ListInstalled()
+	if lerr != nil {
+		return nil, lerr.Error()
+	}
+	return plugins, ""
 }
 
 func PluginSearchCmd() *cobra.Command {

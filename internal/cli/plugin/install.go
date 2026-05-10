@@ -13,35 +13,32 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
-	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
-// parsePackageRefs parses "name" or "name@version" strings into PackageRefs.
-func parsePackageRefs(args []string) []apimodel.PackageRef {
-	refs := make([]apimodel.PackageRef, 0, len(args))
-	for _, arg := range args {
-		name, version, _ := strings.Cut(arg, "@")
-		refs = append(refs, apimodel.PackageRef{Name: name, Version: version})
+// pluginNamesFromArgs returns the bare plugin names from "name@version"
+// args. Orbital install accepts the @version form on the wire too, so
+// this is mainly for echoing the requested set back to the user.
+func pluginNamesFromArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		name, _, _ := strings.Cut(a, "@")
+		out = append(out, name)
 	}
-	return refs
-}
-
-// filterAuthOps returns the names of auth-type plugin operations.
-func filterAuthOps(ops []apimodel.PluginOperation) []string {
-	var names []string
-	for _, op := range ops {
-		if op.Type == "auth" {
-			names = append(names, op.Name)
-		}
-	}
-	return names
+	return out
 }
 
 func PluginInstallCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "install <name>[@<version>]...",
-		Short: "Install plugins on the agent (and locally for auth plugins)",
-		Args:  cobra.MinimumNArgs(1),
+		Short: "Install plugins on this host",
+		Long: `Install plugins on this host's local orbital tree.
+
+formae plugin install runs orbital locally — it does not call the agent.
+Resource plugins must be installed on the host that runs the agent (run
+this command there, typically under sudo). Auth plugins run on both
+sides of the CLI⇄agent exchange, so install them on every host that
+runs either.`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cc *cobra.Command, args []string) error {
 			channel, _ := cc.Flags().GetString("channel")
 			app, err := cmd.AppFromContext(cc.Context(), "", "", cc)
@@ -49,54 +46,26 @@ func PluginInstallCmd() *cobra.Command {
 				return err
 			}
 
-			req := apimodel.InstallPluginsRequest{
-				Packages: parsePackageRefs(args),
-				Channel:  channel,
-			}
-			resp, err := app.InstallPlugins(req)
+			mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, channel)
 			if err != nil {
 				return err
 			}
-
-			// Build the CLI-local manager BEFORE printing the agent install
-			// results. Constructing the local orbital manager can trigger
-			// sudo elevation when the binary lives at a privileged path
-			// (orbital.tree.New → InvokeSelfWithSudo → syscall.Exec). The
-			// re-execed process restarts from main and re-runs this whole
-			// command — printing the agent results before the elevation
-			// would produce duplicated lines. By deferring the prints
-			// until after the elevation has happened, the original process
-			// exits silently via syscall.Exec and only the privileged
-			// re-exec emits user-facing output.
-			authNames := filterAuthOps(resp.Operations)
-			var localMgr *CLIPluginManager
-			if len(authNames) > 0 {
-				localMgr, err = NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories)
-				if err != nil {
-					fmt.Printf("  %s CLI-side install failed: %s\n", display.Gold("!"), err.Error())
-					fmt.Printf("  Retry with: formae plugin install %s\n", strings.Join(authNames, " "))
-					return err
-				}
+			if mgr == nil {
+				return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
 			}
 
-			for _, op := range resp.Operations {
-				fmt.Printf("  %s Installed %s %s on agent\n", display.Green("✓"), op.Name, op.Version)
+			// orbital may re-exec under sudo when the tree path is
+			// privileged. The re-exec restarts main and re-runs this
+			// command, so we keep all user-visible output below the
+			// install call to avoid duplicated lines.
+			if err := mgr.LocalInstall(args); err != nil {
+				return err
 			}
 
-			if localMgr != nil {
-				if localErr := localMgr.LocalInstall(authNames); localErr != nil {
-					fmt.Printf("  %s CLI-side install failed: %s\n", display.Gold("!"), localErr.Error())
-					fmt.Printf("  Agent has the plugins. Retry with: formae plugin install %s\n", strings.Join(authNames, " "))
-					return localErr
-				}
-				for _, name := range authNames {
-					fmt.Printf("  %s Installed %s on cli\n", display.Green("✓"), name)
-				}
+			for _, name := range pluginNamesFromArgs(args) {
+				fmt.Printf("  %s Installed %s\n", display.Green("✓"), name)
 			}
-
-			if resp.RequiresRestart {
-				fmt.Printf("\n  %s Restart the agent to load the new plugins: formae agent restart\n", display.Gold("!"))
-			}
+			fmt.Printf("\n  %s If this host runs the formae agent, restart it to load the new plugins: formae agent restart\n", display.Gold("!"))
 			return nil
 		},
 		SilenceErrors: true,
