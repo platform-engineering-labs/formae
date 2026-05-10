@@ -205,6 +205,11 @@ func getTemplateTarballURL(version string) string {
 	)
 }
 
+// runPluginInitFn is the entrypoint cobra calls. Tests swap it to
+// capture the constructed PluginInitOptions, then restore it via a
+// t.Cleanup.
+var runPluginInitFn = runPluginInit
+
 func PluginInitCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "init",
@@ -228,12 +233,15 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 			opts.License, _ = c.Flags().GetString("license")
 			opts.OutputDir, _ = c.Flags().GetString("output-dir")
 			opts.NoInput, _ = c.Flags().GetBool("no-input")
+			opts.Hub, _ = c.Flags().GetString("hub")
+			opts.NoAvailabilityCheck, _ = c.Flags().GetBool("no-availability-check")
+			opts.AllowConflict, _ = c.Flags().GetBool("allow-conflict")
 
 			if err := validatePluginInitOptions(opts); err != nil {
 				return err
 			}
 
-			return runPluginInit(opts)
+			return runPluginInitFn(c.Context(), opts)
 		},
 		SilenceErrors: true,
 	}
@@ -246,11 +254,17 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 	command.Flags().String("license", "", "SPDX license identifier (default: Apache-2.0)")
 	command.Flags().String("output-dir", "", "Target directory (default: ./<name>)")
 	command.Flags().Bool("no-input", false, "Disable interactive prompts; error if required flags are missing")
+	command.Flags().String("hub", "",
+		fmt.Sprintf("Hub base URL (default: $FORMAE_HUB_URL or %s)", DefaultHubURL))
+	command.Flags().Bool("no-availability-check", false,
+		"Skip the hub availability check (use for offline scaffolding or tests)")
+	command.Flags().Bool("allow-conflict", false,
+		"Scaffold even if the hub reports the plugin name is already registered")
 
 	return command
 }
 
-func runPluginInit(opts *PluginInitOptions) error {
+func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 	p := prompter.NewBasicPrompter()
 
 	// In non-interactive mode, all values are already set and validated
@@ -279,6 +293,21 @@ func runPluginInit(opts *PluginInitOptions) error {
 			return err
 		}
 		config.Name = name
+	}
+
+	// Hub availability check (runs immediately after name is resolved, before further prompts)
+	if !opts.NoAvailabilityCheck {
+		hubURL, err := resolveHubURL(opts)
+		if err != nil {
+			return err
+		}
+		client := opts.HubClient
+		if client == nil {
+			client = NewHubClient(hubURL)
+		}
+		if err := runAvailabilityCheck(ctx, client, config.Name, opts.AllowConflict); err != nil {
+			return err
+		}
 	}
 
 	// Namespace (required)
@@ -394,7 +423,11 @@ func runPluginInit(opts *PluginInitOptions) error {
 
 	// Download and extract the template
 	fmt.Printf("%s\n", display.Grey("Downloading template from GitHub..."))
-	if err := (httpTemplateDownloader{}).Download(context.Background(), config.OutputDir); err != nil {
+	downloader := opts.TemplateDownloader
+	if downloader == nil {
+		downloader = httpTemplateDownloader{}
+	}
+	if err := downloader.Download(ctx, config.OutputDir); err != nil {
 		return fmt.Errorf("failed to download template: %w", err)
 	}
 
