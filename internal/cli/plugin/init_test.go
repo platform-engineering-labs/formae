@@ -209,6 +209,34 @@ func TestValidateOutputDir(t *testing.T) {
 	})
 }
 
+func TestValidatePluginName_HubRegex(t *testing.T) {
+	t.Run("lowercase + hyphen + digits accepted", func(t *testing.T) {
+		assert.NoError(t, validatePluginName("my-plugin-2"))
+	})
+
+	t.Run("uppercase first letter rejected", func(t *testing.T) {
+		err := validatePluginName("Foo")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "lowercase")
+	})
+
+	t.Run("internal uppercase rejected", func(t *testing.T) {
+		err := validatePluginName("myPlugin")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "lowercase")
+	})
+
+	t.Run("all caps rejected", func(t *testing.T) {
+		err := validatePluginName("FOO")
+		assert.Error(t, err)
+	})
+
+	t.Run("underscore still rejected (regression)", func(t *testing.T) {
+		err := validatePluginName("invalid_name")
+		assert.Error(t, err)
+	})
+}
+
 func TestTransformContent_ConfigPKL(t *testing.T) {
 	config := &PluginConfig{
 		Name:      "sftp",

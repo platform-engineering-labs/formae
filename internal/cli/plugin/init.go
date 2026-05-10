@@ -327,10 +327,10 @@ func runPluginInit(opts *PluginInitOptions) error {
 }
 
 func validatePluginName(name string) error {
-	// Must start with letter, contain only letters/numbers/hyphens (no spaces)
-	pattern := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9-]*$`)
+	// Must start with lowercase letter, contain only lowercase letters/digits/hyphens (hub manifest rule)
+	pattern := regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 	if !pattern.MatchString(name) {
-		return fmt.Errorf("plugin name must start with a letter and contain only letters, numbers, and hyphens (no spaces)")
+		return fmt.Errorf("plugin name must start with a lowercase letter and contain only lowercase letters, digits, and hyphens (hub manifest rule)")
 	}
 	return nil
 }
