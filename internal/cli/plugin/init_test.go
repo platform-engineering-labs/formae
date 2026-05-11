@@ -277,30 +277,33 @@ func TestResolveHubURL(t *testing.T) {
 	t.Run("flag set with valid URL wins", func(t *testing.T) {
 		t.Setenv("FORMAE_HUB_URL", "https://env.example.com")
 		opts := &PluginInitOptions{Hub: "https://flag.example.com"}
-		got, err := resolveHubURL(opts)
+		got, explicit, err := resolveHubURL(opts)
 		require.NoError(t, err)
 		assert.Equal(t, "https://flag.example.com", got)
+		assert.True(t, explicit, "flag-provided URL must be explicit")
 	})
 
 	t.Run("flag empty falls back to env", func(t *testing.T) {
 		t.Setenv("FORMAE_HUB_URL", "https://env.example.com")
 		opts := &PluginInitOptions{}
-		got, err := resolveHubURL(opts)
+		got, explicit, err := resolveHubURL(opts)
 		require.NoError(t, err)
 		assert.Equal(t, "https://env.example.com", got)
+		assert.True(t, explicit, "env-provided URL must be explicit")
 	})
 
 	t.Run("flag and env empty falls back to default", func(t *testing.T) {
 		t.Setenv("FORMAE_HUB_URL", "")
 		opts := &PluginInitOptions{}
-		got, err := resolveHubURL(opts)
+		got, explicit, err := resolveHubURL(opts)
 		require.NoError(t, err)
 		assert.Equal(t, DefaultHubURL, got)
+		assert.False(t, explicit, "default URL must not be explicit")
 	})
 
 	t.Run("flag with bad scheme returns FlagError", func(t *testing.T) {
 		opts := &PluginInitOptions{Hub: "ftp://hub.example.com"}
-		_, err := resolveHubURL(opts)
+		_, _, err := resolveHubURL(opts)
 		require.Error(t, err)
 		var flagErr *cmd.FlagError
 		assert.True(t, errors.As(err, &flagErr))
@@ -309,7 +312,7 @@ func TestResolveHubURL(t *testing.T) {
 	t.Run("env with bad scheme returns FlagError", func(t *testing.T) {
 		t.Setenv("FORMAE_HUB_URL", "ftp://hub.example.com")
 		opts := &PluginInitOptions{}
-		_, err := resolveHubURL(opts)
+		_, _, err := resolveHubURL(opts)
 		require.Error(t, err)
 		var flagErr *cmd.FlagError
 		assert.True(t, errors.As(err, &flagErr))
@@ -332,7 +335,7 @@ func TestRunAvailabilityCheck(t *testing.T) {
 
 	t.Run("conflict, no allowConflict, returns plain error mentioning name and url and --allow-conflict", func(t *testing.T) {
 		fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
-		err := runAvailabilityCheck(ctx, fc, "foo", false)
+		err := runAvailabilityCheck(ctx, fc, "foo", false, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "foo")
 		assert.Contains(t, err.Error(), "https://github.com/x/y")
@@ -341,25 +344,44 @@ func TestRunAvailabilityCheck(t *testing.T) {
 
 	t.Run("conflict, allowConflict=true, returns nil", func(t *testing.T) {
 		fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
-		err := runAvailabilityCheck(ctx, fc, "foo", true)
+		err := runAvailabilityCheck(ctx, fc, "foo", true, false)
 		assert.NoError(t, err)
 	})
 
 	t.Run("available returns nil", func(t *testing.T) {
 		fc := &fakeHubClient{res: AvailabilityResult{Available: true}}
-		err := runAvailabilityCheck(ctx, fc, "foo", false)
+		err := runAvailabilityCheck(ctx, fc, "foo", false, false)
 		assert.NoError(t, err)
 	})
 
-	t.Run("HubUnreachableError downgrades to nil", func(t *testing.T) {
-		fc := &fakeHubClient{err: &HubUnreachableError{Cause: errors.New("dial tcp: timeout")}}
-		err := runAvailabilityCheck(ctx, fc, "foo", false)
+	t.Run("HubTransientError always downgrades to nil (default hub)", func(t *testing.T) {
+		fc := &fakeHubClient{err: &HubTransientError{Cause: errors.New("hub returned HTTP 503")}}
+		err := runAvailabilityCheck(ctx, fc, "foo", false, false)
 		assert.NoError(t, err)
+	})
+
+	t.Run("HubTransientError always downgrades to nil (explicit hub)", func(t *testing.T) {
+		fc := &fakeHubClient{err: &HubTransientError{Cause: errors.New("hub returned HTTP 503")}}
+		err := runAvailabilityCheck(ctx, fc, "foo", false, true)
+		assert.NoError(t, err)
+	})
+
+	t.Run("HubUnreachableError with default hub downgrades to nil", func(t *testing.T) {
+		fc := &fakeHubClient{err: &HubUnreachableError{Cause: errors.New("dial tcp: connection refused")}}
+		err := runAvailabilityCheck(ctx, fc, "foo", false, false)
+		assert.NoError(t, err, "unreachable default hub must warn-and-continue")
+	})
+
+	t.Run("HubUnreachableError with explicit hub is hard-fail", func(t *testing.T) {
+		fc := &fakeHubClient{err: &HubUnreachableError{Cause: errors.New("dial tcp: connection refused")}}
+		err := runAvailabilityCheck(ctx, fc, "foo", false, true)
+		require.Error(t, err, "unreachable explicit hub must hard-fail")
+		assert.Contains(t, err.Error(), "hub availability check failed")
 	})
 
 	t.Run("plain error (trust/protocol) is hard-fail", func(t *testing.T) {
 		fc := &fakeHubClient{err: errors.New("hub TLS validation failed: x")}
-		err := runAvailabilityCheck(ctx, fc, "foo", false)
+		err := runAvailabilityCheck(ctx, fc, "foo", false, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "TLS")
 	})
@@ -368,7 +390,7 @@ func TestRunAvailabilityCheck(t *testing.T) {
 		canceledCtx, cancel := context.WithCancel(context.Background())
 		cancel() // immediately cancel so ctx.Err() == context.Canceled
 		fc := &fakeHubClient{err: context.Canceled}
-		err := runAvailabilityCheck(canceledCtx, fc, "foo", false)
+		err := runAvailabilityCheck(canceledCtx, fc, "foo", false, false)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, context.Canceled))
 		// Must not be wrapped under "hub availability check failed: ..."
@@ -380,7 +402,7 @@ func TestRunAvailabilityCheck(t *testing.T) {
 		defer cancel()
 		time.Sleep(1 * time.Millisecond) // ensure the deadline has passed
 		fc := &fakeHubClient{err: context.DeadlineExceeded}
-		err := runAvailabilityCheck(expiredCtx, fc, "foo", false)
+		err := runAvailabilityCheck(expiredCtx, fc, "foo", false, false)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, context.DeadlineExceeded))
 	})

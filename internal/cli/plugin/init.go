@@ -300,7 +300,7 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 
 	// Hub availability check (runs immediately after name is resolved, before further prompts)
 	if !opts.NoAvailabilityCheck {
-		hubURL, err := resolveHubURL(opts)
+		hubURL, explicit, err := resolveHubURL(opts)
 		if err != nil {
 			return err
 		}
@@ -308,7 +308,7 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 		if client == nil {
 			client = NewHubClient(hubURL)
 		}
-		if err := runAvailabilityCheck(ctx, client, config.Name, opts.AllowConflict); err != nil {
+		if err := runAvailabilityCheck(ctx, client, config.Name, opts.AllowConflict, explicit); err != nil {
 			return err
 		}
 	}
@@ -505,19 +505,27 @@ func validateOutputDir(dir string) error {
 	return nil
 }
 
-func resolveHubURL(opts *PluginInitOptions) (string, error) {
+// resolveHubURL returns the normalized hub URL and whether it was set
+// explicitly by the caller (via --hub flag or FORMAE_HUB_URL env var).
+// When explicit is false the URL is the built-in default.
+func resolveHubURL(opts *PluginInitOptions) (hubURL string, explicit bool, err error) {
 	candidate := opts.Hub
-	if candidate == "" {
+	if candidate != "" {
+		explicit = true
+	} else {
 		candidate = os.Getenv("FORMAE_HUB_URL")
+		if candidate != "" {
+			explicit = true
+		}
 	}
 	if candidate == "" {
 		candidate = DefaultHubURL
 	}
-	normalized, err := validateHubURL(candidate)
-	if err != nil {
-		return "", cmd.FlagErrorf("invalid hub URL: %s", err)
+	normalized, valErr := validateHubURL(candidate)
+	if valErr != nil {
+		return "", false, cmd.FlagErrorf("invalid hub URL: %s", valErr)
 	}
-	return normalized, nil
+	return normalized, explicit, nil
 }
 
 func runAvailabilityCheck(
@@ -525,6 +533,7 @@ func runAvailabilityCheck(
 	client HubClient,
 	name string,
 	allowConflict bool,
+	explicitHub bool,
 ) error {
 	res, err := client.CheckPluginAvailability(ctx, name)
 	if err != nil {
@@ -535,8 +544,24 @@ func runAvailabilityCheck(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// HubTransientError: definitely temporary (timeout, 408, 429, 5xx).
+		// Always warn-and-continue regardless of whether the hub was explicit.
+		var transient *HubTransientError
+		if errors.As(err, &transient) {
+			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+				"Hub availability check skipped: %s. Hub will re-validate at registration time.",
+				transient.Cause)))
+			return nil
+		}
+		// HubUnreachableError: transport failure that is not definitively
+		// temporary (DNS NXDOMAIN, connection refused). Fail closed when
+		// the caller explicitly configured the hub URL — they likely have a
+		// typo. Warn-and-continue only for the built-in default.
 		var unreachable *HubUnreachableError
 		if errors.As(err, &unreachable) {
+			if explicitHub {
+				return fmt.Errorf("hub availability check failed: %w", err)
+			}
 			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
 				"Hub availability check skipped: %s. Hub will re-validate at registration time.",
 				unreachable.Cause)))

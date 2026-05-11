@@ -8,6 +8,7 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -152,4 +153,42 @@ func TestWiring_NoAvailabilityCheck_DoesNotCallHub(t *testing.T) {
 	_ = runPluginInit(context.Background(), opts)
 
 	assert.Equal(t, 1, dl.calls)
+}
+
+// TestWiring_ExplicitHub_DNSFailure_HardFails asserts that when the user
+// explicitly passes --hub with a non-existent hostname, a DNS failure
+// hard-fails the command (downloader NOT called).
+func TestWiring_ExplicitHub_DNSFailure_HardFails(t *testing.T) {
+	dl := &spyDownloader{}
+	// Use an explicit (non-default) hub URL pointing at an unresolvable host.
+	opts := newWiringOpts(t, "http://nonexistent.invalid:1", dl, nil)
+
+	err := runPluginInit(context.Background(), opts)
+
+	require.Error(t, err, "explicit hub with DNS failure must hard-fail")
+	assert.Equal(t, 0, dl.calls, "downloader must NOT be called when explicit hub is unreachable")
+}
+
+// TestWiring_DefaultHub_DNSFailure_WarnsAndContinues asserts that when the
+// default hub URL is used and it's unreachable (simulated via injected client),
+// the command warns and continues scaffolding (downloader IS called).
+func TestWiring_DefaultHub_DNSFailure_WarnsAndContinues(t *testing.T) {
+	dl := &spyDownloader{}
+	// Inject a fake HubClient that returns HubUnreachableError directly,
+	// simulating what happens when the default hub is unreachable.
+	opts := newWiringOpts(t, "", dl, func(o *PluginInitOptions) {
+		o.Hub = "" // no explicit hub — will fall through to DefaultHubURL
+		o.HubClient = &fakeUnreachableHubClient{}
+	})
+
+	_ = runPluginInit(context.Background(), opts)
+
+	assert.Equal(t, 1, dl.calls, "downloader must be called when default hub is unreachable (warn-and-continue)")
+}
+
+// fakeUnreachableHubClient always returns HubUnreachableError.
+type fakeUnreachableHubClient struct{}
+
+func (f *fakeUnreachableHubClient) CheckPluginAvailability(_ context.Context, _ string) (AvailabilityResult, error) {
+	return AvailabilityResult{}, &HubUnreachableError{Cause: fmt.Errorf("simulated: connection refused")}
 }

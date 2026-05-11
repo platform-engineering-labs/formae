@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -36,10 +37,25 @@ type HubClient interface {
 	CheckPluginAvailability(ctx context.Context, name string) (AvailabilityResult, error)
 }
 
-// HubUnreachableError signals a transient inability to talk to the hub.
-// Callers downgrade to a warning. Trust and protocol-mismatch errors do
-// NOT use this type — they bubble up as plain errors so the caller can
-// hard-fail.
+// HubTransientError signals a definitely-temporary inability to reach the hub:
+// HTTP timeouts (including dial/read timeouts) and HTTP 408/429/5xx responses.
+// Callers always downgrade to a warning and continue, regardless of whether
+// the hub URL was explicit or the default.
+type HubTransientError struct{ Cause error }
+
+func (e *HubTransientError) Error() string { return e.Cause.Error() }
+func (e *HubTransientError) Unwrap() error { return e.Cause }
+
+// HubUnreachableError signals a transport-level failure that is NOT
+// definitively temporary: DNS resolution failures and connection-refused
+// errors. The hub host either doesn't exist or nothing is listening.
+//
+// Callers must distinguish whether the hub URL was explicitly configured:
+//   - explicit URL (--hub flag / FORMAE_HUB_URL env var) → hard-fail
+//   - default URL → downgrade to warning (same as HubTransientError)
+//
+// Trust and protocol-mismatch errors do NOT use this type — they bubble up
+// as plain errors so the caller can always hard-fail.
 type HubUnreachableError struct{ Cause error }
 
 func (e *HubUnreachableError) Error() string { return e.Cause.Error() }
@@ -94,7 +110,10 @@ func (c *httpHubClient) CheckPluginAvailability(ctx context.Context, name string
 			return AvailabilityResult{}, fmt.Errorf(
 				"hub protocol mismatch (is --hub using the right scheme?): %w", err)
 		}
-		return AvailabilityResult{}, &HubUnreachableError{Cause: err}
+		if isDefinitiveTransportError(err) {
+			return AvailabilityResult{}, &HubUnreachableError{Cause: err}
+		}
+		return AvailabilityResult{}, &HubTransientError{Cause: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -134,12 +153,12 @@ func (c *httpHubClient) CheckPluginAvailability(ctx context.Context, name string
 		}
 		return AvailabilityResult{Available: false, GitHubRepoURL: body.GitHubRepoURL}, nil
 	case http.StatusRequestTimeout, http.StatusTooManyRequests:
-		return AvailabilityResult{}, &HubUnreachableError{
+		return AvailabilityResult{}, &HubTransientError{
 			Cause: fmt.Errorf("hub returned HTTP %d", resp.StatusCode),
 		}
 	default:
 		if resp.StatusCode >= 500 {
-			return AvailabilityResult{}, &HubUnreachableError{
+			return AvailabilityResult{}, &HubTransientError{
 				Cause: fmt.Errorf("hub returned HTTP %d", resp.StatusCode),
 			}
 		}
@@ -177,6 +196,42 @@ func isProtocolMismatchError(err error) bool {
 	if err != nil && strings.Contains(err.Error(), "malformed HTTP response") {
 		return true
 	}
+	return false
+}
+
+// isDefinitiveTransportError returns true when err is a transport-level
+// failure that is definitively not transient: DNS resolution failures or
+// connection-refused errors. These indicate the host does not exist or
+// nothing is listening, rather than a temporary overload or timeout.
+//
+// Timeout errors are intentionally excluded — they are transient and
+// handled by returning HubTransientError instead.
+func isDefinitiveTransportError(err error) bool {
+	// Unwrap url.Error to get at the underlying net.Error / syscall.Errno.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Unwrap()
+	}
+
+	// DNS lookup failure.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		// IsNotFound: NXDOMAIN — definitively not transient.
+		// IsTimeout: treated as transient (server-side DNS timeout, not our fault).
+		if dnsErr.IsNotFound {
+			return true
+		}
+		// Timeout DNS errors are transient; server-not-found is definitive.
+		return false
+	}
+
+	// Connection refused (ECONNREFUSED) or no route to host (ENETUNREACH / EHOSTUNREACH).
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+
 	return false
 }
 

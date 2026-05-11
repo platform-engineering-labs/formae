@@ -86,9 +86,11 @@ func TestHubClient_500_Transient(t *testing.T) {
 	_, err := c.CheckPluginAvailability(context.Background(), "foo")
 
 	require.Error(t, err)
-	var unreachable *HubUnreachableError
-	assert.True(t, errors.As(err, &unreachable))
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "5xx must be HubTransientError")
 	assert.Contains(t, err.Error(), "500")
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "5xx must NOT be HubUnreachableError")
 }
 
 func TestHubClient_429_Transient(t *testing.T) {
@@ -101,8 +103,10 @@ func TestHubClient_429_Transient(t *testing.T) {
 	_, err := c.CheckPluginAvailability(context.Background(), "foo")
 
 	require.Error(t, err)
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "429 must be HubTransientError")
 	var unreachable *HubUnreachableError
-	assert.True(t, errors.As(err, &unreachable))
+	assert.False(t, errors.As(err, &unreachable), "429 must NOT be HubUnreachableError")
 }
 
 func TestHubClient_408_Transient(t *testing.T) {
@@ -115,8 +119,10 @@ func TestHubClient_408_Transient(t *testing.T) {
 	_, err := c.CheckPluginAvailability(context.Background(), "foo")
 
 	require.Error(t, err)
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "408 must be HubTransientError")
 	var unreachable *HubUnreachableError
-	assert.True(t, errors.As(err, &unreachable))
+	assert.False(t, errors.As(err, &unreachable), "408 must NOT be HubUnreachableError")
 }
 
 func TestHubClient_ReadTimeout_Transient(t *testing.T) {
@@ -129,8 +135,46 @@ func TestHubClient_ReadTimeout_Transient(t *testing.T) {
 	_, err := c.CheckPluginAvailability(context.Background(), "foo")
 
 	require.Error(t, err)
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "dial/read timeout must be HubTransientError")
 	var unreachable *HubUnreachableError
-	assert.True(t, errors.As(err, &unreachable))
+	assert.False(t, errors.As(err, &unreachable), "timeout must NOT be HubUnreachableError")
+}
+
+// TestHubClient_DNSFailure_Unreachable verifies that a DNS resolution failure
+// produces HubUnreachableError (not HubTransientError). This is a
+// "transport-but-not-temporary" failure: the host simply doesn't exist.
+func TestHubClient_DNSFailure_Unreachable(t *testing.T) {
+	// .invalid is an IANA-reserved TLD guaranteed to never resolve.
+	c := NewHubClient("http://nonexistent.invalid:1").(*httpHubClient)
+
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable), "DNS failure must be HubUnreachableError")
+	var transient *HubTransientError
+	assert.False(t, errors.As(err, &transient), "DNS failure must NOT be HubTransientError")
+}
+
+// TestHubClient_ConnectionRefused_Unreachable verifies that a refused connection
+// (nothing listening) produces HubUnreachableError (not HubTransientError).
+func TestHubClient_ConnectionRefused_Unreachable(t *testing.T) {
+	// Start a server then immediately close it so the port is freed.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	ln.Close() // port is now closed; connecting to it will be refused
+
+	c := NewHubClient("http://" + addr).(*httpHubClient)
+
+	_, err = c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable), "connection refused must be HubUnreachableError")
+	var transient *HubTransientError
+	assert.False(t, errors.As(err, &transient), "connection refused must NOT be HubTransientError")
 }
 
 func TestHubClient_401_HardFail(t *testing.T) {
