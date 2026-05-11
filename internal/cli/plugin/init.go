@@ -7,6 +7,8 @@ package plugin
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,6 +46,98 @@ type PluginInitOptions struct {
 	License     string
 	OutputDir   string
 	NoInput     bool
+
+	// Hub availability check
+	Hub                 string
+	NoAvailabilityCheck bool
+	AllowConflict       bool
+
+	// Test seams — nil in production paths
+	HubClient          HubClient
+	TemplateDownloader TemplateDownloader
+}
+
+// TemplateDownloader fetches the plugin template tarball and extracts
+// it into outputDir. Production uses httpTemplateDownloader; tests
+// inject a spy via PluginInitOptions.TemplateDownloader.
+type TemplateDownloader interface {
+	Download(ctx context.Context, outputDir string) error
+}
+
+type httpTemplateDownloader struct{}
+
+func (httpTemplateDownloader) Download(ctx context.Context, outputDir string) error {
+	branch := DefaultBranch
+	url := getTemplateTarballURL(branch)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build template request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download template: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download template: HTTP %d", resp.StatusCode)
+	}
+
+	gzr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer func() { _ = gzr.Close() }()
+
+	tr := tar.NewReader(gzr)
+
+	rootPrefix := fmt.Sprintf("%s-%s/", TemplateRepoName, branch)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar entry: %w", err)
+		}
+
+		if !strings.HasPrefix(header.Name, rootPrefix) {
+			continue
+		}
+
+		relPath := strings.TrimPrefix(header.Name, rootPrefix)
+		if relPath == "" {
+			continue
+		}
+
+		targetPath := filepath.Join(outputDir, relPath)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", targetPath, err)
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return fmt.Errorf("failed to create parent directory for %s: %w", targetPath, err)
+			}
+			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				_ = outFile.Close()
+				return fmt.Errorf("failed to write file %s: %w", targetPath, err)
+			}
+			if err := outFile.Close(); err != nil {
+				return fmt.Errorf("failed to close file %s: %w", targetPath, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // validatePluginInitOptions validates the options and applies defaults.
@@ -111,6 +205,11 @@ func getTemplateTarballURL(version string) string {
 	)
 }
 
+// runPluginInitFn is the entrypoint cobra calls. Tests swap it to
+// capture the constructed PluginInitOptions, then restore it via a
+// t.Cleanup.
+var runPluginInitFn = runPluginInit
+
 func PluginInitCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "init",
@@ -134,12 +233,15 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 			opts.License, _ = c.Flags().GetString("license")
 			opts.OutputDir, _ = c.Flags().GetString("output-dir")
 			opts.NoInput, _ = c.Flags().GetBool("no-input")
+			opts.Hub, _ = c.Flags().GetString("hub")
+			opts.NoAvailabilityCheck, _ = c.Flags().GetBool("no-availability-check")
+			opts.AllowConflict, _ = c.Flags().GetBool("allow-conflict")
 
 			if err := validatePluginInitOptions(opts); err != nil {
 				return err
 			}
 
-			return runPluginInit(opts)
+			return runPluginInitFn(c.Context(), opts)
 		},
 		SilenceErrors: true,
 	}
@@ -152,11 +254,17 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 	command.Flags().String("license", "", "SPDX license identifier (default: Apache-2.0)")
 	command.Flags().String("output-dir", "", "Target directory (default: ./<name>)")
 	command.Flags().Bool("no-input", false, "Disable interactive prompts; error if required flags are missing")
+	command.Flags().String("hub", "",
+		fmt.Sprintf("Hub base URL (default: $FORMAE_HUB_URL or %s)", DefaultHubURL))
+	command.Flags().Bool("no-availability-check", false,
+		"Skip the hub availability check (use for offline scaffolding or tests)")
+	command.Flags().Bool("allow-conflict", false,
+		"Scaffold even if the hub reports the plugin name is already registered")
 
 	return command
 }
 
-func runPluginInit(opts *PluginInitOptions) error {
+func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 	p := prompter.NewBasicPrompter()
 
 	// In non-interactive mode, all values are already set and validated
@@ -175,6 +283,9 @@ func runPluginInit(opts *PluginInitOptions) error {
 
 	// Plugin name (required)
 	if opts.Name != "" {
+		if err := validatePluginName(opts.Name); err != nil {
+			return cmd.FlagErrorf("invalid plugin name: %s", err.Error())
+		}
 		config.Name = opts.Name
 	} else {
 		name, err := p.PromptString("Plugin name")
@@ -185,6 +296,21 @@ func runPluginInit(opts *PluginInitOptions) error {
 			return err
 		}
 		config.Name = name
+	}
+
+	// Hub availability check (runs immediately after name is resolved, before further prompts)
+	if !opts.NoAvailabilityCheck {
+		hubURL, explicit, err := resolveHubURL(opts)
+		if err != nil {
+			return err
+		}
+		client := opts.HubClient
+		if client == nil {
+			client = NewHubClient(hubURL)
+		}
+		if err := runAvailabilityCheck(ctx, client, config.Name, opts.AllowConflict, explicit); err != nil {
+			return err
+		}
 	}
 
 	// Namespace (required)
@@ -300,7 +426,11 @@ func runPluginInit(opts *PluginInitOptions) error {
 
 	// Download and extract the template
 	fmt.Printf("%s\n", display.Grey("Downloading template from GitHub..."))
-	if err := downloadAndExtractTemplate(config.OutputDir); err != nil {
+	downloader := opts.TemplateDownloader
+	if downloader == nil {
+		downloader = httpTemplateDownloader{}
+	}
+	if err := downloader.Download(ctx, config.OutputDir); err != nil {
 		return fmt.Errorf("failed to download template: %w", err)
 	}
 
@@ -327,10 +457,10 @@ func runPluginInit(opts *PluginInitOptions) error {
 }
 
 func validatePluginName(name string) error {
-	// Must start with letter, contain only letters/numbers/hyphens (no spaces)
-	pattern := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9-]*$`)
+	// Must start with lowercase letter, contain only lowercase letters/digits/hyphens (hub manifest rule)
+	pattern := regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 	if !pattern.MatchString(name) {
-		return fmt.Errorf("plugin name must start with a letter and contain only letters, numbers, and hyphens (no spaces)")
+		return fmt.Errorf("plugin name must start with a lowercase letter and contain only lowercase letters, digits, and hyphens (hub manifest rule)")
 	}
 	return nil
 }
@@ -375,6 +505,84 @@ func validateOutputDir(dir string) error {
 	return nil
 }
 
+// resolveHubURL returns the normalized hub URL and whether it was set
+// explicitly by the caller (via --hub flag or FORMAE_HUB_URL env var).
+// When explicit is false the URL is the built-in default.
+func resolveHubURL(opts *PluginInitOptions) (hubURL string, explicit bool, err error) {
+	candidate := opts.Hub
+	if candidate != "" {
+		explicit = true
+	} else {
+		candidate = os.Getenv("FORMAE_HUB_URL")
+		if candidate != "" {
+			explicit = true
+		}
+	}
+	if candidate == "" {
+		candidate = DefaultHubURL
+	}
+	normalized, valErr := validateHubURL(candidate)
+	if valErr != nil {
+		return "", false, cmd.FlagErrorf("invalid hub URL: %s", valErr)
+	}
+	return normalized, explicit, nil
+}
+
+func runAvailabilityCheck(
+	ctx context.Context,
+	client HubClient,
+	name string,
+	allowConflict bool,
+	explicitHub bool,
+) error {
+	res, err := client.CheckPluginAvailability(ctx, name)
+	if err != nil {
+		// Propagate cancellation as-is so cobra surfaces the right exit.
+		// The hub client returns ctx.Err() directly for caller-driven
+		// cancellation, so checking ctx.Err() here correctly distinguishes
+		// caller cancellation from hub-client-internal timeouts.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// HubTransientError: definitely temporary (timeout, 408, 429, 5xx).
+		// Always warn-and-continue regardless of whether the hub was explicit.
+		var transient *HubTransientError
+		if errors.As(err, &transient) {
+			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+				"Hub availability check skipped: %s. Hub will re-validate at registration time.",
+				transient.Cause)))
+			return nil
+		}
+		// HubUnreachableError: transport failure that is not definitively
+		// temporary (DNS NXDOMAIN, connection refused). Fail closed when
+		// the caller explicitly configured the hub URL — they likely have a
+		// typo. Warn-and-continue only for the built-in default.
+		var unreachable *HubUnreachableError
+		if errors.As(err, &unreachable) {
+			if explicitHub {
+				return fmt.Errorf("hub availability check failed: %w", err)
+			}
+			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+				"Hub availability check skipped: %s. Hub will re-validate at registration time.",
+				unreachable.Cause)))
+			return nil
+		}
+		return fmt.Errorf("hub availability check failed: %w", err)
+	}
+	if !res.Available {
+		if allowConflict {
+			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+				"Warning: plugin name %q is already registered by %s. Continuing because --allow-conflict was set; registration will fail at confirm time.",
+				name, res.GitHubRepoURL)))
+			return nil
+		}
+		return fmt.Errorf(
+			"plugin name %q is already registered by %s. Pick a different name (or pass --allow-conflict to scaffold anyway)",
+			name, res.GitHubRepoURL)
+	}
+	return nil
+}
+
 // expandTilde expands ~ to the user's home directory
 func expandTilde(path string) string {
 	if strings.HasPrefix(path, "~/") {
@@ -392,87 +600,6 @@ func expandTilde(path string) string {
 		return home
 	}
 	return path
-}
-
-func downloadAndExtractTemplate(outputDir string) error {
-	branch := DefaultBranch
-	url := getTemplateTarballURL(branch)
-
-	// Download the tarball
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to download template: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download template: HTTP %d", resp.StatusCode)
-	}
-
-	// Create a gzip reader
-	gzr, err := gzip.NewReader(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer func() { _ = gzr.Close() }()
-
-	// Create a tar reader
-	tr := tar.NewReader(gzr)
-
-	// GitHub tarballs have a root directory named "{repo}-{branch}/"
-	// We need to strip this prefix when extracting
-	rootPrefix := fmt.Sprintf("%s-%s/", TemplateRepoName, branch)
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to read tar entry: %w", err)
-		}
-
-		// Skip entries that don't start with the expected prefix
-		if !strings.HasPrefix(header.Name, rootPrefix) {
-			continue
-		}
-
-		// Strip the root directory prefix
-		relPath := strings.TrimPrefix(header.Name, rootPrefix)
-		if relPath == "" {
-			continue
-		}
-
-		targetPath := filepath.Join(outputDir, relPath)
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("failed to create directory %s: %w", targetPath, err)
-			}
-		case tar.TypeReg:
-			// Ensure parent directory exists
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				return fmt.Errorf("failed to create parent directory for %s: %w", targetPath, err)
-			}
-
-			// Create the file
-			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
-			if err != nil {
-				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
-			}
-
-			if _, err := io.Copy(outFile, tr); err != nil {
-				_ = outFile.Close()
-				return fmt.Errorf("failed to write file %s: %w", targetPath, err)
-			}
-			if err := outFile.Close(); err != nil {
-				return fmt.Errorf("failed to close file %s: %w", targetPath, err)
-			}
-		}
-	}
-
-	return nil
 }
 
 func transformTemplateFiles(config *PluginConfig) error {
