@@ -56,7 +56,7 @@ const (
 	PluginRoute          = BasePath + "/plugins/:name"
 	PluginInstallRoute   = BasePath + "/plugins/install"
 	PluginUninstallRoute = BasePath + "/plugins/uninstall"
-	PluginUpgradeRoute   = BasePath + "/plugins/upgrade"
+	PluginUpdateRoute    = BasePath + "/plugins/update"
 
 	HealthRoute  = BasePath + "/health"
 	MetricsRoute = "/metrics"
@@ -228,7 +228,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.GET(PluginsRoute, s.listPluginsHandler)
 	e.POST(PluginInstallRoute, s.installPluginsHandler)
 	e.POST(PluginUninstallRoute, s.uninstallPluginsHandler)
-	e.POST(PluginUpgradeRoute, s.upgradePluginsHandler)
+	e.POST(PluginUpdateRoute, s.updatePluginsHandler)
 	e.GET(PluginRoute, s.getPluginHandler)
 
 	// Prometheus metrics endpoint (if enabled)

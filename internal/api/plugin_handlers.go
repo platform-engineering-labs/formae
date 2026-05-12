@@ -143,26 +143,26 @@ func (s *Server) uninstallPluginsHandler(c echo.Context) error {
 	})
 }
 
-func (s *Server) upgradePluginsHandler(c echo.Context) error {
+func (s *Server) updatePluginsHandler(c echo.Context) error {
 	pm, err := s.requirePluginManager(c)
 	if err != nil {
 		return err
 	}
 
-	var req apimodel.UpgradePluginsRequest
+	var req apimodel.UpdatePluginsRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 
-	pmReq := plugin_manager.UpgradeRequest{
+	pmReq := plugin_manager.UpdateRequest{
 		Packages: toManagerPackageRefs(req.Packages),
 		Channel:  req.Channel,
 	}
-	resp, err := pm.Upgrade(pmReq)
+	resp, err := pm.Update(pmReq)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(http.StatusOK, apimodel.UpgradePluginsResponse{
+	return c.JSON(http.StatusOK, apimodel.UpdatePluginsResponse{
 		Operations:      toAPIOperations(resp.Operations),
 		RequiresRestart: resp.RequiresRestart,
 		Warnings:        resp.Warnings,

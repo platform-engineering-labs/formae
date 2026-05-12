@@ -84,7 +84,7 @@ type Operation struct {
 	Action  string // "install" | "remove" | "noop"
 }
 
-// Response is the result of an Install, Uninstall, or Upgrade call.
+// Response is the result of an Install, Uninstall, or Update call.
 type Response struct {
 	Operations      []Operation
 	RequiresRestart bool
@@ -100,8 +100,8 @@ type InstallRequest struct {
 // UninstallRequest is the input to Uninstall.
 type UninstallRequest struct{ Packages []PackageRef }
 
-// UpgradeRequest is the input to Upgrade.
-type UpgradeRequest struct {
+// UpdateRequest is the input to Update.
+type UpdateRequest struct {
 	Packages []PackageRef
 	Channel  string
 }
@@ -120,7 +120,7 @@ type orbitalFactory func(channel string) (orbitalClient, error)
 // listOrb is the long-lived client used for inspecting locally-installed
 // packages (List/Uninstall) — those operations are channel-agnostic. Per-call
 // factory invocations build channel-specific clients for queries that depend
-// on a remote channel (Available/Info/Install/Upgrade).
+// on a remote channel (Available/Info/Install/Update).
 //
 // pluginDirs are the directories the agent scans for on-disk plugin
 // installs. The same dirs the agent scans at startup to populate the
@@ -436,16 +436,16 @@ func (pm *PluginManager) Uninstall(req UninstallRequest) (Response, error) {
 	return pm.buildResponse(pm.listOrb, req.Packages, "remove")
 }
 
-// Upgrade updates the requested packages via orbital. req.Channel selects
-// which channel to upgrade against; empty resolves to DefaultChannel.
-func (pm *PluginManager) Upgrade(req UpgradeRequest) (Response, error) {
+// Update updates the requested packages via orbital. req.Channel selects
+// which channel to update against; empty resolves to DefaultChannel.
+func (pm *PluginManager) Update(req UpdateRequest) (Response, error) {
 	orb, err := pm.clientFor(req.Channel)
 	if err != nil {
 		return Response{}, fmt.Errorf("building orbital client for channel: %w", err)
 	}
 	specs := packageSpecs(req.Packages)
 	if err := orb.Update(specs...); err != nil {
-		return Response{}, fmt.Errorf("upgrading packages: %w", err)
+		return Response{}, fmt.Errorf("updating packages: %w", err)
 	}
 	return pm.buildResponse(orb, req.Packages, "install")
 }

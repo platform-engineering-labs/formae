@@ -33,7 +33,7 @@ func PluginCmd() *cobra.Command {
 	command.AddCommand(PluginInfoCmd())
 	command.AddCommand(PluginInstallCmd())
 	command.AddCommand(PluginUninstallCmd())
-	command.AddCommand(PluginUpgradeCmd())
+	command.AddCommand(PluginUpdateCmd())
 	command.AddCommand(PluginInitCmd())
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)

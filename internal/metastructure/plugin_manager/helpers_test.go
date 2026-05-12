@@ -20,7 +20,7 @@ func newForTesting(logger *slog.Logger, orb orbitalClient) *PluginManager {
 // newForTestingWithFactory creates a PluginManager with an explicit factory
 // for channel-specific tests. listOrb is used for List/Uninstall (channel-
 // agnostic), while factory(channel) is consulted for Available/Info/Install/
-// Upgrade.
+// Update.
 func newForTestingWithFactory(logger *slog.Logger, listOrb orbitalClient, factory orbitalFactory) *PluginManager {
 	return &PluginManager{logger: logger, listOrb: listOrb, factory: factory}
 }

@@ -268,12 +268,12 @@ type UninstallPluginsResponse struct {
 	Warnings        []string          `json:"warnings,omitempty"`
 }
 
-type UpgradePluginsRequest struct {
+type UpdatePluginsRequest struct {
 	Packages []PackageRef `json:"packages,omitempty"`
 	Channel  string       `json:"channel,omitempty"`
 }
 
-type UpgradePluginsResponse struct {
+type UpdatePluginsResponse struct {
 	Operations      []PluginOperation `json:"operations"`
 	RequiresRestart bool              `json:"requiresRestart"`
 	Warnings        []string          `json:"warnings,omitempty"`

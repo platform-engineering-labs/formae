@@ -483,7 +483,7 @@ func (a *App) installedResourcePlugins() (map[string]PluginInfo, error) {
 	return result, nil
 }
 
-func (a *App) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.UpgradePluginsResponse, error) {
+func (a *App) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.UpdatePluginsResponse, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, err
@@ -494,7 +494,7 @@ func (a *App) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.Upgr
 		return nil, err
 	}
 
-	return client.UpgradePlugins(req)
+	return client.UpdatePlugins(req)
 }
 
 func (a *App) Stats() (*apimodel.Stats, []string, error) {
