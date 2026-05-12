@@ -8,6 +8,7 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -542,6 +543,91 @@ func TestResourceUpdater_DeleteOperationFailsWhenPluginCrashes(t *testing.T) {
 	})
 }
 
+// Sibling to TestResourceUpdater_PreservesPluginErrorMessageOnUpdateFailure — verifies
+// the same StatusMessage propagation for the delete handler.
+func TestResourceUpdater_PreservesPluginErrorMessageOnDeleteFailure(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		const pluginErr = "simulated AWS API failure on DeleteResource"
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: "FakeAWS::S3::Bucket",
+					Properties:   `{"foo":"bar","baz":"qux","a":[3,4,2]}`,
+				}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return nil, errors.New(pluginErr)
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		if err != nil {
+			t.Fatalf("Failed to create metastructure: %v", err)
+			return
+		}
+
+		messages := make(chan any, 1)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:      "test-forma-command-delete-error-message",
+				State:   forma_command.CommandStateNotStarted,
+				StartTs: util.TimeNow(),
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					{
+						Operation: resource_update.OperationDelete,
+						DesiredState: pkgmodel.Resource{
+							Label: "test-resource",
+							Type:  "FakeAWS::S3::Bucket",
+							Stack: "test-stack",
+							Ksuid: initialResource.DesiredState.Ksuid,
+						},
+					},
+				},
+			},
+		})
+
+		hash, err := testutil.Call(m.Node, "ResourcePersister", resource_update.PersistResourceUpdate{
+			PluginOperation: resource.OperationCreate,
+			ResourceUpdate:  *initialResource,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, hash)
+
+		deleteResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
+		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
+			ResourceURI: initialResource.DesiredState.URI(),
+			CommandID:   "test-forma-command-delete-error-message",
+			Operation:   string(deleteResource.Operation),
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(deleteResource.Operation), "test-forma-command-delete-error-message"), resource_update.StartResourceUpdate{
+			ResourceUpdate: *deleteResource,
+			CommandID:      "test-forma-command-delete-error-message",
+		})
+
+		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
+			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateFailed
+		})
+
+		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
+			CommandID: "test-forma-command-delete-error-message",
+		})
+		assert.NoError(t, err)
+
+		command, ok := commandRes.(*forma_command.FormaCommand)
+		assert.True(t, ok)
+		assert.Len(t, command.ResourceUpdates, 1)
+		assert.Contains(t, command.ResourceUpdates[0].MostRecentFailureMessage(), pluginErr,
+			"plugin error message must propagate to MostRecentFailureMessage so operators can debug Delete failures")
+	})
+}
+
 func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
@@ -833,6 +919,94 @@ func TestResourceUpdater_SuccessfullyUpdatesAResource(t *testing.T) {
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
 		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, command.ResourceUpdates[0].State)
+	})
+}
+
+// When the plugin returns a plain error from Update, the PluginOperator must
+// preserve err.Error() as the TrackedProgress.StatusMessage so operators can
+// see what went wrong. Without this, every plugin Update failure surfaces as
+// `UnforeseenError` with no message — operators cannot tell an AWS API rejection
+// apart from a panic or a type assertion failure.
+func TestResourceUpdater_PreservesPluginErrorMessageOnUpdateFailure(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		const pluginErr = "simulated AWS API failure on UpdateResource"
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: "FakeAWS::S3::Bucket",
+					Properties:   `{"foo":"bar","baz":"qux","a":[3,4,2]}`,
+				}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				return nil, errors.New(pluginErr)
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		if err != nil {
+			t.Fatalf("Failed to create metastructure: %v", err)
+			return
+		}
+
+		messages := make(chan any, 1)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
+		hash, err := testutil.Call(m.Node, "ResourcePersister", resource_update.PersistResourceUpdate{
+			PluginOperation: resource.OperationCreate,
+			ResourceUpdate:  *initialResource,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, hash)
+
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:      "test-forma-command-update-error-message",
+				State:   forma_command.CommandStateNotStarted,
+				StartTs: util.TimeNow(),
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					{
+						Operation: resource_update.OperationUpdate,
+						DesiredState: pkgmodel.Resource{
+							Label: "test-resource",
+							Type:  "FakeAWS::S3::Bucket",
+							Stack: "test-stack",
+							Ksuid: initialResource.DesiredState.Ksuid,
+						},
+					},
+				},
+			},
+		})
+
+		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
+		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
+			ResourceURI: initialResource.DesiredState.URI(),
+			CommandID:   "test-forma-command-update-error-message",
+			Operation:   string(updateResource.Operation),
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-update-error-message"), resource_update.StartResourceUpdate{
+			ResourceUpdate: *updateResource,
+			CommandID:      "test-forma-command-update-error-message",
+		})
+
+		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg resource_update.ResourceUpdateFinished) bool {
+			return msg.Uri == initialResource.DesiredState.URI() && msg.State == resource_update.ResourceUpdateStateFailed
+		})
+
+		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
+			CommandID: "test-forma-command-update-error-message",
+		})
+		assert.NoError(t, err)
+
+		command, ok := commandRes.(*forma_command.FormaCommand)
+		assert.True(t, ok)
+		assert.Len(t, command.ResourceUpdates, 1)
+		assert.Contains(t, command.ResourceUpdates[0].MostRecentFailureMessage(), pluginErr,
+			"plugin error message must propagate to MostRecentFailureMessage so operators can debug Update failures")
 	})
 }
 

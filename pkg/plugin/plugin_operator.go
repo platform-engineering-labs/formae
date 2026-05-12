@@ -574,7 +574,9 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to update resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		errProgress := data.newUnforeseenError()
+		errProgress.StatusMessage = err.Error()
+		return StateFinishedWithError, data, errProgress, nil, nil
 	}
 
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
@@ -594,7 +596,9 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to delete resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		errProgress := data.newUnforeseenError()
+		errProgress.StatusMessage = err.Error()
+		return StateFinishedWithError, data, errProgress, nil, nil
 	}
 
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
@@ -677,7 +681,9 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to get resume waiting for resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		errProgress := data.newUnforeseenError()
+		errProgress.StatusMessage = err.Error()
+		return StateFinishedWithError, data, errProgress, nil, nil
 	}
 
 	return handlePluginResult(data, operation.Request, proc, result.ProgressResult)
