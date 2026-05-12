@@ -68,6 +68,10 @@ internal/schema/pkl/generator/imports.pkl
 internal/schema/pkl/generator/resources.pkl
 internal/schema/pkl/generator/resolvables.pkl
 
+# Bundled pkl-reader-helm binary (downloaded by make build via
+# scripts/install-helm-reader.sh; shipped via pkg-bin → dist/pel/bin/).
+pkl-reader-helm
+
 # semver files generated during build
 version.semver
 

@@ -150,6 +150,14 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 	}
 	opts = append(opts, pklgo.WithResourceReader(tfvarsReader{baseDir: tfvarsBaseDir}))
 
+	// Auto-register pkl-reader-helm as an external resource reader when
+	// it's discoverable on PATH or under an installed plugin's bin/. Lets
+	// formas use `import "@helm/helm.pkl"` without each project declaring
+	// the reader in evaluatorSettings.
+	if helmOpt := helmReaderOption(); helmOpt != nil {
+		opts = append(opts, helmOpt)
+	}
+
 	var cleanup func()
 	if projectDir != "" {
 		evaluator, cleanup, err = newSafeProjectEvaluator(
@@ -423,32 +431,32 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 	formaDir := filepath.Dir(path)
 	projectDir := WalkForProjectFile(formaDir)
 
+	evalOpts := []func(*pklgo.EvaluatorOptions){
+		pklgo.PreconfiguredOptions,
+		pklgo.WithResourceReader(libExtension{}),
+		pklgo.WithResourceReader(tfvarsReader{baseDir: formaDir}),
+		func(opts *pklgo.EvaluatorOptions) {
+			opts.Properties = props
+			opts.OutputFormat = "json"
+		},
+	}
+	// Auto-register pkl-reader-helm if discoverable; harmless when no
+	// helm imports are present in the forma.
+	if helmOpt := helmReaderOption(); helmOpt != nil {
+		evalOpts = append(evalOpts, helmOpt)
+	}
+
 	var cleanup func()
 	if projectDir != "" {
 		evaluator, cleanup, err = newSafeProjectEvaluator(
 			context.Background(),
 			&url.URL{Scheme: "file", Path: projectDir},
-			pklgo.PreconfiguredOptions,
-			pklgo.WithResourceReader(libExtension{}),
-			pklgo.WithResourceReader(tfvarsReader{baseDir: formaDir}),
-			func(opts *pklgo.EvaluatorOptions) {
-				opts.Properties = props
-				opts.OutputFormat = "json"
-			})
-
+			evalOpts...,
+		)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		evalOpts := []func(*pklgo.EvaluatorOptions){
-			pklgo.PreconfiguredOptions,
-			pklgo.WithResourceReader(libExtension{}),
-			pklgo.WithResourceReader(tfvarsReader{baseDir: formaDir}),
-			func(opts *pklgo.EvaluatorOptions) {
-				opts.Properties = props
-				opts.OutputFormat = "json"
-			},
-		}
 		if pklCmd := bundledPklCommand(); pklCmd != nil {
 			evaluator, err = pklgo.NewEvaluatorWithCommand(context.Background(), pklCmd, evalOpts...)
 		} else {

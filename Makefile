@@ -20,19 +20,35 @@ VERSION := $(shell echo "$(RAW_VERSION)" | cut -d'-' -f1)
 # downstream installs.
 CHANNEL := $(shell echo "$(RAW_VERSION)" | grep -q -- '-' && echo dev || echo stable)
 
+# Pinned pkl-reader-helm version. Must track the `pkl-readers/helm@<ver>`
+# dep declared by every plugin that uses helm-via-pkl (today: k8s).
+# Override per-build with HELM_READER_VERSION=<ver>.
+HELM_READER_VERSION ?= 0.1.2
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
 	rm -rf fcfg
+	rm -rf pkl-reader-helm
 	rm -rf version.semver
 
 clean-pel:
 	rm -rf ~/.pel/*
 
-build:
+build: helm-reader
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 	go build -o fcfg cmd/formae-config/main.go
+
+## helm-reader: Download the pinned pkl-reader-helm binary into the
+## repo root so `build` ships it next to the formae binary and
+## `pkg-bin` includes it in dist/pel/bin/. Idempotent — skips the
+## download when the right version is already present. Required by
+## any forma that imports `@formae-helm/v<X.Y>/HelmChart.pkl`;
+## formae's auto-register code (internal/schema/pkl/helm_reader.go)
+## discovers it via exec.LookPath.
+helm-reader:
+	@HELM_READER_VERSION=$(HELM_READER_VERSION) ./scripts/install-helm-reader.sh
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
@@ -47,6 +63,7 @@ pkg-bin: clean build
 	mkdir -p ./dist/pel/bin
 	cp -Rp ./formae ./dist/pel/bin
 	cp -Rp ./fcfg ./dist/pel/bin
+	cp -Rp ./pkl-reader-helm ./dist/pel/bin
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
