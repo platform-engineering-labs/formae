@@ -120,7 +120,7 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 
 		// Determine which configs to compare. When the new config contains
 		// $ref resolvables, resolve them first so we compare actual values.
-		existingResolved, newResolved, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
+		existingResolved, newResolved, allRefsResolved, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
 		if err != nil {
 			return TargetUpdate{}, false, fmt.Errorf("failed to resolve target configs: %w", err)
 		}
@@ -143,9 +143,17 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			// - The raw config format changed (e.g., plain value ↔ $ref wrapper)
 			// - The discoverable flag changed
 			// - The ConfigSchema changed (e.g., plugin annotations updated)
-			existingStripped := stripResolvableValuesRaw(existing.Config)
-			desiredStripped := stripResolvableValuesRaw(target.Config)
-			if !util.JsonEqualRaw(existingStripped, desiredStripped) {
+			// Only strip cached $value entries when refs were successfully
+			// resolved. If resolution failed, a stale cached $value paired
+			// with a dangling $ref must still surface as an update so the
+			// failure isn't silently absorbed.
+			existingForRaw := existing.Config
+			desiredForRaw := target.Config
+			if allRefsResolved {
+				existingForRaw = stripResolvableValuesRaw(existingForRaw)
+				desiredForRaw = stripResolvableValuesRaw(desiredForRaw)
+			}
+			if !util.JsonEqualRaw(existingForRaw, desiredForRaw) {
 				operation = TargetOperationUpdate
 			} else if existing.Discoverable != target.Discoverable {
 				operation = TargetOperationUpdate
@@ -196,15 +204,15 @@ func configSchemasEqual(a, b pkgmodel.ConfigSchema) bool {
 // field-level comparison. Both configs are stripped of $ref metadata so that
 // ClassifyConfigChange compares plain values. When the new config contains
 // $ref resolvables, they are resolved from the DB first.
-func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, error) {
+func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, bool, error) {
 	if len(resolvables) == 0 {
 		// No resolvables in new config, but existing config may still have
 		// $ref metadata from a previous apply. Strip it for comparison.
 		existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 		if err != nil {
-			return existingConfig, newConfig, nil
+			return existingConfig, newConfig, true, nil
 		}
-		return existingValues, newConfig, nil
+		return existingValues, newConfig, true, nil
 	}
 
 	// Resolve $ref values from DB for comparison
@@ -219,31 +227,31 @@ func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.
 		if err != nil || resource == nil {
 			slog.Debug("Cannot resolve $ref from DB, treating as config change",
 				"uri", uri, "error", err)
-			return existingConfig, newConfig, nil
+			return existingConfig, newConfig, false, nil
 		}
 
 		value := gjson.GetBytes(resource.Properties, propertyPath)
 		if !value.Exists() {
 			slog.Debug("Referenced property not found in resource, treating as config change",
 				"uri", uri, "propertyPath", propertyPath)
-			return existingConfig, newConfig, nil
+			return existingConfig, newConfig, false, nil
 		}
 
 		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, value.String())
 		if err != nil {
-			return existingConfig, newConfig, nil
+			return existingConfig, newConfig, false, nil
 		}
 	}
 
 	// Strip $ref metadata from both sides so ClassifyConfigChange sees plain values
 	existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 	if err != nil {
-		return existingConfig, json.RawMessage(resolvedConfig), nil
+		return existingConfig, json.RawMessage(resolvedConfig), true, nil
 	}
 	newValues, err := resolver.ConvertToPluginFormat(resolvedConfig)
 	if err != nil {
-		return existingConfig, json.RawMessage(resolvedConfig), nil
+		return existingConfig, json.RawMessage(resolvedConfig), true, nil
 	}
 
-	return existingValues, newValues, nil
+	return existingValues, newValues, true, nil
 }
