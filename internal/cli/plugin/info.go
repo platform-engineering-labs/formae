@@ -6,6 +6,7 @@ package plugin
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -27,7 +28,12 @@ func PluginInfoCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "info",
 		Short: "Show detailed plugin information",
-		Long:  `Show the description, version, and metadata for a single plugin.`,
+		Long: `Show the description, version, and metadata for a single
+plugin from the configured plugin repositories.
+
+On a stock install the plugin store lives at a path that only root can
+write to, so this command may prompt for sudo to refresh the
+repository metadata.`,
 		Annotations: map[string]string{
 			"args": "<name>",
 		},
@@ -108,16 +114,12 @@ func runInfoForMachines(app *app.App, opts *InfoOptions) error {
 }
 
 func fetchPluginInfo(app *app.App, opts *InfoOptions) (*apimodel.Plugin, error) {
-	client, err := app.NewClient()
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.GetPlugin(opts.Name, opts.Channel)
-	if err != nil {
-		return nil, err
+	if mgr == nil {
+		return nil, fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
 	}
-	if resp == nil {
-		return nil, nil
-	}
-	return &resp.Plugin, nil
+	return mgr.LocalInfo(opts.Name)
 }

@@ -13,53 +13,13 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
-// mergedPlugin tracks where a plugin is installed and the version on
-// each side. When agent and CLI report the same plugin at the same
-// version, the renderer collapses both into a single `(agent + cli)`
-// row; when versions differ, it surfaces the mismatch inline so
-// dual-install drift on auth plugins is visible at a glance.
-type mergedPlugin struct {
-	plugin       apimodel.Plugin
-	agentVersion string
-	cliVersion   string
-}
-
-func (m mergedPlugin) onAgent() bool { return m.agentVersion != "" }
-func (m mergedPlugin) onCLI() bool   { return m.cliVersion != "" }
-
-// renderPluginList merges the agent and local views into a single
-// listing. Annotations are driven by *divergence*: when both arms
-// returned data, matching rows render plain — the typical single-host
-// install where agent and CLI share the orbital tree by definition is
-// not noisy. Only one arm reachable: every row carries that arm's
-// label ((agent) or (cli)) for consistency, and the caller surfaces a
-// hint explaining why the other arm is missing.
-func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin, agentReached, localScanned bool) string {
-	if len(agentPlugins) == 0 && len(localPlugins) == 0 {
+// renderPluginList groups the installed plugins by kind and renders one
+// row per plugin (✓ name version, optionally annotated with the bundle
+// they came from). The list is sourced from a single local read of the
+// orbital tree; there is no agent/CLI divergence to surface here.
+func renderPluginList(plugins []apimodel.Plugin) string {
+	if len(plugins) == 0 {
 		return "No plugins installed.\n"
-	}
-
-	// Merge by name. Agent-reported metadata wins for the descriptor
-	// fields (Type, Kind, Category, ManagedBy) since the agent
-	// canonicalizes those; CLI-only plugins fall back to whatever the
-	// local orbital records carry.
-	merged := map[string]*mergedPlugin{}
-	for _, p := range agentPlugins {
-		m := merged[p.Name]
-		if m == nil {
-			m = &mergedPlugin{plugin: p}
-			merged[p.Name] = m
-		}
-		m.plugin = p
-		m.agentVersion = p.InstalledVersion
-	}
-	for _, p := range localPlugins {
-		m := merged[p.Name]
-		if m == nil {
-			m = &mergedPlugin{plugin: p}
-			merged[p.Name] = m
-		}
-		m.cliVersion = p.InstalledVersion
 	}
 
 	// Group by kind/type. Bundles get their own section so users can see
@@ -67,26 +27,26 @@ func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin, agentReached
 	// individual plugins those bundles pulled in. Internally orbital
 	// calls these "metapackages"; we render them as "bundles" in the CLI
 	// for friendlier vocabulary.
-	var resource, auth, bundles []*mergedPlugin
-	for _, m := range merged {
+	var resource, auth, bundles []apimodel.Plugin
+	for _, p := range plugins {
 		switch {
-		case m.plugin.Kind == "metapackage":
-			bundles = append(bundles, m)
-		case m.plugin.Type == "auth":
-			auth = append(auth, m)
+		case p.Kind == "metapackage":
+			bundles = append(bundles, p)
+		case p.Type == "auth":
+			auth = append(auth, p)
 		default:
-			resource = append(resource, m)
+			resource = append(resource, p)
 		}
 	}
-	sortByName := func(s []*mergedPlugin) {
-		sort.Slice(s, func(i, j int) bool { return s[i].plugin.Name < s[j].plugin.Name })
+	sortByName := func(s []apimodel.Plugin) {
+		sort.Slice(s, func(i, j int) bool { return s[i].Name < s[j].Name })
 	}
 	sortByName(resource)
 	sortByName(auth)
 	sortByName(bundles)
 
 	var sb strings.Builder
-	emit := func(header string, plugins []*mergedPlugin, addLeadingNewline bool) {
+	emit := func(header string, plugins []apimodel.Plugin, addLeadingNewline bool) {
 		if len(plugins) == 0 {
 			return
 		}
@@ -94,8 +54,8 @@ func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin, agentReached
 			sb.WriteString("\n")
 		}
 		sb.WriteString(display.LightBlue(header) + "\n")
-		for _, m := range plugins {
-			sb.WriteString(renderMergedRow(m, agentReached, localScanned) + "\n")
+		for _, p := range plugins {
+			sb.WriteString(renderPluginRow(p) + "\n")
 		}
 	}
 
@@ -106,63 +66,14 @@ func renderPluginList(agentPlugins, localPlugins []apimodel.Plugin, agentReached
 	return sb.String()
 }
 
-func renderMergedRow(m *mergedPlugin, agentReached, localScanned bool) string {
-	name := padRight(m.plugin.Name, 14)
+func renderPluginRow(p apimodel.Plugin) string {
+	name := padRight(p.Name, 14)
 	managedBy := ""
-	if m.plugin.ManagedBy != "" {
-		managedBy = display.Grey("  (" + m.plugin.ManagedBy + ")")
+	if p.ManagedBy != "" {
+		managedBy = display.Grey("  (" + p.ManagedBy + ")")
 	}
-
-	// Both arms reached + version mismatch is the only case that
-	// breaks the single-version rendering: surface both versions
-	// inline, mark with a warning glyph.
-	if agentReached && localScanned && m.onAgent() && m.onCLI() && m.agentVersion != m.cliVersion {
-		return fmt.Sprintf("  %s %s  %s  %s%s",
-			display.Gold("⚠"), name,
-			display.Grey(fmt.Sprintf("agent %s / cli %s", m.agentVersion, m.cliVersion)),
-			display.Gold("version mismatch"), managedBy)
-	}
-
-	version := m.agentVersion
-	if version == "" {
-		version = m.cliVersion
-	}
-	annotation := annotateRow(m, agentReached, localScanned)
-
-	line := fmt.Sprintf("  %s %s  %s",
-		display.Green("✓"), name, display.Grey(version))
-	if annotation != "" {
-		line += "  " + display.Grey(annotation)
-	}
-	return line + managedBy
-}
-
-// annotateRow decides what to put after the version, encoding the
-// "annotate only what's notable" rule:
-//
-//	both arms reached, plugin on both:    no annotation (boring case)
-//	both arms reached, agent only:        (agent only)
-//	both arms reached, cli only:          (cli only)
-//	only agent reached:                   (agent)         — every row
-//	only local scanned:                   (cli)           — every row
-//
-// The version-mismatch case is handled by the caller because it also
-// changes the version display.
-func annotateRow(m *mergedPlugin, agentReached, localScanned bool) string {
-	if agentReached && localScanned {
-		switch {
-		case m.onAgent() && !m.onCLI():
-			return "(agent only)"
-		case m.onCLI() && !m.onAgent():
-			return "(cli only)"
-		default:
-			return ""
-		}
-	}
-	if agentReached {
-		return "(agent)"
-	}
-	return "(cli)"
+	return fmt.Sprintf("  %s %s  %s%s",
+		display.Green("✓"), name, display.Grey(p.InstalledVersion), managedBy)
 }
 
 func renderPluginSearch(plugins []apimodel.Plugin) string {

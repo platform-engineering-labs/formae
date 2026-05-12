@@ -7,6 +7,8 @@ package plugin
 import (
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/opsmgr"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -16,9 +18,11 @@ import (
 	"github.com/platform-engineering-labs/orbital/ops"
 )
 
-// CLIPluginManager runs orbital against the local /opt/pel tree. While
-// /opt/pel is root-owned, mutating operations re-exec the CLI under sudo
-// via orbital's tree.New flow. Read-only listing does not.
+// CLIPluginManager wraps the local plugin store on this host. When the
+// store path is root-owned (the default install layout), orbital's
+// tree.New re-execs the CLI under sudo so the store can be mutated
+// safely. This type is internal to the CLI; user-facing strings do not
+// mention "orbital" or "tree" — those are implementation details.
 type CLIPluginManager struct {
 	orb    *mgr.Manager
 	logger *slog.Logger
@@ -46,7 +50,7 @@ func NewCLIPluginManager(logger *slog.Logger, repos []pkgmodel.Repository, chann
 		return nil, err
 	}
 	if !orb.Ready() {
-		return nil, fmt.Errorf("orbital tree not initialized at %s; install formae via the orbital installer or set %s to point at an initialized tree (e.g. /opt/pel)", orb.Path, opsmgr.FormaePelRootEnv)
+		return nil, fmt.Errorf("plugin store at %s is not initialized; install formae from the official installer, or set %s to point at an existing install (e.g. /opt/pel)", orb.Path, opsmgr.FormaePelRootEnv)
 	}
 	return &CLIPluginManager{orb: orb, logger: logger}, nil
 }
@@ -94,6 +98,139 @@ func (pm *CLIPluginManager) ListInstalled() ([]apimodel.Plugin, error) {
 		plugins = append(plugins, pluginFromPackage(pkg))
 	}
 	return plugins, nil
+}
+
+// LocalSearch returns plugins available for installation from the
+// configured repositories, filtered by query/category/type. Mirrors the
+// agent-side PluginManager.Available shape (sorted by name, with
+// AvailableVersions populated) so the CLI can stand alone without an
+// agent.
+func (pm *CLIPluginManager) LocalSearch(query, category, typ string) ([]apimodel.Plugin, error) {
+	if err := pm.orb.Refresh(); err != nil {
+		pm.logger.Warn("refresh failed, using cached repository data", "error", err)
+	}
+	avail, err := pm.orb.Available()
+	if err != nil {
+		return nil, fmt.Errorf("querying available packages: %w", err)
+	}
+
+	plugins := make([]apimodel.Plugin, 0, len(avail))
+	for _, status := range avail {
+		if status == nil || len(status.Available) == 0 {
+			continue
+		}
+		var src *records.Package
+		for _, pkg := range status.Available {
+			if isPluginPackage(pkg) {
+				src = pkg
+				break
+			}
+		}
+		if src == nil {
+			continue
+		}
+		p := pluginFromPackage(src)
+		p.InstalledVersion = installedVersionOf(status.Available)
+		p.AvailableVersions = uniqueVersions(status.Available)
+		if matchesPluginFilter(p, query, category, typ) {
+			plugins = append(plugins, p)
+		}
+	}
+	sort.Slice(plugins, func(i, j int) bool {
+		return plugins[i].Name < plugins[j].Name
+	})
+	return plugins, nil
+}
+
+// LocalInfo returns detailed information about a single plugin from the
+// configured repositories, or nil if no candidate carries plugin
+// metadata or the package is unknown. Mirrors the agent-side
+// PluginManager.Info.
+func (pm *CLIPluginManager) LocalInfo(name string) (*apimodel.Plugin, error) {
+	if err := pm.orb.Refresh(); err != nil {
+		pm.logger.Warn("refresh failed, using cached repository data", "error", err)
+	}
+	status, err := pm.orb.AvailableFor(name)
+	if err != nil {
+		// orbital's AvailableFor returns "no available packages for: <name>"
+		// when the package isn't in any of the requested channel's repos.
+		// That's a normal not-found, not an internal error.
+		if strings.Contains(err.Error(), "no available packages for") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying package info for %s: %w", name, err)
+	}
+	if status == nil || len(status.Available) == 0 {
+		return nil, nil
+	}
+
+	var src *records.Package
+	for _, pkg := range status.Available {
+		if isPluginPackage(pkg) {
+			src = pkg
+			break
+		}
+	}
+	if src == nil {
+		return nil, nil
+	}
+	p := pluginFromPackage(src)
+	p.InstalledVersion = installedVersionOf(status.Available)
+	p.AvailableVersions = uniqueVersions(status.Available)
+	return &p, nil
+}
+
+// installedVersionOf returns the version string of the package marked
+// Installed in pkgs, or "" if none is installed. Lets search/info show
+// the user which available version is currently on disk.
+func installedVersionOf(pkgs []*records.Package) string {
+	for _, pkg := range pkgs {
+		if pkg != nil && pkg.Installed && pkg.Version != nil {
+			return versionString(pkg.Version)
+		}
+	}
+	return ""
+}
+
+// uniqueVersions returns the distinct version strings from pkgs in
+// input order. Orbital can surface the same package twice when it
+// lives both in the local tree (after install) and in a configured
+// repo, so a naive append would produce duplicates.
+func uniqueVersions(pkgs []*records.Package) []string {
+	seen := make(map[string]bool, len(pkgs))
+	versions := make([]string, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		if pkg == nil || pkg.Header == nil || pkg.Version == nil {
+			continue
+		}
+		v := versionString(pkg.Version)
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		versions = append(versions, v)
+	}
+	return versions
+}
+
+// matchesPluginFilter returns true if p satisfies every non-empty
+// search filter. query matches the lowercased
+// name+summary+description haystack.
+func matchesPluginFilter(p apimodel.Plugin, query, category, typ string) bool {
+	if category != "" && p.Category != category {
+		return false
+	}
+	if typ != "" && p.Type != typ {
+		return false
+	}
+	if query != "" {
+		q := strings.ToLower(query)
+		haystack := strings.ToLower(p.Name + " " + p.Summary + " " + p.Description)
+		if !strings.Contains(haystack, q) {
+			return false
+		}
+	}
+	return true
 }
 
 func isPluginPackage(pkg *records.Package) bool {

@@ -6,6 +6,7 @@ package plugin
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -29,9 +30,14 @@ func PluginSearchCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "search",
 		Short: "Search available plugins",
-		Long: `Search the plugins available for installation. With no
-arguments, every available plugin is listed; with a query, only plugins
-whose name or description matches are returned.`,
+		Long: `Search the plugins available for installation from the
+configured plugin repositories. With no arguments, every available
+plugin is listed; with a query, only plugins whose name, summary, or
+description matches are returned.
+
+On a stock install the plugin store lives at a path that only root can
+write to, so this command may prompt for sudo to refresh the
+repository metadata.`,
 		Annotations: map[string]string{
 			"args": "[<query>]",
 		},
@@ -109,13 +115,12 @@ func runSearchForMachines(app *app.App, opts *SearchOptions) error {
 }
 
 func searchPlugins(app *app.App, opts *SearchOptions) ([]apimodel.Plugin, error) {
-	client, err := app.NewClient()
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.ListPlugins("available", opts.Query, opts.Category, opts.Type, opts.Channel)
-	if err != nil {
-		return nil, err
+	if mgr == nil {
+		return nil, fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
 	}
-	return resp.Plugins, nil
+	return mgr.LocalSearch(opts.Query, opts.Category, opts.Type)
 }
