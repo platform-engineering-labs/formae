@@ -380,6 +380,75 @@ func TestGeneratePatch(t *testing.T) {
 	assert.Equal(t, "/val2", replOps[0].Path)
 }
 
+// TestGeneratePatch_NestedCreateOnlyTriggersReplacement exercises a
+// createOnly field declared on a nested SubResource. Schema Hints from
+// `formae.fq.hints()` emit dot-separated keys for nested fields
+// ("spec.selector") but jsonpatch operation paths are slash-separated
+// per RFC 6902 ("/spec/selector/matchLabels/foo"). The createOnly
+// detection must normalize the two so changes to nested immutable
+// fields trigger a replacement instead of being silently shipped to
+// the plugin as a mutable patch.
+//
+// Regression: before the fix, isCreateOnlyPath compared dot-paths to
+// slash-paths raw, so nested createOnly violations weren't caught.
+// Users only learned about the immutability when the cloud API
+// rejected the apply (e.g. K8s "spec.selector: field is immutable"
+// on Deployment).
+func TestGeneratePatch_NestedCreateOnlyTriggersReplacement(t *testing.T) {
+	document := []byte(`{
+		"label": "deploy",
+		"stack": "s",
+		"spec": {
+			"selector": {
+				"matchLabels": {"app": "demo"}
+			},
+			"replicas": 2
+		}
+	}`)
+
+	// Add a new key under spec.selector.matchLabels (createOnly) AND
+	// bump replicas (mutable). The createOnly change should be
+	// extracted into createOnlyPatch; the replicas change should
+	// remain in the mutable patchDoc.
+	patch := []byte(`{
+		"label": "deploy",
+		"stack": "s",
+		"spec": {
+			"selector": {
+				"matchLabels": {"app": "demo", "foo": "bar"}
+			},
+			"replicas": 3
+		}
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"label", "stack", "spec"},
+		Hints: map[string]pkgmodel.FieldHint{
+			// Dot-separated key as emitted by `formae.fq.hints()` for a
+			// SubResource field. The fix must normalize this to the
+			// slash-form jsonpatch uses.
+			"spec.selector": {CreateOnly: true},
+		},
+	}
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	require.NotEmpty(t, createOnlyPatch, "nested createOnly change must produce a non-empty createOnlyPatch")
+
+	var coOps []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(createOnlyPatch, &coOps))
+	require.Len(t, coOps, 1, "exactly one op should target the nested createOnly field")
+	assert.Equal(t, "/spec/selector/matchLabels/foo", coOps[0].Path,
+		"the matchLabels addition must end up in createOnlyPatch, not in the mutable patch")
+
+	var mutableOps []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &mutableOps))
+	for _, op := range mutableOps {
+		assert.NotContains(t, op.Path, "/spec/selector",
+			"no op under spec.selector may remain in the mutable patch")
+	}
+}
+
 // Test that createPatch will resolve references in json objects amd arrays of json objects
 func TestGeneratePatch_ShouldResolveRefs(t *testing.T) {
 	resourceKsuid := util.NewID()

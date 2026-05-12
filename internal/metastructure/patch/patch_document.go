@@ -713,9 +713,19 @@ func extractCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnly
 // isCreateOnlyPath checks if a patch path targets a createOnly field.
 // Matches both the field itself ("/DomainName") and nested paths within
 // it ("/ContainerDefinitions/0/Name").
+//
+// Schema Hints from `formae.fq.hints()` use dot-separated keys for
+// nested fields ("Spec.Selector"), but jsonpatch operation paths use
+// slash separators per RFC 6902 ("/Spec/Selector/MatchLabels/foo").
+// Normalize the schema-side keys to slash form before comparison so
+// nested createOnly fields on SubResources are detected. Without the
+// normalization the check silently no-ops for any path deeper than a
+// top-level field — which leaves createOnly violations on nested
+// fields undetected until the cloud API rejects them at apply time.
 func isCreateOnlyPath(path string, createOnlyFields []string) bool {
 	for _, field := range createOnlyFields {
-		if path == field || strings.HasPrefix(path, field+"/") {
+		f := strings.ReplaceAll(field, ".", "/")
+		if path == f || strings.HasPrefix(path, f+"/") {
 			return true
 		}
 	}
