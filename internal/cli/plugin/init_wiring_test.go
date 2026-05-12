@@ -55,6 +55,7 @@ func newWiringOpts(t *testing.T, hubURL string, downloader TemplateDownloader, o
 		Name:               "foo",
 		Namespace:          "FOO",
 		Description:        "test",
+		Category:           "other",
 		Author:             "Tester",
 		ModulePath:         "github.com/test/formae-plugin-foo",
 		License:            "Apache-2.0",

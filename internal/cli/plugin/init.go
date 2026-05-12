@@ -25,11 +25,27 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 )
 
+// pluginCategories is the closed set the formae Hub accepts for the
+// `display.category` field. Mirrors the Zod enum on the Hub side; keep
+// in sync when the Hub's allowlist changes.
+var pluginCategories = []string{
+	"cloud",
+	"auth",
+	"config",
+	"observability",
+	"cicd",
+	"network",
+	"data",
+	"security",
+	"other",
+}
+
 // PluginConfig holds the configuration for a new plugin
 type PluginConfig struct {
 	Name        string
 	Namespace   string
 	Description string
+	Category    string
 	Author      string
 	License     string
 	OutputDir   string
@@ -41,6 +57,7 @@ type PluginInitOptions struct {
 	Name        string
 	Namespace   string
 	Description string
+	Category    string
 	Author      string
 	ModulePath  string
 	License     string
@@ -174,17 +191,42 @@ func validatePluginInitOptions(opts *PluginInitOptions) error {
 		if err := validateNamespace(opts.Namespace); err != nil {
 			return cmd.FlagErrorf("invalid namespace: %s", err.Error())
 		}
+		if opts.Category != "" {
+			if err := validatePluginCategory(opts.Category); err != nil {
+				return cmd.FlagErrorf("invalid category: %s", err.Error())
+			}
+		}
 
 		// Apply defaults for optional fields
 		if opts.License == "" {
 			opts.License = "Apache-2.0"
 		}
+		if opts.Category == "" {
+			opts.Category = "other"
+		}
 		if opts.OutputDir == "" {
 			opts.OutputDir = "./" + opts.Name
+		}
+	} else if opts.Category != "" {
+		// Interactive mode still validates a --category passed on the
+		// command line so the prompt is skipped for the user.
+		if err := validatePluginCategory(opts.Category); err != nil {
+			return cmd.FlagErrorf("invalid category: %s", err.Error())
 		}
 	}
 
 	return nil
+}
+
+// validatePluginCategory checks that the supplied category is in the
+// closed allowlist the formae Hub accepts.
+func validatePluginCategory(category string) error {
+	for _, c := range pluginCategories {
+		if c == category {
+			return nil
+		}
+	}
+	return fmt.Errorf("category must be one of: %s", strings.Join(pluginCategories, ", "))
 }
 
 // Template repository configuration
@@ -228,6 +270,7 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 			opts.Name, _ = c.Flags().GetString("name")
 			opts.Namespace, _ = c.Flags().GetString("namespace")
 			opts.Description, _ = c.Flags().GetString("description")
+			opts.Category, _ = c.Flags().GetString("category")
 			opts.Author, _ = c.Flags().GetString("author")
 			opts.ModulePath, _ = c.Flags().GetString("module-path")
 			opts.License, _ = c.Flags().GetString("license")
@@ -249,6 +292,8 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 	command.Flags().String("name", "", "Plugin name (required for --no-input)")
 	command.Flags().String("namespace", "", "Target technology namespace, e.g. AWS, GCP (required for --no-input)")
 	command.Flags().String("description", "", "Plugin description (required for --no-input)")
+	command.Flags().String("category", "",
+		fmt.Sprintf("Plugin category (default: prompted in interactive mode, 'other' in --no-input). One of: %s", strings.Join(pluginCategories, ", ")))
 	command.Flags().String("author", "", "Plugin author for license copyright (required for --no-input)")
 	command.Flags().String("module-path", "", "Go module path, e.g. github.com/your-org/formae-plugin-foo (required for --no-input)")
 	command.Flags().String("license", "", "SPDX license identifier (default: Apache-2.0)")
@@ -336,6 +381,19 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 			return err
 		}
 		config.Description = description
+	}
+
+	// Category — picked from the formae Hub's closed enum so the
+	// scaffolded manifest is publishable without a follow-up edit.
+	if opts.Category != "" {
+		config.Category = opts.Category
+	} else {
+		defaultIndex := len(pluginCategories) - 1 // "other"
+		category, err := p.PromptChoice("Plugin category", pluginCategories, defaultIndex)
+		if err != nil {
+			return err
+		}
+		config.Category = category
 	}
 
 	// Author (required, for license copyright)
@@ -728,6 +786,9 @@ func transformContent(content string, config *PluginConfig) string {
 
 	// Description
 	content = strings.ReplaceAll(content, `description = "Example Formae plugin template"`, fmt.Sprintf(`description = "%s"`, config.Description))
+
+	// Category (the template ships with "other"; replace with the chosen value).
+	content = strings.ReplaceAll(content, `category = "other"`, fmt.Sprintf(`category = "%s"`, config.Category))
 
 	// License
 	content = strings.ReplaceAll(content, `license = "Apache-2.0"`, fmt.Sprintf(`license = "%s"`, config.License))
