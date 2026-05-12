@@ -719,10 +719,10 @@ func TestCompareArrayUnordered_NestedProviderDefaults(t *testing.T) {
 		},
 	}
 	providerDefaults := map[string]providerDefault{
-		"webhooks.matchPolicy":          {},
-		"webhooks.timeoutSeconds":       {},
-		"webhooks.failurePolicy":        {},
-		"webhooks.sideEffects":          {},
+		"webhooks.matchPolicy":               {},
+		"webhooks.timeoutSeconds":            {},
+		"webhooks.failurePolicy":             {},
+		"webhooks.sideEffects":               {},
 		"webhooks.clientConfig.service.port": {},
 	}
 	result := compareArrayUnordered(t, "webhooks", expected, actual, "after create", providerDefaults)
@@ -768,8 +768,8 @@ func TestCompareProperties_ExtraTopLevelProviderDefault(t *testing.T) {
 	}
 	actualResource := map[string]any{
 		"Properties": map[string]any{
-			"metadata":      map[string]any{"name": "my-svc"},
-			"clusterIP":     "10.96.0.1",
+			"metadata":  map[string]any{"name": "my-svc"},
+			"clusterIP": "10.96.0.1",
 		},
 	}
 	providerDefaults := map[string]providerDefault{
@@ -1079,6 +1079,68 @@ func TestCompareProperties_NullInExpectedMissingInActual(t *testing.T) {
 	result := compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults)
 	if !result {
 		t.Error("should pass when expected has null but actual omits the key")
+	}
+}
+
+func TestCompareArrayOfMaps_ProviderDefaultMissingInActualElement(t *testing.T) {
+	// Schema declares container.terminationMessagePath as hasProviderDefault.
+	// PKL renders the default value into expected; the plugin strips it on read,
+	// so actual omits it. mapSubsetMatch must still find the candidate element.
+	expected := []any{
+		map[string]any{
+			"name":                     "nginx",
+			"image":                    "nginx:alpine",
+			"terminationMessagePath":   "/dev/termination-log",
+			"terminationMessagePolicy": "File",
+		},
+	}
+	actual := []any{
+		map[string]any{
+			"name":  "nginx",
+			"image": "nginx:alpine",
+		},
+	}
+	providerDefaults := map[string]providerDefault{
+		"spec.containers.terminationMessagePath":   {},
+		"spec.containers.terminationMessagePolicy": {},
+	}
+	if !compareArrayOfMaps(t, "spec.containers", expected, actual, "after create", providerDefaults) {
+		t.Error("should match when expected has provider-defaulted keys that actual omits")
+	}
+}
+
+func TestCompareMap_ProviderDefaultMissingInActual(t *testing.T) {
+	// Forward direction (expected → actual): expected has a key the plugin strips
+	// on read. Without this tolerance, compareMap would flag it as missing.
+	expected := map[string]any{
+		"name":                   "nginx",
+		"terminationMessagePath": "/dev/termination-log",
+	}
+	actual := map[string]any{
+		"name": "nginx",
+	}
+	providerDefaults := map[string]providerDefault{
+		"spec.containers[0].terminationMessagePath": {},
+	}
+	if !compareMap(t, "spec.containers[0]", expected, actual, "after create", providerDefaults) {
+		t.Error("should pass when expected has provider-defaulted key that actual omits")
+	}
+}
+
+func TestCompareMap_MissingKeyNotProviderDefault_StillFails(t *testing.T) {
+	// Regression guard: tolerance only applies to hasProviderDefault keys.
+	// A user-set key missing from actual must still be flagged.
+	expected := map[string]any{
+		"name":  "nginx",
+		"image": "nginx:alpine",
+	}
+	actual := map[string]any{
+		"name": "nginx",
+	}
+	providerDefaults := map[string]providerDefault{}
+	inner := &testing.T{}
+	if compareMap(inner, "spec.containers[0]", expected, actual, "after create", providerDefaults) {
+		t.Error("should fail when a non-provider-default key is missing in actual")
 	}
 }
 

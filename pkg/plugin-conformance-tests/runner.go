@@ -637,7 +637,11 @@ func compareArrayOfMaps(r testReporter, key string, expectedArr, actualArr []any
 			continue
 		}
 
-		// Find matching actual element using subset comparison
+		// Find matching actual element using subset comparison.
+		// Element path is e.g. "spec.containers[i]" — pass it so subset matching
+		// can tolerate expected keys marked hasProviderDefault that the provider
+		// strips on read (e.g. container.terminationMessagePath).
+		elemPath := fmt.Sprintf("%s[%d]", key, i)
 		matchIdx := -1
 		for j, actualVal := range actualArr {
 			if matched[j] {
@@ -647,7 +651,7 @@ func compareArrayOfMaps(r testReporter, key string, expectedArr, actualArr []any
 			if !isActualMap {
 				continue
 			}
-			if mapSubsetMatch(expectedMap, actualMap) {
+			if mapSubsetMatch(expectedMap, actualMap, elemPath, providerDefaults) {
 				matchIdx = j
 				break
 			}
@@ -672,9 +676,12 @@ func compareArrayOfMaps(r testReporter, key string, expectedArr, actualArr []any
 
 // mapSubsetMatch checks if all keys in expected exist in actual with matching
 // values. This is a non-reporting version of compareMap for use in matching.
-// Resolvables are normalized before comparison.
-func mapSubsetMatch(expected, actual map[string]any) bool {
+// Resolvables are normalized before comparison. The pathPrefix lets the matcher
+// tolerate expected keys marked hasProviderDefault when the provider strips them
+// on read (e.g. container.terminationMessagePath).
+func mapSubsetMatch(expected, actual map[string]any, pathPrefix string, providerDefaults map[string]providerDefault) bool {
 	for key, expectedValue := range expected {
+		fieldPath := joinFieldPath(pathPrefix, key)
 		actualValue, exists := actual[key]
 		if !exists {
 			// Skip expected keys with null or empty collection values —
@@ -688,6 +695,11 @@ func mapSubsetMatch(expected, actual map[string]any) bool {
 			if m, ok := expectedValue.(map[string]any); ok && len(m) == 0 {
 				continue
 			}
+			// Tolerate missing provider-defaulted fields (e.g. fields the plugin
+			// strips on read because the API server sets them server-side).
+			if isProviderDefault(fieldPath, providerDefaults) {
+				continue
+			}
 			return false
 		}
 		expectedValue = normalizeResolvables(expectedValue)
@@ -699,7 +711,7 @@ func mapSubsetMatch(expected, actual map[string]any) bool {
 			if !ok {
 				return false
 			}
-			if !mapSubsetMatch(ev, av) {
+			if !mapSubsetMatch(ev, av, fieldPath, providerDefaults) {
 				return false
 			}
 		case []any:
@@ -707,7 +719,7 @@ func mapSubsetMatch(expected, actual map[string]any) bool {
 			if !ok {
 				return false
 			}
-			if !arraySubsetMatch(ev, av) {
+			if !arraySubsetMatch(ev, av, fieldPath, providerDefaults) {
 				return false
 			}
 		default:
@@ -721,9 +733,18 @@ func mapSubsetMatch(expected, actual map[string]any) bool {
 	return true
 }
 
+// joinFieldPath appends a key to a dotted path. Empty prefix returns key alone.
+func joinFieldPath(prefix, key string) string {
+	if prefix == "" {
+		return key
+	}
+	return prefix + "." + key
+}
+
 // arraySubsetMatch checks if two arrays match, using subset matching for map
-// elements and exact comparison for scalars.
-func arraySubsetMatch(expected, actual []any) bool {
+// elements and exact comparison for scalars. pathPrefix points at the array
+// itself; element paths are pathPrefix+"[i]".
+func arraySubsetMatch(expected, actual []any, pathPrefix string, providerDefaults map[string]providerDefault) bool {
 	if len(expected) != len(actual) {
 		return false
 	}
@@ -731,11 +752,12 @@ func arraySubsetMatch(expected, actual []any) bool {
 	if len(expected) > 0 {
 		if _, isMap := expected[0].(map[string]any); isMap {
 			matched := make([]bool, len(actual))
-			for _, ev := range expected {
+			for i, ev := range expected {
 				eMap, ok := ev.(map[string]any)
 				if !ok {
 					return false
 				}
+				elemPath := fmt.Sprintf("%s[%d]", pathPrefix, i)
 				found := false
 				for j, av := range actual {
 					if matched[j] {
@@ -745,7 +767,7 @@ func arraySubsetMatch(expected, actual []any) bool {
 					if !ok {
 						continue
 					}
-					if mapSubsetMatch(eMap, aMap) {
+					if mapSubsetMatch(eMap, aMap, elemPath, providerDefaults) {
 						matched[j] = true
 						found = true
 						break
@@ -834,7 +856,7 @@ func compareArrayWithResolvables(r testReporter, key string, expectedArr, actual
 					continue
 				}
 				if actMap, isActMap := act.(map[string]any); isActMap {
-					if mapSubsetMatch(expMap, actMap) {
+					if mapSubsetMatch(expMap, actMap, elemName, providerDefaults) {
 						matched[j] = true
 						found = true
 						break
@@ -884,6 +906,11 @@ func compareMap(r testReporter, name string, expected, actual map[string]any, co
 				continue
 			}
 			if m, isMap := expectedValue.(map[string]any); isMap && len(m) == 0 {
+				continue
+			}
+			// Tolerate missing provider-defaulted fields (e.g. fields the plugin
+			// strips on read because the API server sets them server-side).
+			if isProviderDefault(name+"."+key, providerDefaults) {
 				continue
 			}
 			r.Errorf("Property %s.%s should exist (%s)", name, key, context)
