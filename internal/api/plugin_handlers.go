@@ -6,6 +6,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -13,6 +15,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 )
 
 func (s *Server) requirePluginManager(c echo.Context) (*plugin_manager.PluginManager, error) {
@@ -22,12 +25,31 @@ func (s *Server) requirePluginManager(c echo.Context) (*plugin_manager.PluginMan
 	return s.pluginManager, nil
 }
 
-func (s *Server) listPluginsHandler(c echo.Context) error {
-	pm, err := s.requirePluginManager(c)
-	if err != nil {
-		return err
+// discoverLocalPluginPaths scans the configured plugin dirs and returns
+// a map from lowercase plugin name to the absolute path of the plugin's
+// PklProject file. Mirrors PluginManager.DiscoverLocalPaths, but lives
+// in api so the installed-plugin listing path can serve LocalPath
+// without depending on an orbital-backed PluginManager.
+func discoverLocalPluginPaths(pluginDirs []string) map[string]string {
+	if len(pluginDirs) == 0 {
+		return map[string]string{}
 	}
+	infos := discovery.DiscoverPluginsMulti(pluginDirs, discovery.Resource)
+	authInfos := discovery.DiscoverPluginsMulti(pluginDirs, discovery.Auth)
+	infos = append(infos, authInfos...)
+	out := make(map[string]string, len(infos))
+	for _, info := range infos {
+		base := filepath.Dir(info.BinaryPath)
+		pklProject := filepath.Join(base, "schema", "pkl", "PklProject")
+		if _, err := os.Stat(pklProject); err != nil {
+			continue
+		}
+		out[strings.ToLower(info.Name)] = pklProject
+	}
+	return out
+}
 
+func (s *Server) listPluginsHandler(c echo.Context) error {
 	scope := c.QueryParam("scope")
 	if scope == "" {
 		scope = "installed"
@@ -36,10 +58,18 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 	var plugins []plugin_manager.Plugin
 	switch scope {
 	case "installed":
-		localPaths := pm.DiscoverLocalPaths()
-		plugins, err = pm.ListWithLocalPaths(localPaths)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		// Installed listing is served from the in-process plugin
+		// registry (populated by PluginProcessSupervisor at startup) and
+		// a filesystem scan for PklProject paths. No orbital is required,
+		// so the endpoint stays usable even when /opt/pel is root-owned
+		// and the agent runs unprivileged.
+		localPaths := discoverLocalPluginPaths(s.pluginDirs)
+		if s.pluginManager != nil {
+			pmPlugins, err := s.pluginManager.ListWithLocalPaths(localPaths)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+			plugins = pmPlugins
 		}
 		registered, regErr := s.metastructure.RegisteredPlugins()
 		if regErr != nil {
@@ -48,7 +78,11 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 		}
 		plugins = mergeRegisteredPlugins(plugins, registered, localPaths)
 	case "available":
-		plugins, err = pm.Available(plugin_manager.AvailableFilter{
+		pm, err := s.requirePluginManager(c)
+		if err != nil {
+			return err
+		}
+		availablePlugins, err := pm.Available(plugin_manager.AvailableFilter{
 			Query:    c.QueryParam("q"),
 			Category: c.QueryParam("category"),
 			Type:     c.QueryParam("type"),
@@ -57,6 +91,7 @@ func (s *Server) listPluginsHandler(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
+		plugins = availablePlugins
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid scope: must be 'installed' or 'available'")
 	}

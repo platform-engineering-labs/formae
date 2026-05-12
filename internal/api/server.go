@@ -67,6 +67,7 @@ type Server struct {
 	echo           *echo.Echo
 	metastructure  metastructure.MetastructureAPI
 	pluginManager  *plugin_manager.PluginManager // nil if not configured
+	pluginDirs     []string                      // for filesystem-only installed-plugin discovery
 	ctx            context.Context
 	authHandle     *auth.AuthPluginHandle
 	serverConfig   *pkgmodel.ServerConfig
@@ -75,10 +76,21 @@ type Server struct {
 }
 
 // SetPluginManager configures the optional plugin manager for the server.
-// When set, the plugin management REST endpoints become active; otherwise
-// they return 503 Service Unavailable.
+// When set, the orbital-backed plugin endpoints (search, info, install,
+// uninstall, update) become active; otherwise they return 503 Service
+// Unavailable. The installed-plugin listing path does not need a plugin
+// manager — it serves from the registered-plugin set plus filesystem
+// discovery via SetPluginDirs.
 func (s *Server) SetPluginManager(pm *plugin_manager.PluginManager) {
 	s.pluginManager = pm
+}
+
+// SetPluginDirs configures the directories scanned to attach LocalPath
+// to plugins surfaced by the installed-plugin listing endpoint. Must
+// match the dirs the agent passes to PluginProcessSupervisor so the
+// listing reflects the same on-disk set the agent is actually running.
+func (s *Server) SetPluginDirs(dirs []string) {
+	s.pluginDirs = dirs
 }
 
 func NewServer(ctx context.Context, metastructure metastructure.MetastructureAPI, authHandle *auth.AuthPluginHandle, serverConfig *pkgmodel.ServerConfig, networkConfig *pkgmodel.NetworkConfig, metricsHandler http.Handler) *Server {

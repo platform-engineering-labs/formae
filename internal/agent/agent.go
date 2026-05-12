@@ -197,6 +197,12 @@ func (a *Agent) Start() error {
 		slog.Info("Agent started")
 
 		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, a.cfg.Network, metricsHandler)
+		// Plugin install/uninstall/update run locally on the CLI host
+		// (see internal/cli/plugin), so the agent does not construct an
+		// orbital-backed PluginManager. The installed-plugin listing
+		// endpoint serves from the in-process registry and a filesystem
+		// scan of these dirs — no orbital tree, no sudo re-exec.
+		apiServer.SetPluginDirs([]string{devPluginDir, systemPluginDir})
 
 		imwg.Add(apiServer)
 		imwg.Go(func() {
