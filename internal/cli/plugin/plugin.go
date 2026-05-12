@@ -23,14 +23,18 @@ func PluginCmd() *cobra.Command {
 		Short: "Execute commands on plugins",
 		Annotations: map[string]string{
 			"type":     "Plugins",
-			"examples": "{{.Name}} {{.Command}} list\n{{.Name}} {{.Command}} search aws\n{{.Name}} {{.Command}} install aws\n{{.Name}} {{.Command}} init",
+			"examples": "{{.Name}} {{.Command}} install aws\n{{.Name}} {{.Command}} init",
 		},
 		SilenceErrors: true,
 	}
 
-	command.AddCommand(PluginListCmd())
-	command.AddCommand(PluginSearchCmd())
-	command.AddCommand(PluginInfoCmd())
+	// list/search/info are temporarily unregistered: they depend on the
+	// agent's plugin manager, which only wires up when the orbital tree
+	// is reachable without sudo elevation. Until the deployment story
+	// is settled (agent running as the tree owner on a pel-owned tree),
+	// exposing them just produces opaque 503s. Re-register the three
+	// AddCommand calls below when the agent reliably has a plugin
+	// manager wired up.
 	command.AddCommand(PluginInstallCmd())
 	command.AddCommand(PluginUninstallCmd())
 	command.AddCommand(PluginUpdateCmd())
