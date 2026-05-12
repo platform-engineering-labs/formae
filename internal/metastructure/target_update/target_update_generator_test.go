@@ -1114,3 +1114,65 @@ func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
 	require.Len(t, updates, 1)
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
 }
+
+func TestGenerateTargetUpdates_RefWithCachedValue_NoChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint","$value":"https://my-cluster.eks.amazonaws.com"}}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint":"https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint"}}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "$ref+$value vs $ref-only with same resolved value must not produce an update")
+}
+
+// When the existing target carries a cached $value but the referenced
+// resource is gone, the dangling ref must surface as an update — otherwise
+// downstream resource generation will silently feed plugins the stale
+// cached value.
+func TestGenerateTargetUpdates_RefWithCachedValue_UnresolvableRef(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint","$value":"https://stale.eks.amazonaws.com"}}`),
+			},
+		},
+		// No resources — abc123 is gone
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint"}}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "dangling $ref with stale cached $value must surface as an update, not be silently absorbed")
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+}
