@@ -725,11 +725,11 @@ func (c *Client) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimod
 	return &result, nil
 }
 
-func (c *Client) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.UpgradePluginsResponse, error) {
+func (c *Client) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.UpdatePluginsResponse, error) {
 	resp, err := c.resty.R().
 		SetHeader("Content-Type", "application/json").
 		SetBody(req).
-		Post(c.endpoint + "/api/v1/plugins/upgrade")
+		Post(c.endpoint + "/api/v1/plugins/update")
 	if err != nil {
 		return nil, err
 	}
@@ -738,10 +738,10 @@ func (c *Client) UpgradePlugins(req apimodel.UpgradePluginsRequest) (*apimodel.U
 	defer resp.Body.Close()
 
 	if resp.StatusCode() != http.StatusOK {
-		return nil, fmt.Errorf("plugin upgrade failed: %d - %s", resp.StatusCode(), resp.String())
+		return nil, fmt.Errorf("plugin update failed: %d - %s", resp.StatusCode(), resp.String())
 	}
 
-	var result apimodel.UpgradePluginsResponse
+	var result apimodel.UpdatePluginsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}

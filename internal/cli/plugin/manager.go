@@ -65,11 +65,11 @@ func (pm *CLIPluginManager) LocalUninstall(names []string) error {
 	return pm.orb.Remove(names...)
 }
 
-// LocalUpgrade upgrades the named packages, or — when names is empty —
+// LocalUpdate updates the named packages, or — when names is empty —
 // every installed package. orbital's Update treats "no packages" as
-// "everything", which matches the user-facing `formae plugin upgrade`
+// "everything", which matches the user-facing `formae plugin update`
 // (no args) semantics.
-func (pm *CLIPluginManager) LocalUpgrade(names []string) error {
+func (pm *CLIPluginManager) LocalUpdate(names []string) error {
 	if err := pm.orb.Refresh(); err != nil {
 		pm.logger.Warn("failed to refresh local repos", "error", err)
 	}

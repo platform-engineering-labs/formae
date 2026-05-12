@@ -709,10 +709,10 @@ func TestUninstall_Error(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Upgrade
+// Update
 // ---------------------------------------------------------------------------
 
-func TestUpgrade_Success(t *testing.T) {
+func TestUpdate_Success(t *testing.T) {
 	fake := &fakeOrbitalClient{
 		available: map[string]*records.Status{
 			"formae-plugin-aws": {
@@ -727,7 +727,7 @@ func TestUpgrade_Success(t *testing.T) {
 	}
 	pm := newForTesting(slog.Default(), fake)
 
-	resp, err := pm.Upgrade(UpgradeRequest{
+	resp, err := pm.Update(UpdateRequest{
 		Packages: []PackageRef{{Name: "formae-plugin-aws", Version: "2.0.0"}},
 	})
 	require.NoError(t, err)
@@ -737,15 +737,15 @@ func TestUpgrade_Success(t *testing.T) {
 	assert.Equal(t, []string{"formae-plugin-aws@2.0.0"}, fake.updatedSpecs)
 }
 
-func TestUpgrade_Error(t *testing.T) {
+func TestUpdate_Error(t *testing.T) {
 	fake := &fakeOrbitalClient{updateErr: errors.New("no update")}
 	pm := newForTesting(slog.Default(), fake)
 
-	_, err := pm.Upgrade(UpgradeRequest{
+	_, err := pm.Update(UpdateRequest{
 		Packages: []PackageRef{{Name: "x"}},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "upgrading packages")
+	assert.Contains(t, err.Error(), "updating packages")
 }
 
 // ---------------------------------------------------------------------------
