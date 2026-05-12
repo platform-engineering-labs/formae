@@ -1114,3 +1114,34 @@ func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
 	require.Len(t, updates, 1)
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
 }
+
+func TestGenerateTargetUpdates_RefWithCachedValue_NoChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint","$value":"https://my-cluster.eks.amazonaws.com"}}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint":"https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint"}}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "$ref+$value vs $ref-only with same resolved value must not produce an update")
+}

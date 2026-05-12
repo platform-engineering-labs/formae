@@ -143,7 +143,9 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			// - The raw config format changed (e.g., plain value ↔ $ref wrapper)
 			// - The discoverable flag changed
 			// - The ConfigSchema changed (e.g., plugin annotations updated)
-			if !util.JsonEqualRaw(existing.Config, target.Config) {
+			existingStripped := stripResolvableValuesRaw(existing.Config)
+			desiredStripped := stripResolvableValuesRaw(target.Config)
+			if !util.JsonEqualRaw(existingStripped, desiredStripped) {
 				operation = TargetOperationUpdate
 			} else if existing.Discoverable != target.Discoverable {
 				operation = TargetOperationUpdate
