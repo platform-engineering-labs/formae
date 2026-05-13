@@ -732,7 +732,7 @@ func TestUpdate_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.Operations, 1)
-	assert.Equal(t, "install", resp.Operations[0].Action)
+	assert.Equal(t, "update", resp.Operations[0].Action)
 	assert.Equal(t, "2.0.0", resp.Operations[0].Version)
 	assert.Equal(t, []string{"formae-plugin-aws@2.0.0"}, fake.updatedSpecs)
 }

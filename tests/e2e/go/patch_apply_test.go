@@ -151,7 +151,7 @@ func testPatchApplyAzure(t *testing.T, cli *FormaeCLI) {
 	}
 	AssertResolvable(t, vnetRgName,
 		"e2e-patch-rg",
-		"Azure::Resources::ResourceGroup",
+		"AZURE::Resources::ResourceGroup",
 		"name",
 		"formae-e2e-patch-rg",
 	)

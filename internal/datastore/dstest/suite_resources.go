@@ -806,7 +806,7 @@ func RunStoreResourceAfterDeleteWithSameNativeID(t *testing.T, newDS func(t *tes
 		defer td.CleanUpFn() //nolint:errcheck
 
 		nativeID := "/subscriptions/test-sub/resourceGroups/test-rg"
-		resourceType := "Azure::Resources::ResourceGroup"
+		resourceType := "AZURE::Resources::ResourceGroup"
 
 		target := &pkgmodel.Target{
 			Label:     "target-1",

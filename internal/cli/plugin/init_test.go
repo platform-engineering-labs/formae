@@ -408,6 +408,92 @@ func TestRunAvailabilityCheck(t *testing.T) {
 	})
 }
 
+func TestValidatePluginCategory(t *testing.T) {
+	t.Run("each Hub-allowed category is accepted", func(t *testing.T) {
+		for _, c := range pluginCategories {
+			assert.NoError(t, validatePluginCategory(c), "expected %q to be accepted", c)
+		}
+	})
+
+	t.Run("an off-allowlist category is rejected", func(t *testing.T) {
+		err := validatePluginCategory("infrastructure")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "category must be one of")
+		assert.Contains(t, err.Error(), "cloud")
+	})
+}
+
+func TestValidatePluginInitOptions_Category(t *testing.T) {
+	baseOpts := func() *PluginInitOptions {
+		return &PluginInitOptions{
+			Name:        "myplugin",
+			Namespace:   "MYNS",
+			Description: "A test plugin",
+			Author:      "Test Author",
+			ModulePath:  "github.com/test/formae-plugin-myplugin",
+		}
+	}
+
+	t.Run("no-input with no --category defaults to 'other'", func(t *testing.T) {
+		opts := baseOpts()
+		opts.NoInput = true
+		require.NoError(t, validatePluginInitOptions(opts))
+		assert.Equal(t, "other", opts.Category)
+	})
+
+	t.Run("no-input preserves a valid --category", func(t *testing.T) {
+		opts := baseOpts()
+		opts.NoInput = true
+		opts.Category = "cloud"
+		require.NoError(t, validatePluginInitOptions(opts))
+		assert.Equal(t, "cloud", opts.Category)
+	})
+
+	t.Run("no-input rejects an off-allowlist --category", func(t *testing.T) {
+		opts := baseOpts()
+		opts.NoInput = true
+		opts.Category = "infrastructure"
+		err := validatePluginInitOptions(opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid category")
+		var flagErr *cmd.FlagError
+		assert.True(t, errors.As(err, &flagErr), "category validation error should be a FlagError so cobra prints usage")
+	})
+
+	t.Run("interactive mode validates --category if supplied", func(t *testing.T) {
+		opts := baseOpts()
+		opts.NoInput = false
+		opts.Category = "bogus"
+		err := validatePluginInitOptions(opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid category")
+	})
+
+	t.Run("interactive mode leaves category empty when not supplied", func(t *testing.T) {
+		opts := baseOpts()
+		opts.NoInput = false
+		require.NoError(t, validatePluginInitOptions(opts))
+		assert.Equal(t, "", opts.Category, "category prompt should still run in runPluginInit; validate must not preempt it")
+	})
+}
+
+func TestTransformContent_Category(t *testing.T) {
+	template := `display {
+    category = "other"
+    kind = "plugin"
+}`
+	transformed := transformContent(template, &PluginConfig{
+		Name:        "myplugin",
+		Namespace:   "MYNS",
+		Description: "A test plugin",
+		Category:    "cloud",
+		License:     "Apache-2.0",
+		ModulePath:  "github.com/test/formae-plugin-myplugin",
+	})
+	assert.Contains(t, transformed, `category = "cloud"`)
+	assert.NotContains(t, transformed, `category = "other"`)
+}
+
 func TestRunPluginInit_FlagNameValidatedInInteractiveMode(t *testing.T) {
 	opts := &PluginInitOptions{
 		Name:                "Foo", // uppercase: violates the lowercase-only rule

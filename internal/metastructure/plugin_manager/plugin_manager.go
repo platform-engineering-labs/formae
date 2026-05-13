@@ -81,7 +81,7 @@ type Operation struct {
 	Name    string
 	Type    string
 	Version string
-	Action  string // "install" | "remove" | "noop"
+	Action  string // "install" | "remove" | "update" | "noop"
 }
 
 // Response is the result of an Install, Uninstall, or Update call.
@@ -447,7 +447,7 @@ func (pm *PluginManager) Update(req UpdateRequest) (Response, error) {
 	if err := orb.Update(specs...); err != nil {
 		return Response{}, fmt.Errorf("updating packages: %w", err)
 	}
-	return pm.buildResponse(orb, req.Packages, "install")
+	return pm.buildResponse(orb, req.Packages, "update")
 }
 
 // buildResponse constructs a Response by querying the post-action state via

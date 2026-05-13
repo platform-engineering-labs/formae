@@ -50,11 +50,11 @@ func TestPluginCoordinator_CaseInsensitiveNamespaceLookup(t *testing.T) {
 func TestPluginCoordinator_GetPluginInfo_CaseInsensitive(t *testing.T) {
 	c := &PluginCoordinator{
 		plugins: map[string]*RegisteredPlugin{
-			"Azure": {
-				Namespace:            "Azure",
+			"AZURE": {
+				Namespace:            "AZURE",
 				MaxRequestsPerSecond: 10,
 				SupportedResources: []plugin.ResourceDescriptor{
-					{Type: "Azure::Compute::VM", Discoverable: true},
+					{Type: "AZURE::Compute::VirtualMachine", Discoverable: true},
 				},
 			},
 		},
