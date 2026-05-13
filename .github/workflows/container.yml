@@ -2,8 +2,19 @@ name: formae-container
 
 on:
   workflow_dispatch:
+    inputs:
+      pel_n:
+        description: 'PEL build revision. If set, the image tag becomes <git-tag>-pel-<pel_n>. Leave empty for the plain <git-tag> name used by the release flow.'
+        required: false
+        type: string
+        default: ''
   workflow_call:
-    
+    inputs:
+      pel_n:
+        type: string
+        required: false
+        default: ''
+
 jobs:
 
   container_linux:
@@ -53,18 +64,30 @@ jobs:
             echo "::error::unsupported tag pattern '${tag}'; expected X.Y.Z or X.Y.Z-dev[.N]"
             exit 1
           fi
+          # The image tag is the original git tag, plus an optional -pel-N
+          # suffix when pel_n is set (workflow_dispatch invocations that
+          # bake in custom plugins on top of an upstream release).
+          if [[ -n "${{ inputs.pel_n }}" ]]; then
+            echo "IMAGE_TAG=${tag}-pel-${{ inputs.pel_n }}" >> "$GITHUB_ENV"
+          else
+            echo "IMAGE_TAG=${tag}" >> "$GITHUB_ENV"
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ env.IMAGE_TAG }}
+          flavor: |
+            latest=false
 
       - name: Build and push container image
         id: push
