@@ -230,7 +230,7 @@ type PluginOperation struct {
 	Name    string `json:"name"`
 	Type    string `json:"type,omitempty"`
 	Version string `json:"version,omitempty"`
-	Action  string `json:"action"` // "install" | "remove" | "noop"
+	Action  string `json:"action"` // "install" | "remove" | "update" | "noop"
 }
 
 // PackageRef identifies a plugin package, optionally at a specific version.
