@@ -164,6 +164,11 @@ func UpdateListCmd() *cobra.Command {
 				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path)
 			}
 
+			err = orb.Refresh()
+			if err != nil {
+				return err
+			}
+
 			available, err := orb.AvailableFor("formae")
 			if err != nil {
 				return err
