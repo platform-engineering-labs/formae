@@ -156,7 +156,7 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 
 	// Step 3: Assert the ResourceGroup.
 	rg := RequireResource(t, resources, "e2e-test-rg")
-	if rg.Type != "Azure::Resources::ResourceGroup" {
+	if rg.Type != "AZURE::Resources::ResourceGroup" {
 		t.Errorf("resource group type: got %s, want Azure::Resources::ResourceGroup", rg.Type)
 	}
 	AssertStringProperty(t, rg, "name", "formae-e2e-reconcile-rg")
@@ -164,7 +164,7 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 
 	// Step 4: Assert the VirtualNetwork.
 	vnet := RequireResource(t, resources, "e2e-test-vnet")
-	if vnet.Type != "Azure::Network::VirtualNetwork" {
+	if vnet.Type != "AZURE::Network::VirtualNetwork" {
 		t.Errorf("vnet type: got %s, want Azure::Network::VirtualNetwork", vnet.Type)
 	}
 	AssertStringProperty(t, vnet, "name", "formae-e2e-reconcile-vnet")
@@ -176,14 +176,14 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 	}
 	AssertResolvable(t, vnetRgName,
 		"e2e-test-rg",
-		"Azure::Resources::ResourceGroup",
+		"AZURE::Resources::ResourceGroup",
 		"name",
 		"formae-e2e-reconcile-rg",
 	)
 
 	// Step 5: Assert the Subnet.
 	subnet := RequireResource(t, resources, "e2e-test-subnet")
-	if subnet.Type != "Azure::Network::Subnet" {
+	if subnet.Type != "AZURE::Network::Subnet" {
 		t.Errorf("subnet type: got %s, want Azure::Network::Subnet", subnet.Type)
 	}
 	AssertStringProperty(t, subnet, "name", "formae-e2e-reconcile-subnet")
@@ -195,7 +195,7 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 	}
 	AssertResolvable(t, subnetRgName,
 		"e2e-test-rg",
-		"Azure::Resources::ResourceGroup",
+		"AZURE::Resources::ResourceGroup",
 		"name",
 		"formae-e2e-reconcile-rg",
 	)
@@ -207,7 +207,7 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 	}
 	AssertResolvable(t, subnetVnetName,
 		"e2e-test-vnet",
-		"Azure::Network::VirtualNetwork",
+		"AZURE::Network::VirtualNetwork",
 		"name",
 		"formae-e2e-reconcile-vnet",
 	)
