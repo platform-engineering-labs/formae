@@ -37,6 +37,7 @@ var pluginCategories = []string{
 	"network",
 	"data",
 	"security",
+	"containers",
 	"other",
 }
 
