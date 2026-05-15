@@ -589,6 +589,52 @@ func TestCompareMap(t *testing.T) {
 			t.Error("compareMap should fail when expected key is missing from actual")
 		}
 	})
+
+	// Cloud providers commonly return [] / {} for fields the user didn't
+	// set; that's semantically equivalent to the key being omitted and
+	// must NOT be flagged as drift. The forward loop already has this
+	// forgiveness — these cases verify the reverse loop matches it.
+	t.Run("extra empty array in actual passes", func(t *testing.T) {
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Tags": []any{}}
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should pass when actual has an extra key with an empty array value")
+		}
+	})
+
+	t.Run("extra empty map in actual passes", func(t *testing.T) {
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Labels": map[string]any{}}
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should pass when actual has an extra key with an empty map value")
+		}
+	})
+
+	t.Run("extra nil value in actual passes", func(t *testing.T) {
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Optional": nil}
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should pass when actual has an extra key with a nil value")
+		}
+	})
+
+	t.Run("extra non-empty array in actual still fails", func(t *testing.T) {
+		fakeT := &testing.T{}
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Tags": []any{"prod"}}
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should still fail when actual has an extra key with a non-empty value (real drift)")
+		}
+	})
+
+	t.Run("extra non-empty map in actual still fails", func(t *testing.T) {
+		fakeT := &testing.T{}
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Labels": map[string]any{"env": "prod"}}
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should still fail when actual has an extra key with a non-empty map value (real drift)")
+		}
+	})
 }
 
 // TestCompareProperties_ResolvableNestedInArray verifies that compareProperties
@@ -797,6 +843,40 @@ func TestCompareProperties_ExtraTopLevelNonProviderDefault(t *testing.T) {
 	result := compareProperties(inner, expectedProperties, actualResource, "after create", providerDefaults)
 	if result {
 		t.Error("should fail when extra top-level key is not a provider default")
+	}
+}
+
+// Cloud providers commonly return [] / {} at the top level for fields the
+// user didn't set; that's semantically equivalent to the key being omitted
+// and must NOT be flagged as drift. Real drift (non-empty extras) still flagged.
+func TestCompareProperties_ExtraTopLevelEmptyValuesAllowed(t *testing.T) {
+	expectedProperties := map[string]any{"Name": "my-app"}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"Name":           "my-app",
+			"Tags":           []any{},
+			"DockerLabels":   map[string]any{},
+			"OptionalScalar": nil,
+		},
+	}
+	providerDefaults := map[string]providerDefault{}
+	if !compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults) {
+		t.Error("compareProperties should pass when extra top-level keys hold structurally-absent values (nil / [] / {})")
+	}
+}
+
+func TestCompareProperties_ExtraTopLevelNonEmptyStillFails(t *testing.T) {
+	expectedProperties := map[string]any{"Name": "my-app"}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"Name": "my-app",
+			"Tags": []any{"prod"},
+		},
+	}
+	providerDefaults := map[string]providerDefault{}
+	inner := &testing.T{}
+	if compareProperties(inner, expectedProperties, actualResource, "after create", providerDefaults) {
+		t.Error("compareProperties should still fail when extra top-level key has a non-empty value")
 	}
 }
 
