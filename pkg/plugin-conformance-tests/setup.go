@@ -34,6 +34,9 @@ func EnsureFormaeBinary(t *testing.T) (binaryPath string, cleanup func()) {
 	if p := os.Getenv("FORMAE_BINARY"); p != "" {
 		if _, err := os.Stat(p); err == nil {
 			t.Logf("using existing formae binary: %s", p)
+			version := extractVersion(t, p)
+			t.Logf("formae binary version: %s", version)
+			t.Setenv("FORMAE_VERSION", version)
 			return p, func() {}
 		}
 		t.Logf("FORMAE_BINARY set to %s but file does not exist, downloading instead", p)
