@@ -92,8 +92,18 @@ func NewResourceUpdateForExisting(
 		return replaceUpdates, nil
 	}
 
-	// Extract resolvables for the new resource
-	newRemainingResolvables := resolver.ExtractResolvableURIs(newResource)
+	// Extract resolvables from the FILTERED new properties — the same JSON
+	// that becomes DesiredState.Properties below. EnforceSetOnceAndCompareResourceForUpdate
+	// has already replaced setOnce / createOnly Resolvables with their existing
+	// values, so the resolver should NOT try to look up URIs that no longer
+	// have a corresponding $ref to write back into. Without this filter,
+	// ResolvePropertyReferences errors with "failed to set property value
+	// for <uri>" because the URI isn't in the patched payload, and the
+	// ResourceUpdater transitions to finished_with_error before
+	// plugin.Update is ever invoked.
+	filteredResource := newResource
+	filteredResource.Properties = filteredProps
+	newRemainingResolvables := resolver.ExtractResolvableURIs(filteredResource)
 
 	updateResource := ResourceUpdate{
 		PriorState:     existingResource,
