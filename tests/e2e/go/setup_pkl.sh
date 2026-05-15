@@ -37,11 +37,17 @@ fi
 FORMAE_VERSION=$(cat "$VERSION_FILE")
 FORMAE_URI="package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@${FORMAE_VERSION}"
 
-# hub_uri reads the baseUri and version from an installed plugin's schema
-# PklProject and emits a PklProject dependency line using the hub URI.
+# plugin_dep emits a PklProject dependency line for an installed plugin.
+#
+# Released versions (no pre-release suffix) resolve via the hub URI — the
+# corresponding schema package has been published by schema-prerelease.
+# Pre-release builds (e.g. `make install` of a plugin repo's HEAD produces
+# `v0.1.8-dev.0`) only exist on the runner's filesystem, so we point the
+# dependency at the plugin's on-disk PklProject. Same shape as
+# `formae extract --schema-location local` emits.
 #
 # Args: <namespace_dir> <pkl_alias> <required: true|false>
-hub_uri() {
+plugin_dep() {
     local ns_dir="$1"
     local alias="$2"
     local required="${3:-true}"
@@ -60,28 +66,35 @@ hub_uri() {
         fi
     fi
 
-    local base_uri version
-    base_uri=$(pkl eval -x 'package.baseUri' "$plugin_dir/schema/pkl/PklProject")
+    local version
     version=$(pkl eval -x 'version' "$plugin_dir/formae-plugin.pkl")
-    echo "Using $alias plugin v$version from hub ($base_uri)" >&2
-    echo "  [\"$alias\"] { uri = \"$base_uri@$version\" }"
+
+    if [[ "$version" == *-* ]]; then
+        echo "Using $alias plugin v$version from local install ($plugin_dir/schema/pkl)" >&2
+        echo "  [\"$alias\"] = import(\"$plugin_dir/schema/pkl/PklProject\")"
+    else
+        local base_uri
+        base_uri=$(pkl eval -x 'package.baseUri' "$plugin_dir/schema/pkl/PklProject")
+        echo "Using $alias plugin v$version from hub ($base_uri)" >&2
+        echo "  [\"$alias\"] { uri = \"$base_uri@$version\" }"
+    fi
 }
 
-# Resolve plugin schemas from the hub. All plugins are optional at this
-# level — the e2e workflow installs only the plugins each test needs (matrix
-# .plugins), so a single setup_pkl.sh run is shared across tests with
-# different plugin sets. Fixtures that import a plugin not installed will
-# fail to evaluate with a clear PKL error, which is the right failure mode.
-AWS_DEP=$(hub_uri "aws" "aws" false)
-AZURE_DEP=$(hub_uri "azure" "azure" false)
-COMPOSE_DEP=$(hub_uri "compose" "compose" false)
-GRAFANA_DEP=$(hub_uri "grafana" "grafana" false)
+# Resolve plugin deps. All plugins are optional at this level — the e2e
+# workflow installs only the plugins each test needs (matrix .plugins), so a
+# single setup_pkl.sh run is shared across tests with different plugin sets.
+# Fixtures that import a plugin not installed will fail to evaluate with a
+# clear PKL error, which is the right failure mode.
+AWS_DEP=$(plugin_dep "aws" "aws" false)
+AZURE_DEP=$(plugin_dep "azure" "azure" false)
+COMPOSE_DEP=$(plugin_dep "compose" "compose" false)
+GRAFANA_DEP=$(plugin_dep "grafana" "grafana" false)
 
-# Generate PklProject. Both formae core and plugins are pinned via hub URIs
-# — matches a real user's setup, and avoids the PKL type-identity split that
-# would happen if the fixture's formae and a plugin's formae were declared
-# at different URIs. Each plugin dep is included only if its hub_uri call
-# returned non-empty (i.e. the plugin is installed in $PLUGINS_DIR).
+# Generate PklProject. formae core is always pinned via hub URI (matches a
+# real user's setup); each plugin is resolved by plugin_dep, which picks hub
+# vs. local based on whether the installed version is a released semver. A
+# plugin dep is included only if its plugin_dep call returned non-empty
+# (i.e. the plugin is installed in $PLUGINS_DIR).
 cat > "$PKLPROJECT_PATH" << EOF
 amends "pkl:Project"
 
