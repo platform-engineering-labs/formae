@@ -921,9 +921,23 @@ func compareMap(r testReporter, name string, expected, actual map[string]any, co
 			}
 		}
 	}
-	// Reverse: actual → expected — flag extra keys not in hasProviderDefault
-	for key := range actual {
+	// Reverse: actual → expected — flag extra keys not in hasProviderDefault.
+	// Mirror the forward loop's "skip if structurally absent" forgiveness:
+	// nil / empty array / empty map values are semantically equivalent to
+	// the key being omitted (cloud providers commonly return [] / {} for
+	// fields the user didn't set, which shouldn't trigger drift detection).
+	// Real drift — non-empty unexpected values — is still flagged.
+	for key, actualValue := range actual {
 		if _, inExpected := expected[key]; inExpected {
+			continue
+		}
+		if actualValue == nil {
+			continue
+		}
+		if arr, isArr := actualValue.([]any); isArr && len(arr) == 0 {
+			continue
+		}
+		if m, isMap := actualValue.(map[string]any); isMap && len(m) == 0 {
 			continue
 		}
 		fieldPath := name + "." + key
@@ -1012,9 +1026,22 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 		}
 	}
 
-	// Reverse: actual → expected — flag extra keys not in hasProviderDefault
-	for key := range actualProperties {
+	// Reverse: actual → expected — flag extra keys not in hasProviderDefault.
+	// Skip when the actual value is structurally absent (nil / empty array
+	// / empty map) — cloud providers commonly return [] / {} for fields
+	// the user didn't set, and that's semantically equivalent to the key
+	// being omitted. Real drift (non-empty unexpected values) still flagged.
+	for key, actualValue := range actualProperties {
 		if _, inExpected := expectedProperties[key]; inExpected {
+			continue
+		}
+		if actualValue == nil {
+			continue
+		}
+		if arr, isArr := actualValue.([]any); isArr && len(arr) == 0 {
+			continue
+		}
+		if m, isMap := actualValue.(map[string]any); isMap && len(m) == 0 {
 			continue
 		}
 		if !isProviderDefault(key, providerDefaults) {
