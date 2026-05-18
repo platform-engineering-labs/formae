@@ -9,7 +9,26 @@ module FormaGenerator
 import "./gen.pkl" as gen
 import "@formae/formae.pkl"
 import "./resources.pkl"
+import "./imports.pkl" as availableImports
 import "pkl:json"
+
+/// Whether the given import path actually exists in the resolved packages
+/// graph. Used to filter speculative `@<pkg>/<pkg>.pkl` namespace-base
+/// imports synthesized in `generateFormaFile` — some plugins don't ship a
+/// file at the package root (e.g. plugin-k8s ships `target.pkl` instead),
+/// and emitting a bogus import drags an extra entry into the alias
+/// collision pool, mis-aliasing real imports.
+function importExists(path: String): Boolean =
+    let (parts = path.split("/"))
+    if (parts.length < 2)
+        false
+    else
+        let (pkg = parts.first)
+        let (pkgModules = availableImports.packages.getOrNull(pkg))
+        if (pkgModules == null)
+            false
+        else
+            pkgModules.containsKey(path)
 
 resourceTypes = resources.GetAllResourceTypes()
 typeMap = resourceTypes.fold(Map(), (acc: Map<String, resources.Resource>, elem) ->
@@ -265,12 +284,20 @@ function generateFormaFile(parsed: json.Value): String =
 
     // Phase 2: Collect all imports for collision-aware alias computation
     let (resourceImports = parsedList.map((resource) -> typeMap[resource.Type].moduleName).distinct)
-    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl)
+    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl).
+    // Skip synthesized base imports whose file doesn't actually exist in
+    // the resolved packages graph — packages such as plugin-k8s ship the
+    // root file under a different basename (target.pkl) and don't expose
+    // `@<pkg>/<pkg>.pkl`. Without this filter the bogus entry triggers a
+    // basename collision against legitimate per-version imports, forcing
+    // `modulePathToAlias` to disambiguate (`k8s` → `k8s_v1_34`) while the
+    // body renderer in gen.pkl still emits the bare basename — they
+    // diverge and the generated forma fails to evaluate.
     let (namespaceBaseImports = parsedList.map((resource) ->
         let (resourceImport = typeMap[resource.Type].moduleName)
         let (packageName = resourceImport.split("/").first.replaceFirst("@", ""))
         "@" + packageName + "/" + packageName + ".pkl"
-    ).distinct)
+    ).distinct.filter((p) -> importExists(p)))
     // Combine and deduplicate - for flat package structures, resourceImport and namespaceImport may be the same
     let (imports = (resourceImports + namespaceBaseImports).distinct)
     let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e)))

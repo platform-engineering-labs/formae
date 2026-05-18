@@ -141,6 +141,30 @@ facts {
         generator.modulePathToAlias("@k8s/v1.35/k8s.pkl", allPaths) == "k8s_v1_35"
     }
 
+    // importExists protects against bogus namespace-base imports. The
+    // fixture packages ship `@fakeaws/fakeaws.pkl` and
+    // `@testprovider/testprovider.pkl`, so both should resolve to true.
+    // A made-up path or an unknown package should resolve to false so
+    // the synthesized namespace-base import is filtered out of allImports
+    // and doesn't fight a real per-version import for the same alias.
+    ["importExists - existing root module returns true"] {
+        generator.importExists("@fakeaws/fakeaws.pkl") &&
+        generator.importExists("@testprovider/testprovider.pkl")
+    }
+
+    ["importExists - missing module returns false"] {
+        !generator.importExists("@fakeaws/does-not-exist.pkl") &&
+        !generator.importExists("@testprovider/missing.pkl")
+    }
+
+    ["importExists - unknown package returns false"] {
+        !generator.importExists("@unknownpkg/anything.pkl")
+    }
+
+    ["importExists - malformed path returns false"] {
+        !generator.importExists("nopackage")
+    }
+
     // --- importFormatting unit tests ---
 
     ["importFormatting - generates collision-aware aliases"] {
