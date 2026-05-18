@@ -52,10 +52,24 @@ function appendProperties(parsed: json.Value): json.Value =
 
 /// Derive a unique Pkl identifier alias from a module path.
 /// When the simple filename would collide with another import in the set,
-/// prepend the parent directory segment.
+/// disambiguate using the parent directory segment.
+///
+/// Disambiguation order depends on whether the parent looks like a version
+/// directory (`v<digits>...`):
+///   - Version parent:  alias = "<baseName>_<sanitizedParent>"  ("filename
+///     first") so the meaningful symbol leads. e.g. "@k8s/v1.34/k8s.pkl" +
+///     "@k8s/k8s.pkl" -> "k8s_v1_34" / "k8s_k8s".
+///   - Non-version parent: alias = "<sanitizedParent>_<baseName>" so the
+///     namespace leads, matching the existing cross-plugin pattern. e.g.
+///     "@aws/ecs/service.pkl" + "@gcp/cloudrun/service.pkl" -> "ecs_service" /
+///     "cloudrun_service".
+///
+/// The parent segment is sanitized to a valid Pkl identifier (replace any
+/// non-[A-Za-z0-9_] characters with `_`) so directory names like `v1.34`
+/// don't synthesize an alias containing `.`, which the Pkl parser rejects.
+///
 /// e.g., "@cloudflare-dns/cloudflare-dns.pkl" -> "cloudflare_dns"
 /// e.g., "@aws/ec2/ec2.pkl" -> "ec2"
-/// e.g., "@aws/ecs/service.pkl" + "@gcp/cloudrun/service.pkl" -> "ecs_service" / "cloudrun_service"
 function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
     let (segments = modulePath.replaceAll(".pkl", "").split("/"))
     let (baseName = segments.last.replaceAll("-", "_"))
@@ -63,8 +77,13 @@ function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
         p != modulePath && p.replaceAll(".pkl", "").split("/").last.replaceAll("-", "_") == baseName
     ).length > 0)
     if (hasCollision && segments.length >= 2)
-        let (parent = segments[segments.length - 2].replaceAll("-", "_").replaceFirst("@", ""))
-        "\(parent)_\(baseName)"
+        let (rawParent = segments[segments.length - 2].replaceFirst("@", ""))
+        let (parent = rawParent.replaceAll(Regex(#"[^A-Za-z0-9_]"#), "_"))
+        let (isVersion = rawParent.matches(Regex(#"^v\d+(\..+)?$"#)))
+        if (isVersion)
+            "\(baseName)_\(parent)"
+        else
+            "\(parent)_\(baseName)"
     else
         baseName
 

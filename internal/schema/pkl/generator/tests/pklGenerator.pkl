@@ -124,6 +124,23 @@ facts {
         generator.modulePathToAlias("@aws/ec2/ec2.pkl", List("@aws/ec2/ec2.pkl")) == "ec2"
     }
 
+    // Version-style parent dirs (e.g. `v1.34`) get sanitized to valid
+    // Pkl identifiers and placed AFTER the basename so the meaningful
+    // symbol leads — alias = `<baseName>_<sanitizedVersion>`. This avoids
+    // the historical bug where `v1.34_k8s` was emitted as the alias and
+    // rejected by the Pkl parser due to the `.` in the identifier.
+    ["modulePathToAlias - version parent placed after baseName, sanitized"] {
+        let (allPaths = List("@k8s/k8s.pkl", "@k8s/v1.34/k8s.pkl"))
+        generator.modulePathToAlias("@k8s/v1.34/k8s.pkl", allPaths) == "k8s_v1_34" &&
+        generator.modulePathToAlias("@k8s/k8s.pkl", allPaths) == "k8s_k8s"
+    }
+
+    ["modulePathToAlias - multiple version dirs each get filename_version"] {
+        let (allPaths = List("@k8s/v1.34/k8s.pkl", "@k8s/v1.35/k8s.pkl"))
+        generator.modulePathToAlias("@k8s/v1.34/k8s.pkl", allPaths) == "k8s_v1_34" &&
+        generator.modulePathToAlias("@k8s/v1.35/k8s.pkl", allPaths) == "k8s_v1_35"
+    }
+
     // --- importFormatting unit tests ---
 
     ["importFormatting - generates collision-aware aliases"] {
