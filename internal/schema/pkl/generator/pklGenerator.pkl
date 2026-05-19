@@ -101,6 +101,11 @@ function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
         let (isVersion = rawParent.matches(Regex(#"^v\d+(\..+)?$"#)))
         if (isVersion)
             "\(baseName)_\(parent)"
+        else if (parent == baseName)
+            // Package-root files like @k8s/k8s.pkl: parent and basename
+            // collapse to the same identifier (`k8s_k8s`), which is ugly
+            // and adds no information. Emit just `baseName`.
+            baseName
         else
             "\(parent)_\(baseName)"
     else

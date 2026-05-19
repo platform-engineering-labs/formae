@@ -132,7 +132,9 @@ facts {
     ["modulePathToAlias - version parent placed after baseName, sanitized"] {
         let (allPaths = List("@k8s/k8s.pkl", "@k8s/v1.34/k8s.pkl"))
         generator.modulePathToAlias("@k8s/v1.34/k8s.pkl", allPaths) == "k8s_v1_34" &&
-        generator.modulePathToAlias("@k8s/k8s.pkl", allPaths) == "k8s_k8s"
+        // Package-root file: parent (`@k8s` → `k8s`) collapses with baseName
+        // (`k8s`) — emit just `k8s` instead of the ugly `k8s_k8s` duplicate.
+        generator.modulePathToAlias("@k8s/k8s.pkl", allPaths) == "k8s"
     }
 
     ["modulePathToAlias - multiple version dirs each get filename_version"] {
