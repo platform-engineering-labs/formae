@@ -373,6 +373,13 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 		config.Namespace = namespace
 	}
 
+	if normalized, changed := normalizeNamespace(config.Namespace); changed {
+		fmt.Fprintf(os.Stderr, "Note: namespace %q normalized to %q for resource type IDs.\n", config.Namespace, normalized)
+		config.Namespace = normalized
+	} else {
+		config.Namespace = normalized
+	}
+
 	// Description (required)
 	if opts.Description != "" {
 		config.Description = opts.Description
@@ -531,6 +538,13 @@ func validateNamespace(namespace string) error {
 		return fmt.Errorf("namespace must start with a letter and contain only letters and numbers (no spaces or hyphens)")
 	}
 	return nil
+}
+
+// normalizeNamespace returns the namespace uppercased, plus a flag indicating
+// whether the input differed from the normalized form (used to emit a notice).
+func normalizeNamespace(input string) (normalized string, changed bool) {
+	upper := strings.ToUpper(input)
+	return upper, upper != input
 }
 
 // validateOutputDir checks if the output directory is valid for plugin initialization.
@@ -781,9 +795,8 @@ func transformContent(content string, config *PluginConfig) string {
 	content = strings.ReplaceAll(content, `type = "example"`, fmt.Sprintf(`type = "%s"`, config.Name))
 
 	// Namespace (uppercase in resource types)
-	upperNamespace := strings.ToUpper(config.Namespace)
-	content = strings.ReplaceAll(content, `namespace = "EXAMPLE"`, fmt.Sprintf(`namespace = "%s"`, upperNamespace))
-	content = strings.ReplaceAll(content, "EXAMPLE::", upperNamespace+"::")
+	content = strings.ReplaceAll(content, `namespace = "EXAMPLE"`, fmt.Sprintf(`namespace = "%s"`, config.Namespace))
+	content = strings.ReplaceAll(content, "EXAMPLE::", config.Namespace+"::")
 
 	// Description
 	content = strings.ReplaceAll(content, `description = "Example Formae plugin template"`, fmt.Sprintf(`description = "%s"`, config.Description))
@@ -799,19 +812,37 @@ func transformContent(content string, config *PluginConfig) string {
 		"https://github.com/your-org/formae-plugin-example",
 		fmt.Sprintf("https://github.com/platform-engineering-labs/formae-plugin-%s", config.Name))
 
-	// Copyright header
-	content = strings.ReplaceAll(content, "© 2025 Your Name", "© 2025 Platform Engineering Labs Inc.")
+	// Copyright header - use dynamic year and configured author
+	currentYear := time.Now().Year()
+	content = strings.ReplaceAll(content, "© 2025 Your Name", fmt.Sprintf("© %d %s", currentYear, config.Author))
 	// Note: String split to avoid REUSE tool misinterpreting this as a license declaration
 	content = strings.ReplaceAll(content, "SPDX-"+"License-Identifier: Apache-2.0", fmt.Sprintf("SPDX-"+"License-Identifier: %s", config.License))
 
 	// PKL dependency alias - must match package name from schema's PklProject
 	content = strings.ReplaceAll(content, `["example"]`, fmt.Sprintf(`["%s"]`, config.Name))
 
-	// PKL import paths - @<packageName>/<packageName>.pkl
+	// PKL import paths - longer match first to avoid partial replacement
+	// @<packageName>/core/<packageName>.pkl (Phase 1b convention: resource in core/ subdir)
+	content = strings.ReplaceAll(content,
+		`@example/core/example.pkl`,
+		fmt.Sprintf(`@%s/core/%s.pkl`, config.Name, config.Name))
+	// @<packageName>/<packageName>.pkl (top-level, backwards compat with older templates)
 	content = strings.ReplaceAll(content, `@example/example.pkl`, fmt.Sprintf(`@%s/%s.pkl`, config.Name, config.Name))
 
-	// PKL module name in Config.pkl
+	// PKL project URIs (longer match first to avoid partial replacement)
+	content = strings.ReplaceAll(content,
+		"plugins/example/schema/pkl/example",
+		fmt.Sprintf("plugins/%s/schema/pkl/%s", config.Name, config.Name))
+
+	// PKL module name in Config.pkl (longer match first, before bare module example)
 	content = strings.ReplaceAll(content, "module example.Config", fmt.Sprintf("module %s.Config", config.Name))
+
+	// PKL bare module declaration (must come after the "module example.Config" rule)
+	content = strings.ReplaceAll(content, "module example\n", fmt.Sprintf("module %s\n", config.Name))
+	content = strings.ReplaceAll(content, "module example\r\n", fmt.Sprintf("module %s\r\n", config.Name))
+
+	// PKL module-qualifier prefix (e.g. example.ExampleResource -> sftp.ExampleResource)
+	content = regexp.MustCompile(`\bexample\.`).ReplaceAllString(content, config.Name+".")
 
 	// <PluginName> placeholder in doc comments (capitalize first letter for display)
 	displayName := strings.ToUpper(config.Name[:1]) + config.Name[1:]
