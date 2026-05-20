@@ -5,6 +5,7 @@
 package testutil
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,4 +171,73 @@ func TestVerifySchemaWithNamespace_FakeAWS(t *testing.T) {
 	}
 
 	t.Logf("Verified %d modules, %d resource types", result.TotalModules, result.TotalResourceTypes)
+}
+
+// TestGenerateImports_TopLevelFileIsIncluded verifies that ImportsGenerator.pkl matches
+// PKL files placed directly under the namespace root (e.g., @ns/resource.pkl), not
+// only files in subdirectories (e.g., @ns/subdir/resource.pkl).
+//
+// Bug (G-7): the current generator uses import*("@<ns>/**/*.pkl") which requires at
+// least one intermediate directory. Top-level files are silently missed.
+//
+// This test will FAIL until the fix (adding import*("@<ns>/*.pkl")) is applied in
+// pkg/plugin/testutil/pkl/ImportsGenerator.pkl.
+func TestGenerateImports_TopLevelFileIsIncluded(t *testing.T) {
+	// Set up a minimal self-contained schema with ONLY a top-level resource.pkl.
+	schemaDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(schemaDir, "PklProject"), []byte(`amends "pkl:Project"
+
+package {
+  name = "minimaltest"
+  baseUri = "package://test.local/minimaltest"
+  version = "0.0.1"
+  packageZipUrl = "https://test.local/minimaltest@0.0.1.zip"
+}
+`), 0644); err != nil {
+		t.Fatalf("failed to write schema PklProject: %v", err)
+	}
+	// Only a top-level file — no subdirectory.
+	if err := os.WriteFile(filepath.Join(schemaDir, "resource.pkl"), []byte("module minimaltest.resource\n"), 0644); err != nil {
+		t.Fatalf("failed to write resource.pkl: %v", err)
+	}
+
+	// Prepare the generator workdir with the embedded PKL files.
+	workDir := t.TempDir()
+	if err := copyEmbeddedFiles(workDir); err != nil {
+		t.Fatalf("copyEmbeddedFiles failed: %v", err)
+	}
+
+	// Write a PklProject that maps "minimaltest" -> local schema.
+	pklProjectContent := "amends \"pkl:Project\"\n\ndependencies {\n  [\"minimaltest\"] = import(\"" + filepath.Join(schemaDir, "PklProject") + "\")\n}\n"
+	if err := os.WriteFile(filepath.Join(workDir, "PklProject"), []byte(pklProjectContent), 0644); err != nil {
+		t.Fatalf("failed to write PklProject: %v", err)
+	}
+
+	// Resolve the project (no network needed — local path dependency).
+	if err := resolvePklProject(workDir); err != nil {
+		t.Fatalf("pkl project resolve failed: %v", err)
+	}
+
+	// Generate imports.pkl using ImportsGenerator.pkl.
+	ctx := context.Background()
+	if err := generateImports(ctx, workDir); err != nil {
+		t.Fatalf("generateImports failed: %v", err)
+	}
+
+	// Read the generated imports.pkl content.
+	importsContent, err := os.ReadFile(filepath.Join(workDir, "imports.pkl"))
+	if err != nil {
+		t.Fatalf("failed to read generated imports.pkl: %v", err)
+	}
+
+	// The fix requires imports.pkl to include the top-level glob @ns/*.pkl.
+	// Currently only @ns/**/*.pkl is present, which misses @minimaltest/resource.pkl.
+	if !strings.Contains(string(importsContent), `import*("@minimaltest/*.pkl")`) {
+		t.Errorf("imports.pkl is missing top-level glob:\n"+
+			"  want: import*(\"@minimaltest/*.pkl\") to be present\n"+
+			"  got:\n%s\n\n"+
+			"Bug G-7: ImportsGenerator.pkl only emits @ns/**/*.pkl which misses top-level files.\n"+
+			"Fix: add import*(\"@ns/*.pkl\") union in pkg/plugin/testutil/pkl/ImportsGenerator.pkl",
+			string(importsContent))
+	}
 }
