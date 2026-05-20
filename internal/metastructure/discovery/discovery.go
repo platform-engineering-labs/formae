@@ -290,6 +290,7 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// Clear per-cycle state at start of each discovery cycle
 	data.pluginInfoCache = make(map[string]*messages.PluginInfoResponse)
 	data.typesWithChildrenQueued = make(map[string]struct{})
+	data.recentlyDiscoveredResourceIDs = make(map[string]struct{})
 	proc.Log().Debug("Starting resource discovery timestamp=%v", data.timeStarted)
 
 	allTargets, err := data.ds.LoadDiscoverableTargets()
