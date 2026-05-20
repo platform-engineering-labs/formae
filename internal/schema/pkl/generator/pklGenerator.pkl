@@ -9,7 +9,26 @@ module FormaGenerator
 import "./gen.pkl" as gen
 import "@formae/formae.pkl"
 import "./resources.pkl"
+import "./imports.pkl" as availableImports
 import "pkl:json"
+
+/// Whether the given import path actually exists in the resolved packages
+/// graph. Used to filter speculative `@<pkg>/<pkg>.pkl` namespace-base
+/// imports synthesized in `generateFormaFile` — some plugins don't ship a
+/// file at the package root (e.g. plugin-k8s ships `target.pkl` instead),
+/// and emitting a bogus import drags an extra entry into the alias
+/// collision pool, mis-aliasing real imports.
+function importExists(path: String): Boolean =
+    let (parts = path.split("/"))
+    if (parts.length < 2)
+        false
+    else
+        let (pkg = parts.first)
+        let (pkgModules = availableImports.packages.getOrNull(pkg))
+        if (pkgModules == null)
+            false
+        else
+            pkgModules.containsKey(path)
 
 resourceTypes = resources.GetAllResourceTypes()
 typeMap = resourceTypes.fold(Map(), (acc: Map<String, resources.Resource>, elem) ->
@@ -52,10 +71,24 @@ function appendProperties(parsed: json.Value): json.Value =
 
 /// Derive a unique Pkl identifier alias from a module path.
 /// When the simple filename would collide with another import in the set,
-/// prepend the parent directory segment.
+/// disambiguate using the parent directory segment.
+///
+/// Disambiguation order depends on whether the parent looks like a version
+/// directory (`v<digits>...`):
+///   - Version parent:  alias = "<baseName>_<sanitizedParent>"  ("filename
+///     first") so the meaningful symbol leads. e.g. "@k8s/v1.34/k8s.pkl" +
+///     "@k8s/k8s.pkl" -> "k8s_v1_34" / "k8s_k8s".
+///   - Non-version parent: alias = "<sanitizedParent>_<baseName>" so the
+///     namespace leads, matching the existing cross-plugin pattern. e.g.
+///     "@aws/ecs/service.pkl" + "@gcp/cloudrun/service.pkl" -> "ecs_service" /
+///     "cloudrun_service".
+///
+/// The parent segment is sanitized to a valid Pkl identifier (replace any
+/// non-[A-Za-z0-9_] characters with `_`) so directory names like `v1.34`
+/// don't synthesize an alias containing `.`, which the Pkl parser rejects.
+///
 /// e.g., "@cloudflare-dns/cloudflare-dns.pkl" -> "cloudflare_dns"
 /// e.g., "@aws/ec2/ec2.pkl" -> "ec2"
-/// e.g., "@aws/ecs/service.pkl" + "@gcp/cloudrun/service.pkl" -> "ecs_service" / "cloudrun_service"
 function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
     let (segments = modulePath.replaceAll(".pkl", "").split("/"))
     let (baseName = segments.last.replaceAll("-", "_"))
@@ -63,8 +96,18 @@ function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
         p != modulePath && p.replaceAll(".pkl", "").split("/").last.replaceAll("-", "_") == baseName
     ).length > 0)
     if (hasCollision && segments.length >= 2)
-        let (parent = segments[segments.length - 2].replaceAll("-", "_").replaceFirst("@", ""))
-        "\(parent)_\(baseName)"
+        let (rawParent = segments[segments.length - 2].replaceFirst("@", ""))
+        let (parent = rawParent.replaceAll(Regex(#"[^A-Za-z0-9_]"#), "_"))
+        let (isVersion = rawParent.matches(Regex(#"^v\d+(\..+)?$"#)))
+        if (isVersion)
+            "\(baseName)_\(parent)"
+        else if (parent == baseName)
+            // Package-root files like @k8s/k8s.pkl: parent and basename
+            // collapse to the same identifier (`k8s_k8s`), which is ugly
+            // and adds no information. Emit just `baseName`.
+            baseName
+        else
+            "\(parent)_\(baseName)"
     else
         baseName
 
@@ -246,12 +289,20 @@ function generateFormaFile(parsed: json.Value): String =
 
     // Phase 2: Collect all imports for collision-aware alias computation
     let (resourceImports = parsedList.map((resource) -> typeMap[resource.Type].moduleName).distinct)
-    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl)
+    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl).
+    // Skip synthesized base imports whose file doesn't actually exist in
+    // the resolved packages graph — packages such as plugin-k8s ship the
+    // root file under a different basename (target.pkl) and don't expose
+    // `@<pkg>/<pkg>.pkl`. Without this filter the bogus entry triggers a
+    // basename collision against legitimate per-version imports, forcing
+    // `modulePathToAlias` to disambiguate (`k8s` → `k8s_v1_34`) while the
+    // body renderer in gen.pkl still emits the bare basename — they
+    // diverge and the generated forma fails to evaluate.
     let (namespaceBaseImports = parsedList.map((resource) ->
         let (resourceImport = typeMap[resource.Type].moduleName)
         let (packageName = resourceImport.split("/").first.replaceFirst("@", ""))
         "@" + packageName + "/" + packageName + ".pkl"
-    ).distinct)
+    ).distinct.filter((p) -> importExists(p)))
     // Combine and deduplicate - for flat package structures, resourceImport and namespaceImport may be the same
     let (imports = (resourceImports + namespaceBaseImports).distinct)
     let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e)))
