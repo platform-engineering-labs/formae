@@ -9,6 +9,7 @@ package plugin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -506,4 +507,160 @@ func TestRunPluginInit_FlagNameValidatedInInteractiveMode(t *testing.T) {
 	var flagErr *cmd.FlagError
 	assert.True(t, errors.As(err, &flagErr),
 		"flag-supplied name validation error should be a *cmd.FlagError so cobra prints usage")
+}
+
+func TestTransformContent_BareModuleDeclaration(t *testing.T) {
+	config := &PluginConfig{
+		Name:      "sftp",
+		Namespace: "SFTP",
+	}
+
+	// "module example\n" is the bare module declaration, distinct from "module example.Config"
+	input := "module example\n\nclass ExampleResource {\n}\n"
+	result := transformContent(input, config)
+
+	if strings.Contains(result, "module example\n") {
+		t.Errorf("expected bare 'module example' declaration to be replaced, but it was not; got:\n%s", result)
+	}
+	if !strings.Contains(result, "module sftp\n") {
+		t.Errorf("expected 'module sftp' in result, got:\n%s", result)
+	}
+}
+
+func TestTransformContent_PklProjectURIs(t *testing.T) {
+	config := &PluginConfig{
+		Name:      "sftp",
+		Namespace: "SFTP",
+	}
+
+	input := `amends "pkl:Project"
+
+package {
+  name = "example"
+  baseUri = "package://localhost/plugins/example/schema/pkl/example"
+  version = "0.1.0"
+  packageZipUrl = "https://localhost/plugins/example/schema/pkl/example@\(version).zip"
+  authors {
+    "..."
+  }
+}
+`
+	result := transformContent(input, config)
+
+	if strings.Contains(result, "plugins/example/schema/pkl/example\"") {
+		t.Errorf("expected baseUri to replace 'plugins/example/schema/pkl/example', got:\n%s", result)
+	}
+	if !strings.Contains(result, "plugins/sftp/schema/pkl/sftp") {
+		t.Errorf("expected baseUri to contain 'plugins/sftp/schema/pkl/sftp', got:\n%s", result)
+	}
+	if strings.Contains(result, "plugins/example/schema/pkl/example@") {
+		t.Errorf("expected packageZipUrl to replace 'plugins/example/schema/pkl/example@', got:\n%s", result)
+	}
+	if !strings.Contains(result, "plugins/sftp/schema/pkl/sftp@") {
+		t.Errorf("expected packageZipUrl to contain 'plugins/sftp/schema/pkl/sftp@', got:\n%s", result)
+	}
+}
+
+func TestTransformContent_PklModulePrefix(t *testing.T) {
+	config := &PluginConfig{
+		Name:      "sftp",
+		Namespace: "SFTP",
+	}
+
+	input := `amends "@example/example.pkl"
+
+resources {
+  new example.ExampleResource {
+    label = "demo"
+    tags = new Mapping<String, example.Tag> {}
+  }
+}
+`
+	result := transformContent(input, config)
+
+	if !strings.Contains(result, `@sftp/sftp.pkl`) {
+		t.Errorf("expected '@sftp/sftp.pkl' in amends line, got:\n%s", result)
+	}
+	if strings.Contains(result, "example.ExampleResource") {
+		t.Errorf("expected 'example.ExampleResource' to be replaced with 'sftp.ExampleResource', got:\n%s", result)
+	}
+	if !strings.Contains(result, "sftp.ExampleResource") {
+		t.Errorf("expected 'sftp.ExampleResource' in result, got:\n%s", result)
+	}
+	if strings.Contains(result, "example.Tag") {
+		t.Errorf("expected 'example.Tag' to be replaced with 'sftp.Tag', got:\n%s", result)
+	}
+	if !strings.Contains(result, "sftp.Tag") {
+		t.Errorf("expected 'sftp.Tag' in result, got:\n%s", result)
+	}
+}
+
+func TestTransformContent_PklSubdirImport(t *testing.T) {
+	config := &PluginConfig{
+		Name:      "smokeplugin",
+		Namespace: "TEST",
+	}
+
+	input := `amends "@example/core/example.pkl"`
+
+	result := transformContent(input, config)
+
+	if !strings.Contains(result, `@smokeplugin/core/smokeplugin.pkl`) {
+		t.Errorf("expected '@smokeplugin/core/smokeplugin.pkl' in result, got:\n%s", result)
+	}
+	if strings.Contains(result, `@example/`) {
+		t.Errorf("expected no '@example/' in result, got:\n%s", result)
+	}
+}
+
+func TestTransformContent_LicenseHeaderYear(t *testing.T) {
+	config := &PluginConfig{
+		Name:   "sftp",
+		Author: "Acme Inc.",
+	}
+
+	input := `// Copyright © 2025 Your Name
+// SPDX-License-Identifier: Apache-2.0
+
+package example
+`
+	result := transformContent(input, config)
+
+	currentYear := fmt.Sprintf("%d", time.Now().Year())
+	expectedHeader := fmt.Sprintf("© %s Acme Inc.", currentYear)
+
+	if strings.Contains(result, "© 2025 Your Name") {
+		t.Errorf("expected '© 2025 Your Name' to be replaced, got:\n%s", result)
+	}
+	if strings.Contains(result, "Platform Engineering Labs Inc.") {
+		t.Errorf("expected author to be 'Acme Inc.', not 'Platform Engineering Labs Inc.', got:\n%s", result)
+	}
+	if !strings.Contains(result, expectedHeader) {
+		t.Errorf("expected %q in result, got:\n%s", expectedHeader, result)
+	}
+}
+
+func TestNormalizeNamespace(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantNorm    string
+		wantChanged bool
+	}{
+		{"mixed case", "Atlas", "ATLAS", true},
+		{"all lower", "atlas", "ATLAS", true},
+		{"already upper", "ATLAS", "ATLAS", false},
+		{"with digits", "Aws2", "AWS2", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := normalizeNamespace(tt.input)
+			if got != tt.wantNorm {
+				t.Errorf("normalizeNamespace(%q) = %q, want %q", tt.input, got, tt.wantNorm)
+			}
+			if changed != tt.wantChanged {
+				t.Errorf("normalizeNamespace(%q) changed = %v, want %v", tt.input, changed, tt.wantChanged)
+			}
+		})
+	}
 }
