@@ -7,12 +7,27 @@ package model
 import "encoding/json"
 
 type Schema struct {
-	Identifier   string               `json:"Identifier" pkl:"Identifier"`
-	Fields       []string             `json:"Fields" pkl:"Fields"`
-	Hints        map[string]FieldHint `json:"Hints" pkl:"Hints"`
-	Discoverable bool                 `json:"Discoverable" pkl:"Discoverable"`
-	Extractable  bool                 `json:"Extractable" pkl:"Extractable"`
-	Portable     bool                 `json:"Portable" pkl:"Portable"`
+	Identifier     string               `json:"Identifier" pkl:"Identifier"`
+	Fields         []string             `json:"Fields" pkl:"Fields"`
+	Hints          map[string]FieldHint `json:"Hints" pkl:"Hints"`
+	Discoverable   bool                 `json:"Discoverable" pkl:"Discoverable"`
+	Extractable    bool                 `json:"Extractable" pkl:"Extractable"`
+	Portable       bool                 `json:"Portable" pkl:"Portable"`
+	Parent         string               `json:"Parent" pkl:"Parent"`                 // NEW: from ResourceHint.parent; "" when unset.
+	ParentMappings []ParentMapping      `json:"ParentMappings" pkl:"ParentMappings"` // NEW: from ResourceHint.parentRefs[*]; nil when unset.
+}
+
+// ParentMapping pairs the parent-side property name with the child-side
+// property name for one component of a parent-child identity relationship.
+// The two names need not match (they coincide for MountTarget→FileSystem but
+// diverge for TaskSet→Service).
+//
+// Uses JSON struct tags (camelCase) to match the field names emitted by
+// `Extractor.pkl` and the corresponding PKL `ParentRef` class. RFC-0043 §2
+// sets this as the precedent for new annotations.
+type ParentMapping struct {
+	ParentProperty string `json:"parentProperty"`
+	ChildProperty  string `json:"childProperty"`
 }
 
 type EdgeKind string

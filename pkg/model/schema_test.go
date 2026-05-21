@@ -52,3 +52,46 @@ func TestFieldHintAttachesToDefaultsFalse(t *testing.T) {
 
 	assert.False(t, decoded.AttachesTo, "AttachesTo should default false for pre-existing stored schemas")
 }
+
+func TestSchema_ParentMappings_Unmarshal(t *testing.T) {
+	var s Schema
+	raw := `{
+		"Identifier": "MountTargetId",
+		"Parent": "AWS::EFS::FileSystem",
+		"ParentMappings": [
+			{"parentProperty": "FileSystemId", "childProperty": "FileSystemId"}
+		]
+	}`
+	err := json.Unmarshal([]byte(raw), &s)
+	require.NoError(t, err)
+	require.Equal(t, "AWS::EFS::FileSystem", s.Parent)
+	require.Len(t, s.ParentMappings, 1)
+	require.Equal(t, "FileSystemId", s.ParentMappings[0].ParentProperty)
+	require.Equal(t, "FileSystemId", s.ParentMappings[0].ChildProperty)
+}
+
+func TestSchema_ParentMappings_Composite(t *testing.T) {
+	var s Schema
+	raw := `{
+		"Identifier": "TaskSetId",
+		"Parent": "AWS::ECS::Service",
+		"ParentMappings": [
+			{"parentProperty": "ServiceName", "childProperty": "Service"},
+			{"parentProperty": "Cluster", "childProperty": "Cluster"}
+		]
+	}`
+	err := json.Unmarshal([]byte(raw), &s)
+	require.NoError(t, err)
+	require.Len(t, s.ParentMappings, 2)
+	require.Equal(t, "ServiceName", s.ParentMappings[0].ParentProperty)
+	require.Equal(t, "Service", s.ParentMappings[0].ChildProperty)
+	require.Equal(t, "Cluster", s.ParentMappings[1].ParentProperty)
+	require.Equal(t, "Cluster", s.ParentMappings[1].ChildProperty)
+}
+
+func TestSchema_ParentFields_DefaultsForLegacyJSON(t *testing.T) {
+	var s Schema
+	require.NoError(t, json.Unmarshal([]byte(`{"Identifier":"X"}`), &s))
+	require.Equal(t, "", s.Parent)
+	require.Nil(t, s.ParentMappings)
+}
