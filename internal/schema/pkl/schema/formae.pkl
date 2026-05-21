@@ -140,6 +140,10 @@ open class ResourceHint extends Annotation {
     identifier: String
     /// Type of parent resource
     parent: String?
+    /// Mapping(s) between parent identity properties and the child properties
+    /// that carry those values. Used by the changeset planner to discriminate
+    /// instance-scoped parent/child containment for runtimeDependency edges.
+    parentRefs: (ParentRef|List<ParentRef>)?
     /// Parent Property required for list operations
     listParam: (ListProperty|List<ListProperty>)?
     /// Property that dictates whether a resource is blocked from discovery
@@ -166,6 +170,22 @@ open class ListProperty {
 
     fixed ParentProperty: String = parentProperty
     fixed ListParameter: String = listParameter
+}
+
+/// Maps a parent-side identity property to the child-side property that
+/// carries that value. The two names need not match (they coincide for
+/// MountTarget→FileSystem but diverge for TaskSet→Service, where the parent's
+/// `ServiceName` is referenced by the child's `Service`).
+///
+/// Uses plain camelCase fields (no hidden/fixed dance). The Go side binds via
+/// JSON struct tags. RFC-0043 §2 sets this as the precedent for new
+/// annotations; a separate RFC will migrate other annotations to the same
+/// shape.
+class ParentRef {
+    /// Name of the property on the parent resource that this mapping references.
+    parentProperty: String
+    /// Name of the property on this child that holds the parent's value.
+    childProperty: String
 }
 
 typealias FieldUpdateMethod = "Array"|"Atomic"|"EntitySet"|"Set"
