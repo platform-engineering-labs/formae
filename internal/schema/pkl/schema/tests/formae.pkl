@@ -583,6 +583,18 @@ facts {
     ["FieldHint AttachesTo defaults to false"] {
         (new formae.FieldHint {}).AttachesTo == false
     }
+
+    ["FieldHint EdgeKind defaults to default"] {
+        (new formae.FieldHint {}).EdgeKind == "default"
+    }
+
+    ["FieldHint EdgeKind attachesTo is set correctly"] {
+        testEdgeKindSchema.Hints["F2"].EdgeKind == "attachesTo"
+    }
+
+    ["FieldHint EdgeKind runtimeDependency is set correctly"] {
+        testEdgeKindSchema.Hints["F3"].EdgeKind == "runtimeDependency"
+    }
 }
 
 local testAttachesToSchema = new formae.Schema {
@@ -590,5 +602,15 @@ local testAttachesToSchema = new formae.Schema {
     Fields = new Listing { "F1" }
     Hints = new Mapping {
         ["F1"] = new formae.FieldHint { attachesTo = true }
+    }
+}
+
+local testEdgeKindSchema = new formae.Schema {
+    Identifier = "AWS::Test::EdgeThing"
+    Fields = new Listing { "F1" "F2" "F3" }
+    Hints = new Mapping {
+        ["F1"] = new formae.FieldHint { edgeKind = "default" }
+        ["F2"] = new formae.FieldHint { edgeKind = "attachesTo" }
+        ["F3"] = new formae.FieldHint { edgeKind = "runtimeDependency" }
     }
 }

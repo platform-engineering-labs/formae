@@ -170,13 +170,26 @@ open class ListProperty {
 
 typealias FieldUpdateMethod = "Array"|"Atomic"|"EntitySet"|"Set"
 
+typealias EdgeKind =
+    "default"            // Construction-data-flow. Default for unannotated fields.
+                         // On destroy: consumer first, producer second.
+  | "attachesTo"         // Reachability. Consumer is reachable through the
+                         // producer at runtime (e.g. ECS Service via ALB Listener).
+                         // On destroy: producer first, consumer second.
+  | "runtimeDependency"  // Containment. Consumer uses the producer and its
+                         // containment children at runtime, even though those
+                         // children are not directly referenced.
+                         // On create:  producer first, then each child K, then consumer.
+                         // On destroy: consumer first, then each child K, then producer.
+
 open class FieldHint extends Annotation {
     hidden createOnly: Boolean = false
     hidden writeOnly: Boolean = false
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
     hidden hasProviderDefault: Boolean = false
-    hidden attachesTo: Boolean = false
+    hidden attachesTo: Boolean = false           // DEPRECATED; use edgeKind instead
+    hidden edgeKind: EdgeKind = "default"        // NEW
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
 
@@ -191,6 +204,7 @@ open class FieldHint extends Annotation {
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed HasProviderDefault: Boolean = hasProviderDefault
     fixed AttachesTo: Boolean = attachesTo
+    fixed EdgeKind: String = edgeKind
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
 }

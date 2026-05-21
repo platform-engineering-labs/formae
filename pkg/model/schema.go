@@ -4,6 +4,8 @@
 
 package model
 
+import "encoding/json"
+
 type Schema struct {
 	Identifier   string               `json:"Identifier" pkl:"Identifier"`
 	Fields       []string             `json:"Fields" pkl:"Fields"`
@@ -13,16 +15,43 @@ type Schema struct {
 	Portable     bool                 `json:"Portable" pkl:"Portable"`
 }
 
+type EdgeKind string
+
+const (
+	EdgeKindDefault           EdgeKind = "default"
+	EdgeKindAttachesTo        EdgeKind = "attachesTo"
+	EdgeKindRuntimeDependency EdgeKind = "runtimeDependency"
+)
+
 type FieldHint struct {
 	CreateOnly         bool `json:"CreateOnly" pkl:"CreateOnly"`
 	WriteOnly          bool `json:"WriteOnly" pkl:"WriteOnly"`
 	Required           bool `json:"Required" pkl:"Required"`
 	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
 	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
-	AttachesTo            bool `json:"AttachesTo" pkl:"AttachesTo"`
+	AttachesTo         bool     `json:"AttachesTo" pkl:"AttachesTo"` // DEPRECATED: kept for one release; engine derives EdgeKind from this when set.
+	EdgeKind           EdgeKind `json:"EdgeKind" pkl:"EdgeKind"`    // NEW
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
+}
+
+// UnmarshalJSON normalizes the deprecated AttachesTo alias into EdgeKind so
+// schemas published before EdgeKind landed continue to drive correct DAG edges.
+func (fh *FieldHint) UnmarshalJSON(data []byte) error {
+	type rawHint FieldHint
+	var raw rawHint
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*fh = FieldHint(raw)
+	if fh.EdgeKind == "" {
+		fh.EdgeKind = EdgeKindDefault
+		if fh.AttachesTo {
+			fh.EdgeKind = EdgeKindAttachesTo
+		}
+	}
+	return nil
 }
 
 type FieldUpdateMethod string
