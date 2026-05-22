@@ -265,6 +265,59 @@ func TestChildPointsAt_Create_LiteralChildProperty_ReturnsFalse(t *testing.T) {
 	require.False(t, childPointsAt(child, producer, resource_update.OperationCreate, baseRes))
 }
 
+// TestChildPointsAt_Destroy_ResolvableChildProperty_Match locks in the
+// post-apply reality that motivated RFC-0043: the resolver leaves a child's
+// parent-reference property in the Resolvable shape
+// (`{"$ref": ..., "$value": ...}`) rather than collapsing it to a literal. The
+// destroy planner must unwrap `$value` when comparing against the producer's
+// literal identifier, otherwise runtimeDependency child edges never fire for
+// realistic resources (EFS MountTarget, etc.).
+func TestChildPointsAt_Destroy_ResolvableChildProperty_Match(t *testing.T) {
+	producer := makeResourceUpdate(t, "AWS::EFS::FileSystem", "fs", map[string]any{
+		"FileSystemId": "fs-abc123", // producer's identifier is literal post-apply
+	})
+	producer.DesiredState.Schema.Identifier = "FileSystemId"
+
+	// Child's FileSystemId is in the Resolvable shape the resolver leaves behind
+	// post-apply: {"$ref": "formae://<producer-ksuid>#/FileSystemId", "$value": "fs-abc123"}.
+	child := makeResourceUpdate(t, "AWS::EFS::MountTarget", "mt", map[string]any{
+		"FileSystemId": map[string]any{
+			"$ref":   string(pkgmodel.NewFormaeURI(producer.URI().KSUID(), "FileSystemId")),
+			"$value": "fs-abc123",
+		},
+	})
+	child.DesiredState.Schema.Parent = "AWS::EFS::FileSystem"
+	child.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+	}
+
+	require.True(t, childPointsAt(child, producer, resource_update.OperationDelete, nil))
+}
+
+// TestChildPointsAt_Destroy_ResolvableChildProperty_NoMatch is the negative
+// counterpart: a Resolvable shape whose `$value` differs from the producer's
+// literal identifier must not match. Guards against an overly-permissive unwrap
+// that ignores the comparison once it sees the Resolvable shape.
+func TestChildPointsAt_Destroy_ResolvableChildProperty_NoMatch(t *testing.T) {
+	producer := makeResourceUpdate(t, "AWS::EFS::FileSystem", "fs", map[string]any{
+		"FileSystemId": "fs-abc123",
+	})
+	producer.DesiredState.Schema.Identifier = "FileSystemId"
+
+	child := makeResourceUpdate(t, "AWS::EFS::MountTarget", "mt", map[string]any{
+		"FileSystemId": map[string]any{
+			"$ref":   "formae://other-ksuid#/FileSystemId",
+			"$value": "fs-different",
+		},
+	})
+	child.DesiredState.Schema.Parent = "AWS::EFS::FileSystem"
+	child.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+	}
+
+	require.False(t, childPointsAt(child, producer, resource_update.OperationDelete, nil))
+}
+
 // TestChildPointsAt_Destroy_Composite_MatchesOnlyCorrectInstance exercises the
 // AND-of-mappings semantics of composite parent mappings. A TaskSet under
 // ECS::Service is identified by (ServiceName, Cluster). Two services share the

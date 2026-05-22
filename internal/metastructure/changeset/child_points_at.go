@@ -60,28 +60,61 @@ func childPointsAt(
 }
 
 // destroySideMatches checks one parent mapping on the destroy path by reading
-// literal property values from both sides' DesiredState. The destroy planner
+// effective property values from both sides' DesiredState. The destroy planner
 // works off the snapshot of the resource being torn down — which is stored in
 // DesiredState — so we read child and producer values from there.
 //
 // ParentProperty names the key on the producer side, ChildProperty names the
 // key on the child side. They can diverge — e.g., TaskSet→Service maps
 // "ServiceName"→"Service" — so we look each up separately.
+//
+// Post-apply the resolver leaves cross-resource references in the Resolvable
+// shape `{"$ref": ..., "$value": ...}` rather than collapsing them to a
+// literal scalar. We must unwrap `$value` before comparing — otherwise a child
+// whose ChildProperty is Resolvable and a producer whose ParentProperty is a
+// literal would never compare equal even when they identify the same instance.
 func destroySideMatches(k, producer *resource_update.ResourceUpdate, m pkgmodel.ParentMapping) bool {
-	kVal, ok := k.DesiredState.GetProperty(m.ChildProperty)
+	kVal, ok := getEffectivePropertyValue(k.DesiredState.Properties, m.ChildProperty)
 	if !ok {
 		return false
 	}
 
 	// Producer's value is keyed by ParentProperty (which equals Schema.Identifier
 	// when the relationship pins on the parent's primary identifier).
-	producerKey := m.ParentProperty
-
-	pVal, ok := producer.DesiredState.GetProperty(producerKey)
+	pVal, ok := getEffectivePropertyValue(producer.DesiredState.Properties, m.ParentProperty)
 	if !ok {
 		return false
 	}
 	return kVal == pVal
+}
+
+// getEffectivePropertyValue returns the unwrapped scalar value of a property.
+//
+// If the property is a Resolvable object (`{"$ref": ..., "$value": ...}`),
+// returns `$value` — this is the shape the resolver leaves on persisted
+// properties post-apply. If the property is a literal scalar, returns it
+// directly.
+//
+// Returns false when the property doesn't exist, isn't a scalar, or is a
+// non-Resolvable object — none of those are valid for parent-mapping equality.
+func getEffectivePropertyValue(props []byte, propName string) (string, bool) {
+	result := gjson.GetBytes(props, propName)
+	if !result.Exists() {
+		return "", false
+	}
+	if result.IsObject() {
+		// Resolvable shape: {"$ref": ..., "$value": ...} — unwrap to $value.
+		if result.Get("$ref").Exists() {
+			v := result.Get("$value")
+			if !v.Exists() {
+				return "", false
+			}
+			return v.String(), true
+		}
+		// Non-Resolvable object — not a valid scalar for parent-mapping comparison.
+		return "", false
+	}
+	return result.String(), true
 }
 
 // createSideMatches is the create-phase counterpart to destroySideMatches.
