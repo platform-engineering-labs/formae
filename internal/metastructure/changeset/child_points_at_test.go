@@ -130,6 +130,71 @@ func TestChildPointsAt_Destroy_MissingChildProperty_ReturnsFalse(t *testing.T) {
 	require.False(t, childPointsAt(child, producer, resource_update.OperationDelete, nil))
 }
 
+// makeResolvable constructs the on-the-wire Resolvable shape that
+// translatePropertiesJSON emits and the engine consumes:
+//
+//	{"$ref": "formae://<KSUID>#/<PropertyPath>", "$value": ""}
+//
+// Matches the URI format produced by pkgmodel.NewFormaeURI (`formae://ksuid#`
+// with `/<path>` appended for property fragments). Used by create-phase tests
+// that need a Resolvable value embedded in a child resource's Properties.
+func makeResolvable(uri pkgmodel.FormaeURI, propPath string) map[string]any {
+	ref := pkgmodel.NewFormaeURI(uri.KSUID(), propPath)
+	return map[string]any{
+		"$ref":   string(ref),
+		"$value": "",
+	}
+}
+
+// TestChildPointsAt_Create_SingleMapping_Match exercises the create-phase
+// happy path: the child's parent-reference property holds a Resolvable
+// pointing at the producer, and baseResources resolves the K-side URI back
+// to a resource whose Type matches Schema.Parent. Expect a match.
+func TestChildPointsAt_Create_SingleMapping_Match(t *testing.T) {
+	producer := makeResourceUpdate(t, "AWS::EFS::FileSystem", "grafanaEfs", nil)
+	producerURI := producer.URI()
+
+	child := makeResourceUpdate(t, "AWS::EFS::MountTarget", "mtA", map[string]any{
+		"FileSystemId": makeResolvable(producerURI, "FileSystemId"),
+	})
+	child.DesiredState.Schema.Parent = "AWS::EFS::FileSystem"
+	child.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+	}
+
+	baseRes := map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate{
+		producerURI.Stripped(): producer,
+	}
+
+	ok := childPointsAt(child, producer, resource_update.OperationCreate, baseRes)
+	require.True(t, ok)
+}
+
+// TestChildPointsAt_Create_SingleMapping_NoMatch exercises the create-phase
+// negative case: the child's parent-reference property points at a different
+// producer of the same Schema.Parent type. baseResources knows about both,
+// but only one matches. Expect no match against the wrong producer.
+func TestChildPointsAt_Create_SingleMapping_NoMatch(t *testing.T) {
+	producer := makeResourceUpdate(t, "AWS::EFS::FileSystem", "grafanaEfs", nil)
+	other := makeResourceUpdate(t, "AWS::EFS::FileSystem", "lokiEfs", nil)
+
+	child := makeResourceUpdate(t, "AWS::EFS::MountTarget", "mtX", map[string]any{
+		"FileSystemId": makeResolvable(other.URI(), "FileSystemId"),
+	})
+	child.DesiredState.Schema.Parent = "AWS::EFS::FileSystem"
+	child.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+	}
+
+	baseRes := map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate{
+		producer.URI().Stripped(): producer,
+		other.URI().Stripped():    other,
+	}
+
+	ok := childPointsAt(child, producer, resource_update.OperationCreate, baseRes)
+	require.False(t, ok)
+}
+
 // TestChildPointsAt_Destroy_Composite_MatchesOnlyCorrectInstance exercises the
 // AND-of-mappings semantics of composite parent mappings. A TaskSet under
 // ECS::Service is identified by (ServiceName, Cluster). Two services share the

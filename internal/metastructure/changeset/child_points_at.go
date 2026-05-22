@@ -5,6 +5,8 @@
 package changeset
 
 import (
+	"github.com/tidwall/gjson"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -83,17 +85,77 @@ func destroySideMatches(k, producer *resource_update.ResourceUpdate, m pkgmodel.
 }
 
 // createSideMatches is the create-phase counterpart to destroySideMatches.
-// Implemented in Task 2.4. Until then, panics if reached so an out-of-order
-// task land does not silently degrade runtimeDependency create-side edges
-// into default edges.
+//
+// At create time the child's parent-reference property does not yet hold a
+// literal (the producer has not been created), but a Resolvable carrying the
+// producer's KSUID-based FormaeURI. We chase that URI through baseResources
+// (the changeset's URI-indexed view of every Create/Replace/Update operation)
+// to compare identities rather than concrete property values.
+//
+// Two reference shapes are possible and they are discriminated by Type:
+//
+//   - **Parent reference** — the K-side URI resolves to a resource whose Type
+//     matches `k.DesiredState.Schema.Parent`. In this case the mapping is
+//     simply asserting "K points at its parent"; the match holds iff the
+//     URI equals `producer`'s URI.
+//   - **Sibling reference** — the K-side URI resolves to some other resource
+//     (typically a peer that K and producer both reference, e.g., an ECS
+//     Cluster shared by TaskSet and Service). In this case the producer must
+//     also carry a Resolvable at `ParentProperty` pointing at the same third
+//     resource; the match holds iff K's and producer's URIs are equal after
+//     stripping property paths.
+//
+// `baseResources` is consulted purely for the type discriminator. A missing
+// entry — e.g., the K-side URI points at a resource outside the current
+// changeset — yields no match: without knowing the referenced resource's
+// type we cannot tell whether this is a parent or sibling reference and must
+// conservatively decline.
 func createSideMatches(
 	k, producer *resource_update.ResourceUpdate,
 	m pkgmodel.ParentMapping,
 	baseResources map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate,
 ) bool {
-	_ = k
-	_ = producer
-	_ = m
-	_ = baseResources
-	panic("createSideMatches not yet implemented (RFC-0043 Task 2.4)")
+	kRef, ok := extractResolvableURI(k.DesiredState.Properties, m.ChildProperty)
+	if !ok {
+		return false
+	}
+
+	kIndexed, found := baseResources[kRef.Stripped()]
+	if !found {
+		return false
+	}
+
+	if kIndexed.DesiredState.Type == k.DesiredState.Schema.Parent {
+		// Parent reference: K's URI must equal producer's URI.
+		return kRef.Stripped() == producer.URI().Stripped()
+	}
+
+	// Sibling reference: K and producer must point at the same third resource.
+	// Read producer's value at m.ParentProperty — it should also be a Resolvable.
+	pRef, ok := extractResolvableURI(producer.DesiredState.Properties, m.ParentProperty)
+	if !ok {
+		return false
+	}
+	return kRef.Stripped() == pRef.Stripped()
+}
+
+// extractResolvableURI reads `propName` out of `props` (raw JSON) and returns
+// the underlying FormaeURI when the value is a Resolvable object of the form
+// `{"$ref": "<uri>", "$value": ...}`. Returns false for literal values,
+// non-object values, or objects without a `$ref` key — none of which can be
+// chased to a base resource for type discrimination.
+//
+// Uses gjson against the raw Properties JSON (Properties is json.RawMessage,
+// not a parsed map) to match the convention used by the surrounding
+// dependency-extraction code in resolver and resource_update.
+func extractResolvableURI(props []byte, propName string) (pkgmodel.FormaeURI, bool) {
+	field := gjson.GetBytes(props, propName)
+	if !field.IsObject() {
+		return "", false
+	}
+	ref := field.Get("$ref")
+	if !ref.Exists() {
+		return "", false
+	}
+	return pkgmodel.FormaeURI(ref.String()), true
 }
