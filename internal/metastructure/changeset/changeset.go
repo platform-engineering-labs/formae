@@ -335,7 +335,18 @@ func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.Resource
 	}
 }
 
-// buildCreateUpdateDependencies creates NORMAL dependencies for create/update operations
+// buildCreateUpdateDependencies creates NORMAL dependencies for create/update
+// operations. The natural edge per reference is consumer → producer (consumer
+// waits for producer).
+//
+// For runtimeDependency edges, the natural edge is augmented with edges from
+// every containment child of the producer whose parent identity matches *this*
+// producer instance into the consumer. Create order becomes: producer first,
+// then children, then consumer.
+//
+// EdgeKindAttachesTo carries no extra meaning on the create phase (it inverts
+// destroy order but agrees with the default on construction), so we leave it
+// to the default branch.
 func (p *ExecutionDAG) buildCreateUpdateDependencies(allOps []resource_update.ResourceUpdate) {
 	createUpdateOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
 
@@ -351,16 +362,73 @@ func (p *ExecutionDAG) buildCreateUpdateDependencies(allOps []resource_update.Re
 		dependentOpURI := createOperationURI(createOp.URI(), createOp.Operation)
 		dependentGroup := p.Nodes[dependentOpURI]
 
+		// Build a lookup map from referenced-resource-ksuid → TargetPath using
+		// the actual Properties JSON. Same pattern as the destroy branch:
+		// lets us find the field hint for each resolvable. Falls back to the
+		// default edge when a ref isn't in the map.
+		refPathByKsuid := make(map[string]string)
+		for _, ref := range resolver.ExtractResolvableRefs(createOp.DesiredState) {
+			ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
+			if ksuid != "" {
+				refPathByKsuid[ksuid] = ref.TargetPath
+			}
+		}
+
 		for _, resolvableURI := range createOp.RemainingResolvables {
 			dependencyBaseURI := resolvableURI.Stripped()
 
 			// Check if there's a corresponding create/update operation for this dependency
-			if dependencyOp, exists := createUpdateOps[dependencyBaseURI]; exists {
-				dependencyOpURI := createOperationURI(dependencyBaseURI, dependencyOp.Operation)
-				dependencyGroup := p.Nodes[dependencyOpURI]
+			dependencyOp, exists := createUpdateOps[dependencyBaseURI]
+			if !exists {
+				continue
+			}
+			dependencyOpURI := createOperationURI(dependencyBaseURI, dependencyOp.Operation)
+			dependencyGroup := p.Nodes[dependencyOpURI]
 
-				// NORMAL: dependent waits for dependency to complete
-				dependentGroup.LinkWith(dependencyGroup)
+			// NORMAL: dependent waits for dependency to complete
+			dependentGroup.LinkWith(dependencyGroup)
+
+			// Resolve the effective EdgeKind. Normalize the deprecated
+			// AttachesTo alias for consistency with the destroy branch even
+			// though only RuntimeDependency triggers extra wiring on the
+			// create phase.
+			targetPath := refPathByKsuid[dependencyBaseURI.KSUID()]
+			hint := fieldHintForPath(createOp.DesiredState.Schema, targetPath)
+			edgeKind := hint.EdgeKind
+			if edgeKind == "" {
+				if hint.AttachesTo {
+					edgeKind = pkgmodel.EdgeKindAttachesTo
+				} else {
+					edgeKind = pkgmodel.EdgeKindDefault
+				}
+			}
+
+			if edgeKind != pkgmodel.EdgeKindRuntimeDependency {
+				continue
+			}
+
+			// runtimeDependency: also wire each containment child of the
+			// producer that points at *this* producer instance into the
+			// consumer. The consumer must wait for the children so it observes
+			// fully-realised runtime state. Create order: producer → children
+			// → consumer.
+			producerType := dependencyOp.DesiredState.Type
+			for _, k := range createUpdateOps {
+				if k.DesiredState.Schema.Parent != producerType {
+					continue
+				}
+				if k.URI() == createOp.URI() {
+					continue
+				}
+				if !childPointsAt(&k, &dependencyOp, resource_update.OperationCreate, p.baseResources) {
+					continue
+				}
+				kNode := p.Nodes[createOperationURI(k.URI(), resource_update.OperationCreate)]
+				if kNode == nil {
+					continue
+				}
+				// Consumer waits for K (K first, consumer second).
+				dependentGroup.LinkWith(kNode)
 			}
 		}
 	}

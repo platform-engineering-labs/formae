@@ -2470,3 +2470,267 @@ func TestBuildDeleteDependencies_RuntimeDependency_NoMatchingChildren_FallsBackT
 		t.Errorf("consumer.delete should have no dependencies, got %d", got)
 	}
 }
+
+// TestBuildCreateUpdateDependencies_RuntimeDependency_AddsChildEdges verifies
+// that a runtimeDependency edge from consumer→producer on the create phase
+// also pulls in edges from each containment child of the producer to the
+// consumer. The create order becomes: producer first, then children, then
+// consumer.
+func TestBuildCreateUpdateDependencies_RuntimeDependency_AddsChildEdges(t *testing.T) {
+	var (
+		consumerURI = pkgmodel.NewFormaeURI("CONS1", "")
+		producerURI = pkgmodel.NewFormaeURI("PROD1", "")
+		mtAURI      = pkgmodel.NewFormaeURI("MTA1", "")
+		mtBURI      = pkgmodel.NewFormaeURI("MTB1", "")
+	)
+
+	// Consumer: TaskDef-like, references producer (FileSystem) via filesystemId
+	// with a runtimeDependency edge.
+	consumer := pkgmodel.Resource{
+		Ksuid: "CONS1", Label: "consumer", Type: "Test::TaskDef", Stack: "s",
+		Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+			"filesystemId": {EdgeKind: pkgmodel.EdgeKindRuntimeDependency},
+		}},
+		Properties: json.RawMessage(`{
+			"filesystemId": {"$ref":"formae://PROD1#/FileSystemId","$value":""}
+		}`),
+	}
+
+	// Producer: FileSystem with a literal identifier.
+	producer := pkgmodel.Resource{
+		Ksuid: "PROD1", Label: "fs", Type: "Test::FileSystem", Stack: "s",
+		Schema: pkgmodel.Schema{
+			Identifier: "FileSystemId",
+		},
+		Properties: json.RawMessage(`{"FileSystemId":"fs-abc"}`),
+	}
+
+	// Two MountTargets whose FileSystemId Resolvable points at the producer
+	// (the create-phase URI-based parent-reference shape).
+	mtA := pkgmodel.Resource{
+		Ksuid: "MTA1", Label: "mtA", Type: "Test::MountTarget", Stack: "s",
+		Schema: pkgmodel.Schema{
+			Parent: "Test::FileSystem",
+			ParentMappings: []pkgmodel.ParentMapping{
+				{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+			},
+		},
+		Properties: json.RawMessage(`{"FileSystemId":{"$ref":"formae://PROD1#/FileSystemId","$value":""}}`),
+	}
+	mtB := pkgmodel.Resource{
+		Ksuid: "MTB1", Label: "mtB", Type: "Test::MountTarget", Stack: "s",
+		Schema: pkgmodel.Schema{
+			Parent: "Test::FileSystem",
+			ParentMappings: []pkgmodel.ParentMapping{
+				{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+			},
+		},
+		Properties: json.RawMessage(`{"FileSystemId":{"$ref":"formae://PROD1#/FileSystemId","$value":""}}`),
+	}
+
+	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
+		{DesiredState: producer, Operation: resource_update.OperationCreate},
+		{DesiredState: mtA, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
+		{DesiredState: mtB, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
+	}, nil, "rtc1", pkgmodel.CommandApply)
+	if err != nil {
+		t.Fatalf("NewChangeset: %v", err)
+	}
+
+	consNode := dagNodeForOp(t, cs.DAG, consumerURI, resource_update.OperationCreate)
+	prodNode := dagNodeForOp(t, cs.DAG, producerURI, resource_update.OperationCreate)
+	mtANode := dagNodeForOp(t, cs.DAG, mtAURI, resource_update.OperationCreate)
+	mtBNode := dagNodeForOp(t, cs.DAG, mtBURI, resource_update.OperationCreate)
+
+	// Natural create edge: consumer.create depends on producer.create
+	// (producer first, consumer second).
+	if !hasDependency(consNode, prodNode) {
+		t.Errorf("consumer.create should depend on producer.create (natural create edge)")
+	}
+	// New runtimeDependency edges: consumer.create depends on each
+	// MountTarget.create (children first, consumer second).
+	if !hasDependency(consNode, mtANode) {
+		t.Errorf("consumer.create should depend on mountTargetA.create (runtimeDependency child edge)")
+	}
+	if !hasDependency(consNode, mtBNode) {
+		t.Errorf("consumer.create should depend on mountTargetB.create (runtimeDependency child edge)")
+	}
+	// Children/producer must not depend on the consumer (no cycles).
+	if hasDependency(prodNode, consNode) {
+		t.Errorf("producer.create should NOT depend on consumer.create")
+	}
+	if hasDependency(mtANode, consNode) {
+		t.Errorf("mountTargetA.create should NOT depend on consumer.create (cycle)")
+	}
+	if hasDependency(mtBNode, consNode) {
+		t.Errorf("mountTargetB.create should NOT depend on consumer.create (cycle)")
+	}
+}
+
+// TestBuildCreateUpdateDependencies_RuntimeDependency_InstanceSafe verifies
+// that on the create phase, runtimeDependency only pulls in containment
+// children of the *referenced* producer instance, not arbitrary children of
+// the same type.
+func TestBuildCreateUpdateDependencies_RuntimeDependency_InstanceSafe(t *testing.T) {
+	var (
+		consumerURI = pkgmodel.NewFormaeURI("CONS1", "")
+		fs1URI      = pkgmodel.NewFormaeURI("FS1", "")
+		fs2URI      = pkgmodel.NewFormaeURI("FS2", "")
+		mt1AURI     = pkgmodel.NewFormaeURI("MT1A", "")
+		mt1BURI     = pkgmodel.NewFormaeURI("MT1B", "")
+		mt2AURI     = pkgmodel.NewFormaeURI("MT2A", "")
+		mt2BURI     = pkgmodel.NewFormaeURI("MT2B", "")
+	)
+
+	consumer := pkgmodel.Resource{
+		Ksuid: "CONS1", Label: "consumer", Type: "Test::TaskDef", Stack: "s",
+		Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+			"filesystemId": {EdgeKind: pkgmodel.EdgeKindRuntimeDependency},
+		}},
+		Properties: json.RawMessage(`{
+			"filesystemId": {"$ref":"formae://FS1#/FileSystemId","$value":""}
+		}`),
+	}
+	fs1 := pkgmodel.Resource{
+		Ksuid: "FS1", Label: "fs1", Type: "Test::FileSystem", Stack: "s",
+		Schema:     pkgmodel.Schema{Identifier: "FileSystemId"},
+		Properties: json.RawMessage(`{"FileSystemId":"fs-1"}`),
+	}
+	fs2 := pkgmodel.Resource{
+		Ksuid: "FS2", Label: "fs2", Type: "Test::FileSystem", Stack: "s",
+		Schema:     pkgmodel.Schema{Identifier: "FileSystemId"},
+		Properties: json.RawMessage(`{"FileSystemId":"fs-2"}`),
+	}
+
+	mountTarget := func(ksuid, label, fsKsuid string) pkgmodel.Resource {
+		return pkgmodel.Resource{
+			Ksuid: ksuid, Label: label, Type: "Test::MountTarget", Stack: "s",
+			Schema: pkgmodel.Schema{
+				Parent: "Test::FileSystem",
+				ParentMappings: []pkgmodel.ParentMapping{
+					{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+				},
+			},
+			Properties: json.RawMessage(`{"FileSystemId":{"$ref":"formae://` + fsKsuid + `#/FileSystemId","$value":""}}`),
+		}
+	}
+
+	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
+		{DesiredState: fs1, Operation: resource_update.OperationCreate},
+		{DesiredState: fs2, Operation: resource_update.OperationCreate},
+		{DesiredState: mountTarget("MT1A", "mt1A", "FS1"), Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
+		{DesiredState: mountTarget("MT1B", "mt1B", "FS1"), Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
+		{DesiredState: mountTarget("MT2A", "mt2A", "FS2"), Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs2URI}},
+		{DesiredState: mountTarget("MT2B", "mt2B", "FS2"), Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs2URI}},
+	}, nil, "rtc2", pkgmodel.CommandApply)
+	if err != nil {
+		t.Fatalf("NewChangeset: %v", err)
+	}
+
+	consNode := dagNodeForOp(t, cs.DAG, consumerURI, resource_update.OperationCreate)
+	mt1ANode := dagNodeForOp(t, cs.DAG, mt1AURI, resource_update.OperationCreate)
+	mt1BNode := dagNodeForOp(t, cs.DAG, mt1BURI, resource_update.OperationCreate)
+	mt2ANode := dagNodeForOp(t, cs.DAG, mt2AURI, resource_update.OperationCreate)
+	mt2BNode := dagNodeForOp(t, cs.DAG, mt2BURI, resource_update.OperationCreate)
+	_ = dagNodeForOp(t, cs.DAG, fs2URI, resource_update.OperationCreate) // verify present
+
+	// FS1's children get the runtimeDependency edge into the consumer.
+	if !hasDependency(consNode, mt1ANode) {
+		t.Errorf("consumer.create should depend on mt1A.create (FS1's child)")
+	}
+	if !hasDependency(consNode, mt1BNode) {
+		t.Errorf("consumer.create should depend on mt1B.create (FS1's child)")
+	}
+	// FS2's children must NOT pull the consumer in — consumer doesn't reference FS2.
+	if hasDependency(consNode, mt2ANode) {
+		t.Errorf("consumer.create should NOT depend on mt2A.create (FS2's child, not referenced)")
+	}
+	if hasDependency(consNode, mt2BNode) {
+		t.Errorf("consumer.create should NOT depend on mt2B.create (FS2's child, not referenced)")
+	}
+}
+
+// TestBuildCreateUpdateDependencies_RuntimeDependency_NoMatchingChildren_FallsBackToDefault
+// verifies that when a runtimeDependency edge fires on the create phase but no
+// containment children of the producer are in the changeset, the default
+// natural create edge (consumer depends on producer) is still added and no
+// spurious child edges appear. An unrelated resource is included to confirm
+// that the children-scan loop does not produce false positives.
+func TestBuildCreateUpdateDependencies_RuntimeDependency_NoMatchingChildren_FallsBackToDefault(t *testing.T) {
+	var (
+		consumerURI  = pkgmodel.NewFormaeURI("CONS1", "")
+		producerURI  = pkgmodel.NewFormaeURI("PROD1", "")
+		unrelatedURI = pkgmodel.NewFormaeURI("UNREL1", "")
+	)
+
+	consumer := pkgmodel.Resource{
+		Ksuid: "CONS1", Label: "consumer", Type: "Test::TaskDef", Stack: "s",
+		Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+			"filesystemId": {EdgeKind: pkgmodel.EdgeKindRuntimeDependency},
+		}},
+		Properties: json.RawMessage(`{
+			"filesystemId": {"$ref":"formae://PROD1#/FileSystemId","$value":""}
+		}`),
+	}
+	producer := pkgmodel.Resource{
+		Ksuid: "PROD1", Label: "fs", Type: "Test::FileSystem", Stack: "s",
+		Schema:     pkgmodel.Schema{Identifier: "FileSystemId"},
+		Properties: json.RawMessage(`{"FileSystemId":"fs-abc"}`),
+	}
+	// Unrelated resource with a Resolvable that does NOT reference the producer.
+	// Confirms the children-scan loop doesn't fire spurious edges for resources
+	// whose parent type doesn't match the producer.
+	unrelated := pkgmodel.Resource{
+		Ksuid: "UNREL1", Label: "unrelated", Type: "Test::Other", Stack: "s",
+		Schema: pkgmodel.Schema{
+			Parent: "Test::SomethingElse",
+			ParentMappings: []pkgmodel.ParentMapping{
+				{ParentProperty: "OtherId", ChildProperty: "OtherId"},
+			},
+		},
+		Properties: json.RawMessage(`{"OtherId":"other-1"}`),
+	}
+
+	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
+		{DesiredState: producer, Operation: resource_update.OperationCreate},
+		{DesiredState: unrelated, Operation: resource_update.OperationCreate},
+	}, nil, "rtc3", pkgmodel.CommandApply)
+	if err != nil {
+		t.Fatalf("NewChangeset: %v", err)
+	}
+
+	consNode := dagNodeForOp(t, cs.DAG, consumerURI, resource_update.OperationCreate)
+	prodNode := dagNodeForOp(t, cs.DAG, producerURI, resource_update.OperationCreate)
+	unrelNode := dagNodeForOp(t, cs.DAG, unrelatedURI, resource_update.OperationCreate)
+
+	// Default create edge: consumer.create depends on producer.create.
+	if !hasDependency(consNode, prodNode) {
+		t.Errorf("consumer.create should depend on producer.create (default edge under runtimeDependency)")
+	}
+	// No reverse edge.
+	if hasDependency(prodNode, consNode) {
+		t.Errorf("producer.create should NOT depend on consumer.create")
+	}
+	// Consumer should have exactly one dependency (the producer) — no spurious
+	// edges from absent children or unrelated resources.
+	if got := len(consNode.Dependencies); got != 1 {
+		t.Errorf("consumer.create should have exactly 1 dependency, got %d", got)
+	}
+	// Consumer's only dependency is the producer.
+	if consNode.Dependencies[0] != prodNode {
+		t.Errorf("consumer.create's only dependency should be producer.create")
+	}
+	// Producer should have no dependencies (it's the entry point on the create
+	// phase).
+	if got := len(prodNode.Dependencies); got != 0 {
+		t.Errorf("producer.create should have no dependencies, got %d", got)
+	}
+	// Unrelated resource should have no dependencies — it doesn't reference
+	// anything in the changeset.
+	if got := len(unrelNode.Dependencies); got != 0 {
+		t.Errorf("unrelated.create should have no dependencies, got %d", got)
+	}
+}
