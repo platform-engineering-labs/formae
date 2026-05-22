@@ -195,6 +195,76 @@ func TestChildPointsAt_Create_SingleMapping_NoMatch(t *testing.T) {
 	require.False(t, ok)
 }
 
+// TestChildPointsAt_Create_Composite_TaskSetShape exercises the create-phase
+// composite-mapping case in its canonical shape: an ECS TaskSet whose parent
+// Service is keyed by (ServiceName, Cluster). The type discriminator inside
+// createSideMatches must classify the "Service" mapping as a parent reference
+// (Resolvable target type == Schema.Parent) and the "Cluster" mapping as a
+// sibling reference (target type == AWS::ECS::Cluster), then verify both halves
+// — parent URI equality plus shared third-party URI on the Cluster side —
+// before declaring a match. Two services sharing a ServiceName but pointing at
+// different clusters demonstrate that the Cluster discriminator does its job.
+func TestChildPointsAt_Create_Composite_TaskSetShape(t *testing.T) {
+	cluster1 := makeResourceUpdate(t, "AWS::ECS::Cluster", "c1", nil)
+	cluster2 := makeResourceUpdate(t, "AWS::ECS::Cluster", "c2", nil)
+
+	svc1 := makeResourceUpdate(t, "AWS::ECS::Service", "S1", map[string]any{
+		"ServiceName": "foo",
+		"Cluster":     makeResolvable(cluster1.URI(), "ClusterName"),
+	})
+	svc1.DesiredState.Schema.Identifier = "Ref"
+
+	svc2 := makeResourceUpdate(t, "AWS::ECS::Service", "S2", map[string]any{
+		"ServiceName": "foo",
+		"Cluster":     makeResolvable(cluster2.URI(), "ClusterName"),
+	})
+	svc2.DesiredState.Schema.Identifier = "Ref"
+
+	ts1 := makeResourceUpdate(t, "AWS::ECS::TaskSet", "TS1", map[string]any{
+		"Service": makeResolvable(svc1.URI(), "ServiceName"),
+		"Cluster": makeResolvable(cluster1.URI(), "ClusterName"),
+	})
+	ts1.DesiredState.Schema.Parent = "AWS::ECS::Service"
+	ts1.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "ServiceName", ChildProperty: "Service"},
+		{ParentProperty: "Cluster", ChildProperty: "Cluster"},
+	}
+
+	baseRes := map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate{
+		cluster1.URI().Stripped(): cluster1,
+		cluster2.URI().Stripped(): cluster2,
+		svc1.URI().Stripped():     svc1,
+		svc2.URI().Stripped():     svc2,
+	}
+
+	// Matches svc1: Service mapping resolves to svc1's URI (parent reference),
+	// Cluster mapping resolves to cluster1 on both sides (sibling reference).
+	require.True(t, childPointsAt(ts1, svc1, resource_update.OperationCreate, baseRes))
+	// Does NOT match svc2: Service mapping would point at svc1, not svc2 — the
+	// parent-reference half fails before the Cluster check is even reached.
+	require.False(t, childPointsAt(ts1, svc2, resource_update.OperationCreate, baseRes))
+}
+
+// TestChildPointsAt_Create_LiteralChildProperty_ReturnsFalse locks in the
+// extractResolvableURI early-return: when the child's parent-reference property
+// holds a literal rather than a Resolvable object, createSideMatches must
+// decline rather than treat the literal as a URI. Removing the IsObject() guard
+// in extractResolvableURI would silently regress without this test.
+func TestChildPointsAt_Create_LiteralChildProperty_ReturnsFalse(t *testing.T) {
+	producer := makeResourceUpdate(t, "AWS::EFS::FileSystem", "fs", nil)
+	child := makeResourceUpdate(t, "AWS::EFS::MountTarget", "mt", map[string]any{
+		"FileSystemId": "fs-literal-abc", // literal string, not a Resolvable
+	})
+	child.DesiredState.Schema.Parent = "AWS::EFS::FileSystem"
+	child.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "FileSystemId", ChildProperty: "FileSystemId"},
+	}
+	baseRes := map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate{
+		producer.URI().Stripped(): producer,
+	}
+	require.False(t, childPointsAt(child, producer, resource_update.OperationCreate, baseRes))
+}
+
 // TestChildPointsAt_Destroy_Composite_MatchesOnlyCorrectInstance exercises the
 // AND-of-mappings semantics of composite parent mappings. A TaskSet under
 // ECS::Service is identified by (ServiceName, Cluster). Two services share the
