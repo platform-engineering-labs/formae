@@ -849,24 +849,40 @@ func generateResourceUpdatesForReconcile(
 	return finalResourceUpdates, nil
 }
 
-// appendCascadeUpdatesIfAbsent adds each cascade-update to out only when its
-// resource isn't already represented in out by another operation. Prevents
-// double-emission when the user's forma also touches the dependent.
+// appendCascadeUpdatesIfAbsent merges cascade-updates into out. When the
+// dependent has no user-driven op for the same resource, the cascade-update
+// is appended as-is. When the dependent already has a user-driven Update,
+// the cascade-update is dropped but the existing Update is marked
+// IsCascade=true so the executor regenerates its PatchDocument at apply
+// time — the user's plan-time patch only reflects user changes, but the
+// resolvable's new value from the parent's replacement only becomes
+// available after the resolver runs, and the provider's Update needs both
+// in a single patch.
+//
+// If the existing op is a Create/Delete/Replace (not Update), the cascade-
+// update is dropped without altering the existing op: those operations are
+// "complete" and don't need patch augmentation.
 func appendCascadeUpdatesIfAbsent(out []ResourceUpdate, cascadeUpdates []ResourceUpdate) []ResourceUpdate {
 	if len(cascadeUpdates) == 0 {
 		return out
 	}
-	present := make(map[pkgmodel.FormaeURI]bool, len(out))
-	for _, ru := range out {
-		present[ru.DesiredState.URI().Stripped()] = true
+	indexByURI := make(map[pkgmodel.FormaeURI]int, len(out))
+	for i, ru := range out {
+		indexByURI[ru.DesiredState.URI().Stripped()] = i
 	}
 	for _, cu := range cascadeUpdates {
 		key := cu.DesiredState.URI().Stripped()
-		if present[key] {
+		if idx, exists := indexByURI[key]; exists {
+			if out[idx].Operation == OperationUpdate {
+				out[idx].IsCascade = true
+				if out[idx].CascadeSource == "" {
+					out[idx].CascadeSource = cu.CascadeSource
+				}
+			}
 			continue
 		}
 		out = append(out, cu)
-		present[key] = true
+		indexByURI[key] = len(out) - 1
 	}
 	return out
 }

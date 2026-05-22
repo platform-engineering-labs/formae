@@ -1377,3 +1377,79 @@ func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
 	// Plain values should be unchanged
 	assert.Equal(t, "us-east-1", config["region"])
 }
+
+// TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate covers RFC-0042's
+// merge-vs-dedup semantics. The conformance test's ecs-service-update
+// fixture changes BOTH the Service's deploymentConfiguration (mutable Service
+// field — user-driven Update) AND the TaskDef's container image (CreateOnly
+// — TaskDef Replace, cascades to Service). The planner emits both a user-
+// driven Update for the Service and a cascade-update from
+// findDependencyUpdates. They target the same URI. Dropping the cascade-
+// update without preserving its information would lose the IsCascade flag,
+// and the executor wouldn't regenerate the patch with the new resolvable
+// value — sending the user's plan-time patch (deploymentConfiguration only)
+// to the provider, which then has no idea TaskDefinitionArn should change.
+//
+// The fix: when the dependent already has a user-driven Update,
+// appendCascadeUpdatesIfAbsent must mark that Update IsCascade=true so the
+// executor knows to regenerate.
+func TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate(t *testing.T) {
+	dependentURI := pkgmodel.NewFormaeURI("dependent-ksuid", "")
+	sourceLabel := "parent"
+
+	t.Run("existing user-driven Update gets IsCascade=true", func(t *testing.T) {
+		existing := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    false,
+		}
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+			CascadeSource: sourceLabel,
+		}
+
+		out := appendCascadeUpdatesIfAbsent([]ResourceUpdate{existing}, []ResourceUpdate{cascade})
+
+		require.Len(t, out, 1, "must dedup — exactly one op for the dependent")
+		assert.Equal(t, OperationUpdate, out[0].Operation)
+		assert.True(t, out[0].IsCascade,
+			"existing Update must be marked IsCascade so the executor regenerates the patch")
+		assert.Equal(t, sourceLabel, out[0].CascadeSource,
+			"existing Update should inherit the cascade source label for diagnostics")
+	})
+
+	t.Run("no duplicate — cascade-update appended as-is", func(t *testing.T) {
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+		}
+		out := appendCascadeUpdatesIfAbsent(nil, []ResourceUpdate{cascade})
+		require.Len(t, out, 1)
+		assert.True(t, out[0].IsCascade)
+	})
+
+	t.Run("existing Create/Delete is not modified", func(t *testing.T) {
+		// If something else already owns the dependent's slot — e.g. a
+		// Replace decomposed into Delete+Create — the cascade-update is
+		// dropped without touching the existing op. Those "complete"
+		// operations carry their own desired state and don't need patch
+		// augmentation.
+		existing := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationCreate,
+			IsCascade:    false,
+		}
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+		}
+		out := appendCascadeUpdatesIfAbsent([]ResourceUpdate{existing}, []ResourceUpdate{cascade})
+		require.Len(t, out, 1)
+		assert.Equal(t, OperationCreate, out[0].Operation)
+		assert.False(t, out[0].IsCascade, "Create/Delete should not be repurposed")
+	})
+}
