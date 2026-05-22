@@ -223,10 +223,16 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 }
 
 // buildDeleteDependencies creates dependencies for delete operations.
-// For most refs the direction is REVERSED (construction-reversed): the
-// dependency is deleted after the consumer. For refs annotated with
-// AttachesTo=true the direction is FORWARD (reachability order): the
-// host resource is deleted first, then the hosted resource.
+// The edge direction is selected per-reference by the field hint's EdgeKind:
+//   - EdgeKindDefault: construction-reversed — the dependency is deleted
+//     after the consumer (consumer first, producer second).
+//   - EdgeKindAttachesTo: reachability order — the producer is deleted first,
+//     then the consumer (consumer waits for producer).
+//   - EdgeKindRuntimeDependency: same default consumer→producer edge, PLUS
+//     edges from the consumer to every containment child of the producer
+//     whose parent identity matches *this* producer instance. The consumer
+//     must complete before the children tear down, so the children become
+//     downstream of the consumer.
 func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.ResourceUpdate) {
 	deleteOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
 	for _, op := range allOps {
@@ -268,11 +274,59 @@ func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.Resource
 			// Look up the field hint for this reference by ksuid.
 			targetPath := refPathByKsuid[depBase.KSUID()]
 			hint := fieldHintForPath(deleteOp.DesiredState.Schema, targetPath)
-			if hint.AttachesTo {
+
+			// Resolve the effective EdgeKind. Schemas published before the
+			// EdgeKind field landed only set the deprecated AttachesTo bool;
+			// JSON unmarshalling normalizes that into EdgeKind, but in-Go
+			// struct-literal callers may still rely on the alias.
+			edgeKind := hint.EdgeKind
+			if edgeKind == "" {
+				if hint.AttachesTo {
+					edgeKind = pkgmodel.EdgeKindAttachesTo
+				} else {
+					edgeKind = pkgmodel.EdgeKindDefault
+				}
+			}
+
+			depResource := deleteOps[depBase]
+
+			switch edgeKind {
+			case pkgmodel.EdgeKindAttachesTo:
 				// Reachability edge: the hosting resource waits for the hosted-on
 				// resource's delete. Destroy order: hosted-on first, hosting second.
 				dependentGroup.LinkWith(depNode)
-			} else {
+
+			case pkgmodel.EdgeKindRuntimeDependency:
+				// Default construction-reversed edge to the producer: consumer
+				// first, producer second.
+				depNode.LinkWith(dependentGroup)
+
+				// PLUS edges to the producer's containment children that point
+				// at *this* producer instance — each child must wait for the
+				// consumer's delete before tearing down (since the consumer
+				// may still be using the producer's runtime state via the
+				// children). Destroy order: consumer first, then children,
+				// then producer.
+				producerType := depResource.DesiredState.Type
+				for _, k := range deleteOps {
+					if k.DesiredState.Schema.Parent != producerType {
+						continue
+					}
+					if k.URI() == deleteOp.URI() {
+						continue
+					}
+					if !childPointsAt(&k, &depResource, resource_update.OperationDelete, nil) {
+						continue
+					}
+					kNode := p.Nodes[createOperationURI(k.URI(), resource_update.OperationDelete)]
+					if kNode == nil {
+						continue
+					}
+					// Child waits for the consumer (consumer first, child second).
+					kNode.LinkWith(dependentGroup)
+				}
+
+			default: // EdgeKindDefault
 				// Construction-reversed edge (existing behavior): B.delete waits
 				// for A.delete. Destroy order: consumer first, producer second.
 				depNode.LinkWith(dependentGroup)
