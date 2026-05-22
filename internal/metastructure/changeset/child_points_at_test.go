@@ -129,3 +129,41 @@ func TestChildPointsAt_Destroy_MissingChildProperty_ReturnsFalse(t *testing.T) {
 	}
 	require.False(t, childPointsAt(child, producer, resource_update.OperationDelete, nil))
 }
+
+// TestChildPointsAt_Destroy_Composite_MatchesOnlyCorrectInstance exercises the
+// AND-of-mappings semantics of composite parent mappings. A TaskSet under
+// ECS::Service is identified by (ServiceName, Cluster). Two services share the
+// same ServiceName but live in different clusters; the TaskSet must match only
+// its own parent, distinguished by Cluster.
+func TestChildPointsAt_Destroy_Composite_MatchesOnlyCorrectInstance(t *testing.T) {
+	// Two Services with same ServiceName but different Cluster
+	svc1 := makeResourceUpdate(t, "AWS::ECS::Service", "S1", map[string]any{
+		"Ref":         "arn:aws:ecs:.../foo/c1",
+		"ServiceName": "foo",
+		"Cluster":     "cluster-1",
+	})
+	svc1.DesiredState.Schema.Identifier = "Ref"
+
+	svc2 := makeResourceUpdate(t, "AWS::ECS::Service", "S2", map[string]any{
+		"Ref":         "arn:aws:ecs:.../foo/c2",
+		"ServiceName": "foo",
+		"Cluster":     "cluster-2",
+	})
+	svc2.DesiredState.Schema.Identifier = "Ref"
+
+	// TaskSet under svc1
+	ts1 := makeResourceUpdate(t, "AWS::ECS::TaskSet", "TS1", map[string]any{
+		"Service": "foo",
+		"Cluster": "cluster-1",
+	})
+	ts1.DesiredState.Schema.Parent = "AWS::ECS::Service"
+	ts1.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "ServiceName", ChildProperty: "Service"},
+		{ParentProperty: "Cluster", ChildProperty: "Cluster"},
+	}
+
+	// Matches svc1 (own parent)
+	require.True(t, childPointsAt(ts1, svc1, resource_update.OperationDelete, nil))
+	// Does NOT match svc2 (same ServiceName, different Cluster)
+	require.False(t, childPointsAt(ts1, svc2, resource_update.OperationDelete, nil))
+}
