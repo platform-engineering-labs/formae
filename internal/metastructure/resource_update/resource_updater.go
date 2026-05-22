@@ -553,7 +553,12 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	// the plugin call here, the executor has resolved each remaining
 	// resolvable into DesiredState.Properties, so a fresh patch.GeneratePatch
 	// against PriorState.Properties yields the actual provider-side diff.
+	proc.Log().Info("cascade-update regen check IsCascade=%v hasEmptyPatch=%v uri=%v",
+		data.resourceUpdate.IsCascade, hasEmptyPatch, data.resourceUpdate.DesiredState.URI())
 	if data.resourceUpdate.IsCascade && hasEmptyPatch {
+		proc.Log().Info("cascade-update regen INPUT prior=%s desired=%s",
+			string(data.resourceUpdate.PriorState.Properties),
+			string(data.resourceUpdate.DesiredState.Properties))
 		patchDoc, _, err := patch.GeneratePatch(
 			data.resourceUpdate.PriorState.Properties,
 			data.resourceUpdate.DesiredState.Properties,
@@ -566,6 +571,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
 		}
+		proc.Log().Info("cascade-update regen OUTPUT patch=%s", string(patchDoc))
 		data.resourceUpdate.DesiredState.PatchDocument = patchDoc
 	}
 
