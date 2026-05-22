@@ -12,6 +12,7 @@ import (
 
 	"github.com/ddddddO/gtree"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExtractTagChange(t *testing.T) {
@@ -640,6 +641,49 @@ func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_ShowsManagementMess
 		// Should only have root node, no management message
 		assert.Len(t, nodes, 1)
 	})
+}
+
+// TestFormatPatchDocument_CascadeResolvableMarker covers RFC-0042's
+// simulate-time UX: the planner synthesizes a `$cascade-resolvable` marker
+// op when a cascade-update's resolvable target is provider-assigned (e.g.
+// ECS Service.TaskDefinition → AWS-assigned TaskDefinitionArn). The
+// renderer must surface "to point at the new <source> (current: <value>)"
+// rather than attempt the usual `from X to Y` formatting that would print
+// the marker JSON.
+func TestFormatPatchDocument_CascadeResolvableMarker(t *testing.T) {
+	node := gtree.NewRoot("")
+	patchDoc := json.RawMessage(`[
+		{
+			"op": "replace",
+			"path": "/TaskDefinition",
+			"value": {
+				"$cascade-resolvable": true,
+				"$source-label": "test-taskdef-for-service",
+				"$current-value": "arn:aws:ecs:us-east-1:0:task-definition/test:1"
+			}
+		}
+	]`)
+	properties := json.RawMessage(`{"TaskDefinition": {"$ref": "formae://x#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/test:1"}}`)
+
+	FormatPatchDocument(node, patchDoc, properties, json.RawMessage("{}"), map[string]string{}, "")
+
+	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
+	require.NoError(t, err)
+	require.NotEmpty(t, nodes)
+
+	var combined string
+	for _, n := range nodes {
+		combined += n.Name() + "\n"
+	}
+
+	assert.Contains(t, combined, `change property "TaskDefinition" to point at the new test-taskdef-for-service`,
+		"renderer must use the friendly RFC-0042 phrasing, not raw JSON")
+	assert.Contains(t, combined, `(current: "arn:aws:ecs:us-east-1:0:task-definition/test:1")`,
+		"renderer must surface the current value so the user can compare")
+	assert.NotContains(t, combined, "$cascade-resolvable",
+		"marker JSON must never leak into user-facing output")
+	assert.NotContains(t, combined, "$source-label",
+		"marker metadata fields must never leak into user-facing output")
 }
 
 func collectNodes(it iter.Seq2[*gtree.WalkerNode, error]) ([]*gtree.WalkerNode, error) {

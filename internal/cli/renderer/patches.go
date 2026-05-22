@@ -40,6 +40,15 @@ type PropertyChange struct {
 	IsRef            bool
 	IsOpaque         bool
 	ExistsInPrevious bool
+
+	// IsCascadeResolvable signals an RFC-0042 cascade-update synthetic op
+	// where the new value isn't knowable at plan time (e.g. provider-
+	// assigned identifiers like TaskDefinitionArn). The renderer prints a
+	// friendly "to point at the new <source-label> (current: <value>)"
+	// line instead of trying to format a missing value.
+	IsCascadeResolvable bool
+	CascadeSourceLabel  string
+	CascadeCurrentValue string
 }
 
 // FormatPatchDocument formats JSON Patch operations for cli display
@@ -198,6 +207,20 @@ func extractPropertyChange(patch patchOperation, props map[string]any, previousP
 		Operation: patch.Op,
 	}
 
+	// RFC-0042 cascade-resolvable marker: the value is an object carrying
+	// `$cascade-resolvable: true` and metadata about the source. The new
+	// concrete value isn't known at plan time (provider-assigned), so we
+	// short-circuit normal value formatting and capture the source info
+	// for friendly rendering.
+	if valueMap, ok := patch.Value.(map[string]any); ok {
+		if isCascade, _ := valueMap["$cascade-resolvable"].(bool); isCascade {
+			change.IsCascadeResolvable = true
+			change.CascadeSourceLabel, _ = valueMap["$source-label"].(string)
+			change.CascadeCurrentValue, _ = valueMap["$current-value"].(string)
+			return change, nil
+		}
+	}
+
 	// Set IsOpaque after we have the path
 	propsBytes, _ := json.Marshal(props)
 	change.IsOpaque = isOpaqueProperty(change.Path, previousProperties) || isOpaqueProperty(change.Path, json.RawMessage(propsBytes))
@@ -245,6 +268,18 @@ func extractPropertyChange(patch patchOperation, props map[string]any, previousP
 // formatPropertyChange formats a PropertyChange for display
 func formatPropertyChange(change PropertyChange) string {
 	displayPath := stripArrayIndices(change.Path)
+
+	if change.IsCascadeResolvable {
+		// RFC-0042 cascade-update where the new value is provider-assigned
+		// (e.g. TaskDefinitionArn). Render the friendly form rather than
+		// trying to show `from X to Y` with a missing Y.
+		if change.CascadeCurrentValue != "" {
+			return display.Gold(fmt.Sprintf(`change property "%s" to point at the new %s (current: "%s")`,
+				displayPath, change.CascadeSourceLabel, change.CascadeCurrentValue))
+		}
+		return display.Gold(fmt.Sprintf(`change property "%s" to point at the new %s`,
+			displayPath, change.CascadeSourceLabel))
+	}
 
 	switch change.Operation {
 	case "add":

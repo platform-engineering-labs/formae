@@ -175,12 +175,14 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 			"v2 should produce changes — parent's CreateOnly field is shifting")
 
 		var parentOps, consumerOps []string
-		for _, ru := range resp.Simulation.Command.ResourceUpdates {
+		var consumerUpdate *apimodel.ResourceUpdate
+		for i, ru := range resp.Simulation.Command.ResourceUpdates {
 			switch ru.ResourceLabel {
 			case "parent":
 				parentOps = append(parentOps, ru.Operation)
 			case "consumer":
 				consumerOps = append(consumerOps, ru.Operation)
+				consumerUpdate = &resp.Simulation.Command.ResourceUpdates[i]
 			}
 		}
 
@@ -192,5 +194,19 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 			"RFC-0042: consumer with non-CreateOnly ref should NOT cascade-replace when parent is replaced")
 		assert.Equal(t, apimodel.OperationUpdate, consumerOps[0],
 			"RFC-0042: consumer with non-CreateOnly ref should be Updated, not Replaced")
+
+		// Verify the simulate output surfaces the cascading change. The
+		// parent's Name is a user-provided field, so the new value lives in
+		// the v2 forma and the synthesized patch should carry a concrete
+		// `replace` op on /ParentRef with "parent-v2".
+		require.NotNil(t, consumerUpdate)
+		require.NotEmpty(t, consumerUpdate.PatchDocument,
+			"cascade-update must carry a synthesized patch so simulate output names the cascading field change")
+		patchStr := string(consumerUpdate.PatchDocument)
+		assert.Contains(t, patchStr, `"path":"/ParentRef"`,
+			"synthesized patch must target the dependent's referring field")
+		assert.Contains(t, patchStr, `"parent-v2"`,
+			"user-provided source field: synthesized patch should carry the concrete new value from the forma")
+		assert.True(t, consumerUpdate.IsCascade, "cascade-update must propagate the IsCascade flag to the API model")
 	})
 }

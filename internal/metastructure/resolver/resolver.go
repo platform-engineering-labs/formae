@@ -46,12 +46,37 @@ func ExtractResolvableURIs(resource pkgmodel.Resource) []pkgmodel.FormaeURI {
 	return resolver.getResolvableURIs()
 }
 
+// stringifyValue best-effort stringifies a resolvable's cached $value
+// payload (any) into a display string. Returns "" when the value is nil.
+// Maps strings to themselves, scalars via fmt, and everything else via
+// JSON marshalling so renderers can show concrete user-facing strings.
+func stringifyValue(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	switch v := v.(type) {
+	case bool, int, int32, int64, uint, uint32, uint64, float32, float64:
+		return fmt.Sprintf("%v", v)
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+}
+
 // ResolvableRef pairs a resolvable's target resource URI with the field-path
 // at which the reference appears in the consuming resource. Consumers that
 // need to look up per-field schema hints use this instead of ExtractResolvableURIs.
 type ResolvableRef struct {
-	URI        pkgmodel.FormaeURI // resource being referenced
-	TargetPath string             // dot-separated path within the consuming resource
+	URI                pkgmodel.FormaeURI // resource being referenced (no fragment)
+	TargetPath         string             // dot-separated path within the consuming resource
+	SourcePropertyName string             // property name on the referenced resource (e.g. "TaskDefinitionArn")
+	CurrentValue       string             // the cached $value at the consuming TargetPath, or "" if absent
 }
 
 // ExtractResolvableRefs returns every resolvable in the resource along with
@@ -64,7 +89,12 @@ func ExtractResolvableRefs(resource pkgmodel.Resource) []ResolvableRef {
 		for _, ref := range refs {
 			// Construct URI without fragment (just scheme://ksuid)
 			uri := pkgmodel.FormaeURI(fmt.Sprintf("formae://%s", ref.ResourceURI.KSUID()))
-			out = append(out, ResolvableRef{URI: uri, TargetPath: ref.TargetPath})
+			out = append(out, ResolvableRef{
+				URI:                uri,
+				TargetPath:         ref.TargetPath,
+				SourcePropertyName: ref.SourcePropertyName,
+				CurrentValue:       stringifyValue(ref.ResolvedValue.Value),
+			})
 		}
 	}
 	return out
