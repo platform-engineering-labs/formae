@@ -256,6 +256,13 @@ open class Schema {
     Extractable: Boolean = true
     /// Property that dictates whether a resource can be moved across targets
     Portable: Boolean = false
+    /// Type of parent resource. Empty string when this resource has no parent.
+    /// Populated by Extractor.pkl from ResourceHint.parent.
+    Parent: String = ""
+    /// Identity-property mappings from this child to its parent. Empty when
+    /// this resource has no parent. Populated by Extractor.pkl from
+    /// ResourceHint.parentRefs, with a `listParam` fallback for legacy schemas.
+    ParentMappings: Listing<ParentRef> = new Listing {}
 
     /// Query fields by FieldHint property
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
@@ -693,7 +700,49 @@ class Fq {
                 Discoverable = hint.discoverable
                 Extractable = hint.extractable
                 Portable = hint.portable
+                Parent = hint.parent ?? ""
+                ParentMappings = parentMappingsOf(hint)
             }
+
+    /// Build the Schema.ParentMappings listing from a ResourceHint.
+    ///
+    /// Preference order: `parentRefs` (the RFC-0043 shape) over `listParam`
+    /// (legacy fallback). `parentRefs` is typed `(ParentRef|List<ParentRef>)?`
+    /// so it arrives as either a single `ParentRef` or a `List<ParentRef>`; PKL
+    /// rejects `Listing` literals at the type boundary so no `is Listing` arm is
+    /// reachable here. `listParam` keeps the `is Listing` arm for symmetry with
+    /// `extractParentMappings` in Extractor.pkl. When falling back to `listParam`,
+    /// the child-side name is taken from `listParameter` (the LIST API parameter
+    /// that carries the parent's value on the child).
+    function parentMappingsOf(resourceHint): Listing<ParentRef> =
+        let (refs = resourceHint.getProperty("parentRefs"))
+        let (listParam = resourceHint.getProperty("listParam"))
+        if (refs != null)
+            if (refs is List)
+                new Listing { for (r in refs) { fromParentRef(r) } }
+            else
+                // Single ParentRef
+                new Listing { fromParentRef(refs) }
+        else if (listParam != null)
+            if (listParam is Listing)
+                new Listing { for (p in listParam) { fromListProperty(p) } }
+            else if (listParam is List)
+                new Listing { for (p in listParam) { fromListProperty(p) } }
+            else
+                // Single ListProperty
+                new Listing { fromListProperty(listParam) }
+        else
+            new Listing {}
+
+    function fromParentRef(r): ParentRef = new ParentRef {
+        parentProperty = r.parentProperty
+        childProperty = r.childProperty
+    }
+
+    function fromListProperty(p): ParentRef = new ParentRef {
+        parentProperty = p.parentProperty
+        childProperty = p.listParameter
+    }
 
     function type(resourceClass: reflect.Class): String =
       let (resourceHint = findResourceHint(resourceClass))

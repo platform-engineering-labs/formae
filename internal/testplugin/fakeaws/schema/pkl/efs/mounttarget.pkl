@@ -1,0 +1,34 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS EFS MountTarget - fixture for verifying Extractor.pkl emits
+ * Schema.Parent + Schema.ParentMappings from `parent` + `parentRefs`.
+ * Mirrors the motivating runtimeDependency example from RFC-0043.
+ */
+module fakeaws.efs.mounttarget
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::EFS::MountTarget"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "MountTargetId"
+    parent = "FakeAWS::EFS::FileSystem"
+    parentRefs = new formae.ParentRef {
+        parentProperty = "FileSystemId"
+        childProperty = "FileSystemId"
+    }
+}
+open class MountTarget extends formae.Resource {
+    @fakeaws.FieldHint
+    fileSystemId: String
+
+    @fakeaws.FieldHint
+    subnetId: String
+}

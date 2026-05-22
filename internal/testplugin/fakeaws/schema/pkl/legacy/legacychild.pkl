@@ -1,0 +1,34 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS LegacyChild - fixture verifying Extractor.pkl's `listParam`
+ * fallback when `parentRefs` is absent. Mirrors pre-RFC-0043 schemas
+ * that only declared a `listParam` for the parent containment hint.
+ */
+module fakeaws.legacy.legacychild
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::Legacy::LegacyChild"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "ChildId"
+    parent = "FakeAWS::Legacy::LegacyParent"
+    listParam = new formae.ListProperty {
+        parentProperty = "ParentId"
+        listParameter = "ParentRef"
+    }
+}
+open class LegacyChild extends formae.Resource {
+    @fakeaws.FieldHint
+    childId: String
+
+    @fakeaws.FieldHint
+    parentRef: String
+}

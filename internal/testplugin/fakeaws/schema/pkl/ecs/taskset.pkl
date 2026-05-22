@@ -1,0 +1,44 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS ECS TaskSet - fixture for verifying Extractor.pkl emits
+ * Schema.ParentMappings from a composite List<ParentRef> declaration.
+ * Mirrors the AWS::ECS::TaskSet → AWS::ECS::Service relationship where
+ * the parent's `ServiceName` is referenced by the child's `Service`.
+ */
+module fakeaws.ecs.taskset
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::ECS::TaskSet"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "TaskSetId"
+    parent = "FakeAWS::ECS::Service"
+    parentRefs = List(
+        new formae.ParentRef {
+            parentProperty = "ServiceName"
+            childProperty = "Service"
+        },
+        new formae.ParentRef {
+            parentProperty = "Cluster"
+            childProperty = "Cluster"
+        }
+    )
+}
+open class TaskSet extends formae.Resource {
+    @fakeaws.FieldHint
+    service: String
+
+    @fakeaws.FieldHint
+    cluster: String
+
+    @fakeaws.FieldHint
+    taskDefinition: String?
+}
