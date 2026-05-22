@@ -80,6 +80,18 @@ func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 			Type:         "FakeAWS::EC2::Instance",
 			Discoverable: true,
 		},
+		// Versioned::Parent + Versioned::Consumer model the RFC-0042 case:
+		// a parent whose CreateOnly field forces Replace, and a consumer
+		// referencing it via a non-createOnly field. Used to verify that the
+		// planner does NOT cascade-replace the consumer in that situation.
+		{
+			Type:         "FakeAWS::Versioned::Parent",
+			Discoverable: false,
+		},
+		{
+			Type:         "FakeAWS::Versioned::Consumer",
+			Discoverable: false,
+		},
 	}
 }
 
@@ -108,6 +120,23 @@ func (s *FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, erro
 				"VpcId"},
 			Hints: map[string]model.FieldHint{
 				"VpcId": {AttachesTo: true},
+			},
+		}, nil
+	case "FakeAWS::Versioned::Parent":
+		return model.Schema{
+			Identifier: "Name",
+			Fields:     []string{"Name", "Value"},
+			Hints: map[string]model.FieldHint{
+				"Name": {CreateOnly: true},
+			},
+		}, nil
+	case "FakeAWS::Versioned::Consumer":
+		return model.Schema{
+			Identifier: "Name",
+			Fields:     []string{"Name", "ParentRef"},
+			Hints: map[string]model.FieldHint{
+				"Name":      {CreateOnly: true},
+				"ParentRef": {CreateOnly: false},
 			},
 		}, nil
 	default:

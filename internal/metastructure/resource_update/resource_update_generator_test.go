@@ -1083,9 +1083,126 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allResources, targetMap, FormaCommandSourceUser)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, allResources, targetMap, FormaCommandSourceUser)
 
 	assert.Len(t, dependencyDeletes, 0, "Should not create duplicates when resources with same label but different types are already being deleted")
+	assert.Len(t, cascadeUpdates, 0, "No cascade-updates expected when no dependents reference the deletes")
+}
+
+// TestFindDependencyUpdates_CreateOnlyBranch exercises RFC-0042 §2: the
+// cascade decision branches on the dependent's referring FieldHint.CreateOnly.
+// CreateOnly=true → cascade-delete (today's behavior, dependent gets torn
+// down). CreateOnly=false → cascade-update (the resolvable re-resolves at
+// apply time; the provider's Update absorbs the new parent value).
+func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
+	parentKsuid := util.NewID()
+	dependentKsuid := util.NewID()
+
+	parentDelete := ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label: "parent",
+			Type:  "AWS::Versioned::Parent",
+			Stack: "test-stack",
+			Ksuid: parentKsuid,
+		},
+		Operation: OperationDelete,
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "AWS"},
+	}
+
+	// makeDependent returns a dependent resource referencing the parent via
+	// the given property at the given path with the given CreateOnly hint.
+	makeDependent := func(propsJSON string, hints map[string]pkgmodel.FieldHint) pkgmodel.Resource {
+		return pkgmodel.Resource{
+			Label:      "dependent",
+			Type:       "AWS::Versioned::Consumer",
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      dependentKsuid,
+			Properties: json.RawMessage(propsJSON),
+			Schema: pkgmodel.Schema{
+				Identifier: "Name",
+				Hints:      hints,
+			},
+		}
+	}
+
+	parentRefJSON := fmt.Sprintf(`{"ParentRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid)
+	parentRefArrayJSON := fmt.Sprintf(`{"Refs":[{"Target":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}]}`, parentKsuid)
+	otherKsuid := util.NewID()
+	mixedRefsJSON := fmt.Sprintf(
+		`{"ImmutableRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"},"MutableRef":{"$ref":"formae://%s#/Other","$value":"x"}}`,
+		parentKsuid, otherKsuid,
+	)
+
+	cases := []struct {
+		name              string
+		dependent         pkgmodel.Resource
+		wantCascadeDelete bool // true => dependencyDeletes has 1, cascadeUpdates 0
+	}{
+		{
+			name: "createOnly=true emits cascade-delete",
+			dependent: makeDependent(parentRefJSON, map[string]pkgmodel.FieldHint{
+				"ParentRef": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			name: "createOnly=false emits cascade-update",
+			dependent: makeDependent(parentRefJSON, map[string]pkgmodel.FieldHint{
+				"ParentRef": {CreateOnly: false},
+			}),
+			wantCascadeDelete: false,
+		},
+		{
+			// Per the plan's mixed-refs case: a single CreateOnly ref to a
+			// deletion target forces cascade-replace for the whole dependent
+			// even when another ref to the same target is mutable.
+			name: "mixed refs — any CreateOnly forces cascade-delete",
+			dependent: makeDependent(mixedRefsJSON, map[string]pkgmodel.FieldHint{
+				"ImmutableRef": {CreateOnly: true},
+				"MutableRef":   {CreateOnly: false},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// Array-indexed TargetPath ("Refs.0.Target") must be looked up
+			// under the stripped key ("Refs.Target") — same convention as
+			// changeset.fieldHintForPath / RFC-0034 AttachesTo.
+			name: "array-indexed path uses stripped hint key",
+			dependent: makeDependent(parentRefArrayJSON, map[string]pkgmodel.FieldHint{
+				"Refs.Target": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			allResources := map[string][]*pkgmodel.Resource{
+				"test-stack": {&tc.dependent},
+			}
+			dependencyDeletes, cascadeUpdates := findDependencyUpdates(
+				[]ResourceUpdate{parentDelete}, allResources, targetMap, FormaCommandSourceUser,
+			)
+
+			if tc.wantCascadeDelete {
+				require.Len(t, dependencyDeletes, 1, "expected a cascade-delete for the dependent")
+				assert.Equal(t, OperationDelete, dependencyDeletes[0].Operation)
+				assert.Equal(t, "dependent", dependencyDeletes[0].DesiredState.Label)
+				assert.Len(t, cascadeUpdates, 0, "no cascade-updates expected when CreateOnly forces delete")
+			} else {
+				require.Len(t, cascadeUpdates, 1, "expected a cascade-update for the dependent")
+				assert.Equal(t, OperationUpdate, cascadeUpdates[0].Operation)
+				assert.Equal(t, "dependent", cascadeUpdates[0].DesiredState.Label)
+				assert.True(t, cascadeUpdates[0].IsCascade, "cascade-update should be marked IsCascade")
+				assert.Equal(t, "parent", cascadeUpdates[0].CascadeSource,
+					"cascade-update should record the source label for debugging")
+				assert.Len(t, dependencyDeletes, 0, "no cascade-deletes expected when all refs are mutable")
+			}
+		})
+	}
 }
 
 func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGenerated(t *testing.T) {
