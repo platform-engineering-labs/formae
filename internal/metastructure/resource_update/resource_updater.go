@@ -547,6 +547,28 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
+	// RFC-0042: planner-emitted cascade-updates carry an empty PatchDocument
+	// because the new resolved value isn't known at plan time (e.g. AWS-
+	// assigned identifiers like TaskDefinitionArn:N). By the time we reach
+	// the plugin call here, the executor has resolved each remaining
+	// resolvable into DesiredState.Properties, so a fresh patch.GeneratePatch
+	// against PriorState.Properties yields the actual provider-side diff.
+	if data.resourceUpdate.IsCascade && hasEmptyPatch {
+		patchDoc, _, err := patch.GeneratePatch(
+			data.resourceUpdate.PriorState.Properties,
+			data.resourceUpdate.DesiredState.Properties,
+			resolver.NewResolvableProperties(),
+			data.resourceUpdate.DesiredState.Schema,
+			pkgmodel.FormaApplyModePatch,
+		)
+		if err != nil {
+			proc.Log().Error("failed to regenerate patch for cascade-update: %v", err)
+			data.resourceUpdate.MarkAsFailed()
+			return StateFinishedWithError, data, nil, nil
+		}
+		data.resourceUpdate.DesiredState.PatchDocument = patchDoc
+	}
+
 	// Convert properties to plugin format (extracts $value from opaque structures)
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {
