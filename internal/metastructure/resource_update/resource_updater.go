@@ -547,10 +547,6 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
-	// PatchDocument is kept in sync by ResourceUpdate.ResolveValue as the
-	// executor's resolver substitutes fresh $value entries into
-	// DesiredState.Properties; nothing patch-related needs doing here.
-
 	// Convert properties to plugin format (extracts $value from opaque structures)
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {
