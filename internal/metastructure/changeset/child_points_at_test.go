@@ -355,3 +355,82 @@ func TestChildPointsAt_Destroy_Composite_MatchesOnlyCorrectInstance(t *testing.T
 	// Does NOT match svc2 (same ServiceName, different Cluster)
 	require.False(t, childPointsAt(ts1, svc2, resource_update.OperationDelete, nil))
 }
+
+// TestChildPointsAt_Create_Composite_ExternalSibling_StillMatches guards
+// against an over-strict baseResources lookup: when the K-side resolvable
+// for the sibling half of a composite mapping points at a resource that is
+// not in the current changeset (an unchanged Cluster that both Service and
+// TaskSet are anchored on), createSideMatches must still fall through to a
+// direct URI comparison between the child's and producer's resolvables.
+//
+// The original implementation declined as soon as the K-side URI was missing
+// from baseResources — silently breaking composite-parent matches with
+// external shared resources, which is the common case in incremental
+// reconciliation.
+func TestChildPointsAt_Create_Composite_ExternalSibling_StillMatches(t *testing.T) {
+	// Cluster is intentionally NOT registered in baseResources — it's an
+	// existing, unchanged resource that lives outside the current changeset.
+	cluster := makeResourceUpdate(t, "AWS::ECS::Cluster", "c1", nil)
+
+	svc1 := makeResourceUpdate(t, "AWS::ECS::Service", "S1", map[string]any{
+		"ServiceName": "foo",
+		"Cluster":     makeResolvable(cluster.URI(), "ClusterName"),
+	})
+	svc1.DesiredState.Schema.Identifier = "Ref"
+
+	ts1 := makeResourceUpdate(t, "AWS::ECS::TaskSet", "TS1", map[string]any{
+		"Service": makeResolvable(svc1.URI(), "ServiceName"),
+		"Cluster": makeResolvable(cluster.URI(), "ClusterName"),
+	})
+	ts1.DesiredState.Schema.Parent = "AWS::ECS::Service"
+	ts1.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "ServiceName", ChildProperty: "Service"},
+		{ParentProperty: "Cluster", ChildProperty: "Cluster"},
+	}
+
+	// baseResources knows about the parent (svc1) but NOT the shared Cluster.
+	baseRes := map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate{
+		svc1.URI().Stripped(): svc1,
+	}
+
+	// Match still holds: the Service mapping resolves to svc1 in baseResources
+	// (parent reference), and the Cluster mapping falls through to direct URI
+	// comparison even though the Cluster is absent from baseResources.
+	require.True(t, childPointsAt(ts1, svc1, resource_update.OperationCreate, baseRes))
+}
+
+// TestChildPointsAt_Create_Composite_ExternalSibling_DiverginRefsNoMatch is
+// the negative counterpart: when the K-side and producer-side resolvables
+// for the sibling mapping point at *different* external resources, the
+// match must NOT fire. Guards against the fall-through accidentally treating
+// "neither side knows what it's pointing at" as a match.
+func TestChildPointsAt_Create_Composite_ExternalSibling_DiverginRefsNoMatch(t *testing.T) {
+	cluster1 := makeResourceUpdate(t, "AWS::ECS::Cluster", "c1", nil)
+	cluster2 := makeResourceUpdate(t, "AWS::ECS::Cluster", "c2", nil)
+
+	svc1 := makeResourceUpdate(t, "AWS::ECS::Service", "S1", map[string]any{
+		"ServiceName": "foo",
+		// Service points at cluster1.
+		"Cluster": makeResolvable(cluster1.URI(), "ClusterName"),
+	})
+	svc1.DesiredState.Schema.Identifier = "Ref"
+
+	ts1 := makeResourceUpdate(t, "AWS::ECS::TaskSet", "TS1", map[string]any{
+		"Service": makeResolvable(svc1.URI(), "ServiceName"),
+		// TaskSet points at cluster2 — divergent from the service's Cluster.
+		"Cluster": makeResolvable(cluster2.URI(), "ClusterName"),
+	})
+	ts1.DesiredState.Schema.Parent = "AWS::ECS::Service"
+	ts1.DesiredState.Schema.ParentMappings = []pkgmodel.ParentMapping{
+		{ParentProperty: "ServiceName", ChildProperty: "Service"},
+		{ParentProperty: "Cluster", ChildProperty: "Cluster"},
+	}
+
+	baseRes := map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate{
+		svc1.URI().Stripped(): svc1,
+	}
+
+	// Service mapping matches (parent reference), but Cluster mapping fails:
+	// the K-side and producer-side resolvables target different cluster URIs.
+	require.False(t, childPointsAt(ts1, svc1, resource_update.OperationCreate, baseRes))
+}

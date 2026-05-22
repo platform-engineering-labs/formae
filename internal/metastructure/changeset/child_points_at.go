@@ -27,8 +27,10 @@ import (
 //   - OperationDelete: compares actual property values on both sides — the
 //     destroy planner already operates on the resource snapshot captured in
 //     DesiredState, so we read literal values from there.
-//   - OperationCreate: not yet implemented (Task 2.4). The create branch needs
-//     to chase Resolvable references through baseResources to compare URIs.
+//   - OperationCreate: chases Resolvable references through baseResources to
+//     compare URIs. The child's parent-reference field holds a Resolvable
+//     carrying the producer's KSUID-based FormaeURI rather than a literal at
+//     create time, so identity matching is done on URIs rather than values.
 //
 // `baseResources` is the changeset's index from stripped FormaeURI to the
 // base (Create/Replace/Update) ResourceUpdate that produces that URI. It is
@@ -125,24 +127,27 @@ func getEffectivePropertyValue(props []byte, propName string) (string, bool) {
 // (the changeset's URI-indexed view of every Create/Replace/Update operation)
 // to compare identities rather than concrete property values.
 //
-// Two reference shapes are possible and they are discriminated by Type:
+// Two reference shapes are possible:
 //
-//   - **Parent reference** — the K-side URI resolves to a resource whose Type
-//     matches `k.DesiredState.Schema.Parent`. In this case the mapping is
-//     simply asserting "K points at its parent"; the match holds iff the
-//     URI equals `producer`'s URI.
-//   - **Sibling reference** — the K-side URI resolves to some other resource
-//     (typically a peer that K and producer both reference, e.g., an ECS
-//     Cluster shared by TaskSet and Service). In this case the producer must
-//     also carry a Resolvable at `ParentProperty` pointing at the same third
+//   - **Parent reference** — the K-side URI resolves to a resource (in
+//     baseResources) whose Type matches `k.DesiredState.Schema.Parent`. In
+//     this case the mapping is simply asserting "K points at its parent"; the
+//     match holds iff the URI equals `producer`'s URI.
+//   - **Sibling reference** — the K-side URI does NOT resolve to a parent-
+//     typed resource. This covers two sub-cases: (a) the referenced resource
+//     is in baseResources but has a different type (a peer K and producer
+//     share, e.g., an ECS Cluster), or (b) the referenced resource is outside
+//     the current changeset (unchanged sibling whose KSUID still appears as a
+//     Resolvable on both K and producer). In either sub-case the producer
+//     must also carry a Resolvable at `ParentProperty` pointing at the same
 //     resource; the match holds iff K's and producer's URIs are equal after
 //     stripping property paths.
 //
-// `baseResources` is consulted purely for the type discriminator. A missing
-// entry — e.g., the K-side URI points at a resource outside the current
-// changeset — yields no match: without knowing the referenced resource's
-// type we cannot tell whether this is a parent or sibling reference and must
-// conservatively decline.
+// `baseResources` is consulted only as a type discriminator for the parent-
+// reference shortcut. If the referenced resource is absent we fall through to
+// the sibling comparison rather than declining — otherwise composite-parent
+// matches with an external shared resource (Service+TaskSet both pointing at
+// a Cluster outside the changeset) would never fire.
 func createSideMatches(
 	k, producer *resource_update.ResourceUpdate,
 	m pkgmodel.ParentMapping,
@@ -153,18 +158,16 @@ func createSideMatches(
 		return false
 	}
 
-	kIndexed, found := baseResources[kRef.Stripped()]
-	if !found {
-		return false
-	}
-
-	if kIndexed.DesiredState.Type == k.DesiredState.Schema.Parent {
+	if kIndexed, found := baseResources[kRef.Stripped()]; found &&
+		kIndexed.DesiredState.Type == k.DesiredState.Schema.Parent {
 		// Parent reference: K's URI must equal producer's URI.
 		return kRef.Stripped() == producer.URI().Stripped()
 	}
 
-	// Sibling reference: K and producer must point at the same third resource.
-	// Read producer's value at m.ParentProperty — it should also be a Resolvable.
+	// Sibling reference (referenced resource has a different type, or is not
+	// in the current changeset at all). K and producer must point at the same
+	// third resource. Read producer's value at m.ParentProperty — it should
+	// also be a Resolvable.
 	pRef, ok := extractResolvableURI(producer.DesiredState.Properties, m.ParentProperty)
 	if !ok {
 		return false
