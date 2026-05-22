@@ -1,0 +1,65 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS Versioned - mixed annotated / unannotated FieldHint fixture
+ * for verifying that descriptors.ExtractSchema emits every property path
+ * (RFC-0042). Properties without an explicit FieldHint must surface in
+ * Schema.Hints with a default FieldHint (createOnly = false); annotated
+ * paths must preserve their values.
+ *
+ * Coverage matrix (paths after Capitalize):
+ *
+ *   VersionedId           — annotated, createOnly = false (default)
+ *   MutableTag            — UNANNOTATED top-level scalar
+ *   ImmutableId           — annotated, createOnly = true
+ *   Block.Description     — UNANNOTATED SubResource leaf
+ *   Block.KnownLeaf       — annotated SubResource leaf
+ *   Block.Inner.Label     — UNANNOTATED deeply nested leaf
+ *   Block.Inner.Tag       — annotated deeply nested leaf, createOnly = true
+ */
+module fakeaws.mixed.versioned
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::Mixed::Versioned"
+
+@fakeaws.SubResourceHint
+open class InnerBlock extends formae.SubResource {
+    label: String?
+
+    @fakeaws.FieldHint { createOnly = true }
+    tag: String?
+}
+
+@fakeaws.SubResourceHint
+open class OuterBlock extends formae.SubResource {
+    description: String?
+
+    @fakeaws.FieldHint
+    knownLeaf: String?
+
+    @fakeaws.FieldHint
+    inner: InnerBlock?
+}
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "VersionedId"
+}
+open class Versioned extends formae.Resource {
+    @fakeaws.FieldHint
+    versionedId: String
+
+    mutableTag: String?
+
+    @fakeaws.FieldHint { createOnly = true }
+    immutableId: String
+
+    @fakeaws.FieldHint
+    block: OuterBlock?
+}
