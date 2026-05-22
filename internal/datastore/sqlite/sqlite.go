@@ -212,7 +212,8 @@ SELECT
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
-	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties
+	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
+	ru.is_cascade, ru.cascade_source
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -242,6 +243,8 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var resourceJSON, resourceTargetJSON, existingResourceJSON, existingTargetJSON []byte
 	var progressResultJSON, mostRecentProgressJSON []byte
 	var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
+	var ruIsCascade sql.NullInt64
+	var ruCascadeSource sql.NullString
 
 	err := rows.Scan(
 		// FormaCommand columns
@@ -254,6 +257,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
+		&ruIsCascade, &ruCascadeSource,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -397,6 +401,13 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 
 	ru.PreviousProperties = previousPropertiesJSON
 
+	if ruIsCascade.Valid {
+		ru.IsCascade = ruIsCascade.Int64 != 0
+	}
+	if ruCascadeSource.Valid {
+		ru.CascadeSource = ruCascadeSource.String
+	}
+
 	return &cmd, &ru, nil
 }
 
@@ -522,7 +533,8 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 			ru.progress_result, ru.most_recent_progress,
-			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties
+			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
+	ru.is_cascade, ru.cascade_source
 		FROM forma_commands fc
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id = (
@@ -689,7 +701,8 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 			ru.progress_result, ru.most_recent_progress,
-			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties
+			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
+	ru.is_cascade, ru.cascade_source
 		FROM forma_commands fc
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id IN (%s)
@@ -3420,8 +3433,9 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 			retries, remaining, version, stack_label, group_id, source,
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
-			remaining_resolvables, reference_labels, previous_properties
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			remaining_resolvables, reference_labels, previous_properties,
+			is_cascade, cascade_source
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -3501,6 +3515,8 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 			remainingResolvablesJSON,
 			referenceLabelsJSON,
 			ru.PreviousProperties,
+			ru.IsCascade,
+			ru.CascadeSource,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert resource update: %w", err)

@@ -267,12 +267,14 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 
 		v2cmd := fas[0]
 		var realParentOps, realConsumerOps []resource_update.OperationType
-		for _, ru := range v2cmd.ResourceUpdates {
+		var realConsumerRU *resource_update.ResourceUpdate
+		for i, ru := range v2cmd.ResourceUpdates {
 			switch ru.DesiredState.Label {
 			case "parent":
 				realParentOps = append(realParentOps, ru.Operation)
 			case "consumer":
 				realConsumerOps = append(realConsumerOps, ru.Operation)
+				realConsumerRU = &v2cmd.ResourceUpdates[i]
 			}
 		}
 		assert.Len(t, realParentOps, 2, "real-apply: parent should be Replaced (delete + create)")
@@ -280,6 +282,17 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 		assert.Contains(t, realParentOps, resource_update.OperationCreate)
 		require.Len(t, realConsumerOps, 1, "real-apply: consumer should be Updated, not Replaced")
 		assert.Equal(t, resource_update.OperationUpdate, realConsumerOps[0])
+
+		// IsCascade / CascadeSource must round-trip through SQLite so
+		// post-restart `formae status` can still render the "(cascade)
+		// because it depends on X" breadcrumb. Pre-fix BulkStoreResourceUpdates
+		// dropped these columns and reloading them as the zero value
+		// silently lost the breadcrumb.
+		require.NotNil(t, realConsumerRU)
+		assert.True(t, realConsumerRU.IsCascade,
+			"persisted ResourceUpdate must round-trip IsCascade=true so post-restart status still renders the cascade marker")
+		assert.Equal(t, "parent", realConsumerRU.CascadeSource,
+			"persisted ResourceUpdate must round-trip CascadeSource so 'because it depends on X' survives a reload")
 
 		// The end-to-end proof: the executor's resolver substituted
 		// parent-v2 into DesiredState, ResolveValue re-derived the patch,
