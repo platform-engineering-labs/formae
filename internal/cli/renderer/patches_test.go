@@ -643,13 +643,13 @@ func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_ShowsManagementMess
 	})
 }
 
-// TestFormatPatchDocument_CascadeResolvableMarker covers RFC-0042's
-// simulate-time UX: the planner synthesizes a `$cascade-resolvable` marker
-// op when a cascade-update's resolvable target is provider-assigned (e.g.
-// ECS Service.TaskDefinition → AWS-assigned TaskDefinitionArn). The
-// renderer must surface "to point at the new <source> (current: <value>)"
-// rather than attempt the usual `from X to Y` formatting that would print
-// the marker JSON.
+// TestFormatPatchDocument_CascadeResolvableMarker covers simulate-time
+// UX for cascade-updates: the planner synthesizes a `$cascade-resolvable`
+// marker op when a cascade-update's resolvable target is provider-
+// assigned (e.g. ECS Service.TaskDefinition → AWS-assigned
+// TaskDefinitionArn). The renderer must surface "to point at the new
+// <source> (current: <value>)" rather than attempt the usual `from X to Y`
+// formatting that would print the marker JSON.
 func TestFormatPatchDocument_CascadeResolvableMarker(t *testing.T) {
 	node := gtree.NewRoot("")
 	patchDoc := json.RawMessage(`[
@@ -677,7 +677,7 @@ func TestFormatPatchDocument_CascadeResolvableMarker(t *testing.T) {
 	}
 
 	assert.Contains(t, combined, `change property "TaskDefinition" to point at the new test-taskdef-for-service`,
-		"renderer must use the friendly RFC-0042 phrasing, not raw JSON")
+		"renderer must use the friendly cascade-update phrasing, not raw JSON")
 	assert.Contains(t, combined, `(current: "arn:aws:ecs:us-east-1:0:task-definition/test:1")`,
 		"renderer must surface the current value so the user can compare")
 	assert.NotContains(t, combined, "$cascade-resolvable",

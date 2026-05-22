@@ -504,32 +504,6 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
-// regenerateCascadePatch recomputes the JSON-Patch body for an RFC-0042
-// cascade-update at apply time. The planner emits cascade-updates with an
-// empty PatchDocument because the new resolved value is unknown at plan
-// time (e.g. AWS-assigned identifiers like TaskDefinitionArn:N). After
-// the executor's resolver has substituted post-Create $value entries into
-// the dependent's DesiredState.Properties, the diff against PriorState is
-// concrete; this helper produces the patch the plugin needs.
-//
-// Reuses patch.GeneratePatch — the same machinery NewResourceUpdateForExisting
-// uses — but is invoked here because the planner's prior == desired check
-// inside NewResourceUpdateForExisting would have short-circuited the
-// cascade-update (the user didn't change the dependent, only the parent).
-func regenerateCascadePatch(prior, desired json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
-	patchDoc, _, err := patch.GeneratePatch(
-		prior,
-		desired,
-		resolver.NewResolvableProperties(),
-		schema,
-		pkgmodel.FormaApplyModePatch,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to regenerate cascade-update patch: %w", err)
-	}
-	return patchDoc, nil
-}
-
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	// When bringing a resource under management without property changes, skip the plugin
 	// Update call since there are no actual changes to make in the cloud. Instead, create
@@ -573,27 +547,9 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
-	// RFC-0042: regenerate the PatchDocument at apply time for any Update
-	// that's flagged as cascading. The plan-time patch (if any) only
-	// reflects the user's direct property changes, but a cascade dependent
-	// also needs the new resolved value of a resolvable whose parent is
-	// being replaced — and that value only lands in DesiredState.Properties
-	// once the executor's resolver has run. The regenerated patch is the
-	// concrete diff against PriorState and is a superset of any plan-time
-	// patch, so it's always safe to overwrite.
-	if data.resourceUpdate.IsCascade {
-		patchDoc, err := regenerateCascadePatch(
-			data.resourceUpdate.PriorState.Properties,
-			data.resourceUpdate.DesiredState.Properties,
-			data.resourceUpdate.DesiredState.Schema,
-		)
-		if err != nil {
-			proc.Log().Error("failed to regenerate patch for cascade-update: %v", err)
-			data.resourceUpdate.MarkAsFailed()
-			return StateFinishedWithError, data, nil, nil
-		}
-		data.resourceUpdate.DesiredState.PatchDocument = patchDoc
-	}
+	// PatchDocument is kept in sync by ResourceUpdate.ResolveValue as the
+	// executor's resolver substitutes fresh $value entries into
+	// DesiredState.Properties; nothing patch-related needs doing here.
 
 	// Convert properties to plugin format (extracts $value from opaque structures)
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)

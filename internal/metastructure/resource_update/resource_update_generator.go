@@ -841,10 +841,10 @@ func generateResourceUpdatesForReconcile(
 
 	finalResourceUpdates := convertUpdatesToReplacementsForDependencies(allResourceUpdates, dependencyDeletes, source)
 
-	// RFC-0042: append cascade-updates produced by findDependencyUpdates'
-	// non-CreateOnly branch AFTER the convert* steps so they're not
-	// re-promoted to Replace. Skip any cascade-update whose resource is
-	// already represented by a user-driven update/create or by an existing
+	// Append cascade-updates from findDependencyUpdates' non-CreateOnly
+	// branch AFTER the convert* steps so they're not re-promoted to
+	// Replace. Skip any cascade-update whose resource is already
+	// represented by a user-driven update/create or by an existing
 	// delete (those paths already cover the dependent).
 	finalResourceUpdates = appendCascadeUpdatesIfAbsent(finalResourceUpdates, cascadeUpdates)
 	return finalResourceUpdates, nil
@@ -1190,18 +1190,18 @@ func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources ma
 }
 
 // findDependencyUpdates finds resources affected by deletes/replaces and
-// classifies each per RFC-0042: if any of a dependent's references to a
-// resource being deleted lands on a CreateOnly field, the dependent must be
-// cascade-deleted (the same call site converts the delete to a Replace if
-// the dependent is in the forma). If all such references land on mutable
-// fields, the dependent is cascade-updated instead — the resolvable
-// re-resolves at execution time and pushes the new value via Update rather
-// than tearing the dependent down.
+// classifies each by the dependent's referring FieldHint: if any of a
+// dependent's references to a resource being deleted lands on a CreateOnly
+// field, the dependent must be cascade-deleted (the same call site
+// converts the delete to a Replace if the dependent is in the forma). If
+// all such references land on mutable fields, the dependent is cascade-
+// updated instead — the resolvable re-resolves at execution time and the
+// new value flows through Update rather than tearing the dependent down.
 //
-// The cascade-update path is RFC-0042's bug fix for the ECS Service +
-// TaskDefinition revision-bump case and equivalents: parents whose changes
-// force replacement, consumed by resources whose referring field is mutable
-// (UpdateService accepts a new TaskDefinitionArn, no tear-down needed).
+// The cascade-update path covers cases like ECS Service consuming a
+// versioned TaskDefinition (Service.taskDefinition is mutable; UpdateService
+// accepts a new TaskDefinitionArn — no tear-down needed when a new TD
+// revision is created).
 func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[string][]*pkgmodel.Resource, existingTargetMap map[string]*pkgmodel.Target, source FormaCommandSource, forma *pkgmodel.Forma) ([]ResourceUpdate, []ResourceUpdate) {
 	// Collect ksuids of resources being deleted so dependents can decide
 	// whether their refs land on a deletion target. Also build a label
@@ -1267,10 +1267,11 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[s
 				continue
 			}
 
-			// RFC-0042 branch: cascade-delete only when at least one ref from
-			// dependentRes to a deletion target lands on a CreateOnly field.
-			// Otherwise emit a cascade-update so the resolvable re-resolves
-			// against the new parent without tearing the dependent down.
+			// Cascade decision: cascade-delete only when at least one ref
+			// from dependentRes to a deletion target lands on a CreateOnly
+			// field. Otherwise emit a cascade-update so the resolvable
+			// re-resolves against the new parent without tearing the
+			// dependent down.
 			if anyRefIsCreateOnly(dependentRes, deletedKsuids) {
 				dependencyDelete, err := NewResourceUpdateForDestroy(dependentRes, *target, source)
 				if err != nil {
@@ -1296,7 +1297,7 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[s
 					cu.DesiredState.PatchDocument = synthOps
 				}
 				dependencyUpdates = append(dependencyUpdates, cu)
-				slog.Debug("Adding cascade update (RFC-0042)",
+				slog.Debug("Adding cascade update",
 					"dependent", dependentRes.Label,
 					"dependsOn", deleteUpdate.DesiredState.Label)
 			}
@@ -1309,7 +1310,7 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[s
 // anyRefIsCreateOnly reports whether any of dep's resolvable references
 // points at a resource in deletedKsuids via a CreateOnly field on dep's
 // schema. A single CreateOnly ref to a deletion target forces cascade-replace
-// for the whole dependent (per RFC-0042 §2a, mixed-refs case).
+// for the whole dependent (mixed-refs case).
 func anyRefIsCreateOnly(dep pkgmodel.Resource, deletedKsuids map[string]bool) bool {
 	for _, ref := range resolver.ExtractResolvableRefs(dep) {
 		ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
@@ -1410,11 +1411,11 @@ func jsonPointerFromDotPath(p string) string {
 	return "/" + strings.ReplaceAll(p, ".", "/")
 }
 
-// newCascadeUpdate constructs an Update on dep for the RFC-0042 cascade-
-// update path. DesiredState carries dep's stored properties, including any
-// resolvable URIs; the executor re-reads the (now replaced) parent at apply
-// time and resolves $value fresh, so the new parent value flows to dep
-// through Update rather than a destroy+create.
+// newCascadeUpdate constructs an Update on dep for the cascade-update
+// path. DesiredState carries dep's stored properties, including any
+// resolvable URIs; the executor re-reads the (now replaced) parent at
+// apply time and resolves $value fresh, so the new parent value flows to
+// dep through Update rather than a destroy+create.
 func newCascadeUpdate(dep pkgmodel.Resource, target pkgmodel.Target, source FormaCommandSource, cascadeSourceLabel string) ResourceUpdate {
 	return ResourceUpdate{
 		PriorState:           dep,

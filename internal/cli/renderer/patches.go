@@ -41,11 +41,11 @@ type PropertyChange struct {
 	IsOpaque         bool
 	ExistsInPrevious bool
 
-	// IsCascadeResolvable signals an RFC-0042 cascade-update synthetic op
-	// where the new value isn't knowable at plan time (e.g. provider-
-	// assigned identifiers like TaskDefinitionArn). The renderer prints a
-	// friendly "to point at the new <source-label> (current: <value>)"
-	// line instead of trying to format a missing value.
+	// IsCascadeResolvable signals a cascade-update synthetic op where the
+	// new value isn't knowable at plan time (e.g. provider-assigned
+	// identifiers like AWS ARNs). The renderer prints a friendly
+	// "to point at the new <source-label> (current: <value>)" line
+	// instead of trying to format a missing value.
 	IsCascadeResolvable bool
 	CascadeSourceLabel  string
 	CascadeCurrentValue string
@@ -207,7 +207,7 @@ func extractPropertyChange(patch patchOperation, props map[string]any, previousP
 		Operation: patch.Op,
 	}
 
-	// RFC-0042 cascade-resolvable marker: the value is an object carrying
+	// Cascade-resolvable marker: the value is an object carrying
 	// `$cascade-resolvable: true` and metadata about the source. The new
 	// concrete value isn't known at plan time (provider-assigned), so we
 	// short-circuit normal value formatting and capture the source info
@@ -270,9 +270,9 @@ func formatPropertyChange(change PropertyChange) string {
 	displayPath := stripArrayIndices(change.Path)
 
 	if change.IsCascadeResolvable {
-		// RFC-0042 cascade-update where the new value is provider-assigned
-		// (e.g. TaskDefinitionArn). Render the friendly form rather than
-		// trying to show `from X to Y` with a missing Y.
+		// Cascade-update where the new value is provider-assigned (e.g.
+		// an AWS ARN). Render the friendly form rather than trying to
+		// show `from X to Y` with a missing Y.
 		if change.CascadeCurrentValue != "" {
 			return display.Gold(fmt.Sprintf(`change property "%s" to point at the new %s (current: "%s")`,
 				displayPath, change.CascadeSourceLabel, change.CascadeCurrentValue))

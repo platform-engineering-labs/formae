@@ -1089,11 +1089,11 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 	assert.Len(t, cascadeUpdates, 0, "No cascade-updates expected when no dependents reference the deletes")
 }
 
-// TestFindDependencyUpdates_CreateOnlyBranch exercises RFC-0042 §2: the
-// cascade decision branches on the dependent's referring FieldHint.CreateOnly.
-// CreateOnly=true → cascade-delete (today's behavior, dependent gets torn
-// down). CreateOnly=false → cascade-update (the resolvable re-resolves at
-// apply time; the provider's Update absorbs the new parent value).
+// TestFindDependencyUpdates_CreateOnlyBranch exercises the cascade
+// decision: branches on the dependent's referring FieldHint.CreateOnly.
+// CreateOnly=true → cascade-delete (dependent gets torn down).
+// CreateOnly=false → cascade-update (the resolvable re-resolves at apply
+// time; the provider's Update absorbs the new parent value).
 func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 	parentKsuid := util.NewID()
 	dependentKsuid := util.NewID()
@@ -1378,7 +1378,7 @@ func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
 	assert.Equal(t, "us-east-1", config["region"])
 }
 
-// TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate covers RFC-0042's
+// TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate covers the cascade-update
 // merge-vs-dedup semantics. The conformance test's ecs-service-update
 // fixture changes BOTH the Service's deploymentConfiguration (mutable Service
 // field — user-driven Update) AND the TaskDef's container image (CreateOnly
@@ -1560,7 +1560,7 @@ func TestSynthesizeCascadeUpdatePatch_NoMatchingRefs(t *testing.T) {
 
 // TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath exercises the path
 // translation from the resolver's dot-separated form (e.g. "Refs.0.Target")
-// into JSON Pointer (e.g. "/Refs/0/Target"). RFC-0042 §2a's array-indexed
+// into JSON Pointer (e.g. "/Refs/0/Target"). The array-indexed
 // case applies equally to the rendered patch.
 func TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath(t *testing.T) {
 	parentKsuid := "parent-ksuid"

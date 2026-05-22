@@ -25,12 +25,14 @@ import (
 )
 
 // TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated covers
-// RFC-0042 §2: when a parent is replaced (a CreateOnly field on the parent
-// changed) and a dependent references it via a *non*-CreateOnly field, the
-// planner must emit a single Update on the dependent — not a cascade
-// delete+create. Today the planner cascade-replaces the dependent regardless
-// of the referring field's mutability, forcing a tear-down (the ECS Service
-// outage on every TaskDefinition revision bump).
+// the cascade-update path: when a parent is replaced (a CreateOnly field
+// on the parent changed) and a dependent references it via a
+// *non*-CreateOnly field, the planner must emit a single Update on the
+// dependent — not a cascade delete+create. The motivating case is an ECS
+// Service consuming a versioned TaskDefinition: tearing the Service down
+// on every TaskDef revision bump (~2-4 min outage per image deploy) was
+// the previous behavior; this test pins the rolling-update behavior in
+// place.
 //
 // Fixture: FakeAWS::Versioned::Parent has a CreateOnly Name field; changing
 // it forces Replace. FakeAWS::Versioned::Consumer.ParentRef resolves to the
@@ -191,9 +193,9 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 		assert.Contains(t, parentOps, apimodel.OperationCreate, "parent should have a Create op")
 
 		require.Len(t, consumerOps, 1,
-			"RFC-0042: consumer with non-CreateOnly ref should NOT cascade-replace when parent is replaced")
+			"consumer with non-CreateOnly ref should NOT cascade-replace when parent is replaced")
 		assert.Equal(t, apimodel.OperationUpdate, consumerOps[0],
-			"RFC-0042: consumer with non-CreateOnly ref should be Updated, not Replaced")
+			"consumer with non-CreateOnly ref should be Updated, not Replaced")
 
 		// Verify the simulate output surfaces the cascading change. The
 		// parent's Name is a user-provided field, so the new value lives in

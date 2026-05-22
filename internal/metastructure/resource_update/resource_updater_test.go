@@ -40,23 +40,19 @@ func TestResourceUpdater_Initialization(t *testing.T) {
 	assert.False(t, updater.IsTerminated(), "Resource updater should not be terminated after spawning")
 }
 
-// TestRegenerateCascadePatch_ResolvableValueChanged mirrors the RFC-0042
-// cascade-update scenario: the dependent's PriorState carries a $ref+$value
-// pointing at a parent property (e.g. ECS Service.TaskDefinition →
-// TaskDef.TaskDefinitionArn), and the executor's resolver has substituted
-// the post-Create value into DesiredState's $value. The regen helper must
-// flatten both sides and produce a JSON-Patch that replaces the resolvable's
-// target path with the new value — that's the patch the AWS plugin sends to
-// CloudControl UpdateResource.
-func TestRegenerateCascadePatch_ResolvableValueChanged(t *testing.T) {
+// TestResolveValue_KeepsPatchDocumentInSync covers the ResolveValue
+// contract: PatchDocument is derived from (PriorState, DesiredState,
+// Schema), so whenever ResolveValue mutates DesiredState.Properties it
+// must re-derive the patch. Mirrors the cascade-update scenario where a
+// parent (e.g. ECS TaskDefinition) is being replaced and the dependent's
+// $value tracks the parent's new identifier — the eventual plugin Update
+// must see a patch reflecting that change.
+func TestResolveValue_KeepsPatchDocumentInSync(t *testing.T) {
 	parentKsuid := "3E3wKW8YqVCQEyfKjsGpbsoE8bl"
+	parentURI := pkgmodel.FormaeURI("formae://" + parentKsuid + "#/TaskDefinitionArn")
 
 	priorProps := json.RawMessage(`{
 		"ServiceName": "formae-sdk-test-svc",
-		"Cluster": {
-			"$ref": "formae://cluster-ksuid#/Arn",
-			"$value": "arn:aws:ecs:us-east-1:0:cluster/test"
-		},
 		"TaskDefinition": {
 			"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn",
 			"$value": "arn:aws:ecs:us-east-1:0:task-definition/test:1"
@@ -64,71 +60,109 @@ func TestRegenerateCascadePatch_ResolvableValueChanged(t *testing.T) {
 		"DesiredCount": 0
 	}`)
 
-	// DesiredState mirrors PriorState except the cascading ref's $value has
-	// been bumped by the executor's resolver after the parent's Create
-	// completed (TaskDef revision 2 of the same family).
-	desiredProps := json.RawMessage(`{
-		"ServiceName": "formae-sdk-test-svc",
-		"Cluster": {
-			"$ref": "formae://cluster-ksuid#/Arn",
-			"$value": "arn:aws:ecs:us-east-1:0:cluster/test"
-		},
-		"TaskDefinition": {
-			"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn",
-			"$value": "arn:aws:ecs:us-east-1:0:task-definition/test:2"
-		},
-		"DesiredCount": 0
-	}`)
-
 	schema := pkgmodel.Schema{
 		Identifier: "ServiceName",
-		Fields:     []string{"ServiceName", "Cluster", "TaskDefinition", "DesiredCount"},
+		Fields:     []string{"ServiceName", "TaskDefinition", "DesiredCount"},
 		Hints: map[string]pkgmodel.FieldHint{
 			"ServiceName":    {CreateOnly: true},
-			"Cluster":        {CreateOnly: true},
 			"TaskDefinition": {CreateOnly: false},
 			"DesiredCount":   {CreateOnly: false},
 		},
 	}
 
-	patchDoc, err := regenerateCascadePatch(priorProps, desiredProps, schema)
-	require.NoError(t, err, "regenerateCascadePatch should succeed")
-	require.NotEmpty(t, patchDoc, "regenerated patch must not be empty — that's the whole point of the helper")
-	patchStr := string(patchDoc)
-	assert.NotEqual(t, "[]", patchStr, "regenerated patch must contain at least one op")
-	assert.Contains(t, patchStr, "TaskDefinition", "patch must target the TaskDefinition path")
-	assert.Contains(t, patchStr, "task-definition/test:2", "patch must carry the post-resolution $value (revision 2)")
-	assert.NotContains(t, patchStr, "task-definition/test:1", "patch must NOT carry the old $value (revision 1)")
-	// Unchanged fields must not appear in the patch.
-	assert.False(t, strings.Contains(patchStr, "DesiredCount") || strings.Contains(patchStr, "Cluster"),
-		"patch should only mention the changed resolvable, not stable fields: %s", patchStr)
+	ru := &ResourceUpdate{
+		Operation: OperationUpdate,
+		PriorState: pkgmodel.Resource{
+			Label:      "svc",
+			Properties: priorProps,
+			Schema:     schema,
+		},
+		DesiredState: pkgmodel.Resource{
+			Label: "svc",
+			// DesiredState starts byte-identical to prior — typical for a
+			// cascade-update emitted by the planner where the user didn't
+			// directly modify the dependent.
+			Properties: append(json.RawMessage(nil), priorProps...),
+			Schema:     schema,
+		},
+	}
+
+	err := ru.ResolveValue(parentURI, "arn:aws:ecs:us-east-1:0:task-definition/test:2")
+	require.NoError(t, err)
+	require.NotEmpty(t, ru.DesiredState.PatchDocument, "ResolveValue must populate PatchDocument when DesiredState changes")
+	patchStr := string(ru.DesiredState.PatchDocument)
+	assert.Contains(t, patchStr, "TaskDefinition", "patch must target the path whose $value changed")
+	assert.Contains(t, patchStr, "task-definition/test:2", "patch must carry the post-resolution $value")
+	assert.NotContains(t, patchStr, "task-definition/test:1", "patch must not carry the pre-resolution $value")
+	assert.False(t, strings.Contains(patchStr, "DesiredCount"),
+		"patch should only diff the changed field, not stable ones: %s", patchStr)
 }
 
-// TestRegenerateCascadePatch_NoChange covers a degenerate input where prior
-// and desired are byte-identical (e.g. the resolver didn't surface a new
-// $value because the parent's relevant property didn't actually change after
-// all). The helper must succeed and return an empty patch — the executor's
-// upstream check then short-circuits the plugin call instead of sending
-// noise.
-func TestRegenerateCascadePatch_NoChange(t *testing.T) {
+// TestResolveValue_NoChangeProducesEmptyPatch confirms that resolving a
+// $ref to the same $value it already has yields an empty/no-op patch —
+// no spurious provider calls.
+func TestResolveValue_NoChangeProducesEmptyPatch(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	parentURI := pkgmodel.FormaeURI("formae://" + parentKsuid + "#/Arn")
 	props := json.RawMessage(`{
 		"ServiceName": "svc",
-		"TaskDefinition": {
-			"$ref": "formae://parent-ksuid#/TaskDefinitionArn",
-			"$value": "arn:aws:ecs:us-east-1:0:task-definition/test:1"
-		}
+		"ParentRef": {"$ref": "formae://` + parentKsuid + `#/Arn", "$value": "v1"}
 	}`)
 	schema := pkgmodel.Schema{
 		Identifier: "ServiceName",
-		Fields:     []string{"ServiceName", "TaskDefinition"},
+		Fields:     []string{"ServiceName", "ParentRef"},
 		Hints: map[string]pkgmodel.FieldHint{
-			"ServiceName":    {CreateOnly: true},
-			"TaskDefinition": {CreateOnly: false},
+			"ServiceName": {CreateOnly: true},
+			"ParentRef":   {CreateOnly: false},
 		},
 	}
-	patchDoc, err := regenerateCascadePatch(props, props, schema)
+	ru := &ResourceUpdate{
+		Operation: OperationUpdate,
+		PriorState: pkgmodel.Resource{
+			Properties: props,
+			Schema:     schema,
+		},
+		DesiredState: pkgmodel.Resource{
+			Properties: append(json.RawMessage(nil), props...),
+			Schema:     schema,
+		},
+	}
+	err := ru.ResolveValue(parentURI, "v1")
 	require.NoError(t, err)
-	if len(patchDoc) > 0 {
-		assert.Equal(t, "[]", string(patchDoc), "no diff should produce empty patch ops, got %s", string(patchDoc))
+	if len(ru.DesiredState.PatchDocument) > 0 {
+		assert.Equal(t, "[]", string(ru.DesiredState.PatchDocument),
+			"no $value change should produce no patch ops, got %s", string(ru.DesiredState.PatchDocument))
+	}
+}
+
+// TestResolveValue_NonUpdateLeavesPatchDocumentUntouched ensures the
+// patch-regen branch only fires for Updates. Creates and Deletes carry
+// full state to the provider rather than a diff, so they don't need —
+// and shouldn't pay for — a regenerated PatchDocument when resolvables
+// are substituted along the way.
+func TestResolveValue_NonUpdateLeavesPatchDocumentUntouched(t *testing.T) {
+	parentURI := pkgmodel.FormaeURI("formae://parent-ksuid#/Arn")
+	props := json.RawMessage(`{"Ref": {"$ref": "formae://parent-ksuid#/Arn", "$value": "v1"}}`)
+	for _, op := range []OperationType{OperationCreate, OperationDelete, OperationReplace} {
+		t.Run(string(op), func(t *testing.T) {
+			ru := &ResourceUpdate{
+				Operation: op,
+				PriorState: pkgmodel.Resource{Properties: props},
+				DesiredState: pkgmodel.Resource{
+					Properties: append(json.RawMessage(nil), props...),
+					// Schema with Fields so the regen WOULD fire if the
+					// Operation guard weren't in place.
+					Schema: pkgmodel.Schema{
+						Fields: []string{"Ref"},
+						Hints:  map[string]pkgmodel.FieldHint{"Ref": {CreateOnly: false}},
+					},
+					PatchDocument: json.RawMessage(`["pre-existing-untouched"]`),
+				},
+			}
+			err := ru.ResolveValue(parentURI, "v2")
+			require.NoError(t, err)
+			assert.Equal(t, `["pre-existing-untouched"]`, string(ru.DesiredState.PatchDocument),
+				"non-Update operations must not re-derive PatchDocument")
+		})
 	}
 }

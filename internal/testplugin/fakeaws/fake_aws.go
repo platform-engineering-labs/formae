@@ -80,10 +80,11 @@ func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 			Type:         "FakeAWS::EC2::Instance",
 			Discoverable: true,
 		},
-		// Versioned::Parent + Versioned::Consumer model the RFC-0042 case:
-		// a parent whose CreateOnly field forces Replace, and a consumer
-		// referencing it via a non-createOnly field. Used to verify that the
-		// planner does NOT cascade-replace the consumer in that situation.
+		// Versioned::Parent + Versioned::Consumer model the cascade-update
+		// case: a parent whose CreateOnly field forces Replace, and a
+		// consumer referencing it via a non-CreateOnly field. Used to
+		// verify that the planner does NOT cascade-replace the consumer
+		// in that situation.
 		{
 			Type:         "FakeAWS::Versioned::Parent",
 			Discoverable: false,

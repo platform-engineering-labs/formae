@@ -62,9 +62,9 @@ func TestExtractSchema_RecursiveSubResource(t *testing.T) {
 // TestExtractSchema_UnannotatedPathsSurface verifies that descriptors.ExtractSchema
 // emits every reachable property path in Schema.Hints — annotated AND unannotated —
 // with unannotated paths defaulting to FieldHint{CreateOnly: false}. This is the
-// schema contract underpinning RFC-0042 (cascade-replace gating on createOnly):
-// the planner must see every reference target's createOnly value, even when the
-// PKL author did not write an explicit @FieldHint.
+// schema contract that lets the planner gate cascade-replace on createOnly: it
+// must see every reference target's createOnly value, even when the PKL author
+// did not write an explicit @FieldHint.
 //
 // Annotated values (createOnly=true on IAM::Role.RoleName-style fields) must be
 // preserved exactly; unannotated paths must show up with createOnly=false at
