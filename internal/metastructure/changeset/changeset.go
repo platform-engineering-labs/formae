@@ -46,6 +46,12 @@ type Changeset struct {
 
 type ExecutionDAG struct {
 	Nodes map[pkgmodel.FormaeURI]*DAGNode
+	// baseResources indexes the create/update ResourceUpdate for each stripped
+	// resource URI in the changeset (exactly one per KSUID, since replace is
+	// pre-split into delete+create and create/update are mutually exclusive per
+	// resource). Delete operations are excluded — RFC-0043 childPointsAt uses
+	// this index only for the create-phase URI→type lookup.
+	baseResources map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate
 }
 
 type DAGNode struct {
@@ -403,7 +409,8 @@ func (p *ExecutionDAG) buildTargetResolvableEdges() {
 
 func NewExecutionDAG() *ExecutionDAG {
 	return &ExecutionDAG{
-		Nodes: make(map[pkgmodel.FormaeURI]*DAGNode),
+		Nodes:         make(map[pkgmodel.FormaeURI]*DAGNode),
+		baseResources: make(map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate),
 	}
 }
 
@@ -428,7 +435,10 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, co
 		}
 	}
 
-	// Step 2: Create resource update groups with operation-specific URIs
+	// Step 2: Create resource update groups with operation-specific URIs.
+	// allOps must not be appended to past this point — &allOps[i] pointers
+	// are stored in p.Nodes and p.baseResources and would be invalidated
+	// by a backing-array reallocation.
 	for i := range allOps {
 		update := &allOps[i]
 		// Create unique identifier that includes operation
@@ -453,6 +463,15 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, co
 			Update:       update,
 			Dependents:   []*DAGNode{},
 			Dependencies: []*DAGNode{},
+		}
+
+		// Register create/update ops in the base-resource index so consumers
+		// (RFC-0043 childPointsAt create phase) can resolve a stripped URI to
+		// the latest desired-state ResourceUpdate in O(1). Delete ops are
+		// intentionally excluded because the index serves DesiredState lookups.
+		switch update.Operation {
+		case resource_update.OperationCreate, resource_update.OperationUpdate:
+			p.baseResources[update.URI().Stripped()] = update
 		}
 	}
 
