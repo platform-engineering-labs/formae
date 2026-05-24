@@ -1083,9 +1083,126 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allResources, targetMap, FormaCommandSourceUser)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, allResources, targetMap, FormaCommandSourceUser, nil)
 
 	assert.Len(t, dependencyDeletes, 0, "Should not create duplicates when resources with same label but different types are already being deleted")
+	assert.Len(t, cascadeUpdates, 0, "No cascade-updates expected when no dependents reference the deletes")
+}
+
+// TestFindDependencyUpdates_CreateOnlyBranch exercises the cascade
+// decision: branches on the dependent's referring FieldHint.CreateOnly.
+// CreateOnly=true → cascade-delete (dependent gets torn down).
+// CreateOnly=false → cascade-update (the resolvable re-resolves at apply
+// time; the provider's Update absorbs the new parent value).
+func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
+	parentKsuid := util.NewID()
+	dependentKsuid := util.NewID()
+
+	parentDelete := ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label: "parent",
+			Type:  "AWS::Versioned::Parent",
+			Stack: "test-stack",
+			Ksuid: parentKsuid,
+		},
+		Operation: OperationDelete,
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "AWS"},
+	}
+
+	// makeDependent returns a dependent resource referencing the parent via
+	// the given property at the given path with the given CreateOnly hint.
+	makeDependent := func(propsJSON string, hints map[string]pkgmodel.FieldHint) pkgmodel.Resource {
+		return pkgmodel.Resource{
+			Label:      "dependent",
+			Type:       "AWS::Versioned::Consumer",
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      dependentKsuid,
+			Properties: json.RawMessage(propsJSON),
+			Schema: pkgmodel.Schema{
+				Identifier: "Name",
+				Hints:      hints,
+			},
+		}
+	}
+
+	parentRefJSON := fmt.Sprintf(`{"ParentRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid)
+	parentRefArrayJSON := fmt.Sprintf(`{"Refs":[{"Target":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}]}`, parentKsuid)
+	otherKsuid := util.NewID()
+	mixedRefsJSON := fmt.Sprintf(
+		`{"ImmutableRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"},"MutableRef":{"$ref":"formae://%s#/Other","$value":"x"}}`,
+		parentKsuid, otherKsuid,
+	)
+
+	cases := []struct {
+		name              string
+		dependent         pkgmodel.Resource
+		wantCascadeDelete bool // true => dependencyDeletes has 1, cascadeUpdates 0
+	}{
+		{
+			name: "createOnly=true emits cascade-delete",
+			dependent: makeDependent(parentRefJSON, map[string]pkgmodel.FieldHint{
+				"ParentRef": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			name: "createOnly=false emits cascade-update",
+			dependent: makeDependent(parentRefJSON, map[string]pkgmodel.FieldHint{
+				"ParentRef": {CreateOnly: false},
+			}),
+			wantCascadeDelete: false,
+		},
+		{
+			// Per the plan's mixed-refs case: a single CreateOnly ref to a
+			// deletion target forces cascade-replace for the whole dependent
+			// even when another ref to the same target is mutable.
+			name: "mixed refs — any CreateOnly forces cascade-delete",
+			dependent: makeDependent(mixedRefsJSON, map[string]pkgmodel.FieldHint{
+				"ImmutableRef": {CreateOnly: true},
+				"MutableRef":   {CreateOnly: false},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// Array-indexed TargetPath ("Refs.0.Target") must be looked up
+			// under the stripped key ("Refs.Target") — same convention as
+			// changeset.fieldHintForPath / RFC-0034 AttachesTo.
+			name: "array-indexed path uses stripped hint key",
+			dependent: makeDependent(parentRefArrayJSON, map[string]pkgmodel.FieldHint{
+				"Refs.Target": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			allResources := map[string][]*pkgmodel.Resource{
+				"test-stack": {&tc.dependent},
+			}
+			dependencyDeletes, cascadeUpdates := findDependencyUpdates(
+				[]ResourceUpdate{parentDelete}, allResources, targetMap, FormaCommandSourceUser, nil,
+			)
+
+			if tc.wantCascadeDelete {
+				require.Len(t, dependencyDeletes, 1, "expected a cascade-delete for the dependent")
+				assert.Equal(t, OperationDelete, dependencyDeletes[0].Operation)
+				assert.Equal(t, "dependent", dependencyDeletes[0].DesiredState.Label)
+				assert.Len(t, cascadeUpdates, 0, "no cascade-updates expected when CreateOnly forces delete")
+			} else {
+				require.Len(t, cascadeUpdates, 1, "expected a cascade-update for the dependent")
+				assert.Equal(t, OperationUpdate, cascadeUpdates[0].Operation)
+				assert.Equal(t, "dependent", cascadeUpdates[0].DesiredState.Label)
+				assert.True(t, cascadeUpdates[0].IsCascade, "cascade-update should be marked IsCascade")
+				assert.Equal(t, "parent", cascadeUpdates[0].CascadeSource,
+					"cascade-update should record the source label for debugging")
+				assert.Len(t, dependencyDeletes, 0, "no cascade-deletes expected when all refs are mutable")
+			}
+		})
+	}
 }
 
 func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGenerated(t *testing.T) {
@@ -1259,4 +1376,214 @@ func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
 
 	// Plain values should be unchanged
 	assert.Equal(t, "us-east-1", config["region"])
+}
+
+// TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate covers the cascade-update
+// merge-vs-dedup semantics. The conformance test's ecs-service-update
+// fixture changes BOTH the Service's deploymentConfiguration (mutable Service
+// field — user-driven Update) AND the TaskDef's container image (CreateOnly
+// — TaskDef Replace, cascades to Service). The planner emits both a user-
+// driven Update for the Service and a cascade-update from
+// findDependencyUpdates. They target the same URI. Dropping the cascade-
+// update without preserving its information would lose the IsCascade flag,
+// and the executor wouldn't regenerate the patch with the new resolvable
+// value — sending the user's plan-time patch (deploymentConfiguration only)
+// to the provider, which then has no idea TaskDefinitionArn should change.
+//
+// The fix: when the dependent already has a user-driven Update,
+// appendCascadeUpdatesIfAbsent must mark that Update IsCascade=true so the
+// executor knows to regenerate.
+func TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate(t *testing.T) {
+	dependentURI := pkgmodel.NewFormaeURI("dependent-ksuid", "")
+	sourceLabel := "parent"
+
+	t.Run("existing user-driven Update gets IsCascade=true", func(t *testing.T) {
+		existing := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    false,
+		}
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+			CascadeSource: sourceLabel,
+		}
+
+		out := appendCascadeUpdatesIfAbsent([]ResourceUpdate{existing}, []ResourceUpdate{cascade})
+
+		require.Len(t, out, 1, "must dedup — exactly one op for the dependent")
+		assert.Equal(t, OperationUpdate, out[0].Operation)
+		assert.True(t, out[0].IsCascade,
+			"existing Update must be marked IsCascade so the executor regenerates the patch")
+		assert.Equal(t, sourceLabel, out[0].CascadeSource,
+			"existing Update should inherit the cascade source label for diagnostics")
+	})
+
+	t.Run("no duplicate — cascade-update appended as-is", func(t *testing.T) {
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+		}
+		out := appendCascadeUpdatesIfAbsent(nil, []ResourceUpdate{cascade})
+		require.Len(t, out, 1)
+		assert.True(t, out[0].IsCascade)
+	})
+
+	t.Run("existing Create/Delete is not modified", func(t *testing.T) {
+		// If something else already owns the dependent's slot — e.g. a
+		// Replace decomposed into Delete+Create — the cascade-update is
+		// dropped without touching the existing op. Those "complete"
+		// operations carry their own desired state and don't need patch
+		// augmentation.
+		existing := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationCreate,
+			IsCascade:    false,
+		}
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+		}
+		out := appendCascadeUpdatesIfAbsent([]ResourceUpdate{existing}, []ResourceUpdate{cascade})
+		require.Len(t, out, 1)
+		assert.Equal(t, OperationCreate, out[0].Operation)
+		assert.False(t, out[0].IsCascade, "Create/Delete should not be repurposed")
+	})
+}
+
+// TestSynthesizeCascadeUpdatePatch_UserProvidedSource exercises the case
+// where the parent's target property is a user-set field whose new value
+// lives in the forma at plan time (e.g. a versioned-parent's Name). The
+// synthesized patch op should be a normal `replace` carrying the concrete
+// new value, ready for the renderer to display `from "old" to "new"`.
+func TestSynthesizeCascadeUpdatePatch_UserProvidedSource(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Type:  "FakeAWS::Versioned::Consumer",
+		Properties: json.RawMessage(`{
+			"Name": "consumer-1",
+			"ParentRef": {"$ref": "formae://` + parentKsuid + `#/Name", "$value": "parent-v1"}
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "parent",
+			Type:       "FakeAWS::Versioned::Parent",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Name": "parent-v2"}`),
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]string{parentKsuid: "parent"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"path":"/ParentRef"`, "patch must target the consumer's referring field")
+	assert.Contains(t, patchStr, `"value":"parent-v2"`, "patch must carry the forma's new value for the user-set source field")
+	assert.NotContains(t, patchStr, "$cascade-resolvable",
+		"user-provided source values should produce normal ops, no marker needed")
+}
+
+// TestSynthesizeCascadeUpdatePatch_ProviderAssignedSource exercises the case
+// where the parent's target property is provider-assigned (e.g. TaskDef's
+// TaskDefinitionArn — only known after AWS Create). The synthesized op
+// should carry a `$cascade-resolvable` marker so the CLI renderer prints
+// the friendly "to point at the new <source> (current: ...)" wording
+// instead of attempting `from X to Y` with a placeholder.
+func TestSynthesizeCascadeUpdatePatch_ProviderAssignedSource(t *testing.T) {
+	parentKsuid := "taskdef-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "ecs-service",
+		Type:  "AWS::ECS::Service",
+		Properties: json.RawMessage(`{
+			"ServiceName": "svc",
+			"TaskDefinition": {"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/test:1"}
+		}`),
+	}
+	// forma's parent has the user-set fields (family, containerDefinitions,
+	// etc.) but NOT TaskDefinitionArn — that's assigned by AWS at Create.
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "test-taskdef-for-service",
+			Type:       "AWS::ECS::TaskDefinition",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Family": "test", "ContainerDefinitions": [{"Image": "nginx:1.27"}]}`),
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]string{parentKsuid: "test-taskdef-for-service"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"path":"/TaskDefinition"`)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"provider-assigned sources must emit the marker so the renderer falls back to the friendly phrasing")
+	assert.Contains(t, patchStr, `"test-taskdef-for-service"`,
+		"marker must carry the source label so the renderer can name the parent")
+	assert.Contains(t, patchStr, "task-definition/test:1",
+		"marker must carry the current $value so the user sees what's being replaced")
+}
+
+// TestSynthesizeCascadeUpdatePatch_NoMatchingRefs returns empty when the
+// dependent has no resolvables pointing at the to-be-deleted set. This is
+// the common path for refs pointing at unaffected parents.
+func TestSynthesizeCascadeUpdatePatch_NoMatchingRefs(t *testing.T) {
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Properties: json.RawMessage(`{
+			"OtherRef": {"$ref": "formae://unrelated-ksuid#/Foo", "$value": "x"}
+		}`),
+	}
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{"some-other-ksuid": true},
+		map[string]string{},
+		map[string]*pkgmodel.Resource{},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "no refs to deletion targets → no synthesized ops")
+}
+
+// TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath exercises the path
+// translation from the resolver's dot-separated form (e.g. "Refs.0.Target")
+// into JSON Pointer (e.g. "/Refs/0/Target"). The array-indexed
+// case applies equally to the rendered patch.
+func TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Properties: json.RawMessage(`{
+			"Refs": [{"Target": {"$ref": "formae://` + parentKsuid + `#/Name", "$value": "v1"}}]
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Name": "v2"}`),
+		},
+	}
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]string{parentKsuid: "parent"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	assert.Contains(t, string(patchDoc), `"path":"/Refs/0/Target"`,
+		"dot-separated TargetPath with numeric segments must convert to JSON Pointer with slashes")
 }

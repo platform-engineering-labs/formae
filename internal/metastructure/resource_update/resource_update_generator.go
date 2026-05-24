@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -821,7 +823,7 @@ func generateResourceUpdatesForReconcile(
 	// After processing all stacks, find dependencies for delete operations
 	allDeleteUpdates := append(resourceReplaces, implicitDeleteResources...)
 
-	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allResourcesByStack, existingTargetMap, source)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, allResourcesByStack, existingTargetMap, source, forma)
 
 	// Convert updates to replacements if they have dependency deletes
 
@@ -838,7 +840,103 @@ func generateResourceUpdatesForReconcile(
 	allResourceUpdates = append(allResourceUpdates, convertedDependencyDeletes...)
 
 	finalResourceUpdates := convertUpdatesToReplacementsForDependencies(allResourceUpdates, dependencyDeletes, source)
+
+	// Append cascade-updates from findDependencyUpdates' non-CreateOnly
+	// branch AFTER the convert* steps so they're not re-promoted to
+	// Replace. Skip any cascade-update whose resource is already
+	// represented by a user-driven update/create or by an existing
+	// delete (those paths already cover the dependent).
+	finalResourceUpdates = appendCascadeUpdatesIfAbsent(finalResourceUpdates, cascadeUpdates)
 	return finalResourceUpdates, nil
+}
+
+// appendCascadeUpdatesIfAbsent merges cascade-updates into out. When the
+// dependent has no user-driven op for the same resource, the cascade-update
+// is appended as-is. When the dependent already has a user-driven Update,
+// the cascade-update is dropped but the existing Update is marked
+// IsCascade=true so the executor regenerates its PatchDocument at apply
+// time — the user's plan-time patch only reflects user changes, but the
+// resolvable's new value from the parent's replacement only becomes
+// available after the resolver runs, and the provider's Update needs both
+// in a single patch.
+//
+// If the existing op is a Create/Delete/Replace (not Update), the cascade-
+// update is dropped without altering the existing op: those operations are
+// "complete" and don't need patch augmentation.
+func appendCascadeUpdatesIfAbsent(out []ResourceUpdate, cascadeUpdates []ResourceUpdate) []ResourceUpdate {
+	if len(cascadeUpdates) == 0 {
+		return out
+	}
+	indexByURI := make(map[pkgmodel.FormaeURI]int, len(out))
+	for i, ru := range out {
+		indexByURI[ru.DesiredState.URI().Stripped()] = i
+	}
+	for _, cu := range cascadeUpdates {
+		key := cu.DesiredState.URI().Stripped()
+		if idx, exists := indexByURI[key]; exists {
+			if out[idx].Operation == OperationUpdate {
+				out[idx].IsCascade = true
+				if out[idx].CascadeSource == "" {
+					out[idx].CascadeSource = cu.CascadeSource
+				}
+				// Merge the cascade-update's synthesized ops into the
+				// existing user-driven patch so simulate output covers
+				// both the user's direct changes AND the cascading
+				// resolvable-driven changes in one document.
+				merged, err := mergeJSONPatchDocuments(out[idx].DesiredState.PatchDocument, cu.DesiredState.PatchDocument)
+				if err != nil {
+					slog.Warn("Failed to merge cascade-update patch into existing user Update",
+						"resource", out[idx].DesiredState.Label, "error", err)
+				} else {
+					out[idx].DesiredState.PatchDocument = merged
+				}
+			}
+			continue
+		}
+		out = append(out, cu)
+		indexByURI[key] = len(out) - 1
+	}
+	return out
+}
+
+// mergeJSONPatchDocuments concatenates two JSON-Patch documents (each a JSON
+// array of ops) into a single document. Used to fuse a user-driven Update's
+// patch with the planner's cascade-update synthesized ops. Skips ops in the
+// addition whose `path` already appears in the base (user wins on conflict).
+func mergeJSONPatchDocuments(base, addition json.RawMessage) (json.RawMessage, error) {
+	var baseOps, addOps []json.RawMessage
+	if len(base) > 0 {
+		if err := json.Unmarshal(base, &baseOps); err != nil {
+			return nil, fmt.Errorf("failed to parse base patch document: %w", err)
+		}
+	}
+	if len(addition) > 0 {
+		if err := json.Unmarshal(addition, &addOps); err != nil {
+			return nil, fmt.Errorf("failed to parse addition patch document: %w", err)
+		}
+	}
+	if len(addOps) == 0 {
+		if len(baseOps) == 0 {
+			return nil, nil
+		}
+		return base, nil
+	}
+	// Build a set of paths already covered by the base so duplicate ops
+	// don't override the user's intent.
+	covered := make(map[string]bool, len(baseOps))
+	for _, op := range baseOps {
+		if p := gjson.GetBytes(op, "path").String(); p != "" {
+			covered[p] = true
+		}
+	}
+	merged := append(baseOps[:0:0], baseOps...)
+	for _, op := range addOps {
+		if p := gjson.GetBytes(op, "path").String(); p != "" && covered[p] {
+			continue
+		}
+		merged = append(merged, op)
+	}
+	return json.Marshal(merged)
 }
 
 func findUnmanagedResource(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource) (pkgmodel.Resource, bool) {
@@ -1057,8 +1155,9 @@ func generateResourceUpdatesForPatch(
 
 	allUpdates := append(append(resourceCreates, resourceUpdates...), resourceReplaces...)
 
-	dependencyDeletes := findDependencyUpdates(resourceReplaces, allResourcesByStack, existingTargetMap, source)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(resourceReplaces, allResourcesByStack, existingTargetMap, source, forma)
 	finalResourceUpdates := convertUpdatesToReplacementsForDependencies(allUpdates, dependencyDeletes, source)
+	finalResourceUpdates = appendCascadeUpdatesIfAbsent(finalResourceUpdates, cascadeUpdates)
 	return finalResourceUpdates, nil
 }
 
@@ -1090,57 +1189,278 @@ func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources ma
 	return dependentResources, nil
 }
 
-// findDependencyDeletes finds resources that need to be deleted because they depend on resources being deleted
-func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[string][]*pkgmodel.Resource, existingTargetMap map[string]*pkgmodel.Target, source FormaCommandSource) []ResourceUpdate {
-	var dependencyDeletes []ResourceUpdate
-
-	for _, deleteUpdate := range allDeleteUpdates {
-		if deleteUpdate.Operation == OperationDelete {
-			// Find all resources that depend on this resource being deleted
-			dependentResources, err := findResourcesThatDependOn(deleteUpdate.DesiredState, allResources)
-			if err != nil {
-				slog.Warn("Failed to find dependent resources",
-					"resource", deleteUpdate.DesiredState.Label,
-					"error", err)
-				continue
-			}
-
-			// Create delete operations for dependent resources
-			for _, dependentRes := range dependentResources {
-				// Check if this dependent resource is not already being deleted
-				alreadyBeingDeleted := false
-				for _, existingDelete := range allDeleteUpdates {
-					if existingDelete.DesiredState.Label == dependentRes.Label &&
-						existingDelete.DesiredState.Stack == dependentRes.Stack &&
-						existingDelete.DesiredState.Type == dependentRes.Type {
-						alreadyBeingDeleted = true
-						break
-					}
-				}
-
-				if !alreadyBeingDeleted && dependentRes.Stack != constants.UnmanagedStack {
-					// Create a dependency delete operation
-					dependencyDelete, err := NewResourceUpdateForDestroy(
-						dependentRes,
-						*existingTargetMap[dependentRes.Target],
-						source,
-					)
-					if err != nil {
-						slog.Error("Failed to create dependency delete for resource",
-							"resource", dependentRes.Label,
-							"error", err)
-						continue
-					}
-					dependencyDeletes = append(dependencyDeletes, dependencyDelete)
-					slog.Debug("Adding dependency delete",
-						"dependent", dependentRes.Label,
-						"dependsOn", deleteUpdate.DesiredState.Label)
-				}
+// findDependencyUpdates finds resources affected by deletes/replaces and
+// classifies each by the dependent's referring FieldHint: if any of a
+// dependent's references to a resource being deleted lands on a CreateOnly
+// field, the dependent must be cascade-deleted (the same call site
+// converts the delete to a Replace if the dependent is in the forma). If
+// all such references land on mutable fields, the dependent is cascade-
+// updated instead — the resolvable re-resolves at execution time and the
+// new value flows through Update rather than tearing the dependent down.
+//
+// The cascade-update path covers cases like ECS Service consuming a
+// versioned TaskDefinition (Service.taskDefinition is mutable; UpdateService
+// accepts a new TaskDefinitionArn — no tear-down needed when a new TD
+// revision is created).
+func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[string][]*pkgmodel.Resource, existingTargetMap map[string]*pkgmodel.Target, source FormaCommandSource, forma *pkgmodel.Forma) ([]ResourceUpdate, []ResourceUpdate) {
+	// Collect ksuids of resources being deleted so dependents can decide
+	// whether their refs land on a deletion target. Also build a label
+	// lookup so cascade-update synthesis can name the source resource for
+	// the user, and a forma-by-ksuid index so the synthesizer can recover
+	// the parent's new property values where the user supplied them.
+	deletedKsuids := make(map[string]bool)
+	ksuidToLabel := make(map[string]string)
+	for _, du := range allDeleteUpdates {
+		if du.Operation == OperationDelete {
+			deletedKsuids[du.DesiredState.Ksuid] = true
+			ksuidToLabel[du.DesiredState.Ksuid] = du.DesiredState.Label
+		}
+	}
+	formaByKsuid := make(map[string]*pkgmodel.Resource)
+	if forma != nil {
+		for i := range forma.Resources {
+			r := &forma.Resources[i]
+			if r.Ksuid != "" {
+				formaByKsuid[r.Ksuid] = r
 			}
 		}
 	}
 
-	return dependencyDeletes
+	var dependencyDeletes []ResourceUpdate
+	var dependencyUpdates []ResourceUpdate
+
+	for _, deleteUpdate := range allDeleteUpdates {
+		if deleteUpdate.Operation != OperationDelete {
+			continue
+		}
+		// Find all resources that depend on this resource being deleted
+		dependentResources, err := findResourcesThatDependOn(deleteUpdate.DesiredState, allResources)
+		if err != nil {
+			slog.Warn("Failed to find dependent resources",
+				"resource", deleteUpdate.DesiredState.Label,
+				"error", err)
+			continue
+		}
+
+		for _, dependentRes := range dependentResources {
+			if dependentRes.Stack == constants.UnmanagedStack {
+				continue
+			}
+			// Check if this dependent resource is not already being deleted
+			alreadyBeingDeleted := false
+			for _, existingDelete := range allDeleteUpdates {
+				if existingDelete.DesiredState.Label == dependentRes.Label &&
+					existingDelete.DesiredState.Stack == dependentRes.Stack &&
+					existingDelete.DesiredState.Type == dependentRes.Type {
+					alreadyBeingDeleted = true
+					break
+				}
+			}
+			if alreadyBeingDeleted {
+				continue
+			}
+
+			target, ok := existingTargetMap[dependentRes.Target]
+			if !ok || target == nil {
+				slog.Warn("Target not found for cascade",
+					"target", dependentRes.Target, "resource", dependentRes.Label)
+				continue
+			}
+
+			// Cascade decision: cascade-delete only when at least one ref
+			// from dependentRes to a deletion target lands on a CreateOnly
+			// field. Otherwise emit a cascade-update so the resolvable
+			// re-resolves against the new parent without tearing the
+			// dependent down.
+			if anyRefIsCreateOnly(dependentRes, deletedKsuids) {
+				dependencyDelete, err := NewResourceUpdateForDestroy(dependentRes, *target, source)
+				if err != nil {
+					slog.Error("Failed to create dependency delete for resource",
+						"resource", dependentRes.Label,
+						"error", err)
+					continue
+				}
+				dependencyDeletes = append(dependencyDeletes, dependencyDelete)
+				slog.Debug("Adding dependency delete",
+					"dependent", dependentRes.Label,
+					"dependsOn", deleteUpdate.DesiredState.Label)
+			} else {
+				cu := newCascadeUpdate(dependentRes, *target, source, deleteUpdate.DesiredState.Label)
+				// Synthesize a plan-time patch so simulate output names the
+				// cascading field change instead of showing an empty Update.
+				// The executor's apply-time regen overwrites this with the
+				// concrete diff against the resolver-updated DesiredState.
+				if synthOps, err := synthesizeCascadeUpdatePatch(dependentRes, deletedKsuids, ksuidToLabel, formaByKsuid); err != nil {
+					slog.Warn("Failed to synthesize cascade-update patch for simulate output",
+						"resource", dependentRes.Label, "error", err)
+				} else if len(synthOps) > 0 {
+					cu.DesiredState.PatchDocument = synthOps
+				}
+				dependencyUpdates = append(dependencyUpdates, cu)
+				slog.Debug("Adding cascade update",
+					"dependent", dependentRes.Label,
+					"dependsOn", deleteUpdate.DesiredState.Label)
+			}
+		}
+	}
+
+	return dependencyDeletes, dependencyUpdates
+}
+
+// anyRefIsCreateOnly reports whether any of dep's resolvable references
+// points at a resource in deletedKsuids via a CreateOnly field on dep's
+// schema. A single CreateOnly ref to a deletion target forces cascade-replace
+// for the whole dependent (mixed-refs case).
+func anyRefIsCreateOnly(dep pkgmodel.Resource, deletedKsuids map[string]bool) bool {
+	for _, ref := range resolver.ExtractResolvableRefs(dep) {
+		ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
+		if !deletedKsuids[ksuid] {
+			continue
+		}
+		hint := dep.Schema.Hints[stripArrayIndicesForHintLookup(ref.TargetPath)]
+		if hint.CreateOnly {
+			return true
+		}
+	}
+	return false
+}
+
+// synthesizeCascadeUpdatePatch builds a JSON-Patch document describing the
+// resolvable-driven changes a cascade-update will introduce at apply time.
+// Used by the planner so simulate/preview output names every cascading
+// change, not just the user's direct property edits.
+//
+// For each resolvable in dep that points at a resource in deletedKsuids:
+//
+//   - If the parent's forma resource carries a concrete (non-resolvable)
+//     value for the resolvable's source property — i.e. a user-set field
+//     like Name — emit a normal `replace` op with that new value. The
+//     standard renderer then prints `from "old" to "new"`.
+//
+//   - If the source property is provider-assigned (not present in the
+//     forma at plan time — e.g. TaskDefinitionArn assigned by AWS at
+//     Create), emit a `replace` op whose value is a `$cascade-resolvable`
+//     marker object. The CLI renderer translates this into "to point at
+//     the new <source-label> (current: <value>)". The executor's apply-
+//     time regen overwrites this with the concrete diff, so the marker
+//     never reaches a provider.
+//
+// Returns (nil, nil) when dep has no refs to deletion targets.
+func synthesizeCascadeUpdatePatch(
+	dep pkgmodel.Resource,
+	deletedKsuids map[string]bool,
+	ksuidToLabel map[string]string,
+	formaByKsuid map[string]*pkgmodel.Resource,
+) (json.RawMessage, error) {
+	type op struct {
+		Op    string `json:"op"`
+		Path  string `json:"path"`
+		Value any    `json:"value"`
+	}
+	var ops []op
+	for _, ref := range resolver.ExtractResolvableRefs(dep) {
+		ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
+		if !deletedKsuids[ksuid] {
+			continue
+		}
+		path := jsonPointerFromDotPath(ref.TargetPath)
+
+		// Try to recover the new value from the forma's parent state.
+		if parent, ok := formaByKsuid[ksuid]; ok && parent != nil && ref.SourcePropertyName != "" && len(parent.Properties) > 0 {
+			extracted := gjson.GetBytes(parent.Properties, ref.SourcePropertyName)
+			if extracted.Exists() && !looksLikeResolvable(extracted) {
+				ops = append(ops, op{Op: "replace", Path: path, Value: extracted.Value()})
+				continue
+			}
+		}
+
+		// Provider-assigned: emit a marker the CLI renderer recognises.
+		ops = append(ops, op{
+			Op:   "replace",
+			Path: path,
+			Value: map[string]any{
+				"$cascade-resolvable": true,
+				"$source-label":       ksuidToLabel[ksuid],
+				"$current-value":      ref.CurrentValue,
+			},
+		})
+	}
+	if len(ops) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(ops)
+}
+
+// looksLikeResolvable reports whether a gjson Result is itself a $ref/$value
+// wrapper — used to skip parent fields that are themselves resolvables
+// (cross-stack chains), since we can't substitute a concrete value for them.
+func looksLikeResolvable(r gjson.Result) bool {
+	if !r.IsObject() {
+		return false
+	}
+	return r.Get("$ref").Exists() || r.Get("$value").Exists()
+}
+
+// jsonPointerFromDotPath converts the resolver's dot-separated TargetPath
+// (e.g. "Refs.0.Target") into a JSON Pointer (e.g. "/Refs/0/Target") that
+// JSON-Patch consumers expect.
+func jsonPointerFromDotPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	return "/" + strings.ReplaceAll(p, ".", "/")
+}
+
+// newCascadeUpdate constructs an Update on dep for the cascade-update
+// path. DesiredState carries dep's stored properties, including any
+// resolvable URIs; the executor re-reads the (now replaced) parent at
+// apply time and resolves $value fresh, so the new parent value flows to
+// dep through Update rather than a destroy+create.
+func newCascadeUpdate(dep pkgmodel.Resource, target pkgmodel.Target, source FormaCommandSource, cascadeSourceLabel string) ResourceUpdate {
+	return ResourceUpdate{
+		PriorState:           dep,
+		DesiredState:         dep,
+		ExistingTarget:       target,
+		ResourceTarget:       target,
+		Operation:            OperationUpdate,
+		State:                ResourceUpdateStateNotStarted,
+		Source:               source,
+		StackLabel:           dep.Stack,
+		RemainingResolvables: resolver.ExtractResolvableURIs(dep),
+		IsCascade:            true,
+		CascadeSource:        cascadeSourceLabel,
+	}
+}
+
+// stripArrayIndicesForHintLookup mirrors changeset.stripArrayIndices: dotted
+// path with numeric segments removed, suitable for Schema.Hints key lookup.
+// Duplicated rather than imported because changeset depends on
+// resource_update.
+func stripArrayIndicesForHintLookup(path string) string {
+	if path == "" {
+		return path
+	}
+	parts := strings.Split(path, ".")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if isAllDigits(part) && len(parts) > 1 {
+			continue
+		}
+		out = append(out, part)
+	}
+	return strings.Join(out, ".")
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func convertUpdatesToReplacementsForDependencies(allResourceUpdates []ResourceUpdate, dependencyDeletes []ResourceUpdate, source FormaCommandSource) []ResourceUpdate {

@@ -462,8 +462,8 @@ class Fq {
 
     function hints(resourceClass: reflect.Class): Mapping<String, FieldHint> =
         let(resourceHint = findResourceHint(resourceClass))
-        let(directHints = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+        let(directHints = resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull ?? new FieldHint {})
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
@@ -496,8 +496,8 @@ class Fq {
         let(nextVisited = visited.add(className))
         let(subResourceHint = findSubResourceHint(subResourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
-        let(directHints = subResourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+        let(directHints = subResourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull ?? new FieldHint {})
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)

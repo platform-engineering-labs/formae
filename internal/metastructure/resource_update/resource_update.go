@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -97,6 +98,17 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 	return ru.RemainingResolvables
 }
 
+// ResolveValue substitutes a freshly-read property value into the
+// DesiredState's $ref/$value structures and keeps the derived
+// PatchDocument in sync. PatchDocument is a derived view of (PriorState,
+// DesiredState, Schema) — whenever the executor mutates the state the
+// patch is derived from, the patch must be re-derived so the eventual
+// plugin call sees a diff that matches reality. ResolveValue is the only
+// apply-time mutator of DesiredState.Properties, so it owns the regen.
+//
+// Only Updates need a fresh patch — Create/Delete/Replace carry full
+// desired/prior state to the provider rather than a diff. Patch regen is
+// also a no-op when no Schema is available (sync/discovery paths).
 func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string) error {
 	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
 	if err != nil {
@@ -104,6 +116,21 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 		return fmt.Errorf("failed to resolve dynamic properties: %w", err)
 	}
 	ru.DesiredState.Properties = properties
+
+	if ru.Operation == OperationUpdate && len(ru.DesiredState.Schema.Fields) > 0 {
+		patchDoc, _, derr := patch.GeneratePatch(
+			ru.PriorState.Properties,
+			ru.DesiredState.Properties,
+			resolver.NewResolvableProperties(),
+			ru.DesiredState.Schema,
+			pkgmodel.FormaApplyModePatch,
+		)
+		if derr != nil {
+			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)
+		}
+		ru.DesiredState.PatchDocument = patchDoc
+	}
+
 	return nil
 }
 
