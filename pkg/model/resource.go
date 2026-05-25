@@ -83,6 +83,52 @@ func (r *Resource) GetProperty(query string) (string, bool) {
 	return value.String(), true
 }
 
+// GetEffectivePropertyValue returns the scalar string value of a property,
+// transparently unwrapping the resolved-reference shape ({"$ref": "...",
+// "$value": "..."}) to its $value.
+//
+// Use this when a downstream consumer needs the producer-supplied value
+// regardless of whether the property is still wrapped in a Resolvable
+// post-apply.
+//
+// Returns false when:
+//   - the property does not exist,
+//   - the property is a resolved-reference whose $value has not been
+//     populated yet (still-pending resolution),
+//   - the property is an object that is neither a scalar nor a resolved
+//     reference (e.g. a nested sub-resource — those need direct gjson).
+func (r *Resource) GetEffectivePropertyValue(query string) (string, bool) {
+	value := r.getProperty(query)
+	if !value.Exists() || value.Type == gjson.Null {
+		return "", false
+	}
+	if ref, ok := AsResolvedReference(value); ok {
+		if !ref.Value.Exists() || ref.Value.Type == gjson.Null {
+			return "", false
+		}
+		return ref.Value.String(), true
+	}
+	if value.IsObject() {
+		// Non-resolvable object — not a scalar.
+		return "", false
+	}
+	return value.String(), true
+}
+
+// GetPropertyReference returns the $ref URI of a property when the property
+// carries the resolved-reference shape ({"$ref": "...", ...}), regardless of
+// whether $value has been populated yet.
+//
+// Returns false for literal values, non-object values, and objects without a
+// $ref key.
+func (r *Resource) GetPropertyReference(query string) (FormaeURI, bool) {
+	ref, ok := AsResolvedReference(r.getProperty(query))
+	if !ok {
+		return "", false
+	}
+	return ref.Ref, true
+}
+
 func (r *Resource) ValidateRequiredOnCreateFields() error {
 	missingFields := r.GetMissingRequiredOnCreateFields()
 

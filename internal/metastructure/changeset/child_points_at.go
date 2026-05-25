@@ -5,8 +5,6 @@
 package changeset
 
 import (
-	"github.com/tidwall/gjson"
-
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -70,53 +68,25 @@ func childPointsAt(
 // key on the child side. They can diverge — e.g., TaskSet→Service maps
 // "ServiceName"→"Service" — so we look each up separately.
 //
-// Post-apply the resolver leaves cross-resource references in the Resolvable
-// shape `{"$ref": ..., "$value": ...}` rather than collapsing them to a
-// literal scalar. We must unwrap `$value` before comparing — otherwise a child
-// whose ChildProperty is Resolvable and a producer whose ParentProperty is a
-// literal would never compare equal even when they identify the same instance.
+// Post-apply the resolver leaves cross-resource references in the resolved-
+// reference shape `{"$ref": ..., "$value": ...}` rather than collapsing them
+// to a literal scalar. Resource.GetEffectivePropertyValue unwraps that for us
+// — otherwise a child whose ChildProperty is a resolved reference and a
+// producer whose ParentProperty is a literal would never compare equal even
+// when they identify the same instance.
 func destroySideMatches(k, producer *resource_update.ResourceUpdate, m pkgmodel.ParentMapping) bool {
-	kVal, ok := getEffectivePropertyValue(k.DesiredState.Properties, m.ChildProperty)
+	kVal, ok := k.DesiredState.GetEffectivePropertyValue(m.ChildProperty)
 	if !ok {
 		return false
 	}
 
 	// Producer's value is keyed by ParentProperty (which equals Schema.Identifier
 	// when the relationship pins on the parent's primary identifier).
-	pVal, ok := getEffectivePropertyValue(producer.DesiredState.Properties, m.ParentProperty)
+	pVal, ok := producer.DesiredState.GetEffectivePropertyValue(m.ParentProperty)
 	if !ok {
 		return false
 	}
 	return kVal == pVal
-}
-
-// getEffectivePropertyValue returns the unwrapped scalar value of a property.
-//
-// If the property is a Resolvable object (`{"$ref": ..., "$value": ...}`),
-// returns `$value` — this is the shape the resolver leaves on persisted
-// properties post-apply. If the property is a literal scalar, returns it
-// directly.
-//
-// Returns false when the property doesn't exist, isn't a scalar, or is a
-// non-Resolvable object — none of those are valid for parent-mapping equality.
-func getEffectivePropertyValue(props []byte, propName string) (string, bool) {
-	result := gjson.GetBytes(props, propName)
-	if !result.Exists() {
-		return "", false
-	}
-	if result.IsObject() {
-		// Resolvable shape: {"$ref": ..., "$value": ...} — unwrap to $value.
-		if result.Get("$ref").Exists() {
-			v := result.Get("$value")
-			if !v.Exists() {
-				return "", false
-			}
-			return v.String(), true
-		}
-		// Non-Resolvable object — not a valid scalar for parent-mapping comparison.
-		return "", false
-	}
-	return result.String(), true
 }
 
 // createSideMatches is the create-phase counterpart to destroySideMatches.
@@ -153,7 +123,7 @@ func createSideMatches(
 	m pkgmodel.ParentMapping,
 	baseResources map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate,
 ) bool {
-	kRef, ok := extractResolvableURI(k.DesiredState.Properties, m.ChildProperty)
+	kRef, ok := k.DesiredState.GetPropertyReference(m.ChildProperty)
 	if !ok {
 		return false
 	}
@@ -167,31 +137,10 @@ func createSideMatches(
 	// Sibling reference (referenced resource has a different type, or is not
 	// in the current changeset at all). K and producer must point at the same
 	// third resource. Read producer's value at m.ParentProperty — it should
-	// also be a Resolvable.
-	pRef, ok := extractResolvableURI(producer.DesiredState.Properties, m.ParentProperty)
+	// also be a resolved reference.
+	pRef, ok := producer.DesiredState.GetPropertyReference(m.ParentProperty)
 	if !ok {
 		return false
 	}
 	return kRef.Stripped() == pRef.Stripped()
-}
-
-// extractResolvableURI reads `propName` out of `props` (raw JSON) and returns
-// the underlying FormaeURI when the value is a Resolvable object of the form
-// `{"$ref": "<uri>", "$value": ...}`. Returns false for literal values,
-// non-object values, or objects without a `$ref` key — none of which can be
-// chased to a base resource for type discrimination.
-//
-// Uses gjson against the raw Properties JSON (Properties is json.RawMessage,
-// not a parsed map) to match the convention used by the surrounding
-// dependency-extraction code in resolver and resource_update.
-func extractResolvableURI(props []byte, propName string) (pkgmodel.FormaeURI, bool) {
-	field := gjson.GetBytes(props, propName)
-	if !field.IsObject() {
-		return "", false
-	}
-	ref := field.Get("$ref")
-	if !ref.Exists() {
-		return "", false
-	}
-	return pkgmodel.FormaeURI(ref.String()), true
 }

@@ -246,10 +246,11 @@ func TestChildPointsAt_Create_Composite_TaskSetShape(t *testing.T) {
 }
 
 // TestChildPointsAt_Create_LiteralChildProperty_ReturnsFalse locks in the
-// extractResolvableURI early-return: when the child's parent-reference property
-// holds a literal rather than a Resolvable object, createSideMatches must
-// decline rather than treat the literal as a URI. Removing the IsObject() guard
-// in extractResolvableURI would silently regress without this test.
+// resolved-reference guard in GetPropertyReference: when the child's parent-
+// reference property holds a literal rather than a {$ref,...} object,
+// createSideMatches must decline rather than treat the literal as a URI.
+// Removing the resolved-reference shape check would silently regress without
+// this test.
 func TestChildPointsAt_Create_LiteralChildProperty_ReturnsFalse(t *testing.T) {
 	producer := makeResourceUpdate(t, "AWS::EFS::FileSystem", "fs", nil)
 	child := makeResourceUpdate(t, "AWS::EFS::MountTarget", "mt", map[string]any{
