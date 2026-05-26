@@ -11,26 +11,34 @@ package rebind
 
 // RebindPlan is the output of the validation step. Execution applies the
 // identity-column rewrites it contains to the metastructure.
+//
+// Each kind of write has its own concrete type so the executor cannot
+// accidentally mix scopes. In particular, ResourceRebind only carries
+// a new label: moving a resource between stacks or targets via a
+// per-resource alias is out of scope for this RFC. Cross-stack moves
+// are only possible through a StackRebind + its cascade.
 type RebindPlan struct {
-	Stacks    []StackRebind
-	Resources []ResourceRebind
-	// Targets is intentionally absent in this PR. Target rename is
-	// deferred to a follow-up RFC (RFC-0041 §Scope of this RFC).
+	Stacks        []StackRebind
+	Resources     []ResourceRebind
+	StackCascades []ResourceStackCascade
+	// Targets and TargetCascades are intentionally absent. Target rename
+	// is deferred to a follow-up RFC (RFC-0041 §Scope of this RFC).
 }
 
-// ResourceRebind is one identity-column rewrite of a managed resource.
-// The row is identified by Ksuid (stable); identity columns get the
-// new values.
+// ResourceRebind is a resource label rename. Only `label` is mutable
+// here; moving a resource across stacks or targets is out of scope
+// for this RFC.
 type ResourceRebind struct {
-	Ksuid     string
-	NewLabel  string
-	NewStack  string
-	NewTarget string
-	// Source records what produced this entry: "alias" for a direct
-	// alias hit on the resource declaration, "stack-cascade" for a
-	// cascade triggered by a renamed stack. (Target-cascade is not
-	// used in this PR; reserved for the follow-up RFC.)
-	Source string
+	Ksuid    string // stable identity, unchanged
+	NewLabel string
+}
+
+// ResourceStackCascade is the per-child write produced by a stack
+// rename. It only touches resources.stack; the resource label and
+// target stay put.
+type ResourceStackCascade struct {
+	Ksuid    string // resource being cascaded
+	NewStack string // new parent stack label
 }
 
 // StackRebind is one identity-column rewrite of a stack.
@@ -41,5 +49,6 @@ type StackRebind struct {
 
 // IsEmpty reports whether the plan has nothing to do.
 func (p *RebindPlan) IsEmpty() bool {
-	return p == nil || (len(p.Stacks) == 0 && len(p.Resources) == 0)
+	return p == nil ||
+		(len(p.Stacks) == 0 && len(p.Resources) == 0 && len(p.StackCascades) == 0)
 }
