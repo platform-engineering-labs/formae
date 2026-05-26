@@ -5,6 +5,7 @@ examples {
       group = null
       target = null
       stack = null
+      alias = null
       managed = true
       x = 42
       name = "test"
@@ -16,6 +17,7 @@ examples {
       group = null
       target = null
       stack = null
+      alias = null
       managed = true
       items {
         "item1"
@@ -27,10 +29,10 @@ examples {
     }
   }
   ["Convert to map with types - simple"] {
-    Map("label", "simple", "group", null, "target", null, "stack", null, "managed", true, "x", 42, "name", "test")
+    Map("label", "simple", "group", null, "target", null, "stack", null, "alias", null, "managed", true, "x", 42, "name", "test")
   }
   ["Convert to map with types - complex"] {
-    Map("label", "my-bucket", "group", null, "target", null, "stack", null, "managed", true, "type", "FakePlugin::Service::TestResource", "size", null, "tags", List(), "bucketName", "my-test-bucket")
+    Map("label", "my-bucket", "group", null, "target", null, "stack", null, "alias", null, "managed", true, "type", "FakePlugin::Service::TestResource", "size", null, "tags", List(), "bucketName", "my-test-bucket")
   }
   ["Generate import statements"] {
     List("@aws/s3.pkl")

@@ -19,11 +19,22 @@ open class Description {
     fixed Confirm: Boolean = confirm
 }
 
+/// Marks a previous identity of a Resource, Stack, or Target.
+/// Used by formae to rebind an existing managed row to a new
+/// identity without destroy/recreate. See RFC-0041.
+open class Alias {
+    hidden label: String(length > 0)
+
+    // Output
+    fixed Label: String = label
+}
+
 open class Resource {
     label: String
     group: String?
     target: TargetResolvable?
     stack: StackResolvable?
+    alias: Alias?
     fixed managed: Boolean = true
 
     local self = this
@@ -38,6 +49,7 @@ open class Resource {
         Group = self.group
         Target = self.target
         Stack = self.stack
+        Alias = self.alias
         Managed = self.managed
 
         Type = self.type()
@@ -55,6 +67,7 @@ open class Stack {
     hidden label: String(length > 0)
     hidden description: String
     hidden policies: Listing<Policy|PolicyResolvable>?
+    hidden alias: Alias?
 
     local parent = this
     hidden res: StackResolvable = new {
@@ -64,6 +77,7 @@ open class Stack {
     // Output
     fixed Label: String = label
     fixed Description: String = description
+    fixed Alias: Alias? = alias
     fixed Policies: Listing<Dynamic>? = policies?.toList()?.map((p) ->
         if (p is PolicyResolvable)
             new Dynamic { `$ref` = "policy://\(p.label)" }
@@ -232,6 +246,7 @@ open class Target {
     hidden namespace: String = config.type.toUpperCase()
     hidden config: Any?
     hidden discoverable: Boolean = true
+    hidden alias: Alias?
 
     local self = this
     hidden res: TargetResolvable = new {
@@ -242,6 +257,7 @@ open class Target {
     fixed Label: String = label
     fixed Namespace: String = namespace
     fixed Config: Any? = config
+    fixed Alias: Alias? = alias
     fixed ConfigSchema: ConfigSchema? =
         if (config != null)
             let (hints = module.fq.configHints(reflect.Class(config.getClass())))

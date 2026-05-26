@@ -5,6 +5,7 @@
 package metastructure
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -28,6 +29,10 @@ type mockExtractDatastore struct {
 	targets   map[string]*pkgmodel.Target
 	stacks    map[string]*pkgmodel.Stack
 	policies  map[string]pkgmodel.Policy
+}
+
+func (m *mockExtractDatastore) WithTx(_ context.Context, fn func(datastore.Tx) error) error {
+	return fn(m)
 }
 
 func (m *mockExtractDatastore) QueryResources(_ *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {

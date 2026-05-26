@@ -5,6 +5,7 @@
 package datastore
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -20,6 +21,10 @@ import (
 // Only the name field is used; all interface methods are stubs.
 type mockDatastore struct {
 	name string
+}
+
+func (m *mockDatastore) WithTx(_ context.Context, fn func(Tx) error) error {
+	return fn(m)
 }
 
 func (m *mockDatastore) StoreFormaCommand(_ *forma_command.FormaCommand, _ string) error {
