@@ -144,6 +144,21 @@ presets:
         - property: DefaultVPC
           value: "true"
 
+  conformance-protect:
+    # Region isolation (regions: us-west-1/us-west-2 + global) protects
+    # region-scoped conformance resources. Global resources (IAM, S3,
+    # Route53, CloudFront) have no region, so an allowlist protects them:
+    # the nuke removes ONLY names containing "formae-e2e" (this suite's own
+    # resources). Conformance resources are named formae-sdk-test-* /
+    # plugin-sdk-test-* and are therefore preserved. New conformance
+    # resource types are protected by default (allowlist semantics).
+    filters:
+      __global__:
+        - property: Name
+          type: contains
+          value: "formae-e2e"
+          invert: true
+
 accounts:
   '942849037363':
     presets:
@@ -151,3 +166,4 @@ accounts:
       - engineers
       - organization
       - defaults
+      - conformance-protect
