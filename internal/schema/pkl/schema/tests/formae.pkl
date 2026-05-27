@@ -583,6 +583,97 @@ facts {
     ["FieldHint AttachesTo defaults to false"] {
         (new formae.FieldHint {}).AttachesTo == false
     }
+
+    ["FieldHint EdgeKind defaults to default"] {
+        (new formae.FieldHint {}).EdgeKind == "default"
+    }
+
+    ["FieldHint EdgeKind attachesTo is set correctly"] {
+        testEdgeKindSchema.Hints["F2"].EdgeKind == "attachesTo"
+    }
+
+    ["FieldHint EdgeKind runtimeDependency is set correctly"] {
+        testEdgeKindSchema.Hints["F3"].EdgeKind == "runtimeDependency"
+    }
+
+    ["ResourceHint accepts a single ParentRef"] {
+        let (hint = singleParentRefHint())
+        hint.parentRefs != null &&
+        hint.parentRefs is formae.ParentRef &&
+        hint.parentRefs.parentProperty == "FileSystemId" &&
+        hint.parentRefs.childProperty == "FileSystemId"
+    }
+
+    // `parentRefs` is typed `(ParentRef|List<ParentRef>)?`, so PKL rejects a
+    // `Listing<ParentRef>` literal at the type check (verified empirically:
+    // assigning `new Listing { ... }` errors with "Expected value of type
+    // `ParentRef|List<ParentRef>`, but got type `Listing`"). Extractor.pkl
+    // still branches on `is Listing` before `is List` for `listParam`, but
+    // for `parentRefs` only the `List` arm is reachable; Task 1.4 may omit
+    // the Listing branch.
+    ["ResourceHint accepts a List of ParentRef"] {
+        let (hint = listParentRefsHint())
+        hint.parentRefs != null &&
+        hint.parentRefs is List &&
+        hint.parentRefs.length == 2 &&
+        hint.parentRefs[0].parentProperty == "ServiceName" &&
+        hint.parentRefs[0].childProperty == "Service" &&
+        hint.parentRefs[1].parentProperty == "Cluster" &&
+        hint.parentRefs[1].childProperty == "Cluster"
+    }
+
+    ["ResourceHint without parentRefs but with listParam still works"] {
+        let (hint = listParamOnlyHint())
+        hint.parentRefs == null &&
+        hint.listParam != null &&
+        hint.listParam is formae.ListProperty
+    }
+
+    ["ResourceHint parentRefs defaults to null"] {
+        let (hint = noParentRefsHint())
+        hint.parentRefs == null
+    }
+}
+
+local function singleParentRefHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::EFS::MountTarget"
+    identifier = "MountTargetId"
+    parent = "AWS::EFS::FileSystem"
+    parentRefs = new formae.ParentRef {
+        parentProperty = "FileSystemId"
+        childProperty = "FileSystemId"
+    }
+}
+
+local function listParentRefsHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::ECS::TaskSet"
+    identifier = "TaskSetId"
+    parent = "AWS::ECS::Service"
+    parentRefs = List(
+        new formae.ParentRef {
+            parentProperty = "ServiceName"
+            childProperty = "Service"
+        },
+        new formae.ParentRef {
+            parentProperty = "Cluster"
+            childProperty = "Cluster"
+        }
+    )
+}
+
+local function listParamOnlyHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::EFS::MountTarget"
+    identifier = "MountTargetId"
+    parent = "AWS::EFS::FileSystem"
+    listParam = new formae.ListProperty {
+        parentProperty = "FileSystemId"
+        listParameter = "FileSystemId"
+    }
+}
+
+local function noParentRefsHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::S3::Bucket"
+    identifier = "BucketName"
 }
 
 local testAttachesToSchema = new formae.Schema {
@@ -590,5 +681,15 @@ local testAttachesToSchema = new formae.Schema {
     Fields = new Listing { "F1" }
     Hints = new Mapping {
         ["F1"] = new formae.FieldHint { attachesTo = true }
+    }
+}
+
+local testEdgeKindSchema = new formae.Schema {
+    Identifier = "AWS::Test::EdgeThing"
+    Fields = new Listing { "F1" "F2" "F3" }
+    Hints = new Mapping {
+        ["F1"] = new formae.FieldHint { edgeKind = "default" }
+        ["F2"] = new formae.FieldHint { edgeKind = "attachesTo" }
+        ["F3"] = new formae.FieldHint { edgeKind = "runtimeDependency" }
     }
 }

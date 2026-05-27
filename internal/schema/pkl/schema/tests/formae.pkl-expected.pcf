@@ -91,6 +91,7 @@ examples {
         RequiredOnCreate = false
         HasProviderDefault = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
       }
@@ -101,6 +102,7 @@ examples {
         RequiredOnCreate = false
         HasProviderDefault = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
       }
@@ -111,6 +113,7 @@ examples {
         RequiredOnCreate = false
         HasProviderDefault = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
       }
@@ -132,6 +135,7 @@ examples {
           RequiredOnCreate = false
           HasProviderDefault = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
         }
@@ -142,6 +146,7 @@ examples {
           RequiredOnCreate = false
           HasProviderDefault = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
         }
@@ -152,6 +157,7 @@ examples {
           RequiredOnCreate = false
           HasProviderDefault = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
         }
@@ -159,6 +165,8 @@ examples {
       Discoverable = true
       Extractable = true
       Portable = false
+      Parent = ""
+      ParentMappings {}
     }
   }
   ["Test Resource - type()"] {
@@ -201,6 +209,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -211,6 +220,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -221,6 +231,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -228,6 +239,8 @@ examples {
         Discoverable = true
         Extractable = true
         Portable = false
+        Parent = ""
+        ParentMappings {}
       }
       Properties {
         bucketName = "my-test-bucket"
@@ -278,6 +291,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -288,6 +302,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -298,6 +313,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -305,6 +321,8 @@ examples {
         Discoverable = true
         Extractable = true
         Portable = false
+        Parent = ""
+        ParentMappings {}
       }
       Properties {
         bucketName = "my-bucket-no-tags"
@@ -339,6 +357,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -349,6 +368,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -359,6 +379,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -369,6 +390,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -379,6 +401,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -389,6 +412,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -399,6 +423,7 @@ examples {
             RequiredOnCreate = false
             HasProviderDefault = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
           }
@@ -406,6 +431,8 @@ examples {
         Discoverable = true
         Extractable = true
         Portable = false
+        Parent = ""
+        ParentMappings {}
       }
       Properties {
         resourceName = "my-resource"
@@ -436,6 +463,7 @@ examples {
         RequiredOnCreate = false
         HasProviderDefault = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
       }
@@ -446,6 +474,7 @@ examples {
         RequiredOnCreate = false
         HasProviderDefault = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
       }
@@ -456,6 +485,7 @@ examples {
         RequiredOnCreate = false
         HasProviderDefault = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
       }
@@ -477,6 +507,7 @@ examples {
           RequiredOnCreate = false
           HasProviderDefault = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
         }
@@ -487,6 +518,7 @@ examples {
           RequiredOnCreate = false
           HasProviderDefault = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
         }
@@ -497,6 +529,7 @@ examples {
           RequiredOnCreate = false
           HasProviderDefault = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
         }
@@ -504,6 +537,8 @@ examples {
       Discoverable = true
       Extractable = true
       Portable = false
+      Parent = ""
+      ParentMappings {}
     }
   }
   ["Fq - type"] {

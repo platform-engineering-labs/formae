@@ -140,6 +140,10 @@ open class ResourceHint extends Annotation {
     identifier: String
     /// Type of parent resource
     parent: String?
+    /// Mapping(s) between parent identity properties and the child properties
+    /// that carry those values. Used by the changeset planner to discriminate
+    /// instance-scoped parent/child containment for runtimeDependency edges.
+    parentRefs: (ParentRef|List<ParentRef>)?
     /// Parent Property required for list operations
     listParam: (ListProperty|List<ListProperty>)?
     /// Property that dictates whether a resource is blocked from discovery
@@ -168,7 +172,34 @@ open class ListProperty {
     fixed ListParameter: String = listParameter
 }
 
+/// Maps a parent-side identity property to the child-side property that
+/// carries that value. The two names need not match (they coincide for
+/// MountTarget→FileSystem but diverge for TaskSet→Service, where the parent's
+/// `ServiceName` is referenced by the child's `Service`).
+///
+/// Uses plain camelCase fields (no hidden/fixed dance). The Go side binds via
+/// JSON struct tags — the precedent for new annotations; older annotations
+/// will migrate to the same shape separately.
+class ParentRef {
+    /// Name of the property on the parent resource that this mapping references.
+    parentProperty: String
+    /// Name of the property on this child that holds the parent's value.
+    childProperty: String
+}
+
 typealias FieldUpdateMethod = "Array"|"Atomic"|"EntitySet"|"Set"
+
+typealias EdgeKind =
+    "default"            // Construction-data-flow. Default for unannotated fields.
+                         // On destroy: consumer first, producer second.
+  | "attachesTo"         // Reachability. Consumer is reachable through the
+                         // producer at runtime (e.g. ECS Service via ALB Listener).
+                         // On destroy: producer first, consumer second.
+  | "runtimeDependency"  // Containment. Consumer uses the producer and its
+                         // containment children at runtime, even though those
+                         // children are not directly referenced.
+                         // On create:  producer first, then each child K, then consumer.
+                         // On destroy: consumer first, then each child K, then producer.
 
 open class FieldHint extends Annotation {
     hidden createOnly: Boolean = false
@@ -176,7 +207,8 @@ open class FieldHint extends Annotation {
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
     hidden hasProviderDefault: Boolean = false
-    hidden attachesTo: Boolean = false
+    hidden attachesTo: Boolean = false           // DEPRECATED; use edgeKind instead
+    hidden edgeKind: EdgeKind = "default"        // NEW
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
 
@@ -191,6 +223,7 @@ open class FieldHint extends Annotation {
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed HasProviderDefault: Boolean = hasProviderDefault
     fixed AttachesTo: Boolean = attachesTo
+    fixed EdgeKind: String = edgeKind
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
 }
@@ -222,6 +255,13 @@ open class Schema {
     Extractable: Boolean = true
     /// Property that dictates whether a resource can be moved across targets
     Portable: Boolean = false
+    /// Type of parent resource. Empty string when this resource has no parent.
+    /// Populated by Extractor.pkl from ResourceHint.parent.
+    Parent: String = ""
+    /// Identity-property mappings from this child to its parent. Empty when
+    /// this resource has no parent. Populated by Extractor.pkl from
+    /// ResourceHint.parentRefs, with a `listParam` fallback for legacy schemas.
+    ParentMappings: Listing<ParentRef> = new Listing {}
 
     /// Query fields by FieldHint property
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
@@ -659,7 +699,49 @@ class Fq {
                 Discoverable = hint.discoverable
                 Extractable = hint.extractable
                 Portable = hint.portable
+                Parent = hint.parent ?? ""
+                ParentMappings = parentMappingsOf(hint)
             }
+
+    /// Build the Schema.ParentMappings listing from a ResourceHint.
+    ///
+    /// Preference order: `parentRefs` (the explicit shape) over `listParam`
+    /// (legacy fallback). `parentRefs` is typed `(ParentRef|List<ParentRef>)?`
+    /// so it arrives as either a single `ParentRef` or a `List<ParentRef>`; PKL
+    /// rejects `Listing` literals at the type boundary so no `is Listing` arm is
+    /// reachable here. `listParam` keeps the `is Listing` arm for symmetry with
+    /// `extractParentMappings` in Extractor.pkl. When falling back to `listParam`,
+    /// the child-side name is taken from `listParameter` (the LIST API parameter
+    /// that carries the parent's value on the child).
+    function parentMappingsOf(resourceHint): Listing<ParentRef> =
+        let (refs = resourceHint.getProperty("parentRefs"))
+        let (listParam = resourceHint.getProperty("listParam"))
+        if (refs != null)
+            if (refs is List)
+                new Listing { for (r in refs) { fromParentRef(r) } }
+            else
+                // Single ParentRef
+                new Listing { fromParentRef(refs) }
+        else if (listParam != null)
+            if (listParam is Listing)
+                new Listing { for (p in listParam) { fromListProperty(p) } }
+            else if (listParam is List)
+                new Listing { for (p in listParam) { fromListProperty(p) } }
+            else
+                // Single ListProperty
+                new Listing { fromListProperty(listParam) }
+        else
+            new Listing {}
+
+    function fromParentRef(r): ParentRef = new ParentRef {
+        parentProperty = r.parentProperty
+        childProperty = r.childProperty
+    }
+
+    function fromListProperty(p): ParentRef = new ParentRef {
+        parentProperty = p.parentProperty
+        childProperty = p.listParameter
+    }
 
     function type(resourceClass: reflect.Class): String =
       let (resourceHint = findResourceHint(resourceClass))

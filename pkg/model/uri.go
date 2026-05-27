@@ -238,6 +238,44 @@ func IsResolvableObject(value gjson.Result) bool {
 	return resField.Exists() && resField.Bool()
 }
 
+// ResolvedReference is the persisted/post-apply shape of a resolved
+// Resolvable: an object of the form {"$ref": "formae://...", "$value": ...}.
+// The unresolved source-time shape (carrying $res/$type/$label/$stack/$property)
+// is handled by IsResolvableObject and FindResolvablesFromProperties — see
+// those for the inverse case.
+//
+// Ref is always set when constructed via AsResolvedReference. Value may be
+// gjson.Null when the reference has not yet been resolved by the executor
+// (the post-resolver state at apply time keeps $ref but adds $value).
+type ResolvedReference struct {
+	Ref   FormaeURI
+	Value gjson.Result
+}
+
+// IsResolvedReference reports whether value is the resolved-reference shape
+// ({"$ref": "...", ...}). Mirror of IsResolvableObject for the post-apply
+// shape; the two shapes are disjoint by construction (source-time objects
+// carry $res, post-apply objects carry $ref).
+func IsResolvedReference(value gjson.Result) bool {
+	if !value.IsObject() {
+		return false
+	}
+	return value.Get("$ref").Exists()
+}
+
+// AsResolvedReference unwraps value to a ResolvedReference when it carries
+// the resolved-reference shape. Returns false for scalars, arrays,
+// non-object values, and objects without a $ref field.
+func AsResolvedReference(value gjson.Result) (ResolvedReference, bool) {
+	if !IsResolvedReference(value) {
+		return ResolvedReference{}, false
+	}
+	return ResolvedReference{
+		Ref:   FormaeURI(value.Get("$ref").String()),
+		Value: value.Get("$value"),
+	}, true
+}
+
 // ToTripletKey converts a resolvable object to a TripletKey
 func (r ResolvableObject) ToTripletKey() TripletKey {
 	return TripletKey{

@@ -40,7 +40,7 @@ forma {
   new formae.Target {
     label = "e2e-target-replace-target"
     config = new aws.Config {
-      region = "us-east-1"
+      region = "us-west-1"
     }
   }
 

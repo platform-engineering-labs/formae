@@ -46,6 +46,12 @@ type Changeset struct {
 
 type ExecutionDAG struct {
 	Nodes map[pkgmodel.FormaeURI]*DAGNode
+	// baseResources indexes the create/update ResourceUpdate for each stripped
+	// resource URI in the changeset (exactly one per KSUID, since replace is
+	// pre-split into delete+create and create/update are mutually exclusive per
+	// resource). Delete operations are excluded — childPointsAt uses this
+	// index only for the create-phase URI→type lookup.
+	baseResources map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate
 }
 
 type DAGNode struct {
@@ -217,10 +223,16 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 }
 
 // buildDeleteDependencies creates dependencies for delete operations.
-// For most refs the direction is REVERSED (construction-reversed): the
-// dependency is deleted after the consumer. For refs annotated with
-// AttachesTo=true the direction is FORWARD (reachability order): the
-// host resource is deleted first, then the hosted resource.
+// The edge direction is selected per-reference by the field hint's EdgeKind:
+//   - EdgeKindDefault: construction-reversed — the dependency is deleted
+//     after the consumer (consumer first, producer second).
+//   - EdgeKindAttachesTo: reachability order — the producer is deleted first,
+//     then the consumer (consumer waits for producer).
+//   - EdgeKindRuntimeDependency: same default consumer→producer edge, PLUS
+//     edges from the consumer to every containment child of the producer
+//     whose parent identity matches *this* producer instance. The consumer
+//     must complete before the children tear down, so the children become
+//     downstream of the consumer.
 func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.ResourceUpdate) {
 	deleteOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
 	for _, op := range allOps {
@@ -236,22 +248,25 @@ func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.Resource
 			continue
 		}
 
-		// Build a lookup map from referenced-resource-ksuid → TargetPath using
-		// the actual Properties JSON. This lets us find the field hint for each
-		// reference. We fall back gracefully when a ref isn't found in the map.
-		refPathByKsuid := make(map[string]string)
+		// Build per-ksuid lists of TargetPaths from the resource's resolvable
+		// refs. A consumer may reference the same producer at multiple paths
+		// (e.g., once with edgeKind=default and once with
+		// edgeKind=runtimeDependency); each path carries its own hint and
+		// must be honored independently. Collapsing to a single
+		// path-per-ksuid would let map iteration order pick which hint wins.
+		pathsByKsuid := make(map[string][]string)
 		for _, ref := range resolver.ExtractResolvableRefs(deleteOp.DesiredState) {
-			// ExtractResolvableRefs returns URIs of the form "formae://<ksuid>" (no
-			// fragment). Extract just the ksuid part.
 			ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
-			if ksuid != "" {
-				refPathByKsuid[ksuid] = ref.TargetPath
+			if ksuid == "" {
+				continue
 			}
+			pathsByKsuid[ksuid] = append(pathsByKsuid[ksuid], ref.TargetPath)
 		}
 
 		for _, resolvableURI := range deleteOp.RemainingResolvables {
 			depBase := resolvableURI.Stripped()
-			if _, exists := deleteOps[depBase]; !exists {
+			depResource, exists := deleteOps[depBase]
+			if !exists {
 				continue
 			}
 			depNode := p.Nodes[createOperationURI(depBase, resource_update.OperationDelete)]
@@ -259,23 +274,95 @@ func (p *ExecutionDAG) buildDeleteDependencies(allOps []resource_update.Resource
 				continue
 			}
 
-			// Look up the field hint for this reference by ksuid.
-			targetPath := refPathByKsuid[depBase.KSUID()]
-			hint := fieldHintForPath(deleteOp.DesiredState.Schema, targetPath)
-			if hint.AttachesTo {
-				// Reachability edge: the hosting resource waits for the hosted-on
-				// resource's delete. Destroy order: hosted-on first, hosting second.
-				dependentGroup.LinkWith(depNode)
-			} else {
-				// Construction-reversed edge (existing behavior): B.delete waits
-				// for A.delete. Destroy order: consumer first, producer second.
-				depNode.LinkWith(dependentGroup)
+			// If no paths recorded (e.g., callers that only populate
+			// RemainingResolvables without the matching Properties JSON, as
+			// some unit tests do), fall back to the single-path default
+			// hint shape.
+			paths := pathsByKsuid[depBase.KSUID()]
+			if len(paths) == 0 {
+				paths = []string{""}
+			}
+
+			for _, targetPath := range paths {
+				// Look up the field hint for this specific reference path.
+				hint := fieldHintForPath(deleteOp.DesiredState.Schema, targetPath)
+
+				// Resolve the effective EdgeKind. Schemas published before
+				// the EdgeKind field landed only set the deprecated
+				// AttachesTo bool; JSON unmarshalling normalizes that into
+				// EdgeKind, but in-Go struct-literal callers may still rely
+				// on the alias.
+				edgeKind := hint.EdgeKind
+				if edgeKind == "" {
+					if hint.AttachesTo {
+						edgeKind = pkgmodel.EdgeKindAttachesTo
+					} else {
+						edgeKind = pkgmodel.EdgeKindDefault
+					}
+				}
+
+				switch edgeKind {
+				case pkgmodel.EdgeKindAttachesTo:
+					// Reachability edge: the hosting resource waits for the hosted-on
+					// resource's delete. Destroy order: hosted-on first, hosting second.
+					dependentGroup.LinkWith(depNode)
+
+				case pkgmodel.EdgeKindRuntimeDependency:
+					// Default construction-reversed edge to the producer: consumer
+					// first, producer second.
+					depNode.LinkWith(dependentGroup)
+
+					// PLUS edges to the producer's containment children that point
+					// at *this* producer instance — each child must wait for the
+					// consumer's delete before tearing down (since the consumer
+					// may still be using the producer's runtime state via the
+					// children). Destroy order: consumer first, then children,
+					// then producer.
+					producerType := depResource.DesiredState.Type
+					for _, k := range deleteOps {
+						if k.DesiredState.Schema.Parent != producerType {
+							continue
+						}
+						if k.URI() == deleteOp.URI() {
+							continue
+						}
+						if !childPointsAt(&k, &depResource, resource_update.OperationDelete, nil) {
+							continue
+						}
+						// buildDeleteDependencies only enrols ops with Operation
+						// == OperationDelete, so k.Operation is always
+						// OperationDelete here — but use the actual field for
+						// symmetry with the create-side counterpart.
+						kNode := p.Nodes[createOperationURI(k.URI(), k.Operation)]
+						if kNode == nil {
+							continue
+						}
+						// Child waits for the consumer (consumer first, child second).
+						kNode.LinkWith(dependentGroup)
+					}
+
+				default: // EdgeKindDefault
+					// Construction-reversed edge (existing behavior): B.delete waits
+					// for A.delete. Destroy order: consumer first, producer second.
+					depNode.LinkWith(dependentGroup)
+				}
 			}
 		}
 	}
 }
 
-// buildCreateUpdateDependencies creates NORMAL dependencies for create/update operations
+// buildCreateUpdateDependencies creates NORMAL dependencies for create/update
+// operations. The natural edge per reference is consumer → producer (consumer
+// waits for producer).
+//
+// For runtimeDependency edges, the natural edge is augmented with edges from
+// every containment child of the producer whose parent identity matches *this*
+// producer instance into the consumer. Create order becomes: producer first,
+// then children, then consumer.
+//
+// EdgeKindAttachesTo carries no extra meaning on the create phase (it inverts
+// destroy order but agrees with the default on construction), so we leave it
+// to the default branch.
 func (p *ExecutionDAG) buildCreateUpdateDependencies(allOps []resource_update.ResourceUpdate) {
 	createUpdateOps := make(map[pkgmodel.FormaeURI]resource_update.ResourceUpdate)
 
@@ -291,16 +378,93 @@ func (p *ExecutionDAG) buildCreateUpdateDependencies(allOps []resource_update.Re
 		dependentOpURI := createOperationURI(createOp.URI(), createOp.Operation)
 		dependentGroup := p.Nodes[dependentOpURI]
 
+		// Build per-ksuid lists of TargetPaths from the resource's resolvable
+		// refs. A consumer may reference the same producer at multiple paths
+		// (e.g., once with edgeKind=default and once with
+		// edgeKind=runtimeDependency); each path carries its own hint and
+		// must be honored independently. Collapsing to a single
+		// path-per-ksuid would let map iteration order pick which hint wins.
+		pathsByKsuid := make(map[string][]string)
+		for _, ref := range resolver.ExtractResolvableRefs(createOp.DesiredState) {
+			ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
+			if ksuid == "" {
+				continue
+			}
+			pathsByKsuid[ksuid] = append(pathsByKsuid[ksuid], ref.TargetPath)
+		}
+
 		for _, resolvableURI := range createOp.RemainingResolvables {
 			dependencyBaseURI := resolvableURI.Stripped()
 
 			// Check if there's a corresponding create/update operation for this dependency
-			if dependencyOp, exists := createUpdateOps[dependencyBaseURI]; exists {
-				dependencyOpURI := createOperationURI(dependencyBaseURI, dependencyOp.Operation)
-				dependencyGroup := p.Nodes[dependencyOpURI]
+			dependencyOp, exists := createUpdateOps[dependencyBaseURI]
+			if !exists {
+				continue
+			}
+			dependencyOpURI := createOperationURI(dependencyBaseURI, dependencyOp.Operation)
+			dependencyGroup := p.Nodes[dependencyOpURI]
 
-				// NORMAL: dependent waits for dependency to complete
-				dependentGroup.LinkWith(dependencyGroup)
+			// NORMAL: dependent waits for dependency to complete
+			dependentGroup.LinkWith(dependencyGroup)
+
+			// If no paths recorded (e.g., callers that only populate
+			// RemainingResolvables without the matching Properties JSON, as
+			// some unit tests do), fall back to the single-path default
+			// hint shape.
+			paths := pathsByKsuid[dependencyBaseURI.KSUID()]
+			if len(paths) == 0 {
+				paths = []string{""}
+			}
+
+			for _, targetPath := range paths {
+				// Resolve the effective EdgeKind for this specific reference
+				// path. Normalize the deprecated AttachesTo alias for
+				// consistency with the destroy branch even though only
+				// RuntimeDependency triggers extra wiring on the create
+				// phase.
+				hint := fieldHintForPath(createOp.DesiredState.Schema, targetPath)
+				edgeKind := hint.EdgeKind
+				if edgeKind == "" {
+					if hint.AttachesTo {
+						edgeKind = pkgmodel.EdgeKindAttachesTo
+					} else {
+						edgeKind = pkgmodel.EdgeKindDefault
+					}
+				}
+
+				if edgeKind != pkgmodel.EdgeKindRuntimeDependency {
+					continue
+				}
+
+				// runtimeDependency: also wire each containment child of the
+				// producer that points at *this* producer instance into the
+				// consumer. The consumer must wait for the children so it
+				// observes fully-realised runtime state. Create order:
+				// producer → children → consumer.
+				producerType := dependencyOp.DesiredState.Type
+				for _, k := range createUpdateOps {
+					if k.DesiredState.Schema.Parent != producerType {
+						continue
+					}
+					if k.URI() == createOp.URI() {
+						continue
+					}
+					if !childPointsAt(&k, &dependencyOp, resource_update.OperationCreate, p.baseResources) {
+						continue
+					}
+					// Use the child's actual Operation rather than
+					// hardcoding OperationCreate: an existing resource
+					// updated in the same changeset will be registered under
+					// (uri, OperationUpdate), not (uri, OperationCreate),
+					// and the hardcoded lookup would silently miss it —
+					// dropping the runtimeDependency child edge.
+					kNode := p.Nodes[createOperationURI(k.URI(), k.Operation)]
+					if kNode == nil {
+						continue
+					}
+					// Consumer waits for K (K first, consumer second).
+					dependentGroup.LinkWith(kNode)
+				}
 			}
 		}
 	}
@@ -403,7 +567,8 @@ func (p *ExecutionDAG) buildTargetResolvableEdges() {
 
 func NewExecutionDAG() *ExecutionDAG {
 	return &ExecutionDAG{
-		Nodes: make(map[pkgmodel.FormaeURI]*DAGNode),
+		Nodes:         make(map[pkgmodel.FormaeURI]*DAGNode),
+		baseResources: make(map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate),
 	}
 }
 
@@ -428,7 +593,10 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, co
 		}
 	}
 
-	// Step 2: Create resource update groups with operation-specific URIs
+	// Step 2: Create resource update groups with operation-specific URIs.
+	// allOps must not be appended to past this point — &allOps[i] pointers
+	// are stored in p.Nodes and p.baseResources and would be invalidated
+	// by a backing-array reallocation.
 	for i := range allOps {
 		update := &allOps[i]
 		// Create unique identifier that includes operation
@@ -453,6 +621,15 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, co
 			Update:       update,
 			Dependents:   []*DAGNode{},
 			Dependencies: []*DAGNode{},
+		}
+
+		// Register create/update ops in the base-resource index so consumers
+		// (childPointsAt create phase) can resolve a stripped URI to
+		// the latest desired-state ResourceUpdate in O(1). Delete ops are
+		// intentionally excluded because the index serves DesiredState lookups.
+		switch update.Operation {
+		case resource_update.OperationCreate, resource_update.OperationUpdate:
+			p.baseResources[update.URI().Stripped()] = update
 		}
 	}
 

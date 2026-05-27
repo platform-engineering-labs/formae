@@ -59,6 +59,76 @@ func TestExtractSchema_RecursiveSubResource(t *testing.T) {
 	}
 }
 
+func TestExtractSchema_ParentMappings_SingleParentRef(t *testing.T) {
+	descriptors := extractFakeawsDescriptors(t)
+
+	d := findDescriptor(t, descriptors, "FakeAWS::EFS::MountTarget")
+	if d.Schema.Parent != "FakeAWS::EFS::FileSystem" {
+		t.Errorf("expected Parent=%q, got %q", "FakeAWS::EFS::FileSystem", d.Schema.Parent)
+	}
+	if got, want := len(d.Schema.ParentMappings), 1; got != want {
+		t.Fatalf("expected %d ParentMapping, got %d (%#v)", want, got, d.Schema.ParentMappings)
+	}
+	if d.Schema.ParentMappings[0].ParentProperty != "FileSystemId" {
+		t.Errorf("expected ParentProperty=%q, got %q", "FileSystemId", d.Schema.ParentMappings[0].ParentProperty)
+	}
+	if d.Schema.ParentMappings[0].ChildProperty != "FileSystemId" {
+		t.Errorf("expected ChildProperty=%q, got %q", "FileSystemId", d.Schema.ParentMappings[0].ChildProperty)
+	}
+}
+
+func TestExtractSchema_ParentMappings_CompositeParentRefs(t *testing.T) {
+	descriptors := extractFakeawsDescriptors(t)
+
+	d := findDescriptor(t, descriptors, "FakeAWS::ECS::TaskSet")
+	if d.Schema.Parent != "FakeAWS::ECS::Service" {
+		t.Errorf("expected Parent=%q, got %q", "FakeAWS::ECS::Service", d.Schema.Parent)
+	}
+	if got, want := len(d.Schema.ParentMappings), 2; got != want {
+		t.Fatalf("expected %d ParentMappings, got %d (%#v)", want, got, d.Schema.ParentMappings)
+	}
+	if d.Schema.ParentMappings[0].ParentProperty != "ServiceName" || d.Schema.ParentMappings[0].ChildProperty != "Service" {
+		t.Errorf("first mapping = %+v; want {ServiceName, Service}", d.Schema.ParentMappings[0])
+	}
+	if d.Schema.ParentMappings[1].ParentProperty != "Cluster" || d.Schema.ParentMappings[1].ChildProperty != "Cluster" {
+		t.Errorf("second mapping = %+v; want {Cluster, Cluster}", d.Schema.ParentMappings[1])
+	}
+}
+
+func TestExtractSchema_ParentMappings_ListParamFallback(t *testing.T) {
+	descriptors := extractFakeawsDescriptors(t)
+
+	d := findDescriptor(t, descriptors, "FakeAWS::Legacy::LegacyChild")
+	if d.Schema.Parent != "FakeAWS::Legacy::LegacyParent" {
+		t.Errorf("expected Parent=%q, got %q", "FakeAWS::Legacy::LegacyParent", d.Schema.Parent)
+	}
+	if got, want := len(d.Schema.ParentMappings), 1; got != want {
+		t.Fatalf("expected %d ParentMapping, got %d (%#v)", want, got, d.Schema.ParentMappings)
+	}
+	// listParam fallback: ParentProperty from listParam.parentProperty,
+	// ChildProperty derived from listParam.listParameter.
+	if d.Schema.ParentMappings[0].ParentProperty != "ParentId" {
+		t.Errorf("expected ParentProperty=%q, got %q", "ParentId", d.Schema.ParentMappings[0].ParentProperty)
+	}
+	if d.Schema.ParentMappings[0].ChildProperty != "ParentRef" {
+		t.Errorf("expected ChildProperty=%q (from listParameter), got %q", "ParentRef", d.Schema.ParentMappings[0].ChildProperty)
+	}
+}
+
+func TestExtractSchema_ParentMappings_AbsentWhenUnset(t *testing.T) {
+	descriptors := extractFakeawsDescriptors(t)
+
+	// A resource without `parent` or `parentRefs` must emit an empty Parent
+	// and nil/empty ParentMappings so the engine treats it as un-parented.
+	d := findDescriptor(t, descriptors, "FakeAWS::Recursive::TreeNode")
+	if d.Schema.Parent != "" {
+		t.Errorf("expected empty Parent, got %q", d.Schema.Parent)
+	}
+	if len(d.Schema.ParentMappings) != 0 {
+		t.Errorf("expected no ParentMappings, got %#v", d.Schema.ParentMappings)
+	}
+}
+
 // TestExtractSchema_UnannotatedPathsSurface verifies that descriptors.ExtractSchema
 // emits every reachable property path in Schema.Hints — annotated AND unannotated —
 // with unannotated paths defaulting to FieldHint{CreateOnly: false}. This is the

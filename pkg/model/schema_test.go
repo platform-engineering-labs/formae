@@ -12,6 +12,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFieldHint_EdgeKind_Unmarshal_Default(t *testing.T) {
+	var fh FieldHint
+	err := json.Unmarshal([]byte(`{}`), &fh)
+	require.NoError(t, err)
+	require.Equal(t, EdgeKindDefault, fh.EdgeKind)
+}
+
+func TestFieldHint_EdgeKind_Unmarshal_Explicit(t *testing.T) {
+	var fh FieldHint
+	err := json.Unmarshal([]byte(`{"EdgeKind":"runtimeDependency"}`), &fh)
+	require.NoError(t, err)
+	require.Equal(t, EdgeKindRuntimeDependency, fh.EdgeKind)
+}
+
+func TestFieldHint_EdgeKind_FromAttachesTo_TransitionalAlias(t *testing.T) {
+	// Old-shape JSON carrying AttachesTo without EdgeKind — derive EdgeKindAttachesTo.
+	var fh FieldHint
+	err := json.Unmarshal([]byte(`{"AttachesTo":true}`), &fh)
+	require.NoError(t, err)
+	require.Equal(t, EdgeKindAttachesTo, fh.EdgeKind)
+}
+
 func TestFieldHintAttachesToJSONRoundTrip(t *testing.T) {
 	original := FieldHint{AttachesTo: true}
 
@@ -29,4 +51,47 @@ func TestFieldHintAttachesToDefaultsFalse(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"CreateOnly":true}`), &decoded))
 
 	assert.False(t, decoded.AttachesTo, "AttachesTo should default false for pre-existing stored schemas")
+}
+
+func TestSchema_ParentMappings_Unmarshal(t *testing.T) {
+	var s Schema
+	raw := `{
+		"Identifier": "MountTargetId",
+		"Parent": "AWS::EFS::FileSystem",
+		"ParentMappings": [
+			{"parentProperty": "FileSystemId", "childProperty": "FileSystemId"}
+		]
+	}`
+	err := json.Unmarshal([]byte(raw), &s)
+	require.NoError(t, err)
+	require.Equal(t, "AWS::EFS::FileSystem", s.Parent)
+	require.Len(t, s.ParentMappings, 1)
+	require.Equal(t, "FileSystemId", s.ParentMappings[0].ParentProperty)
+	require.Equal(t, "FileSystemId", s.ParentMappings[0].ChildProperty)
+}
+
+func TestSchema_ParentMappings_Composite(t *testing.T) {
+	var s Schema
+	raw := `{
+		"Identifier": "TaskSetId",
+		"Parent": "AWS::ECS::Service",
+		"ParentMappings": [
+			{"parentProperty": "ServiceName", "childProperty": "Service"},
+			{"parentProperty": "Cluster", "childProperty": "Cluster"}
+		]
+	}`
+	err := json.Unmarshal([]byte(raw), &s)
+	require.NoError(t, err)
+	require.Len(t, s.ParentMappings, 2)
+	require.Equal(t, "ServiceName", s.ParentMappings[0].ParentProperty)
+	require.Equal(t, "Service", s.ParentMappings[0].ChildProperty)
+	require.Equal(t, "Cluster", s.ParentMappings[1].ParentProperty)
+	require.Equal(t, "Cluster", s.ParentMappings[1].ChildProperty)
+}
+
+func TestSchema_ParentFields_DefaultsForLegacyJSON(t *testing.T) {
+	var s Schema
+	require.NoError(t, json.Unmarshal([]byte(`{"Identifier":"X"}`), &s))
+	require.Equal(t, "", s.Parent)
+	require.Nil(t, s.ParentMappings)
 }
