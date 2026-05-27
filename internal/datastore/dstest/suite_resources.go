@@ -378,6 +378,44 @@ func RunQueryResources(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	})
 }
 
+// RunQueryResources_LikeMetacharsAreLiteral verifies that `_` and `%` in
+// user-supplied values are matched literally rather than acting as SQL LIKE
+// wildcards. Without explicit escape handling, `label:my_svc*` would match
+// rows whose label contains `my<anychar>svc...` because `_` is the LIKE
+// single-char wildcard in every supported backend.
+func RunQueryResources_LikeMetacharsAreLiteral(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("QueryResources_LikeMetacharsAreLiteral", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		// Two labels, distinguished only by the literal `_` vs `X` between
+		// `my` and `svc`. A correctly-escaped query for `my_svc*` should
+		// only match the underscore variant.
+		resources := []*pkgmodel.Resource{
+			{NativeID: "n-literal", Stack: "s", Type: "t", Label: "my_svc-prod", Properties: json.RawMessage(`{}`)},
+			{NativeID: "n-wildcard", Stack: "s", Type: "t", Label: "myXsvc-prod", Properties: json.RawMessage(`{}`)},
+		}
+		for _, r := range resources {
+			_, err := ds.StoreResource(r, "test-cmd")
+			assert.NoError(t, err)
+		}
+
+		query := &datastore.ResourceQuery{
+			Label: &datastore.QueryItem[string]{
+				Item:       "my_svc*",
+				Constraint: datastore.Optional,
+			},
+		}
+		results, err := ds.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 1, "underscore should match literally, not as a single-char wildcard")
+		if len(results) == 1 {
+			assert.Equal(t, "my_svc-prod", results[0].Label)
+		}
+	})
+}
+
 func RunStoreResourceSameResourceTwice(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	t.Run("StoreResource_SameResourceTwiceReturnsSameVersionId", func(t *testing.T) {
 		td := newDS(t)

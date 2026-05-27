@@ -653,8 +653,12 @@ func extendSQLiteQueryString[T any](queryStr string, queryItem *datastore.QueryI
 	// Single value: keep the original template-driven path. Avoids reformatting
 	// when no multi-value or wildcard handling is needed.
 	if len(values) == 1 {
-		op, operand, _ := sqlOpAndOperand(values[0], isExcluded)
-		queryStr += fmt.Sprintf(sqlPart, op)
+		op, operand, isLike := sqlOpAndOperand(values[0], isExcluded)
+		clause := fmt.Sprintf(sqlPart, op)
+		if isLike {
+			clause += sqliteLikeEscapeSuffix
+		}
+		queryStr += clause
 		*args = append(*args, operand)
 		return queryStr
 	}
@@ -664,8 +668,12 @@ func extendSQLiteQueryString[T any](queryStr string, queryItem *datastore.QueryI
 	innerTemplate := strings.TrimPrefix(sqlPart, " AND ")
 	clauses := make([]string, 0, len(values))
 	for _, v := range values {
-		op, operand, _ := sqlOpAndOperand(v, isExcluded)
-		clauses = append(clauses, fmt.Sprintf(innerTemplate, op))
+		op, operand, isLike := sqlOpAndOperand(v, isExcluded)
+		clause := fmt.Sprintf(innerTemplate, op)
+		if isLike {
+			clause += sqliteLikeEscapeSuffix
+		}
+		clauses = append(clauses, clause)
 		*args = append(*args, operand)
 	}
 
@@ -722,12 +730,17 @@ func eqOp(isExcluded bool) string {
 	return "="
 }
 
+// sqliteLikeEscapeSuffix is appended after the `?` placeholder of every LIKE
+// clause emitted by this package. SQLite has no default escape character for
+// LIKE — without `ESCAPE '\'`, the backslashes produced by sqlLikePattern are
+// treated as literals while `_` and `%` still act as wildcards. See
+// https://www.sqlite.org/lang_expr.html#like.
+const sqliteLikeEscapeSuffix = ` ESCAPE '\'`
+
 // sqlLikePattern translates every `*` in s into a SQL LIKE `%`. Any literal
-// `%`, `_`, or `\` in the user value is escaped so it matches literally rather
-// than acting as a LIKE wildcard. (The escapes work without an explicit
-// ESCAPE clause for SQLite/Postgres because `\` is not a LIKE metacharacter
-// by default — but with the literal chars escaped this way, the SQL engine
-// matches them as-is.)
+// `%`, `_`, or `\` in the user value is escaped with `\` so it matches as a
+// literal char. The emitted clause must be paired with `ESCAPE '\'` — see
+// sqliteLikeEscapeSuffix.
 func sqlLikePattern(s string) string {
 	escaped := strings.ReplaceAll(s, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, "%", "\\%")
