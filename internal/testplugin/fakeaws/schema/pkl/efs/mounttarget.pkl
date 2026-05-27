@@ -7,7 +7,7 @@
 /*
  * FakeAWS EFS MountTarget - fixture for verifying Extractor.pkl emits
  * Schema.Parent + Schema.ParentMappings from `parent` + `parentRefs`.
- * Mirrors the motivating runtimeDependency example from RFC-0043.
+ * Mirrors the motivating runtimeDependency example (EFS mount targets).
  */
 module fakeaws.efs.mounttarget
 

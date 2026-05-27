@@ -6,8 +6,8 @@
 
 /*
  * FakeAWS LegacyChild - fixture verifying Extractor.pkl's `listParam`
- * fallback when `parentRefs` is absent. Mirrors pre-RFC-0043 schemas
- * that only declared a `listParam` for the parent containment hint.
+ * fallback when `parentRefs` is absent. Mirrors older schemas that only
+ * declared a `listParam` for the parent containment hint.
  */
 module fakeaws.legacy.legacychild
 

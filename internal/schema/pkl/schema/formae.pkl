@@ -178,9 +178,8 @@ open class ListProperty {
 /// `ServiceName` is referenced by the child's `Service`).
 ///
 /// Uses plain camelCase fields (no hidden/fixed dance). The Go side binds via
-/// JSON struct tags. RFC-0043 §2 sets this as the precedent for new
-/// annotations; a separate RFC will migrate other annotations to the same
-/// shape.
+/// JSON struct tags — the precedent for new annotations; older annotations
+/// will migrate to the same shape separately.
 class ParentRef {
     /// Name of the property on the parent resource that this mapping references.
     parentProperty: String
@@ -706,7 +705,7 @@ class Fq {
 
     /// Build the Schema.ParentMappings listing from a ResourceHint.
     ///
-    /// Preference order: `parentRefs` (the RFC-0043 shape) over `listParam`
+    /// Preference order: `parentRefs` (the explicit shape) over `listParam`
     /// (legacy fallback). `parentRefs` is typed `(ParentRef|List<ParentRef>)?`
     /// so it arrives as either a single `ParentRef` or a `List<ParentRef>`; PKL
     /// rejects `Listing` literals at the type boundary so no `is Listing` arm is

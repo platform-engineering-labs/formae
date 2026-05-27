@@ -1169,7 +1169,7 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 		{
 			// Array-indexed TargetPath ("Refs.0.Target") must be looked up
 			// under the stripped key ("Refs.Target") — same convention as
-			// changeset.fieldHintForPath / RFC-0034 AttachesTo.
+			// changeset.fieldHintForPath / the attachesTo edge hint.
 			name: "array-indexed path uses stripped hint key",
 			dependent: makeDependent(parentRefArrayJSON, map[string]pkgmodel.FieldHint{
 				"Refs.Target": {CreateOnly: true},

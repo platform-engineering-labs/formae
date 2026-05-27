@@ -267,8 +267,8 @@ func TestChildPointsAt_Create_LiteralChildProperty_ReturnsFalse(t *testing.T) {
 }
 
 // TestChildPointsAt_Destroy_ResolvableChildProperty_Match locks in the
-// post-apply reality that motivated RFC-0043: the resolver leaves a child's
-// parent-reference property in the Resolvable shape
+// post-apply reality that motivated the runtimeDependency edge work: the
+// resolver leaves a child's parent-reference property in the Resolvable shape
 // (`{"$ref": ..., "$value": ...}`) rather than collapsing it to a literal. The
 // destroy planner must unwrap `$value` when comparing against the producer's
 // literal identifier, otherwise runtimeDependency child edges never fire for

@@ -23,8 +23,8 @@ type Schema struct {
 // diverge for TaskSet→Service).
 //
 // Uses JSON struct tags (camelCase) to match the field names emitted by
-// `Extractor.pkl` and the corresponding PKL `ParentRef` class. RFC-0043 §2
-// sets this as the precedent for new annotations.
+// `Extractor.pkl` and the corresponding PKL `ParentRef` class — the
+// precedent for new annotations.
 type ParentMapping struct {
 	ParentProperty string `json:"parentProperty"`
 	ChildProperty  string `json:"childProperty"`

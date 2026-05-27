@@ -49,8 +49,8 @@ type ExecutionDAG struct {
 	// baseResources indexes the create/update ResourceUpdate for each stripped
 	// resource URI in the changeset (exactly one per KSUID, since replace is
 	// pre-split into delete+create and create/update are mutually exclusive per
-	// resource). Delete operations are excluded — RFC-0043 childPointsAt uses
-	// this index only for the create-phase URI→type lookup.
+	// resource). Delete operations are excluded — childPointsAt uses this
+	// index only for the create-phase URI→type lookup.
 	baseResources map[pkgmodel.FormaeURI]*resource_update.ResourceUpdate
 }
 
@@ -624,7 +624,7 @@ func (p *ExecutionDAG) Init(resourceUpdates []resource_update.ResourceUpdate, co
 		}
 
 		// Register create/update ops in the base-resource index so consumers
-		// (RFC-0043 childPointsAt create phase) can resolve a stripped URI to
+		// (childPointsAt create phase) can resolve a stripped URI to
 		// the latest desired-state ResourceUpdate in O(1). Delete ops are
 		// intentionally excluded because the index serves DesiredState lookups.
 		switch update.Operation {
