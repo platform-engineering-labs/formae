@@ -119,6 +119,21 @@ postgres-up:
 postgres-down:
 	docker rm -f formae-test-postgres
 
+# Local SQL Server container for the mssql datastore tests.
+# --platform linux/amd64 lets it run under emulation on Apple Silicon.
+mssql-up:
+	docker rm -f formae-test-mssql 2>/dev/null || true
+	docker run -d --name formae-test-mssql \
+		--platform linux/amd64 \
+		-e ACCEPT_EULA=Y \
+		-e 'MSSQL_SA_PASSWORD=Formae_Test_1234!' \
+		-e MSSQL_PID=Developer \
+		-p 1433:1433 \
+		mcr.microsoft.com/mssql/server:2019-latest
+
+mssql-down:
+	docker rm -f formae-test-mssql
+
 local-data-api-up:
 	docker rm -f local-data-api-postgres local-data-api 2>/dev/null || true
 	docker network create local-data-api-net 2>/dev/null || true
@@ -268,4 +283,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build dev-install install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all

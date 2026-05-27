@@ -223,6 +223,17 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 					Database:   config.Agent.Datastore.AuroraDataAPI.Database,
 					Region:     config.Agent.Datastore.AuroraDataAPI.Region,
 				},
+				MSSQL: pkgmodel.MSSQLConfig{
+					Host:                   config.Agent.Datastore.MSSQL.Host,
+					Port:                   int(config.Agent.Datastore.MSSQL.Port),
+					Database:               config.Agent.Datastore.MSSQL.Database,
+					AuthMode:               config.Agent.Datastore.MSSQL.AuthMode,
+					User:                   config.Agent.Datastore.MSSQL.User,
+					Password:               config.Agent.Datastore.MSSQL.Password,
+					Encrypt:                config.Agent.Datastore.MSSQL.Encrypt,
+					TrustServerCertificate: config.Agent.Datastore.MSSQL.TrustServerCertificate,
+					ConnectionParams:       config.Agent.Datastore.MSSQL.ConnectionParams,
+				},
 			},
 			Retry: translateRetryConfig(config.Agent.Retry),
 			Synchronization: pkgmodel.SynchronizationConfig{

@@ -77,6 +77,12 @@ const (
 	SqliteDatastore        = "sqlite"
 	PostgresDatastore      = "postgres"
 	AuroraDataAPIDatastore = "auroradataapi"
+	MSSQLDatastore         = "mssql"
+)
+
+const (
+	MSSQLAuthSQL              = "sql"               // username/password
+	MSSQLAuthWorkloadIdentity = "workload-identity" // Azure AD workload identity
 )
 
 type ServerConfig struct {
@@ -96,6 +102,7 @@ type DatastoreConfig struct {
 	Sqlite        SqliteConfig
 	Postgres      PostgresConfig
 	AuroraDataAPI AuroraDataAPIConfig
+	MSSQL         MSSQLConfig
 }
 
 type SqliteConfig struct {
@@ -118,6 +125,20 @@ type AuroraDataAPIConfig struct {
 	Database   string
 	Region     string
 	Endpoint   string
+}
+
+// MSSQLConfig configures the Microsoft SQL Server datastore backend.
+// User/Password apply only when AuthMode == MSSQLAuthSQL.
+type MSSQLConfig struct {
+	Host                   string
+	Port                   int
+	Database               string
+	AuthMode               string
+	User                   string
+	Password               string
+	Encrypt                bool
+	TrustServerCertificate bool
+	ConnectionParams       string
 }
 
 type RetryConfig struct {

@@ -8,7 +8,9 @@ open module formae.Config
 
 typealias Port = Int(this >= 0 && this <= 65535)
 
-typealias DatastoreType = "sqlite" | "postgres" | "auroradataapi"
+typealias DatastoreType = "sqlite" | "postgres" | "auroradataapi" | "mssql"
+
+typealias MSSQLAuthMode = "sql" | "workload-identity"
 
 class ServerConfig {
     nodename: String = "formae"
@@ -37,6 +39,8 @@ class DatastoreConfig {
     postgres: PostgresConfig = new PostgresConfig{}
 
     auroraDataAPI: AuroraDataAPIConfig = new AuroraDataAPIConfig{}
+
+    mssql: MSSQLConfig = new MSSQLConfig{}
 }
 
 class SqliteConfig {
@@ -67,6 +71,26 @@ class AuroraDataAPIConfig {
     database: String = ""
 
     region: String = ""
+}
+
+class MSSQLConfig {
+    host: String = ""
+
+    port: Port = 1433
+
+    database: String = ""
+
+    authMode: MSSQLAuthMode = "sql"
+
+    user: String = ""
+
+    password: String = ""
+
+    encrypt: Boolean = true
+
+    trustServerCertificate: Boolean = false
+
+    connectionParams: String = ""
 }
 
 class RetryConfig {

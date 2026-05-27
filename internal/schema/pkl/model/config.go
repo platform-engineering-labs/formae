@@ -60,6 +60,7 @@ type DatastoreConfig struct {
 	Sqlite        SqliteConfig        `pkl:"sqlite"`
 	Postgres      PostgresConfig      `pkl:"postgres"`
 	AuroraDataAPI AuroraDataAPIConfig `pkl:"auroraDataAPI"`
+	MSSQL         MSSQLConfig         `pkl:"mssql"`
 }
 
 type SqliteConfig struct {
@@ -82,6 +83,18 @@ type AuroraDataAPIConfig struct {
 	Database   string `pkl:"database"`
 	Region     string `pkl:"region"`
 	Endpoint   string `pkl:"endpoint"`
+}
+
+type MSSQLConfig struct {
+	Host                   string `pkl:"host"`
+	Port                   int32  `pkl:"port"`
+	Database               string `pkl:"database"`
+	AuthMode               string `pkl:"authMode"`
+	User                   string `pkl:"user"`
+	Password               string `pkl:"password"`
+	Encrypt                bool   `pkl:"encrypt"`
+	TrustServerCertificate bool   `pkl:"trustServerCertificate"`
+	ConnectionParams       string `pkl:"connectionParams"`
 }
 
 type RetryConfig struct {
