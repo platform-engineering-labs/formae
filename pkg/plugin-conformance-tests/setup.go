@@ -23,7 +23,9 @@ import (
 	"github.com/platform-engineering-labs/orbital/platform"
 )
 
-const hubURL = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
+// hubRepoBase is the orbital repository; the channel is appended as a URL
+// fragment (e.g. "#stable", "#dev") to select stable vs dev releases.
+const hubRepoBase = "https://hub.platform.engineering/repos/platform.engineering/pel"
 
 // EnsureFormaeBinary returns the path to a formae binary, downloading it via
 // orbital if the FORMAE_BINARY environment variable is not already set. The
@@ -49,35 +51,46 @@ func EnsureFormaeBinary(t *testing.T) (binaryPath string, cleanup func()) {
 
 	cleanup = func() { os.RemoveAll(tmpDir) }
 
-	orb := newOrbitalManager(t, tmpDir)
-
-	if !orb.Ready() {
-		if _, err := orb.Initialize(); err != nil {
-			cleanup()
-			t.Fatalf("failed to initialize orbital: %v", err)
+	// Each channel gets its own orbital tree so the stable and dev
+	// repositories don't clobber each other. Managers are built lazily so the
+	// dev channel is only refreshed when the stable channel can't satisfy the
+	// minimum.
+	managers := map[string]*mgr.Manager{}
+	roots := map[string]string{}
+	queryChannel := func(channel string) (*records.Status, error) {
+		orb, ok := managers[channel]
+		if !ok {
+			root := filepath.Join(tmpDir, channel)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				cleanup()
+				t.Fatalf("failed to create orbital root for %s channel: %v", channel, err)
+			}
+			orb = newOrbitalManager(t, root, channel)
+			if !orb.Ready() {
+				if _, err := orb.Initialize(); err != nil {
+					cleanup()
+					t.Fatalf("failed to initialize orbital (%s channel): %v", channel, err)
+				}
+			}
+			if err := orb.Refresh(); err != nil {
+				cleanup()
+				t.Fatalf("failed to refresh orbital repository (%s channel): %v", channel, err)
+			}
+			managers[channel] = orb
+			roots[channel] = root
 		}
+		return orb.AvailableFor("formae")
 	}
 
-	if err := orb.Refresh(); err != nil {
-		cleanup()
-		t.Fatalf("failed to refresh orbital repository: %v", err)
-	}
+	candidate, channel := selectFormaeCandidate(t, queryChannel, cleanup)
 
-	available, err := orb.AvailableFor("formae")
-	if err != nil {
-		cleanup()
-		t.Fatalf("failed to query available formae versions: %v", err)
-	}
-
-	candidate := resolveCandidate(t, available, cleanup)
-
-	t.Logf("installing formae %s", candidate.Version.Short())
-	if err := orb.Install(candidate.Id().String()); err != nil {
+	t.Logf("installing formae %s from the %s channel", candidate.Version.Short(), channel)
+	if err := managers[channel].Install(candidate.Id().String()); err != nil {
 		cleanup()
 		t.Fatalf("failed to install formae: %v", err)
 	}
 
-	binPath := findBinary(t, tmpDir, cleanup)
+	binPath := findBinary(t, roots[channel], cleanup)
 
 	version := extractVersion(t, binPath)
 	t.Logf("formae binary version: %s", version)
@@ -164,11 +177,12 @@ func ResolvePKLDependencies(t *testing.T, version string, projectDirs ...string)
 	}
 }
 
-// newOrbitalManager creates an orbital Manager pointed at the hub repository.
-func newOrbitalManager(t *testing.T, rootPath string) *mgr.Manager {
+// newOrbitalManager creates an orbital Manager pointed at the hub repository
+// for the given channel ("stable" or "dev").
+func newOrbitalManager(t *testing.T, rootPath, channel string) *mgr.Manager {
 	t.Helper()
 
-	u, err := url.Parse(hubURL)
+	u, err := url.Parse(hubRepoBase + "#" + channel)
 	if err != nil {
 		t.Fatalf("failed to parse hub URL: %v", err)
 	}
@@ -192,42 +206,104 @@ func newOrbitalManager(t *testing.T, rootPath string) *mgr.Manager {
 	return orb
 }
 
-// resolveCandidate picks the formae package to install: a specific version if
-// FORMAE_VERSION is set, or the latest available version otherwise.
-func resolveCandidate(t *testing.T, available *records.Status, cleanup func()) *records.Package {
+// selectFormaeCandidate decides which formae package to install and from which
+// channel. An explicit FORMAE_VERSION is honored exactly, searched across the
+// stable then dev channels. Otherwise the plugin's minFormaeVersion (from
+// formae-plugin.pkl) drives a stable-preferred, dev-fallback resolution.
+func selectFormaeCandidate(t *testing.T, queryChannel func(channel string) (*records.Status, error), cleanup func()) (*records.Package, string) {
 	t.Helper()
 
 	if version := os.Getenv("FORMAE_VERSION"); version != "" {
-		v := &ops.Version{}
-		if err := v.Parse(version); err != nil {
+		want := &ops.Version{}
+		if err := want.Parse(version); err != nil {
 			cleanup()
 			t.Fatalf("failed to parse FORMAE_VERSION %q: %v", version, err)
 		}
-
-		found, candidate := available.HasVersion(v)
-		if !found {
-			cleanup()
-			t.Fatalf("formae version %s not found in repository", version)
+		for _, channel := range []string{"stable", "dev"} {
+			available, err := queryChannel(channel)
+			if err != nil {
+				cleanup()
+				t.Fatalf("failed to query available formae versions (%s channel): %v", channel, err)
+			}
+			if found, candidate := available.HasVersion(want); found {
+				return candidate, channel
+			}
 		}
-
-		return candidate
+		cleanup()
+		t.Fatalf("formae version %s not found in the stable or dev channel", version)
 	}
 
-	// For a fresh install HasUpdate may return false because nothing is
-	// installed yet. Fall back to picking the first entry from the sorted
-	// Available list (highest version).
-	if hasUpdate, candidate := available.HasUpdate(); hasUpdate {
-		return candidate
+	minVersion := readMinFormaeVersion(t, cleanup)
+	candidate, channel, err := resolveFormaeCandidate(queryChannel, minVersion)
+	if err != nil {
+		cleanup()
+		t.Fatalf("%v", err)
+	}
+	return candidate, channel
+}
+
+// readMinFormaeVersion reads the minFormaeVersion field from the plugin's
+// formae-plugin.pkl manifest in the current working directory. This is the
+// compatibility floor the conformance run must meet.
+func readMinFormaeVersion(t *testing.T, cleanup func()) *ops.Version {
+	t.Helper()
+
+	out, err := exec.Command("pkl", "eval", "-x", "minFormaeVersion", "formae-plugin.pkl").CombinedOutput()
+	if err != nil {
+		cleanup()
+		t.Fatalf("failed to read minFormaeVersion from formae-plugin.pkl: %v\noutput: %s", err, string(out))
 	}
 
-	available.Sort()
-	if len(available.Available) > 0 {
-		return available.Available[0]
+	raw := strings.TrimSpace(string(out))
+	v := &ops.Version{}
+	if err := v.Parse(raw); err != nil {
+		cleanup()
+		t.Fatalf("failed to parse minFormaeVersion %q from formae-plugin.pkl: %v", raw, err)
 	}
+	return v
+}
 
-	cleanup()
-	t.Fatalf("no formae versions available in repository")
-	return nil // unreachable
+// resolveFormaeCandidate picks the formae package to install by preferring the
+// highest stable release that meets minVersion, falling back to the highest
+// qualifying dev release, and erroring if neither channel has one. queryChannel
+// returns the available packages for a given channel ("stable" or "dev").
+func resolveFormaeCandidate(queryChannel func(channel string) (*records.Status, error), minVersion *ops.Version) (*records.Package, string, error) {
+	for _, channel := range []string{"stable", "dev"} {
+		available, err := queryChannel(channel)
+		if err != nil {
+			return nil, "", fmt.Errorf("querying %s channel for formae versions: %w", channel, err)
+		}
+		if candidate := pickHighestAtLeast(available, minVersion); candidate != nil {
+			return candidate, channel, nil
+		}
+	}
+	return nil, "", fmt.Errorf("no formae release >= %s available in the stable or dev channel", minVersion.Short())
+}
+
+// pickHighestAtLeast returns the highest-version package whose core
+// (major.minor.patch) version is >= minVersion, or nil if none qualify. The
+// pre-release component is ignored on purpose: a dev build of the target
+// version (e.g. 0.86.0-dev.4) is treated as meeting a 0.86.0 floor, which is
+// what makes the dev-channel fallback useful.
+func pickHighestAtLeast(available *records.Status, minVersion *ops.Version) *records.Package {
+	if available == nil {
+		return nil
+	}
+	available.Sort() // highest version first
+	for _, pkg := range available.Available {
+		if versionAtLeast(pkg.Version, minVersion) {
+			return pkg
+		}
+	}
+	return nil
+}
+
+// versionAtLeast reports whether v's core version is >= min's core version,
+// ignoring pre-release and build metadata.
+func versionAtLeast(v, min *ops.Version) bool {
+	vCore := &ops.Version{Major: v.Major, Minor: v.Minor, Patch: v.Patch}
+	minCore := &ops.Version{Major: min.Major, Minor: min.Minor, Patch: min.Patch}
+	return vCore.Compare(minCore) != -1
 }
 
 // findBinary locates the formae binary inside the orbital installation tree.
