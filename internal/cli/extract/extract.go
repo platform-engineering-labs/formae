@@ -59,16 +59,18 @@ func ExtractCmd() *cobra.Command {
 			return runExtract(app, opts)
 		},
 		Annotations: map[string]string{
-			"type":     "Forma",
-			"examples": "{{.Name}} {{.Command}} ./code.pkl  |  {{.Name}} {{.Command}} --query 'type:AWS::S3::Bucket' ./buckets.pkl",
-			"args":     "<target file>",
+			"type": "Forma",
+			"examples": "formae extract --query 'type:AWS::S3::Bucket' ./buckets.pkl" +
+				" | formae extract --query 'type:GCP::Compute::* managed:false' ./gcp-unmanaged.pkl" +
+				" | formae extract --query 'stack:prod target:eu target:us' ./prod.pkl",
+			"args": "<target file>",
 		},
 		SilenceErrors: true,
 	}
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
-	command.Flags().String("query", " ", "Query that allows to find resources by their attributes")
+	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
 	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
 	command.Flags().String("schema-location", "remote", "How plugin PKL schemas are referenced in the generated PklProject. 'remote' (default) emits package:// URIs that PKL fetches from the hub. 'local' emits local file imports against the agent's on-disk PklProject paths; requires CLI and agent to share a filesystem.")

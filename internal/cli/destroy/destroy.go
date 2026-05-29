@@ -80,16 +80,18 @@ func DestroyCmd() *cobra.Command {
 			return runDestroy(app, opts)
 		},
 		Annotations: map[string]string{
-			"type":     "Forma",
-			"examples": "{{.Name}} {{.Command}} forma.pkl",
-			"args":     "<forma file>",
+			"type": "Forma",
+			"examples": "formae destroy forma.pkl" +
+				" | formae destroy --query 'stack:test-* managed:false'" +
+				" | formae destroy --query 'type:AWS::S3::Bucket stack:scratch' --yes",
+			"args": "<forma file>",
 		},
 		SilenceErrors: true,
 	}
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
-	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Only used when no forma file is provided.")
+	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Only used when no forma file is provided. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the result output (json | yaml)")
 	command.Flags().Bool("simulate", false, "Simulate the command rather than make actual changes")

@@ -633,35 +633,144 @@ func closeRows(rows *sql.Rows) {
 	}
 }
 
+// extendSQLiteQueryString appends a WHERE clause to queryStr for the given
+// query item.
+//
+// sqlPart is a template that takes one %s — the comparison operator — and
+// includes a literal `?` placeholder. Examples:
+//
+//	" AND command_id %s ?"
+//	" AND LOWER(command) %s LOWER(?)"
+//	" AND EXISTS (SELECT 1 FROM resource_updates ru ... AND ru.stack_label %s ?)"
+//
+// For multi-valued items (Item + ExtraItems) the inner clause is replicated
+// once per value and joined with OR (or AND when the constraint is Excluded
+// — i.e. -stack:a -stack:b means "neither a nor b").
+//
+// String values may carry leading or trailing `*` for wildcard matching:
+// `foo*` → `LIKE 'foo%'`, `*foo` → `LIKE '%foo'`. Internal `_` and `%` in the
+// matched value are escaped with `\` (paired with `ESCAPE '\'` on the LIKE).
 func extendSQLiteQueryString[T any](queryStr string, queryItem *datastore.QueryItem[T], sqlPart string, args *[]any) string {
-	if queryItem != nil {
-		var operator string
+	if queryItem == nil {
+		return queryStr
+	}
 
-		if queryItem.Constraint == datastore.Excluded {
-			operator = "!="
-		} else if queryItem.Constraint == datastore.Required || queryItem.Constraint == datastore.Optional {
-			operator = "="
-		}
+	values := allQueryItemValues(queryItem)
+	if len(values) == 0 {
+		return queryStr
+	}
 
-		queryStr += fmt.Sprintf(sqlPart, operator)
-		operand := ""
-		switch v := any(queryItem.Item).(type) {
-		case bool:
-			if v {
-				operand = "1"
-			} else {
-				operand = "0"
-			}
-		case string:
-			operand = v
-		default:
-			operand = fmt.Sprintf("%v", v)
-		}
+	isExcluded := queryItem.Constraint == datastore.Excluded
 
+	// Single value: keep the original template-driven path. Avoids reformatting
+	// when no multi-value or wildcard handling is needed.
+	if len(values) == 1 {
+		op, operand, isLike := sqlOpAndOperand(values[0], isExcluded)
+		clause := resolveEscapeMarker(fmt.Sprintf(sqlPart, op), isLike)
+		queryStr += clause
+		*args = append(*args, operand)
+		return queryStr
+	}
+
+	// Multi-value: replicate the template's inner clause once per value, join
+	// with OR (or AND for Excluded), wrap in parens, and re-prepend " AND ".
+	innerTemplate := strings.TrimPrefix(sqlPart, " AND ")
+	clauses := make([]string, 0, len(values))
+	for _, v := range values {
+		op, operand, isLike := sqlOpAndOperand(v, isExcluded)
+		clause := resolveEscapeMarker(fmt.Sprintf(innerTemplate, op), isLike)
+		clauses = append(clauses, clause)
 		*args = append(*args, operand)
 	}
 
-	return queryStr
+	glue := " OR "
+	if isExcluded {
+		glue = " AND "
+	}
+	return queryStr + " AND (" + strings.Join(clauses, glue) + ")"
+}
+
+// allQueryItemValues flattens a QueryItem's Item and ExtraItems into a single
+// slice. Returns []any to handle both string and bool fields uniformly.
+func allQueryItemValues[T any](qi *datastore.QueryItem[T]) []any {
+	values := make([]any, 0, 1+len(qi.ExtraItems))
+	values = append(values, any(qi.Item))
+	for _, e := range qi.ExtraItems {
+		values = append(values, any(e))
+	}
+	return values
+}
+
+// sqlOpAndOperand resolves the SQL operator and bound value for one query
+// term, accounting for exclusion and `*` wildcards on strings. Any `*` in
+// the value (anywhere) flips the operator to LIKE and translates to `%`.
+// The third return value is whether the operator uses LIKE (vs =).
+func sqlOpAndOperand(v any, isExcluded bool) (op string, operand any, isLike bool) {
+	s, isString := v.(string)
+	if !isString {
+		// Bool path mirrors the original switch: true→"1", false→"0".
+		if b, ok := v.(bool); ok {
+			if b {
+				return eqOp(isExcluded), "1", false
+			}
+			return eqOp(isExcluded), "0", false
+		}
+		return eqOp(isExcluded), fmt.Sprintf("%v", v), false
+	}
+
+	if !strings.Contains(s, "*") {
+		return eqOp(isExcluded), s, false
+	}
+
+	likeOp := "LIKE"
+	if isExcluded {
+		likeOp = "NOT LIKE"
+	}
+	return likeOp, sqlLikePattern(s), true
+}
+
+func eqOp(isExcluded bool) string {
+	if isExcluded {
+		return "!="
+	}
+	return "="
+}
+
+// escapeMarker is the sentinel placed in `sqlPart` templates at the exact
+// position where the LIKE ESCAPE clause must land — immediately after the
+// LIKE pattern expression. Templates without a LIKE position simply omit it.
+// For LIKE clauses we substitute the actual ESCAPE fragment; for `=` we
+// substitute an empty string.
+//
+// This indirection exists because SQLite has no default escape character for
+// LIKE (https://www.sqlite.org/lang_expr.html#like) and the ESCAPE clause's
+// correct position varies by template:
+//   - bare:        `... ru.stack_label LIKE ?{esc})`  → after `?`, BEFORE `)`
+//   - LOWER-wrap:  `... LOWER(type) LIKE LOWER(?){esc}` → after `LOWER(?)`
+//
+// A naive trailing append or `?` replace gets one of these wrong.
+const escapeMarker = "{esc}"
+
+const sqliteLikeEscapeSuffix = ` ESCAPE '\'`
+
+// resolveEscapeMarker substitutes the escapeMarker in clause with either the
+// ESCAPE suffix (when isLike) or an empty string.
+func resolveEscapeMarker(clause string, isLike bool) string {
+	if isLike {
+		return strings.ReplaceAll(clause, escapeMarker, sqliteLikeEscapeSuffix)
+	}
+	return strings.ReplaceAll(clause, escapeMarker, "")
+}
+
+// sqlLikePattern translates every `*` in s into a SQL LIKE `%`. Any literal
+// `%`, `_`, or `\` in the user value is escaped with `\` so it matches as a
+// literal char. The emitted clause must be paired with `ESCAPE '\'` — see
+// sqliteLikeEscapeSuffix.
+func sqlLikePattern(s string) string {
+	escaped := strings.ReplaceAll(s, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "%", "\\%")
+	escaped = strings.ReplaceAll(escaped, "_", "\\_")
+	return strings.ReplaceAll(escaped, "*", "%")
 }
 
 func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
@@ -672,16 +781,16 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	subqueryStr := "SELECT command_id FROM forma_commands WHERE 1=1"
 	args := []any{}
 
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.CommandID, " AND command_id %s ?", &args)
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.ClientID, " AND client_id %s ?", &args)
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER(?)", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.CommandID, " AND command_id %s ?{esc}", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.ClientID, " AND client_id %s ?{esc}", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER(?){esc}", &args)
 	if query.Command == nil {
 		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
 	}
 
 	// Stack filter uses the normalized resource_updates table
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s ?)", &args)
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER(?)", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s ?{esc})", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER(?){esc}", &args)
 
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {
@@ -732,12 +841,12 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 		AND r1.operation != '%s'`, string(resource_update.OperationDelete))
 	args := []any{}
 
-	queryStr = extendSQLiteQueryString(queryStr, query.NativeID, " AND native_id %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Stack, " AND stack %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Type, " AND LOWER(type) %s LOWER(?)", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Target, " AND target %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Managed, " AND managed %s ?", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.NativeID, " AND native_id %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Stack, " AND stack %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Type, " AND LOWER(type) %s LOWER(?){esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Target, " AND target %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Managed, " AND managed %s ?{esc}", &args)
 	queryStr += " ORDER BY type, label"
 
 	rows, err := d.conn.Query(queryStr, args...)
@@ -2721,9 +2830,9 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 		)`
 	args := []any{}
 
-	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Namespace, " AND namespace %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Discoverable, " AND discoverable %s ?", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Namespace, " AND namespace %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Discoverable, " AND discoverable %s ?{esc}", &args)
 	queryStr += " ORDER BY label"
 
 	slog.Debug("QueryTargets", "queryStr", queryStr, "args", args)

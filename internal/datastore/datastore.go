@@ -26,8 +26,18 @@ const (
 
 type QueryItemConstraint int
 
+// QueryItem is one filter clause in a query.
+//
+// Item plus ExtraItems form the value set: a single-valued filter has
+// ExtraItems == nil. A multi-valued filter (e.g. `target:eu target:us` for
+// "target IN (eu, us)") puts the first value in Item and additional values
+// in ExtraItems. The SQL renderer combines them with OR / IN as appropriate.
+//
+// String values may carry leading or trailing `*` wildcards (e.g. `*foo`,
+// `foo*`) which the renderer translates to SQL LIKE patterns.
 type QueryItem[T any] struct {
 	Item       T
+	ExtraItems []T
 	Constraint QueryItemConstraint
 }
 

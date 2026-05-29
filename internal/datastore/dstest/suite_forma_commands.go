@@ -658,3 +658,67 @@ func RunQueryFormaCommands(t *testing.T, newDS func(t *testing.T) TestDatastore)
 		}
 	})
 }
+
+// RunQueryFormaCommands_StackWildcardEscape verifies that wildcards in
+// `stack:` queries — which route through an EXISTS subquery against
+// resource_updates — produce valid SQL with the ESCAPE clause positioned
+// correctly *inside* the EXISTS parens. A naive append-to-end places
+// `ESCAPE '\'` after the closing `)`, which is a syntax error.
+func RunQueryFormaCommands_StackWildcardEscape(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("QueryFormaCommands_StackWildcardEscape", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		// Two commands with different stack labels. A wildcard query
+		// `stack:life*` should match the lifecycle one only.
+		commands := []*forma_command.FormaCommand{
+			{
+				Description: pkgmodel.Description{},
+				ClientID:    "client-a",
+				StartTs:     util.TimeNow(),
+				Command:     pkgmodel.CommandApply,
+				State:       forma_command.CommandStateInProgress,
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					{
+						DesiredState: pkgmodel.Resource{Stack: "lifecycle-prod", Properties: json.RawMessage(`{}`)},
+						StackLabel:   "lifecycle-prod",
+						State:        resource_update.ResourceUpdateStateSuccess,
+					},
+				},
+			},
+			{
+				Description: pkgmodel.Description{},
+				ClientID:    "client-b",
+				StartTs:     util.TimeNow(),
+				Command:     pkgmodel.CommandApply,
+				State:       forma_command.CommandStateInProgress,
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					{
+						DesiredState: pkgmodel.Resource{Stack: "other-prod", Properties: json.RawMessage(`{}`)},
+						StackLabel:   "other-prod",
+						State:        resource_update.ResourceUpdateStateSuccess,
+					},
+				},
+			},
+		}
+		for i, c := range commands {
+			c.ID = fmt.Sprintf("cmd-stack-wildcard-%d", i)
+			err := ds.StoreFormaCommand(c, c.ID)
+			assert.NoError(t, err)
+		}
+
+		query := &datastore.StatusQuery{
+			Stack: &datastore.QueryItem[string]{
+				Item:       "life*",
+				Constraint: datastore.Required,
+			},
+		}
+		results, err := ds.QueryFormaCommands(query)
+		assert.NoError(t, err, "stack wildcard must produce valid SQL inside the EXISTS clause")
+		assert.Len(t, results, 1)
+		if len(results) == 1 {
+			assert.Equal(t, "client-a", results[0].ClientID)
+		}
+	})
+}

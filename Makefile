@@ -49,6 +49,13 @@ build: helm-reader
 ## discovers it via exec.LookPath.
 helm-reader:
 	@HELM_READER_VERSION=$(HELM_READER_VERSION) ./scripts/install-helm-reader.sh
+	
+## dev-install: Stage the locally built formae into an installer-shaped tree at ./dist/dev so the agent's orbital-tree check passes without a sudo write to /opt/pel. Plugins still resolve from ~/.pel/formae/plugins/.
+dev-install: build
+	@mkdir -p $(CURDIR)/dist/dev/bin $(CURDIR)/dist/dev/.ops
+	@cp $(CURDIR)/formae $(CURDIR)/dist/dev/bin/formae
+	@echo "Staged at $(CURDIR)/dist/dev/bin/formae"
+	@echo "Run: $(CURDIR)/dist/dev/bin/formae agent start"
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
@@ -261,4 +268,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build dev-install install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all

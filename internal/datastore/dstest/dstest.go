@@ -31,11 +31,13 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGetMostRecentFormaCommandByClientID(t, newDS)
 	RunGetMostRecentNonReconcileFormaCommandsByStack(t, newDS)
 	RunQueryFormaCommands(t, newDS)
+	RunQueryFormaCommands_StackWildcardEscape(t, newDS)
 
 	RunStoreResource(t, newDS)
 	RunUpdateResource(t, newDS)
 	RunDeleteResource(t, newDS)
 	RunQueryResources(t, newDS)
+	RunQueryResources_LikeMetacharsAreLiteral(t, newDS)
 	RunStoreResourceSameResourceTwice(t, newDS)
 	RunLoadResourceByNativeID(t, newDS)
 	RunLoadResourceByNativeIDDifferentTypes(t, newDS)

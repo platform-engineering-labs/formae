@@ -40,6 +40,8 @@ var RootCmdUsageTemplate = display.Grey("Usage: ") + display.Green("{{.CommandPa
 
 var SimpleCmdUsageTemplate = display.Grey("Usage: ") + display.Green("{{.CommandPath}}{{if .HasAvailableLocalFlags}} [OPTIONS]{{end}}{{if .HasAvailableSubCommands}} [COMMAND]{{end}}") +
 	display.Green("{{if index .Annotations \"args\"}} {{index .Annotations \"args\"}}{{end}}") + "\n" +
+	"{{if index .Annotations \"examples\"}}\n" + display.Gold("Examples:") + "\n  " +
+	display.Grey("{{formatExamplesMultiline (index .Annotations \"examples\") .}}") + "\n{{end}}" +
 	"{{if .HasAvailableSubCommands}}\n" + display.Gold("Commands:") +
 	"{{range $cmd := .Commands}}\n  " + display.Green("{{rpad $cmd.Name $cmd.NamePadding}}") + "       {{$cmd.Short}}" +
 	"{{if (index $cmd.Annotations \"examples\")}}\n                   " +

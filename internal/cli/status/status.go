@@ -74,7 +74,10 @@ func CommandCmd() *cobra.Command {
 			return runStatus(app, opts)
 		},
 		Annotations: map[string]string{
-			"examples": "{{.Name}} status {{.Command}} --query 'state:inprogress' --max-results 10 |  {{.Name}} status {{.Command}} --watch",
+			"examples": "formae status command --query 'status:InProgress' --max-results 10" +
+				" | formae status command --query 'client:me command:apply'" +
+				" | formae status command --query 'stack:prod status:Success'" +
+				" | formae status command --watch",
 		},
 		SilenceErrors: true,
 	}
@@ -83,7 +86,7 @@ func CommandCmd() *cobra.Command {
 
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().String("query", " ", "Query that allows to find past and current commands by their attributes")
+	command.Flags().String("query", " ", "Query that allows to find past and current commands by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("output-layout", string(StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", StatusOutputSummary, StatusOutputDetailed))
 	command.Flags().Int("max-results", 10, "Maximum number of command results to return when using a query")
@@ -332,8 +335,10 @@ func StatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Various status retrieval commands",
 		Annotations: map[string]string{
-			"type":     "Information",
-			"examples": "{{.Name}} {{.Command}} agent  |  {{.Name}} {{.Command}} command --query 'state:inprogress'",
+			"type": "Information",
+			"examples": "formae status agent" +
+				" | formae status command --query 'status:InProgress'" +
+				" | formae status command --query 'client:me'",
 		},
 		SilenceErrors: true,
 	}

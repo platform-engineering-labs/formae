@@ -314,6 +314,105 @@ func RunQueryResources(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, results)
 		assert.Len(t, results, 5)
+
+		// Multi-value (Item + ExtraItems): stack:stack-0 stack:stack-2 → IN.
+		// stack-0 has rows for i=0,3,6,9 (4 rows); stack-2 has rows for i=2,5,8
+		// (3 rows); union = 7 rows.
+		query = &datastore.ResourceQuery{
+			Stack: &datastore.QueryItem[string]{
+				Item:       "stack-0",
+				ExtraItems: []string{"stack-2"},
+				Constraint: datastore.Optional,
+			},
+		}
+		results, err = ds.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 7)
+		for _, r := range results {
+			assert.Contains(t, []string{"stack-0", "stack-2"}, r.Stack)
+		}
+
+		// Multi-value with Excluded: -stack:stack-0 -stack:stack-2 →
+		// rows where stack is neither. Only stack-1 remains: i=1,4,7 (3 rows).
+		query = &datastore.ResourceQuery{
+			Stack: &datastore.QueryItem[string]{
+				Item:       "stack-0",
+				ExtraItems: []string{"stack-2"},
+				Constraint: datastore.Excluded,
+			},
+		}
+		results, err = ds.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 3)
+		for _, r := range results {
+			assert.Equal(t, "stack-1", r.Stack)
+		}
+
+		// Wildcard prefix: type starts with "type-1" (4 type-buckets exist,
+		// so type-1 alone is rows for i=1,5,9 — 3 rows). Use "type-1*" to
+		// confirm trailing-wildcard works.
+		query = &datastore.ResourceQuery{
+			Type: &datastore.QueryItem[string]{
+				Item:       "type-1*",
+				Constraint: datastore.Optional,
+			},
+		}
+		results, err = ds.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 3)
+		for _, r := range results {
+			assert.Equal(t, "type-1", r.Type)
+		}
+
+		// Wildcard suffix: native_id ends with "-7" (single row, i=7).
+		query = &datastore.ResourceQuery{
+			NativeID: &datastore.QueryItem[string]{
+				Item:       "*-7",
+				Constraint: datastore.Optional,
+			},
+		}
+		results, err = ds.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 1)
+		assert.Equal(t, "native-7", results[0].NativeID)
+	})
+}
+
+// RunQueryResources_LikeMetacharsAreLiteral verifies that `_` and `%` in
+// user-supplied values are matched literally rather than acting as SQL LIKE
+// wildcards. Without explicit escape handling, `label:my_svc*` would match
+// rows whose label contains `my<anychar>svc...` because `_` is the LIKE
+// single-char wildcard in every supported backend.
+func RunQueryResources_LikeMetacharsAreLiteral(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("QueryResources_LikeMetacharsAreLiteral", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		// Two labels, distinguished only by the literal `_` vs `X` between
+		// `my` and `svc`. A correctly-escaped query for `my_svc*` should
+		// only match the underscore variant.
+		resources := []*pkgmodel.Resource{
+			{NativeID: "n-literal", Stack: "s", Type: "t", Label: "my_svc-prod", Properties: json.RawMessage(`{}`)},
+			{NativeID: "n-wildcard", Stack: "s", Type: "t", Label: "myXsvc-prod", Properties: json.RawMessage(`{}`)},
+		}
+		for _, r := range resources {
+			_, err := ds.StoreResource(r, "test-cmd")
+			assert.NoError(t, err)
+		}
+
+		query := &datastore.ResourceQuery{
+			Label: &datastore.QueryItem[string]{
+				Item:       "my_svc*",
+				Constraint: datastore.Optional,
+			},
+		}
+		results, err := ds.QueryResources(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 1, "underscore should match literally, not as a single-char wildcard")
+		if len(results) == 1 {
+			assert.Equal(t, "my_svc-prod", results[0].Label)
+		}
 	})
 }
 
@@ -874,9 +973,9 @@ func RunStoreResourceAfterDeleteWithSameNativeID(t *testing.T, newDS func(t *tes
 // RunStoreResourceWithDifferentKSUIDSameData reproduces the KSUID mismatch bug.
 //
 // The scenario:
-//   1. User deploys chart A (e.g. keycloak) — a namespace gets KSUID-A in the DB
-//   2. User switches to chart B (e.g. nginx) via reconcile — chart A's resources get deleted
-//   3. User switches back to chart A — the SAME namespace is re-created
+//  1. User deploys chart A (e.g. keycloak) — a namespace gets KSUID-A in the DB
+//  2. User switches to chart B (e.g. nginx) via reconcile — chart A's resources get deleted
+//  3. User switches back to chart A — the SAME namespace is re-created
 //
 // What goes wrong on step 3:
 //   - Formae assigns a new KSUID-B to the namespace (the old one was deleted from its bookkeeping)
@@ -889,10 +988,11 @@ func RunStoreResourceAfterDeleteWithSameNativeID(t *testing.T, newDS func(t *tes
 //   - That ref can't be resolved because KSUID-B was never stored → crash
 //
 // Why this test doesn't use delete+recreate:
-//   DeleteResource stores data as "{}", so the next store always sees different data
-//   and the early return never fires. The bug only triggers when the native_id+type lookup
-//   finds a row with IDENTICAL data but a DIFFERENT KSUID — which is what this test sets up
-//   directly by storing twice with different KSUIDs.
+//
+//	DeleteResource stores data as "{}", so the next store always sees different data
+//	and the early return never fires. The bug only triggers when the native_id+type lookup
+//	finds a row with IDENTICAL data but a DIFFERENT KSUID — which is what this test sets up
+//	directly by storing twice with different KSUIDs.
 func RunStoreResourceWithDifferentKSUIDSameData(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	t.Run("StoreResource_WithDifferentKSUIDSameData", func(t *testing.T) {
 		td := newDS(t)
@@ -961,4 +1061,3 @@ func RunStoreResourceWithDifferentKSUIDSameData(t *testing.T, newDS func(t *test
 		}
 	})
 }
-
