@@ -654,10 +654,7 @@ func extendSQLiteQueryString[T any](queryStr string, queryItem *datastore.QueryI
 	// when no multi-value or wildcard handling is needed.
 	if len(values) == 1 {
 		op, operand, isLike := sqlOpAndOperand(values[0], isExcluded)
-		clause := fmt.Sprintf(sqlPart, op)
-		if isLike {
-			clause += sqliteLikeEscapeSuffix
-		}
+		clause := resolveEscapeMarker(fmt.Sprintf(sqlPart, op), isLike)
 		queryStr += clause
 		*args = append(*args, operand)
 		return queryStr
@@ -669,10 +666,7 @@ func extendSQLiteQueryString[T any](queryStr string, queryItem *datastore.QueryI
 	clauses := make([]string, 0, len(values))
 	for _, v := range values {
 		op, operand, isLike := sqlOpAndOperand(v, isExcluded)
-		clause := fmt.Sprintf(innerTemplate, op)
-		if isLike {
-			clause += sqliteLikeEscapeSuffix
-		}
+		clause := resolveEscapeMarker(fmt.Sprintf(innerTemplate, op), isLike)
 		clauses = append(clauses, clause)
 		*args = append(*args, operand)
 	}
@@ -730,12 +724,31 @@ func eqOp(isExcluded bool) string {
 	return "="
 }
 
-// sqliteLikeEscapeSuffix is appended after the `?` placeholder of every LIKE
-// clause emitted by this package. SQLite has no default escape character for
-// LIKE — without `ESCAPE '\'`, the backslashes produced by sqlLikePattern are
-// treated as literals while `_` and `%` still act as wildcards. See
-// https://www.sqlite.org/lang_expr.html#like.
+// escapeMarker is the sentinel placed in `sqlPart` templates at the exact
+// position where the LIKE ESCAPE clause must land — immediately after the
+// LIKE pattern expression. Templates without a LIKE position simply omit it.
+// For LIKE clauses we substitute the actual ESCAPE fragment; for `=` we
+// substitute an empty string.
+//
+// This indirection exists because SQLite has no default escape character for
+// LIKE (https://www.sqlite.org/lang_expr.html#like) and the ESCAPE clause's
+// correct position varies by template:
+//   - bare:        `... ru.stack_label LIKE ?{esc})`  → after `?`, BEFORE `)`
+//   - LOWER-wrap:  `... LOWER(type) LIKE LOWER(?){esc}` → after `LOWER(?)`
+//
+// A naive trailing append or `?` replace gets one of these wrong.
+const escapeMarker = "{esc}"
+
 const sqliteLikeEscapeSuffix = ` ESCAPE '\'`
+
+// resolveEscapeMarker substitutes the escapeMarker in clause with either the
+// ESCAPE suffix (when isLike) or an empty string.
+func resolveEscapeMarker(clause string, isLike bool) string {
+	if isLike {
+		return strings.ReplaceAll(clause, escapeMarker, sqliteLikeEscapeSuffix)
+	}
+	return strings.ReplaceAll(clause, escapeMarker, "")
+}
 
 // sqlLikePattern translates every `*` in s into a SQL LIKE `%`. Any literal
 // `%`, `_`, or `\` in the user value is escaped with `\` so it matches as a
@@ -756,16 +769,16 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	subqueryStr := "SELECT command_id FROM forma_commands WHERE 1=1"
 	args := []any{}
 
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.CommandID, " AND command_id %s ?", &args)
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.ClientID, " AND client_id %s ?", &args)
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER(?)", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.CommandID, " AND command_id %s ?{esc}", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.ClientID, " AND client_id %s ?{esc}", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER(?){esc}", &args)
 	if query.Command == nil {
 		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
 	}
 
 	// Stack filter uses the normalized resource_updates table
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s ?)", &args)
-	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER(?)", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s ?{esc})", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER(?){esc}", &args)
 
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {
@@ -815,12 +828,12 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 		AND r1.operation != '%s'`, string(resource_update.OperationDelete))
 	args := []any{}
 
-	queryStr = extendSQLiteQueryString(queryStr, query.NativeID, " AND native_id %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Stack, " AND stack %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Type, " AND LOWER(type) %s LOWER(?)", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Target, " AND target %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Managed, " AND managed %s ?", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.NativeID, " AND native_id %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Stack, " AND stack %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Type, " AND LOWER(type) %s LOWER(?){esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Target, " AND target %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Managed, " AND managed %s ?{esc}", &args)
 	queryStr += " ORDER BY type, label"
 
 	rows, err := d.conn.Query(queryStr, args...)
@@ -2804,9 +2817,9 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 		)`
 	args := []any{}
 
-	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Namespace, " AND namespace %s ?", &args)
-	queryStr = extendSQLiteQueryString(queryStr, query.Discoverable, " AND discoverable %s ?", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Namespace, " AND namespace %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, query.Discoverable, " AND discoverable %s ?{esc}", &args)
 	queryStr += " ORDER BY label"
 
 	slog.Debug("QueryTargets", "queryStr", queryStr, "args", args)
