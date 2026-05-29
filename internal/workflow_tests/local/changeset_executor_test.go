@@ -316,6 +316,77 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 	})
 }
 
+// TestChangesetExecutor_SyncReadFailureDoesNotCascade verifies that a failed
+// Read inside a sync command does not trigger cascade-failure handling. A sync's
+// resources are Read operations with no inter-dependencies, so there is nothing
+// for a failure to cascade *to* — the only candidate is the failed Read itself.
+//
+// Reproduces the prod incident where a single-resource sync whose Read failed
+// produced a self-cascade: the executor reported the failed Read as a cascading
+// failure and pushed it to FormaCommandPersister.MarkResourcesAsFailed, which
+// (for an empty sync command already evicted from cache and deleted from the DB)
+// panicked the persister with "forma command not found".
+func TestChangesetExecutor_SyncReadFailureDoesNotCascade(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		logCapture := test_helpers.SetupTestLogger()
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return nil, fmt.Errorf("simulated read failure")
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		assert.NoError(t, err)
+
+		messages := make(chan any, 10)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		commandID := "test-command-sync-read-failure"
+
+		// A single read resource update originating from the Synchronizer.
+		readUpdate := newTestUpdateResourceUpdate("sync-vpc", "native-will-fail", "FakeAWS::EC2::VPC")
+		readUpdate.Operation = resource_update.OperationRead
+		readUpdate.Source = resource_update.FormaCommandSourceSynchronize
+
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:      commandID,
+				Command: pkgmodel.CommandSync,
+				State:   forma_command.CommandStateNotStarted,
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					readUpdate,
+				},
+			},
+		})
+
+		cs, err := changeset.NewChangeset(
+			[]resource_update.ResourceUpdate{readUpdate}, nil, commandID, pkgmodel.CommandSync)
+		assert.NoError(t, err)
+
+		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
+			CommandID: commandID,
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
+			Changeset:        cs,
+			NotifyOnComplete: true,
+		})
+
+		testutil.ExpectMessageWithPredicate(t, messages, 15*time.Second, func(msg changeset.ChangesetCompleted) bool {
+			return msg.CommandID == commandID
+		})
+
+		// The failed Read must not be treated as a cascading failure: a sync has
+		// no dependency edges, so the executor must never engage the cascade path.
+		assert.False(t, logCapture.ContainsAll("Cascading failures detected"),
+			"a failed Read in a sync command must not trigger cascade-failure handling")
+	})
+}
+
 func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
