@@ -196,7 +196,17 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 	if err != nil {
 		return nil, err
 	}
-	cleanedDocument, err := StripNestedEmptyCollections(documentFiltered)
+
+	// Suppress spurious top-level remove ops where the provider Read returns
+	// an empty collection for a field that PKL renders as absent. Runs on the
+	// pre-StripNestedEmptyCollections document so we only suppress true []/{}
+	// actuals (not structures that became empty under nested stripping).
+	documentMinusTopEmpties, err := stripTopLevelEmptyCollectionsAbsentInPatch(documentFiltered, cleanedDesired)
+	if err != nil {
+		return nil, err
+	}
+
+	cleanedDocument, err := StripNestedEmptyCollections(documentMinusTopEmpties)
 	if err != nil {
 		return nil, err
 	}
@@ -673,6 +683,47 @@ func isEmptyCollection(val any) bool {
 	default:
 		return false
 	}
+}
+
+// stripTopLevelEmptyCollectionsAbsentInPatch removes top-level keys from the
+// document whose value is an empty array `[]` or empty object `{}` and whose
+// key is absent from the patch. This suppresses spurious `op:remove` patch ops
+// that the JSON-Patch comparator would otherwise emit when PKL renders a
+// Property as absent (no key) and the provider's Read returns the field as
+// an empty collection (e.g. AWS::ECS::TaskDefinition.Tags returns `[]` even
+// when not set on Create).
+//
+// Mirror of filterSpuriousEmptyAdds on the input side: that one drops "add"
+// ops with empty values; this one prevents the "remove" ops from being
+// generated in the first place. Both are corrections for the PKL-render vs
+// provider-Read asymmetry around empty collections.
+//
+// IMPORTANT: This helper must run BEFORE StripNestedEmptyCollections on the
+// document side. Otherwise a top-level object whose contents were all
+// recursively stripped to empty (e.g. {Outer: {Inner: []}} → {Outer: {}})
+// would falsely match the empty-collection predicate and silently mask
+// legitimate drift on a structurally non-trivial field.
+func stripTopLevelEmptyCollectionsAbsentInPatch(document, patch []byte) ([]byte, error) {
+	var docMap map[string]any
+	if err := json.Unmarshal(document, &docMap); err != nil {
+		return nil, fmt.Errorf("stripTopLevelEmptyCollectionsAbsentInPatch: invalid document: %w", err)
+	}
+
+	var patchMap map[string]any
+	if err := json.Unmarshal(patch, &patchMap); err != nil {
+		return nil, fmt.Errorf("stripTopLevelEmptyCollectionsAbsentInPatch: invalid patch: %w", err)
+	}
+
+	for k, v := range docMap {
+		if _, presentInPatch := patchMap[k]; presentInPatch {
+			continue
+		}
+		if isEmptyCollection(v) {
+			delete(docMap, k)
+		}
+	}
+
+	return json.Marshal(docMap)
 }
 
 // filterCreateOnlyFields removes patch operations that target createOnly fields.
