@@ -1129,6 +1129,198 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsNull(t *testing.T) {
 	assert.Equal(t, "/Tags", patches[0].Path)
 }
 
+func TestGeneratePatch_AbsentDesiredVsEmptyActualArray_NoPatch(t *testing.T) {
+	// Reproducer: ECS TaskDef Tags. PKL renders Tags as absent (no key);
+	// AWS Read returns `Tags: []`. Diff layer must NOT emit a remove op,
+	// otherwise CCAPI rejects with "patchDocument length >= 1".
+	//
+	// The Tags hint matches the real AWS::ECS::TaskDefinition field hint
+	// (UpdateMethod: EntitySet, IndexField: Key, HasProviderDefault: false).
+	// HasProviderDefault: false is load-bearing — it's why the existing
+	// removeProviderDefaultFields/EntitySetElements passes don't trigger
+	// for this field, leaving the spurious remove op to be emitted.
+	document := []byte(`{"Tags": [], "Family": "x"}`)
+	patch := []byte(`{"Family": "x"}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Tags", "Family"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {
+				UpdateMethod:       "EntitySet",
+				IndexField:         "Key",
+				HasProviderDefault: false,
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "expected no patch ops when desired is absent and actual is empty array")
+}
+
+func TestStripTopLevelEmptyCollectionsAbsentInPatch(t *testing.T) {
+	tests := []struct {
+		name         string
+		document     string
+		patch        string
+		wantDocument string
+	}{
+		{
+			name:         "absent in patch, empty array in document → stripped",
+			document:     `{"Tags": [], "Name": "x"}`,
+			patch:        `{"Name": "x"}`,
+			wantDocument: `{"Name": "x"}`,
+		},
+		{
+			name:         "absent in patch, empty object in document → stripped",
+			document:     `{"Config": {}, "Name": "x"}`,
+			patch:        `{"Name": "x"}`,
+			wantDocument: `{"Name": "x"}`,
+		},
+		{
+			name:         "absent in patch, non-empty array in document → preserved",
+			document:     `{"Tags": [{"Key":"a","Value":"b"}], "Name": "x"}`,
+			patch:        `{"Name": "x"}`,
+			wantDocument: `{"Tags": [{"Key":"a","Value":"b"}], "Name": "x"}`,
+		},
+		{
+			name:         "absent in patch, scalar in document → preserved",
+			document:     `{"Count": 0, "Name": "x"}`,
+			patch:        `{"Name": "x"}`,
+			wantDocument: `{"Count": 0, "Name": "x"}`,
+		},
+		{
+			name:         "absent in patch, null in document → preserved",
+			document:     `{"Tags": null, "Name": "x"}`,
+			patch:        `{"Name": "x"}`,
+			wantDocument: `{"Tags": null, "Name": "x"}`,
+		},
+		{
+			name:         "present in patch with [], empty array in document → preserved",
+			document:     `{"Tags": [], "Name": "x"}`,
+			patch:        `{"Tags": [], "Name": "x"}`,
+			wantDocument: `{"Tags": [], "Name": "x"}`,
+		},
+		{
+			name:         "present in patch with non-empty, empty array in document → preserved (lets diff render intentional clear vs add)",
+			document:     `{"Tags": [], "Name": "x"}`,
+			patch:        `{"Tags": [{"Key":"a","Value":"b"}], "Name": "x"}`,
+			wantDocument: `{"Tags": [], "Name": "x"}`,
+		},
+		{
+			name:         "absent in patch, top-level object containing only nested empties → preserved (regression guard from adversarial review)",
+			document:     `{"Outer": {"Inner": []}, "Name": "x"}`,
+			patch:        `{"Name": "x"}`,
+			wantDocument: `{"Outer": {"Inner": []}, "Name": "x"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := stripTopLevelEmptyCollectionsAbsentInPatch([]byte(tc.document), []byte(tc.patch))
+			require.NoError(t, err)
+
+			equal, err := util.JsonEqualIgnoreArrayOrder(got, []byte(tc.wantDocument))
+			require.NoError(t, err)
+			assert.True(t, equal, "got %s, want %s", string(got), tc.wantDocument)
+		})
+	}
+}
+
+func TestGeneratePatch_OuterWithOnlyNestedEmpties_NoSpuriousSuppression(t *testing.T) {
+	// Regression guard for the adversarial-review finding on placement.
+	//
+	// The concern: if our new helper ran AFTER StripNestedEmptyCollections,
+	// it would observe `{Outer: {}, Name: x}` (because nested-strip collapses
+	// Outer's only field) and would erroneously suppress Outer's remove op —
+	// silently masking drift on a structurally non-trivial field.
+	//
+	// Pre-strip placement defends against that. Empirically, jsonpatch's
+	// default semantics already treat top-level empty maps as equivalent to
+	// absent (no remove op emitted for {Outer: {}} vs {}), so this case
+	// doesn't currently produce a spurious remove either way. The test pins
+	// that outcome: if jsonpatch ever starts emitting a remove for empty top-
+	// level objects, or if a hint registers Outer as a collection that emits
+	// removes for the empty form, this test will catch the divergence.
+	//
+	// The helper's contract for this shape — preserve Outer when its
+	// original (pre-strip) value is non-trivial — is covered directly by
+	// the corresponding case in TestStripTopLevelEmptyCollectionsAbsentInPatch.
+	document := []byte(`{"Outer": {"Inner": []}, "Name": "x"}`)
+	patch := []byte(`{"Name": "x"}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Outer", "Name"},
+		Hints:  map[string]pkgmodel.FieldHint{},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "expected nil patch; pinning current jsonpatch behavior for {Outer:{}}-vs-{} so any future change surfaces here, not as silent drift")
+}
+
+func TestGeneratePatch_AbsentDesiredVsEmptyActualArray_PatchMode_NoPatch(t *testing.T) {
+	// Same shape and hint configuration as the Reconcile reproducer
+	// (TestGeneratePatch_AbsentDesiredVsEmptyActualArray_NoPatch). In Patch
+	// mode, PatchStrategyEnsureExists does not emit removes for absent-desired
+	// keys, so the new suppression must be a no-op here. This test pins the
+	// per-mode behavior: the fix must not regress Patch-mode no-op semantics.
+	document := []byte(`{"Tags": [], "Family": "x"}`)
+	patch := []byte(`{"Family": "x"}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Tags", "Family"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {
+				UpdateMethod:       "EntitySet",
+				IndexField:         "Key",
+				HasProviderDefault: false,
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "expected no patch ops in Patch mode either")
+}
+
+func TestGeneratePatch_AbsentDesiredVsEmptyActual_EntitySetField_NotAWSSpecific_NoPatch(t *testing.T) {
+	// Provider-agnostic synthetic schema with an EntitySet field where
+	// HasProviderDefault is false — so removeProviderDefaultEntitySetElements
+	// is NOT triggered (it gates on HasProviderDefault) and the field reaches
+	// the new helper intact. The new helper then strips the empty top-level
+	// Attributes from the document. End-to-end: no remove op emitted.
+	//
+	// Using HasProviderDefault: false here is load-bearing — with true,
+	// removeProviderDefaultEntitySetElements would delete the field before
+	// our helper sees it, degenerately passing the test without exercising
+	// the new suppression. Names also intentionally differ from AWS
+	// reproducer (Attributes/ID, not Tags/Family) to demonstrate the fix is
+	// provider-agnostic.
+	document := []byte(`{"Attributes": [], "ID": "abc"}`)
+	patch := []byte(`{"ID": "abc"}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Attributes", "ID"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Attributes": {
+				UpdateMethod:       "EntitySet",
+				IndexField:         "Key",
+				HasProviderDefault: false,
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc)
+}
+
 func TestHasValue(t *testing.T) {
 	tests := []struct {
 		name     string
