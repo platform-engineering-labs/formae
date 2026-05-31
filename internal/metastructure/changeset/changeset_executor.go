@@ -498,7 +498,10 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 		var failedTargets []forma_persister.TargetUpdateRef
 		for _, failedUpdate := range cascadingFailures {
 			// Skip the original failure — its updater actor already persisted it.
-			if failedUpdate.NodeURI() == event.nodeURI {
+			// Compare by identity: NodeURI() is the bare resource URI while
+			// event.nodeURI is the operation-qualified DAG key, so they never
+			// match and the original would otherwise be re-marked as a cascade.
+			if failedUpdate == node.Update {
 				continue
 			}
 			switch u := failedUpdate.(type) {
