@@ -139,6 +139,8 @@ type MSSQLConfig struct {
 	Encrypt                bool
 	TrustServerCertificate bool
 	ConnectionParams       string
+	MaxOpenConns           int
+	ConnMaxLifetime        time.Duration
 }
 
 type RetryConfig struct {

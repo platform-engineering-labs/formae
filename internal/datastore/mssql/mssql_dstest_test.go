@@ -67,8 +67,16 @@ func TestDatastore(t *testing.T) {
 			t.Fatalf("create mssql datastore: %v", err)
 		}
 
+		conn := ds.(*mssql.DatastoreMSSQL).Conn()
 		return dstest.TestDatastore{
 			Datastore: ds,
+			RawInsertResource: func(uri, version, target, operation string) error {
+				_, err := conn.Exec(
+					"INSERT INTO resources (uri, version, target, operation) VALUES (@p1, @p2, @p3, @p4)",
+					uri, version, target, operation,
+				)
+				return err
+			},
 			CleanUpFn: func() error {
 				ds.Close()
 				m, err := sql.Open("sqlserver", dstestMSSQLBase+"&database=master")

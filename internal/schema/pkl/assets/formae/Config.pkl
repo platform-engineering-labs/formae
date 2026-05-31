@@ -91,6 +91,10 @@ class MSSQLConfig {
     trustServerCertificate: Boolean = false
 
     connectionParams: String = ""
+
+    maxOpenConns: Int = 4
+
+    connMaxLifetime: Duration = 1.h
 }
 
 class RetryConfig {

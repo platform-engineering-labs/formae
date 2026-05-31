@@ -187,27 +187,54 @@ func (d *DatastoreMSSQL) insertResource(resource *pkgmodel.Resource, version, co
 	return nil
 }
 
-// upsertResource is the MSSQL stand-in for ON CONFLICT (uri, version) DO UPDATE.
+// upsertResource is MSSQL's atomic ON CONFLICT (uri, version) DO UPDATE:
+// UPDATE WITH (UPDLOCK, SERIALIZABLE); IF @@ROWCOUNT=0 INSERT in a transaction.
 func (d *DatastoreMSSQL) upsertResource(resource *pkgmodel.Resource, version, commandID, operation string, data []byte) error {
-	query := `
-	IF EXISTS (SELECT 1 FROM resources WHERE uri = @p1 AND version = @p2)
-		UPDATE resources SET
-			command_id = @p3, operation = @p4, native_id = @p5, stack = @p6,
-			type = @p7, label = @p8, target = @p9, data = @p10, managed = @p11, ksuid = @p12
-		WHERE uri = @p1 AND version = @p2
-	ELSE
-		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12)
-	`
-	_, err := d.conn.ExecContext(d.ctx, query,
+	args := []any{
 		string(resource.URI()), version, commandID, operation,
 		resource.NativeID, resource.Stack, resource.Type, resource.Label,
 		resource.Target, string(data), resource.Managed, resource.Ksuid,
-	)
+	}
+
+	tx, err := d.conn.BeginTx(d.ctx, nil)
 	if err != nil {
-		slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
+		return fmt.Errorf("begin upsertResource tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	const updateQuery = `
+	UPDATE resources WITH (UPDLOCK, SERIALIZABLE) SET
+		command_id = @p3, operation = @p4, native_id = @p5, stack = @p6,
+		type = @p7, label = @p8, target = @p9, data = @p10, managed = @p11, ksuid = @p12
+	WHERE uri = @p1 AND version = @p2`
+	res, err := tx.ExecContext(d.ctx, updateQuery, args...)
+	if err != nil {
+		slog.Error("failed to upsert resource (update)", "error", err, "resourceURI", resource.URI())
 		return fmt.Errorf("failed to store resource: %w", err)
 	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		const insertQuery = `
+		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
+		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12)`
+		if _, err := tx.ExecContext(d.ctx, insertQuery, args...); err != nil {
+			slog.Error("failed to upsert resource (insert)", "error", err, "resourceURI", resource.URI())
+			return fmt.Errorf("failed to store resource: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit upsertResource tx: %w", err)
+	}
+	committed = true
 	return nil
 }
 

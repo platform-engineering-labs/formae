@@ -281,15 +281,15 @@ func (d *DatastoreMSSQL) DeleteTarget(targetLabel string) (string, error) {
 }
 
 func (d *DatastoreMSSQL) CountResourcesInTarget(targetLabel string) (int, error) {
-	query := `
+	query := fmt.Sprintf(`
 		SELECT COUNT(*) FROM resources r1
 		WHERE target = @p1
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.uri = r2.uri
-			AND r2.version > r1.version
+			AND r2.version %[1]s > r1.version %[1]s
 		)
-		AND operation != @p2`
+		AND operation != @p2`, binColl)
 	row := d.conn.QueryRowContext(d.ctx, query, targetLabel, resource_update.OperationDelete)
 
 	var count int

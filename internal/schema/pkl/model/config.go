@@ -86,15 +86,17 @@ type AuroraDataAPIConfig struct {
 }
 
 type MSSQLConfig struct {
-	Host                   string `pkl:"host"`
-	Port                   int32  `pkl:"port"`
-	Database               string `pkl:"database"`
-	AuthMode               string `pkl:"authMode"`
-	User                   string `pkl:"user"`
-	Password               string `pkl:"password"`
-	Encrypt                bool   `pkl:"encrypt"`
-	TrustServerCertificate bool   `pkl:"trustServerCertificate"`
-	ConnectionParams       string `pkl:"connectionParams"`
+	Host                   string        `pkl:"host"`
+	Port                   int32         `pkl:"port"`
+	Database               string        `pkl:"database"`
+	AuthMode               string        `pkl:"authMode"`
+	User                   string        `pkl:"user"`
+	Password               string        `pkl:"password"`
+	Encrypt                bool          `pkl:"encrypt"`
+	TrustServerCertificate bool          `pkl:"trustServerCertificate"`
+	ConnectionParams       string        `pkl:"connectionParams"`
+	MaxOpenConns           int32         `pkl:"maxOpenConns"`
+	ConnMaxLifetime        *pkl.Duration `pkl:"connMaxLifetime"`
 }
 
 type RetryConfig struct {

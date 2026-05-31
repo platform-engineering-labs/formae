@@ -233,6 +233,8 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 					Encrypt:                config.Agent.Datastore.MSSQL.Encrypt,
 					TrustServerCertificate: config.Agent.Datastore.MSSQL.TrustServerCertificate,
 					ConnectionParams:       config.Agent.Datastore.MSSQL.ConnectionParams,
+					MaxOpenConns:           int(config.Agent.Datastore.MSSQL.MaxOpenConns),
+					ConnMaxLifetime:        config.Agent.Datastore.MSSQL.ConnMaxLifetime.GoDuration(),
 				},
 			},
 			Retry: translateRetryConfig(config.Agent.Retry),

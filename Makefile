@@ -190,6 +190,9 @@ local-data-api-ci:
 test-unit-postgres:
 	go test -v -tags=unit -failfast ./internal/datastore/postgres
 
+test-unit-mssql:
+	go test -v -tags=unit -count=1 -failfast -timeout=15m ./internal/datastore/mssql
+
 test-unit-auroradataapi:
 	FORMAE_TEST_AURORA_CLUSTER_ARN=arn:aws:rds:us-east-1:123456789012:cluster:local \
 	FORMAE_TEST_AURORA_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \

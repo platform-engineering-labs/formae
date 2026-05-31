@@ -42,6 +42,20 @@ func NewDatastoreMSSQL(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agent
 		return nil, fmt.Errorf("mssql: open connection: %w", err)
 	}
 
+	// Pkl supplies these defaults (4 / 1h); the fallback catches Go-direct
+	// callers (tests, programmatic configs) whose zero values would otherwise
+	// mean "unlimited" in database/sql.
+	maxOpen := cfg.MSSQL.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 4
+	}
+	connLifetime := cfg.MSSQL.ConnMaxLifetime
+	if connLifetime <= 0 {
+		connLifetime = time.Hour
+	}
+	conn.SetMaxOpenConns(maxOpen)
+	conn.SetConnMaxLifetime(connLifetime)
+
 	if err := conn.PingContext(ctx); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("mssql: ping: %w", err)
@@ -52,16 +66,20 @@ func NewDatastoreMSSQL(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agent
 		return nil, fmt.Errorf("mssql: run migrations: %w", err)
 	}
 
-	slog.Info("Started Azure SQL datastore", "host", cfg.MSSQL.Host, "database", cfg.MSSQL.Database)
+	slog.Info("Started MSSQL datastore", "host", cfg.MSSQL.Host, "database", cfg.MSSQL.Database)
 
 	return &DatastoreMSSQL{conn: conn, agentID: agentID, cfg: cfg, ctx: ctx}, nil
 }
 
 func (d *DatastoreMSSQL) Close() {
 	if err := d.conn.Close(); err != nil {
-		slog.Error("Error closing Azure SQL connection", "error", err)
+		slog.Error("Error closing MSSQL connection", "error", err)
 	}
 }
+
+// Conn returns the underlying *sql.DB. Intended for tests that need direct
+// SQL access (e.g. to seed rows with specific version strings).
+func (d *DatastoreMSSQL) Conn() *sql.DB { return d.conn }
 
 // placeholders returns "@p<start>,@p<start+1>,...,@p<start+n-1>".
 func placeholders(start, n int) string {
@@ -394,8 +412,9 @@ func loadFormaCommandsFromJoinedRows(rows *sql.Rows) ([]*forma_command.FormaComm
 	return result, nil
 }
 
-// StoreFormaCommand upserts the command row via a transactional
-// IF EXISTS UPDATE ELSE INSERT (MSSQL has no ON CONFLICT).
+// StoreFormaCommand upserts the command row atomically via
+// UPDATE WITH (UPDLOCK, SERIALIZABLE); IF @@ROWCOUNT=0 INSERT — MSSQL's
+// stand-in for Postgres's ON CONFLICT.
 func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
 	for _, r := range fa.ResourceUpdates {
 		if r.DesiredState.Properties == nil {
@@ -416,33 +435,60 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		return fmt.Errorf("failed to marshal policy updates: %w", err)
 	}
 
-	query := fmt.Sprintf(`
-	IF EXISTS (SELECT 1 FROM %[1]s WHERE command_id = @p1)
-		UPDATE %[1]s SET
-			timestamp = @p2, command = @p3, state = @p4, agent_version = @p5,
-			client_id = @p6, agent_id = @p7, description_text = @p8,
-			description_confirm = @p9, config_mode = @p10, config_force = @p11,
-			config_simulate = @p12, target_updates = @p13, stack_updates = @p14,
-			policy_updates = @p15, modified_ts = @p16
-		WHERE command_id = @p1
-	ELSE
-		INSERT INTO %[1]s
-			(command_id, timestamp, command, state, agent_version, client_id, agent_id,
-			 description_text, description_confirm, config_mode, config_force, config_simulate,
-			 target_updates, stack_updates, policy_updates, modified_ts)
-		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16)
-	`, datastore.CommandsTable)
-
-	_, err = d.conn.ExecContext(d.ctx, query,
+	args := []any{
 		commandID, fa.StartTs.UTC(), string(fa.Command), string(fa.State), formae.Version,
 		fa.ClientID, d.agentID, fa.Description.Text, fa.Description.Confirm,
 		string(fa.Config.Mode), fa.Config.Force, fa.Config.Simulate,
 		string(targetUpdatesJSON), string(stackUpdatesJSON), string(policyUpdatesJSON), fa.ModifiedTs.UTC(),
-	)
+	}
+
+	tx, err := d.conn.BeginTx(d.ctx, nil)
 	if err != nil {
-		slog.Error("failed to store FormaCommand", "error", err)
+		return fmt.Errorf("begin upsert tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	updateQuery := fmt.Sprintf(`
+	UPDATE %[1]s WITH (UPDLOCK, SERIALIZABLE) SET
+		timestamp = @p2, command = @p3, state = @p4, agent_version = @p5,
+		client_id = @p6, agent_id = @p7, description_text = @p8,
+		description_confirm = @p9, config_mode = @p10, config_force = @p11,
+		config_simulate = @p12, target_updates = @p13, stack_updates = @p14,
+		policy_updates = @p15, modified_ts = @p16
+	WHERE command_id = @p1`, datastore.CommandsTable)
+
+	res, err := tx.ExecContext(d.ctx, updateQuery, args...)
+	if err != nil {
+		slog.Error("failed to store FormaCommand (update)", "error", err)
 		return err
 	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		insertQuery := fmt.Sprintf(`
+		INSERT INTO %[1]s
+			(command_id, timestamp, command, state, agent_version, client_id, agent_id,
+			 description_text, description_confirm, config_mode, config_force, config_simulate,
+			 target_updates, stack_updates, policy_updates, modified_ts)
+		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16)`,
+			datastore.CommandsTable)
+		if _, err := tx.ExecContext(d.ctx, insertQuery, args...); err != nil {
+			slog.Error("failed to store FormaCommand (insert)", "error", err)
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit upsert tx: %w", err)
+	}
+	committed = true
 
 	if len(fa.ResourceUpdates) > 0 && fa.Command != pkgmodel.CommandSync {
 		if err := d.BulkStoreResourceUpdates(commandID, fa.ResourceUpdates); err != nil {
@@ -522,20 +568,20 @@ func (d *DatastoreMSSQL) GetResourceModificationsSinceLastReconcile(stack string
 	query := fmt.Sprintf(`
 SELECT DISTINCT
   T2.type, T2.label, T2.operation
-FROM %s AS T1
+FROM %[1]s AS T1
 JOIN resources AS T2 ON T1.command_id = T2.command_id
 WHERE EXISTS (
     SELECT 1 FROM resources AS r1
     WHERE r1.stack = @p1 AND NOT EXISTS (
         SELECT 1 FROM resources AS r2
-        WHERE r1.ksuid = r2.ksuid AND r2.version > r1.version
+        WHERE r1.ksuid = r2.ksuid AND r2.version %[2]s > r1.version %[2]s
     ) AND r1.operation != 'delete'
   ) AND T1.timestamp > (
     SELECT TOP (1) fc.timestamp FROM forma_commands fc
     WHERE fc.config_mode = 'reconcile'
       AND EXISTS (SELECT 1 FROM resources r WHERE r.command_id = fc.command_id AND r.stack = @p2)
     ORDER BY fc.timestamp DESC
-  ) AND T2.stack = @p3`, datastore.CommandsTable)
+  ) AND T2.stack = @p3`, datastore.CommandsTable, binColl)
 
 	rows, err := d.conn.QueryContext(d.ctx, query, stack, stack, stack)
 	if err != nil {
