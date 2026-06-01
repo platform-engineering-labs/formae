@@ -400,7 +400,7 @@ func findWorstStateInGroup(group []apimodel.ResourceUpdate) apimodel.ResourceUpd
 }
 
 func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {
-	op := coloredOperation(rc.Operation)
+	op := displayOperation(rc)
 
 	line := display.Greyf("%s resource %s", op, rc.ResourceLabel)
 	if rc.IsCascade {
@@ -409,6 +409,9 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	node := root.Add(line)
 
 	node.Add(fmt.Sprintf(display.Grey("of type ")+"%s", rc.ResourceType))
+	if rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel {
+		node.Add(display.Grey("renamed from ") + display.LightBlue(rc.OldLabel))
+	}
 	node.Add(formatStackLine(rc.Operation, rc.OldStackName, rc.StackName))
 
 	if rc.IsCascade && rc.CascadeSource != "" {
@@ -479,6 +482,30 @@ func coloredOperation(operation string) string {
 		colored = display.Green(operation)
 	}
 	return colored
+}
+
+// displayOperation returns the verb shown to the user for a resource update.
+// RFC-0041: when a label rename is part of the update, surface it as its own
+// verb rather than letting the underlying OperationUpdate carry both meanings.
+//
+//   - Label-only rename (no property delta)         -> "RENAME"
+//   - Label rename combined with a property update  -> "[RENAME+UPDATE]"
+//   - Everything else                               -> the normal coloured op.
+//
+// A rename is detected by OldLabel being populated and different from the
+// current ResourceLabel. The presence of a non-empty PatchDocument signals a
+// property delta on an OperationUpdate.
+func displayOperation(rc apimodel.ResourceUpdate) string {
+	renamed := rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel
+	if !renamed {
+		return coloredOperation(rc.Operation)
+	}
+
+	propertyChange := rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0 && string(rc.PatchDocument) != "[]"
+	if propertyChange {
+		return display.Gold("[RENAME+UPDATE]")
+	}
+	return display.Green("RENAME")
 }
 
 func formatDurationLine(duration int64) string {

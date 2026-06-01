@@ -63,6 +63,10 @@ type ResourceUpdate struct {
 	ResourceID      string            `json:"ResourceId"`
 	ResourceType    string            `json:"ResourceType"`
 	ResourceLabel   string            `json:"ResourceLabel,omitempty"`
+	// OldLabel is the resource's previous label. Populated only when a
+	// label rename is part of this update (RFC-0041 alias path); empty
+	// otherwise. The renderer uses it to surface the rename to the user.
+	OldLabel        string            `json:"OldLabel,omitempty"`
 	StackName       string            `json:"StackName,omitempty"`
 	OldStackName    string            `json:"OldStackName,omitempty"`
 	Operation       string            `json:"Operation"`

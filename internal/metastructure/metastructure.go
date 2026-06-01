@@ -561,10 +561,16 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			dur = ru.ModifiedTs.Sub(ru.StartTs)
 		}
 
+		var oldLabel string
+		if ru.PriorState.Label != "" && ru.PriorState.Label != ru.DesiredState.Label {
+			oldLabel = ru.PriorState.Label
+		}
+
 		apiCommand.ResourceUpdates = append(apiCommand.ResourceUpdates, apimodel.ResourceUpdate{
 			ResourceID:      ru.DesiredState.Ksuid,
 			ResourceType:    ru.DesiredState.Type,
 			ResourceLabel:   ru.DesiredState.Label,
+			OldLabel:        oldLabel,
 			StackName:       ru.StackLabel,
 			OldStackName:    ru.PriorState.Stack,
 			Properties:      ru.DesiredState.Properties,
