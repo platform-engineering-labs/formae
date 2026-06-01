@@ -86,6 +86,44 @@ func TestRenderSimulation_RenameWithPropertyChange(t *testing.T) {
 	assert.Contains(t, result, "by doing the following:")
 }
 
+// RFC-0041 edge case: bringing a resource under management AND renaming it in
+// the same apply. The renderer must surface both facts:
+//   - "RENAME" verb (because OldLabel is set)
+//   - "renamed from <discovery-default>" sub-line
+//   - "from unmanaged to <stack>" via the existing formatStackLine
+//
+// The user sees one entry covering both the import and the rename.
+func TestRenderSimulation_BringingUnderManagementAndRename(t *testing.T) {
+	simulation := apimodel.Simulation{
+		ChangesRequired: true,
+		Command: apimodel.Command{
+			CommandID: "import-and-rename-id",
+			Command:   "apply",
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{
+					ResourceID:    util.NewID(),
+					ResourceType:  "FakeAWS::EC2::Instance",
+					ResourceLabel: "web-server",
+					OldLabel:      "i-0abc1234",
+					StackName:     "prod",
+					OldStackName:  "$unmanaged",
+					Operation:     apimodel.OperationUpdate,
+					State:         "NotStarted",
+				},
+			},
+		},
+	}
+
+	result, err := RenderSimulation(&simulation)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "RENAME resource web-server", "rename verb shown")
+	assert.Contains(t, result, "renamed from i-0abc1234", "previous label shown")
+	assert.Contains(t, result, "from unmanaged to prod", "stack move from unmanaged shown")
+	assert.NotContains(t, result, "[RENAME+UPDATE]", "no property delta -> not the combined verb")
+}
+
 // No rename + property change -> existing UPDATE verb unchanged.
 // Guards against the rename detection misfiring on plain updates.
 func TestRenderSimulation_PlainUpdate_NoOldLabel(t *testing.T) {

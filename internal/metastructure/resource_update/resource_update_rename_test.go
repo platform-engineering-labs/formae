@@ -127,6 +127,52 @@ func TestRename_AliasDoesNotMatchExisting_Rejected(t *testing.T) {
 	require.Error(t, err, "alias mismatch is a generator bug")
 }
 
+// RFC-0041 edge case: bringing a resource under management AND renaming it in
+// the same apply.
+//
+// Discovery has assigned a default label (e.g. "i-0abc1234") to an unmanaged
+// resource. The user authors a forma with the human label and an alias to the
+// discovery default. The apply must rename and assign-to-stack atomically —
+// no destroy+create, no two-apply workaround. The existing "bringing under
+// management without property changes" path handles this once the factory
+// allows the label change via the alias.
+func TestRename_BringingUnderManagementAndRename(t *testing.T) {
+	ksuid := util.NewID()
+	nativeID := "i-0abc1234"
+
+	existing := pkgmodel.Resource{
+		Ksuid:      ksuid,
+		Label:      "i-0abc1234", // discovery default
+		Type:       "AWS::EC2::Instance",
+		Stack:      "$unmanaged",
+		Target:     "test-target",
+		NativeID:   nativeID,
+		Schema:     pkgmodel.Schema{Fields: []string{"InstanceType"}},
+		Properties: json.RawMessage(`{"InstanceType": "t3.small"}`),
+		Managed:    false,
+	}
+	newResource := existing
+	newResource.Label = "web-server"
+	newResource.Stack = "prod"
+	newResource.Alias = "i-0abc1234"
+	newResource.Managed = true
+
+	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "combined import+rename must emit one update")
+
+	u := updates[0]
+	assert.Equal(t, OperationUpdate, u.Operation)
+	assert.Equal(t, "i-0abc1234", u.PriorState.Label, "PriorState carries discovery default label")
+	assert.Equal(t, "$unmanaged", u.PriorState.Stack, "PriorState in $unmanaged")
+	assert.Equal(t, "web-server", u.DesiredState.Label, "DesiredState carries new human label")
+	assert.Equal(t, "prod", u.DesiredState.Stack, "DesiredState in target stack")
+	assert.Equal(t, ksuid, u.DesiredState.Ksuid, "KSUID preserved across import+rename")
+	assert.Equal(t, nativeID, u.DesiredState.NativeID, "NativeID preserved")
+}
+
 // Generator-level: matchExistingForDesired falls back to alias on tuple miss.
 func TestMatchExistingForDesired_AliasFallback(t *testing.T) {
 	existing := []*pkgmodel.Resource{
