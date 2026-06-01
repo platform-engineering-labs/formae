@@ -128,6 +128,36 @@ func GenerateResourceUpdates(
 	return resourceUpdates, nil
 }
 
+// matchExistingForDesired finds the existing managed resource that corresponds
+// to a desired-state declaration. The match is by (Type, Label) within the
+// caller's already-narrowed stack scope.
+//
+// RFC-0041: when the desired declaration carries an `Alias`, a miss on the
+// current label falls through to a second lookup by the alias label. This is
+// the resource label rename path: the existing managed row sits at the old
+// label, the new declaration is at the new label, and the alias tells the
+// generator they are the same resource. The caller pairs them so
+// NewResourceUpdateForExisting can emit a single update carrying the label
+// delta in PriorState/DesiredState.
+//
+// Returns nil if no match.
+func matchExistingForDesired(existingResources []*pkgmodel.Resource, newResource pkgmodel.Resource) *pkgmodel.Resource {
+	for _, existingResource := range existingResources {
+		if existingResource.Label == newResource.Label && existingResource.Type == newResource.Type {
+			return existingResource
+		}
+	}
+	if newResource.Alias == "" {
+		return nil
+	}
+	for _, existingResource := range existingResources {
+		if existingResource.Label == newResource.Alias && existingResource.Type == newResource.Type {
+			return existingResource
+		}
+	}
+	return nil
+}
+
 // stackExistsInForma checks if a stack label exists in the Forma.Stacks slice
 func stackExistsInForma(forma *pkgmodel.Forma, stackLabel string) bool {
 	for _, stack := range forma.Stacks {
@@ -1035,63 +1065,56 @@ func generateResourceUpdatesForPatch(
 		}
 
 		for _, newResource := range stack.Resources {
-			resourceExists := false
+			matched := matchExistingForDesired(existingResources, newResource)
 
-			for _, existingResource := range existingResources {
-				// Check for existing resource with same label and type
-				if existingResource.Label == newResource.Label && existingResource.Type == newResource.Type {
-					resourceExists = true
-
-					// Use NewResourceUpdateForExisting to handle all the logic
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
-					if err != nil {
-						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
-					}
-
-					existingResourceUpdates, err := NewResourceUpdateForExisting(
-						readOnlyProperties,
-						*existingResource,
-						newResource,
-						*existingTargetMap[existingResource.Target],
-						*desiredTargetMap[newResource.Target],
-						mode,
-						source,
-					)
-
-					if err != nil {
-						return nil, fmt.Errorf("failed to generate resource update for existing resource: %w", err)
-					}
-
-					// Process the returned updates
-					for _, update := range existingResourceUpdates {
-						switch update.Operation {
-						case OperationUpdate:
-							resourceUpdates = append(resourceUpdates, update)
-						case OperationDelete:
-							resourceReplaces = append(resourceReplaces, update)
-						case OperationCreate:
-							resourceReplaces = append(resourceReplaces, update)
-						default:
-							// For any other operations, add to resourceReplaces
-							resourceReplaces = append(resourceReplaces, update)
-						}
-					}
-					break
+			if matched != nil {
+				// Use NewResourceUpdateForExisting to handle all the logic
+				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 				}
+
+				existingResourceUpdates, err := NewResourceUpdateForExisting(
+					readOnlyProperties,
+					*matched,
+					newResource,
+					*existingTargetMap[matched.Target],
+					*desiredTargetMap[newResource.Target],
+					mode,
+					source,
+				)
+
+				if err != nil {
+					return nil, fmt.Errorf("failed to generate resource update for existing resource: %w", err)
+				}
+
+				// Process the returned updates
+				for _, update := range existingResourceUpdates {
+					switch update.Operation {
+					case OperationUpdate:
+						resourceUpdates = append(resourceUpdates, update)
+					case OperationDelete:
+						resourceReplaces = append(resourceReplaces, update)
+					case OperationCreate:
+						resourceReplaces = append(resourceReplaces, update)
+					default:
+						// For any other operations, add to resourceReplaces
+						resourceReplaces = append(resourceReplaces, update)
+					}
+				}
+				continue
 			}
 
 			// If resource doesn't exist in the existing stack, create it
-			if !resourceExists {
-				resourceCreate, err := NewResourceUpdateForCreate(
-					newResource,
-					*desiredTargetMap[newResource.Target],
-					source,
-				)
-				if err != nil {
-					return nil, err
-				}
-				resourceCreates = append(resourceCreates, resourceCreate)
+			resourceCreate, err := NewResourceUpdateForCreate(
+				newResource,
+				*desiredTargetMap[newResource.Target],
+				source,
+			)
+			if err != nil {
+				return nil, err
 			}
+			resourceCreates = append(resourceCreates, resourceCreate)
 		}
 	}
 

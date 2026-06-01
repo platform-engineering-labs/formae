@@ -32,8 +32,13 @@ func NewResourceUpdateForExisting(
 		return nil, nil
 	}
 
-	// Check if resources have same label and type
-	if existingResource.Label != newResource.Label {
+	// Check if resources have same label and type. RFC-0041: labels may
+	// legitimately differ when the new resource declares an `alias` that
+	// names the existing resource's label — this is the rename path. Any
+	// other label mismatch is a generator bug (the caller should not have
+	// paired an existing row with an unrelated desired row).
+	labelChanged := existingResource.Label != newResource.Label
+	if labelChanged && newResource.Alias != existingResource.Label {
 		return nil, fmt.Errorf("resource labels don't match: %s vs %s", existingResource.Label, newResource.Label)
 	}
 
@@ -46,7 +51,7 @@ func NewResourceUpdateForExisting(
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
-	if !hasChanges && !stackChanged {
+	if !hasChanges && !stackChanged && !labelChanged {
 		return []ResourceUpdate{}, nil
 	}
 
@@ -75,7 +80,7 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
 		}
 
-		if patchDocument == nil && len(createOnlyPatch) == 0 && !stackChanged {
+		if patchDocument == nil && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged {
 			return []ResourceUpdate{}, nil
 		}
 	} else {
