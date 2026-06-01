@@ -1693,27 +1693,74 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 		if existingKSUID, ok := ksuidMap[triplet]; ok {
 			// Found by triplet in the target stack
 			resources[idx].Ksuid = existingKSUID
-		} else {
-			// Not found in target stack - check if it exists in $unmanaged
-			// This handles the case where we're bringing unmanaged resources under management
-			unmanagedKSUID, err := ds.GetKSUIDByTriplet(
-				constants.UnmanagedStack,
-				triplet.Label,
+			continue
+		}
+
+		// RFC-0041: a forma resource that declares `alias` is asking to take
+		// over an existing managed row at the old label. Look up the existing
+		// KSUID by the alias triplet BEFORE falling through to the $unmanaged
+		// scan or minting a fresh KSUID. Without this, a rename mints a brand
+		// new KSUID and the persister writes a second row with the same
+		// NativeID as the existing row — visible as duplicate inventory rows.
+		if resources[idx].Alias != "" {
+			aliasKSUID, err := ds.GetKSUIDByTriplet(
+				triplet.Stack,
+				resources[idx].Alias,
 				triplet.Type,
 			)
-			if err == nil && unmanagedKSUID != "" {
-				// Found in $unmanaged - preserve that KSUID
-				slog.Debug("Preserving KSUID from $unmanaged stack",
-					"label", triplet.Label,
+			if err == nil && aliasKSUID != "" {
+				slog.Debug("Preserving KSUID via alias",
+					"newLabel", triplet.Label,
+					"alias", resources[idx].Alias,
 					"type", triplet.Type,
-					"ksuid", unmanagedKSUID)
-				resources[idx].Ksuid = unmanagedKSUID
-				ksuidToLabel[unmanagedKSUID] = triplet.Label
-			} else {
-				// Truly doesn't exist! Generate new KSUID
-				resources[idx].Ksuid = util.NewID()
+					"ksuid", aliasKSUID)
+				resources[idx].Ksuid = aliasKSUID
+				ksuidToLabel[aliasKSUID] = triplet.Label
+				continue
 			}
 		}
+
+		// Not found in target stack - check if it exists in $unmanaged
+		// This handles the case where we're bringing unmanaged resources under management
+		unmanagedKSUID, err := ds.GetKSUIDByTriplet(
+			constants.UnmanagedStack,
+			triplet.Label,
+			triplet.Type,
+		)
+		if err == nil && unmanagedKSUID != "" {
+			// Found in $unmanaged - preserve that KSUID
+			slog.Debug("Preserving KSUID from $unmanaged stack",
+				"label", triplet.Label,
+				"type", triplet.Type,
+				"ksuid", unmanagedKSUID)
+			resources[idx].Ksuid = unmanagedKSUID
+			ksuidToLabel[unmanagedKSUID] = triplet.Label
+			continue
+		}
+
+		// RFC-0041 edge case: bringing under management + renaming in one apply.
+		// The existing row is in $unmanaged under the alias's discovery default
+		// label, not the new label. Try $unmanaged with the alias label too.
+		if resources[idx].Alias != "" {
+			unmanagedAliasKSUID, err := ds.GetKSUIDByTriplet(
+				constants.UnmanagedStack,
+				resources[idx].Alias,
+				triplet.Type,
+			)
+			if err == nil && unmanagedAliasKSUID != "" {
+				slog.Debug("Preserving KSUID via alias in $unmanaged stack",
+					"newLabel", triplet.Label,
+					"alias", resources[idx].Alias,
+					"type", triplet.Type,
+					"ksuid", unmanagedAliasKSUID)
+				resources[idx].Ksuid = unmanagedAliasKSUID
+				ksuidToLabel[unmanagedAliasKSUID] = triplet.Label
+				continue
+			}
+		}
+
+		// Truly doesn't exist! Generate new KSUID
+		resources[idx].Ksuid = util.NewID()
 	}
 
 	for tripletKey, ksuid := range ksuidMap {

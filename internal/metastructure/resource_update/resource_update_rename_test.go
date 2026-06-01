@@ -18,6 +18,45 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// RFC-0041 bug regression: the factory must use existingResource.Ksuid, not
+// newResource.Ksuid. The upstream assignKSUIDs path can mint a fresh KSUID
+// when the (stack, new-label, type) triplet misses; if the factory then
+// trusted that fresh KSUID, the persister would write a SECOND row with the
+// same NativeID under a new KSUID — visible as duplicate rows in inventory.
+func TestRename_PreservesExistingKsuidNotNewResourceKsuid(t *testing.T) {
+	existingKsuid := util.NewID()
+	strayKsuid := util.NewID() // what assignKSUIDs might have wrongly minted
+	nativeID := "i-0abc1234"
+
+	existing := pkgmodel.Resource{
+		Ksuid:      existingKsuid,
+		Label:      "web-server",
+		Type:       "AWS::EC2::Instance",
+		Stack:      "prod",
+		Target:     "test-target",
+		NativeID:   nativeID,
+		Schema:     pkgmodel.Schema{Fields: []string{"InstanceType"}},
+		Properties: json.RawMessage(`{"InstanceType": "t3.small"}`),
+		Managed:    true,
+	}
+	newResource := existing
+	newResource.Label = "app-server"
+	newResource.Alias = "web-server"
+	newResource.Ksuid = strayKsuid // simulate a stale/wrong KSUID from upstream
+
+	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+
+	u := updates[0]
+	assert.Equal(t, existingKsuid, u.DesiredState.Ksuid,
+		"DesiredState must carry the EXISTING row's KSUID, not whatever stale value upstream put on newResource")
+	assert.NotEqual(t, strayKsuid, u.DesiredState.Ksuid,
+		"a stray KSUID from upstream must not pass through; that creates duplicate rows")
+}
+
 // RFC-0041: pure label rename — alias matches an existing row by old label,
 // labels differ, properties are identical. The factory must emit a single
 // OperationUpdate carrying PriorState (old label) and DesiredState (new label).

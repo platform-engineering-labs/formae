@@ -114,7 +114,14 @@ func NewResourceUpdateForExisting(
 			NativeID:           existingResource.NativeID,
 			ReadOnlyProperties: existingResource.ReadOnlyProperties,
 			Managed:            newResource.Managed,
-			Ksuid:              newResource.Ksuid,
+			// Preserve the existing row's KSUID across the update. The caller
+			// has already paired `existingResource` (current managed row) with
+			// `newResource` (desired declaration); the existing KSUID is the
+			// authoritative identity. Using `newResource.Ksuid` here would let
+			// a stale or freshly-minted KSUID from the upstream `assignKSUIDs`
+			// pass through, which (RFC-0041) causes a rename to write a second
+			// row with the same NativeID under a new KSUID.
+			Ksuid: existingResource.Ksuid,
 		},
 		ResourceTarget:       newTarget,
 		Operation:            OperationUpdate,
