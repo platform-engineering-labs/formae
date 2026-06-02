@@ -20,6 +20,9 @@ var EmbedMigrationsSQLite embed.FS
 //go:embed migrations_postgres/*.sql
 var EmbedMigrationsPostgres embed.FS
 
+//go:embed migrations_mssql/*.sql
+var EmbedMigrationsMSSQL embed.FS
+
 // RunMigrations runs database migrations using goose for the given dialect.
 func RunMigrations(db *sql.DB, dialect string) error {
 	var migrationsFS embed.FS
@@ -32,6 +35,9 @@ func RunMigrations(db *sql.DB, dialect string) error {
 	case "postgres":
 		migrationsFS = EmbedMigrationsPostgres
 		migrationsDir = "migrations_postgres"
+	case "mssql", "sqlserver":
+		migrationsFS = EmbedMigrationsMSSQL
+		migrationsDir = "migrations_mssql"
 	default:
 		return fmt.Errorf("unsupported dialect: %s", dialect)
 	}

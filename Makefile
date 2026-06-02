@@ -119,6 +119,27 @@ postgres-up:
 postgres-down:
 	docker rm -f formae-test-postgres
 
+# Local SQL Server container for the mssql datastore tests.
+# --platform linux/amd64 lets it run under emulation on Apple Silicon.
+mssql-up:
+	docker rm -f formae-test-mssql 2>/dev/null || true
+	docker run -d --name formae-test-mssql \
+		--platform linux/amd64 \
+		-e ACCEPT_EULA=Y \
+		-e 'MSSQL_SA_PASSWORD=Formae_Test_1234!' \
+		-e MSSQL_PID=Developer \
+		-p 1433:1433 \
+		mcr.microsoft.com/mssql/server:2019-latest
+	@echo "Waiting for SQL Server to accept connections..."
+	@until docker exec formae-test-mssql /opt/mssql-tools18/bin/sqlcmd \
+		-S localhost -U sa -P 'Formae_Test_1234!' -C -Q "SELECT 1" >/dev/null 2>&1; do sleep 1; done
+	@docker exec formae-test-mssql /opt/mssql-tools18/bin/sqlcmd \
+		-S localhost -U sa -P 'Formae_Test_1234!' -C -Q "CREATE DATABASE formae" >/dev/null
+	@echo "MSSQL ready: localhost:1433, database 'formae'"
+
+mssql-down:
+	docker rm -f formae-test-mssql
+
 local-data-api-up:
 	docker rm -f local-data-api-postgres local-data-api 2>/dev/null || true
 	docker network create local-data-api-net 2>/dev/null || true
@@ -174,6 +195,9 @@ local-data-api-ci:
 
 test-unit-postgres:
 	go test -v -tags=unit -failfast ./internal/datastore/postgres
+
+test-unit-mssql:
+	go test -v -tags=unit -count=1 -failfast -timeout=15m ./internal/datastore/mssql
 
 test-unit-auroradataapi:
 	FORMAE_TEST_AURORA_CLUSTER_ARN=arn:aws:rds:us-east-1:123456789012:cluster:local \
@@ -268,4 +292,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build dev-install install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
