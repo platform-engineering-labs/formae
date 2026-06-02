@@ -6,6 +6,7 @@ package discovery
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -414,12 +415,23 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 
 		for range n {
 			nextOp := data.queuedListOperations[namespace][0]
-			err := scanTargetForResourceType(data.targets[nextOp.TargetLabel], nextOp, data, proc)
-			if err != nil {
-				proc.Log().Error("Failed to scan target for resource type %s: %v", nextOp.ResourceType, err)
-				return state, data, nil, gen.TerminateReasonPanic
-			}
 			data.queuedListOperations[namespace] = data.queuedListOperations[namespace][1:]
+			if err := scanTargetForResourceType(data.targets[nextOp.TargetLabel], nextOp, data, proc); err != nil {
+				// A failed scan of a single resource type must not crash the
+				// Discovery actor. Skip the resource type for this cycle and
+				// keep scanning the rest; it is re-queued on the next cycle. A
+				// spawn timeout is transient back-pressure (the plugin node was
+				// momentarily unresponsive), so it is logged at WRN; anything
+				// else is unexpected and logged at ERR. Either way the actor
+				// survives — mirroring ResourceUpdater and ResolveCache, which
+				// already treat a plugin spawn/operation failure as terminal for
+				// the unit of work, never fatal for the actor.
+				if errors.Is(err, gen.ErrTimeout) {
+					proc.Log().Warning("Skipping resource type %s for this discovery cycle: transient spawn back-pressure: %v", nextOp.ResourceType, err)
+				} else {
+					proc.Log().Error("Skipping resource type %s for this discovery cycle: %v", nextOp.ResourceType, err)
+				}
+			}
 		}
 	}
 	for namespace, done := range finished {
@@ -434,6 +446,15 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 			return state, data, nil, nil
 		}
 		delete(data.queuedListOperations, namespace)
+	}
+
+	// If every scanned operation this cycle was skipped (e.g. all spawns timed
+	// out), no Listing callback will arrive to drive completion. Finish the
+	// cycle here so the Discovering->Idle transition fires and the next
+	// scheduled discovery run is queued; otherwise Discovery would hang in
+	// StateDiscovering forever.
+	if !data.HasOutstandingWork() {
+		return StateIdle, data, nil, nil
 	}
 
 	return StateDiscovering, data, nil, nil
