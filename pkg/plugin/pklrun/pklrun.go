@@ -73,6 +73,20 @@ func NewProjectEvaluator(ctx context.Context, projectDir string, opts ...Option)
 	return newSafeProjectEvaluator(ctx, projectDir, cfg.pklCmd, cfg.evalOpts...)
 }
 
+// ProjectResolve unconditionally runs `pkl project resolve <projectDir>`,
+// regenerating PklProject.deps.json. Use it after writing or changing a
+// PklProject (e.g. ProjectInit, schema generators); for the lazy
+// resolve-only-if-missing behavior used when loading a project for evaluation,
+// prefer NewProjectEvaluator. WithPklCommand selects the binary; evaluator
+// options are ignored.
+func ProjectResolve(projectDir string, opts ...Option) error {
+	cfg := &config{}
+	for _, o := range opts {
+		o(cfg)
+	}
+	return runPklProjectResolve(projectDir, cfg.pklCmd)
+}
+
 // ensureProjectResolved runs `pkl project resolve` when projectDir has a
 // PklProject but no resolved PklProject.deps.json. When the deps file already
 // exists it is a no-op, so resolution happens at most once per project dir.

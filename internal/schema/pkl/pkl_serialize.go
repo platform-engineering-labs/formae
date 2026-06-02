@@ -19,6 +19,7 @@ import (
 	formae "github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/pklrun"
 )
 
 // serializeWithPKL is a generic helper function that can serialize any data structure
@@ -105,7 +106,7 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 		if err := os.Remove(depsJSON); err != nil && !os.IsNotExist(err) {
 			return "", fmt.Errorf("failed to clear stale deps.json: %w", err)
 		}
-		if err := runPklProjectResolve(generatorDir); err != nil {
+		if err := pklrun.ProjectResolve(generatorDir, pklrun.WithPklCommand(bundledPklCommand())); err != nil {
 			return "", fmt.Errorf("re-resolve after dep swap: %w", err)
 		}
 	}

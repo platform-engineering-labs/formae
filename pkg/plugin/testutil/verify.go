@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -193,12 +192,7 @@ func generatePklProject(ctx context.Context, workDir, namespace, schemaPath stri
 
 // resolvePklProject runs pkl project resolve to fetch dependencies.
 func resolvePklProject(workDir string) error {
-	cmd := exec.Command("pkl", "project", "resolve", workDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pkl project resolve failed: %s", string(output))
-	}
-	return nil
+	return pklrun.ProjectResolve(workDir)
 }
 
 // generateImports generates imports.pkl from PklProject dependencies.

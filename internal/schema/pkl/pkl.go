@@ -8,13 +8,11 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -47,45 +45,14 @@ func init() {
 // bundledPklCommand returns the sibling pkl binary next to the formae executable,
 // or nil to let pkl-go fall back to PATH. Using PATH risks picking up a pkl
 // version that doesn't support stdlib features our schemas rely on (e.g.
-// `pkl.reflect.Property.allAnnotations` needs 0.31+).
+// `pkl.reflect.Property.allAnnotations` needs 0.31+). The detection logic lives
+// in pklrun so every pkl invocation (eval and `project resolve`) shares it.
 func bundledPklCommand() []string {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil
 	}
-	// Resolve symlinks so /usr/local/bin/formae -> /opt/pel/bin/formae finds
-	// /opt/pel/bin/pkl rather than looking in /usr/local/bin.
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	bundled := filepath.Join(filepath.Dir(exe), "pkl")
-	if info, err := os.Stat(bundled); err == nil && !info.IsDir() {
-		return []string{bundled}
-	}
-	return nil
-}
-
-// runPklProjectResolve invokes `pkl project resolve <dir>` using the
-// sibling-of-formae binary when present, falling back to PATH. Combined
-// stdout/stderr is included in the returned error so failures (missing
-// binary, malformed PklProject, network issues fetching remote deps) are
-// surfaced at the call site instead of silently dropped.
-func runPklProjectResolve(dir string) error {
-	args := []string{"project", "resolve", dir}
-	var cmd *exec.Cmd
-	if pklCmd := bundledPklCommand(); pklCmd != nil {
-		cmd = exec.Command(pklCmd[0], append(append([]string{}, pklCmd[1:]...), args...)...)
-	} else {
-		cmd = exec.Command("pkl", args...)
-	}
-	if errors.Is(cmd.Err, exec.ErrDot) {
-		cmd.Err = nil
-	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pkl project resolve failed in %s: %w\nOutput: %s", dir, err, string(output))
-	}
-	return nil
+	return pklrun.BundledPklCommand(exe)
 }
 
 func (p PKL) Name() string {
@@ -646,7 +613,7 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.Sc
 	}
 
 	if hasRemotePackages {
-		if err := runPklProjectResolve(path); err != nil {
+		if err := pklrun.ProjectResolve(path, pklrun.WithPklCommand(bundledPklCommand())); err != nil {
 			return err
 		}
 	}

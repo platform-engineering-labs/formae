@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -165,16 +164,10 @@ func generatePklProject(ctx context.Context, workDir string, dependencies []Depe
 	return nil
 }
 
-// resolvePklProject runs pkl project resolve to fetch dependencies
+// resolvePklProject runs pkl project resolve to fetch dependencies, creating
+// PklProject.deps.json with resolved versions.
 func resolvePklProject(workDir string) error {
-	// Use pkl CLI to resolve dependencies
-	// This creates PklProject.deps.json with resolved versions
-	cmd := newPklCommand("project", "resolve", workDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pkl project resolve failed: %w\nOutput: %s", err, string(output))
-	}
-	return nil
+	return pklrun.ProjectResolve(workDir)
 }
 
 // generateImports generates imports.pkl from PklProject dependencies using ImportsGenerator.pkl
@@ -238,11 +231,6 @@ func runExtractor(ctx context.Context, workDir string) ([]plugin.ResourceTypeDes
 	}
 
 	return pklResult.Descriptors, nil
-}
-
-// newPklCommand creates a new exec.Cmd for running pkl CLI commands
-func newPklCommand(args ...string) *exec.Cmd {
-	return exec.Command("pkl", args...)
 }
 
 // formaeDepPattern matches the `["formae"] { ... }` or `["formae"] = import(...)`
