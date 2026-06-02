@@ -192,6 +192,7 @@ examples {
         $res = true
         $visibility = "Clear"
       }
+      Alias = null
       Managed = true
       Type = "AWS::S3::Bucket"
       Schema {
@@ -274,6 +275,7 @@ examples {
         $res = true
         $visibility = "Clear"
       }
+      Alias = null
       Managed = true
       Type = "AWS::S3::Bucket"
       Schema {
@@ -336,6 +338,7 @@ examples {
       Group = null
       Target = null
       Stack = null
+      Alias = null
       Managed = true
       Type = "FakeAWS::S3::Resource"
       Schema {
