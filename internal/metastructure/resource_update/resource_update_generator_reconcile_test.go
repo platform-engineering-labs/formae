@@ -1807,3 +1807,131 @@ func TestTargetReplace_Reconcile_TargetOnlyForma_RecreatesAll(t *testing.T) {
 	assert.Equal(t, 1, deleteCount, "should have 1 delete for vpc")
 	assert.Equal(t, 1, createCount, "should have 1 create for vpc")
 }
+
+// RFC-0041: a resource that declares `alias` matches an existing managed row
+// by the alias label under reconcile mode. The renamed resource must surface
+// as a single OperationUpdate (label change in PriorState/DesiredState), NOT
+// as Delete(old) + Create(new). The destroy-and-recreate outcome would
+// destroy the underlying cloud object — exactly what this RFC avoids.
+func TestGenerateResourceUpdatesForReconcile_RenameViaAlias(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	ksuid := util.NewID()
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Ksuid:      ksuid,
+				Label:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				NativeID:   "i-0abc1234",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	if _, err := ds.StoreStack(existingStack, "setup"); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "app-server",
+				Alias:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		targetMap,
+		targetMap,
+		ds,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "rename under reconcile must emit one update, not delete+create")
+
+	u := updates[0]
+	assert.Equal(t, OperationUpdate, u.Operation, "must be OperationUpdate, not Delete or Create")
+	assert.Equal(t, "web-server", u.PriorState.Label, "PriorState carries old label")
+	assert.Equal(t, "app-server", u.DesiredState.Label, "DesiredState carries new label")
+	assert.Equal(t, ksuid, u.DesiredState.Ksuid, "KSUID preserved across rename")
+}
+
+// Rename + property change in reconcile mode: still ONE OperationUpdate,
+// PatchDocument present for the property delta.
+func TestGenerateResourceUpdatesForReconcile_RenameWithPropertyChange(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	ksuid := util.NewID()
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Ksuid:      ksuid,
+				Label:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Schema:     pkgmodel.Schema{Fields: []string{"InstanceType"}},
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	if _, err := ds.StoreStack(existingStack, "setup"); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "app-server",
+				Alias:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Schema:     pkgmodel.Schema{Fields: []string{"InstanceType"}},
+				Properties: json.RawMessage(`{"InstanceType": "t3.medium"}`),
+				Managed:    true,
+			},
+		},
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		targetMap,
+		targetMap,
+		ds,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+
+	u := updates[0]
+	assert.Equal(t, OperationUpdate, u.Operation)
+	assert.Equal(t, "web-server", u.PriorState.Label)
+	assert.Equal(t, "app-server", u.DesiredState.Label)
+	assert.NotNil(t, u.DesiredState.PatchDocument, "patch document expected for property change")
+}

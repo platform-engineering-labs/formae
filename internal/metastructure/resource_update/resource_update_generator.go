@@ -158,6 +158,33 @@ func matchExistingForDesired(existingResources []*pkgmodel.Resource, newResource
 	return nil
 }
 
+// reconcileMatchesExisting reports whether a forma resource and an existing
+// managed row refer to the same logical resource under reconcile semantics.
+// Matches require Type / Target equality and either the same stack or the
+// $unmanaged stack on the existing side. Labels match by either the current
+// label OR (RFC-0041) the forma resource's `alias` against the existing label.
+//
+// Without the alias arm the reconcile path treats a rename as
+// `delete(old) + create(new)`, destroying the cloud object.
+func reconcileMatchesExisting(newResource, existingResource pkgmodel.Resource) bool {
+	if newResource.Type != existingResource.Type {
+		return false
+	}
+	if newResource.Target != existingResource.Target {
+		return false
+	}
+	if newResource.Stack != existingResource.Stack && existingResource.Stack != constants.UnmanagedStack {
+		return false
+	}
+	if newResource.Label == existingResource.Label {
+		return true
+	}
+	if newResource.Alias != "" && newResource.Alias == existingResource.Label {
+		return true
+	}
+	return false
+}
+
 // stackExistsInForma checks if a stack label exists in the Forma.Stacks slice
 func stackExistsInForma(forma *pkgmodel.Forma, stackLabel string) bool {
 	for _, stack := range forma.Stacks {
@@ -654,10 +681,7 @@ func generateResourceUpdatesForReconcile(
 		for _, existingResource := range existingResources {
 			found := false
 			for _, newResource := range stack.Resources {
-				if newResource.Label == existingResource.Label &&
-					newResource.Type == existingResource.Type &&
-					newResource.Target == existingResource.Target &&
-					(newResource.Stack == existingResource.Stack || existingResource.Stack == constants.UnmanagedStack) {
+				if reconcileMatchesExisting(newResource, *existingResource) {
 
 					found = true
 
@@ -727,10 +751,7 @@ func generateResourceUpdatesForReconcile(
 		for _, newResource := range stack.Resources {
 			found := false
 			for _, existingResource := range existingResources {
-				if newResource.Label == existingResource.Label &&
-					newResource.Type == existingResource.Type &&
-					newResource.Target == existingResource.Target &&
-					(newResource.Stack == existingResource.Stack || existingResource.Stack == constants.UnmanagedStack) {
+				if reconcileMatchesExisting(newResource, *existingResource) {
 					found = true
 					break
 				}
