@@ -5,6 +5,7 @@
 package mssql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -29,6 +30,9 @@ const binColl = "COLLATE Latin1_General_BIN2"
 var _ datastore.Datastore = (*DatastoreMSSQL)(nil)
 
 func (d *DatastoreMSSQL) QueryResources(query *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "QueryResources")
+	defer span.End()
+
 	queryStr := fmt.Sprintf(`
 	SELECT data, ksuid
 	FROM resources r1
@@ -50,7 +54,7 @@ func (d *DatastoreMSSQL) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 	queryStr = extendMSSQLQueryString(queryStr, query.Managed, " AND managed %s @p%d", &args)
 	queryStr += " ORDER BY type, label"
 
-	rows, err := d.conn.QueryContext(d.ctx, queryStr, args...)
+	rows, err := d.conn.QueryContext(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -75,19 +79,25 @@ func (d *DatastoreMSSQL) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 }
 
 func (d *DatastoreMSSQL) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "StoreResource")
+	defer span.End()
+
 	jsonData, err := json.Marshal(resource)
 	if err != nil {
 		return "", err
 	}
-	return d.storeResource(resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate))
 }
 
 func (d *DatastoreMSSQL) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
-	return d.storeResource(resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	ctx, span := mssqlTracer.Start(context.Background(), "DeleteResource")
+	defer span.End()
+
+	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
 }
 
 // storeResource is the shared upsert path for create/update/delete.
-func (d *DatastoreMSSQL) storeResource(resource *pkgmodel.Resource, data []byte, commandID, operation string) (string, error) {
+func (d *DatastoreMSSQL) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID, operation string) (string, error) {
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
 	}
@@ -96,7 +106,7 @@ func (d *DatastoreMSSQL) storeResource(resource *pkgmodel.Resource, data []byte,
 		"SELECT TOP (1) ksuid, data, uri, version, managed FROM resources WHERE native_id = @p1 AND type = @p2 ORDER BY version %s DESC",
 		binColl,
 	)
-	row := d.conn.QueryRowContext(d.ctx, lookup, resource.NativeID, resource.Type)
+	row := d.conn.QueryRowContext(ctx, lookup, resource.NativeID, resource.Type)
 
 	var (
 		ksuid        string
@@ -109,7 +119,7 @@ func (d *DatastoreMSSQL) storeResource(resource *pkgmodel.Resource, data []byte,
 
 	if errors.Is(err, sql.ErrNoRows) {
 		newVersion := mksuid.New().String()
-		if err := d.insertResource(resource, newVersion, commandID, operation, data); err != nil {
+		if err := d.insertResource(ctx, resource, newVersion, commandID, operation, data); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
@@ -141,7 +151,7 @@ func (d *DatastoreMSSQL) storeResource(resource *pkgmodel.Resource, data []byte,
 			"SELECT TOP (1) operation FROM resources WHERE uri = @p1 ORDER BY version %s DESC",
 			binColl,
 		)
-		err = d.conn.QueryRowContext(d.ctx, latestQuery, string(resource.URI())).Scan(&latestOperation)
+		err = d.conn.QueryRowContext(ctx, latestQuery, string(resource.URI())).Scan(&latestOperation)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return "", nil
@@ -163,19 +173,19 @@ func (d *DatastoreMSSQL) storeResource(resource *pkgmodel.Resource, data []byte,
 		newVersion = mksuid.New().String()
 	}
 
-	if err := d.upsertResource(resource, newVersion, commandID, operation, data); err != nil {
+	if err := d.upsertResource(ctx, resource, newVersion, commandID, operation, data); err != nil {
 		return "", err
 	}
 
 	return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
 }
 
-func (d *DatastoreMSSQL) insertResource(resource *pkgmodel.Resource, version, commandID, operation string, data []byte) error {
+func (d *DatastoreMSSQL) insertResource(ctx context.Context, resource *pkgmodel.Resource, version, commandID, operation string, data []byte) error {
 	query := `
 	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
 	VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12)
 	`
-	_, err := d.conn.ExecContext(d.ctx, query,
+	_, err := d.conn.ExecContext(ctx, query,
 		string(resource.URI()), version, commandID, operation,
 		resource.NativeID, resource.Stack, resource.Type, resource.Label,
 		resource.Target, string(data), resource.Managed, resource.Ksuid,
@@ -189,14 +199,14 @@ func (d *DatastoreMSSQL) insertResource(resource *pkgmodel.Resource, version, co
 
 // upsertResource is MSSQL's atomic ON CONFLICT (uri, version) DO UPDATE:
 // UPDATE WITH (UPDLOCK, SERIALIZABLE); IF @@ROWCOUNT=0 INSERT in a transaction.
-func (d *DatastoreMSSQL) upsertResource(resource *pkgmodel.Resource, version, commandID, operation string, data []byte) error {
+func (d *DatastoreMSSQL) upsertResource(ctx context.Context, resource *pkgmodel.Resource, version, commandID, operation string, data []byte) error {
 	args := []any{
 		string(resource.URI()), version, commandID, operation,
 		resource.NativeID, resource.Stack, resource.Type, resource.Label,
 		resource.Target, string(data), resource.Managed, resource.Ksuid,
 	}
 
-	tx, err := d.conn.BeginTx(d.ctx, nil)
+	tx, err := d.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin upsertResource tx: %w", err)
 	}
@@ -212,7 +222,7 @@ func (d *DatastoreMSSQL) upsertResource(resource *pkgmodel.Resource, version, co
 		command_id = @p3, operation = @p4, native_id = @p5, stack = @p6,
 		type = @p7, label = @p8, target = @p9, data = @p10, managed = @p11, ksuid = @p12
 	WHERE uri = @p1 AND version = @p2`
-	res, err := tx.ExecContext(d.ctx, updateQuery, args...)
+	res, err := tx.ExecContext(ctx, updateQuery, args...)
 	if err != nil {
 		slog.Error("failed to upsert resource (update)", "error", err, "resourceURI", resource.URI())
 		return fmt.Errorf("failed to store resource: %w", err)
@@ -225,7 +235,7 @@ func (d *DatastoreMSSQL) upsertResource(resource *pkgmodel.Resource, version, co
 		const insertQuery = `
 		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
 		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12)`
-		if _, err := tx.ExecContext(d.ctx, insertQuery, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
 			slog.Error("failed to upsert resource (insert)", "error", err, "resourceURI", resource.URI())
 			return fmt.Errorf("failed to store resource: %w", err)
 		}
@@ -239,6 +249,9 @@ func (d *DatastoreMSSQL) upsertResource(resource *pkgmodel.Resource, version, co
 }
 
 func (d *DatastoreMSSQL) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadResource")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 	SELECT TOP (1) data, ksuid
 	FROM resources
@@ -246,7 +259,7 @@ func (d *DatastoreMSSQL) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	AND operation != @p2
 	ORDER BY version %s DESC
 	`, binColl)
-	row := d.conn.QueryRowContext(d.ctx, query, string(uri), string(resource_update.OperationDelete))
+	row := d.conn.QueryRowContext(ctx, query, string(uri), string(resource_update.OperationDelete))
 
 	var jsonData, ksuid string
 	if err := row.Scan(&jsonData, &ksuid); err != nil {
@@ -265,6 +278,9 @@ func (d *DatastoreMSSQL) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 }
 
 func (d *DatastoreMSSQL) LoadResourceByNativeID(nativeID, resourceType string) (*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadResourceByNativeID")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 	SELECT TOP (1) data, ksuid
 	FROM resources r1
@@ -277,7 +293,7 @@ func (d *DatastoreMSSQL) LoadResourceByNativeID(nativeID, resourceType string) (
 	)
 	AND r1.operation != @p3
 	`, binColl)
-	row := d.conn.QueryRowContext(d.ctx, query, nativeID, resourceType, string(resource_update.OperationDelete))
+	row := d.conn.QueryRowContext(ctx, query, nativeID, resourceType, string(resource_update.OperationDelete))
 
 	var jsonData, ksuid string
 	if err := row.Scan(&jsonData, &ksuid); err != nil {
@@ -296,6 +312,9 @@ func (d *DatastoreMSSQL) LoadResourceByNativeID(nativeID, resourceType string) (
 }
 
 func (d *DatastoreMSSQL) LoadAllResources() ([]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadAllResources")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 	SELECT data, ksuid
 	FROM resources r1
@@ -307,7 +326,7 @@ func (d *DatastoreMSSQL) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	)
 	AND operation != @p1
 	`, binColl)
-	rows, err := d.conn.QueryContext(d.ctx, query, string(resource_update.OperationDelete))
+	rows, err := d.conn.QueryContext(ctx, query, string(resource_update.OperationDelete))
 	if err != nil {
 		return nil, err
 	}
@@ -332,13 +351,16 @@ func (d *DatastoreMSSQL) LoadAllResources() ([]*pkgmodel.Resource, error) {
 }
 
 func (d *DatastoreMSSQL) LatestLabelForResource(label string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LatestLabelForResource")
+	defer span.End()
+
 	query := `
 	SELECT TOP (1) label
 	FROM resources
 	WHERE label = @p1 OR label LIKE @p2 + '-%'
 	ORDER BY LEN(label) DESC, label DESC
 	`
-	row := d.conn.QueryRowContext(d.ctx, query, label, label)
+	row := d.conn.QueryRowContext(ctx, query, label, label)
 
 	var latestLabel string
 	if err := row.Scan(&latestLabel); err != nil {
@@ -351,6 +373,9 @@ func (d *DatastoreMSSQL) LatestLabelForResource(label string) (string, error) {
 }
 
 func (d *DatastoreMSSQL) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadResourceById")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 	SELECT TOP (1) data, ksuid
 	FROM resources
@@ -358,7 +383,7 @@ func (d *DatastoreMSSQL) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	AND operation != @p2
 	ORDER BY version %s DESC
 	`, binColl)
-	row := d.conn.QueryRowContext(d.ctx, query, ksuid, string(resource_update.OperationDelete))
+	row := d.conn.QueryRowContext(ctx, query, ksuid, string(resource_update.OperationDelete))
 
 	var jsonData, ksuidResult string
 	if err := row.Scan(&jsonData, &ksuidResult); err != nil {
@@ -379,6 +404,9 @@ func (d *DatastoreMSSQL) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 // FindResourcesDependingOn matches `"$ref":"formae://<ksuid>#` over the
 // nvarchar(max) data column with LIKE. Full scan (same TODO as postgres/sqlite).
 func (d *DatastoreMSSQL) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "FindResourcesDependingOn")
+	defer span.End()
+
 	pattern := fmt.Sprintf("%%\"$ref\":\"formae://%s#%%", ksuid)
 
 	query := fmt.Sprintf(`
@@ -394,7 +422,7 @@ func (d *DatastoreMSSQL) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 	AND operation != @p2
 	`, binColl)
 
-	rows, err := d.conn.QueryContext(d.ctx, query, pattern, string(resource_update.OperationDelete))
+	rows, err := d.conn.QueryContext(ctx, query, pattern, string(resource_update.OperationDelete))
 	if err != nil {
 		return nil, err
 	}
@@ -419,6 +447,9 @@ func (d *DatastoreMSSQL) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 }
 
 func (d *DatastoreMSSQL) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "FindResourcesDependingOnMany")
+	defer span.End()
+
 	if len(ksuids) == 0 {
 		return make(map[string][]*pkgmodel.Resource), nil
 	}
@@ -446,7 +477,7 @@ func (d *DatastoreMSSQL) FindResourcesDependingOnMany(ksuids []string) (map[stri
 	AND operation != @p%d
 	`, strings.Join(conditions, " OR "), binColl, binColl, deleteArgNum)
 
-	rows, err := d.conn.QueryContext(d.ctx, query, args...)
+	rows, err := d.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -477,6 +508,9 @@ func (d *DatastoreMSSQL) FindResourcesDependingOnMany(ksuids []string) (map[stri
 }
 
 func (d *DatastoreMSSQL) FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "FindTargetsDependingOnMany")
+	defer span.End()
+
 	if len(ksuids) == 0 {
 		return make(map[string][]*pkgmodel.Target), nil
 	}
@@ -501,7 +535,7 @@ func (d *DatastoreMSSQL) FindTargetsDependingOnMany(ksuids []string) (map[string
 	)
 	`, strings.Join(conditions, " OR "))
 
-	rows, err := d.conn.QueryContext(d.ctx, query, args...)
+	rows, err := d.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -547,6 +581,9 @@ func (d *DatastoreMSSQL) FindTargetsDependingOnMany(ksuids []string) (map[string
 }
 
 func (d *DatastoreMSSQL) BulkStoreResources(resources []pkgmodel.Resource, commandID string) (string, error) {
+	_, span := mssqlTracer.Start(context.Background(), "BulkStoreResources")
+	defer span.End()
+
 	var lastVersionID string
 	for i := range resources {
 		versionID, err := d.StoreResource(&resources[i], commandID)
@@ -560,6 +597,9 @@ func (d *DatastoreMSSQL) BulkStoreResources(resources []pkgmodel.Resource, comma
 }
 
 func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadResourcesByStack")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 	SELECT data, ksuid
 	FROM resources r1
@@ -573,7 +613,7 @@ func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 	AND operation != @p2
 	`, binColl)
 
-	rows, err := d.conn.QueryContext(d.ctx, query, stackLabel, string(resource_update.OperationDelete))
+	rows, err := d.conn.QueryContext(ctx, query, stackLabel, string(resource_update.OperationDelete))
 	if err != nil {
 		return nil, err
 	}
@@ -598,6 +638,9 @@ func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 }
 
 func (d *DatastoreMSSQL) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadAllResourcesByStack")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 	SELECT data, ksuid
 	FROM resources r1
@@ -610,7 +653,7 @@ func (d *DatastoreMSSQL) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 	AND operation != @p1
 	`, binColl)
 
-	rows, err := d.conn.QueryContext(d.ctx, query, string(resource_update.OperationDelete))
+	rows, err := d.conn.QueryContext(ctx, query, string(resource_update.OperationDelete))
 	if err != nil {
 		return nil, err
 	}

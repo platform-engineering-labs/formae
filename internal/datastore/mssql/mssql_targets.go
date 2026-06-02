@@ -5,6 +5,7 @@
 package mssql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -55,6 +56,9 @@ func marshalConfigSchema(target *pkgmodel.Target) ([]byte, error) {
 }
 
 func (d *DatastoreMSSQL) CreateTarget(target *pkgmodel.Target) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "CreateTarget")
+	defer span.End()
+
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
@@ -66,7 +70,7 @@ func (d *DatastoreMSSQL) CreateTarget(target *pkgmodel.Target) (string, error) {
 	}
 
 	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (@p1, 1, @p2, @p3, @p4, @p5)`
-	_, err = d.conn.ExecContext(d.ctx, query, target.Label, target.Namespace, string(cfg), nullableJSON(configSchemaJSON), target.Discoverable)
+	_, err = d.conn.ExecContext(ctx, query, target.Label, target.Namespace, string(cfg), nullableJSON(configSchemaJSON), target.Discoverable)
 	if err != nil {
 		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -76,7 +80,10 @@ func (d *DatastoreMSSQL) CreateTarget(target *pkgmodel.Target) (string, error) {
 }
 
 func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
-	row := d.conn.QueryRowContext(d.ctx, "SELECT MAX(version) FROM targets WHERE label = @p1", target.Label)
+	ctx, span := mssqlTracer.Start(context.Background(), "UpdateTarget")
+	defer span.End()
+
+	row := d.conn.QueryRowContext(ctx, "SELECT MAX(version) FROM targets WHERE label = @p1", target.Label)
 
 	var maxVersion sql.NullInt64
 	if err := row.Scan(&maxVersion); err != nil {
@@ -98,7 +105,7 @@ func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	}
 
 	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (@p1, @p2, @p3, @p4, @p5, @p6)`
-	_, err = d.conn.ExecContext(d.ctx, query, target.Label, newVersion, target.Namespace, string(cfg), nullableJSON(configSchemaJSON), target.Discoverable)
+	_, err = d.conn.ExecContext(ctx, query, target.Label, newVersion, target.Namespace, string(cfg), nullableJSON(configSchemaJSON), target.Discoverable)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -108,8 +115,11 @@ func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
 }
 
 func (d *DatastoreMSSQL) LoadTarget(label string) (*pkgmodel.Target, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadTarget")
+	defer span.End()
+
 	query := `SELECT TOP (1) label, version, namespace, config, config_schema, discoverable FROM targets WHERE label = @p1 ORDER BY version DESC`
-	row := d.conn.QueryRowContext(d.ctx, query, label)
+	row := d.conn.QueryRowContext(ctx, query, label)
 
 	target, err := scanTargetColumns(row.Scan)
 	if err != nil {
@@ -122,6 +132,9 @@ func (d *DatastoreMSSQL) LoadTarget(label string) (*pkgmodel.Target, error) {
 }
 
 func (d *DatastoreMSSQL) LoadAllTargets() ([]*pkgmodel.Target, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadAllTargets")
+	defer span.End()
+
 	query := `
 		SELECT label, version, namespace, config, config_schema, discoverable
 		FROM targets t1
@@ -131,7 +144,7 @@ func (d *DatastoreMSSQL) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
 		)`
-	rows, err := d.conn.QueryContext(d.ctx, query)
+	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +162,9 @@ func (d *DatastoreMSSQL) LoadAllTargets() ([]*pkgmodel.Target, error) {
 }
 
 func (d *DatastoreMSSQL) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadTargetsByLabels")
+	defer span.End()
+
 	if len(targetNames) == 0 {
 		return []*pkgmodel.Target{}, nil
 	}
@@ -169,7 +185,7 @@ func (d *DatastoreMSSQL) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 			AND t2.version > t1.version
 		)`, placeholders(1, len(targetNames)))
 
-	rows, err := d.conn.QueryContext(d.ctx, query, args...)
+	rows, err := d.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +203,9 @@ func (d *DatastoreMSSQL) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 }
 
 func (d *DatastoreMSSQL) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadDiscoverableTargets")
+	defer span.End()
+
 	// Latest version per label, then dedupe by config via ROW_NUMBER()
 	// (MSSQL lacks postgres's DISTINCT ON).
 	query := `
@@ -210,7 +229,7 @@ func (d *DatastoreMSSQL) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		FROM ranked
 		WHERE rn = 1`
 
-	rows, err := d.conn.QueryContext(d.ctx, query)
+	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +247,9 @@ func (d *DatastoreMSSQL) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 }
 
 func (d *DatastoreMSSQL) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel.Target, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "QueryTargets")
+	defer span.End()
+
 	queryStr := `
 		SELECT label, version, namespace, config, config_schema, discoverable
 		FROM targets t1
@@ -244,7 +266,7 @@ func (d *DatastoreMSSQL) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 	queryStr = extendMSSQLQueryString(queryStr, query.Discoverable, " AND discoverable %s @p%d", &args)
 	queryStr += " ORDER BY label"
 
-	rows, err := d.conn.QueryContext(d.ctx, queryStr, args...)
+	rows, err := d.conn.QueryContext(ctx, queryStr, args...)
 	if err != nil {
 		slog.Error("QueryTargets failed", "error", err)
 		return nil, err
@@ -263,7 +285,10 @@ func (d *DatastoreMSSQL) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 }
 
 func (d *DatastoreMSSQL) DeleteTarget(targetLabel string) (string, error) {
-	result, err := d.conn.ExecContext(d.ctx, "DELETE FROM targets WHERE label = @p1", targetLabel)
+	ctx, span := mssqlTracer.Start(context.Background(), "DeleteTarget")
+	defer span.End()
+
+	result, err := d.conn.ExecContext(ctx, "DELETE FROM targets WHERE label = @p1", targetLabel)
 	if err != nil {
 		slog.Error("Failed to delete target", "error", err, "label", targetLabel)
 		return "", err
@@ -281,6 +306,9 @@ func (d *DatastoreMSSQL) DeleteTarget(targetLabel string) (string, error) {
 }
 
 func (d *DatastoreMSSQL) CountResourcesInTarget(targetLabel string) (int, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "CountResourcesInTarget")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 		SELECT COUNT(*) FROM resources r1
 		WHERE target = @p1
@@ -290,7 +318,7 @@ func (d *DatastoreMSSQL) CountResourcesInTarget(targetLabel string) (int, error)
 			AND r2.version %[1]s > r1.version %[1]s
 		)
 		AND operation != @p2`, binColl)
-	row := d.conn.QueryRowContext(d.ctx, query, targetLabel, resource_update.OperationDelete)
+	row := d.conn.QueryRowContext(ctx, query, targetLabel, resource_update.OperationDelete)
 
 	var count int
 	if err := row.Scan(&count); err != nil {

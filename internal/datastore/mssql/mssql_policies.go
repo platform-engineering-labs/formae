@@ -5,6 +5,7 @@
 package mssql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -74,6 +75,9 @@ func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmod
 }
 
 func (d *DatastoreMSSQL) CreatePolicy(policy pkgmodel.Policy, commandID string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "CreatePolicy")
+	defer span.End()
+
 	id := mksuid.New().String()
 	version := mksuid.New().String()
 
@@ -84,7 +88,7 @@ func (d *DatastoreMSSQL) CreatePolicy(policy pkgmodel.Policy, commandID string) 
 
 	query := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
 	          VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
-	_, err = d.conn.ExecContext(d.ctx, query, id, version, commandID, "create",
+	_, err = d.conn.ExecContext(ctx, query, id, version, commandID, "create",
 		policy.GetLabel(), policy.GetType(), policy.GetStackID(), string(policyData))
 	if err != nil {
 		slog.Error("Failed to create policy", "error", err, "label", policy.GetLabel())
@@ -95,6 +99,9 @@ func (d *DatastoreMSSQL) CreatePolicy(policy pkgmodel.Policy, commandID string) 
 }
 
 func (d *DatastoreMSSQL) UpdatePolicy(policy pkgmodel.Policy, commandID string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "UpdatePolicy")
+	defer span.End()
+
 	// Look up the existing policy's id so the new version shares it.
 	var id string
 	var err error
@@ -103,13 +110,13 @@ func (d *DatastoreMSSQL) UpdatePolicy(policy pkgmodel.Policy, commandID string) 
 			SELECT TOP (1) id FROM policies
 			WHERE label = @p1 AND (stack_id IS NULL OR stack_id = '')
 			ORDER BY version COLLATE Latin1_General_BIN2 DESC`
-		err = d.conn.QueryRowContext(d.ctx, query, policy.GetLabel()).Scan(&id)
+		err = d.conn.QueryRowContext(ctx, query, policy.GetLabel()).Scan(&id)
 	} else {
 		query := `
 			SELECT TOP (1) id FROM policies
 			WHERE label = @p1 AND stack_id = @p2
 			ORDER BY version COLLATE Latin1_General_BIN2 DESC`
-		err = d.conn.QueryRowContext(d.ctx, query, policy.GetLabel(), policy.GetStackID()).Scan(&id)
+		err = d.conn.QueryRowContext(ctx, query, policy.GetLabel(), policy.GetStackID()).Scan(&id)
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to find existing policy: %w", err)
@@ -124,7 +131,7 @@ func (d *DatastoreMSSQL) UpdatePolicy(policy pkgmodel.Policy, commandID string) 
 
 	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
 	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
-	_, err = d.conn.ExecContext(d.ctx, insertQuery, id, version, commandID, "update",
+	_, err = d.conn.ExecContext(ctx, insertQuery, id, version, commandID, "update",
 		policy.GetLabel(), policy.GetType(), policy.GetStackID(), string(policyData))
 	if err != nil {
 		slog.Error("Failed to update policy", "error", err, "label", policy.GetLabel())
@@ -135,6 +142,9 @@ func (d *DatastoreMSSQL) UpdatePolicy(policy pkgmodel.Policy, commandID string) 
 }
 
 func (d *DatastoreMSSQL) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetPoliciesForStack")
+	defer span.End()
+
 	// Inline policies (stack_id on the policy) ∪ standalone policies attached
 	// via the stack_policies junction.
 	query := `
@@ -159,7 +169,7 @@ func (d *DatastoreMSSQL) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy,
 		UNION
 		SELECT label, policy_type, policy_data, stack_id FROM standalone_policies`
 
-	rows, err := d.conn.QueryContext(d.ctx, query, stackID, stackID)
+	rows, err := d.conn.QueryContext(ctx, query, stackID, stackID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +204,9 @@ func (d *DatastoreMSSQL) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy,
 }
 
 func (d *DatastoreMSSQL) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetStandalonePolicy")
+	defer span.End()
+
 	query := `
 		WITH latest_policy AS (
 			SELECT id, label, policy_type, policy_data, operation,
@@ -206,7 +219,7 @@ func (d *DatastoreMSSQL) GetStandalonePolicy(label string) (pkgmodel.Policy, err
 		WHERE rn = 1 AND operation != 'delete'`
 
 	var policyLabel, policyType, policyDataStr string
-	err := d.conn.QueryRowContext(d.ctx, query, label).Scan(&policyLabel, &policyType, &policyDataStr)
+	err := d.conn.QueryRowContext(ctx, query, label).Scan(&policyLabel, &policyType, &policyDataStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -218,6 +231,9 @@ func (d *DatastoreMSSQL) GetStandalonePolicy(label string) (pkgmodel.Policy, err
 }
 
 func (d *DatastoreMSSQL) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "ListAllStandalonePolicies")
+	defer span.End()
+
 	query := `
 		WITH latest_policies AS (
 			SELECT id, label, policy_type, policy_data, operation,
@@ -230,7 +246,7 @@ func (d *DatastoreMSSQL) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) 
 		WHERE rn = 1 AND operation != 'delete'
 		ORDER BY label`
 
-	rows, err := d.conn.QueryContext(d.ctx, query)
+	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list standalone policies: %w", err)
 	}
@@ -258,6 +274,9 @@ func (d *DatastoreMSSQL) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) 
 }
 
 func (d *DatastoreMSSQL) AttachPolicyToStack(stackID, policyLabel string) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "AttachPolicyToStack")
+	defer span.End()
+
 	policyQuery := `
 		WITH latest_policy AS (
 			SELECT id, label, operation,
@@ -268,7 +287,7 @@ func (d *DatastoreMSSQL) AttachPolicyToStack(stackID, policyLabel string) error 
 		SELECT id FROM latest_policy
 		WHERE rn = 1 AND operation != 'delete'`
 	var policyID string
-	err := d.conn.QueryRowContext(d.ctx, policyQuery, policyLabel).Scan(&policyID)
+	err := d.conn.QueryRowContext(ctx, policyQuery, policyLabel).Scan(&policyID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("standalone policy not found: %s", policyLabel)
@@ -280,7 +299,7 @@ func (d *DatastoreMSSQL) AttachPolicyToStack(stackID, policyLabel string) error 
 	insertQuery := `
 		IF NOT EXISTS (SELECT 1 FROM stack_policies WHERE stack_id = @p1 AND policy_id = @p2)
 			INSERT INTO stack_policies (stack_id, policy_id) VALUES (@p1, @p2)`
-	if _, err = d.conn.ExecContext(d.ctx, insertQuery, stackID, policyID); err != nil {
+	if _, err = d.conn.ExecContext(ctx, insertQuery, stackID, policyID); err != nil {
 		return fmt.Errorf("failed to attach policy to stack: %w", err)
 	}
 
@@ -291,6 +310,9 @@ func (d *DatastoreMSSQL) AttachPolicyToStack(stackID, policyLabel string) error 
 }
 
 func (d *DatastoreMSSQL) IsPolicyAttachedToStack(stackLabel, policyLabel string) (bool, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "IsPolicyAttachedToStack")
+	defer span.End()
+
 	query := `
 		WITH latest_stack AS (
 			SELECT id, label, operation,
@@ -310,7 +332,7 @@ func (d *DatastoreMSSQL) IsPolicyAttachedToStack(stackLabel, policyLabel string)
 		WHERE s.rn = 1 AND s.operation != 'delete'
 		AND p.rn = 1 AND p.operation != 'delete'`
 	var exists int
-	err := d.conn.QueryRowContext(d.ctx, query, stackLabel, policyLabel).Scan(&exists)
+	err := d.conn.QueryRowContext(ctx, query, stackLabel, policyLabel).Scan(&exists)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
@@ -321,6 +343,9 @@ func (d *DatastoreMSSQL) IsPolicyAttachedToStack(stackLabel, policyLabel string)
 }
 
 func (d *DatastoreMSSQL) GetStacksReferencingPolicy(policyLabel string) ([]string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetStacksReferencingPolicy")
+	defer span.End()
+
 	query := `
 		WITH latest_stacks AS (
 			SELECT id, label, operation,
@@ -339,7 +364,7 @@ func (d *DatastoreMSSQL) GetStacksReferencingPolicy(policyLabel string) ([]strin
 		WHERE s.rn = 1 AND s.operation != 'delete'
 		AND p.rn = 1 AND p.operation != 'delete'
 		ORDER BY s.label`
-	rows, err := d.conn.QueryContext(d.ctx, query, policyLabel)
+	rows, err := d.conn.QueryContext(ctx, query, policyLabel)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stacks referencing policy: %w", err)
 	}
@@ -362,6 +387,9 @@ func (d *DatastoreMSSQL) GetStacksReferencingPolicy(policyLabel string) ([]strin
 }
 
 func (d *DatastoreMSSQL) GetAttachedPolicyLabelsForStack(stackLabel string) ([]string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetAttachedPolicyLabelsForStack")
+	defer span.End()
+
 	query := `
 		WITH latest_stacks AS (
 			SELECT id, label, operation,
@@ -381,7 +409,7 @@ func (d *DatastoreMSSQL) GetAttachedPolicyLabelsForStack(stackLabel string) ([]s
 		WHERE s.rn = 1 AND s.operation != 'delete'
 		AND p.rn = 1 AND p.operation != 'delete'
 		ORDER BY p.label`
-	rows, err := d.conn.QueryContext(d.ctx, query, stackLabel)
+	rows, err := d.conn.QueryContext(ctx, query, stackLabel)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get attached policies for stack: %w", err)
 	}
@@ -404,6 +432,9 @@ func (d *DatastoreMSSQL) GetAttachedPolicyLabelsForStack(stackLabel string) ([]s
 }
 
 func (d *DatastoreMSSQL) DetachPolicyFromStack(stackLabel, policyLabel string) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "DetachPolicyFromStack")
+	defer span.End()
+
 	query := `
 		DELETE FROM stack_policies
 		WHERE stack_id IN (
@@ -422,7 +453,7 @@ func (d *DatastoreMSSQL) DetachPolicyFromStack(stackLabel, policyLabel string) e
 				WHERE label = @p2 AND (stack_id IS NULL OR stack_id = '')
 			) sub WHERE rn = 1 AND operation != 'delete'
 		)`
-	if _, err := d.conn.ExecContext(d.ctx, query, stackLabel, policyLabel); err != nil {
+	if _, err := d.conn.ExecContext(ctx, query, stackLabel, policyLabel); err != nil {
 		return fmt.Errorf("failed to detach policy from stack: %w", err)
 	}
 
@@ -433,6 +464,9 @@ func (d *DatastoreMSSQL) DetachPolicyFromStack(stackLabel, policyLabel string) e
 }
 
 func (d *DatastoreMSSQL) DeletePolicy(policyLabel string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "DeletePolicy")
+	defer span.End()
+
 	query := `
 		WITH latest_policies AS (
 			SELECT id, label, policy_type, operation,
@@ -444,7 +478,7 @@ func (d *DatastoreMSSQL) DeletePolicy(policyLabel string) (string, error) {
 		FROM latest_policies
 		WHERE rn = 1 AND operation != 'delete'`
 	var id, policyType string
-	err := d.conn.QueryRowContext(d.ctx, query, policyLabel).Scan(&id, &policyType)
+	err := d.conn.QueryRowContext(ctx, query, policyLabel).Scan(&id, &policyType)
 	if err != nil {
 		return "", fmt.Errorf("failed to get policy for deletion: %w", err)
 	}
@@ -453,7 +487,7 @@ func (d *DatastoreMSSQL) DeletePolicy(policyLabel string) (string, error) {
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
 	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
-	_, err = d.conn.ExecContext(d.ctx, insertQuery, id, version, "", "delete", policyLabel, policyType, nil, "{}")
+	_, err = d.conn.ExecContext(ctx, insertQuery, id, version, "", "delete", policyLabel, policyType, nil, "{}")
 	if err != nil {
 		return "", fmt.Errorf("failed to delete policy: %w", err)
 	}
@@ -464,8 +498,11 @@ func (d *DatastoreMSSQL) DeletePolicy(policyLabel string) (string, error) {
 }
 
 func (d *DatastoreMSSQL) DeletePoliciesForStack(stackID string, commandID string) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "DeletePoliciesForStack")
+	defer span.End()
+
 	// Detach standalone attachments; leave the standalone policies themselves alone.
-	if _, err := d.conn.ExecContext(d.ctx, "DELETE FROM stack_policies WHERE stack_id = @p1", stackID); err != nil {
+	if _, err := d.conn.ExecContext(ctx, "DELETE FROM stack_policies WHERE stack_id = @p1", stackID); err != nil {
 		slog.Warn("Failed to delete policy attachments for stack", "error", err, "stackID", stackID)
 	}
 
@@ -480,7 +517,7 @@ func (d *DatastoreMSSQL) DeletePoliciesForStack(stackID string, commandID string
 		SELECT id, label, policy_type
 		FROM latest_policies
 		WHERE rn = 1 AND operation != 'delete'`
-	rows, err := d.conn.QueryContext(d.ctx, inlinePoliciesQuery, stackID)
+	rows, err := d.conn.QueryContext(ctx, inlinePoliciesQuery, stackID)
 	if err != nil {
 		return fmt.Errorf("failed to get inline policies for stack: %w", err)
 	}
@@ -505,7 +542,7 @@ func (d *DatastoreMSSQL) DeletePoliciesForStack(stackID string, commandID string
 	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
 	for _, p := range toDelete {
 		version := mksuid.New().String()
-		if _, err := d.conn.ExecContext(d.ctx, insertQuery, p.id, version, commandID, "delete", p.label, p.policyType, stackID, "{}"); err != nil {
+		if _, err := d.conn.ExecContext(ctx, insertQuery, p.id, version, commandID, "delete", p.label, p.policyType, stackID, "{}"); err != nil {
 			slog.Error("Failed to delete inline policy", "error", err, "label", p.label)
 			continue
 		}
@@ -516,6 +553,9 @@ func (d *DatastoreMSSQL) DeletePoliciesForStack(stackID string, commandID string
 }
 
 func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetExpiredStacks")
+	defer span.End()
+
 	// Stacks whose TTL (inline or attached standalone) has elapsed, excluding any
 	// with active commands. JSON_VALUE + DATEADD stand in for postgres interval math.
 	query := `
@@ -568,7 +608,7 @@ func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 		)
 		ORDER BY valid_from`
 
-	rows, err := d.conn.QueryContext(d.ctx, query)
+	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -597,6 +637,9 @@ func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 }
 
 func (d *DatastoreMSSQL) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetStacksWithAutoReconcilePolicy")
+	defer span.End()
+
 	query := `
 		WITH latest_stacks AS (
 			SELECT id, label, valid_from, operation,
@@ -646,7 +689,7 @@ func (d *DatastoreMSSQL) GetStacksWithAutoReconcilePolicy() ([]datastore.StackRe
 		FROM all_auto_reconcile ar
 		LEFT JOIN last_reconcile lr ON ar.stack_label = lr.stack_label`
 
-	rows, err := d.conn.QueryContext(d.ctx, query)
+	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -671,6 +714,9 @@ func (d *DatastoreMSSQL) GetStacksWithAutoReconcilePolicy() ([]datastore.StackRe
 }
 
 func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetResourcesAtLastReconcile")
+	defer span.End()
+
 	// Declared state: resources from the last user-initiated reconcile apply.
 	// Filter source='user' so auto-reconcile/sync don't shift the baseline.
 	query := `
@@ -695,7 +741,7 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 		AND r.stack = @p2
 		AND r.operation != 'delete'`
 
-	rows, err := d.conn.QueryContext(d.ctx, query, stackLabel, stackLabel)
+	rows, err := d.conn.QueryContext(ctx, query, stackLabel, stackLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -730,6 +776,9 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 }
 
 func (d *DatastoreMSSQL) StackHasActiveCommands(stackLabel string) (bool, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "StackHasActiveCommands")
+	defer span.End()
+
 	query := `
 		SELECT CASE WHEN EXISTS (
 			SELECT 1 FROM resource_updates ru
@@ -739,7 +788,7 @@ func (d *DatastoreMSSQL) StackHasActiveCommands(stackLabel string) (bool, error)
 		) THEN 1 ELSE 0 END`
 
 	var exists bool
-	if err := d.conn.QueryRowContext(d.ctx, query, stackLabel).Scan(&exists); err != nil {
+	if err := d.conn.QueryRowContext(ctx, query, stackLabel).Scan(&exists); err != nil {
 		return false, err
 	}
 

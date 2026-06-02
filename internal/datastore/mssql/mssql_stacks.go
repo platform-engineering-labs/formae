@@ -5,6 +5,7 @@
 package mssql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,9 @@ import (
 // COLLATE Latin1_General_BIN2 (the MSSQL analogue of postgres COLLATE "C").
 
 func (d *DatastoreMSSQL) CreateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "CreateStack")
+	defer span.End()
+
 	existing, err := d.GetStackByLabel(stack.Label)
 	if err != nil {
 		return "", err
@@ -39,7 +43,7 @@ func (d *DatastoreMSSQL) CreateStack(stack *pkgmodel.Stack, commandID string) (s
 	version := mksuid.New().String()
 
 	query := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (@p1, @p2, @p3, @p4, @p5, @p6)`
-	_, err = d.conn.ExecContext(d.ctx, query, id, version, commandID, "create", stack.Label, stack.Description)
+	_, err = d.conn.ExecContext(ctx, query, id, version, commandID, "create", stack.Label, stack.Description)
 	if err != nil {
 		slog.Error("Failed to create stack", "error", err, "label", stack.Label)
 		return "", err
@@ -49,12 +53,15 @@ func (d *DatastoreMSSQL) CreateStack(stack *pkgmodel.Stack, commandID string) (s
 }
 
 func (d *DatastoreMSSQL) UpdateStack(stack *pkgmodel.Stack, commandID string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "UpdateStack")
+	defer span.End()
+
 	query := `
 		SELECT TOP (1) id, operation FROM stacks
 		WHERE label = @p1
 		ORDER BY version COLLATE Latin1_General_BIN2 DESC
 	`
-	row := d.conn.QueryRowContext(d.ctx, query, stack.Label)
+	row := d.conn.QueryRowContext(ctx, query, stack.Label)
 
 	var id, operation string
 	if err := row.Scan(&id, &operation); err != nil {
@@ -69,7 +76,7 @@ func (d *DatastoreMSSQL) UpdateStack(stack *pkgmodel.Stack, commandID string) (s
 
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (@p1, @p2, @p3, @p4, @p5, @p6)`
-	_, err := d.conn.ExecContext(d.ctx, insertQuery, id, version, commandID, "update", stack.Label, stack.Description)
+	_, err := d.conn.ExecContext(ctx, insertQuery, id, version, commandID, "update", stack.Label, stack.Description)
 	if err != nil {
 		slog.Error("Failed to update stack", "error", err, "label", stack.Label)
 		return "", err
@@ -79,12 +86,15 @@ func (d *DatastoreMSSQL) UpdateStack(stack *pkgmodel.Stack, commandID string) (s
 }
 
 func (d *DatastoreMSSQL) DeleteStack(label string, commandID string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "DeleteStack")
+	defer span.End()
+
 	query := `
 		SELECT TOP (1) id, operation FROM stacks
 		WHERE label = @p1
 		ORDER BY version COLLATE Latin1_General_BIN2 DESC
 	`
-	row := d.conn.QueryRowContext(d.ctx, query, label)
+	row := d.conn.QueryRowContext(ctx, query, label)
 
 	var id, operation string
 	if err := row.Scan(&id, &operation); err != nil {
@@ -104,7 +114,7 @@ func (d *DatastoreMSSQL) DeleteStack(label string, commandID string) (string, er
 
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO stacks (id, version, command_id, operation, label, description) VALUES (@p1, @p2, @p3, @p4, @p5, @p6)`
-	_, execErr := d.conn.ExecContext(d.ctx, insertQuery, id, version, commandID, "delete", label, "")
+	_, execErr := d.conn.ExecContext(ctx, insertQuery, id, version, commandID, "delete", label, "")
 	if execErr != nil {
 		slog.Error("Failed to delete stack", "error", execErr, "label", label)
 		return "", execErr
@@ -114,12 +124,15 @@ func (d *DatastoreMSSQL) DeleteStack(label string, commandID string) (string, er
 }
 
 func (d *DatastoreMSSQL) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetStackByLabel")
+	defer span.End()
+
 	query := `
 		SELECT TOP (1) id, description, operation FROM stacks
 		WHERE label = @p1
 		ORDER BY version COLLATE Latin1_General_BIN2 DESC
 	`
-	row := d.conn.QueryRowContext(d.ctx, query, label)
+	row := d.conn.QueryRowContext(ctx, query, label)
 
 	var id, description, operation string
 	if err := row.Scan(&id, &description, &operation); err != nil {
@@ -140,6 +153,9 @@ func (d *DatastoreMSSQL) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 }
 
 func (d *DatastoreMSSQL) CountResourcesInStack(label string) (int, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "CountResourcesInStack")
+	defer span.End()
+
 	query := `
 		SELECT COUNT(*) FROM resources r1
 		WHERE stack = @p1
@@ -150,7 +166,7 @@ func (d *DatastoreMSSQL) CountResourcesInStack(label string) (int, error) {
 		)
 		AND operation != @p2
 	`
-	row := d.conn.QueryRowContext(d.ctx, query, label, string(resource_update.OperationDelete))
+	row := d.conn.QueryRowContext(ctx, query, label, string(resource_update.OperationDelete))
 
 	var count int
 	if err := row.Scan(&count); err != nil {
@@ -161,6 +177,9 @@ func (d *DatastoreMSSQL) CountResourcesInStack(label string) (int, error) {
 }
 
 func (d *DatastoreMSSQL) ListAllStacks() ([]*pkgmodel.Stack, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "ListAllStacks")
+	defer span.End()
+
 	query := `
 		SELECT id, label, description, valid_from FROM (
 			SELECT id, label, description, valid_from, operation,
@@ -170,7 +189,7 @@ func (d *DatastoreMSSQL) ListAllStacks() ([]*pkgmodel.Stack, error) {
 		WHERE rn = 1 AND operation != 'delete'
 		ORDER BY label
 	`
-	rows, err := d.conn.QueryContext(d.ctx, query)
+	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}

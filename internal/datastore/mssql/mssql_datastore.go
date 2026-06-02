@@ -12,8 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/XSAM/otelsql"
 	json "github.com/goccy/go-json"
 	_ "github.com/microsoft/go-mssqldb"
+	_ "github.com/microsoft/go-mssqldb/azuread"
+	"go.opentelemetry.io/otel"
+	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
@@ -22,6 +27,12 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+var mssqlTracer trace.Tracer
+
+func init() {
+	mssqlTracer = otel.Tracer("formae/datastore/mssql")
+}
 
 // DatastoreMSSQL implements datastore.Datastore against Microsoft SQL Server.
 type DatastoreMSSQL struct {
@@ -37,7 +48,10 @@ func NewDatastoreMSSQL(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agent
 		return nil, fmt.Errorf("mssql: build connection: %w", err)
 	}
 
-	conn, err := sql.Open(driverName, dsn)
+	conn, err := otelsql.Open(driverName, dsn,
+		otelsql.WithAttributes(semconv.DBSystemMSSQL),
+		otelsql.WithSpanOptions(otelsql.SpanOptions{DisableErrSkip: true}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("mssql: open connection: %w", err)
 	}
@@ -55,6 +69,13 @@ func NewDatastoreMSSQL(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agent
 	}
 	conn.SetMaxOpenConns(maxOpen)
 	conn.SetConnMaxLifetime(connLifetime)
+
+	// Register pool stats (open / in-use / idle / wait counts) on the global meter
+	if _, err := otelsql.RegisterDBStatsMetrics(conn,
+		otelsql.WithAttributes(semconv.DBSystemMSSQL),
+	); err != nil {
+		slog.Warn("mssql: failed to register DB pool stats", "error", err)
+	}
 
 	if err := conn.PingContext(ctx); err != nil {
 		_ = conn.Close()
@@ -416,6 +437,9 @@ func loadFormaCommandsFromJoinedRows(rows *sql.Rows) ([]*forma_command.FormaComm
 // UPDATE WITH (UPDLOCK, SERIALIZABLE); IF @@ROWCOUNT=0 INSERT — MSSQL's
 // stand-in for Postgres's ON CONFLICT.
 func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "StoreFormaCommand")
+	defer span.End()
+
 	for _, r := range fa.ResourceUpdates {
 		if r.DesiredState.Properties == nil {
 			slog.Debug("Resource properties are empty for resource", "resourceLabel", r.DesiredState.Label, "commandID", commandID)
@@ -442,7 +466,7 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		string(targetUpdatesJSON), string(stackUpdatesJSON), string(policyUpdatesJSON), fa.ModifiedTs.UTC(),
 	}
 
-	tx, err := d.conn.BeginTx(d.ctx, nil)
+	tx, err := d.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin upsert tx: %w", err)
 	}
@@ -462,7 +486,7 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		policy_updates = @p15, modified_ts = @p16
 	WHERE command_id = @p1`, datastore.CommandsTable)
 
-	res, err := tx.ExecContext(d.ctx, updateQuery, args...)
+	res, err := tx.ExecContext(ctx, updateQuery, args...)
 	if err != nil {
 		slog.Error("failed to store FormaCommand (update)", "error", err)
 		return err
@@ -479,7 +503,7 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 			 target_updates, stack_updates, policy_updates, modified_ts)
 		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16)`,
 			datastore.CommandsTable)
-		if _, err := tx.ExecContext(d.ctx, insertQuery, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
 			slog.Error("failed to store FormaCommand (insert)", "error", err)
 			return err
 		}
@@ -500,7 +524,10 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 }
 
 func (d *DatastoreMSSQL) LoadFormaCommands() ([]*forma_command.FormaCommand, error) {
-	rows, err := d.conn.QueryContext(d.ctx, formaCommandWithResourceUpdatesQueryBase+resourceUpdateOrderBy)
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadFormaCommands")
+	defer span.End()
+
+	rows, err := d.conn.QueryContext(ctx, formaCommandWithResourceUpdatesQueryBase+resourceUpdateOrderBy)
 	if err != nil {
 		return nil, err
 	}
@@ -508,8 +535,11 @@ func (d *DatastoreMSSQL) LoadFormaCommands() ([]*forma_command.FormaCommand, err
 }
 
 func (d *DatastoreMSSQL) LoadIncompleteFormaCommands() ([]*forma_command.FormaCommand, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadIncompleteFormaCommands")
+	defer span.End()
+
 	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.command != 'sync' AND fc.state IN (@p1, @p2)" + resourceUpdateOrderBy
-	rows, err := d.conn.QueryContext(d.ctx, query,
+	rows, err := d.conn.QueryContext(ctx, query,
 		string(forma_command.CommandStateNotStarted), string(forma_command.CommandStateInProgress))
 	if err != nil {
 		return nil, err
@@ -518,17 +548,23 @@ func (d *DatastoreMSSQL) LoadIncompleteFormaCommands() ([]*forma_command.FormaCo
 }
 
 func (d *DatastoreMSSQL) DeleteFormaCommand(_ *forma_command.FormaCommand, commandID string) error {
-	if _, err := d.conn.ExecContext(d.ctx, "DELETE FROM resource_updates WHERE command_id = @p1", commandID); err != nil {
+	ctx, span := mssqlTracer.Start(context.Background(), "DeleteFormaCommand")
+	defer span.End()
+
+	if _, err := d.conn.ExecContext(ctx, "DELETE FROM resource_updates WHERE command_id = @p1", commandID); err != nil {
 		return fmt.Errorf("failed to delete resource_updates: %w", err)
 	}
 	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = @p1", datastore.CommandsTable)
-	_, err := d.conn.ExecContext(d.ctx, query, commandID)
+	_, err := d.conn.ExecContext(ctx, query, commandID)
 	return err
 }
 
 func (d *DatastoreMSSQL) GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetFormaCommandByCommandID")
+	defer span.End()
+
 	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.command_id = @p1" + resourceUpdateOrderBy
-	rows, err := d.conn.QueryContext(d.ctx, query, commandID)
+	rows, err := d.conn.QueryContext(ctx, query, commandID)
 	if err != nil {
 		return nil, err
 	}
@@ -543,6 +579,9 @@ func (d *DatastoreMSSQL) GetFormaCommandByCommandID(commandID string) (*forma_co
 }
 
 func (d *DatastoreMSSQL) GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetMostRecentFormaCommandByClientID")
+	defer span.End()
+
 	query := formaCommandWithResourceUpdatesQueryBase + `
 		WHERE fc.command_id = (
 			SELECT TOP (1) command_id FROM forma_commands
@@ -550,7 +589,7 @@ func (d *DatastoreMSSQL) GetMostRecentFormaCommandByClientID(clientID string) (*
 			ORDER BY timestamp DESC
 		)
 		ORDER BY ru.ksuid ASC`
-	rows, err := d.conn.QueryContext(d.ctx, query, clientID)
+	rows, err := d.conn.QueryContext(ctx, query, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -565,6 +604,9 @@ func (d *DatastoreMSSQL) GetMostRecentFormaCommandByClientID(clientID string) (*
 }
 
 func (d *DatastoreMSSQL) GetResourceModificationsSinceLastReconcile(stack string) ([]datastore.ResourceModification, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetResourceModificationsSinceLastReconcile")
+	defer span.End()
+
 	query := fmt.Sprintf(`
 SELECT DISTINCT
   T2.type, T2.label, T2.operation
@@ -583,7 +625,7 @@ WHERE EXISTS (
     ORDER BY fc.timestamp DESC
   ) AND T2.stack = @p3`, datastore.CommandsTable, binColl)
 
-	rows, err := d.conn.QueryContext(d.ctx, query, stack, stack, stack)
+	rows, err := d.conn.QueryContext(ctx, query, stack, stack, stack)
 	if err != nil {
 		return nil, err
 	}
@@ -609,6 +651,9 @@ WHERE EXISTS (
 }
 
 func (d *DatastoreMSSQL) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "QueryFormaCommands")
+	defer span.End()
+
 	limit := datastore.DefaultFormaCommandsQueryLimit
 	if query.N > 0 {
 		limit = min(datastore.DefaultFormaCommandsQueryLimit, query.N)
@@ -631,7 +676,7 @@ func (d *DatastoreMSSQL) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 		WHERE fc.command_id IN (%s)
 		ORDER BY fc.timestamp DESC, ru.ksuid ASC`, subqueryStr)
 
-	rows, err := d.conn.QueryContext(d.ctx, queryStr, args...)
+	rows, err := d.conn.QueryContext(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -641,11 +686,14 @@ func (d *DatastoreMSSQL) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 // BulkStoreResourceUpdates DELETEs the command's existing rows then bulk
 // INSERTs in one transaction (MSSQL has no INSERT OR REPLACE).
 func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "BulkStoreResourceUpdates")
+	defer span.End()
+
 	if len(updates) == 0 {
 		return nil
 	}
 
-	tx, err := d.conn.BeginTx(d.ctx, nil)
+	tx, err := d.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -656,7 +704,7 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 		}
 	}()
 
-	if _, err = tx.ExecContext(d.ctx, "DELETE FROM resource_updates WHERE command_id = @p1", commandID); err != nil {
+	if _, err = tx.ExecContext(ctx, "DELETE FROM resource_updates WHERE command_id = @p1", commandID); err != nil {
 		return fmt.Errorf("failed to clear existing resource updates: %w", err)
 	}
 
@@ -755,7 +803,7 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 			ru.CascadeSource,
 		}
 		stmt := insertPrefix + "(" + placeholders(1, colsPerRow) + ")"
-		if _, err = tx.ExecContext(d.ctx, stmt, args...); err != nil {
+		if _, err = tx.ExecContext(ctx, stmt, args...); err != nil {
 			return fmt.Errorf("failed to insert resource update: %w", err)
 		}
 	}
@@ -768,7 +816,10 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 }
 
 func (d *DatastoreMSSQL) UpdateFormaCommandProgress(commandID string, state forma_command.CommandState, modifiedTs time.Time) error {
-	result, err := d.conn.ExecContext(d.ctx,
+	ctx, span := mssqlTracer.Start(context.Background(), "UpdateFormaCommandProgress")
+	defer span.End()
+
+	result, err := d.conn.ExecContext(ctx,
 		fmt.Sprintf("UPDATE %s SET state = @p1, modified_ts = @p2 WHERE command_id = @p3", datastore.CommandsTable),
 		string(state), modifiedTs.UTC(), commandID,
 	)
@@ -786,7 +837,10 @@ func (d *DatastoreMSSQL) UpdateFormaCommandProgress(commandID string, state form
 }
 
 func (d *DatastoreMSSQL) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
-	result, err := d.conn.ExecContext(d.ctx,
+	ctx, span := mssqlTracer.Start(context.Background(), "UpdateFormaCommandTargetUpdates")
+	defer span.End()
+
+	result, err := d.conn.ExecContext(ctx,
 		fmt.Sprintf("UPDATE %s SET target_updates = @p1, state = @p2, modified_ts = @p3 WHERE command_id = @p4", datastore.CommandsTable),
 		string(targetUpdatesJSON), string(state), modifiedTs.UTC(), commandID,
 	)
