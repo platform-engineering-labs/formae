@@ -488,7 +488,6 @@ func coloredOperation(operation string) string {
 	return colored
 }
 
-
 func formatDurationLine(duration int64) string {
 	if duration <= 0 {
 		return ""
