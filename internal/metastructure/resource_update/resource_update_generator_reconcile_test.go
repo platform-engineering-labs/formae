@@ -1935,3 +1935,71 @@ func TestGenerateResourceUpdatesForReconcile_RenameWithPropertyChange(t *testing
 	assert.Equal(t, "app-server", u.DesiredState.Label)
 	assert.NotNil(t, u.DesiredState.PatchDocument, "patch document expected for property change")
 }
+
+// RFC-0041: bring-under-management + rename in a single reconcile.
+// The forma's resource declares the NEW human label and an alias to the
+// discovery default. The unmanaged row sits at the discovery default in the
+// $unmanaged stack. Reconcile must emit ONE OperationUpdate pairing the
+// unmanaged row with the new declaration (KSUID + NativeID preserved),
+// NOT a Create for the new label.
+func TestGenerateResourceUpdatesForReconcile_BringingUnderManagementAndRename(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	ksuid := util.NewID()
+	// Seed an unmanaged row at the discovery default label.
+	if _, err := ds.StoreStack(&pkgmodel.Forma{
+		Resources: []pkgmodel.Resource{
+			{
+				Ksuid:      ksuid,
+				Label:      "i-0abc1234",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "$unmanaged",
+				Target:     "test-target",
+				NativeID:   "i-0abc1234",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    false,
+			},
+		},
+	}, "discovery"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "web-server",
+				Alias:      "i-0abc1234",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		targetMap,
+		targetMap,
+		ds,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "bring-under-management + rename must emit one update, not Create+leave-orphan")
+
+	u := updates[0]
+	assert.Equal(t, OperationUpdate, u.Operation, "must be OperationUpdate, not Create")
+	assert.Equal(t, "i-0abc1234", u.PriorState.Label, "PriorState carries discovery default label")
+	assert.Equal(t, "$unmanaged", u.PriorState.Stack, "PriorState in $unmanaged")
+	assert.Equal(t, "web-server", u.DesiredState.Label, "DesiredState carries new human label")
+	assert.Equal(t, "prod", u.DesiredState.Stack, "DesiredState in target stack")
+	assert.Equal(t, ksuid, u.DesiredState.Ksuid, "KSUID preserved across import+rename")
+	assert.Equal(t, "i-0abc1234", u.DesiredState.NativeID, "NativeID preserved")
+}

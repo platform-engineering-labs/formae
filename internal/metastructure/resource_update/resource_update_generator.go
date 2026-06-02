@@ -1000,6 +1000,20 @@ func findUnmanagedResource(resource pkgmodel.Resource, allResources map[string][
 			return *res, true
 		}
 	}
+	// RFC-0041: bring-under-management + rename in one apply. The forma's
+	// resource declares the NEW human label, but the unmanaged row sits at
+	// the discovery default (recorded as `alias`). Without this fallback the
+	// generator emits a Create for the new label and orphans the unmanaged
+	// row — duplicate inventory entries for the same NativeID. Match by the
+	// alias label too so both transitions (label rename + import) fold into
+	// a single OperationUpdate driven by NewResourceUpdateForExisting.
+	if resource.Alias != "" {
+		for _, res := range unmanagedResources {
+			if res.Type == resource.Type && res.Label == resource.Alias {
+				return *res, true
+			}
+		}
+	}
 	return pkgmodel.Resource{}, false
 }
 
