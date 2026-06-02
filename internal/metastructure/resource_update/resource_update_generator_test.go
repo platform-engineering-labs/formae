@@ -1083,7 +1083,7 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, allResources, targetMap, FormaCommandSourceUser, nil)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, nil, allResources, targetMap, FormaCommandSourceUser, nil)
 
 	assert.Len(t, dependencyDeletes, 0, "Should not create duplicates when resources with same label but different types are already being deleted")
 	assert.Len(t, cascadeUpdates, 0, "No cascade-updates expected when no dependents reference the deletes")
@@ -1184,7 +1184,7 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 				"test-stack": {&tc.dependent},
 			}
 			dependencyDeletes, cascadeUpdates := findDependencyUpdates(
-				[]ResourceUpdate{parentDelete}, allResources, targetMap, FormaCommandSourceUser, nil,
+				[]ResourceUpdate{parentDelete}, nil, allResources, targetMap, FormaCommandSourceUser, nil,
 			)
 
 			if tc.wantCascadeDelete {
@@ -1481,6 +1481,7 @@ func TestSynthesizeCascadeUpdatePatch_UserProvidedSource(t *testing.T) {
 	patchDoc, err := synthesizeCascadeUpdatePatch(
 		dep,
 		map[string]bool{parentKsuid: true},
+		nil, // replacedKsuids — none in this test scenario
 		map[string]string{parentKsuid: "parent"},
 		formaByKsuid,
 	)
@@ -1523,6 +1524,7 @@ func TestSynthesizeCascadeUpdatePatch_ProviderAssignedSource(t *testing.T) {
 	patchDoc, err := synthesizeCascadeUpdatePatch(
 		dep,
 		map[string]bool{parentKsuid: true},
+		nil, // replacedKsuids — none in this test scenario
 		map[string]string{parentKsuid: "test-taskdef-for-service"},
 		formaByKsuid,
 	)
@@ -1551,6 +1553,7 @@ func TestSynthesizeCascadeUpdatePatch_NoMatchingRefs(t *testing.T) {
 	patchDoc, err := synthesizeCascadeUpdatePatch(
 		dep,
 		map[string]bool{"some-other-ksuid": true},
+		nil, // replacedKsuids — none in this test scenario
 		map[string]string{},
 		map[string]*pkgmodel.Resource{},
 	)
@@ -1579,6 +1582,7 @@ func TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath(t *testing.T) {
 	patchDoc, err := synthesizeCascadeUpdatePatch(
 		dep,
 		map[string]bool{parentKsuid: true},
+		nil, // replacedKsuids — none in this test scenario
 		map[string]string{parentKsuid: "parent"},
 		formaByKsuid,
 	)
@@ -1586,4 +1590,169 @@ func TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath(t *testing.T) {
 	require.NotEmpty(t, patchDoc)
 	assert.Contains(t, string(patchDoc), `"path":"/Refs/0/Target"`,
 		"dot-separated TargetPath with numeric segments must convert to JSON Pointer with slashes")
+}
+
+// TestSynthesizeCascadeUpdatePatch_ReplacedParentWithRecoverableValue covers
+// the REPLACE'd-parent case: the parent's delete-half has a matching
+// create-half in the same plan, AND the forma's parent state already carries
+// a concrete value for the property the dependent's Resolvable points at
+// (because the agent has merged its stale cached $value into the forma).
+// The optimization at synthesizeCascadeUpdatePatch's "recover the new value
+// from the forma's parent state" branch is unsafe for REPLACE: the recovered
+// value is the OLD revision, not the post-apply value. We expect the marker
+// to be emitted so the renderer prints the friendly phrasing.
+func TestSynthesizeCascadeUpdatePatch_ReplacedParentWithRecoverableValue(t *testing.T) {
+	parentKsuid := "taskdef-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "ecs-service",
+		Type:  "AWS::ECS::Service",
+		Properties: json.RawMessage(`{
+			"ServiceName": "svc",
+			"TaskDefinition": {"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/test:20"}
+		}`),
+	}
+	// forma's parent state DOES carry TaskDefinitionArn — simulates the
+	// production scenario where the resolver merges the cached value in.
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "hub-task-def",
+			Type:       "AWS::ECS::TaskDefinition",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Family": "test", "TaskDefinitionArn": "arn:aws:ecs:us-east-1:0:task-definition/test:20"}`),
+			Schema: pkgmodel.Schema{
+				Hints: map[string]pkgmodel.FieldHint{
+					"TaskDefinitionArn": {HasProviderDefault: true},
+				},
+			},
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]bool{parentKsuid: true}, // replacedKsuids — parent IS being REPLACE'd
+		map[string]string{parentKsuid: "hub-task-def"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"path":"/TaskDefinition"`)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"REPLACE'd parents must emit the marker, not a concrete (stale) value")
+	assert.Contains(t, patchStr, `"hub-task-def"`,
+		"marker must carry the source label")
+	assert.NotContains(t, patchStr, `"value":"arn:aws:ecs:us-east-1:0:task-definition/test:20"`,
+		"stale cached value must not be emitted as the concrete 'to' target")
+}
+
+// TestFindDependencyUpdates_ReplaceParentEmitsCascadeMarker verifies the full
+// path: when a parent is being REPLACE'd and a dependent has a Resolvable
+// pointing at one of the parent's provider-assigned properties, the cascade-
+// update's PatchDocument carries the $cascade-resolvable marker (not a
+// concrete stale value pulled from the forma's parent state).
+func TestFindDependencyUpdates_ReplaceParentEmitsCascadeMarker(t *testing.T) {
+	parentKsuid := "taskdef-ksuid"
+	parentLabel := "hub-task-def"
+	depLabel := "hub-service"
+	target := pkgmodel.Target{Label: "default"}
+
+	parent := pkgmodel.Resource{
+		Ksuid:      parentKsuid,
+		Label:      parentLabel,
+		Type:       "AWS::ECS::TaskDefinition",
+		Stack:      "hub-app",
+		Target:     target.Label,
+		Properties: json.RawMessage(`{"Family": "hub", "TaskDefinitionArn": "arn:aws:ecs:us-east-1:0:task-definition/hub:20"}`),
+		Schema: pkgmodel.Schema{
+			Hints: map[string]pkgmodel.FieldHint{
+				"TaskDefinitionArn": {HasProviderDefault: true},
+			},
+		},
+	}
+	dep := pkgmodel.Resource{
+		Label:  depLabel,
+		Type:   "AWS::ECS::Service",
+		Stack:  "hub-app",
+		Target: target.Label,
+		Properties: json.RawMessage(`{
+			"ServiceName": "hub-svc",
+			"TaskDefinition": {"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/hub:20"}
+		}`),
+	}
+
+	// resourceReplaces holds the two halves of a REPLACE on the parent.
+	resourceReplaces := []ResourceUpdate{
+		{Operation: OperationDelete, DesiredState: parent},
+		{Operation: OperationCreate, DesiredState: parent},
+	}
+
+	allResources := map[string][]*pkgmodel.Resource{
+		"hub-app": {&parent, &dep},
+	}
+	existingTargetMap := map[string]*pkgmodel.Target{target.Label: &target}
+	forma := &pkgmodel.Forma{Resources: []pkgmodel.Resource{parent, dep}}
+
+	// Build replacedKsuids the same way the production callers do.
+	replacedKsuids := make(map[string]bool)
+	for _, ru := range resourceReplaces {
+		if ru.Operation == OperationDelete && ru.DesiredState.Ksuid != "" {
+			replacedKsuids[ru.DesiredState.Ksuid] = true
+		}
+	}
+
+	_, dependencyUpdates := findDependencyUpdates(
+		resourceReplaces,
+		replacedKsuids,
+		allResources,
+		existingTargetMap,
+		FormaCommandSourceUser,
+		forma,
+	)
+
+	require.Len(t, dependencyUpdates, 1, "exactly one cascade-update for the dependent")
+	cu := dependencyUpdates[0]
+	require.NotEmpty(t, cu.DesiredState.PatchDocument, "cascade-update must carry a synthesized patch")
+	patchStr := string(cu.DesiredState.PatchDocument)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"REPLACE'd parent must produce a marker, not a stale concrete value")
+	assert.NotContains(t, patchStr, `"value":"arn:aws:ecs:us-east-1:0:task-definition/hub:20"`,
+		"stale cached value must not appear as the concrete 'to' target")
+}
+
+// TestSynthesizeCascadeUpdatePatch_DeletedParentNotReplaced confirms that
+// when a parent is being deleted outright (not REPLACE'd), the recover-
+// concrete-value optimization still runs — preserving the existing behavior
+// of TestSynthesizeCascadeUpdatePatch_UserProvidedSource for the non-REPLACE
+// case explicitly.
+func TestSynthesizeCascadeUpdatePatch_DeletedParentNotReplaced(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Properties: json.RawMessage(`{
+			"ParentRef": {"$ref": "formae://` + parentKsuid + `#/Name", "$value": "parent-v1"}
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "parent",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Name": "parent-v2"}`),
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]bool{}, // replacedKsuids — explicitly empty: parent is DELETE-only
+		map[string]string{parentKsuid: "parent"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"value":"parent-v2"`,
+		"DELETE-only parents must still use the recover-concrete-value path")
+	assert.NotContains(t, patchStr, "$cascade-resolvable",
+		"no marker for DELETE-only when the forma has the value")
 }
