@@ -72,12 +72,28 @@ definitions:
           $ref: '#/definitions/model.ConfigFieldHint'
         type: object
     type: object
+  model.EdgeKind:
+    enum:
+    - default
+    - attachesTo
+    - runtimeDependency
+    type: string
+    x-enum-varnames:
+    - EdgeKindDefault
+    - EdgeKindAttachesTo
+    - EdgeKindRuntimeDependency
   model.FieldHint:
     properties:
       AttachesTo:
+        description: 'DEPRECATED: kept for one release; engine derives EdgeKind from
+          this when set.'
         type: boolean
       CreateOnly:
         type: boolean
+      EdgeKind:
+        allOf:
+        - $ref: '#/definitions/model.EdgeKind'
+        description: NEW
       HasProviderDefault:
         type: boolean
       IndexField:
@@ -214,6 +230,13 @@ definitions:
           $ref: '#/definitions/model.ResourceModification'
         type: array
     type: object
+  model.ParentMapping:
+    properties:
+      childProperty:
+        type: string
+      parentProperty:
+        type: string
+    type: object
   model.PluginInfo:
     properties:
       DiscoveryFilters:
@@ -308,6 +331,9 @@ definitions:
     type: object
   model.Resource:
     properties:
+      Alias:
+        description: 'RFC-0041: previous label, used to rename in place'
+        type: string
       Group:
         type: string
       Ksuid:
@@ -382,6 +408,12 @@ definitions:
         type: integer
       NativeId:
         type: string
+      OldLabel:
+        description: |-
+          OldLabel is the resource's previous label. Populated only when a
+          label rename is part of this update (RFC-0041 alias path); empty
+          otherwise. The renderer uses it to surface the rename to the user.
+        type: string
       OldProperties:
         items:
           type: integer
@@ -440,6 +472,14 @@ definitions:
         type: object
       Identifier:
         type: string
+      Parent:
+        description: 'NEW: from ResourceHint.parent; "" when unset.'
+        type: string
+      ParentMappings:
+        description: 'NEW: from ResourceHint.parentRefs[*]; nil when unset.'
+        items:
+          $ref: '#/definitions/model.ParentMapping'
+        type: array
       Portable:
         type: boolean
     type: object

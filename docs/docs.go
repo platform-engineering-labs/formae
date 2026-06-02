@@ -771,14 +771,36 @@ const docTemplate = `{
                 }
             }
         },
+        "model.EdgeKind": {
+            "type": "string",
+            "enum": [
+                "default",
+                "attachesTo",
+                "runtimeDependency"
+            ],
+            "x-enum-varnames": [
+                "EdgeKindDefault",
+                "EdgeKindAttachesTo",
+                "EdgeKindRuntimeDependency"
+            ]
+        },
         "model.FieldHint": {
             "type": "object",
             "properties": {
                 "AttachesTo": {
+                    "description": "DEPRECATED: kept for one release; engine derives EdgeKind from this when set.",
                     "type": "boolean"
                 },
                 "CreateOnly": {
                     "type": "boolean"
+                },
+                "EdgeKind": {
+                    "description": "NEW",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.EdgeKind"
+                        }
+                    ]
                 },
                 "HasProviderDefault": {
                     "type": "boolean"
@@ -957,6 +979,17 @@ const docTemplate = `{
                 }
             }
         },
+        "model.ParentMapping": {
+            "type": "object",
+            "properties": {
+                "childProperty": {
+                    "type": "string"
+                },
+                "parentProperty": {
+                    "type": "string"
+                }
+            }
+        },
         "model.PluginInfo": {
             "type": "object",
             "properties": {
@@ -1097,6 +1130,10 @@ const docTemplate = `{
         "model.Resource": {
             "type": "object",
             "properties": {
+                "Alias": {
+                    "description": "RFC-0041: previous label, used to rename in place",
+                    "type": "string"
+                },
                 "Group": {
                     "type": "string"
                 },
@@ -1198,6 +1235,10 @@ const docTemplate = `{
                 "NativeId": {
                     "type": "string"
                 },
+                "OldLabel": {
+                    "description": "OldLabel is the resource's previous label. Populated only when a\nlabel rename is part of this update (RFC-0041 alias path); empty\notherwise. The renderer uses it to surface the rename to the user.",
+                    "type": "string"
+                },
                 "OldProperties": {
                     "type": "array",
                     "items": {
@@ -1285,6 +1326,17 @@ const docTemplate = `{
                 },
                 "Identifier": {
                     "type": "string"
+                },
+                "Parent": {
+                    "description": "NEW: from ResourceHint.parent; \"\" when unset.",
+                    "type": "string"
+                },
+                "ParentMappings": {
+                    "description": "NEW: from ResourceHint.parentRefs[*]; nil when unset.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ParentMapping"
+                    }
                 },
                 "Portable": {
                     "type": "boolean"
