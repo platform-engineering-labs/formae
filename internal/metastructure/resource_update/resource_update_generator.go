@@ -823,7 +823,13 @@ func generateResourceUpdatesForReconcile(
 	// After processing all stacks, find dependencies for delete operations
 	allDeleteUpdates := append(resourceReplaces, implicitDeleteResources...)
 
-	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, allResourcesByStack, existingTargetMap, source, forma)
+	replacedKsuids := make(map[string]bool)
+	for _, ru := range resourceReplaces {
+		if ru.Operation == OperationDelete && ru.DesiredState.Ksuid != "" {
+			replacedKsuids[ru.DesiredState.Ksuid] = true
+		}
+	}
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, replacedKsuids, allResourcesByStack, existingTargetMap, source, forma)
 
 	// Convert updates to replacements if they have dependency deletes
 
@@ -1155,7 +1161,13 @@ func generateResourceUpdatesForPatch(
 
 	allUpdates := append(append(resourceCreates, resourceUpdates...), resourceReplaces...)
 
-	dependencyDeletes, cascadeUpdates := findDependencyUpdates(resourceReplaces, allResourcesByStack, existingTargetMap, source, forma)
+	replacedKsuids := make(map[string]bool)
+	for _, ru := range resourceReplaces {
+		if ru.Operation == OperationDelete && ru.DesiredState.Ksuid != "" {
+			replacedKsuids[ru.DesiredState.Ksuid] = true
+		}
+	}
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(resourceReplaces, replacedKsuids, allResourcesByStack, existingTargetMap, source, forma)
 	finalResourceUpdates := convertUpdatesToReplacementsForDependencies(allUpdates, dependencyDeletes, source)
 	finalResourceUpdates = appendCascadeUpdatesIfAbsent(finalResourceUpdates, cascadeUpdates)
 	return finalResourceUpdates, nil
@@ -1202,7 +1214,7 @@ func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources ma
 // versioned TaskDefinition (Service.taskDefinition is mutable; UpdateService
 // accepts a new TaskDefinitionArn — no tear-down needed when a new TD
 // revision is created).
-func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[string][]*pkgmodel.Resource, existingTargetMap map[string]*pkgmodel.Target, source FormaCommandSource, forma *pkgmodel.Forma) ([]ResourceUpdate, []ResourceUpdate) {
+func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, replacedKsuids map[string]bool, allResources map[string][]*pkgmodel.Resource, existingTargetMap map[string]*pkgmodel.Target, source FormaCommandSource, forma *pkgmodel.Forma) ([]ResourceUpdate, []ResourceUpdate) {
 	// Collect ksuids of resources being deleted so dependents can decide
 	// whether their refs land on a deletion target. Also build a label
 	// lookup so cascade-update synthesis can name the source resource for
@@ -1290,7 +1302,7 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, allResources map[s
 				// cascading field change instead of showing an empty Update.
 				// The executor's apply-time regen overwrites this with the
 				// concrete diff against the resolver-updated DesiredState.
-				if synthOps, err := synthesizeCascadeUpdatePatch(dependentRes, deletedKsuids, ksuidToLabel, formaByKsuid); err != nil {
+				if synthOps, err := synthesizeCascadeUpdatePatch(dependentRes, deletedKsuids, replacedKsuids, ksuidToLabel, formaByKsuid); err != nil {
 					slog.Warn("Failed to synthesize cascade-update patch for simulate output",
 						"resource", dependentRes.Label, "error", err)
 				} else if len(synthOps) > 0 {
@@ -1349,6 +1361,7 @@ func anyRefIsCreateOnly(dep pkgmodel.Resource, deletedKsuids map[string]bool) bo
 func synthesizeCascadeUpdatePatch(
 	dep pkgmodel.Resource,
 	deletedKsuids map[string]bool,
+	replacedKsuids map[string]bool,
 	ksuidToLabel map[string]string,
 	formaByKsuid map[string]*pkgmodel.Resource,
 ) (json.RawMessage, error) {
@@ -1366,15 +1379,31 @@ func synthesizeCascadeUpdatePatch(
 		path := jsonPointerFromDotPath(ref.TargetPath)
 
 		// Try to recover the new value from the forma's parent state.
+		// For REPLACE'd parents, the recovered value is only trustworthy
+		// for user-provided source fields. Provider-assigned fields
+		// (HasProviderDefault=true) get their value from the provider at
+		// apply time, so any value sitting in the forma now is the stale
+		// cached one — emit the marker so the renderer uses the friendly
+		// "to point at the new <source>" phrasing instead of misleading
+		// the operator with a stale concrete value.
 		if parent, ok := formaByKsuid[ksuid]; ok && parent != nil && ref.SourcePropertyName != "" && len(parent.Properties) > 0 {
-			extracted := gjson.GetBytes(parent.Properties, ref.SourcePropertyName)
-			if extracted.Exists() && !looksLikeResolvable(extracted) {
-				ops = append(ops, op{Op: "replace", Path: path, Value: extracted.Value()})
-				continue
+			sourceFieldIsProviderAssigned := false
+			if replacedKsuids[ksuid] {
+				if hint, hintOk := parent.Schema.Hints[stripArrayIndicesForHintLookup(ref.SourcePropertyName)]; hintOk && hint.HasProviderDefault {
+					sourceFieldIsProviderAssigned = true
+				}
+			}
+			if !sourceFieldIsProviderAssigned {
+				extracted := gjson.GetBytes(parent.Properties, ref.SourcePropertyName)
+				if extracted.Exists() && !looksLikeResolvable(extracted) {
+					ops = append(ops, op{Op: "replace", Path: path, Value: extracted.Value()})
+					continue
+				}
 			}
 		}
 
-		// Provider-assigned: emit a marker the CLI renderer recognises.
+		// Provider-assigned source on a REPLACE'd parent (or no recoverable
+		// value at all): emit a marker the CLI renderer recognises.
 		ops = append(ops, op{
 			Op:   "replace",
 			Path: path,
