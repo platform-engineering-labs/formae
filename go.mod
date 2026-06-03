@@ -42,6 +42,7 @@ require (
 	github.com/lmittmann/tint v1.0.6
 	github.com/masterminds/semver v1.5.0
 	github.com/mattn/go-sqlite3 v1.14.24
+	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/olekukonko/tablewriter v1.0.7
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
 	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
@@ -49,7 +50,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260509215119-2aad56a9d57b
-	github.com/platform-engineering-labs/orbital v0.1.38
+	github.com/platform-engineering-labs/orbital v0.1.41
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/prometheus/client_golang v1.23.2
@@ -196,7 +197,6 @@ require (
 	github.com/mdlayher/sdnotify v1.0.0 // indirect
 	github.com/mdlayher/socket v0.5.0 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
-	github.com/microsoft/go-mssqldb v1.10.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
