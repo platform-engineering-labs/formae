@@ -438,7 +438,20 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	// the operator scans for what's actually changing.
 	renamed := rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel
 	hasPatch := rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0
-	if renamed || hasPatch {
+
+	// RFC-0041: where the `change label from "<old>" to "<new>"` line lives
+	// depends on the op.
+	//
+	//  - OperationUpdate: the body block is `by doing the following:` and
+	//    already contains property-change entries. Put the label rename
+	//    inside the same block so the operator scans one list.
+	//  - OperationReplace: the body block is `because these immutable
+	//    properties changed:` which is reserved for CreateOnly-property
+	//    changes. The rename isn't one of those, so it goes one level up
+	//    as a parent sub-line — same shape as `from stack X` on a replace.
+	//
+	// Only one location ever fires for a given update. No duplication.
+	if rc.Operation == apimodel.OperationUpdate && (renamed || hasPatch) {
 		propertiesNode := node.Add(display.Grey("by doing the following:"))
 		if renamed {
 			propertiesNode.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
@@ -452,11 +465,6 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 		}
 	}
 
-	// RFC-0041: a replace that coincides with a rename. Replace renders the
-	// `because these immutable properties changed:` block below; the rename
-	// itself isn't an immutable-property change, so surface it as its own
-	// `change label from "<old>" to "<new>"` line at the parent level. Same
-	// shape as `from stack X to Y` for stack moves on a replace.
 	if rc.Operation == apimodel.OperationReplace && renamed {
 		node.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
 	}
