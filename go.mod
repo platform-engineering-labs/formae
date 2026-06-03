@@ -42,6 +42,7 @@ require (
 	github.com/lmittmann/tint v1.0.6
 	github.com/masterminds/semver v1.5.0
 	github.com/mattn/go-sqlite3 v1.14.24
+	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/olekukonko/tablewriter v1.0.7
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
 	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
@@ -49,7 +50,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260509215119-2aad56a9d57b
-	github.com/platform-engineering-labs/orbital v0.1.38
+	github.com/platform-engineering-labs/orbital v0.1.41
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/prometheus/client_golang v1.23.2
@@ -91,6 +92,10 @@ require (
 require (
 	ergo.services/meta v0.0.0-20240904054930-a97f6add8a78 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.6.0 // indirect
 	github.com/DataDog/zstd v1.5.7 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/RoaringBitmap/roaring v0.9.1 // indirect
@@ -158,6 +163,9 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.25.1 // indirect
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
+	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/btree v1.1.2 // indirect
@@ -177,6 +185,7 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
 	github.com/lunixbochs/struc v0.0.0-20241101090106-8d528fa2c543 // indirect
 	github.com/mashiike/s3-setlock v0.2.0 // indirect
@@ -197,6 +206,7 @@ require (
 	github.com/olekukonko/errors v0.0.0-20250405072817-4e6d85265da6 // indirect
 	github.com/olekukonko/ll v0.0.8 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
@@ -207,6 +217,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/safchain/ethtool v0.3.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
+	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/swaggo/files/v2 v2.0.2 // indirect
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e // indirect
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
@@ -239,16 +250,16 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.47.0 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/mod v0.31.0 // indirect
-	golang.org/x/net v0.49.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/term v0.39.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/mod v0.34.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/term v0.42.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
-	golang.org/x/tools v0.40.0 // indirect
+	golang.org/x/tools v0.43.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect

@@ -16,6 +16,12 @@ import (
 type TestDatastore struct {
 	datastore.Datastore
 	CleanUpFn func() error
+	// RawInsertResource writes a resources row directly with the exact
+	// (uri, version, target, operation) provided, bypassing the Datastore's
+	// version generation. Tests that need to exercise specific version
+	// strings (e.g. byte-order vs case-insensitive comparison) use it.
+	// Backends that don't provide it leave it nil and the test t.Skip()s.
+	RawInsertResource func(uri, version, target, operation string) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -57,6 +63,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunQueryTargetsNonDiscoverable(t, newDS)
 	RunQueryTargetsVersioning(t, newDS)
 	RunCountResourcesInTarget(t, newDS)
+	RunCountResourcesInTargetUsesByteOrderForVersionComparison(t, newDS)
 	RunDeleteTargetSuccess(t, newDS)
 	RunUpdateTargetNotFoundReturnsError(t, newDS)
 	RunDeleteTargetNotFound(t, newDS)
