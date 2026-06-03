@@ -5,6 +5,7 @@
 package datastore
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -15,6 +16,14 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
+
+// Tx represents a datastore transaction context handed to callers of
+// WithTx. The marker carries no methods in this PR; subsequent RFC-0041
+// PRs (resource and stack rebind) will extend it with the specific
+// write operations the rebinder needs. Keeping the interface marker-only
+// for now means every Datastore implementation can satisfy it trivially
+// without committing to a full transactional API up front.
+type Tx interface{}
 
 const (
 	CommandsTable                  string              = "forma_commands"
@@ -121,6 +130,13 @@ type ResourceSnapshot struct {
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
 type Datastore interface {
+	// Transactional operations
+
+	// WithTx runs fn inside a single datastore transaction. If fn returns
+	// an error, the transaction is rolled back. Used by the rebind phase
+	// (RFC-0041) to atomically apply identity-column rewrites.
+	WithTx(ctx context.Context, fn func(Tx) error) error
+
 	// FormaCommand operations - these represent requested changes to infrastructure
 
 	// StoreFormaCommand persists a new FormaCommand with its ResourceUpdates

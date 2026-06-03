@@ -178,6 +178,15 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 	return d, nil
 }
 
+// WithTx runs fn with the datastore as the transaction value. Postgres-side
+// BEGIN/COMMIT semantics will be plumbed when the first real Tx method
+// lands in a follow-up PR (RFC-0041 PR 2); this PR ships the marker
+// interface only.
+func (d DatastorePostgres) WithTx(ctx context.Context, fn func(datastore.Tx) error) error {
+	_ = ctx
+	return fn(d)
+}
+
 func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
 	ctx, span := tracer.Start(context.Background(), "StoreFormaCommand")
 	defer span.End()

@@ -33,6 +33,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/rebind"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -277,6 +278,17 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	// persisted and visible to subsequent queries.
 	if !config.Simulate {
 		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
+			return nil, err
+		}
+	}
+
+	// RFC-0041: run the rebind phase ahead of update generation so the
+	// downstream diff observes any renamed identities. PR 1 ships this
+	// as a no-op when no aliases are declared; later PRs add real rename
+	// behaviour without touching the wiring.
+	if !config.Simulate {
+		rebinder := rebind.NewRebinder(m.Datastore)
+		if err := rebinder.Run(context.Background(), *forma, clientID); err != nil {
 			return nil, err
 		}
 	}

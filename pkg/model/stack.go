@@ -18,6 +18,7 @@ type Stack struct {
 	Description string            `json:"Description"`
 	Policies    []json.RawMessage `json:"Policies,omitempty"` // Inline policies from PKL
 	CreatedAt   time.Time         `json:"CreatedAt,omitempty"`
+	Alias       *Alias            `json:"Alias,omitempty"` // RFC-0041 rename alias (previous identity)
 }
 
 // IsPolicyReference checks if a raw policy JSON is a reference ($ref) rather than inline

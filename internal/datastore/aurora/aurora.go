@@ -242,6 +242,15 @@ func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfi
 	return d, nil
 }
 
+// WithTx runs fn with the datastore as the transaction value. Aurora-side
+// BEGIN/COMMIT semantics will be plumbed when the first real Tx method
+// lands in a follow-up PR (RFC-0041 PR 2); this PR ships the marker
+// interface only.
+func (d *DatastoreAuroraDataAPI) WithTx(ctx context.Context, fn func(datastore.Tx) error) error {
+	_ = ctx
+	return fn(d)
+}
+
 func (d *DatastoreAuroraDataAPI) runMigrations() error {
 	ctx := context.Background()
 

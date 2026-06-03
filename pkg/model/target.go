@@ -30,6 +30,7 @@ type Target struct {
 	ConfigSchema ConfigSchema    `json:"ConfigSchema,omitzero" pkl:"ConfigSchema,omitempty"`
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
+	Alias        *Alias          `json:"Alias,omitempty" pkl:"Alias,omitempty"` // RFC-0041 rename alias (previous identity)
 }
 
 func NewTargetFromString(target string) Target {

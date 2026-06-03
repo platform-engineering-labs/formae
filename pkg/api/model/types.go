@@ -95,6 +95,7 @@ const (
 	OperationDelete  = "delete"
 	OperationRead    = "read"
 	OperationReplace = "replace" // delete + create
+	OperationRebind  = "rebind"  // RFC-0041 identity-column rewrite (no plugin call)
 )
 
 const (
