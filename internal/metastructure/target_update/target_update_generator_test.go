@@ -1176,3 +1176,56 @@ func TestGenerateTargetUpdates_RefWithCachedValue_UnresolvableRef(t *testing.T) 
 	require.Len(t, updates, 1, "dangling $ref with stale cached $value must surface as an update, not be silently absorbed")
 	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
 }
+
+// Mirrors a real K8s target Config shape: $refs are nested under Auth, alongside
+// plain scalar fields. Existing Config has $ref+$value pairs (resolved at apply);
+// desired Config has $ref only. Same resolved values, same shape → no update.
+func TestGenerateTargetUpdates_RefWithCachedValue_NestedAuth_NoChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target-aws": {
+				Label:     "k8s-target-aws",
+				Namespace: "K8S",
+				Config: json.RawMessage(`{
+					"Type":"K8S",
+					"Auth":{
+						"Type":"EKS",
+						"Endpoint":{"$ref":"formae://cluster1#/Endpoint","$value":"https://abc.eks.amazonaws.com"},
+						"CertificateAuthority":{"$ref":"formae://cluster1#/CertificateAuthorityData","$value":"LS0tLS1CRUdJTg=="},
+						"ClusterName":{"$ref":"formae://cluster1#/Name","$value":"k8s-fullstack"}
+					},
+					"ApiVersion":"v1.34"
+				}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"cluster1": {
+				Ksuid:              "cluster1",
+				Properties:         json.RawMessage(`{"Name":"k8s-fullstack"}`),
+				ReadOnlyProperties: json.RawMessage(`{"Endpoint":"https://abc.eks.amazonaws.com","CertificateAuthorityData":"LS0tLS1CRUdJTg=="}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target-aws",
+			Namespace: "K8S",
+			Config: json.RawMessage(`{
+				"Type":"K8S",
+				"Auth":{
+					"Type":"EKS",
+					"Endpoint":{"$ref":"formae://cluster1#/Endpoint"},
+					"CertificateAuthority":{"$ref":"formae://cluster1#/CertificateAuthorityData"},
+					"ClusterName":{"$ref":"formae://cluster1#/Name"}
+				},
+				"ApiVersion":"v1.34"
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "nested $ref+$value vs $ref-only with same resolved values must not produce an update")
+}

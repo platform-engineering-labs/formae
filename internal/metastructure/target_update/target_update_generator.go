@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/tidwall/gjson"
-
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -230,14 +228,14 @@ func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.
 			return existingConfig, newConfig, false, nil
 		}
 
-		value := gjson.GetBytes(resource.Properties, propertyPath)
-		if !value.Exists() {
+		strVal, ok := resource.GetProperty(propertyPath)
+		if !ok {
 			slog.Debug("Referenced property not found in resource, treating as config change",
 				"uri", uri, "propertyPath", propertyPath)
 			return existingConfig, newConfig, false, nil
 		}
 
-		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, value.String())
+		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, strVal)
 		if err != nil {
 			return existingConfig, newConfig, false, nil
 		}
