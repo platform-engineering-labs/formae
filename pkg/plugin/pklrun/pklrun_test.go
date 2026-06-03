@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Env keys driving the fake pkl binary (see TestHelperProcess). They are passed
@@ -111,11 +112,32 @@ func TestEnsureProjectResolved_MissingDeps_Resolves(t *testing.T) {
 	}
 }
 
-func TestEnsureProjectResolved_PresentDeps_Skips(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, depsFile), []byte("{}"), 0o644); err != nil {
+// writeProjectWithDeps writes a PklProject and its deps.json into dir, then
+// stamps them so the PklProject's mtime is projAge before the deps.json's. A
+// negative projAge makes the project older (fresh deps); a positive one makes it
+// newer (stale deps).
+func writeProjectWithDeps(t *testing.T, dir string, projAge time.Duration) {
+	t.Helper()
+	proj := filepath.Join(dir, projectFile)
+	deps := filepath.Join(dir, depsFile)
+	if err := os.WriteFile(proj, []byte("amends \"pkl:Project\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(deps, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(deps, base, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(proj, base.Add(projAge), base.Add(projAge)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureProjectResolved_FreshDeps_Skips(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectWithDeps(t, dir, -time.Minute) // PklProject older than deps.json
 	counter := filepath.Join(t.TempDir(), "calls")
 	useFakePkl(t, counter, 0, "")
 
@@ -124,7 +146,22 @@ func TestEnsureProjectResolved_PresentDeps_Skips(t *testing.T) {
 	}
 
 	if n := invocations(t, counter); n != 0 {
-		t.Fatalf("expected 0 resolve invocations when %s present, got %d", depsFile, n)
+		t.Fatalf("expected 0 resolve invocations when deps.json is fresh, got %d", n)
+	}
+}
+
+func TestEnsureProjectResolved_StaleDeps_Resolves(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectWithDeps(t, dir, time.Minute) // PklProject newer than deps.json
+	counter := filepath.Join(t.TempDir(), "calls")
+	useFakePkl(t, counter, 0, "")
+
+	if err := ensureProjectResolved(dir, fakePklCommand()); err != nil {
+		t.Fatalf("ensureProjectResolved: %v", err)
+	}
+
+	if n := invocations(t, counter); n != 1 {
+		t.Fatalf("expected 1 resolve invocation when PklProject is newer than deps.json, got %d", n)
 	}
 }
 

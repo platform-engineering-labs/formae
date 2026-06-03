@@ -87,19 +87,37 @@ func ProjectResolve(projectDir string, opts ...Option) error {
 	return runPklProjectResolve(projectDir, cfg.pklCmd)
 }
 
-// ensureProjectResolved runs `pkl project resolve` when projectDir has a
-// PklProject but no resolved PklProject.deps.json. When the deps file already
-// exists it is a no-op, so resolution happens at most once per project dir.
+// ensureProjectResolved runs `pkl project resolve` when the project's resolved
+// dependency set is missing or out of date:
+//
+//   - PklProject.deps.json absent            → resolve (never resolved before)
+//   - PklProject newer than its deps.json    → resolve (deps edited after the
+//     last resolve; the cached set is stale)
+//   - otherwise                              → no-op (trust the resolved set)
+//
+// The mtime check closes the gap where editing dependencies without deleting
+// deps.json would silently evaluate against the old resolved set.
 func ensureProjectResolved(projectDir string, pklCmd []string) error {
 	deps := filepath.Join(projectDir, depsFile)
-	switch _, err := os.Stat(deps); {
-	case err == nil:
-		return nil // already resolved
+	depsInfo, err := os.Stat(deps)
+	switch {
 	case os.IsNotExist(err):
 		return runPklProjectResolve(projectDir, pklCmd)
-	default:
+	case err != nil:
 		return fmt.Errorf("failed to stat %s: %w", deps, err)
 	}
+
+	// deps.json exists — re-resolve if the PklProject has been touched since.
+	projInfo, err := os.Stat(filepath.Join(projectDir, projectFile))
+	if err != nil {
+		// No (readable) PklProject to compare against; trust the existing
+		// deps.json rather than guessing.
+		return nil
+	}
+	if projInfo.ModTime().After(depsInfo.ModTime()) {
+		return runPklProjectResolve(projectDir, pklCmd)
+	}
+	return nil
 }
 
 // runPklProjectResolve invokes `pkl project resolve <dir>`. Combined
