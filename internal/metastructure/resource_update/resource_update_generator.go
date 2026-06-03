@@ -1389,7 +1389,7 @@ func synthesizeCascadeUpdatePatch(
 		if parent, ok := formaByKsuid[ksuid]; ok && parent != nil && ref.SourcePropertyName != "" && len(parent.Properties) > 0 {
 			sourceFieldIsProviderAssigned := false
 			if replacedKsuids[ksuid] {
-				if hint, hintOk := parent.Schema.Hints[ref.SourcePropertyName]; hintOk && hint.HasProviderDefault {
+				if hint, hintOk := parent.Schema.Hints[stripArrayIndicesForHintLookup(ref.SourcePropertyName)]; hintOk && hint.HasProviderDefault {
 					sourceFieldIsProviderAssigned = true
 				}
 			}

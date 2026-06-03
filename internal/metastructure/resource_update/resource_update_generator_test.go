@@ -1756,3 +1756,55 @@ func TestSynthesizeCascadeUpdatePatch_DeletedParentNotReplaced(t *testing.T) {
 	assert.NotContains(t, patchStr, "$cascade-resolvable",
 		"no marker for DELETE-only when the forma has the value")
 }
+
+// TestSynthesizeCascadeUpdatePatch_ReplacedParentIndexedProviderField covers
+// the case where a dependent's Resolvable targets a provider-assigned field
+// nested inside an array on the parent (e.g. an ALB Listener referencing
+// /DefaultActions/0/TargetGroupArn). Schema hint keys are stored without
+// numeric segments, so the lookup must strip array indices before consulting
+// HasProviderDefault — otherwise REPLACE'd parents fall through to the
+// recover-concrete-value path and emit the stale cached value.
+func TestSynthesizeCascadeUpdatePatch_ReplacedParentIndexedProviderField(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "listener",
+		Type:  "AWS::ElasticLoadBalancingV2::Listener",
+		Properties: json.RawMessage(`{
+			"Name": "listener-1",
+			"TargetGroupRef": {"$ref": "formae://` + parentKsuid + `#/DefaultActions.0.TargetGroupArn", "$value": "arn:aws:elasticloadbalancing:...:targetgroup/old/1111"}
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "alb",
+			Ksuid:      parentKsuid,
+			Type:       "AWS::ElasticLoadBalancingV2::TargetGroup",
+			Properties: json.RawMessage(`{"DefaultActions": [{"TargetGroupArn": "arn:aws:elasticloadbalancing:...:targetgroup/old/1111"}]}`),
+			Schema: pkgmodel.Schema{
+				Hints: map[string]pkgmodel.FieldHint{
+					// Schema hints are keyed without array indices.
+					"DefaultActions.TargetGroupArn": {HasProviderDefault: true},
+				},
+			},
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]bool{parentKsuid: true}, // parent is REPLACE'd
+		map[string]string{parentKsuid: "alb"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"indexed provider-assigned source on REPLACE'd parent must still emit the marker after array-index stripping")
+	assert.Contains(t, patchStr, `"alb"`, "marker must carry the source label")
+	assert.Contains(t, patchStr, `"arn:aws:elasticloadbalancing:...:targetgroup/old/1111"`,
+		"marker must carry the current $value so the user sees what is being replaced")
+	// The stale value must appear only inside the cascade marker, not as a bare replace target.
+	assert.NotContains(t, patchStr, `"value":"arn:`,
+		"stale cached value must not be emitted as a bare concrete replace value outside the cascade marker")
+}
