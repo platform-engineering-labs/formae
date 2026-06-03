@@ -416,7 +416,11 @@ func TestCleanPatchPath(t *testing.T) {
 	})
 }
 
-func TestFormatPatchDocument_TagsPropertyCreated_ShowsTagsAndManagementMessage(t *testing.T) {
+// RFC-0041: the "put resource under management" patch-document subnode is
+// gone — formatSimulatedResourceUpdate now emits dedicated `label: <old> -> <new>`
+// and `from unmanaged to <stack>` sub-lines on the parent entry, so the
+// patch document stays focused on actual property changes.
+func TestFormatPatchDocument_TagsPropertyCreated_NoManagementMessage(t *testing.T) {
 	node := gtree.NewRoot("")
 	patchDoc := []map[string]any{
 		{
@@ -437,23 +441,26 @@ func TestFormatPatchDocument_TagsPropertyCreated_ShowsTagsAndManagementMessage(t
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
 
-	// Should have: root node, tags display, and management message
-	assert.GreaterOrEqual(t, len(nodes), 2, "Expected at least root + management message")
-
 	nodeNames := make([]string, len(nodes))
 	for i, n := range nodes {
 		nodeNames[i] = n.Name()
 	}
 
-	// Verify "put resource under management" message is present
-	hasManagementMessage := false
+	// Tags must still surface in the patch document.
+	hasTags := false
 	for _, name := range nodeNames {
-		if contains(name, "put resource under management") {
-			hasManagementMessage = true
+		if containsAny(name, []string{"Environment", "Team", "production", "platform-eng", "Tags"}) {
+			hasTags = true
 			break
 		}
 	}
-	assert.True(t, hasManagementMessage, "Should show management message when oldStackName is $unmanaged")
+	assert.True(t, hasTags, "Should still render tag patch entries")
+
+	// "put resource under management" must NOT appear inside the patch document.
+	for _, name := range nodeNames {
+		assert.False(t, contains(name, "put resource under management"),
+			"RFC-0041 dropped the redundant management message from the patch document")
+	}
 }
 
 func TestFormatPatchDocument_TagsPropertyCreatedWithOnlyCustomTags_ShowsOnlyCustomTags(t *testing.T) {
@@ -610,8 +617,12 @@ func TestFormatPatchDocument_RemoveArrayEntry_ShowsRemovedValue(t *testing.T) {
 	})
 }
 
-func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_ShowsManagementMessage(t *testing.T) {
-	t.Run("empty patch document with $unmanaged oldStackName shows management message", func(t *testing.T) {
+// RFC-0041: empty patch + $unmanaged old stack must NOT add a child entry.
+// The parent update entry's `from unmanaged to <stack>` sub-line (and the
+// `label:` sub-line if a rename is happening) cover the transition; the
+// patch document is reserved for actual property changes.
+func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_NoChildEntries(t *testing.T) {
+	t.Run("empty patch document with $unmanaged oldStackName emits no child entries", func(t *testing.T) {
 		node := gtree.NewRoot("")
 		emptyPatchDoc := json.RawMessage("[]")
 		properties := json.RawMessage("{}")
@@ -622,9 +633,8 @@ func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_ShowsManagementMess
 		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 		assert.NoError(t, err)
 
-		// Should have root node + management message
-		assert.Len(t, nodes, 2)
-		assert.Contains(t, nodes[1].Name(), "put resource under management")
+		// Root only — no "put resource under management" child anymore.
+		assert.Len(t, nodes, 1)
 	})
 
 	t.Run("empty patch document without $unmanaged oldStackName shows nothing", func(t *testing.T) {
