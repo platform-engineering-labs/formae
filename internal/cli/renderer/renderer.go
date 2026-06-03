@@ -409,26 +409,31 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	node := root.Add(line)
 
 	node.Add(fmt.Sprintf(display.Grey("of type ")+"%s", rc.ResourceType))
-	// RFC-0041: a label change is part of an OperationUpdate, not a separate
-	// op type. We keep the existing UPDATE verb and highlight the rename via
-	// a dedicated sub-line so the diff stays consistent with how stack
-	// changes are surfaced (also UPDATE with a "from X to Y" sub-line).
-	if rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel {
-		node.Add(display.Gold("label: ") + display.Red(rc.OldLabel) + display.Grey(" -> ") + display.Green(rc.ResourceLabel))
-	}
 	node.Add(formatStackLine(rc.Operation, rc.OldStackName, rc.StackName))
 
 	if rc.IsCascade && rc.CascadeSource != "" {
 		node.Add(display.Grey("because it depends on ") + display.LightBlue(rc.CascadeSource))
 	}
 
-	if rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0 {
+	// RFC-0041: render a label rename and property changes together inside
+	// the `by doing the following:` block. The rename surfaces as a
+	// `change label from "<old>" to "<new>"` entry, matching the
+	// `change property` style. This keeps the diff body the single place
+	// the operator scans for what's actually changing.
+	renamed := rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel
+	hasPatch := rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0
+	if renamed || hasPatch {
 		propertiesNode := node.Add(display.Grey("by doing the following:"))
-		refLabels := rc.ReferenceLabels
-		if refLabels == nil {
-			refLabels = make(map[string]string)
+		if renamed {
+			propertiesNode.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
 		}
-		FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+		if hasPatch {
+			refLabels := rc.ReferenceLabels
+			if refLabels == nil {
+				refLabels = make(map[string]string)
+			}
+			FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+		}
 	}
 
 	if rc.Operation == apimodel.OperationReplace && len(rc.CreateOnlyPatch) > 0 {

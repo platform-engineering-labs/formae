@@ -14,11 +14,10 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
-// RFC-0041: pure label rename — OldLabel set, no PatchDocument property delta.
-// The renderer shows the normal "update" verb and adds a highlighted
-// "label: <old> -> <new>" sub-line. There is no separate RENAME verb because
-// a rename is part of OperationUpdate; the verb stays consistent with how
-// the engine actually models the change.
+// RFC-0041: pure label rename. The renderer keeps the existing `update`
+// verb and surfaces the rename inside the `by doing the following:` block
+// as a `change label from "<old>" to "<new>"` entry, matching the
+// `change property` style.
 func TestRenderSimulation_PureLabelRename(t *testing.T) {
 	simulation := apimodel.Simulation{
 		ChangesRequired: true,
@@ -45,13 +44,14 @@ func TestRenderSimulation_PureLabelRename(t *testing.T) {
 	result = stripAnsiCodes(t, result)
 
 	assert.Contains(t, result, "update resource app-server", "verb stays as update")
-	assert.Contains(t, result, "label: web-server -> app-server", "label change highlighted as a sub-line")
+	assert.Contains(t, result, "by doing the following:", "rename surfaces inside the patch block")
+	assert.Contains(t, result, `change label from "web-server" to "app-server"`, "label rename rendered as a patch-style entry")
+	assert.NotContains(t, result, "label: web-server -> app-server", "no parent-level label sub-line")
 	assert.NotContains(t, result, "RENAME", "no dedicated RENAME verb")
-	assert.NotContains(t, result, "[RENAME+UPDATE]", "no combined verb either")
 }
 
-// Label rename + property change in same update — verb stays "update";
-// label change shows on its own sub-line; property patch listed below.
+// Label rename + property change — both surface inside the same
+// `by doing the following:` block. Label first, then property changes.
 func TestRenderSimulation_RenameWithPropertyChange(t *testing.T) {
 	patch := json.RawMessage(`[{"op":"replace","path":"/InstanceType","value":"t3.medium"}]`)
 	oldProps := json.RawMessage(`{"InstanceType":"t3.small"}`)
@@ -84,14 +84,14 @@ func TestRenderSimulation_RenameWithPropertyChange(t *testing.T) {
 	assert.NoError(t, err)
 	result = stripAnsiCodes(t, result)
 
-	assert.Contains(t, result, "update resource app-server", "verb stays as update")
-	assert.Contains(t, result, "label: web-server -> app-server", "label change shown")
-	assert.Contains(t, result, "by doing the following:", "patch listing follows")
-	assert.NotContains(t, result, "RENAME")
+	assert.Contains(t, result, "update resource app-server")
+	assert.Contains(t, result, `change label from "web-server" to "app-server"`)
+	assert.Contains(t, result, "InstanceType", "property change still rendered")
 }
 
-// RFC-0041 edge case: bringing under management AND renaming.
-// Both transitions surface — label change AND "from unmanaged to prod".
+// RFC-0041 edge case: bring-under-management + rename. The `change label`
+// entry appears alongside the `from unmanaged to <stack>` sub-line on the
+// parent.
 func TestRenderSimulation_BringingUnderManagementAndRename(t *testing.T) {
 	simulation := apimodel.Simulation{
 		ChangesRequired: true,
@@ -117,14 +117,15 @@ func TestRenderSimulation_BringingUnderManagementAndRename(t *testing.T) {
 	assert.NoError(t, err)
 	result = stripAnsiCodes(t, result)
 
-	assert.Contains(t, result, "update resource web-server", "verb stays as update")
-	assert.Contains(t, result, "label: i-0abc1234 -> web-server", "label change shown")
-	assert.Contains(t, result, "from unmanaged to prod", "stack move from unmanaged shown")
-	assert.NotContains(t, result, "RENAME")
+	assert.Contains(t, result, "update resource web-server")
+	assert.Contains(t, result, `change label from "i-0abc1234" to "web-server"`)
+	assert.Contains(t, result, "from unmanaged to prod", "stack-move sub-line on the parent")
+	assert.NotContains(t, result, "put resource under management",
+		"the redundant management message was dropped — the stack-move sub-line covers it")
 }
 
-// No rename + property change -> existing UPDATE verb unchanged, no label
-// sub-line. Regression guard against the rename detection misfiring.
+// No rename + property change -> existing UPDATE verb, no `change label`
+// entry. Regression guard against the rename detection misfiring.
 func TestRenderSimulation_PlainUpdate_NoOldLabel(t *testing.T) {
 	patch := json.RawMessage(`[{"op":"replace","path":"/InstanceType","value":"t3.medium"}]`)
 
@@ -153,6 +154,6 @@ func TestRenderSimulation_PlainUpdate_NoOldLabel(t *testing.T) {
 	result = stripAnsiCodes(t, result)
 
 	assert.Contains(t, result, "update resource web-server")
+	assert.NotContains(t, result, "change label")
 	assert.NotContains(t, result, "label:")
-	assert.NotContains(t, result, "RENAME")
 }
