@@ -25,6 +25,7 @@ const (
 	ViolationResolvableNotResolved                       // resolvable $ref not properly resolved
 	ViolationModelInventoryMismatch                      // model expected state doesn't match inventory
 	ViolationDuplicateNativeID                           // two or more inventory rows share a NativeID (RFC-0041)
+	ViolationRenameOldLabelStillPresent                  // after rename, inventory still has a row at the old label (RFC-0041)
 )
 
 // Violation describes a single invariant violation.
@@ -803,6 +804,53 @@ func CheckOperationLogInvariants(opLog []testcontrol.OperationLogEntry) []Violat
 				Kind:    ViolationPropertyMismatch,
 				Message: fmt.Sprintf("operation log entry %d has operation %s without resource type", i, entry.Operation),
 			})
+		}
+	}
+
+	return violations
+}
+
+// CheckRenameInvariants verifies RFC-0041 invariants after one or more
+// renames. For every slot whose PreviousLabel is non-empty (a rename
+// landed on it), the inventory must NOT carry a current row at the old
+// (Stack, Type, PreviousLabel) tuple — that would mean the rename either
+// failed silently or produced a duplicate row instead of renaming the
+// existing one.
+func CheckRenameInvariants(model *StateModel, inventory []pkgmodel.Resource) []Violation {
+	var violations []Violation
+	if model == nil {
+		return violations
+	}
+
+	// Index inventory rows by (stack, type, label) for O(1) lookup.
+	type key struct{ stack, typ, label string }
+	rows := make(map[key]pkgmodel.Resource, len(inventory))
+	for _, r := range inventory {
+		rows[key{stack: r.Stack, typ: r.Type, label: r.Label}] = r
+	}
+
+	for stackIdx, stack := range model.Stacks {
+		for slotIdx, res := range stack.Resources {
+			if res == nil || res.PreviousLabel == "" {
+				continue
+			}
+			// Determine the resource type by consulting the pool when one is
+			// present; otherwise default to Test::Generic::Resource.
+			resType := "Test::Generic::Resource"
+			if model.Pool != nil && slotIdx < len(model.Pool.Slots) {
+				resType = model.Pool.Slots[slotIdx].Type
+			}
+			oldKey := key{stack: stack.Label, typ: resType, label: res.PreviousLabel}
+			if hit, present := rows[oldKey]; present && hit.Managed {
+				violations = append(violations, Violation{
+					Kind: ViolationRenameOldLabelStillPresent,
+					Message: fmt.Sprintf(
+						"slot %d (stack %s, type %s) was renamed away from %q but a managed inventory row still carries that label (ksuid=%s, nativeID=%s)",
+						slotIdx, stack.Label, resType, res.PreviousLabel, hit.Ksuid, hit.NativeID,
+					),
+				})
+			}
+			_ = stackIdx // silence linter; index kept for symmetry with other checks
 		}
 	}
 

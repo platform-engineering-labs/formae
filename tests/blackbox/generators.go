@@ -93,6 +93,9 @@ func allowedKinds(config PropertyTestConfig) []OperationKind {
 	if config.EnableCrashInjection {
 		kinds = append(kinds, OpCrashAgent)
 	}
+	if config.EnableRename {
+		kinds = append(kinds, OpRename)
+	}
 
 	return kinds
 }
@@ -259,6 +262,18 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 
 	case OpCheckTTL:
 		// No additional fields needed
+
+	case OpRename:
+		// RFC-0041: rename a managed resource's label via `alias`. Pick a
+		// slot index from the pool. The executor will skip the op if the
+		// slot is not in StateExists at the time of execution (the rapid
+		// generator runs before any state is realised). For pool-based
+		// configs prefer parent slots so we don't trip over child slots
+		// referencing parent labels (the forma builder does not thread
+		// label overrides through ParentLabelForStack).
+		op.StackIndex = stackIndexGen(t, config)
+		op.RenameSlotIndex = renameSlotIndexGen(t, config, pool, slotCount)
+		op.RenameNewLabel = renameLabelGen(t)
 
 	case OpSetTTLPolicy:
 		op.StackIndex = stackIndexGen(t, config)
@@ -522,4 +537,39 @@ func subsequenceGen(t *rapid.T, values []string, label string) []string {
 		return []string{}
 	}
 	return result
+}
+
+// renameSlotIndexGen picks a slot index to target for OpRename. For pool-based
+// configs we prefer parent slots: the forma builder does not thread label
+// overrides through ParentLabelForStack / CrossStackParentLabelForStack, so
+// renaming a parent that has child references would leave subsequent applies
+// pointing at the parent's old label. Parents (no parent of their own) are
+// safe.
+//
+// For flat configs (no pool), any slot is renameable.
+func renameSlotIndexGen(t *rapid.T, config PropertyTestConfig, pool *ResourcePool, slotCount int) int {
+	if pool == nil {
+		return rapid.IntRange(0, config.ResourceCount-1).Draw(t, "renameSlot")
+	}
+	var candidates []int
+	for i := 0; i < slotCount; i++ {
+		if pool.IsParent(i) {
+			candidates = append(candidates, i)
+		}
+	}
+	if len(candidates) == 0 {
+		// Fallback to slot 0 to keep the generator total (it will be a no-op
+		// at execution time if the slot doesn't exist).
+		return 0
+	}
+	return rapid.SampledFrom(candidates).Draw(t, "renameSlot")
+}
+
+// renameLabelGen produces a fresh label string for an OpRename. The label
+// space is small and unique; collisions across operations are unlikely
+// within a single sequence but the executor refuses ops where the new
+// label already exists in the stack.
+func renameLabelGen(t *rapid.T) string {
+	suffix := rapid.IntRange(100, 9999).Draw(t, "renameLabelSuffix")
+	return fmt.Sprintf("renamed-%d", suffix)
 }

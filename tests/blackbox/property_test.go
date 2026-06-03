@@ -177,3 +177,60 @@ func TestProperty_FullChaos(t *testing.T) {
 		})
 	})
 }
+
+// TestProperty_Rename exercises ONLY the OpRename operation against a
+// stack of pre-applied resources. No other chaos ops (no applies, no
+// destroys, no cloud drift, no crashes). The intent is to isolate the
+// rename code path so any invariant failure points squarely at rename
+// logic, not at interaction with another op.
+//
+// Sequence per rapid sample:
+//  1. ResetAgentState, NewStateModel, SetupStacks — gives us a stack
+//     with resources already in StateExists.
+//  2. Draw N OpRename ops on slots that exist. Each op picks a slot
+//     and a fresh label.
+//  3. Execute the renames in order.
+//  4. DrainPendingCommands + TriggerSyncAndWait + AssertAllInvariants
+//     (which runs CheckInvariants — duplicate-NativeID guard — and
+//     CheckRenameInvariants — no old-label-still-current guard).
+func TestProperty_Rename(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		h := NewTestHarness(t, 10*time.Second)
+		defer h.Cleanup()
+
+		rapid.Check(t, func(rt *rapid.T) {
+			// Config drives only resource pool size + rename count. No
+			// other ops are enabled.
+			config := PropertyTestConfig{
+				ResourceCount: 10,
+				StackCount:    1,
+			}
+
+			h.ResetAgentState(t)
+			model := NewStateModel(config.StackCount, config.ResourceCount)
+			h.SetupStacks(t, model, config)
+
+			// Draw a small number of rename operations directly. We do NOT
+			// use OperationSequenceGen here because that draws from
+			// allowedKinds and would mix other ops in.
+			pool := resourcePoolForConfig(config)
+			slotCount := slotCountForConfig(config, pool)
+			renameCount := rapid.IntRange(1, 5).Draw(rt, "renameCount")
+
+			for i := 0; i < renameCount; i++ {
+				op := Operation{
+					Kind:            OpRename,
+					StackIndex:      0,
+					RenameSlotIndex: renameSlotIndexGen(rt, config, pool, slotCount),
+					RenameNewLabel:  renameLabelGen(rt),
+					SequenceNum:     i,
+				}
+				h.ExecuteOperation(t, &op, model)
+			}
+
+			h.DrainPendingCommands(t, model, 30*time.Second)
+			h.TriggerSyncAndWait(t)
+			h.AssertAllInvariants(t, model)
+		})
+	})
+}

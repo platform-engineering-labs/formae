@@ -299,6 +299,8 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 		h.executeCancel(t, op, model)
 	case OpCrashAgent:
 		h.executeCrashAgent(t, model)
+	case OpRename:
+		h.executeRename(t, op, model)
 	default:
 		t.Fatalf("unknown operation kind: %d", op.Kind)
 	}
@@ -397,7 +399,7 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	if len(model) > 0 && model[0] != nil {
 		ignoreManagedDriftNativeIDs = model[0].ManagedDriftNativeIDs()
 	}
-	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
+	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, ignoreManagedDriftNativeIDs, model...)
 	violations = append(violations, resourceViolations...)
 	if opLog, err := h.TryGetOperationLog(); err == nil {
 		violations = append(violations, CheckOperationLogInvariants(opLog)...)
@@ -440,7 +442,7 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 // prior rapid iterations can create cloud resources after ResetAgentState;
 // these resolve themselves once the stale operations complete and the cloud
 // entries are cleaned. Genuine invariant bugs persist across retries.
-func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool) []Violation {
+func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool, model ...*StateModel) []Violation {
 	t.Helper()
 
 	const maxRetries = 3
@@ -464,6 +466,12 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 			continue
 		}
 		resourceViolations := CheckInvariants(inventory, cloudState, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
+		// RFC-0041: also assert rename invariants whenever the model has
+		// recorded a rename. The check is a no-op when no PreviousLabel is
+		// set anywhere; cheap to run unconditionally.
+		if len(model) > 0 && model[0] != nil {
+			resourceViolations = append(resourceViolations, CheckRenameInvariants(model[0], inventory)...)
+		}
 
 		if len(resourceViolations) == 0 {
 			return nil
@@ -1089,11 +1097,12 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	}
 
 	stackLabel := model.Stack(op.StackIndex).Label
+	overrides := model.LabelOverrides(op.StackIndex)
 	var forma *pkgmodel.Forma
 	if model.Pool != nil {
-		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, op.ResourceIDs, op.Properties, op.ChildProperties)
+		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, op.ResourceIDs, op.Properties, op.ChildProperties, overrides)
 	} else {
-		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
+		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, overrides, op.Properties)
 	}
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
@@ -1209,7 +1218,7 @@ func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateMo
 func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromStackResources(stackLabel, existingIDs)
+	forma := FormaFromStackResources(stackLabel, existingIDs, model.LabelOverrides(op.StackIndex))
 
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
@@ -1269,7 +1278,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 		}
 	}
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps, model.LabelOverrides(op.StackIndex))
 
 	if hasDependents {
 		// Simulate to check whether the agent would create cascade deletes.
@@ -1342,7 +1351,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps, model.LabelOverrides(op.StackIndex))
 
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
@@ -2076,7 +2085,7 @@ func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config Proper
 		stackLabel := model.Stack(stackIdx).Label
 		ids := []int{0} // just the first resource
 
-		forma := FormaFromStackResources(stackLabel, ids)
+		forma := FormaFromStackResources(stackLabel, ids, nil)
 		resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
 		if err != nil {
 			t.Logf("SetupStacks: stack %s apply rejected: %v", stackLabel, err)
@@ -2344,13 +2353,19 @@ func (h *TestHarness) dumpRawResourceRows(t *testing.T, resources []pkgmodel.Res
 // FormaFromResourceIDs builds a forma containing the resources at the given
 // pool indices on the default stack. Used by smoke tests and ResetAgentState.
 func FormaFromResourceIDs(ids []int) *pkgmodel.Forma {
-	return FormaFromStackResources("default", ids)
+	return FormaFromStackResources("default", ids, nil)
 }
 
 // FormaFromStackResources builds a forma containing the resources at the given
 // pool indices on the specified stack, using the given properties template.
 // The "NAME" placeholder in propsTemplate is replaced with each resource's label.
-func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...string) *pkgmodel.Forma {
+// FormaFromStackResources builds a forma containing the resources at the given
+// slot indices. labelOverrides, if non-nil, maps slot index -> custom label;
+// for slots present in the map, the override is used instead of the default
+// index-derived label. Used to support OpRename: after a rename, the slot's
+// label override flows into subsequent applies so the renamed resource is
+// addressed by its new label.
+func FormaFromStackResources(stackLabel string, ids []int, labelOverrides map[int]string, propsTemplate ...string) *pkgmodel.Forma {
 	template := `{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`
 	if len(propsTemplate) > 0 && propsTemplate[0] != "" {
 		template = propsTemplate[0]
@@ -2359,6 +2374,9 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 	resources := make([]pkgmodel.Resource, len(ids))
 	for i, id := range ids {
 		name := resourceLabelForStack(stackLabel, id)
+		if override, ok := labelOverrides[id]; ok && override != "" {
+			name = override
+		}
 		props := strings.Replace(template, `"NAME"`, `"`+name+`"`, 1)
 		resources[i] = pkgmodel.Resource{
 			Label:      name,
@@ -2389,14 +2407,19 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 // types, schemas, and resolvable ParentId references for child/grandchild slots.
 // parentProps is the properties template for Test::Generic::Resource (with "NAME" placeholder).
 // childProps is the properties template for child/grandchild types (with "NAME" and "PARENT_ID" placeholders).
+// labelOverrides, if non-nil, maps slot index -> custom label and takes priority
+// over the pool's default LabelForStack derivation. Used by OpRename.
 func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStackLabel string, ids []int,
-	parentProps string, childProps string) *pkgmodel.Forma {
+	parentProps string, childProps string, labelOverrides map[int]string) *pkgmodel.Forma {
 
 	resources := make([]pkgmodel.Resource, 0, len(ids))
 
 	for _, idx := range ids {
 		slot := pool.Slots[idx]
 		label := pool.LabelForStack(stackLabel, idx)
+		if override, ok := labelOverrides[idx]; ok && override != "" {
+			label = override
+		}
 
 		switch {
 		case pool.IsParent(idx):
@@ -2743,11 +2766,12 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	policy := json.RawMessage(fmt.Sprintf(`{"Type":"ttl","TTLSeconds":%d,"OnDependents":"cascade"}`, ttlSeconds))
 
 	var forma *pkgmodel.Forma
+	overrides := model.LabelOverrides(model.StackIndexByLabel(stackLabel))
 	if model.Pool != nil {
 		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs,
-			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps)
+			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps, overrides)
 	} else {
-		forma = FormaFromStackResources(stackLabel, existingIDs, resourceProperties(stackLabel, existingIDs))
+		forma = FormaFromStackResources(stackLabel, existingIDs, overrides, resourceProperties(stackLabel, existingIDs))
 	}
 	for i := range forma.Stacks {
 		if forma.Stacks[i].Label == stackLabel {
@@ -2852,3 +2876,87 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }
+
+// executeRename implements OpRename (RFC-0041). It builds a forma containing
+// just the renamed resource — same stack/target/properties as the current
+// slot, with `Label = op.RenameNewLabel` and `Alias = <current label>` — and
+// dispatches via the existing ApplyForma path in patch mode.
+//
+// Skips and logs (rather than fails) when the slot is not in StateExists at
+// execution time: the rapid generator picks slot indices before any state
+// has been realised, so many draws will land on non-existing slots.
+//
+// On success, the state model's slot.CurrentLabel becomes the new label
+// and slot.PreviousLabel captures the pre-rename value, so subsequent
+// FormaFrom*Resources calls reference the slot by its new label.
+func (h *TestHarness) executeRename(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+
+	stack := model.Stack(op.StackIndex)
+	res, ok := stack.Resources[op.RenameSlotIndex]
+	if !ok || res == nil || res.State != StateExists {
+		t.Logf("[op %d] RenameLabel slot=%d in stack=%s → skipped (slot not in StateExists)",
+			op.SequenceNum, op.RenameSlotIndex, stack.Label)
+		return
+	}
+
+	oldLabel := model.LabelForSlot(op.StackIndex, op.RenameSlotIndex)
+	newLabel := op.RenameNewLabel
+	if newLabel == "" || newLabel == oldLabel {
+		t.Logf("[op %d] RenameLabel slot=%d in stack=%s → skipped (no-op label)",
+			op.SequenceNum, op.RenameSlotIndex, stack.Label)
+		return
+	}
+
+	// Build a forma containing just the renamed slot, with the rename declared
+	// via the alias field. Use the existing label-override path on the forma
+	// builder: a one-entry override map maps the slot to its new label.
+	overrides := map[int]string{op.RenameSlotIndex: newLabel}
+	ids := []int{op.RenameSlotIndex}
+	var forma *pkgmodel.Forma
+	if model.Pool != nil {
+		forma = FormaFromPoolResources(model.Pool, stack.Label, model.ProviderStackLabel, ids,
+			defaultRenameParentProps, defaultRenameChildProps, overrides)
+	} else {
+		forma = FormaFromStackResources(stack.Label, ids, overrides)
+	}
+
+	// Decorate the chosen resource with `alias = oldLabel`. The forma builder
+	// constructs the resource using the override label as `Label`; we then
+	// flip its Alias field to point at the previous label so the engine
+	// matches the existing managed row.
+	for i := range forma.Resources {
+		if forma.Resources[i].Stack == stack.Label && forma.Resources[i].Label == newLabel {
+			forma.Resources[i].Alias = oldLabel
+		}
+	}
+
+	resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModePatch, false, clientID, false)
+	if err != nil {
+		t.Logf("[op %d] RenameLabel slot=%d in stack=%s %q → %q → rejected: %v",
+			op.SequenceNum, op.RenameSlotIndex, stack.Label, oldLabel, newLabel, err)
+		return
+	}
+	if !resp.Simulation.ChangesRequired {
+		t.Logf("[op %d] RenameLabel slot=%d in stack=%s %q → %q → no changes required",
+			op.SequenceNum, op.RenameSlotIndex, stack.Label, oldLabel, newLabel)
+		return
+	}
+
+	commandID := resp.CommandID
+	t.Logf("[op %d] RenameLabel slot=%d in stack=%s %q → %q → command %s",
+		op.SequenceNum, op.RenameSlotIndex, stack.Label, oldLabel, newLabel, commandID)
+
+	snapshots := model.SnapshotResources(op.StackIndex, []int{op.RenameSlotIndex})
+
+	// Model update: record the rename. Subsequent ops on this slot will see
+	// the new label via LabelForSlot / LabelOverrides.
+	model.RecordRename(op.StackIndex, op.RenameSlotIndex, newLabel)
+	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, []int{op.RenameSlotIndex}), h.currentOperationLogSize(t), false)
+}
+
+// Default properties templates for renames. The rename op doesn't change
+// properties — these match the templates used by the destroy paths so the
+// forma is structurally valid.
+const defaultRenameParentProps = `{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`
+const defaultRenameChildProps = `{"Name":"NAME","ParentId":"PARENT_ID","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`

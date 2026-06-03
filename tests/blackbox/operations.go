@@ -45,6 +45,12 @@ const (
 	// Crash injection
 
 	OpCrashAgent // kill the agent with SIGKILL and restart it
+
+	// Rename (RFC-0041) — rename a managed resource's label via `alias`.
+	// The rename is metadata-only (no plugin call) and must preserve the
+	// resource's KSUID and NativeID across the operation.
+
+	OpRename
 )
 
 // Operation represents a single step in a property-test operation sequence.
@@ -94,6 +100,13 @@ type Operation struct {
 	// Key format: "stackIdx:slotIdx". If a resource update has no entry, it succeeds.
 	// nil map means no failure injection (all succeed).
 	DrawnOutcomes map[string]DrawnOutcome
+
+	// For OpRename: which slot to rename and what to rename it to. The slot
+	// must currently be in StateExists. After successful rename, the state
+	// model's slot.CurrentLabel becomes NewLabel and slot.PreviousLabel
+	// captures the pre-rename label. (RFC-0041.)
+	RenameSlotIndex int
+	RenameNewLabel  string
 
 	// Set during execution to track ordering.
 	SequenceNum int
@@ -185,6 +198,10 @@ type PropertyTestConfig struct {
 
 	// EnableCrashInjection allows OpCrashAgent operations (kill -9 + restart).
 	EnableCrashInjection bool
+
+	// EnableRename allows OpRename operations (RFC-0041). When set the
+	// generator may draw a rename for any slot currently in StateExists.
+	EnableRename bool
 
 	// StackCount is the number of independent stacks (1 for sequential tests, 2-3 for concurrent).
 	StackCount int

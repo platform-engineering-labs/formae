@@ -29,6 +29,16 @@ type ExpectedResource struct {
 	Index      int
 	Properties string
 	State      ResourceState
+	// CurrentLabel overrides the default index-derived label for this slot.
+	// Set when an OpRename has renamed the slot's resource. Empty means the
+	// slot uses the default label produced by resourceLabelForStack().
+	// (RFC-0041 follow-up: enables OpRename in the rapid generators.)
+	CurrentLabel string
+	// PreviousLabel is the label this slot carried before the most recent
+	// rename. Used by OpRename invariants and by executeRename to build the
+	// `alias` field on the next forma. Cleared once a subsequent rename
+	// records its own previous label.
+	PreviousLabel string
 }
 
 // ExpectedUnmanagedResource tracks the expected state of a discovered
@@ -173,6 +183,80 @@ func (m *StateModel) GetNativeID(stackIdx, slotIdx int) string {
 
 func (m *StateModel) ClearNativeID(stackIdx, slotIdx int) {
 	delete(m.NativeIDs, nativeIDKey(stackIdx, slotIdx))
+}
+
+// LabelForSlot returns the label that callers should use when building a
+// forma for the resource at (stackIdx, slotIdx). Returns the slot's
+// CurrentLabel if a rename has overridden the default; otherwise falls back
+// to the index-derived default produced by resourceLabelForStack.
+//
+// (RFC-0041 follow-up.) Generators and the executor consult this helper
+// instead of calling resourceLabelForStack directly so that subsequent ops
+// on a renamed slot use the rename's new label.
+func (m *StateModel) LabelForSlot(stackIdx, slotIdx int) string {
+	stack := m.Stack(stackIdx)
+	if res, ok := stack.Resources[slotIdx]; ok && res != nil && res.CurrentLabel != "" {
+		return res.CurrentLabel
+	}
+	return resourceLabelForStack(stack.Label, slotIdx)
+}
+
+// PreviousLabelForSlot returns the label this slot carried before the most
+// recent rename, or empty if no rename has happened. Used by executeRename
+// to populate the `alias` field on the renamed-resource forma.
+func (m *StateModel) PreviousLabelForSlot(stackIdx, slotIdx int) string {
+	stack := m.Stack(stackIdx)
+	if res, ok := stack.Resources[slotIdx]; ok && res != nil {
+		return res.PreviousLabel
+	}
+	return ""
+}
+
+// RecordRename updates the model after a successful rename. After this call,
+// LabelForSlot returns newLabel and PreviousLabelForSlot returns oldLabel
+// (where oldLabel is the value LabelForSlot returned immediately before
+// this call).
+func (m *StateModel) RecordRename(stackIdx, slotIdx int, newLabel string) {
+	stack := m.Stack(stackIdx)
+	res, ok := stack.Resources[slotIdx]
+	if !ok || res == nil {
+		return
+	}
+	res.PreviousLabel = m.LabelForSlot(stackIdx, slotIdx)
+	res.CurrentLabel = newLabel
+}
+
+// StackIndexByLabel returns the stack index for the given stack label, or -1
+// if no stack with that label exists.
+func (m *StateModel) StackIndexByLabel(label string) int {
+	for i := range m.Stacks {
+		if m.Stacks[i].Label == label {
+			return i
+		}
+	}
+	return -1
+}
+
+// LabelOverrides returns a map of slot index -> current label for slots that
+// have been renamed. Callers that build a forma for a stack pass this map to
+// FormaFromPoolResources / FormaFromStackResources so the constructed forma
+// references resources by their post-rename labels. A nil or empty map means
+// every slot uses its default index-derived label.
+func (m *StateModel) LabelOverrides(stackIdx int) map[int]string {
+	if stackIdx < 0 || stackIdx >= len(m.Stacks) {
+		return nil
+	}
+	stack := m.Stack(stackIdx)
+	var overrides map[int]string
+	for idx, res := range stack.Resources {
+		if res != nil && res.CurrentLabel != "" {
+			if overrides == nil {
+				overrides = make(map[int]string)
+			}
+			overrides[idx] = res.CurrentLabel
+		}
+	}
+	return overrides
 }
 
 // FindExistingResourceWithNativeID finds a managed resource that exists in the
