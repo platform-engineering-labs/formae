@@ -351,14 +351,30 @@ func createDisplayUpdateFromGroup(group []apimodel.ResourceUpdate) apimodel.Reso
 		// Merge the fields needed to render the replacement reason. The
 		// delete half carries CreateOnlyPatch and the old property values;
 		// the create half carries the new property values.
+		//
+		// RFC-0041: if the replace coincides with a rename, the delete half
+		// holds the OLD label (it was constructed from the existing managed
+		// row) and the create half holds the NEW label (from the forma's
+		// renamed declaration). Surface that delta as OldLabel + use the new
+		// label as the display name so the operator sees the resource at its
+		// post-apply identity.
+		var deleteLabel, createLabel string
 		for _, update := range group {
 			switch update.Operation {
 			case apimodel.OperationDelete:
 				displayUpdate.CreateOnlyPatch = update.CreateOnlyPatch
 				displayUpdate.OldProperties = update.Properties
+				deleteLabel = update.ResourceLabel
 			case apimodel.OperationCreate:
 				displayUpdate.Properties = update.Properties
+				createLabel = update.ResourceLabel
 			}
+		}
+		if createLabel != "" {
+			displayUpdate.ResourceLabel = createLabel
+		}
+		if deleteLabel != "" && createLabel != "" && deleteLabel != createLabel {
+			displayUpdate.OldLabel = deleteLabel
 		}
 	} else if hasDelete {
 		displayUpdate.Operation = apimodel.OperationDelete
@@ -434,6 +450,15 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 			}
 			FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
 		}
+	}
+
+	// RFC-0041: a replace that coincides with a rename. Replace renders the
+	// `because these immutable properties changed:` block below; the rename
+	// itself isn't an immutable-property change, so surface it as its own
+	// `change label from "<old>" to "<new>"` line at the parent level. Same
+	// shape as `from stack X to Y` for stack moves on a replace.
+	if rc.Operation == apimodel.OperationReplace && renamed {
+		node.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
 	}
 
 	if rc.Operation == apimodel.OperationReplace && len(rc.CreateOnlyPatch) > 0 {

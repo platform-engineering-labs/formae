@@ -124,6 +124,67 @@ func TestRenderSimulation_BringingUnderManagementAndRename(t *testing.T) {
 		"the redundant management message was dropped — the stack-move sub-line covers it")
 }
 
+// RFC-0041: a replace (CreateOnly property changed) that coincides with a
+// rename. The replace pair is delete(old-label) + create(new-label) with the
+// same GroupID. The renderer must:
+//   - show the resource at the NEW label (its post-apply identity), not the
+//     old one;
+//   - surface the label rename as a `change label from "<old>" to "<new>"`
+//     line at the parent level (replace doesn't use `by doing the following:`,
+//     it uses `because these immutable properties changed:`);
+//   - still show the immutable-property-change block.
+func TestRenderSimulation_ReplaceWithRename(t *testing.T) {
+	createOnlyPatch := json.RawMessage(`[{"op":"replace","path":"/CidrBlock","value":"172.32.0.0/16"}]`)
+	oldProps := json.RawMessage(`{"CidrBlock":"172.31.0.0/16"}`)
+	newProps := json.RawMessage(`{"CidrBlock":"172.32.0.0/16"}`)
+	groupID := util.NewID()
+
+	simulation := apimodel.Simulation{
+		ChangesRequired: true,
+		Command: apimodel.Command{
+			CommandID: "replace-with-rename-id",
+			Command:   "apply",
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{
+					ResourceID:      util.NewID(),
+					ResourceType:    "AWS::EC2::VPC",
+					ResourceLabel:   "vpc-008eef40942ac586b",
+					StackName:       "demo",
+					Operation:       apimodel.OperationDelete,
+					State:           "NotStarted",
+					GroupID:         groupID,
+					Properties:      oldProps,
+					CreateOnlyPatch: createOnlyPatch,
+				},
+				{
+					ResourceID:    util.NewID(),
+					ResourceType:  "AWS::EC2::VPC",
+					ResourceLabel: "managed-vpc",
+					StackName:     "demo",
+					Operation:     apimodel.OperationCreate,
+					State:         "NotStarted",
+					GroupID:       groupID,
+					Properties:    newProps,
+				},
+			},
+		},
+	}
+
+	result, err := RenderSimulation(&simulation)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "replace resource managed-vpc",
+		"replace must show the resource at its NEW label")
+	assert.NotContains(t, result, "replace resource vpc-008eef40942ac586b",
+		"old label must not be the display name")
+	assert.Contains(t, result, `change label from "vpc-008eef40942ac586b" to "managed-vpc"`,
+		"label rename surfaces as a dedicated line for replace ops")
+	assert.Contains(t, result, "because these immutable properties changed:",
+		"the immutable-property-change block still renders")
+	assert.Contains(t, result, "CidrBlock", "the CreateOnly property change is rendered")
+}
+
 // No rename + property change -> existing UPDATE verb, no `change label`
 // entry. Regression guard against the rename detection misfiring.
 func TestRenderSimulation_PlainUpdate_NoOldLabel(t *testing.T) {
