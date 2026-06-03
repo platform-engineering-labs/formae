@@ -169,14 +169,27 @@ func UpdateListCmd() *cobra.Command {
 				return err
 			}
 
-			available, err := orb.AvailableFor("formae")
+			available, err := orb.AvailableForSimple("formae")
 			if err != nil {
 				return err
 			}
 
-			fmt.Print("available formae versions:\n\n")
+			if available.Installed != nil {
+				fmt.Printf("installed: %s (%s)\n\n", available.Installed.Version.Short(), available.Installed.Version.Timestamp.String())
+			}
+
+			fmt.Print("available versions:\n\n")
 			for _, entry := range available.Available {
-				fmt.Printf("  %s\n", entry.Version.String())
+				if entry.Version.Semver().EQ(available.Installed.Version.Semver()) {
+					age := "Newer"
+					if entry.Version.LT(available.Installed.Version) {
+						age = "Older"
+					}
+
+					fmt.Printf("  %s %s: (%s)\n", entry.Version.Short(), age, entry.Version.Timestamp.String())
+				} else {
+					fmt.Printf("  %s\n", entry.Version.Short())
+				}
 			}
 
 			return nil
