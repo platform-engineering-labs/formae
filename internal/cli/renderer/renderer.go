@@ -15,6 +15,7 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/renderer"
 	"github.com/olekukonko/tablewriter/tw"
+	"github.com/platform-engineering-labs/jsonpatch"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -351,14 +352,30 @@ func createDisplayUpdateFromGroup(group []apimodel.ResourceUpdate) apimodel.Reso
 		// Merge the fields needed to render the replacement reason. The
 		// delete half carries CreateOnlyPatch and the old property values;
 		// the create half carries the new property values.
+		//
+		// RFC-0041: if the replace coincides with a rename, the delete half
+		// holds the OLD label (it was constructed from the existing managed
+		// row) and the create half holds the NEW label (from the forma's
+		// renamed declaration). Surface that delta as OldLabel + use the new
+		// label as the display name so the operator sees the resource at its
+		// post-apply identity.
+		var deleteLabel, createLabel string
 		for _, update := range group {
 			switch update.Operation {
 			case apimodel.OperationDelete:
 				displayUpdate.CreateOnlyPatch = update.CreateOnlyPatch
 				displayUpdate.OldProperties = update.Properties
+				deleteLabel = update.ResourceLabel
 			case apimodel.OperationCreate:
 				displayUpdate.Properties = update.Properties
+				createLabel = update.ResourceLabel
 			}
+		}
+		if createLabel != "" {
+			displayUpdate.ResourceLabel = createLabel
+		}
+		if deleteLabel != "" && createLabel != "" && deleteLabel != createLabel {
+			displayUpdate.OldLabel = deleteLabel
 		}
 	} else if hasDelete {
 		displayUpdate.Operation = apimodel.OperationDelete
@@ -415,13 +432,51 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 		node.Add(display.Grey("because it depends on ") + display.LightBlue(rc.CascadeSource))
 	}
 
-	if rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0 {
+	// RFC-0041: render a label rename and property changes together inside
+	// the `by doing the following:` block. The rename surfaces as a
+	// `change label from "<old>" to "<new>"` entry, matching the
+	// `change property` style. This keeps the diff body the single place
+	// the operator scans for what's actually changing.
+	renamed := rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel
+	hasPatch := rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0
+	isBringingUnderManagement := rc.OldStackName == constants.UnmanagedStack && rc.StackName != constants.UnmanagedStack
+
+	// RFC-0041: where the `change label from "<old>" to "<new>"` line lives
+	// depends on the op.
+	//
+	//  - OperationUpdate: the body block is `by doing the following:` and
+	//    already contains property-change entries. Put the label rename
+	//    inside the same block so the operator scans one list. The
+	//    bring-under-management message lives here too (first entry) so
+	//    the import + rename + property delta read as one ordered list of
+	//    "what's about to happen" rather than splitting transition notes
+	//    onto parent sub-lines.
+	//  - OperationReplace: the body block is `because these immutable
+	//    properties changed:` which is reserved for CreateOnly-property
+	//    changes. The rename isn't one of those, so it goes one level up
+	//    as a parent sub-line — same shape as `from stack X` on a replace.
+	//
+	// Only one location ever fires for a given update. No duplication.
+	if rc.Operation == apimodel.OperationUpdate && (renamed || hasPatch || isBringingUnderManagement) {
 		propertiesNode := node.Add(display.Grey("by doing the following:"))
-		refLabels := rc.ReferenceLabels
-		if refLabels == nil {
-			refLabels = make(map[string]string)
+		if isBringingUnderManagement {
+			propertiesNode.Add(display.LightBlue("put resource under management"))
 		}
-		FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+		if renamed {
+			propertiesNode.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
+		}
+		if hasPatch {
+			refLabels := rc.ReferenceLabels
+			if refLabels == nil {
+				refLabels = make(map[string]string)
+			}
+			FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels)
+		}
+	} else if isBringingUnderManagement {
+		// Non-update bring-under-management (e.g. a replace that's also a
+		// migration). No `by doing the following:` block to host the line,
+		// so surface it on the parent.
+		node.Add(display.LightBlue("put resource under management"))
 	}
 
 	if rc.Operation == apimodel.OperationReplace && len(rc.CreateOnlyPatch) > 0 {
@@ -430,8 +485,75 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 		if refLabels == nil {
 			refLabels = make(map[string]string)
 		}
-		FormatPatchDocument(propertiesNode, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+		FormatPatchDocument(propertiesNode, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels)
 	}
+
+	// RFC-0041: on a replace, render any non-immutable changes (label rename
+	// + mutable property delta) in a separate "and by doing the following:"
+	// block AFTER the immutable-cause block. Keeps the cause/effect reading
+	// flow: what immutable property forced the replace → and by the way,
+	// here's everything else that's also changing as part of the same apply.
+	if rc.Operation == apimodel.OperationReplace {
+		mutablePatch := mutablePatchForReplace(rc.OldProperties, rc.Properties, rc.CreateOnlyPatch)
+		if renamed || len(mutablePatch) > 0 {
+			block := node.Add(display.Grey("and by doing the following:"))
+			if renamed {
+				block.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
+			}
+			if len(mutablePatch) > 0 {
+				refLabels := rc.ReferenceLabels
+				if refLabels == nil {
+					refLabels = make(map[string]string)
+				}
+				FormatPatchDocument(block, mutablePatch, rc.Properties, rc.OldProperties, refLabels)
+			}
+		}
+	}
+}
+
+// mutablePatchForReplace returns the JSON-patch document describing changes
+// between oldProperties and newProperties that are NOT already covered by
+// createOnlyPatch. On a replace the engine has split the diff so the
+// CreateOnlyPatch carries the immutable-property change(s) that forced the
+// recreate; everything else in the diff (mutable property edits) is silent
+// in the rendered output unless this helper surfaces it.
+//
+// Returns nil on any diff failure — silent fallback is preferable to a noisy
+// error in the CLI rendering path.
+func mutablePatchForReplace(oldProperties, newProperties, createOnlyPatch json.RawMessage) json.RawMessage {
+	if len(oldProperties) == 0 || len(newProperties) == 0 {
+		return nil
+	}
+	full, err := jsonpatch.CreatePatch(oldProperties, newProperties, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+	if err != nil || len(full) == 0 {
+		return nil
+	}
+	immutablePaths := make(map[string]bool)
+	if len(createOnlyPatch) > 0 {
+		var ops []struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(createOnlyPatch, &ops); err == nil {
+			for _, op := range ops {
+				immutablePaths[op.Path] = true
+			}
+		}
+	}
+	mutable := make([]jsonpatch.JsonPatchOperation, 0, len(full))
+	for _, op := range full {
+		if immutablePaths[string(op.Path)] {
+			continue
+		}
+		mutable = append(mutable, op)
+	}
+	if len(mutable) == 0 {
+		return nil
+	}
+	out, err := json.Marshal(mutable)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 func formatResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {

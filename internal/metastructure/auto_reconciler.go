@@ -284,27 +284,15 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 	// record; their KSUID must never be reused.
 	resources := make([]*pkgmodel.Resource, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		ksuid := snapshot.KSUID
-		if ksuid != "" {
-			uri := pkgmodel.NewFormaeURI(ksuid, "")
-			existing, err := ds.LoadResource(uri)
-			if err != nil || existing == nil {
-				// KSUID was deleted — clear it so assignKSUIDs() resolves a fresh one
-				ksuid = ""
+		var existing *pkgmodel.Resource
+		if snapshot.KSUID != "" {
+			uri := pkgmodel.NewFormaeURI(snapshot.KSUID, "")
+			loaded, err := ds.LoadResource(uri)
+			if err == nil {
+				existing = loaded
 			}
 		}
-		res := &pkgmodel.Resource{
-			Ksuid:      ksuid,
-			Type:       snapshot.Type,
-			Label:      snapshot.Label,
-			Target:     snapshot.Target,
-			Stack:      stackLabel,
-			NativeID:   snapshot.NativeID,
-			Properties: snapshot.Properties,
-			Schema:     snapshot.Schema,
-			Managed:    true,
-		}
-		resources = append(resources, res)
+		resources = append(resources, reconcileResourceFromSnapshot(snapshot, existing, stackLabel))
 	}
 
 	// Convert to Forma
@@ -423,4 +411,44 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	}
 
 	return result.command.ID, nil
+}
+
+// reconcileResourceFromSnapshot converts a last-reconcile snapshot into the
+// resource to embed in a reconcile forma. `existing` is the live row looked
+// up by snapshot.KSUID, or nil if the KSUID has been deleted since the
+// snapshot was taken (its tombstone forbids reuse).
+//
+// RFC-0041: a rename (via patch apply) since the last reconcile leaves the
+// snapshot with the OLD label while the live row carries the NEW label.
+// Without the override the synthesized reconcile forma asks the engine to
+// "re-create" the old label, treats the new label as drift, and silently
+// undoes the user's rename. Use the live row's current label and record the
+// snapshot label as `alias` so the resource-update generator pairs the
+// synthesized resource with the renamed inventory row by alias instead of
+// by stale label.
+func reconcileResourceFromSnapshot(snapshot datastore.ResourceSnapshot, existing *pkgmodel.Resource, stackLabel string) *pkgmodel.Resource {
+	ksuid := snapshot.KSUID
+	label := snapshot.Label
+	alias := ""
+	if ksuid != "" {
+		if existing == nil {
+			// KSUID was deleted — clear it so assignKSUIDs() resolves a fresh one.
+			ksuid = ""
+		} else if existing.Label != "" && existing.Label != snapshot.Label {
+			label = existing.Label
+			alias = snapshot.Label
+		}
+	}
+	return &pkgmodel.Resource{
+		Ksuid:      ksuid,
+		Type:       snapshot.Type,
+		Label:      label,
+		Alias:      alias,
+		Target:     snapshot.Target,
+		Stack:      stackLabel,
+		NativeID:   snapshot.NativeID,
+		Properties: snapshot.Properties,
+		Schema:     snapshot.Schema,
+		Managed:    true,
+	}
 }

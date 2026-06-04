@@ -515,9 +515,22 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	isBringingUnderManagement := data.resourceUpdate.PriorState.Stack == constants.UnmanagedStack &&
 		data.resourceUpdate.DesiredState.Stack != constants.UnmanagedStack
 
-	if isBringingUnderManagement && hasEmptyPatch {
-		proc.Log().Debug("Bringing resource under management without property changes resourceURI=%v oldStack=%s newStack=%s",
-			data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Stack, data.resourceUpdate.DesiredState.Stack)
+	// RFC-0041: a label-only change (label differs, same stack, same target,
+	// no property delta) is a metadata-only update. Skip the plugin call for
+	// the same reason "bringing under management without property changes"
+	// does — there is nothing for the cloud to do.
+	isLabelOnlyChange := data.resourceUpdate.PriorState.Label != data.resourceUpdate.DesiredState.Label &&
+		data.resourceUpdate.PriorState.Stack == data.resourceUpdate.DesiredState.Stack &&
+		data.resourceUpdate.PriorState.Target == data.resourceUpdate.DesiredState.Target
+
+	if (isBringingUnderManagement || isLabelOnlyChange) && hasEmptyPatch {
+		if isLabelOnlyChange {
+			proc.Log().Debug("Renaming resource without property changes resourceURI=%v oldLabel=%s newLabel=%s",
+				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Label, data.resourceUpdate.DesiredState.Label)
+		} else {
+			proc.Log().Debug("Bringing resource under management without property changes resourceURI=%v oldStack=%s newStack=%s",
+				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Stack, data.resourceUpdate.DesiredState.Stack)
+		}
 
 		// Merge Properties and ReadOnlyProperties to get complete cloud state
 		completeProperties, err := util.MergeJSON(
@@ -525,9 +538,14 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			data.resourceUpdate.PriorState.ReadOnlyProperties,
 		)
 		if err != nil {
-			proc.Log().Error("failed to merge properties when bringing resource under management: %v", err)
+			proc.Log().Error("failed to merge properties when handling metadata-only update: %v", err)
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
+		}
+
+		statusMessage := "Brought under management without property changes"
+		if isLabelOnlyChange {
+			statusMessage = "Renamed without property changes"
 		}
 
 		// Create synthetic ProgressResult with existing resource data
@@ -536,7 +554,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			ProgressResult: resource.ProgressResult{
 				Operation:          resource.OperationUpdate,
 				OperationStatus:    resource.OperationStatusSuccess,
-				StatusMessage:      "Brought under management without property changes",
+				StatusMessage:      statusMessage,
 				NativeID:           data.resourceUpdate.PriorState.NativeID,
 				ResourceProperties: completeProperties,
 			},

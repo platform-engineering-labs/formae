@@ -24,6 +24,7 @@ const (
 	ViolationCommandNotTerminal                          // command not in terminal state
 	ViolationResolvableNotResolved                       // resolvable $ref not properly resolved
 	ViolationModelInventoryMismatch                      // model expected state doesn't match inventory
+	ViolationDuplicateNativeID                           // two or more inventory rows share a NativeID (RFC-0041)
 )
 
 // Violation describes a single invariant violation.
@@ -52,12 +53,32 @@ type CommandState struct {
 func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testcontrol.CloudStateEntry, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool) []Violation {
 	var violations []Violation
 
-	// Build lookup of inventory resources by NativeID
+	// Build lookup of inventory resources by NativeID.
+	//
+	// RFC-0041: detect duplicate NativeID rows BEFORE collapsing them into
+	// the lookup map. A correct rename produces a NEW VERSION ROW under
+	// the SAME KSUID — inventory must therefore show at most one current
+	// row per NativeID. Two current rows under the same NativeID with
+	// different KSUIDs is the symptom of the rename-without-ksuid-
+	// preservation bug; we want it to fail loudly here rather than be
+	// silently masked by the map.
 	inventoryByNativeID := make(map[string]pkgmodel.Resource, len(inventory))
+	seenNativeIDs := make(map[string]pkgmodel.Resource, len(inventory))
 	for _, res := range inventory {
-		if res.NativeID != "" {
-			inventoryByNativeID[res.NativeID] = res
+		if res.NativeID == "" {
+			continue
 		}
+		if prev, dup := seenNativeIDs[res.NativeID]; dup {
+			violations = append(violations, Violation{
+				Kind: ViolationDuplicateNativeID,
+				Message: fmt.Sprintf(
+					"duplicate inventory rows for NativeID %s: ksuid=%s label=%s AND ksuid=%s label=%s — rename did not preserve KSUID",
+					res.NativeID, prev.Ksuid, prev.Label, res.Ksuid, res.Label,
+				),
+			})
+		}
+		seenNativeIDs[res.NativeID] = res
+		inventoryByNativeID[res.NativeID] = res
 	}
 
 	// Invariant 1: No phantom resources

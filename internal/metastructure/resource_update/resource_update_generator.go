@@ -96,6 +96,15 @@ func GenerateResourceUpdates(
 		}
 	}
 
+	// RFC-0041: reject forma-authoring errors around `alias` before generating
+	// updates. Only Apply commands carry user-authored aliases; sync/discovery
+	// commands construct resources programmatically and never set Alias.
+	if command == pkgmodel.CommandApply {
+		if err := validateAliasUsage(forma, ds); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, r := range forma.Resources {
 		if _, exists := desiredTargetMap[r.Target]; !exists {
 			return nil, apimodel.TargetReferenceNotFoundError{
@@ -128,6 +137,60 @@ func GenerateResourceUpdates(
 	return resourceUpdates, nil
 }
 
+// matchExistingForDesired finds the existing managed resource that corresponds
+// to a desired-state declaration. The match is by (Type, Label) within the
+// caller's already-narrowed stack scope.
+//
+// RFC-0041: when the desired declaration carries an `Alias`, a miss on the
+// current label falls through to a second lookup by the alias label. This is
+// the resource label rename path: the existing managed row sits at the old
+// label, the new declaration is at the new label, and the alias tells the
+// generator they are the same resource. The caller pairs them so
+// NewResourceUpdateForExisting can emit a single update carrying the label
+// delta in PriorState/DesiredState.
+//
+// Returns nil if no match.
+func matchExistingForDesired(existingResources []*pkgmodel.Resource, newResource pkgmodel.Resource) *pkgmodel.Resource {
+	for _, existingResource := range existingResources {
+		if existingResource.Label == newResource.Label && existingResource.Type == newResource.Type {
+			return existingResource
+		}
+	}
+	if newResource.Alias == "" {
+		return nil
+	}
+	for _, existingResource := range existingResources {
+		if existingResource.Label == newResource.Alias && existingResource.Type == newResource.Type {
+			return existingResource
+		}
+	}
+	return nil
+}
+
+// reconcileMatchesExisting reports whether a forma resource and an existing
+// managed row refer to the same logical resource under reconcile semantics.
+// Matches require Type / Target equality and either the same stack or the
+// $unmanaged stack on the existing side. Labels match by either the current
+// label OR (RFC-0041) the forma resource's `alias` against the existing label.
+//
+// Without the alias arm the reconcile path treats a rename as
+// `delete(old) + create(new)`, destroying the cloud object.
+func reconcileMatchesExisting(newResource, existingResource pkgmodel.Resource) bool {
+	if newResource.Type != existingResource.Type {
+		return false
+	}
+	if newResource.Target != existingResource.Target {
+		return false
+	}
+	if newResource.Stack != existingResource.Stack && existingResource.Stack != constants.UnmanagedStack {
+		return false
+	}
+	if newResource.Label == existingResource.Label {
+		return true
+	}
+	return newResource.Alias != "" && newResource.Alias == existingResource.Label
+}
+
 // stackExistsInForma checks if a stack label exists in the Forma.Stacks slice
 func stackExistsInForma(forma *pkgmodel.Forma, stackLabel string) bool {
 	for _, stack := range forma.Stacks {
@@ -136,6 +199,125 @@ func stackExistsInForma(forma *pkgmodel.Forma, stackLabel string) bool {
 		}
 	}
 	return false
+}
+
+// validateAliasUsage rejects two RFC-0041 forma-authoring errors that the
+// generator would otherwise swallow:
+//
+//  1. Duplicate claim: two forma resources match the same existing managed
+//     row — one via the current label, the other via `alias`. The reconcile
+//     loop has no break after the first match, so both would emit updates
+//     against the same existing row and the final label would be
+//     nondeterministic. Most likely the user forgot to delete the old
+//     declaration during a refactor.
+//  2. Dead alias: a resource declares `alias` that matches no existing
+//     managed (same stack) or unmanaged resource. Without rejection the
+//     resource falls through to Create with a stale alias persisted into
+//     the metastructure and round-tripped through `formae extract`.
+//     Creating-and-renaming-in-one-step is almost always a stale alias from
+//     a prior refactor.
+func validateAliasUsage(forma *pkgmodel.Forma, ds ResourceDataLookup) error {
+	for _, stack := range forma.SplitByStack() {
+		stackLabel := stack.SingleStackLabel()
+		existing, err := ds.LoadResourcesByStack(stackLabel)
+		if err != nil {
+			return fmt.Errorf("failed to load stack %s for alias validation: %w", stackLabel, err)
+		}
+		if len(existing) == 0 {
+			continue
+		}
+
+		// Per existing managed row, collect every forma resource that
+		// claims it (via current label or via alias). A row with two or
+		// more claimants is the duplicate-claim error.
+		type claim struct {
+			formaLabel string
+			viaAlias   bool
+		}
+		claims := make(map[string][]claim, len(existing))
+		for _, r := range stack.Resources {
+			for _, ex := range existing {
+				if ex.Type != r.Type {
+					continue
+				}
+				switch {
+				case ex.Label == r.Label:
+					claims[ex.Ksuid] = append(claims[ex.Ksuid], claim{r.Label, false})
+				case r.Alias != "" && ex.Label == r.Alias:
+					claims[ex.Ksuid] = append(claims[ex.Ksuid], claim{r.Label, true})
+				}
+			}
+		}
+		for ksuid, cs := range claims {
+			if len(cs) < 2 {
+				continue
+			}
+			var existingLabel string
+			for _, ex := range existing {
+				if ex.Ksuid == ksuid {
+					existingLabel = ex.Label
+					break
+				}
+			}
+			parts := make([]string, 0, len(cs))
+			for _, c := range cs {
+				via := "label"
+				if c.viaAlias {
+					via = "alias"
+				}
+				parts = append(parts, fmt.Sprintf("`%s` (via %s)", c.formaLabel, via))
+			}
+			return fmt.Errorf(
+				"resources %s both claim the existing managed resource `%s` in stack %q — remove the duplicate declaration",
+				strings.Join(parts, " and "), existingLabel, stackLabel,
+			)
+		}
+	}
+
+	// Dead alias: declared but matches no existing managed (current stack)
+	// or unmanaged resource of the same type.
+	var allResources map[string][]*pkgmodel.Resource
+	for _, r := range forma.Resources {
+		if r.Alias == "" {
+			continue
+		}
+		if r.Alias == r.Label {
+			return fmt.Errorf(
+				"resource `%s` declares `alias` equal to its `label` — alias must reference a different prior label",
+				r.Label,
+			)
+		}
+		if allResources == nil {
+			loaded, err := ds.LoadAllResourcesByStack()
+			if err != nil {
+				return fmt.Errorf("failed to load resources for alias validation: %w", err)
+			}
+			allResources = loaded
+		}
+		found := false
+		for _, ex := range allResources[r.Stack] {
+			if ex.Type == r.Type && ex.Label == r.Alias {
+				found = true
+				break
+			}
+		}
+		if !found {
+			for _, ex := range allResources[constants.UnmanagedStack] {
+				if ex.Type == r.Type && ex.Label == r.Alias {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf(
+				"resource `%s` declares alias `%s` but no existing managed (stack %q) or unmanaged resource of type %s matches that label — drop the alias if this is a fresh resource",
+				r.Label, r.Alias, r.Stack, r.Type,
+			)
+		}
+	}
+
+	return nil
 }
 
 func validateStackReferences(forma *pkgmodel.Forma, ds ResourceDataLookup) error {
@@ -624,10 +806,7 @@ func generateResourceUpdatesForReconcile(
 		for _, existingResource := range existingResources {
 			found := false
 			for _, newResource := range stack.Resources {
-				if newResource.Label == existingResource.Label &&
-					newResource.Type == existingResource.Type &&
-					newResource.Target == existingResource.Target &&
-					(newResource.Stack == existingResource.Stack || existingResource.Stack == constants.UnmanagedStack) {
+				if reconcileMatchesExisting(newResource, *existingResource) {
 
 					found = true
 
@@ -697,10 +876,7 @@ func generateResourceUpdatesForReconcile(
 		for _, newResource := range stack.Resources {
 			found := false
 			for _, existingResource := range existingResources {
-				if newResource.Label == existingResource.Label &&
-					newResource.Type == existingResource.Type &&
-					newResource.Target == existingResource.Target &&
-					(newResource.Stack == existingResource.Stack || existingResource.Stack == constants.UnmanagedStack) {
+				if reconcileMatchesExisting(newResource, *existingResource) {
 					found = true
 					break
 				}
@@ -955,6 +1131,20 @@ func findUnmanagedResource(resource pkgmodel.Resource, allResources map[string][
 			return *res, true
 		}
 	}
+	// RFC-0041: bring-under-management + rename in one apply. The forma's
+	// resource declares the NEW human label, but the unmanaged row sits at
+	// the discovery default (recorded as `alias`). Without this fallback the
+	// generator emits a Create for the new label and orphans the unmanaged
+	// row — duplicate inventory entries for the same NativeID. Match by the
+	// alias label too so both transitions (label rename + import) fold into
+	// a single OperationUpdate driven by NewResourceUpdateForExisting.
+	if resource.Alias != "" {
+		for _, res := range unmanagedResources {
+			if res.Type == resource.Type && res.Label == resource.Alias {
+				return *res, true
+			}
+		}
+	}
 	return pkgmodel.Resource{}, false
 }
 
@@ -1041,63 +1231,56 @@ func generateResourceUpdatesForPatch(
 		}
 
 		for _, newResource := range stack.Resources {
-			resourceExists := false
+			matched := matchExistingForDesired(existingResources, newResource)
 
-			for _, existingResource := range existingResources {
-				// Check for existing resource with same label and type
-				if existingResource.Label == newResource.Label && existingResource.Type == newResource.Type {
-					resourceExists = true
-
-					// Use NewResourceUpdateForExisting to handle all the logic
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
-					if err != nil {
-						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
-					}
-
-					existingResourceUpdates, err := NewResourceUpdateForExisting(
-						readOnlyProperties,
-						*existingResource,
-						newResource,
-						*existingTargetMap[existingResource.Target],
-						*desiredTargetMap[newResource.Target],
-						mode,
-						source,
-					)
-
-					if err != nil {
-						return nil, fmt.Errorf("failed to generate resource update for existing resource: %w", err)
-					}
-
-					// Process the returned updates
-					for _, update := range existingResourceUpdates {
-						switch update.Operation {
-						case OperationUpdate:
-							resourceUpdates = append(resourceUpdates, update)
-						case OperationDelete:
-							resourceReplaces = append(resourceReplaces, update)
-						case OperationCreate:
-							resourceReplaces = append(resourceReplaces, update)
-						default:
-							// For any other operations, add to resourceReplaces
-							resourceReplaces = append(resourceReplaces, update)
-						}
-					}
-					break
+			if matched != nil {
+				// Use NewResourceUpdateForExisting to handle all the logic
+				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 				}
+
+				existingResourceUpdates, err := NewResourceUpdateForExisting(
+					readOnlyProperties,
+					*matched,
+					newResource,
+					*existingTargetMap[matched.Target],
+					*desiredTargetMap[newResource.Target],
+					mode,
+					source,
+				)
+
+				if err != nil {
+					return nil, fmt.Errorf("failed to generate resource update for existing resource: %w", err)
+				}
+
+				// Process the returned updates
+				for _, update := range existingResourceUpdates {
+					switch update.Operation {
+					case OperationUpdate:
+						resourceUpdates = append(resourceUpdates, update)
+					case OperationDelete:
+						resourceReplaces = append(resourceReplaces, update)
+					case OperationCreate:
+						resourceReplaces = append(resourceReplaces, update)
+					default:
+						// For any other operations, add to resourceReplaces
+						resourceReplaces = append(resourceReplaces, update)
+					}
+				}
+				continue
 			}
 
 			// If resource doesn't exist in the existing stack, create it
-			if !resourceExists {
-				resourceCreate, err := NewResourceUpdateForCreate(
-					newResource,
-					*desiredTargetMap[newResource.Target],
-					source,
-				)
-				if err != nil {
-					return nil, err
-				}
-				resourceCreates = append(resourceCreates, resourceCreate)
+			resourceCreate, err := NewResourceUpdateForCreate(
+				newResource,
+				*desiredTargetMap[newResource.Target],
+				source,
+			)
+			if err != nil {
+				return nil, err
 			}
+			resourceCreates = append(resourceCreates, resourceCreate)
 		}
 	}
 
@@ -1699,27 +1882,74 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 		if existingKSUID, ok := ksuidMap[triplet]; ok {
 			// Found by triplet in the target stack
 			resources[idx].Ksuid = existingKSUID
-		} else {
-			// Not found in target stack - check if it exists in $unmanaged
-			// This handles the case where we're bringing unmanaged resources under management
-			unmanagedKSUID, err := ds.GetKSUIDByTriplet(
-				constants.UnmanagedStack,
-				triplet.Label,
+			continue
+		}
+
+		// RFC-0041: a forma resource that declares `alias` is asking to take
+		// over an existing managed row at the old label. Look up the existing
+		// KSUID by the alias triplet BEFORE falling through to the $unmanaged
+		// scan or minting a fresh KSUID. Without this, a rename mints a brand
+		// new KSUID and the persister writes a second row with the same
+		// NativeID as the existing row — visible as duplicate inventory rows.
+		if resources[idx].Alias != "" {
+			aliasKSUID, err := ds.GetKSUIDByTriplet(
+				triplet.Stack,
+				resources[idx].Alias,
 				triplet.Type,
 			)
-			if err == nil && unmanagedKSUID != "" {
-				// Found in $unmanaged - preserve that KSUID
-				slog.Debug("Preserving KSUID from $unmanaged stack",
-					"label", triplet.Label,
+			if err == nil && aliasKSUID != "" {
+				slog.Debug("Preserving KSUID via alias",
+					"newLabel", triplet.Label,
+					"alias", resources[idx].Alias,
 					"type", triplet.Type,
-					"ksuid", unmanagedKSUID)
-				resources[idx].Ksuid = unmanagedKSUID
-				ksuidToLabel[unmanagedKSUID] = triplet.Label
-			} else {
-				// Truly doesn't exist! Generate new KSUID
-				resources[idx].Ksuid = util.NewID()
+					"ksuid", aliasKSUID)
+				resources[idx].Ksuid = aliasKSUID
+				ksuidToLabel[aliasKSUID] = triplet.Label
+				continue
 			}
 		}
+
+		// Not found in target stack - check if it exists in $unmanaged
+		// This handles the case where we're bringing unmanaged resources under management
+		unmanagedKSUID, err := ds.GetKSUIDByTriplet(
+			constants.UnmanagedStack,
+			triplet.Label,
+			triplet.Type,
+		)
+		if err == nil && unmanagedKSUID != "" {
+			// Found in $unmanaged - preserve that KSUID
+			slog.Debug("Preserving KSUID from $unmanaged stack",
+				"label", triplet.Label,
+				"type", triplet.Type,
+				"ksuid", unmanagedKSUID)
+			resources[idx].Ksuid = unmanagedKSUID
+			ksuidToLabel[unmanagedKSUID] = triplet.Label
+			continue
+		}
+
+		// RFC-0041 edge case: bringing under management + renaming in one apply.
+		// The existing row is in $unmanaged under the alias's discovery default
+		// label, not the new label. Try $unmanaged with the alias label too.
+		if resources[idx].Alias != "" {
+			unmanagedAliasKSUID, err := ds.GetKSUIDByTriplet(
+				constants.UnmanagedStack,
+				resources[idx].Alias,
+				triplet.Type,
+			)
+			if err == nil && unmanagedAliasKSUID != "" {
+				slog.Debug("Preserving KSUID via alias in $unmanaged stack",
+					"newLabel", triplet.Label,
+					"alias", resources[idx].Alias,
+					"type", triplet.Type,
+					"ksuid", unmanagedAliasKSUID)
+				resources[idx].Ksuid = unmanagedAliasKSUID
+				ksuidToLabel[unmanagedAliasKSUID] = triplet.Label
+				continue
+			}
+		}
+
+		// Truly doesn't exist! Generate new KSUID
+		resources[idx].Ksuid = util.NewID()
 	}
 
 	for tripletKey, ksuid := range ksuidMap {

@@ -398,6 +398,20 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				secretSafeResource.Schema.Discoverable = currentResource.Schema.Discoverable
 				secretSafeResource.Schema.Extractable = currentResource.Schema.Extractable
 
+				// RFC-0041: sync must never rename. The label is part of formae's
+				// internal identity, not the cloud's; sync reads cloud state and
+				// must not mutate the managed row's label. If a sync-origin update
+				// ever arrives with a label diff against the current row, it
+				// indicates a generator bug — log loudly and force the current
+				// label so the rename does not slip through.
+				if secretSafeResource.Label != currentResource.Label {
+					slog.Warn("Sync produced a label diff; preserving current label (sync must never rename)",
+						"resourceKsuid", currentResource.Ksuid,
+						"currentLabel", currentResource.Label,
+						"syncLabel", secretSafeResource.Label)
+					secretSafeResource.Label = currentResource.Label
+				}
+
 				currentResource.Properties = secretSafeResource.Properties
 				currentResource.ReadOnlyProperties = secretSafeResource.ReadOnlyProperties
 

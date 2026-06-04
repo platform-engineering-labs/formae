@@ -1061,3 +1061,79 @@ func RunStoreResourceWithDifferentKSUIDSameData(t *testing.T, newDS func(t *test
 		}
 	})
 }
+
+// RunStoreResourceRenamePreservesKsuidAndAddsNewVersion verifies the
+// RFC-0041 invariant: a rename writes a NEW VERSION ROW under the same
+// KSUID, never a second row with a fresh KSUID. The previous version
+// remains in history; the latest visible row carries the new label.
+// QueryResources for the native id returns exactly one current row.
+func RunStoreResourceRenamePreservesKsuidAndAddsNewVersion(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StoreResource_RenamePreservesKsuidAndAddsNewVersion", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		target := &pkgmodel.Target{
+			Label:     "test-target",
+			Namespace: "default",
+			Config:    json.RawMessage(`{}`),
+		}
+		_, err := ds.CreateTarget(target)
+		assert.NoError(t, err)
+
+		ksuid := util.NewID()
+		nativeID := "vpc-rfc0041-rename"
+
+		original := &pkgmodel.Resource{
+			Ksuid:      ksuid,
+			NativeID:   nativeID,
+			Stack:      "test-stack",
+			Type:       "AWS::EC2::VPC",
+			Label:      "plugin-sdk-test-vpc",
+			Target:     "test-target",
+			Managed:    true,
+			Properties: json.RawMessage(`{"CidrBlock": "10.0.0.0/16"}`),
+		}
+		versionOriginal, err := ds.StoreResource(original, "cmd-create")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, versionOriginal)
+
+		// Simulate the rename apply: the persister writes with the SAME ksuid,
+		// the SAME native id, but the NEW label. This is what RFC-0041's
+		// persist path does after a successful update.
+		time.Sleep(1100 * time.Millisecond) // KSUID has 1-second precision
+		renamed := *original
+		renamed.Label = "new-vpc"
+		versionRenamed, err := ds.StoreResource(&renamed, "cmd-rename")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, versionRenamed)
+
+		assert.NotEqual(t, versionOriginal, versionRenamed,
+			"rename must produce a NEW version row, not collapse into the prior version")
+		assert.True(t, strings.HasPrefix(versionRenamed, ksuid+"_"),
+			"new version must be under the same KSUID; got version=%s ksuid=%s",
+			versionRenamed, ksuid)
+
+		// Latest visible row for this NativeID is exactly one — the renamed row.
+		// Before the RFC-0041 ksuid-preservation fix, this query returned TWO
+		// rows (one per ksuid) because the rename minted a fresh ksuid.
+		results, err := ds.QueryResources(&datastore.ResourceQuery{
+			NativeID: &datastore.QueryItem[string]{Item: nativeID, Constraint: datastore.Required},
+		})
+		assert.NoError(t, err)
+		assert.Len(t, results, 1, "inventory must show exactly one current row per NativeID after rename")
+		if len(results) == 1 {
+			assert.Equal(t, ksuid, results[0].Ksuid, "current row must carry the original KSUID")
+			assert.Equal(t, "new-vpc", results[0].Label, "current row must carry the new label")
+			assert.Equal(t, nativeID, results[0].NativeID)
+		}
+
+		// The original row is still loadable by KSUID (history preserved).
+		loaded, err := ds.LoadResourceById(ksuid)
+		assert.NoError(t, err)
+		if assert.NotNil(t, loaded, "resource should be loadable by KSUID after rename") {
+			assert.Equal(t, ksuid, loaded.Ksuid)
+			assert.Equal(t, "new-vpc", loaded.Label, "latest-version load returns the new label")
+		}
+	})
+}

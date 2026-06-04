@@ -24,6 +24,11 @@ open class Resource {
     group: String?
     target: TargetResolvable?
     stack: StackResolvable?
+    /// Previous label of this resource. When set, an apply that does not find a
+    /// managed row at the current label will look up by this previous label
+    /// (same stack, same target) and rename the matched row in place. See
+    /// RFC-0041.
+    alias: String?
     fixed managed: Boolean = true
 
     local self = this
@@ -38,6 +43,7 @@ open class Resource {
         Group = self.group
         Target = self.target
         Stack = self.stack
+        Alias = self.alias
         Managed = self.managed
 
         Type = self.type()

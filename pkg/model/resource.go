@@ -32,6 +32,7 @@ type Resource struct {
 	NativeID           string          `json:"NativeID,omitempty"`
 	Managed            bool            `json:"Managed,omitempty"` // Whether the resource is managed by Formae or not
 	Ksuid              string          `json:"Ksuid,omitempty"`
+	Alias              string          `json:"Alias,omitempty"` // RFC-0041: previous label, used to rename in place
 }
 
 // TupleKey returns the lookup key for this resource in the format: type/stack/label

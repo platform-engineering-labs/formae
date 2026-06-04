@@ -561,10 +561,16 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			dur = ru.ModifiedTs.Sub(ru.StartTs)
 		}
 
+		var oldLabel string
+		if ru.PriorState.Label != "" && ru.PriorState.Label != ru.DesiredState.Label {
+			oldLabel = ru.PriorState.Label
+		}
+
 		apiCommand.ResourceUpdates = append(apiCommand.ResourceUpdates, apimodel.ResourceUpdate{
 			ResourceID:      ru.DesiredState.Ksuid,
 			ResourceType:    ru.DesiredState.Type,
 			ResourceLabel:   ru.DesiredState.Label,
+			OldLabel:        oldLabel,
 			StackName:       ru.StackLabel,
 			OldStackName:    ru.PriorState.Stack,
 			Properties:      ru.DesiredState.Properties,
@@ -1735,12 +1741,23 @@ func filterUnabsorbedModifications(
 
 	// Build a set of resources present in the forma
 	formaResources := make(map[resourceKey]struct{})
+	// RFC-0041: a forma resource that declares an `alias` covers its previous
+	// label too. Index aliases by (stack, type, alias) so a drift recorded
+	// under the old label is absorbed when the forma renames the resource.
+	formaAliases := make(map[resourceKey]struct{})
 	for _, r := range forma.Resources {
 		formaResources[resourceKey{
 			stack:    r.Stack,
 			typeName: r.Type,
 			label:    r.Label,
 		}] = struct{}{}
+		if r.Alias != "" {
+			formaAliases[resourceKey{
+				stack:    r.Stack,
+				typeName: r.Type,
+				label:    r.Alias,
+			}] = struct{}{}
+		}
 	}
 
 	var unabsorbed []datastore.ResourceModification
@@ -1757,6 +1774,12 @@ func filterUnabsorbedModifications(
 		_, hasUpdate := resourcesWithUpdates[key]
 		if inForma && !hasUpdate {
 			continue // absorbed
+		}
+		// RFC-0041: alias-aware absorption. A modification keyed by the OLD
+		// label is absorbed by a forma resource declaring `alias = <old>`.
+		// The rename update (if any) takes the modification with it.
+		if _, isAlias := formaAliases[key]; isAlias {
+			continue
 		}
 		unabsorbed = append(unabsorbed, mod)
 	}
