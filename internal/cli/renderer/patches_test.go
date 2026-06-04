@@ -270,7 +270,7 @@ func TestFormatPatchDocument_OpaqueWriteOnlyField(t *testing.T) {
 		previousProperties := json.RawMessage(`{"SecretString": {"$value": "oldhash", "$visibility": "Opaque", "$strategy": "Update"}}`)
 
 		refLabels := make(map[string]string)
-		FormatPatchDocument(node, serialized, properties, previousProperties, refLabels, "")
+		FormatPatchDocument(node, serialized, properties, previousProperties, refLabels)
 
 		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 		assert.NoError(t, err)
@@ -303,7 +303,7 @@ func TestFormatPatchDocument_RemoveArrayObject_RendersAsJSON(t *testing.T) {
 		]
 	}`)
 
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), previousProperties, map[string]string{}, "")
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), previousProperties, map[string]string{})
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
@@ -436,7 +436,7 @@ func TestFormatPatchDocument_TagsPropertyCreated_NoManagementMessage(t *testing.
 	assert.NoError(t, err)
 
 	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "$unmanaged")
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
@@ -479,7 +479,7 @@ func TestFormatPatchDocument_TagsPropertyCreatedWithOnlyCustomTags_ShowsOnlyCust
 	assert.NoError(t, err)
 
 	refLabels := make(map[string]string)
-	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "")
+	FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	assert.NoError(t, err)
@@ -555,7 +555,7 @@ func TestFormatPatchDocument_WithReferences(t *testing.T) {
 			"ksuid-vpc-123": "my-vpc",
 		}
 
-		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "")
+		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
 
 		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 		assert.NoError(t, err)
@@ -580,7 +580,7 @@ func TestFormatPatchDocument_WithReferences(t *testing.T) {
 
 		refLabels := map[string]string{}
 
-		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels, "")
+		FormatPatchDocument(node, serialized, json.RawMessage("{}"), json.RawMessage("{}"), refLabels)
 
 		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 		assert.NoError(t, err)
@@ -606,7 +606,7 @@ func TestFormatPatchDocument_RemoveArrayEntry_ShowsRemovedValue(t *testing.T) {
 		properties := json.RawMessage(`{"networks": ["net-b", "net-c"]}`)
 		previousProperties := json.RawMessage(`{"networks": ["net-a", "net-b", "net-c"]}`)
 
-		FormatPatchDocument(node, serialized, properties, previousProperties, nil, "")
+		FormatPatchDocument(node, serialized, properties, previousProperties, nil)
 
 		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 		assert.NoError(t, err)
@@ -617,40 +617,23 @@ func TestFormatPatchDocument_RemoveArrayEntry_ShowsRemovedValue(t *testing.T) {
 	})
 }
 
-// RFC-0041: empty patch + $unmanaged old stack must NOT add a child entry.
-// The parent update entry's `from unmanaged to <stack>` sub-line (and the
-// `label:` sub-line if a rename is happening) cover the transition; the
-// patch document is reserved for actual property changes.
-func TestFormatPatchDocument_EmptyPatchWithUnmanagedOldStack_NoChildEntries(t *testing.T) {
-	t.Run("empty patch document with $unmanaged oldStackName emits no child entries", func(t *testing.T) {
-		node := gtree.NewRoot("")
-		emptyPatchDoc := json.RawMessage("[]")
-		properties := json.RawMessage("{}")
-		refLabels := map[string]string{}
+// RFC-0041: empty patch must NOT add a child entry. The parent update entry's
+// `from unmanaged to <stack>` sub-line (and the `label:` sub-line if a rename
+// is happening) cover the transition; the patch document is reserved for
+// actual property changes.
+func TestFormatPatchDocument_EmptyPatch_NoChildEntries(t *testing.T) {
+	node := gtree.NewRoot("")
+	emptyPatchDoc := json.RawMessage("[]")
+	properties := json.RawMessage("{}")
+	refLabels := map[string]string{}
 
-		FormatPatchDocument(node, emptyPatchDoc, properties, json.RawMessage("{}"), refLabels, "$unmanaged")
+	FormatPatchDocument(node, emptyPatchDoc, properties, json.RawMessage("{}"), refLabels)
 
-		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
-		assert.NoError(t, err)
+	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
+	assert.NoError(t, err)
 
-		// Root only — no "put resource under management" child anymore.
-		assert.Len(t, nodes, 1)
-	})
-
-	t.Run("empty patch document without $unmanaged oldStackName shows nothing", func(t *testing.T) {
-		node := gtree.NewRoot("")
-		emptyPatchDoc := json.RawMessage("[]")
-		properties := json.RawMessage("{}")
-		refLabels := map[string]string{}
-
-		FormatPatchDocument(node, emptyPatchDoc, properties, json.RawMessage("{}"), refLabels, "some-other-stack")
-
-		nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
-		assert.NoError(t, err)
-
-		// Should only have root node, no management message
-		assert.Len(t, nodes, 1)
-	})
+	// Root only — no "put resource under management" child anymore.
+	assert.Len(t, nodes, 1)
 }
 
 // TestFormatPatchDocument_CascadeResolvableMarker covers simulate-time
@@ -675,7 +658,7 @@ func TestFormatPatchDocument_CascadeResolvableMarker(t *testing.T) {
 	]`)
 	properties := json.RawMessage(`{"TaskDefinition": {"$ref": "formae://x#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/test:1"}}`)
 
-	FormatPatchDocument(node, patchDoc, properties, json.RawMessage("{}"), map[string]string{}, "")
+	FormatPatchDocument(node, patchDoc, properties, json.RawMessage("{}"), map[string]string{})
 
 	nodes, err := collectNodes(gtree.WalkIterFromRoot(node))
 	require.NoError(t, err)

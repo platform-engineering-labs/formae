@@ -461,7 +461,7 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 			if refLabels == nil {
 				refLabels = make(map[string]string)
 			}
-			FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+			FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels)
 		}
 	}
 
@@ -475,7 +475,7 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 		if refLabels == nil {
 			refLabels = make(map[string]string)
 		}
-		FormatPatchDocument(propertiesNode, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels, rc.OldStackName)
+		FormatPatchDocument(propertiesNode, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels)
 	}
 }
 

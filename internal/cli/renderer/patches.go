@@ -50,18 +50,15 @@ type PropertyChange struct {
 	CascadeCurrentValue string
 }
 
-// FormatPatchDocument formats JSON Patch operations for cli display
+// FormatPatchDocument formats JSON Patch operations for cli display.
 //
-// RFC-0041: the "put resource under management" message was removed.
+// RFC-0041: the "put resource under management" sub-line was removed.
 // formatSimulatedResourceUpdate now emits dedicated `label: <old> -> <new>`
 // and `from unmanaged to <stack>` sub-lines on the parent update entry, so
 // re-stating "put resource under management" inside `by doing the following:`
-// is redundant noise. If oldStackName is $unmanaged and there are no property
-// patches, this function emits nothing — the parent's sub-lines convey the
-// transition.
-func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties json.RawMessage, previousProperties json.RawMessage, refLabels map[string]string, oldStackName string) {
-	_ = oldStackName // retained in the signature for callers; no longer used here.
-
+// is redundant noise. With an empty patch this function emits nothing — the
+// parent's sub-lines convey the transition.
+func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties json.RawMessage, previousProperties json.RawMessage, refLabels map[string]string) {
 	patches := parsePatchOperations(patchDoc, node)
 	if patches == nil {
 		return

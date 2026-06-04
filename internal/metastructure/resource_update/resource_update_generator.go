@@ -96,6 +96,15 @@ func GenerateResourceUpdates(
 		}
 	}
 
+	// RFC-0041: reject forma-authoring errors around `alias` before generating
+	// updates. Only Apply commands carry user-authored aliases; sync/discovery
+	// commands construct resources programmatically and never set Alias.
+	if command == pkgmodel.CommandApply {
+		if err := validateAliasUsage(forma, ds); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, r := range forma.Resources {
 		if _, exists := desiredTargetMap[r.Target]; !exists {
 			return nil, apimodel.TargetReferenceNotFoundError{
@@ -179,10 +188,7 @@ func reconcileMatchesExisting(newResource, existingResource pkgmodel.Resource) b
 	if newResource.Label == existingResource.Label {
 		return true
 	}
-	if newResource.Alias != "" && newResource.Alias == existingResource.Label {
-		return true
-	}
-	return false
+	return newResource.Alias != "" && newResource.Alias == existingResource.Label
 }
 
 // stackExistsInForma checks if a stack label exists in the Forma.Stacks slice
@@ -193,6 +199,125 @@ func stackExistsInForma(forma *pkgmodel.Forma, stackLabel string) bool {
 		}
 	}
 	return false
+}
+
+// validateAliasUsage rejects two RFC-0041 forma-authoring errors that the
+// generator would otherwise swallow:
+//
+//  1. Duplicate claim: two forma resources match the same existing managed
+//     row — one via the current label, the other via `alias`. The reconcile
+//     loop has no break after the first match, so both would emit updates
+//     against the same existing row and the final label would be
+//     nondeterministic. Most likely the user forgot to delete the old
+//     declaration during a refactor.
+//  2. Dead alias: a resource declares `alias` that matches no existing
+//     managed (same stack) or unmanaged resource. Without rejection the
+//     resource falls through to Create with a stale alias persisted into
+//     the metastructure and round-tripped through `formae extract`.
+//     Creating-and-renaming-in-one-step is almost always a stale alias from
+//     a prior refactor.
+func validateAliasUsage(forma *pkgmodel.Forma, ds ResourceDataLookup) error {
+	for _, stack := range forma.SplitByStack() {
+		stackLabel := stack.SingleStackLabel()
+		existing, err := ds.LoadResourcesByStack(stackLabel)
+		if err != nil {
+			return fmt.Errorf("failed to load stack %s for alias validation: %w", stackLabel, err)
+		}
+		if len(existing) == 0 {
+			continue
+		}
+
+		// Per existing managed row, collect every forma resource that
+		// claims it (via current label or via alias). A row with two or
+		// more claimants is the duplicate-claim error.
+		type claim struct {
+			formaLabel string
+			viaAlias   bool
+		}
+		claims := make(map[string][]claim, len(existing))
+		for _, r := range stack.Resources {
+			for _, ex := range existing {
+				if ex.Type != r.Type {
+					continue
+				}
+				switch {
+				case ex.Label == r.Label:
+					claims[ex.Ksuid] = append(claims[ex.Ksuid], claim{r.Label, false})
+				case r.Alias != "" && ex.Label == r.Alias:
+					claims[ex.Ksuid] = append(claims[ex.Ksuid], claim{r.Label, true})
+				}
+			}
+		}
+		for ksuid, cs := range claims {
+			if len(cs) < 2 {
+				continue
+			}
+			var existingLabel string
+			for _, ex := range existing {
+				if ex.Ksuid == ksuid {
+					existingLabel = ex.Label
+					break
+				}
+			}
+			parts := make([]string, 0, len(cs))
+			for _, c := range cs {
+				via := "label"
+				if c.viaAlias {
+					via = "alias"
+				}
+				parts = append(parts, fmt.Sprintf("`%s` (via %s)", c.formaLabel, via))
+			}
+			return fmt.Errorf(
+				"resources %s both claim the existing managed resource `%s` in stack %q — remove the duplicate declaration",
+				strings.Join(parts, " and "), existingLabel, stackLabel,
+			)
+		}
+	}
+
+	// Dead alias: declared but matches no existing managed (current stack)
+	// or unmanaged resource of the same type.
+	var allResources map[string][]*pkgmodel.Resource
+	for _, r := range forma.Resources {
+		if r.Alias == "" {
+			continue
+		}
+		if r.Alias == r.Label {
+			return fmt.Errorf(
+				"resource `%s` declares `alias` equal to its `label` — alias must reference a different prior label",
+				r.Label,
+			)
+		}
+		if allResources == nil {
+			loaded, err := ds.LoadAllResourcesByStack()
+			if err != nil {
+				return fmt.Errorf("failed to load resources for alias validation: %w", err)
+			}
+			allResources = loaded
+		}
+		found := false
+		for _, ex := range allResources[r.Stack] {
+			if ex.Type == r.Type && ex.Label == r.Alias {
+				found = true
+				break
+			}
+		}
+		if !found {
+			for _, ex := range allResources[constants.UnmanagedStack] {
+				if ex.Type == r.Type && ex.Label == r.Alias {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf(
+				"resource `%s` declares alias `%s` but no existing managed (stack %q) or unmanaged resource of type %s matches that label — drop the alias if this is a fresh resource",
+				r.Label, r.Alias, r.Stack, r.Type,
+			)
+		}
+	}
+
+	return nil
 }
 
 func validateStackReferences(forma *pkgmodel.Forma, ds ResourceDataLookup) error {
