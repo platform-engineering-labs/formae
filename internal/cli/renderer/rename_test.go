@@ -6,6 +6,7 @@ package renderer
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -183,6 +184,15 @@ func TestRenderSimulation_ReplaceWithRename(t *testing.T) {
 	assert.Contains(t, result, "because these immutable properties changed:",
 		"the immutable-property-change block still renders")
 	assert.Contains(t, result, "CidrBlock", "the CreateOnly property change is rendered")
+
+	// RFC-0041 ordering: the `because these immutable properties changed:`
+	// block is the replace's reason, the label rename is incidental. Render
+	// the reason first, the incidental change second so the operator reads
+	// cause-before-effect.
+	becauseIdx := strings.Index(result, "because these immutable properties changed:")
+	renameIdx := strings.Index(result, `change label from "vpc-008eef40942ac586b" to "managed-vpc"`)
+	assert.True(t, becauseIdx >= 0 && renameIdx > becauseIdx,
+		"replace ordering: `because ...` must come before `change label ...` (becauseIdx=%d, renameIdx=%d)", becauseIdx, renameIdx)
 }
 
 // No rename + property change -> existing UPDATE verb, no `change label`

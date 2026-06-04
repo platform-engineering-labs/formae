@@ -465,10 +465,6 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 		}
 	}
 
-	if rc.Operation == apimodel.OperationReplace && renamed {
-		node.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
-	}
-
 	if rc.Operation == apimodel.OperationReplace && len(rc.CreateOnlyPatch) > 0 {
 		propertiesNode := node.Add(display.Grey("because these immutable properties changed:"))
 		refLabels := rc.ReferenceLabels
@@ -476,6 +472,15 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 			refLabels = make(map[string]string)
 		}
 		FormatPatchDocument(propertiesNode, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels)
+	}
+
+	// RFC-0041: render the label rename AFTER the "because these immutable
+	// properties changed:" block on a replace. The replace's reason is the
+	// immutable-property change; the rename is incidental, and putting it
+	// last keeps the operator's eye on the cause-and-effect ordering
+	// (what changed → why → and by the way, label moved too).
+	if rc.Operation == apimodel.OperationReplace && renamed {
+		node.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
 	}
 }
 
