@@ -413,7 +413,6 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	return result.command.ID, nil
 }
 
-
 // reconcileResourceFromSnapshot converts a last-reconcile snapshot into the
 // resource to embed in a reconcile forma. `existing` is the live row looked
 // up by snapshot.KSUID, or nil if the KSUID has been deleted since the
