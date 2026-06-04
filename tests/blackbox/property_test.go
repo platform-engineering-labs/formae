@@ -151,6 +151,7 @@ func TestProperty_FullChaos(t *testing.T) {
 				EnableForceReconcile: true,
 				EnableTTL:            true,
 				EnableCrashInjection: true,
+				EnableRename:         true,
 			}
 
 			h.ResetAgentState(t)
