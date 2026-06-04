@@ -427,6 +427,16 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	node.Add(fmt.Sprintf(display.Grey("of type ")+"%s", rc.ResourceType))
 	node.Add(formatStackLine(rc.Operation, rc.OldStackName, rc.StackName))
 
+	// Bring-under-management sub-line on the parent entry. Surfaced here
+	// rather than inside the patch-document block so it sits alongside
+	// `from unmanaged to <stack>` instead of mixing with property-change
+	// entries. Detection is OldStackName == $unmanaged + StackName not
+	// $unmanaged — the same condition formatStackLine uses to render the
+	// `from unmanaged to <stack>` arrow.
+	if rc.OldStackName == constants.UnmanagedStack && rc.StackName != constants.UnmanagedStack {
+		node.Add(display.LightBlue("put resource under management"))
+	}
+
 	if rc.IsCascade && rc.CascadeSource != "" {
 		node.Add(display.Grey("because it depends on ") + display.LightBlue(rc.CascadeSource))
 	}

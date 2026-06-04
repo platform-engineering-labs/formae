@@ -121,8 +121,8 @@ func TestRenderSimulation_BringingUnderManagementAndRename(t *testing.T) {
 	assert.Contains(t, result, "update resource web-server")
 	assert.Contains(t, result, `change label from "i-0abc1234" to "web-server"`)
 	assert.Contains(t, result, "from unmanaged to prod", "stack-move sub-line on the parent")
-	assert.NotContains(t, result, "put resource under management",
-		"the redundant management message was dropped — the stack-move sub-line covers it")
+	assert.Contains(t, result, "put resource under management",
+		"bring-under-management surfaces as a parent sub-line alongside the stack-move")
 }
 
 // RFC-0041: a replace (CreateOnly property changed) that coincides with a
