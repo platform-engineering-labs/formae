@@ -33,6 +33,27 @@ func TestPkl_Evaluate(t *testing.T) {
 	assert.Equal(t, "A", gjson.Get(jsonString, "Resources.1.Properties.Type").String())
 }
 
+// TestPkl_Evaluate_AutoResolvesUnresolvedProject reproduces the reported failure:
+// applying a forma whose directory has a PklProject but no resolved
+// PklProject.deps.json used to fail with a NoSuchFileException and force a manual
+// `pkl project resolve`. Evaluate now auto-resolves via pklrun. The deps file is
+// gitignored and regenerated, so removing it needs no cleanup.
+func TestPkl_Evaluate_AutoResolvesUnresolvedProject(t *testing.T) {
+	depsPath := "./testdata/forma/PklProject.deps.json"
+	if err := os.Remove(depsPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("removing deps.json to simulate unresolved project: %v", err)
+	}
+
+	props := map[string]string{"name": "bacon.platform.engineering"}
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+	require.NoError(t, err, "Evaluate must auto-run `pkl project resolve` when PklProject.deps.json is missing")
+
+	if _, statErr := os.Stat(depsPath); statErr != nil {
+		t.Fatalf("auto-resolve should have recreated PklProject.deps.json: %v", statErr)
+	}
+}
+
 func TestPkl_EvaluateCommandAndMode(t *testing.T) {
 	props := map[string]string{"name": "bacon.platform.engineering"}
 

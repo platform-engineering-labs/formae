@@ -8,13 +8,11 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -24,6 +22,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/pklrun"
 )
 
 const ProjectFile = "PklProject"
@@ -46,45 +45,14 @@ func init() {
 // bundledPklCommand returns the sibling pkl binary next to the formae executable,
 // or nil to let pkl-go fall back to PATH. Using PATH risks picking up a pkl
 // version that doesn't support stdlib features our schemas rely on (e.g.
-// `pkl.reflect.Property.allAnnotations` needs 0.31+).
+// `pkl.reflect.Property.allAnnotations` needs 0.31+). The detection logic lives
+// in pklrun so every pkl invocation (eval and `project resolve`) shares it.
 func bundledPklCommand() []string {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil
 	}
-	// Resolve symlinks so /usr/local/bin/formae -> /opt/pel/bin/formae finds
-	// /opt/pel/bin/pkl rather than looking in /usr/local/bin.
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	bundled := filepath.Join(filepath.Dir(exe), "pkl")
-	if info, err := os.Stat(bundled); err == nil && !info.IsDir() {
-		return []string{bundled}
-	}
-	return nil
-}
-
-// runPklProjectResolve invokes `pkl project resolve <dir>` using the
-// sibling-of-formae binary when present, falling back to PATH. Combined
-// stdout/stderr is included in the returned error so failures (missing
-// binary, malformed PklProject, network issues fetching remote deps) are
-// surfaced at the call site instead of silently dropped.
-func runPklProjectResolve(dir string) error {
-	args := []string{"project", "resolve", dir}
-	var cmd *exec.Cmd
-	if pklCmd := bundledPklCommand(); pklCmd != nil {
-		cmd = exec.Command(pklCmd[0], append(append([]string{}, pklCmd[1:]...), args...)...)
-	} else {
-		cmd = exec.Command("pkl", args...)
-	}
-	if errors.Is(cmd.Err, exec.ErrDot) {
-		cmd.Err = nil
-	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pkl project resolve failed in %s: %w\nOutput: %s", dir, err, string(output))
-	}
-	return nil
+	return pklrun.BundledPklCommand(exe)
 }
 
 func (p PKL) Name() string {
@@ -658,7 +626,7 @@ func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.Sc
 	}
 
 	if hasRemotePackages {
-		if err := runPklProjectResolve(path); err != nil {
+		if err := pklrun.ProjectResolve(path, pklrun.WithPklCommand(bundledPklCommand())); err != nil {
 			return err
 		}
 	}
@@ -962,43 +930,17 @@ func parseLogLevel(level string) slog.Level {
 	}
 }
 
-// newSafeProjectEvaluator creates a project-aware PKL evaluator without the race
-// condition in pkl-go's NewProjectEvaluator. That function internally creates two
-// evaluators on the same manager and defer-closes the first one. If the pkl subprocess
-// sends a late message for the closed evaluator, the manager's listen loop exits
-// entirely (calls return instead of continue), killing all message processing.
-// See: https://github.com/apple/pkl-go/blob/v0.12.0/pkl/evaluator_exec.go#L57-L84
-//
-// This function keeps both evaluators alive until the returned cleanup function is
-// called, which closes the entire manager.
+// newSafeProjectEvaluator builds a project-aware PKL evaluator for the project
+// at projectBaseURL, delegating to pklrun. pklrun auto-runs `pkl project resolve`
+// when PklProject.deps.json is missing (so `formae apply` works on an unresolved
+// project) and owns the race-condition workaround around pkl-go's evaluator
+// manager. The bundled, sibling-of-formae pkl binary is preferred over PATH so
+// schemas relying on newer stdlib features resolve correctly.
 func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pklgo.EvaluatorOptions)) (pklgo.Evaluator, func(), error) {
-	var manager pklgo.EvaluatorManager
-	if cmd := bundledPklCommand(); cmd != nil {
-		manager = pklgo.NewEvaluatorManagerWithCommand(cmd)
-	} else {
-		manager = pklgo.NewEvaluatorManager()
-	}
-
-	projectEvaluator, err := manager.NewEvaluator(ctx, opts...)
-	if err != nil {
-		_ = manager.Close()
-		return nil, nil, fmt.Errorf("failed to create project evaluator: %w", err)
-	}
-
-	projectPath := projectBaseURL.JoinPath("PklProject")
-	project, err := pklgo.LoadProjectFromEvaluator(ctx, projectEvaluator, &pklgo.ModuleSource{Uri: projectPath})
-	if err != nil {
-		_ = manager.Close()
-		return nil, nil, fmt.Errorf("failed to load project: %w", err)
-	}
-
-	newOpts := []func(*pklgo.EvaluatorOptions){pklgo.WithProject(project)}
-	newOpts = append(newOpts, opts...)
-	evaluator, err := manager.NewEvaluator(ctx, newOpts...)
-	if err != nil {
-		_ = manager.Close()
-		return nil, nil, fmt.Errorf("failed to create evaluator: %w", err)
-	}
-
-	return evaluator, func() { _ = manager.Close() }, nil
+	return pklrun.NewProjectEvaluator(
+		ctx,
+		projectBaseURL.Path,
+		pklrun.WithPklCommand(bundledPklCommand()),
+		pklrun.WithEvaluatorOptions(opts...),
+	)
 }
