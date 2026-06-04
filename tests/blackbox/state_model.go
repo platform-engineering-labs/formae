@@ -695,8 +695,16 @@ func (m *StateModel) Resource(stackIndex, idx int) *ExpectedResource {
 	return m.Stacks[stackIndex].Resources[idx]
 }
 
-// LabelForResource returns the expected label for the resource slot on the stack.
+// LabelForResource returns the expected label for the resource slot on the
+// stack. RFC-0041: after a RecordRename, the slot's CurrentLabel overrides
+// the index-derived default; invariant checks and findResourceSlot rely on
+// this to match a renamed slot against its inventory row by the new label.
 func (m *StateModel) LabelForResource(stackIndex, idx int) string {
+	if stackIndex >= 0 && stackIndex < len(m.Stacks) {
+		if res, ok := m.Stacks[stackIndex].Resources[idx]; ok && res != nil && res.CurrentLabel != "" {
+			return res.CurrentLabel
+		}
+	}
 	stackLabel := m.Stacks[stackIndex].Label
 	if m.Pool != nil {
 		return m.Pool.LabelForStack(stackLabel, idx)
