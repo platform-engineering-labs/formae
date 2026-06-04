@@ -72,4 +72,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.1
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.2
