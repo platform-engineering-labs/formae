@@ -15,6 +15,7 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/renderer"
 	"github.com/olekukonko/tablewriter/tw"
+	"github.com/platform-engineering-labs/jsonpatch"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/constants"
@@ -487,14 +488,72 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 		FormatPatchDocument(propertiesNode, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels)
 	}
 
-	// RFC-0041: render the label rename AFTER the "because these immutable
-	// properties changed:" block on a replace. The replace's reason is the
-	// immutable-property change; the rename is incidental, and putting it
-	// last keeps the operator's eye on the cause-and-effect ordering
-	// (what changed → why → and by the way, label moved too).
-	if rc.Operation == apimodel.OperationReplace && renamed {
-		node.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
+	// RFC-0041: on a replace, render any non-immutable changes (label rename
+	// + mutable property delta) in a separate "and by doing the following:"
+	// block AFTER the immutable-cause block. Keeps the cause/effect reading
+	// flow: what immutable property forced the replace → and by the way,
+	// here's everything else that's also changing as part of the same apply.
+	if rc.Operation == apimodel.OperationReplace {
+		mutablePatch := mutablePatchForReplace(rc.OldProperties, rc.Properties, rc.CreateOnlyPatch)
+		if renamed || len(mutablePatch) > 0 {
+			block := node.Add(display.Grey("and by doing the following:"))
+			if renamed {
+				block.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
+			}
+			if len(mutablePatch) > 0 {
+				refLabels := rc.ReferenceLabels
+				if refLabels == nil {
+					refLabels = make(map[string]string)
+				}
+				FormatPatchDocument(block, mutablePatch, rc.Properties, rc.OldProperties, refLabels)
+			}
+		}
 	}
+}
+
+// mutablePatchForReplace returns the JSON-patch document describing changes
+// between oldProperties and newProperties that are NOT already covered by
+// createOnlyPatch. On a replace the engine has split the diff so the
+// CreateOnlyPatch carries the immutable-property change(s) that forced the
+// recreate; everything else in the diff (mutable property edits) is silent
+// in the rendered output unless this helper surfaces it.
+//
+// Returns nil on any diff failure — silent fallback is preferable to a noisy
+// error in the CLI rendering path.
+func mutablePatchForReplace(oldProperties, newProperties, createOnlyPatch json.RawMessage) json.RawMessage {
+	if len(oldProperties) == 0 || len(newProperties) == 0 {
+		return nil
+	}
+	full, err := jsonpatch.CreatePatch(oldProperties, newProperties, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists)
+	if err != nil || len(full) == 0 {
+		return nil
+	}
+	immutablePaths := make(map[string]bool)
+	if len(createOnlyPatch) > 0 {
+		var ops []struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(createOnlyPatch, &ops); err == nil {
+			for _, op := range ops {
+				immutablePaths[op.Path] = true
+			}
+		}
+	}
+	mutable := make([]jsonpatch.JsonPatchOperation, 0, len(full))
+	for _, op := range full {
+		if immutablePaths[string(op.Path)] {
+			continue
+		}
+		mutable = append(mutable, op)
+	}
+	if len(mutable) == 0 {
+		return nil
+	}
+	out, err := json.Marshal(mutable)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 func formatResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate) {

@@ -186,13 +186,79 @@ func TestRenderSimulation_ReplaceWithRename(t *testing.T) {
 	assert.Contains(t, result, "CidrBlock", "the CreateOnly property change is rendered")
 
 	// RFC-0041 ordering: the `because these immutable properties changed:`
-	// block is the replace's reason, the label rename is incidental. Render
-	// the reason first, the incidental change second so the operator reads
-	// cause-before-effect.
+	// block is the replace's reason, the label rename and mutable property
+	// edits land in a follow-up `and by doing the following:` block. Cause
+	// first, effect second.
+	assert.Contains(t, result, "and by doing the following:",
+		"non-immutable changes on replace surface under their own block")
 	becauseIdx := strings.Index(result, "because these immutable properties changed:")
+	andIdx := strings.Index(result, "and by doing the following:")
 	renameIdx := strings.Index(result, `change label from "vpc-008eef40942ac586b" to "managed-vpc"`)
-	assert.True(t, becauseIdx >= 0 && renameIdx > becauseIdx,
-		"replace ordering: `because ...` must come before `change label ...` (becauseIdx=%d, renameIdx=%d)", becauseIdx, renameIdx)
+	assert.True(t, becauseIdx >= 0 && andIdx > becauseIdx,
+		"replace ordering: `because ...` must come before `and by doing the following:` (becauseIdx=%d, andIdx=%d)", becauseIdx, andIdx)
+	assert.True(t, andIdx >= 0 && renameIdx > andIdx,
+		"label rename must live inside the `and by doing the following:` block (andIdx=%d, renameIdx=%d)", andIdx, renameIdx)
+}
+
+// RFC-0041: replace with both an immutable-property change AND a mutable
+// property change. The mutable change must NOT appear in the
+// `because these immutable properties changed:` block (it didn't cause the
+// replace) but must surface in the `and by doing the following:` block so
+// the operator sees the full picture of what this apply will do.
+func TestRenderSimulation_Replace_MutableAndImmutableProperties(t *testing.T) {
+	createOnlyPatch := json.RawMessage(`[{"op":"replace","path":"/CidrBlock","value":"172.32.0.0/16"}]`)
+	oldProps := json.RawMessage(`{"CidrBlock":"172.31.0.0/16","EnableDnsHostnames":true}`)
+	newProps := json.RawMessage(`{"CidrBlock":"172.32.0.0/16","EnableDnsHostnames":false}`)
+	groupID := util.NewID()
+
+	simulation := apimodel.Simulation{
+		ChangesRequired: true,
+		Command: apimodel.Command{
+			CommandID: "replace-mutable-id",
+			Command:   "apply",
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{
+					ResourceID:      util.NewID(),
+					ResourceType:    "AWS::EC2::VPC",
+					ResourceLabel:   "managed-vpc",
+					StackName:       "demo",
+					Operation:       apimodel.OperationDelete,
+					State:           "NotStarted",
+					GroupID:         groupID,
+					Properties:      oldProps,
+					CreateOnlyPatch: createOnlyPatch,
+				},
+				{
+					ResourceID:    util.NewID(),
+					ResourceType:  "AWS::EC2::VPC",
+					ResourceLabel: "managed-vpc",
+					StackName:     "demo",
+					Operation:     apimodel.OperationCreate,
+					State:         "NotStarted",
+					GroupID:       groupID,
+					Properties:    newProps,
+				},
+			},
+		},
+	}
+
+	result, err := RenderSimulation(&simulation)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "because these immutable properties changed:")
+	assert.Contains(t, result, "and by doing the following:",
+		"mutable property change on replace surfaces in the and-by-doing block")
+	assert.Contains(t, result, "EnableDnsHostnames",
+		"the mutable property delta is rendered inside the and-by-doing block")
+
+	// EnableDnsHostnames must NOT appear inside the `because` block — it
+	// didn't cause the replace.
+	becauseIdx := strings.Index(result, "because these immutable properties changed:")
+	andIdx := strings.Index(result, "and by doing the following:")
+	enableIdx := strings.Index(result, "EnableDnsHostnames")
+	assert.True(t, becauseIdx >= 0 && andIdx > becauseIdx && enableIdx > andIdx,
+		"mutable property must appear after the and-by-doing line, not in the because block (becauseIdx=%d, andIdx=%d, enableIdx=%d)", becauseIdx, andIdx, enableIdx)
 }
 
 // No rename + property change -> existing UPDATE verb, no `change label`
