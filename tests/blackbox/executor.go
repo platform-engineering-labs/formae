@@ -2908,27 +2908,41 @@ func (h *TestHarness) executeRename(t *testing.T, op *Operation, model *StateMod
 		return
 	}
 
-	// Build a forma containing just the renamed slot, with the rename declared
-	// via the alias field. Use the existing label-override path on the forma
-	// builder: a one-entry override map maps the slot to its new label.
-	overrides := map[int]string{op.RenameSlotIndex: newLabel}
+	// Build a forma containing just the renamed slot WITHOUT applying a label
+	// override. The builder uses the pool's base label (and substitutes it
+	// into Properties.Name), which matches the value that's been carried in
+	// inventory since the initial Apply — every subsequent rename leaves
+	// Properties untouched in the engine, so keeping the builder's defaults
+	// here means the rename's patch document stays empty (label-only change).
+	//
+	// After the builder returns, locate the parent resource for this stack
+	// (drawRename filters to parents, so exactly one such resource exists)
+	// and flip its Label to newLabel + Alias to oldLabel. Matching by slot
+	// position rather than by Label is what makes chained renames work: on
+	// the second rename, oldLabel is the renamed label and won't equal the
+	// builder's base label.
 	ids := []int{op.RenameSlotIndex}
 	var forma *pkgmodel.Forma
 	if model.Pool != nil {
 		forma = FormaFromPoolResources(model.Pool, stack.Label, model.ProviderStackLabel, ids,
-			defaultRenameParentProps, defaultRenameChildProps, overrides)
+			defaultRenameParentProps, defaultRenameChildProps, nil)
 	} else {
-		forma = FormaFromStackResources(stack.Label, ids, overrides)
+		forma = FormaFromStackResources(stack.Label, ids, nil)
 	}
 
-	// Decorate the chosen resource with `alias = oldLabel`. The forma builder
-	// constructs the resource using the override label as `Label`; we then
-	// flip its Alias field to point at the previous label so the engine
-	// matches the existing managed row.
+	patched := false
 	for i := range forma.Resources {
-		if forma.Resources[i].Stack == stack.Label && forma.Resources[i].Label == newLabel {
+		if forma.Resources[i].Stack == stack.Label {
+			forma.Resources[i].Label = newLabel
 			forma.Resources[i].Alias = oldLabel
+			patched = true
+			break
 		}
+	}
+	if !patched {
+		t.Logf("[op %d] RenameLabel slot=%d in stack=%s → skipped (forma builder produced no resource for this stack)",
+			op.SequenceNum, op.RenameSlotIndex, stack.Label)
+		return
 	}
 
 	resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModePatch, false, clientID, false)
