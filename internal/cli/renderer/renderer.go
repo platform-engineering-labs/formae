@@ -427,16 +427,6 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	node.Add(fmt.Sprintf(display.Grey("of type ")+"%s", rc.ResourceType))
 	node.Add(formatStackLine(rc.Operation, rc.OldStackName, rc.StackName))
 
-	// Bring-under-management sub-line on the parent entry. Surfaced here
-	// rather than inside the patch-document block so it sits alongside
-	// `from unmanaged to <stack>` instead of mixing with property-change
-	// entries. Detection is OldStackName == $unmanaged + StackName not
-	// $unmanaged — the same condition formatStackLine uses to render the
-	// `from unmanaged to <stack>` arrow.
-	if rc.OldStackName == constants.UnmanagedStack && rc.StackName != constants.UnmanagedStack {
-		node.Add(display.LightBlue("put resource under management"))
-	}
-
 	if rc.IsCascade && rc.CascadeSource != "" {
 		node.Add(display.Grey("because it depends on ") + display.LightBlue(rc.CascadeSource))
 	}
@@ -448,21 +438,29 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	// the operator scans for what's actually changing.
 	renamed := rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel
 	hasPatch := rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0
+	isBringingUnderManagement := rc.OldStackName == constants.UnmanagedStack && rc.StackName != constants.UnmanagedStack
 
 	// RFC-0041: where the `change label from "<old>" to "<new>"` line lives
 	// depends on the op.
 	//
 	//  - OperationUpdate: the body block is `by doing the following:` and
 	//    already contains property-change entries. Put the label rename
-	//    inside the same block so the operator scans one list.
+	//    inside the same block so the operator scans one list. The
+	//    bring-under-management message lives here too (first entry) so
+	//    the import + rename + property delta read as one ordered list of
+	//    "what's about to happen" rather than splitting transition notes
+	//    onto parent sub-lines.
 	//  - OperationReplace: the body block is `because these immutable
 	//    properties changed:` which is reserved for CreateOnly-property
 	//    changes. The rename isn't one of those, so it goes one level up
 	//    as a parent sub-line — same shape as `from stack X` on a replace.
 	//
 	// Only one location ever fires for a given update. No duplication.
-	if rc.Operation == apimodel.OperationUpdate && (renamed || hasPatch) {
+	if rc.Operation == apimodel.OperationUpdate && (renamed || hasPatch || isBringingUnderManagement) {
 		propertiesNode := node.Add(display.Grey("by doing the following:"))
+		if isBringingUnderManagement {
+			propertiesNode.Add(display.LightBlue("put resource under management"))
+		}
 		if renamed {
 			propertiesNode.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
 		}
@@ -473,6 +471,11 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 			}
 			FormatPatchDocument(propertiesNode, rc.PatchDocument, rc.Properties, rc.OldProperties, refLabels)
 		}
+	} else if isBringingUnderManagement {
+		// Non-update bring-under-management (e.g. a replace that's also a
+		// migration). No `by doing the following:` block to host the line,
+		// so surface it on the parent.
+		node.Add(display.LightBlue("put resource under management"))
 	}
 
 	if rc.Operation == apimodel.OperationReplace && len(rc.CreateOnlyPatch) > 0 {
