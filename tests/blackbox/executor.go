@@ -414,19 +414,29 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 		if err == nil {
 			inventory = managedInventory
 		}
-		modelViolations := CheckModelVsInventory(model[0], inventory)
-		modelViolations = append(modelViolations, CheckUnmanagedModelVsInventory(model[0], unmanagedInventory)...)
-		modelViolations = append(modelViolations, CheckManagedDriftVsInventory(model[0], inventory)...)
-		if len(modelViolations) > 0 {
-			t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
-			for _, res := range inventory {
-				t.Logf("  inventory: stack=%s label=%s type=%s nativeID=%s", res.Stack, res.Label, res.Type, res.NativeID)
+		// When IdentityOnlyInvariants is set the test is willing to live
+		// with the harness's State/Properties prediction drifting under
+		// chaos and only cares about rename-identity guarantees. Skip
+		// CheckModelVsInventory and the unmanaged + managed-drift checks
+		// that all depend on the same prediction; CheckInvariants
+		// (duplicate-NativeID) and CheckRenameInvariants (no-old-label-
+		// still-present + per-NativeID label drift) already fired in
+		// Phase 3 above.
+		if !model[0].IdentityOnlyInvariants {
+			modelViolations := CheckModelVsInventory(model[0], inventory)
+			modelViolations = append(modelViolations, CheckUnmanagedModelVsInventory(model[0], unmanagedInventory)...)
+			modelViolations = append(modelViolations, CheckManagedDriftVsInventory(model[0], inventory)...)
+			if len(modelViolations) > 0 {
+				t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
+				for _, res := range inventory {
+					t.Logf("  inventory: stack=%s label=%s type=%s nativeID=%s", res.Stack, res.Label, res.Type, res.NativeID)
+				}
+				for _, v := range modelViolations {
+					t.Logf("  violation: %s", v.Message)
+				}
 			}
-			for _, v := range modelViolations {
-				t.Logf("  violation: %s", v.Message)
-			}
+			violations = append(violations, modelViolations...)
 		}
-		violations = append(violations, modelViolations...)
 	}
 
 	for _, v := range violations {

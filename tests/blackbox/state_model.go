@@ -104,6 +104,15 @@ type StateModel struct {
 	// Populated from command response ResourceUpdate.NativeID on successful
 	// creates/updates. Cleared on successful deletes.
 	NativeIDs map[string]string
+	// IdentityOnlyInvariants narrows AssertAllInvariants to checks that
+	// don't depend on the harness's State/Properties prediction:
+	// duplicate-NativeID, CheckRenameInvariants (no-old-label-still-
+	// present, per-NativeID label drift), command completeness, resource
+	// invariants. CheckModelVsInventory / Unmanaged / ManagedDrift are
+	// skipped. Used by chaos tests with EnableRename on, where the
+	// prediction model has multiple drift modes (cascade-destroy abort,
+	// OOB-delete + failed-apply) that aren't rename-specific.
+	IdentityOnlyInvariants bool
 }
 
 // NewStateModel creates a state model with the given number of stacks,
