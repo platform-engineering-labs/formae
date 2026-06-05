@@ -974,6 +974,25 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 					res.CurrentLabel = snap.CurrentLabel
 					res.PreviousLabel = snap.PreviousLabel
 				}
+				// Drift overlay on the revert: the snapshot captured the slot's
+				// state at command-submit time, but OOB cloud operations
+				// (CloudDelete / CloudModify) may have changed cloud reality
+				// in the meantime. ManagedDriftedResources is keyed by
+				// NativeID; if there's a pending-sync entry showing the cloud
+				// row gone, the slot must land on NotExist on revert so the
+				// later sync-from-cloud doesn't leave model.expected stuck at
+				// Exists for a row inventory will eventually drop.
+				if res != nil && res.State == StateExists {
+					if nativeID := model.GetNativeID(stackIdx, slotIdx); nativeID != "" {
+						if drift, ok := model.ManagedDriftedResources[nativeID]; ok && drift.PendingSync && !drift.PresentInCloud {
+							t.Logf("correctModelFromCommandOutcome: forcing stack=%s slot=%d → NotExist after OOB-delete drift (nativeID=%s, ru.State=%s, op=%s)",
+								model.Stack(stackIdx).Label, slotIdx, nativeID, ru.State, ru.Operation)
+							res.State = StateNotExist
+							res.Properties = ""
+							model.ClearNativeID(stackIdx, slotIdx)
+						}
+					}
+				}
 			} else {
 				// No snapshot — derive from operation semantics.
 				res := model.Resource(stackIdx, slotIdx)

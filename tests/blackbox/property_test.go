@@ -151,17 +151,20 @@ func TestProperty_FullChaos(t *testing.T) {
 				EnableForceReconcile: true,
 				EnableTTL:            true,
 				EnableCrashInjection: true,
-				// EnableRename intentionally off here. With rename folded into
-				// the OpApply path (RFC-0041) a rename rides inside an Update
-				// — the same prediction model that already drifts under chaos
-				// (cancel × ForceReconcile × partial-success applies on
-				// non-renamed slots). Leaving rename off keeps FullChaos
-				// focused on the existing prediction-correctness story until
-				// the harness's expected-State/Properties prediction is
-				// hardened. Identity-only coverage for rename lives in the
-				// LabelForResource-aware invariants (CheckRenameInvariants)
-				// and the duplicate-NativeID guard, which both fire under
-				// AssertAllInvariants for any test that turns EnableRename on.
+				// EnableRename intentionally off here. The harness's expected-
+				// State prediction has multiple drift modes under chaos.
+				// correctModelFromCommandOutcome now consults
+				// ManagedDriftedResources on revert so an OOB cloud delete
+				// followed by a failed apply transitions the slot to NotExist
+				// — that catches the original RFC-0041 round-5 shape — but
+				// abort-destroy + dependents-detected combinations on cascade
+				// trees still leave model.expected diverging. Rename folded
+				// into OpApply expands rapid's op space and hits those modes
+				// faster. Until the broader prediction model is hardened,
+				// FullChaos stays rename-free; TestProperty_RenameViaApply
+				// covers the rename code path on its own and
+				// CheckRenameInvariants + duplicate-NativeID fire under
+				// AssertAllInvariants regardless.
 			}
 
 			h.ResetAgentState(t)
