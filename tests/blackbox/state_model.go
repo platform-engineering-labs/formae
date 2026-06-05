@@ -28,6 +28,16 @@ type ExpectedResource struct {
 	Index      int
 	Properties string
 	State      ResourceState
+	// CurrentLabel overrides the default index-derived label for this slot.
+	// Set when an OpRename has renamed the slot's resource. Empty means the
+	// slot uses the default label produced by resourceLabelForStack().
+	// (RFC-0041 follow-up: enables OpRename in the rapid generators.)
+	CurrentLabel string
+	// PreviousLabel is the label this slot carried before the most recent
+	// rename. Used by OpRename invariants and by executeRename to build the
+	// `alias` field on the next forma. Cleared once a subsequent rename
+	// records its own previous label.
+	PreviousLabel string
 }
 
 // ExpectedUnmanagedResource tracks the expected state of a discovered
@@ -236,12 +246,7 @@ func (m *StateModel) FindDriftEligibleResource(sequenceNum int) (stackIdx, slotI
 			if m.Pool != nil && m.Pool.IsCrossStack(idx) && busyStacks[0] {
 				continue
 			}
-			var label string
-			if m.Pool != nil {
-				label = m.Pool.LabelForStack(stack.Label, idx)
-			} else {
-				label = resourceLabelForStack(stack.Label, idx)
-			}
+			label := m.LabelForResource(si, idx)
 			var rType string
 			if m.Pool != nil {
 				rType = m.Pool.Slots[idx].Type
@@ -267,12 +272,7 @@ func (m *StateModel) NativeIDsByLabel() map[string]string {
 		var stackIdx, slotIdx int
 		fmt.Sscanf(key, "%d:%d", &stackIdx, &slotIdx)
 		stackLabel := m.Stacks[stackIdx].Label
-		var label string
-		if m.Pool != nil {
-			label = m.Pool.LabelForStack(stackLabel, slotIdx)
-		} else {
-			label = resourceLabelForStack(stackLabel, slotIdx)
-		}
+		label := m.LabelForResource(stackIdx, slotIdx)
 		result[stackLabel+":"+label] = nativeID
 	}
 	return result
@@ -422,13 +422,75 @@ func (m *StateModel) Resource(stackIndex, idx int) *ExpectedResource {
 	return m.Stacks[stackIndex].Resources[idx]
 }
 
-// LabelForResource returns the expected label for the resource slot on the stack.
+// LabelForResource returns the expected label for the resource slot on the
+// stack. RFC-0041: after a RecordRename, the slot's CurrentLabel overrides
+// the index-derived default; invariant checks and findResourceSlot rely on
+// this to match a renamed slot against its inventory row by the new label.
 func (m *StateModel) LabelForResource(stackIndex, idx int) string {
+	if stackIndex >= 0 && stackIndex < len(m.Stacks) {
+		if res, ok := m.Stacks[stackIndex].Resources[idx]; ok && res != nil && res.CurrentLabel != "" {
+			return res.CurrentLabel
+		}
+	}
 	stackLabel := m.Stacks[stackIndex].Label
 	if m.Pool != nil {
 		return m.Pool.LabelForStack(stackLabel, idx)
 	}
 	return resourceLabelForStack(stackLabel, idx)
+}
+
+// DefaultLabelForResource returns the index-derived label for the slot,
+// ignoring any rename overlay. This is the label a slot gets on (re)create.
+func (m *StateModel) DefaultLabelForResource(stackIndex, idx int) string {
+	stackLabel := m.Stacks[stackIndex].Label
+	if m.Pool != nil {
+		return m.Pool.LabelForStack(stackLabel, idx)
+	}
+	return resourceLabelForStack(stackLabel, idx)
+}
+
+// RecordRename updates the model after a rename was accepted. After this
+// call, LabelForResource returns newLabel and the slot remembers the label
+// it carried immediately before.
+func (m *StateModel) RecordRename(stackIdx, slotIdx int, newLabel string) {
+	res, ok := m.Stack(stackIdx).Resources[slotIdx]
+	if !ok || res == nil {
+		return
+	}
+	res.PreviousLabel = m.LabelForResource(stackIdx, slotIdx)
+	res.CurrentLabel = newLabel
+}
+
+// StackIndexByLabel returns the stack index for the given stack label, or -1
+// if no stack with that label exists.
+func (m *StateModel) StackIndexByLabel(label string) int {
+	for i := range m.Stacks {
+		if m.Stacks[i].Label == label {
+			return i
+		}
+	}
+	return -1
+}
+
+// LabelOverrides returns a map of slot index -> current label for slots that
+// have been renamed. Callers that build a forma for a stack pass this map to
+// FormaFromPoolResources / FormaFromStackResources so the constructed forma
+// carries and references resources by their post-rename labels. A nil map
+// means every slot uses its default index-derived label.
+func (m *StateModel) LabelOverrides(stackIdx int) map[int]string {
+	if stackIdx < 0 || stackIdx >= len(m.Stacks) {
+		return nil
+	}
+	var overrides map[int]string
+	for idx, res := range m.Stack(stackIdx).Resources {
+		if res != nil && res.CurrentLabel != "" {
+			if overrides == nil {
+				overrides = make(map[int]string)
+			}
+			overrides[idx] = res.CurrentLabel
+		}
+	}
+	return overrides
 }
 
 // TypeForResource returns the expected type for the resource slot.
@@ -547,10 +609,12 @@ func (m *StateModel) SnapshotResources(stackIndex int, resourceIDs []int) []Reso
 		res := m.Resource(stackIndex, id)
 		if res != nil {
 			snapshots = append(snapshots, ResourceSnapshot{
-				StackIndex: stackIndex,
-				SlotIndex:  id,
-				State:      res.State,
-				Properties: res.Properties,
+				StackIndex:    stackIndex,
+				SlotIndex:     id,
+				State:         res.State,
+				Properties:    res.Properties,
+				CurrentLabel:  res.CurrentLabel,
+				PreviousLabel: res.PreviousLabel,
 			})
 		}
 	}
@@ -564,6 +628,8 @@ func (m *StateModel) RevertResources(snapshots []ResourceSnapshot) {
 		if res != nil {
 			res.State = snap.State
 			res.Properties = snap.Properties
+			res.CurrentLabel = snap.CurrentLabel
+			res.PreviousLabel = snap.PreviousLabel
 		}
 	}
 }
