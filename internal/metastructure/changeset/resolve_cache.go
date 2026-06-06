@@ -56,19 +56,17 @@ func NewResolveCache() gen.ProcessBehavior {
 func (r *ResolveCache) Init(args ...any) error {
 	r.cache = make(map[pkgmodel.FormaeURI]gjson.Result)
 
-	// Read retry config from node environment (set by metastructure).
+	// Read retry config from node environment (set by metastructure). Apply
+	// shared defaults so ResourceUpdater can size its outer watchdog from the
+	// same values without re-encoding them.
+	var retryCfg pkgmodel.RetryConfig
 	if cfg, ok := r.Env("RetryConfig"); ok {
-		if retryCfg, ok := cfg.(pkgmodel.RetryConfig); ok {
-			r.maxRetries = retryCfg.MaxRetries
-			r.retryDelay = retryCfg.RetryDelay
+		if rc, ok := cfg.(pkgmodel.RetryConfig); ok {
+			retryCfg = rc
 		}
 	}
-	if r.maxRetries == 0 {
-		r.maxRetries = 3
-	}
-	if r.retryDelay == 0 {
-		r.retryDelay = 2 * time.Second
-	}
+	r.maxRetries = retryCfg.MaxRetriesOrDefault()
+	r.retryDelay = retryCfg.RetryDelayOrDefault()
 
 	r.Log().Debug("ResolveCache actor initialized maxRetries=%d retryDelay=%s", r.maxRetries, r.retryDelay)
 

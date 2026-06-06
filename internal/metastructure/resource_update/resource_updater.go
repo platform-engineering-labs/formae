@@ -450,15 +450,18 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 		return StateResolving, data, nil, fmt.Errorf("failed to send ResolveValue message to resolve cache: %w", err)
 	}
 
-	// Size the envelope to the actual ResolveCache budget per property, not the
-	// progress-poll interval. ResolveCache's plugin Call uses PluginOperationCallTimeout
-	// per attempt, and may internally retry up to maxRetries times with retryDelay
-	// spacing for recoverable errors. 4x gives comfortable headroom over the
-	// worst-case ~3 attempts.
-	resolveCacheTimeout := time.Duration(PluginOperationCallTimeout*4) * time.Second
-	if heartbeatTimeout := data.retryConfig.StatusCheckInterval * 10; heartbeatTimeout > resolveCacheTimeout {
-		resolveCacheTimeout = heartbeatTimeout
-	}
+	// The watchdog must outlive ResolveCache's worst-case wall time per property:
+	// each plugin Call takes up to PluginOperationCallTimeout, retried up to
+	// MaxRetries times with RetryDelay spacing for recoverable errors. Derive
+	// the envelope from the same RetryConfig that ResolveCache itself reads, so
+	// the two cannot drift if the policy is tuned.
+	maxRetries := data.retryConfig.MaxRetriesOrDefault()
+	retryDelay := data.retryConfig.RetryDelayOrDefault()
+	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
+	const resolveCacheMargin = 30 * time.Second
+	resolveCacheTimeout := time.Duration(maxRetries)*perAttempt +
+		time.Duration(maxRetries-1)*retryDelay +
+		resolveCacheMargin
 	timeout := statemachine.StateTimeout{
 		Duration: resolveCacheTimeout,
 		Message:  ResolveCacheMissingInAction{},
