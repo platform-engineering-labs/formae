@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -55,19 +56,16 @@ func NewResolveCache() gen.ProcessBehavior {
 func (r *ResolveCache) Init(args ...any) error {
 	r.cache = make(map[pkgmodel.FormaeURI]gjson.Result)
 
-	// Read retry config from node environment (set by metastructure).
-	if cfg, ok := r.Env("RetryConfig"); ok {
-		if retryCfg, ok := cfg.(pkgmodel.RetryConfig); ok {
-			r.maxRetries = retryCfg.MaxRetries
-			r.retryDelay = retryCfg.RetryDelay
-		}
+	cfg, ok := r.Env("RetryConfig")
+	if !ok {
+		return fmt.Errorf("resolveCache: missing 'RetryConfig' environment variable")
 	}
-	if r.maxRetries == 0 {
-		r.maxRetries = 3
+	retryCfg, ok := cfg.(pkgmodel.RetryConfig)
+	if !ok {
+		return fmt.Errorf("resolveCache: 'RetryConfig' environment variable has wrong type %T", cfg)
 	}
-	if r.retryDelay == 0 {
-		r.retryDelay = 2 * time.Second
-	}
+	r.maxRetries = retryCfg.MaxRetries
+	r.retryDelay = retryCfg.RetryDelay
 
 	r.Log().Debug("ResolveCache actor initialized maxRetries=%d retryDelay=%s", r.maxRetries, r.retryDelay)
 
@@ -221,7 +219,11 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 		return nil, fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
 	}
 
-	progressResult, err := r.Call(
+	// Use the same call budget as ResourceUpdater.doPluginOperation. The default
+	// Ergo Call timeout (5s) is too short for live AWS API reads, which routinely
+	// run longer than that — especially CloudControl GetResource immediately
+	// after a Create, when SDK credential resolution and the read itself stack up.
+	progressResult, err := r.CallWithTimeout(
 		spawnRes.PID,
 		plugin.ReadResource{
 			Namespace:         retry.loadResult.Resource.Namespace(),
@@ -231,7 +233,8 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 			Resource:          retry.loadResult.Resource,
 			NativeID:          retry.loadResult.Resource.NativeID,
 			TargetConfig:      retry.config,
-		})
+		},
+		resource_update.PluginOperationCallTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read resource: %w", err)
 	}
