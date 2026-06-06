@@ -7,6 +7,7 @@ package resource_update
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
@@ -449,8 +450,17 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 		return StateResolving, data, nil, fmt.Errorf("failed to send ResolveValue message to resolve cache: %w", err)
 	}
 
+	// Size the envelope to the actual ResolveCache budget per property, not the
+	// progress-poll interval. ResolveCache's plugin Call uses PluginOperationCallTimeout
+	// per attempt, and may internally retry up to maxRetries times with retryDelay
+	// spacing for recoverable errors. 4x gives comfortable headroom over the
+	// worst-case ~3 attempts.
+	resolveCacheTimeout := time.Duration(PluginOperationCallTimeout*4) * time.Second
+	if heartbeatTimeout := data.retryConfig.StatusCheckInterval * 10; heartbeatTimeout > resolveCacheTimeout {
+		resolveCacheTimeout = heartbeatTimeout
+	}
 	timeout := statemachine.StateTimeout{
-		Duration: data.retryConfig.StatusCheckInterval * 10,
+		Duration: resolveCacheTimeout,
 		Message:  ResolveCacheMissingInAction{},
 	}
 

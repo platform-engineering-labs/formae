@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -221,7 +222,11 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 		return nil, fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
 	}
 
-	progressResult, err := r.Call(
+	// Use the same call budget as ResourceUpdater.doPluginOperation. The default
+	// Ergo Call timeout (5s) is too short for live AWS API reads, which routinely
+	// run longer than that — especially CloudControl GetResource immediately
+	// after a Create, when SDK credential resolution and the read itself stack up.
+	progressResult, err := r.CallWithTimeout(
 		spawnRes.PID,
 		plugin.ReadResource{
 			Namespace:         retry.loadResult.Resource.Namespace(),
@@ -231,7 +236,8 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 			Resource:          retry.loadResult.Resource,
 			NativeID:          retry.loadResult.Resource.NativeID,
 			TargetConfig:      retry.config,
-		})
+		},
+		resource_update.PluginOperationCallTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read resource: %w", err)
 	}
