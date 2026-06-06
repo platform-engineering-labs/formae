@@ -455,12 +455,10 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 	// MaxRetries times with RetryDelay spacing for recoverable errors. Derive
 	// the envelope from the same RetryConfig that ResolveCache itself reads, so
 	// the two cannot drift if the policy is tuned.
-	maxRetries := data.retryConfig.MaxRetriesOrDefault()
-	retryDelay := data.retryConfig.RetryDelayOrDefault()
 	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
 	const resolveCacheMargin = 30 * time.Second
-	resolveCacheTimeout := time.Duration(maxRetries)*perAttempt +
-		time.Duration(maxRetries-1)*retryDelay +
+	resolveCacheTimeout := time.Duration(data.retryConfig.MaxRetries)*perAttempt +
+		time.Duration(data.retryConfig.MaxRetries-1)*data.retryConfig.RetryDelay +
 		resolveCacheMargin
 	timeout := statemachine.StateTimeout{
 		Duration: resolveCacheTimeout,

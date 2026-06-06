@@ -149,28 +149,6 @@ type RetryConfig struct {
 	RetryDelay          time.Duration
 }
 
-// Defaults for RetryConfig fields when a config carries zero/unset values.
-// Co-located here so ResolveCache (which applies them) and ResourceUpdater
-// (which sizes its resolving-state watchdog from them) cannot drift.
-const (
-	DefaultMaxRetries = 3
-	DefaultRetryDelay = 2 * time.Second
-)
-
-func (rc RetryConfig) MaxRetriesOrDefault() int {
-	if rc.MaxRetries <= 0 {
-		return DefaultMaxRetries
-	}
-	return rc.MaxRetries
-}
-
-func (rc RetryConfig) RetryDelayOrDefault() time.Duration {
-	if rc.RetryDelay <= 0 {
-		return DefaultRetryDelay
-	}
-	return rc.RetryDelay
-}
-
 type SynchronizationConfig struct {
 	Enabled  bool
 	Interval time.Duration
