@@ -2399,35 +2399,56 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 	_, span := sqliteTracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()
 
-	// Get resources from the last USER reconcile command for this stack.
-	// This gives us the "declared state" - what the user specified in their Forma file.
-	// We filter by source='user' on resource_updates to exclude auto-reconciler and sync commands,
-	// as they shouldn't change the declared state - they only enforce or detect drift.
+	// Declared state for auto-reconcile: per-resource DesiredState from the
+	// most recent user-source reconcile that touched each resource. Failed
+	// reconciles count (so failed updates are retried until they converge);
+	// Canceled and InProgress reconciles do not (they aren't accepted user
+	// intent).
+	//
+	// Reading per-resource rather than per-command is the key invariant.
+	// The generator only emits resource_updates rows for resources whose
+	// state actually changes — unchanged resources produce no row. If we
+	// scoped the snapshot to a single reconcile command, a partial reconcile
+	// that changed only some resources would yield a desired-state Forma
+	// that omits the unchanged ones, and auto-reconcile would implicitly
+	// delete them as drift. Taking the most recent user-source reconcile
+	// row per ksuid keeps unchanged resources represented by the earlier
+	// reconcile that last declared them.
+	//
+	// Delete operations are excluded: a deletion the user requested is not
+	// part of the desired state going forward.
 	query := `
-		WITH last_user_reconcile_for_stack AS (
-			SELECT fc.command_id
-			FROM forma_commands fc
-			INNER JOIN resource_updates ru ON ru.command_id = fc.command_id
+		WITH user_reconcile_updates AS (
+			SELECT ru.ksuid, ru.resource, ru.operation, fc.timestamp
+			FROM resource_updates ru
+			INNER JOIN forma_commands fc ON ru.command_id = fc.command_id
 			WHERE fc.config_mode = 'reconcile'
-			AND fc.state = 'Success'
+			AND fc.state IN ('Success', 'Failed')
 			AND fc.command = 'apply'
 			AND ru.source = 'user'
 			AND ru.stack_label = ?
-			GROUP BY fc.command_id
-			ORDER BY fc.timestamp DESC
-			LIMIT 1
+		),
+		latest_per_ksuid AS (
+			SELECT ksuid, resource, operation,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY ksuid
+			           ORDER BY timestamp DESC,
+			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
+			       ) as rn
+			FROM user_reconcile_updates
 		)
-		SELECT r.ksuid, r.type, r.label, r.target,
-		       json_extract(r.data, '$.Properties') as properties,
-		       json_extract(r.data, '$.Schema') as schema,
-		       r.native_id
-		FROM resources r
-		WHERE r.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
-		AND r.stack = ?
-		AND r.operation != 'delete'
+		SELECT ksuid,
+		       json_extract(resource, '$.Type')       as type,
+		       json_extract(resource, '$.Label')      as label,
+		       json_extract(resource, '$.Target')     as target,
+		       json_extract(resource, '$.Properties') as properties,
+		       json_extract(resource, '$.Schema')     as schema,
+		       json_extract(resource, '$.NativeID')   as native_id
+		FROM latest_per_ksuid
+		WHERE rn = 1 AND operation != 'delete'
 	`
 
-	rows, err := d.conn.Query(query, stackLabel, stackLabel)
+	rows, err := d.conn.Query(query, stackLabel)
 	if err != nil {
 		return nil, err
 	}
