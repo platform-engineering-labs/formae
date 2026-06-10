@@ -228,10 +228,14 @@ func RunGetResourcesAtLastReconcile_DeleteRowsExcluded(t *testing.T, newDS func(
 			pkgmodel.FormaApplyModeReconcile,
 			-5*time.Minute,
 			[]resource_update.ResourceUpdate{
-				// Replace pair for the same resource: delete the old, create
-				// the new. Only the create side belongs in the snapshot.
+				// Replace pair: in production NewResourceUpdateForReplace
+				// emits a delete and a create for the SAME ksuid (assigned
+				// by BatchGetKSUIDsByTriplets matching the existing row).
+				// Both rows share the command's timestamp. The query must
+				// deterministically return the create side, not drop the
+				// resource because the delete row won the row-number tie.
 				resourceUpdate("stack-a", "ksuid-1", "bucket-1", `{"foo":"v1"}`, types.OperationDelete, resource_update.FormaCommandSourceUser),
-				resourceUpdate("stack-a", "ksuid-2", "bucket-1", `{"foo":"v2"}`, types.OperationCreate, resource_update.FormaCommandSourceUser),
+				resourceUpdate("stack-a", "ksuid-1", "bucket-1", `{"foo":"v2"}`, types.OperationCreate, resource_update.FormaCommandSourceUser),
 				// Implicit delete of a different resource that was removed
 				// from the forma — must also be excluded from the baseline.
 				resourceUpdate("stack-a", "ksuid-3", "bucket-removed", `{"foo":"old"}`, types.OperationDelete, resource_update.FormaCommandSourceUser),
@@ -241,9 +245,10 @@ func RunGetResourcesAtLastReconcile_DeleteRowsExcluded(t *testing.T, newDS func(
 
 		snaps, err := td.GetResourcesAtLastReconcile("stack-a")
 		assert.NoError(t, err)
-		assert.Len(t, snaps, 1, "Only the create side of the replace pair should be returned")
-		assert.Equal(t, "ksuid-2", snaps[0].KSUID)
-		assert.JSONEq(t, `{"foo":"v2"}`, string(snaps[0].Properties))
+		if assert.Len(t, snaps, 1, "Only the create side of the replace pair should be returned") {
+			assert.Equal(t, "ksuid-1", snaps[0].KSUID)
+			assert.JSONEq(t, `{"foo":"v2"}`, string(snaps[0].Properties))
+		}
 	})
 }
 

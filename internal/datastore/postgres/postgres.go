@@ -2526,7 +2526,11 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 		),
 		latest_per_ksuid AS (
 			SELECT ksuid, resource_json, operation,
-			       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY timestamp DESC) as rn
+			       ROW_NUMBER() OVER (
+			           PARTITION BY ksuid
+			           ORDER BY timestamp DESC,
+			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
+			       ) as rn
 			FROM user_reconcile_updates
 		)
 		SELECT ksuid,
