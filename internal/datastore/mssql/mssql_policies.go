@@ -718,43 +718,50 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 	defer span.End()
 
 	// Declared state for auto-reconcile: per-resource DesiredState from the
-	// last user-source reconcile apply for this stack. Failed reconciles count
-	// (so failed updates are retried until they converge); Canceled and
-	// InProgress reconciles do not (they aren't accepted user intent).
-	// Reading from resource_updates rather than the resources table ensures
-	// resources whose update failed last time are still in the desired-state
-	// baseline — a failed Create never writes to resources, but
-	// BulkStoreResourceUpdates populates resource_updates at command-creation
-	// time for every intended update. Delete operations are excluded: a
-	// deletion the user requested is not part of the desired state going
-	// forward.
+	// most recent user-source reconcile that touched each resource. Failed
+	// reconciles count (so failed updates are retried until they converge);
+	// Canceled and InProgress reconciles do not (they aren't accepted user
+	// intent).
+	//
+	// Reading per-resource rather than per-command is the key invariant.
+	// The generator only emits resource_updates rows for resources whose
+	// state actually changes — unchanged resources produce no row. If we
+	// scoped the snapshot to a single reconcile command, a partial reconcile
+	// that changed only some resources would yield a desired-state Forma
+	// that omits the unchanged ones, and auto-reconcile would implicitly
+	// delete them as drift. Taking the most recent user-source reconcile
+	// row per ksuid keeps unchanged resources represented by the earlier
+	// reconcile that last declared them.
+	//
+	// Delete operations are excluded: a deletion the user requested is not
+	// part of the desired state going forward.
 	query := `
-		WITH last_user_reconcile_for_stack AS (
-			SELECT TOP (1) fc.command_id, fc.timestamp
-			FROM forma_commands fc
-			INNER JOIN resource_updates ru ON ru.command_id = fc.command_id
+		WITH user_reconcile_updates AS (
+			SELECT ru.ksuid, ru.resource, ru.operation, fc.timestamp
+			FROM resource_updates ru
+			INNER JOIN forma_commands fc ON ru.command_id = fc.command_id
 			WHERE fc.config_mode = 'reconcile'
 			AND fc.state IN ('Success', 'Failed')
 			AND fc.command = 'apply'
 			AND ru.source = 'user'
 			AND ru.stack_label = @p1
-			GROUP BY fc.command_id, fc.timestamp
-			ORDER BY fc.timestamp DESC
+		),
+		latest_per_ksuid AS (
+			SELECT ksuid, resource, operation,
+			       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY timestamp DESC) as rn
+			FROM user_reconcile_updates
 		)
-		SELECT ru.ksuid,
-		       JSON_VALUE(ru.resource, '$.Type')         as type,
-		       JSON_VALUE(ru.resource, '$.Label')        as label,
-		       JSON_VALUE(ru.resource, '$.Target')       as target,
-		       JSON_QUERY(ru.resource, '$.Properties')   as properties,
-		       JSON_QUERY(ru.resource, '$.Schema')       as [schema],
-		       JSON_VALUE(ru.resource, '$.NativeID')     as native_id
-		FROM resource_updates ru
-		WHERE ru.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
-		AND ru.stack_label = @p2
-		AND ru.source = 'user'
-		AND ru.operation != 'delete'`
+		SELECT ksuid,
+		       JSON_VALUE(resource, '$.Type')         as type,
+		       JSON_VALUE(resource, '$.Label')        as label,
+		       JSON_VALUE(resource, '$.Target')       as target,
+		       JSON_QUERY(resource, '$.Properties')   as properties,
+		       JSON_QUERY(resource, '$.Schema')       as [schema],
+		       JSON_VALUE(resource, '$.NativeID')     as native_id
+		FROM latest_per_ksuid
+		WHERE rn = 1 AND operation != 'delete'`
 
-	rows, err := d.conn.QueryContext(ctx, query, stackLabel, stackLabel)
+	rows, err := d.conn.QueryContext(ctx, query, stackLabel)
 	if err != nil {
 		return nil, err
 	}

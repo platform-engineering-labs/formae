@@ -678,3 +678,166 @@ func TestAutoReconciler_RevertsInterveningPatch(t *testing.T) {
 			"auto-reconcile should revert the intervening patch back to the reconcile baseline (v1)")
 	})
 }
+
+// TestAutoReconciler_PreservesUnchangedResourcesAfterPartialFailure exercises
+// the case where a reconcile generates updates only for the subset of
+// resources whose declared state actually changed. If one of those updates
+// fails, auto-reconcile must still treat the unchanged resources as part of
+// the desired baseline — otherwise it would observe them in the resources
+// table but not in the latest reconcile's diff-only snapshot and implicitly
+// delete them.
+//
+// Scenario: initial reconcile creates three resources at v1, then a second
+// reconcile changes only resource-a to v2 (B and C unchanged, so no
+// resource_updates rows are emitted for them). A's update fails. Auto-
+// reconcile must keep B and C present and retry A.
+func TestAutoReconciler_PreservesUnchangedResourcesAfterPartialFailure(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var failAUpdate atomic.Bool
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusSuccess,
+						NativeID:        "native-" + request.Label,
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"foo":"v1"}`,
+				}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				if request.Label == "resource-a" && failAUpdate.Load() {
+					return &resource.UpdateResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationUpdate,
+							OperationStatus: resource.OperationStatusFailure,
+							ErrorCode:       resource.OperationErrorCodeUnforeseenError,
+							StatusMessage:   "simulated outage",
+							NativeID:        request.NativeID,
+						},
+					}, nil
+				}
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationUpdate,
+						OperationStatus: resource.OperationStatusSuccess,
+						NativeID:        request.NativeID,
+					},
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, cleanup, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer cleanup()
+		require.NoError(t, err)
+
+		schema := pkgmodel.Schema{Fields: []string{"foo"}}
+		v1 := json.RawMessage(`{"foo":"v1"}`)
+		v2 := json.RawMessage(`{"foo":"v2"}`)
+		stack := pkgmodel.Stack{
+			Label: "partial-failure-stack",
+			Policies: []json.RawMessage{
+				json.RawMessage(`{"Type":"auto-reconcile","IntervalSeconds":2}`),
+			},
+		}
+		targets := []pkgmodel.Target{{Label: "test-target"}}
+		mk := func(label string, props json.RawMessage) pkgmodel.Resource {
+			return pkgmodel.Resource{
+				Label: label, Type: "FakeAWS::Resource",
+				Properties: props, Schema: schema,
+				Stack: "partial-failure-stack", Target: "test-target",
+			}
+		}
+
+		// Phase 1: initial reconcile creates all three resources at v1.
+		f1 := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{stack},
+			Resources: []pkgmodel.Resource{
+				mk("resource-a", v1), mk("resource-b", v1), mk("resource-c", v1),
+			},
+			Targets: targets,
+		}
+		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+
+		r := require.New(t)
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("partial-failure-stack")
+			return err == nil && len(resources) == 3
+		}, 15*time.Second, 200*time.Millisecond, "initial reconcile should create 3 resources")
+
+		// Phase 2: arm A's update failure, then reconcile with only A
+		// changed. B and C carry their existing v1 properties — the
+		// generator emits no resource_updates rows for them.
+		failAUpdate.Store(true)
+		f2 := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{stack},
+			Resources: []pkgmodel.Resource{
+				mk("resource-a", v2), mk("resource-b", v1), mk("resource-c", v1),
+			},
+			Targets: targets,
+		}
+		m.ApplyForma(f2, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+
+		// Wait for the second reconcile to settle: A still at v1 (its
+		// update failed), B and C still at v1 (untouched). All three
+		// remain in the stack.
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("partial-failure-stack")
+			if err != nil || len(resources) != 3 {
+				return false
+			}
+			byLabel := map[string]string{}
+			for _, res := range resources {
+				byLabel[res.Label] = string(res.Properties)
+			}
+			return byLabel["resource-a"] == `{"foo":"v1"}` &&
+				byLabel["resource-b"] == `{"foo":"v1"}` &&
+				byLabel["resource-c"] == `{"foo":"v1"}`
+		}, 15*time.Second, 200*time.Millisecond,
+			"after failed second reconcile: A unchanged (update failed), B and C unchanged (no diff)")
+
+		// Phase 3: auto-reconcile must keep B and C present across
+		// several ticks while it retries A. The auto-reconciler should
+		// see B and C as part of the desired baseline even though the
+		// failed reconcile produced no resource_updates rows for them.
+		// Wait long enough for at least ~5 auto-reconcile ticks (each
+		// 2s) to fire — gives ample time for an incorrect baseline to
+		// delete them.
+		time.Sleep(12 * time.Second)
+		resources, err := m.Datastore.LoadResourcesByStack("partial-failure-stack")
+		r.NoError(err)
+		labels := map[string]bool{}
+		for _, res := range resources {
+			labels[res.Label] = true
+		}
+		r.True(labels["resource-b"], "B must remain present — failed reconcile didn't change it")
+		r.True(labels["resource-c"], "C must remain present — failed reconcile didn't change it")
+		r.True(labels["resource-a"], "A must remain present — its update failed, not deleted")
+
+		// Phase 4: clear A's failure; auto-reconcile should converge A
+		// to v2 without disturbing B or C.
+		failAUpdate.Store(false)
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("partial-failure-stack")
+			if err != nil || len(resources) != 3 {
+				return false
+			}
+			byLabel := map[string]string{}
+			for _, res := range resources {
+				byLabel[res.Label] = string(res.Properties)
+			}
+			return byLabel["resource-a"] == `{"foo":"v2"}` &&
+				byLabel["resource-b"] == `{"foo":"v1"}` &&
+				byLabel["resource-c"] == `{"foo":"v1"}`
+		}, 30*time.Second, 500*time.Millisecond,
+			"after clearing A's failure: A=v2 (converged), B and C still at v1")
+	})
+}
