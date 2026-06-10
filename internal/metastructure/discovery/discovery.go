@@ -94,7 +94,15 @@ type DiscoveryData struct {
 	ds                            datastore.Datastore
 	serverCfg                     *pkgmodel.ServerConfig
 	discoveryCfg                  *pkgmodel.DiscoveryConfig
-	isScheduledDiscovery          bool
+	// tickPending tracks whether a periodic Discover{} SendAfter is currently in
+	// flight. A successor tick is scheduled on cycle completion iff no timer is
+	// pending, so exactly one periodic timer exists at all times: a tick dropped
+	// while a cycle is running clears the flag and is replaced when that cycle
+	// completes, while a one-shot (Once=true) completing under a pending timer
+	// schedules nothing. Tracking the run's provenance instead (the previous
+	// design) wedged discovery permanently when a one-shot cycle outlived and
+	// swallowed the only pending tick.
+	tickPending                   bool
 	targets                       map[string]pkgmodel.Target
 	resourceHierarchy             map[string]*hierarchyNode
 	resourceDescriptors           map[string]plugin.ResourceDescriptor
@@ -179,6 +187,8 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		pluginInfoCache:               make(map[string]*messages.PluginInfoResponse),
 		typesWithChildrenQueued:       make(map[string]struct{}),
 		nativeIDsByCommand:            make(map[string][]string),
+		// The initial tick is armed below when discovery is enabled.
+		tickPending: discoveryCfg.Enabled,
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -212,12 +222,13 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, proc gen.Process) (gen.Atom, DiscoveryData, error) {
 	if oldState == StateDiscovering && newState == StateIdle {
 		proc.Log().Debug("Discovery finished (duration=%s). The following resources have been discovered:\n%s", time.Since(data.timeStarted), renderSummary(data.summary))
-		if data.isScheduledDiscovery {
+		if !data.tickPending && data.discoveryCfg.Enabled {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
 				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return newState, data, gen.TerminateReasonPanic
 			}
+			data.tickPending = true
 		}
 	}
 	return newState, data, nil
@@ -278,13 +289,20 @@ func getPluginInfo(proc gen.Process, namespace string) (*messages.PluginInfoResp
 }
 
 func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
+	// A periodic tick has landed, so its timer is no longer in flight. Recorded
+	// before the already-running guard: a tick dropped into a running cycle is
+	// consumed, and clearing the flag here is what makes that cycle schedule a
+	// replacement when it completes.
+	if !message.Once {
+		data.tickPending = false
+	}
+
 	// Check if a discovery cycle is already running
 	if state == StateDiscovering {
 		proc.Log().Debug("Discovery already running, consider configuring a longer interval")
 		return state, data, nil, nil
 	}
 
-	data.isScheduledDiscovery = !message.Once
 	data.timeStarted = time.Now()
 	data.summary = make(map[string]int)
 
@@ -305,12 +323,13 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	if len(data.targets) == 0 {
 		proc.Log().Debug("No discoverable targets found, completing discovery")
 
-		if data.isScheduledDiscovery {
+		if !data.tickPending && data.discoveryCfg.Enabled {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
 				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return StateIdle, data, nil, gen.TerminateReasonPanic
 			}
+			data.tickPending = true
 			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
 		}
 
@@ -364,12 +383,13 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// to allow future Discover messages to be processed
 	if !data.HasOutstandingWork() {
 		proc.Log().Debug("No targets could be processed (plugins not available), completing discovery")
-		if data.isScheduledDiscovery {
+		if !data.tickPending && data.discoveryCfg.Enabled {
 			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
 			if err != nil {
 				proc.Log().Error("Failed to schedule next discovery run: %v", err)
 				return StateIdle, data, nil, gen.TerminateReasonPanic
 			}
+			data.tickPending = true
 			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
 		}
 		return StateIdle, data, nil, nil

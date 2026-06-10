@@ -51,6 +51,14 @@ type stubProcess struct {
 	spawn func(n int, req messages.SpawnPluginOperator) (any, error)
 
 	spawnRequests []messages.SpawnPluginOperator
+
+	// pluginInfo, when set, answers GetPluginInfo calls so discover() can be
+	// driven end-to-end without a PluginCoordinator.
+	pluginInfo *messages.PluginInfoResponse
+
+	// sendAfterMsgs records every message scheduled via SendAfter, so tests can
+	// assert on the periodic Discover re-arm behavior.
+	sendAfterMsgs []any
 }
 
 func (p *stubProcess) Log() gen.Log   { return stubLog{} }
@@ -59,8 +67,21 @@ func (p *stubProcess) PID() gen.PID   { return gen.PID{Node: "test-node", ID: 1}
 
 func (p *stubProcess) Send(_ any, _ any) error { return nil }
 
-func (p *stubProcess) SendAfter(_ any, _ any, _ time.Duration) (gen.CancelFunc, error) {
+func (p *stubProcess) SendAfter(_ any, message any, _ time.Duration) (gen.CancelFunc, error) {
+	p.sendAfterMsgs = append(p.sendAfterMsgs, message)
 	return func() bool { return true }, nil
+}
+
+// scheduledDiscoverCount returns how many periodic Discover messages have been
+// scheduled via SendAfter.
+func (p *stubProcess) scheduledDiscoverCount() int {
+	n := 0
+	for _, m := range p.sendAfterMsgs {
+		if _, ok := m.(Discover); ok {
+			n++
+		}
+	}
+	return n
 }
 
 func (p *stubProcess) Call(_ any, message any) (any, error) {
@@ -68,6 +89,11 @@ func (p *stubProcess) Call(_ any, message any) (any, error) {
 	case changeset.RequestTokens:
 		// Grant every token requested so the whole queue is scanned in one pass.
 		return changeset.TokensGranted{N: m.N}, nil
+	case messages.GetPluginInfo:
+		if p.pluginInfo != nil {
+			return *p.pluginInfo, nil
+		}
+		return nil, fmt.Errorf("stubProcess: no pluginInfo configured")
 	case messages.SpawnPluginOperator:
 		p.spawnRequests = append(p.spawnRequests, m)
 		if p.spawn != nil {
