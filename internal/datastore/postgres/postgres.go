@@ -2492,32 +2492,43 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 	ctx, span := tracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()
 
-	// Get resources from the last USER reconcile command for this stack.
-	// This gives us the "declared state" - what the user specified in their Forma file.
-	// We filter by source='user' on resource_updates to exclude auto-reconciler and sync commands,
-	// as they shouldn't change the declared state - they only enforce or detect drift.
+	// Declared state for auto-reconcile: per-resource DesiredState from the
+	// last user-source reconcile apply for this stack. Failed reconciles count
+	// (so failed updates are retried until they converge); Canceled and
+	// InProgress reconciles do not (they aren't accepted user intent).
+	// Reading from resource_updates rather than the resources table ensures
+	// resources whose update failed last time are still in the desired-state
+	// baseline — a failed Create never writes to resources, but
+	// BulkStoreResourceUpdates populates resource_updates at command-creation
+	// time for every intended update. Delete operations are excluded: a
+	// deletion the user requested is not part of the desired state going
+	// forward.
 	query := `
 		WITH last_user_reconcile_for_stack AS (
 			SELECT fc.command_id
 			FROM forma_commands fc
 			INNER JOIN resource_updates ru ON ru.command_id = fc.command_id
 			WHERE fc.config_mode = 'reconcile'
-			AND fc.state = 'Success'
+			AND fc.state IN ('Success', 'Failed')
 			AND fc.command = 'apply'
 			AND ru.source = 'user'
 			AND ru.stack_label = $1
-			GROUP BY fc.command_id
+			GROUP BY fc.command_id, fc.timestamp
 			ORDER BY fc.timestamp DESC
 			LIMIT 1
 		)
-		SELECT r.ksuid, r.type, r.label, r.target,
-		       r.data->'Properties' as properties,
-		       r.data->'Schema' as schema,
-		       r.native_id
-		FROM resources r
-		WHERE r.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
-		AND r.stack = $2
-		AND r.operation != 'delete'
+		SELECT ru.ksuid,
+		       ru.resource->>'Type'      as type,
+		       ru.resource->>'Label'     as label,
+		       ru.resource->>'Target'    as target,
+		       ru.resource->'Properties' as properties,
+		       ru.resource->'Schema'     as schema,
+		       ru.resource->>'NativeID'  as native_id
+		FROM resource_updates ru
+		WHERE ru.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
+		AND ru.stack_label = $2
+		AND ru.source = 'user'
+		AND ru.operation != 'delete'
 	`
 
 	rows, err := d.pool.Query(ctx, query, stackLabel, stackLabel)

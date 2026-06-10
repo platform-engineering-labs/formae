@@ -717,29 +717,42 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 	ctx, span := mssqlTracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()
 
-	// Declared state: resources from the last user-initiated reconcile apply.
-	// Filter source='user' so auto-reconcile/sync don't shift the baseline.
+	// Declared state for auto-reconcile: per-resource DesiredState from the
+	// last user-source reconcile apply for this stack. Failed reconciles count
+	// (so failed updates are retried until they converge); Canceled and
+	// InProgress reconciles do not (they aren't accepted user intent).
+	// Reading from resource_updates rather than the resources table ensures
+	// resources whose update failed last time are still in the desired-state
+	// baseline — a failed Create never writes to resources, but
+	// BulkStoreResourceUpdates populates resource_updates at command-creation
+	// time for every intended update. Delete operations are excluded: a
+	// deletion the user requested is not part of the desired state going
+	// forward.
 	query := `
 		WITH last_user_reconcile_for_stack AS (
 			SELECT TOP (1) fc.command_id, fc.timestamp
 			FROM forma_commands fc
 			INNER JOIN resource_updates ru ON ru.command_id = fc.command_id
 			WHERE fc.config_mode = 'reconcile'
-			AND fc.state = 'Success'
+			AND fc.state IN ('Success', 'Failed')
 			AND fc.command = 'apply'
 			AND ru.source = 'user'
 			AND ru.stack_label = @p1
 			GROUP BY fc.command_id, fc.timestamp
 			ORDER BY fc.timestamp DESC
 		)
-		SELECT r.ksuid, r.type, r.label, r.target,
-		       JSON_QUERY(r.data, '$.Properties') as properties,
-		       JSON_QUERY(r.data, '$.Schema') as [schema],
-		       r.native_id
-		FROM resources r
-		WHERE r.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
-		AND r.stack = @p2
-		AND r.operation != 'delete'`
+		SELECT ru.ksuid,
+		       JSON_VALUE(ru.resource, '$.Type')         as type,
+		       JSON_VALUE(ru.resource, '$.Label')        as label,
+		       JSON_VALUE(ru.resource, '$.Target')       as target,
+		       JSON_QUERY(ru.resource, '$.Properties')   as properties,
+		       JSON_QUERY(ru.resource, '$.Schema')       as [schema],
+		       JSON_VALUE(ru.resource, '$.NativeID')     as native_id
+		FROM resource_updates ru
+		WHERE ru.command_id = (SELECT command_id FROM last_user_reconcile_for_stack)
+		AND ru.stack_label = @p2
+		AND ru.source = 'user'
+		AND ru.operation != 'delete'`
 
 	rows, err := d.conn.QueryContext(ctx, query, stackLabel, stackLabel)
 	if err != nil {
