@@ -17,7 +17,7 @@ import (
 func TestMinFormaeVersion_IsValidSemver(t *testing.T) {
 	v, err := semver.NewVersion(MinFormaeVersion)
 	require.NoError(t, err, "MinFormaeVersion should be a valid semver string")
-	assert.Equal(t, "0.84.0", v.String())
+	assert.Equal(t, "0.86.0", v.String())
 }
 
 func TestSDKVersion_IsValidSemver(t *testing.T) {
