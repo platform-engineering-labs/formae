@@ -546,3 +546,135 @@ func TestAutoReconciler_RetriesFailureAndRevertsOOBDriftSimultaneously(t *testin
 			"after clearing B's failure: all 3 resources converge to v2")
 	})
 }
+
+// TestAutoReconciler_RevertsInterveningPatch verifies that a patch-mode
+// apply between two reconcile cycles does not shift the auto-reconcile
+// baseline — auto-reconcile drives the resource back to the state declared
+// by the last reconcile, undoing the patch.
+//
+// This is the patch-side counterpart to TestAutoReconciler_ReconcileAfterSyncChange
+// (which exercises the same property for sync-detected OOB drift): the
+// auto-reconcile baseline is the user's last reconcile-mode apply, and
+// intervening sync or patch operations are treated as drift that the next
+// reconcile cycle overwrites.
+func TestAutoReconciler_RevertsInterveningPatch(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var mu sync.Mutex
+		observedProps := map[string]string{}
+		getPropsByNativeID := func(nativeID string) string {
+			mu.Lock()
+			defer mu.Unlock()
+			return observedProps[nativeID]
+		}
+		setPropsByNativeID := func(nativeID, props string) {
+			mu.Lock()
+			defer mu.Unlock()
+			observedProps[nativeID] = props
+		}
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				nativeID := "native-" + request.Label
+				setPropsByNativeID(nativeID, string(request.Properties))
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusSuccess,
+						NativeID:        nativeID,
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   getPropsByNativeID(request.NativeID),
+				}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				setPropsByNativeID(request.NativeID, string(request.DesiredProperties))
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationUpdate,
+						OperationStatus: resource.OperationStatusSuccess,
+						NativeID:        request.NativeID,
+					},
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		// Sync stays off here so the reverted property doesn't get echoed
+		// back from the plugin between reconcile cycles — we want a clean
+		// signal that the auto-reconciler is the one driving the property
+		// back to its declared value.
+		cfg.Agent.Synchronization.Enabled = false
+		m, cleanup, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer cleanup()
+		require.NoError(t, err)
+
+		schema := pkgmodel.Schema{Fields: []string{"foo"}}
+		v1 := json.RawMessage(`{"foo":"v1"}`)
+		vPatched := json.RawMessage(`{"foo":"patched"}`)
+		stack := pkgmodel.Stack{
+			Label: "patch-undo-stack",
+			Policies: []json.RawMessage{
+				json.RawMessage(`{"Type":"auto-reconcile","IntervalSeconds":2}`),
+			},
+		}
+		targets := []pkgmodel.Target{{Label: "test-target"}}
+		resourceTemplate := func(props json.RawMessage) pkgmodel.Resource {
+			return pkgmodel.Resource{
+				Label: "patched-resource", Type: "FakeAWS::Resource",
+				Properties: props, Schema: schema,
+				Stack: "patch-undo-stack", Target: "test-target",
+			}
+		}
+
+		// Phase 1: initial reconcile at v1.
+		f1 := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{stack},
+			Resources: []pkgmodel.Resource{resourceTemplate(v1)},
+			Targets:   targets,
+		}
+		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+
+		r := require.New(t)
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("patch-undo-stack")
+			if err != nil || len(resources) != 1 {
+				return false
+			}
+			return string(resources[0].Properties) == `{"foo":"v1"}`
+		}, 15*time.Second, 200*time.Millisecond, "initial reconcile should land the resource at v1")
+
+		// Phase 2: patch the resource to a new value. This succeeds and
+		// updates the resources table, but is mode=patch so it must not
+		// become the auto-reconcile baseline.
+		fPatch := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{stack},
+			Resources: []pkgmodel.Resource{resourceTemplate(vPatched)},
+			Targets:   targets,
+		}
+		m.ApplyForma(fPatch, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "test-client")
+
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("patch-undo-stack")
+			if err != nil || len(resources) != 1 {
+				return false
+			}
+			return string(resources[0].Properties) == `{"foo":"patched"}`
+		}, 15*time.Second, 200*time.Millisecond, "patch should land the resource at patched")
+
+		// Phase 3: auto-reconcile should pick the initial reconcile as the
+		// baseline (the patch's config_mode='patch' excludes it from the
+		// candidate pool) and drive the resource back to v1.
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("patch-undo-stack")
+			if err != nil || len(resources) != 1 {
+				return false
+			}
+			return string(resources[0].Properties) == `{"foo":"v1"}`
+		}, 30*time.Second, 500*time.Millisecond,
+			"auto-reconcile should revert the intervening patch back to the reconcile baseline (v1)")
+	})
+}
