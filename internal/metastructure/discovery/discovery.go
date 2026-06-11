@@ -75,9 +75,7 @@ func NewDiscovery() gen.ProcessBehavior {
 
 // Messages processed by Discovery
 
-type Discover struct {
-	Once bool
-}
+type Discover struct{}
 
 type ResumeScanning struct{}
 
@@ -88,7 +86,26 @@ const (
 	// InitialDelay is the delay before the first discovery run after startup
 	// to allow the plugins to register.
 	InitialDelay = 10 * time.Second
+
+	// discoveryTickName is the GenericTimeout name used for the periodic
+	// re-arm. Setting a new timer with this name auto-cancels any prior one,
+	// so exactly one periodic tick is in flight at any time.
+	discoveryTickName = gen.Atom("discovery-tick")
 )
+
+// rescheduleAction returns the action that schedules the next periodic
+// discovery. Auto-cancel-on-replace semantics of the named GenericTimeout
+// guarantee a single periodic chain.
+func rescheduleAction(data DiscoveryData) []statemachine.Action {
+	if !data.discoveryCfg.Enabled {
+		return nil
+	}
+	return []statemachine.Action{statemachine.GenericTimeout{
+		Name:     discoveryTickName,
+		Duration: data.discoveryCfg.Interval,
+		Message:  Discover{},
+	}}
+}
 
 type DiscoveryData struct {
 	ds                            datastore.Datastore
@@ -119,15 +136,6 @@ type DiscoveryData struct {
 	hasPendingResumeScan bool
 	// Cached plugin info per namespace, refreshed at start of each discovery cycle
 	pluginInfoCache map[string]*messages.PluginInfoResponse
-	// tickPending tracks whether a periodic Discover{} SendAfter is currently in
-	// flight. A successor tick is scheduled on cycle completion iff no timer is
-	// pending, so exactly one periodic timer exists at all times: a tick dropped
-	// while a cycle is running clears the flag and is replaced when that cycle
-	// completes, while a one-shot (Once=true) completing under a pending timer
-	// schedules nothing. Tracking the run's provenance instead (the previous
-	// design) wedged discovery permanently when a one-shot cycle outlived and
-	// swallowed the only pending tick.
-	tickPending bool
 }
 
 func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
@@ -187,8 +195,6 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		pluginInfoCache:               make(map[string]*messages.PluginInfoResponse),
 		typesWithChildrenQueued:       make(map[string]struct{}),
 		nativeIDsByCommand:            make(map[string][]string),
-		// The initial tick is armed below when discovery is enabled.
-		tickPending: discoveryCfg.Enabled,
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -222,14 +228,6 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, proc gen.Process) (gen.Atom, DiscoveryData, error) {
 	if oldState == StateDiscovering && newState == StateIdle {
 		proc.Log().Debug("Discovery finished (duration=%s). The following resources have been discovered:\n%s", time.Since(data.timeStarted), renderSummary(data.summary))
-		if !data.tickPending && data.discoveryCfg.Enabled {
-			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
-			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run: %v", err)
-				return newState, data, gen.TerminateReasonPanic
-			}
-			data.tickPending = true
-		}
 	}
 	return newState, data, nil
 }
@@ -289,14 +287,6 @@ func getPluginInfo(proc gen.Process, namespace string) (*messages.PluginInfoResp
 }
 
 func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
-	// A periodic tick has landed, so its timer is no longer in flight. Recorded
-	// before the already-running guard: a tick dropped into a running cycle is
-	// consumed, and clearing the flag here is what makes that cycle schedule a
-	// replacement when it completes.
-	if !message.Once {
-		data.tickPending = false
-	}
-
 	// Check if a discovery cycle is already running
 	if state == StateDiscovering {
 		proc.Log().Debug("Discovery already running, consider configuring a longer interval")
@@ -322,18 +312,7 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// If there are no discoverable targets, complete discovery immediately
 	if len(data.targets) == 0 {
 		proc.Log().Debug("No discoverable targets found, completing discovery")
-
-		if !data.tickPending && data.discoveryCfg.Enabled {
-			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
-			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run: %v", err)
-				return StateIdle, data, nil, gen.TerminateReasonPanic
-			}
-			data.tickPending = true
-			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
-		}
-
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	for _, target := range data.targets {
@@ -383,16 +362,7 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// to allow future Discover messages to be processed
 	if !data.HasOutstandingWork() {
 		proc.Log().Debug("No targets could be processed (plugins not available), completing discovery")
-		if !data.tickPending && data.discoveryCfg.Enabled {
-			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
-			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run: %v", err)
-				return StateIdle, data, nil, gen.TerminateReasonPanic
-			}
-			data.tickPending = true
-			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
-		}
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	// Send ResumeScanning only after confirming work was queued and we're transitioning to StateDiscovering.
@@ -474,7 +444,7 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 	// scheduled discovery run is queued; otherwise Discovery would hang in
 	// StateDiscovering forever.
 	if !data.HasOutstandingWork() {
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	return StateDiscovering, data, nil, nil
@@ -557,7 +527,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	if message.Error != "" {
 		proc.Log().Error("Failed to list resources for %s in target %s: %s", message.ResourceType, message.TargetLabel, message.Error)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 		return state, data, nil, nil
 	}
@@ -583,12 +553,12 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 		if err := discoverChildrenOnce(op, data, proc); err != nil {
 			proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 			if !data.HasOutstandingWork() {
-				return StateIdle, data, nil, nil
+				return StateIdle, data, rescheduleAction(data), nil
 			}
 			return state, data, nil, nil
 		}
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 		return state, data, nil, nil
 	}
@@ -598,7 +568,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	if !ok {
 		proc.Log().Error("Target not found for label %s", message.TargetLabel)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 		return state, data, nil, nil
 	}
@@ -608,7 +578,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	if err != nil {
 		proc.Log().Error("Failed to synchronize resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 	}
 
@@ -847,7 +817,7 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		proc.Log().Error("Discovery failed to synchronize discovered resources resourceType=%s listParams=%s commandID=%s", op.ResourceType, op.ListParams, message.CommandID)
 		delete(data.nativeIDsByCommand, message.CommandID)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 	}
 
@@ -865,7 +835,7 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		if err != nil {
 			proc.Log().Error("Failed to load parent resources for child discovery type=%s target=%s: %v", op.ResourceType, op.TargetLabel, err)
 			if !data.HasOutstandingWork() {
-				return StateIdle, data, nil, nil
+				return StateIdle, data, rescheduleAction(data), nil
 			}
 			return state, data, nil, nil
 		}
@@ -885,13 +855,13 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		if err := discoverChildren(syncedParents, op, data, proc); err != nil {
 			proc.Log().Error("Failed to discover children for %s in target %s: %v", op.ResourceType, op.TargetLabel, err)
 			if !data.HasOutstandingWork() {
-				return StateIdle, data, nil, nil
+				return StateIdle, data, rescheduleAction(data), nil
 			}
 			return state, data, nil, nil
 		}
 	}
 	if !data.HasOutstandingWork() {
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	return state, data, nil, nil

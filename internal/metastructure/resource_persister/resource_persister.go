@@ -532,7 +532,7 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 			Name: actornames.Discovery,
 			Node: rp.Node().Name(),
 		}
-		if err := rp.Send(discoveryPID, discovery.Discover{Once: true}); err != nil {
+		if err := rp.Send(discoveryPID, discovery.Discover{}); err != nil {
 			rp.Log().Error("Failed to trigger discovery for newly discoverable target label=%s: %v",
 				update.Target.Label, err)
 		} else {

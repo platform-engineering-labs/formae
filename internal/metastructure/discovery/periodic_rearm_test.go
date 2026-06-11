@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ func (s *stubDiscoveryDatastore) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 
 // newDiscoverData builds a DiscoveryData wired to one discoverable target whose
 // plugin reports a single discoverable resource type, ready to be driven through
-// the discover() and onStateChange() handlers directly.
+// the discover() handler directly.
 func newDiscoverData(proc *stubProcess) DiscoveryData {
 	const namespace = "FakeAWS"
 
@@ -64,76 +65,53 @@ func newDiscoverData(proc *stubProcess) DiscoveryData {
 	}
 }
 
-// Regression test for the discovery wedge: a one-shot Discover{Once:true}
-// (fired by target persistence during an apply) enters Discovering and is held
-// there while the apply runs. The pending periodic tick fires mid-cycle, hits
-// the already-running guard, and is dropped. When the one-shot cycle finally
-// completes, a replacement periodic tick MUST be scheduled — otherwise the
-// periodic chain is dead until agent restart and out-of-band resources are
-// never discovered.
-func TestOneShotCycleThatSwallowsPeriodicTickReschedulesOnCompletion(t *testing.T) {
+// A Discover arriving while a discovery cycle is running (e.g. force_discover
+// or a target persisted mid-cycle) must not break the periodic chain. The
+// busy guard drops the message without producing actions, and a subsequent
+// cycle completion still returns a GenericTimeout to schedule the next tick.
+//
+// The named-timer design makes the wedge that 0.86.0 hit (a cycle swallowing
+// the only pending periodic tick) structurally impossible: every transition
+// to Idle returns a fresh GenericTimeout, and the framework auto-cancels any
+// prior tick with the same name. There is no flag whose stale value could
+// suppress the next schedule.
+func TestDiscoverDuringRunningCycleDoesNotKillPeriodicChain(t *testing.T) {
 	proc := &stubProcess{}
 	data := newDiscoverData(proc)
 
-	// A one-shot discovery starts while Idle (target persisted during apply).
-	state, data, _, err := discover(gen.PID{}, StateIdle, data, Discover{Once: true}, proc)
+	// A Discover lands during a running cycle. Busy guard drops it without
+	// producing actions.
+	state, _, actions, err := discover(gen.PID{}, StateDiscovering, data, Discover{}, proc)
 	require.NoError(t, err)
-	require.Equal(t, StateDiscovering, state, "one-shot must start a cycle")
-	require.Equal(t, 0, proc.scheduledDiscoverCount(), "a one-shot run must not arm the periodic ticker by itself")
+	require.Equal(t, StateDiscovering, state, "Discover during a running cycle must be dropped, not start a second cycle")
+	require.Empty(t, actions, "a dropped message must not produce actions")
 
-	// The pending periodic tick fires mid-cycle and is dropped by the
-	// already-running guard. This consumes the only periodic timer in flight.
-	state, data, _, err = discover(gen.PID{}, state, data, Discover{}, proc)
+	// A subsequent cycle completes — here exercised via the no-targets early
+	// exit, which is the simplest path through discover() that returns to
+	// Idle with a rescheduleAction. The full completion paths in
+	// processListing/syncCompleted use the same helper.
+	data.ds = &stubDiscoveryDatastore{targets: nil}
+	nextState, _, actions, err := discover(gen.PID{}, StateIdle, data, Discover{}, proc)
 	require.NoError(t, err)
-	require.Equal(t, StateDiscovering, state, "tick during a running cycle must be dropped, not start a second cycle")
+	require.Equal(t, StateIdle, nextState)
 
-	// The parked one-shot cycle completes (apply finished, queue drained).
-	_, _, err = onStateChange(StateDiscovering, StateIdle, data, proc)
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, proc.scheduledDiscoverCount(),
-		"the dropped periodic tick must be replaced when the cycle completes; otherwise periodic discovery is dead until restart")
+	require.Len(t, actions, 1, "cycle completion must schedule the next periodic tick")
+	timeout, ok := actions[0].(statemachine.GenericTimeout)
+	require.True(t, ok, "scheduled action must be a GenericTimeout (named timer so a fresh schedule cancels any prior one)")
+	assert.Equal(t, discoveryTickName, timeout.Name)
+	assert.Equal(t, data.discoveryCfg.Interval, timeout.Duration)
+	assert.Equal(t, Discover{}, timeout.Message)
 }
 
-// A fast one-shot that completes while the periodic timer is still pending must
-// NOT schedule an additional tick — otherwise every force_discover or
-// target-persist trigger would spawn an extra periodic chain and multiply the
-// scan frequency.
-func TestOneShotCompletionWithPendingTickDoesNotDoubleSchedule(t *testing.T) {
+// When discovery is disabled, no periodic chain should exist; cycle
+// completion must not schedule a tick.
+func TestDiscoveryDisabledDoesNotScheduleTick(t *testing.T) {
 	proc := &stubProcess{}
 	data := newDiscoverData(proc)
+	data.discoveryCfg = &pkgmodel.DiscoveryConfig{Enabled: false, Interval: 20 * time.Second}
+	data.ds = &stubDiscoveryDatastore{targets: nil}
 
-	// A periodic cycle runs and completes: it schedules the next tick (baton out).
-	state, data, _, err := discover(gen.PID{}, StateIdle, data, Discover{}, proc)
+	_, _, actions, err := discover(gen.PID{}, StateIdle, data, Discover{}, proc)
 	require.NoError(t, err)
-	require.Equal(t, StateDiscovering, state)
-	_, data, err = onStateChange(StateDiscovering, StateIdle, data, proc)
-	require.NoError(t, err)
-	require.Equal(t, 1, proc.scheduledDiscoverCount(), "a periodic cycle must schedule its successor on completion")
-
-	// A one-shot starts and completes while that tick is still pending.
-	state, data, _, err = discover(gen.PID{}, StateIdle, data, Discover{Once: true}, proc)
-	require.NoError(t, err)
-	require.Equal(t, StateDiscovering, state)
-	_, _, err = onStateChange(StateDiscovering, StateIdle, data, proc)
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, proc.scheduledDiscoverCount(),
-		"a one-shot completing while a periodic tick is pending must not schedule a second timer")
-}
-
-// The plain periodic loop: each cycle schedules exactly one successor on
-// completion.
-func TestPeriodicCycleSchedulesExactlyOneSuccessor(t *testing.T) {
-	proc := &stubProcess{}
-	data := newDiscoverData(proc)
-
-	state, data, _, err := discover(gen.PID{}, StateIdle, data, Discover{}, proc)
-	require.NoError(t, err)
-	require.Equal(t, StateDiscovering, state)
-
-	_, _, err = onStateChange(StateDiscovering, StateIdle, data, proc)
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, proc.scheduledDiscoverCount())
+	assert.Empty(t, actions, "disabled discovery must not schedule any timer")
 }
