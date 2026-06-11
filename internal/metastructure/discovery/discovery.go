@@ -94,15 +94,6 @@ type DiscoveryData struct {
 	ds                            datastore.Datastore
 	serverCfg                     *pkgmodel.ServerConfig
 	discoveryCfg                  *pkgmodel.DiscoveryConfig
-	// tickPending tracks whether a periodic Discover{} SendAfter is currently in
-	// flight. A successor tick is scheduled on cycle completion iff no timer is
-	// pending, so exactly one periodic timer exists at all times: a tick dropped
-	// while a cycle is running clears the flag and is replaced when that cycle
-	// completes, while a one-shot (Once=true) completing under a pending timer
-	// schedules nothing. Tracking the run's provenance instead (the previous
-	// design) wedged discovery permanently when a one-shot cycle outlived and
-	// swallowed the only pending tick.
-	tickPending                   bool
 	targets                       map[string]pkgmodel.Target
 	resourceHierarchy             map[string]*hierarchyNode
 	resourceDescriptors           map[string]plugin.ResourceDescriptor
@@ -128,6 +119,15 @@ type DiscoveryData struct {
 	hasPendingResumeScan bool
 	// Cached plugin info per namespace, refreshed at start of each discovery cycle
 	pluginInfoCache map[string]*messages.PluginInfoResponse
+	// tickPending tracks whether a periodic Discover{} SendAfter is currently in
+	// flight. A successor tick is scheduled on cycle completion iff no timer is
+	// pending, so exactly one periodic timer exists at all times: a tick dropped
+	// while a cycle is running clears the flag and is replaced when that cycle
+	// completes, while a one-shot (Once=true) completing under a pending timer
+	// schedules nothing. Tracking the run's provenance instead (the previous
+	// design) wedged discovery permanently when a one-shot cycle outlived and
+	// swallowed the only pending tick.
+	tickPending bool
 }
 
 func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
