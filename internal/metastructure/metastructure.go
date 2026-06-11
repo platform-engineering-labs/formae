@@ -1209,7 +1209,7 @@ func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error)
 }
 
 func (m *Metastructure) ForceSync() error {
-	if err := m.Node.Send(gen.Atom("Synchronizer"), Synchronize{Once: true}); err != nil {
+	if err := m.Node.Send(gen.Atom("Synchronizer"), Synchronize{}); err != nil {
 		slog.Error(fmt.Sprintf("Failed to send message to Synchronizer: %v", err))
 		return err
 	}
@@ -1218,7 +1218,7 @@ func (m *Metastructure) ForceSync() error {
 }
 
 func (m *Metastructure) ForceDiscovery() error {
-	if err := m.Node.Send(gen.Atom("Discovery"), discovery.Discover{Once: true}); err != nil {
+	if err := m.Node.Send(gen.Atom("Discovery"), discovery.Discover{}); err != nil {
 		slog.Error(fmt.Sprintf("Failed to send message to Discovery: %v", err))
 		return err
 	}

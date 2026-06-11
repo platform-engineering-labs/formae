@@ -69,9 +69,8 @@ type SynchronizerData struct {
 	datastore datastore.Datastore
 	cfg       pkgmodel.SynchronizationConfig
 
-	isScheduledSync bool
-	timeStarted     time.Time
-	commandID       string
+	timeStarted time.Time
+	commandID   string
 
 	// excludedResources tracks resources that are currently being updated by
 	// non-sync operations (e.g., user apply/destroy commands). These resources
@@ -81,8 +80,22 @@ type SynchronizerData struct {
 
 // Messages processed by Synchronizer
 
-type Synchronize struct {
-	Once bool
+type Synchronize struct{}
+
+const syncTickName = gen.Atom("sync-tick")
+
+// rescheduleAction returns the action that schedules the next periodic
+// synchronization. Setting a GenericTimeout with the same name auto-cancels
+// any prior pending timer, so exactly one tick is in flight at any time.
+func rescheduleAction(data SynchronizerData) []statemachine.Action {
+	if !data.cfg.Enabled {
+		return nil
+	}
+	return []statemachine.Action{statemachine.GenericTimeout{
+		Name:     syncTickName,
+		Duration: data.cfg.Interval,
+		Message:  Synchronize{},
+	}}
 }
 
 func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[SynchronizerData], error) {
@@ -138,21 +151,17 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 func onStateChange(oldState gen.Atom, newState gen.Atom, data SynchronizerData, proc gen.Process) (gen.Atom, SynchronizerData, error) {
 	if oldState == StateSynchronizing && newState == StateIdle {
 		proc.Log().Debug("Synchronization finished duration=%s", time.Since(data.timeStarted))
-		if err := scheduleNextSync(data, proc); err != nil {
-			return newState, data, gen.TerminateReasonPanic
-		}
 	}
 	return newState, data, nil
 }
 
 func synchronize(from gen.PID, state gen.Atom, data SynchronizerData, message Synchronize, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
-	data.isScheduledSync = !message.Once
-	data.timeStarted = time.Now()
-
 	if state == StateSynchronizing {
 		proc.Log().Debug("Synchronizer already running, consider configuring a longer interval")
 		return state, data, nil, nil
 	}
+
+	data.timeStarted = time.Now()
 	proc.Log().Debug("Starting resource synchronization timestamp=%v", data.timeStarted)
 
 	return synchronizeAllResources(state, data, proc)
@@ -273,10 +282,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 
 	if len(allResourceUpdates) == 0 {
 		proc.Log().Debug("Synchronizer: no resources found to synchronize")
-		if err = scheduleNextSync(data, proc); err != nil {
-			return state, data, nil, gen.TerminateReasonPanic
-		}
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	var resourcesToSynchronize []pkgmodel.Resource
@@ -339,7 +345,7 @@ func changesetCompleted(from gen.PID, state gen.Atom, data SynchronizerData, mes
 		return state, data, nil, nil
 	}
 
-	return StateIdle, data, nil, nil
+	return StateIdle, data, rescheduleAction(data), nil
 }
 
 func registerInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
@@ -352,15 +358,4 @@ func unregisterInProgressResource(from gen.PID, state gen.Atom, data Synchronize
 	delete(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource unregistered from in-progress, can be synced resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
-}
-
-func scheduleNextSync(data SynchronizerData, proc gen.Process) error {
-	if data.isScheduledSync {
-		_, err := proc.SendAfter(proc.PID(), Synchronize{}, data.cfg.Interval)
-		if err != nil {
-			return fmt.Errorf("failed to schedule next resource synchronization %w", err)
-		}
-	}
-
-	return nil
 }
