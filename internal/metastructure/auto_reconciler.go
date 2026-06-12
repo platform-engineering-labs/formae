@@ -274,7 +274,19 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 	}
 
 	if len(snapshots) == 0 {
-		return nil, fmt.Errorf("no resources to reconcile")
+		// Empty baseline = nothing to enforce. Two cases produce this:
+		//   1. The user destroyed the stack (latest user-source row per
+		//      ksuid is a delete; outer filter drops it; snapshot empty).
+		//   2. No user-source reconcile-mode command has ever touched
+		//      the stack (the auto-reconcile policy was attached but
+		//      no apply ran yet).
+		// Both cases are no-ops for the auto-reconciler, not errors.
+		// Returning (nil, nil) lets startReconcile fall through its
+		// "no drift, nothing to reconcile" branch and reschedule the
+		// next tick quietly. Otherwise (returning an error) we'd log
+		// a failed reconcile attempt on every beat after a successful
+		// destroy.
+		return nil, nil
 	}
 
 	// Convert snapshots to Resource objects.

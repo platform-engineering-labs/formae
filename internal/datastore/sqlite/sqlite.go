@@ -2415,16 +2415,33 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 	// row per ksuid keeps unchanged resources represented by the earlier
 	// reconcile that last declared them.
 	//
-	// Delete operations are excluded: a deletion the user requested is not
-	// part of the desired state going forward.
+	// Destroy commands also contribute to the baseline. A destroy is the
+	// user's latest declaration that the named resources should not exist —
+	// its resource_updates rows have operation='delete' and become the
+	// latest-per-ksuid touch for any destroyed resource. The outer filter
+	// (operation != 'delete') then drops them from the snapshot, yielding
+	// the correct empty desired baseline for fully-destroyed stacks (or
+	// the correctly trimmed baseline for partial destroys). Without this
+	// branch, a destroy is invisible to the baseline and auto-reconcile
+	// resurrects the destroyed resources on its next beat.
+	//
+	// Destroys land in forma_commands with command='destroy' and
+	// config_mode='patch' (the API server's DestroyForma path sends only
+	// Simulate; FormaCommandFromForma defaults empty Mode to Patch), so
+	// the OR branch admits them without further filtering on config_mode.
+	//
+	// Delete operations are excluded from the outer SELECT: a deletion the
+	// user requested is not part of the desired state going forward.
 	query := `
 		WITH user_reconcile_updates AS (
 			SELECT ru.ksuid, ru.resource, ru.operation, fc.timestamp
 			FROM resource_updates ru
 			INNER JOIN forma_commands fc ON ru.command_id = fc.command_id
-			WHERE fc.config_mode = 'reconcile'
+			WHERE (
+				(fc.command = 'apply' AND fc.config_mode = 'reconcile')
+				OR fc.command = 'destroy'
+			)
 			AND fc.state IN ('Success', 'Failed')
-			AND fc.command = 'apply'
 			AND ru.source = 'user'
 			AND ru.stack_label = ?
 		),
