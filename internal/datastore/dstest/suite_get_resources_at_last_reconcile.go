@@ -41,6 +41,27 @@ func reconcileBuilder(
 	}
 }
 
+// destroyBuilder constructs a destroy-command forma_command with the given
+// delete-operation resource updates. Destroy commands are persisted with
+// command='destroy' and config_mode='patch' (the default when
+// FormaCommandConfig.Mode is empty, as set by the API server's DestroyForma
+// path).
+func destroyBuilder(
+	state forma_command.CommandState,
+	startOffset time.Duration,
+	updates []resource_update.ResourceUpdate,
+) *forma_command.FormaCommand {
+	return &forma_command.FormaCommand{
+		ID:              util.NewID(),
+		Command:         pkgmodel.CommandDestroy,
+		Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+		State:           state,
+		StartTs:         util.TimeNow().Add(startOffset),
+		ModifiedTs:      util.TimeNow().Add(startOffset),
+		ResourceUpdates: updates,
+	}
+}
+
 // resourceUpdate constructs a ResourceUpdate where the DesiredState carries
 // realistic top-level fields so that GetResourcesAtLastReconcile's
 // JSON-extraction queries (Type/Label/Target/Properties/Schema/NativeID)
@@ -393,5 +414,127 @@ func RunGetResourcesAtLastReconcile_StackScoped(t *testing.T, newDS func(t *test
 		assert.NoError(t, err)
 		assert.Len(t, snapsB, 1)
 		assert.Equal(t, "bucket-b", snapsB[0].Label)
+	})
+}
+
+// RunGetResourcesAtLastReconcile_DestroyAfterApplyEmptiesBaseline verifies
+// that a successful destroy of a stack supersedes the prior apply: the
+// baseline becomes empty even though the apply's create rows are still
+// present in resource_updates.
+//
+// Without the destroy-included filter, the apply's create rows would be the
+// only candidates and the resource would remain in the baseline forever —
+// driving auto-reconcile to resurrect it.
+func RunGetResourcesAtLastReconcile_DestroyAfterApplyEmptiesBaseline(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetResourcesAtLastReconcile_DestroyAfterApplyEmptiesBaseline", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		// Older successful apply.
+		apply := reconcileBuilder(
+			forma_command.CommandStateSuccess,
+			pkgmodel.FormaApplyModeReconcile,
+			-10*time.Minute,
+			[]resource_update.ResourceUpdate{
+				resourceUpdate("stack-a", "ksuid-1", "bucket-1", `{"foo":"v1"}`, types.OperationCreate, resource_update.FormaCommandSourceUser),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(apply, apply.ID))
+
+		// Later successful destroy of the same resource.
+		destroy := destroyBuilder(
+			forma_command.CommandStateSuccess,
+			-1*time.Minute,
+			[]resource_update.ResourceUpdate{
+				resourceUpdate("stack-a", "ksuid-1", "bucket-1", `{"foo":"v1"}`, types.OperationDelete, resource_update.FormaCommandSourceUser),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(destroy, destroy.ID))
+
+		snaps, err := td.GetResourcesAtLastReconcile("stack-a")
+		assert.NoError(t, err)
+		assert.Empty(t, snaps, "destroy must supersede the prior apply — baseline should be empty")
+	})
+}
+
+// RunGetResourcesAtLastReconcile_FailedDestroyIncluded verifies that a
+// failed destroy still contributes its delete rows to the latest-per-ksuid
+// computation. The user's intent is "delete these"; the auto-reconciler
+// must treat them as desired-state-empty even if the delete didn't succeed.
+//
+// Combined with the outer operation != 'delete' filter, a failed destroy
+// yields an empty baseline for destroyed resources (correct: don't resurrect
+// them; the user wanted them gone). A subsequent retry by the user (or by
+// auto-reconcile itself, once it can do destroys) completes the work.
+func RunGetResourcesAtLastReconcile_FailedDestroyIncluded(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetResourcesAtLastReconcile_FailedDestroyIncluded", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		apply := reconcileBuilder(
+			forma_command.CommandStateSuccess,
+			pkgmodel.FormaApplyModeReconcile,
+			-10*time.Minute,
+			[]resource_update.ResourceUpdate{
+				resourceUpdate("stack-a", "ksuid-1", "bucket-1", `{"foo":"v1"}`, types.OperationCreate, resource_update.FormaCommandSourceUser),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(apply, apply.ID))
+
+		// Failed destroy — user intent still recorded.
+		destroy := destroyBuilder(
+			forma_command.CommandStateFailed,
+			-1*time.Minute,
+			[]resource_update.ResourceUpdate{
+				resourceUpdate("stack-a", "ksuid-1", "bucket-1", `{"foo":"v1"}`, types.OperationDelete, resource_update.FormaCommandSourceUser),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(destroy, destroy.ID))
+
+		snaps, err := td.GetResourcesAtLastReconcile("stack-a")
+		assert.NoError(t, err)
+		assert.Empty(t, snaps, "failed destroy still records the user's intent — baseline should be empty")
+	})
+}
+
+// RunGetResourcesAtLastReconcile_PartialDestroyLeavesUntouchedInBaseline
+// verifies that destroying one resource while another is left alone yields
+// a baseline containing only the un-destroyed resource. The latest-per-ksuid
+// logic picks the apply's create row for the surviving resource (its only
+// touch) and the destroy's delete row for the removed one (which the outer
+// filter drops).
+func RunGetResourcesAtLastReconcile_PartialDestroyLeavesUntouchedInBaseline(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetResourcesAtLastReconcile_PartialDestroyLeavesUntouchedInBaseline", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		// Apply creates two resources.
+		apply := reconcileBuilder(
+			forma_command.CommandStateSuccess,
+			pkgmodel.FormaApplyModeReconcile,
+			-10*time.Minute,
+			[]resource_update.ResourceUpdate{
+				resourceUpdate("stack-a", "ksuid-1", "keeper", `{"foo":"v1"}`, types.OperationCreate, resource_update.FormaCommandSourceUser),
+				resourceUpdate("stack-a", "ksuid-2", "doomed", `{"foo":"v1"}`, types.OperationCreate, resource_update.FormaCommandSourceUser),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(apply, apply.ID))
+
+		// Destroy targets only the second resource.
+		destroy := destroyBuilder(
+			forma_command.CommandStateSuccess,
+			-1*time.Minute,
+			[]resource_update.ResourceUpdate{
+				resourceUpdate("stack-a", "ksuid-2", "doomed", `{"foo":"v1"}`, types.OperationDelete, resource_update.FormaCommandSourceUser),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(destroy, destroy.ID))
+
+		snaps, err := td.GetResourcesAtLastReconcile("stack-a")
+		assert.NoError(t, err)
+		if assert.Len(t, snaps, 1, "only the untouched resource should remain in the baseline") {
+			assert.Equal(t, "ksuid-1", snaps[0].KSUID)
+			assert.Equal(t, "keeper", snaps[0].Label)
+		}
 	})
 }

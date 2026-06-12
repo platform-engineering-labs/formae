@@ -841,3 +841,124 @@ func TestAutoReconciler_PreservesUnchangedResourcesAfterPartialFailure(t *testin
 			"after clearing A's failure: A=v2 (converged), B and C still at v1")
 	})
 }
+
+// TestAutoReconciler_DestroyedResourcesStayDestroyed verifies that when a
+// stack with an AutoReconcilePolicy is destroyed, the auto-reconciler does
+// not resurrect the destroyed resources on its next beat.
+//
+// The destroy must be visible to GetResourcesAtLastReconcile so the
+// auto-reconciler's baseline reflects "this stack is empty" rather than the
+// pre-destroy apply. Otherwise the next beat diffs the apply's resources
+// against the now-empty actual state and creates them again.
+//
+// The test counts both Create and Delete plugin calls, and queries
+// GetResourcesAtLastReconcile directly after the destroy completes — both
+// to prove the destroy actually went through the plugin Delete path AND
+// that the SQL baseline computation reflects an empty stack.
+func TestAutoReconciler_DestroyedResourcesStayDestroyed(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var createCount atomic.Int32
+		var deleteCount atomic.Int32
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				createCount.Add(1)
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusSuccess,
+						NativeID:        "native-" + request.Label,
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"foo":"v1"}`,
+				}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				deleteCount.Add(1)
+				return &resource.DeleteResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationDelete,
+						OperationStatus: resource.OperationStatusSuccess,
+						NativeID:        request.NativeID,
+					},
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		// Disable sync — the destroy + auto-reconcile interaction is the
+		// only thing under test; sync would muddy timing.
+		cfg.Agent.Synchronization.Enabled = false
+		m, cleanup, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer cleanup()
+		require.NoError(t, err)
+
+		schema := pkgmodel.Schema{Fields: []string{"foo"}}
+		v1 := json.RawMessage(`{"foo":"v1"}`)
+		stack := pkgmodel.Stack{
+			Label: "destroy-stack",
+			Policies: []json.RawMessage{
+				json.RawMessage(`{"Type":"auto-reconcile","IntervalSeconds":2}`),
+			},
+		}
+		targets := []pkgmodel.Target{{Label: "test-target"}}
+
+		// Phase 1: apply a stack with auto-reconcile + one resource.
+		f := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{stack},
+			Resources: []pkgmodel.Resource{
+				{Label: "doomed", Type: "FakeAWS::Resource", Properties: v1, Schema: schema, Stack: "destroy-stack", Target: "test-target"},
+			},
+			Targets: targets,
+		}
+		m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+
+		r := require.New(t)
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("destroy-stack")
+			return err == nil && len(resources) == 1
+		}, 15*time.Second, 200*time.Millisecond, "initial apply should create the resource")
+
+		// Sanity: exactly one Create from the initial apply, no Deletes yet.
+		r.Equal(int32(1), createCount.Load(), "exactly one Create from initial apply")
+		r.Equal(int32(0), deleteCount.Load(), "no Deletes before destroy")
+
+		// Reset Create counter so we can detect any resurrection-driven
+		// Create. The Delete counter accumulates the destroy's call below.
+		createCount.Store(0)
+
+		// Phase 2: destroy the stack.
+		m.DestroyForma(f, &config.FormaCommandConfig{}, "test-client")
+		r.Eventually(func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack("destroy-stack")
+			return err == nil && len(resources) == 0
+		}, 15*time.Second, 200*time.Millisecond, "destroy should remove the resource")
+
+		// Prove the destroy actually went through the plugin: exactly one
+		// Delete call. (Without this assertion, a "destroy" that bypasses
+		// the plugin and just clears inventory would also produce zero
+		// resurrection-Creates and the test would pass falsely.)
+		r.Equal(int32(1), deleteCount.Load(), "destroy must call the plugin Delete exactly once")
+
+		// Prove the SQL baseline correctly reflects an empty stack post-destroy.
+		snaps, err := m.Datastore.GetResourcesAtLastReconcile("destroy-stack")
+		r.NoError(err)
+		r.Empty(snaps, "GetResourcesAtLastReconcile should return empty after destroy — destroy must be visible to the baseline query")
+
+		// Phase 3: wait through several auto-reconcile beats (interval=2s).
+		// No additional Create should happen — the destroy must "stick".
+		time.Sleep(8 * time.Second)
+		r.Equal(int32(0), createCount.Load(),
+			"auto-reconcile must not resurrect destroyed resources (got %d unexpected Creates)",
+			createCount.Load())
+
+		// Sanity: still gone.
+		resources, err := m.Datastore.LoadResourcesByStack("destroy-stack")
+		r.NoError(err)
+		r.Empty(resources, "stack should remain empty after auto-reconcile beats")
+	})
+}

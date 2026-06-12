@@ -93,4 +93,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGetResourcesAtLastReconcile_PatchModeExcluded(t, newDS)
 	RunGetResourcesAtLastReconcile_MostRecentReconcileWins(t, newDS)
 	RunGetResourcesAtLastReconcile_StackScoped(t, newDS)
+	RunGetResourcesAtLastReconcile_DestroyAfterApplyEmptiesBaseline(t, newDS)
+	RunGetResourcesAtLastReconcile_FailedDestroyIncluded(t, newDS)
+	RunGetResourcesAtLastReconcile_PartialDestroyLeavesUntouchedInBaseline(t, newDS)
 }
