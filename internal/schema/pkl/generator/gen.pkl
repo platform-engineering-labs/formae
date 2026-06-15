@@ -36,7 +36,11 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     else Unexpected("Int", value.getClass().simpleName)
 
   [String] = (_, value) ->
-    if (value is String) value.replaceAll("\"", "\\\"")
+    // Return the raw string unchanged. Escaping for PKL string literals is a
+    // serialization concern handled by escapeString during rendering. Escaping
+    // here too would double-escape quotes (" -> \" -> \\\") and break the
+    // extract -> apply roundtrip with phantom drift.
+    if (value is String) value
     else if (value is Int || value is Number) value.toString()
     else Unexpected("String", value.getClass().simpleName)
 

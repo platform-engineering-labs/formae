@@ -348,6 +348,25 @@ facts {
         rendered.contains("\\(")
     }
 
+    // --- String escaping (roundtrip) tests ---
+
+    ["String type conversion preserves quotes (escaping is a serialization concern)"] {
+        // Type conversion must NOT escape quotes; escaping belongs only to the
+        // serialization stage (escapeString). If it escapes here too, the value
+        // gets double-escaped: " -> \" -> \\\" and the extract->apply roundtrip
+        // sees phantom drift.
+        gen.apply(SimpleFoo, new Dynamic { x = 1; name = "a\"b"; label = "q" }).name == "a\"b"
+    }
+
+    ["String serialization escapes quotes exactly once (no double-escape)"] {
+        let (applied = gen.apply(SimpleFoo, new Dynamic { x = 1; name = "a\"b"; label = "q" }))
+        let (pklMap = gen.genPklToMap(applied.toDynamic()))
+        let (rendered = gen.genMapToPklStringWithTypes("SimpleFoo", pklMap, "test"))
+        // Correct output contains: name = "a\"b" (single backslash before the quote).
+        // The double-escape bug would render a\\\"b, which does not contain a\"b.
+        rendered.contains("name = \"a\\\"b\"")
+    }
+
     ["duplicate Typed values produce single import after dedup"] {
         // Two SubResource instances in the same resource should not
         // produce duplicate __import_statement__ entries after dedup.
