@@ -87,6 +87,21 @@ func (r *ResolveCache) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// resolveMissReason builds a human-readable explanation for a terminal
+// resolve miss — a referenced property that is absent from the source
+// resource even after a successful Read. It names the reference and the
+// missing property so the operator can act without log spelunking, and
+// additionally identifies the source resource by triplet when it is known.
+func resolveMissReason(resourceURI pkgmodel.FormaeURI, source *pkgmodel.Resource) string {
+	property := resourceURI.PropertyPath()
+	if source != nil && source.Label != "" {
+		return fmt.Sprintf("could not resolve reference %q: source resource %q has no property %q",
+			string(resourceURI), source.Stack+"/"+source.Type+"/"+source.Label, property)
+	}
+	return fmt.Sprintf("could not resolve reference %q: source resource has no property %q",
+		string(resourceURI), property)
+}
+
 // startResolve handles a new ResolveValue request: checks the cache, loads from
 // the persister if needed, and kicks off the first read attempt.
 func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI) {
@@ -96,7 +111,7 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 		value := json.Get(resourceURI.PropertyPath())
 		if !value.Exists() {
 			r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
-			_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, nil)})
 			return
 		}
 		_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String()})
@@ -112,13 +127,13 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 		})
 	if err != nil {
 		r.Log().Error("Failed to load resource from resource persister resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 	loadResourceResult, ok := stackerResult.(messages.LoadResourceResult)
 	if !ok {
 		r.Log().Error("Unexpected result type from resource persister resultType=%v", reflect.TypeOf(stackerResult))
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 
@@ -150,7 +165,7 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	progress, err := r.readViaPlugin(retry)
 	if err != nil {
 		r.Log().Error("Failed to read resource via plugin resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 
@@ -162,13 +177,13 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 			retry.Attempt++
 			if _, err := r.SendAfter(r.PID(), retry, r.retryDelay); err != nil {
 				r.Log().Error("Failed to schedule resolve retry: %v", err)
-				_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+				_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 			}
 			return
 		}
 		r.Log().Error("ResolveCache: exhausted retries errorCode=%s resourceURI=%v attempts=%d",
 			progress.ErrorCode, resourceURI, retry.Attempt)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 
@@ -176,7 +191,7 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	if progress.OperationStatus == resource.OperationStatusFailure {
 		r.Log().Error("ResolveCache: non-recoverable error reading resource errorCode=%s resourceURI=%v",
 			progress.ErrorCode, resourceURI)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 
@@ -189,7 +204,7 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	value := enhancedParsed.Get(resourceURI.PropertyPath())
 	if !value.Exists() {
 		r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, &retry.loadResult.Resource)})
 		return
 	}
 

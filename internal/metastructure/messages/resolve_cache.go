@@ -17,4 +17,9 @@ type ValueResolved struct {
 
 type FailedToResolveValue struct {
 	ResourceURI model.FormaeURI
+	// Reason is a human-readable explanation of why the value could not be
+	// resolved (e.g. which property was missing on which source resource).
+	// It is surfaced to the operator as the failed resource update's
+	// ErrorMessage.
+	Reason string
 }

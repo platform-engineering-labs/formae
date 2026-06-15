@@ -918,7 +918,11 @@ func resolveCacheMissingInAction(from gen.PID, state gen.Atom, data ResourceUpda
 }
 
 func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.FailedToResolveValue, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	proc.Log().Error("Failed to resolve resource property resourceUri=%v", message.ResourceURI)
+	proc.Log().Error("Failed to resolve resource property resourceUri=%v reason=%s", message.ResourceURI, message.Reason)
+	// The resolve failure precedes any plugin operation, so no progress is
+	// recorded. Carry the reason explicitly so it surfaces as the failed
+	// resource update's ErrorMessage instead of an empty string.
+	data.resourceUpdate.FailureReason = message.Reason
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
