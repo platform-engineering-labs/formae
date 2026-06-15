@@ -84,6 +84,12 @@ type ResourceUpdate struct {
 	// immutable properties forced the replace. Never sent to resource
 	// plugins — the replace executes as a plain destroy + create.
 	CreateOnlyPatch json.RawMessage `json:"CreateOnlyPatch,omitempty"`
+	// FailureReason carries a human-readable explanation for a failure that
+	// is not recorded as plugin progress — notably a terminal resolve miss,
+	// where the resource fails before any plugin operation runs and would
+	// otherwise surface an empty ErrorMessage. MostRecentFailureMessage falls
+	// back to this when no progress-based failure message is available.
+	FailureReason string `json:"FailureReason,omitempty"`
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {
@@ -260,9 +266,15 @@ func (ru *ResourceUpdate) MostRecentFailureMessage() string {
 	}
 
 	// Account for recoverable errors
-	return ru.FilterProgressMessage(func(p plugin.TrackedProgress) bool {
+	if msg := ru.FilterProgressMessage(func(p plugin.TrackedProgress) bool {
 		return p.OperationStatus == resource.OperationStatusFailure && p.StatusMessage != ""
-	})
+	}); msg != "" {
+		return msg
+	}
+
+	// Fall back to a failure that was not recorded as plugin progress (e.g. a
+	// terminal resolve miss, which fails before any plugin operation runs).
+	return ru.FailureReason
 }
 
 func (ru *ResourceUpdate) MostRecentStatusMessage() string {

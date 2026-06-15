@@ -15,6 +15,8 @@ import (
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -146,7 +148,7 @@ func TestResolveValue_NonUpdateLeavesPatchDocumentUntouched(t *testing.T) {
 	for _, op := range []OperationType{OperationCreate, OperationDelete, OperationReplace} {
 		t.Run(string(op), func(t *testing.T) {
 			ru := &ResourceUpdate{
-				Operation: op,
+				Operation:  op,
 				PriorState: pkgmodel.Resource{Properties: props},
 				DesiredState: pkgmodel.Resource{
 					Properties: append(json.RawMessage(nil), props...),
@@ -165,4 +167,43 @@ func TestResolveValue_NonUpdateLeavesPatchDocumentUntouched(t *testing.T) {
 				"non-Update operations must not re-derive PatchDocument")
 		})
 	}
+}
+
+// TestMostRecentFailureMessage_FallsBackToFailureReason covers the
+// terminal-resolve-miss path: the resource fails before any plugin operation
+// runs, so there is no progress-based failure message. Without a fallback the
+// operator sees an empty ErrorMessage. MostRecentFailureMessage must surface
+// the recorded FailureReason instead.
+func TestMostRecentFailureMessage_FallsBackToFailureReason(t *testing.T) {
+	ru := &ResourceUpdate{
+		State:         ResourceUpdateStateFailed,
+		FailureReason: `could not resolve reference "formae://abc#/Arn": source resource has no property "Arn"`,
+		// No ProgressResult — the failure precedes any plugin call.
+	}
+
+	assert.Equal(t, ru.FailureReason, ru.MostRecentFailureMessage(),
+		"a terminal resolve miss has no plugin progress, so the FailureReason must surface as the failure message")
+}
+
+// TestMostRecentFailureMessage_PrefersProgressMessage ensures the FailureReason
+// is only a fallback: a genuine plugin failure message still takes precedence
+// so we never mask a richer provider error with a generic resolve reason.
+func TestMostRecentFailureMessage_PrefersProgressMessage(t *testing.T) {
+	const pluginErr = "AccessDenied: not authorized to perform iam:CreateRole"
+	ru := &ResourceUpdate{
+		State:         ResourceUpdateStateFailed,
+		FailureReason: "some resolve reason that must not win",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationCreate,
+					OperationStatus: resource.OperationStatusFailure,
+					StatusMessage:   pluginErr,
+				},
+			},
+		},
+	}
+
+	assert.Equal(t, pluginErr, ru.MostRecentFailureMessage(),
+		"a plugin failure message must take precedence over the resolve FailureReason fallback")
 }
