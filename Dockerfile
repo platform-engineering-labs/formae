@@ -6,6 +6,7 @@ ARG CHANNEL="stable"
 RUN if [ -z "$VERSION" ]; then echo "VERSION is required"; exit 1; fi
 
 ENV PATH=/opt/pel/bin:$PATH
+ENV HOME=/home/pel
 
 RUN useradd -m -s /bin/bash pel
 
@@ -28,8 +29,7 @@ RUN useradd -m -s /bin/bash pel
 # which prompts for sudo when writing to the root-owned plugin store.
 RUN apt-get update &&  \
     apt-get install -y jq curl && \
-    HOME=/home/pel /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel ${CHANNEL} formae@${VERSION} && \
-    HOME=/home/pel /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel stable standard && \
+    /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel ${CHANNEL} formae@${VERSION} standard && \
     apt-get remove -y jq curl && \
     apt-get autoremove -y --purge && \
     apt-get clean && \
