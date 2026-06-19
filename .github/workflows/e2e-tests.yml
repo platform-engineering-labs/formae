@@ -72,6 +72,10 @@ jobs:
           done
 
   e2e:
+    # Pin the check-context name to the test only, so adding plugin dimensions
+    # to the matrix below does not rename the GitHub status check. The ruleset's
+    # required checks match contexts as "e2e (<test>)".
+    name: e2e (${{ matrix.test }}${{ matrix.user_plugins && ' [user-install]' || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [pre-cleanup]
