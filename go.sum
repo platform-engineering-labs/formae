@@ -397,8 +397,8 @@ github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmd
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
 github.com/pkg/sftp v1.13.6 h1:JFZT4XbOU7l77xGSpOdW+pwIMqP044IyjXX6FGyEKFo=
 github.com/pkg/sftp v1.13.6/go.mod h1:tz1ryNURKu77RL+GuCzmoJYxQczL3wLNNpPWagdg4Qk=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20260509215119-2aad56a9d57b h1:Y3RJPd1/aZNnb3+wGu2vFnUmGkDh5u5AtCivg3h9EXE=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20260509215119-2aad56a9d57b/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
+github.com/platform-engineering-labs/jsonpatch v0.0.0-20260620044942-701436c7758c h1:J6V/LUUjSmYuV8A7cISFOqFgADUcvd9/QFkWIeYpyPI=
+github.com/platform-engineering-labs/jsonpatch v0.0.0-20260620044942-701436c7758c/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
 github.com/platform-engineering-labs/orbital v0.1.41 h1:+gbT761JoyhhdapaGGRkpGNGg8V0BKLd6+DVa/wOS2o=
 github.com/platform-engineering-labs/orbital v0.1.41/go.mod h1:wwVPqOmW5RO78dDzL/G5CN1Ioao0P/aUsOZVrPVx64s=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=

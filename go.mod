@@ -49,7 +49,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
-	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260509215119-2aad56a9d57b
+	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260620044942-701436c7758c
 	github.com/platform-engineering-labs/orbital v0.1.41
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0
