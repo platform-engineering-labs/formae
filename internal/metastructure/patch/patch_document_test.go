@@ -2454,3 +2454,44 @@ func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserDeclaresOne(t *test
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "characterization: with hasProviderDefault on an EntitySet, OOB-added entries are tolerated even when user declares others")
 }
+
+// TestGeneratePatch_AtomicNestedArrayProducesReplace guards the PLA-37 fix:
+// a list field marked updateMethod=Atomic via a dotted nested hint key
+// (FirewallPolicy.StatefulDefaultActions) must produce a single whole-array
+// replace, not per-element remove+add. AWS Cloud Control does not reliably
+// apply remove+add against a mutually-exclusive list, leaving both values.
+func TestGeneratePatch_AtomicNestedArrayProducesReplace(t *testing.T) {
+	document := []byte(`{
+		"FirewallPolicy": {
+			"StatefulDefaultActions": ["aws:drop_strict"],
+			"StatelessDefaultActions": ["aws:forward_to_sfe"]
+		}
+	}`)
+	patch := []byte(`{
+		"FirewallPolicy": {
+			"StatefulDefaultActions": ["aws:drop_established"],
+			"StatelessDefaultActions": ["aws:forward_to_sfe"]
+		}
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"FirewallPolicy"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"FirewallPolicy.StatefulDefaultActions": {
+				UpdateMethod: pkgmodel.FieldUpdateMethodAtomic,
+			},
+		},
+	}
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+
+	var patches []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &patches))
+
+	require.Len(t, patches, 1)
+	assert.Equal(t, "replace", patches[0].Operation)
+	assert.Equal(t, "/FirewallPolicy/StatefulDefaultActions", patches[0].Path)
+	assert.Equal(t, []any{"aws:drop_established"}, patches[0].Value)
+}
