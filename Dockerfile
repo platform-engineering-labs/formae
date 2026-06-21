@@ -29,7 +29,8 @@ RUN useradd -m -s /bin/bash pel
 # which prompts for sudo when writing to the root-owned plugin store.
 RUN apt-get update &&  \
     apt-get install -y jq curl && \
-    /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel ${CHANNEL} formae@${VERSION} standard && \
+    /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel ${CHANNEL} formae@${VERSION} && \
+    /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel stable standard && \
     apt-get remove -y jq curl && \
     apt-get autoremove -y --purge && \
     apt-get clean && \
