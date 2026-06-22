@@ -12,7 +12,7 @@ replace github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests
 
 replace github.com/platform-engineering-labs/formae/tests/testcontrol => ./tests/testcontrol
 
-replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260415213736-97867d619df3
+replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260622204247-151a8339ad2b
 
 replace github.com/platform-engineering-labs/formae/pkg/auth => ./pkg/auth
 
