@@ -5,6 +5,7 @@
 package changeset
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"sort"
@@ -147,29 +148,47 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 //   - Replace: resource deletes → target delete → target create → resource creates
 //   - Delete:  resource deletes → target delete
 //   - Resolvables: target create/update → depends on resource creates it references
+//
+// For a target create/update node, every create/update resource op on that target
+// depends on it. A delete op on that target also depends on it, but only when the
+// target update re-resolves config ($ref → $value): the delete must dispatch with
+// the resolved config rather than the stale $ref-only snapshot. That delete edge is
+// gated on resolvables and skipped when it would close a cycle.
 func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
 	// Build resolvable-based dependency edges for target create/update operations.
 	// When a target config contains $ref to a resource property, the target node
 	// must wait for that resource's create/update to complete first.
 	p.buildTargetResolvableEdges()
 
-	// Build implicit edges: every resource depends on its target's create/update node.
+	// Build implicit edges so resources on a target wait for its create/update node.
 	// This ensures the target is persisted (and resolved, if it has resolvables) before
-	// any resource on that target starts executing.
+	// the dependent op dispatches its config to the plugin.
 	for _, tu := range targetUpdates {
 		if tu.Operation == target_update.TargetOperationCreate || tu.Operation == target_update.TargetOperationUpdate {
 			targetNode := p.Nodes[tu.NodeURI()]
 			if targetNode == nil {
 				continue
 			}
+			// Whether this target update re-resolves config ($ref → $value). Only
+			// then must deletes wait — a plain-config update needs no re-resolution,
+			// so deletes need no new ordering constraint.
+			reResolvesConfig := len(tu.RemainingResolvables) > 0
 			for _, node := range p.Nodes {
 				ru, ok := node.Update.(*resource_update.ResourceUpdate)
-				if !ok {
+				if !ok || ru.DesiredState.Target != tu.Target.Label {
 					continue
 				}
-				if ru.DesiredState.Target == tu.Target.Label &&
-					(ru.Operation == resource_update.OperationCreate || ru.Operation == resource_update.OperationUpdate) {
+				switch ru.Operation {
+				case resource_update.OperationCreate, resource_update.OperationUpdate:
 					node.LinkWith(targetNode)
+				case resource_update.OperationDelete:
+					// A delete on a target whose config is being re-resolved must
+					// also wait, or it would dispatch the stale $ref-only config.
+					// Skip when the target node already (transitively) depends on
+					// this delete, since the edge would close a cycle.
+					if reResolvesConfig && !dependsOnTransitively(targetNode, node.URI) {
+						node.LinkWith(targetNode)
+					}
 				}
 			}
 		}
@@ -687,6 +706,47 @@ func dfs(group *DAGNode, visited map[pkgmodel.FormaeURI]struct{}) bool {
 	}
 
 	return false
+}
+
+// propagateResolvedTargetConfig copies a target's resolved (plugin-format) config
+// onto every resource-update node whose DesiredState.Target matches targetLabel.
+// After a target with $ref auth re-resolves on a mutable update, dependent ops must
+// dispatch with the resolved value instead of the stale $ref snapshot from
+// generation time. Ordering edges (see buildTargetResourceEdges) guarantee this runs
+// before any dependent op's dispatch snapshot is taken.
+func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginConfig json.RawMessage) {
+	for _, node := range p.Nodes {
+		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+			if ru.DesiredState.Target == targetLabel {
+				ru.ResourceTarget.Config = pluginConfig
+			}
+		}
+	}
+}
+
+// dependsOnTransitively reports whether node depends, directly or transitively,
+// on the node identified by targetURI by walking the Dependencies graph. Used to
+// keep new ordering edges cycle-safe: adding node→targetURI would close a cycle
+// exactly when targetURI already depends on node.
+func dependsOnTransitively(node *DAGNode, targetURI pkgmodel.FormaeURI) bool {
+	visited := make(map[pkgmodel.FormaeURI]struct{})
+	var walk func(n *DAGNode) bool
+	walk = func(n *DAGNode) bool {
+		for _, dep := range n.Dependencies {
+			if dep.URI == targetURI {
+				return true
+			}
+			if _, seen := visited[dep.URI]; seen {
+				continue
+			}
+			visited[dep.URI] = struct{}{}
+			if walk(dep) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(node)
 }
 
 func (n *DAGNode) LinkWith(upstream *DAGNode) {
