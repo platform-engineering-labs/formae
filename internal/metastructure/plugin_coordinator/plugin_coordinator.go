@@ -320,9 +320,6 @@ func (c *PluginCoordinator) remoteSpawn(namespace string, nodeName gen.Atom, reg
 	start := time.Now()
 	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, opts)
 	elapsed := time.Since(start)
-	if elapsed > 100*time.Millisecond {
-		c.Log().Warning("PluginCoordinator: SLOW SpawnRegister on %s took %s (err=%v)", nodeName, elapsed, err)
-	}
 	if err != nil {
 		return gen.PID{}, fmt.Errorf("failed to remote spawn on %s (took %s): %w", nodeName, elapsed, err)
 	}
