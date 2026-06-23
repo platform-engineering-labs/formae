@@ -100,11 +100,6 @@ func (a *Agent) Start() error {
 		}
 		systemPluginDir := plugindiscovery.SystemPluginDir(binPath)
 
-		// One-time migration: remove stale dev plugins that are now bundled
-		if err := plugindiscovery.CleanStaleDevPlugins(systemPluginDir, devPluginDir); err != nil {
-			slog.Warn("Failed to clean stale dev plugins", "error", err)
-		}
-
 		resourceInfos := plugindiscovery.DiscoverPluginsMulti(
 			[]string{devPluginDir, systemPluginDir}, plugindiscovery.Resource,
 		)
