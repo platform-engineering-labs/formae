@@ -124,12 +124,16 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	ru.DesiredState.Properties = properties
 
 	if ru.Operation == OperationUpdate && len(ru.DesiredState.Schema.Fields) > 0 {
+		// Recompute the same writeOnly exclusion the factory applied, so this
+		// regeneration does not re-introduce an unchanged or setOnce-frozen value.
+		excludeWriteOnly := WriteOnlyPathsToExclude(ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema.WriteOnly())
 		patchDoc, _, derr := patch.GeneratePatch(
 			ru.PriorState.Properties,
 			ru.DesiredState.Properties,
 			resolver.NewResolvableProperties(),
 			ru.DesiredState.Schema,
 			pkgmodel.FormaApplyModePatch,
+			excludeWriteOnly...,
 		)
 		if derr != nil {
 			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)

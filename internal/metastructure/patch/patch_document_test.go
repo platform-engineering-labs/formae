@@ -2495,3 +2495,70 @@ func TestGeneratePatch_AtomicNestedArrayProducesReplace(t *testing.T) {
 	assert.Equal(t, "/FirewallPolicy/StatefulDefaultActions", patches[0].Path)
 	assert.Equal(t, []any{"aws:drop_established"}, patches[0].Value)
 }
+
+func TestGeneratePatch_WriteOnlyNonOpaqueAndNestedPath_NoOverStripping(t *testing.T) {
+	// Password is a writeOnly leaf nested under LoginProfile (dotted hint key),
+	// plus a top-level non-opaque writeOnly token. Read never returns either;
+	// both must be re-added with their cleartext values and nothing else.
+	// Passing an empty exclude list must not over-strip.
+	document := []byte(`{"LoginProfile":{"PasswordResetRequired":false},"UserName":"u"}`)
+	patch := []byte(`{
+		"LoginProfile":{"Password":"p@ss","PasswordResetRequired":false},
+		"UserName":"u",
+		"ApiToken":"tok-123"
+	}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"LoginProfile", "UserName", "ApiToken"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"LoginProfile.Password": {WriteOnly: true}, // nested/dotted
+			"ApiToken":              {WriteOnly: true}, // top-level non-opaque
+		},
+	}
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch,
+		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	byPath := map[string]jsonpatch.JsonPatchOperation{}
+	for _, op := range ops {
+		byPath[op.Path] = op
+	}
+	require.Contains(t, byPath, "/LoginProfile/Password")
+	assert.Equal(t, "p@ss", byPath["/LoginProfile/Password"].Value)
+	require.Contains(t, byPath, "/ApiToken")
+	assert.Equal(t, "tok-123", byPath["/ApiToken"].Value)
+	// no over-stripping: PasswordResetRequired (unchanged) and UserName must NOT appear
+	assert.NotContains(t, byPath, "/LoginProfile/PasswordResetRequired")
+	assert.NotContains(t, byPath, "/UserName")
+}
+
+func TestGeneratePatch_ExcludeList_DropsWriteOnlyOpFromDesired(t *testing.T) {
+	// The exclude list (variadic) drops a writeOnly field path from the desired
+	// side so jsonpatch emits no op for it, while leaving non-excluded writeOnly
+	// fields intact.
+	document := []byte(`{"UserName":"u"}`)
+	patch := []byte(`{"UserName":"u","SecretString":"shhh","ApiToken":"tok"}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"UserName", "SecretString", "ApiToken"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"SecretString": {WriteOnly: true},
+			"ApiToken":     {WriteOnly: true},
+		},
+	}
+
+	patchDoc, _, err := generatePatch(document, patch,
+		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch, "SecretString")
+	require.NoError(t, err)
+
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	byPath := map[string]jsonpatch.JsonPatchOperation{}
+	for _, op := range ops {
+		byPath[op.Path] = op
+	}
+	assert.NotContains(t, byPath, "/SecretString", "excluded writeOnly path must produce no op")
+	require.Contains(t, byPath, "/ApiToken", "non-excluded writeOnly path must still be emitted")
+	assert.Equal(t, "tok", byPath["/ApiToken"].Value)
+}

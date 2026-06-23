@@ -27,8 +27,11 @@ var defaultIgnoredFields = []jsonpatch.Path{}
 //     these immutable properties changed: …") and are never sent to plugins.
 //
 // The two slices are disjoint. Either can be nil.
-func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	return generatePatch(document, patch, properties, schema, mode)
+//
+// excludeWriteOnly lists dotted paths the caller found unchanged or setOnce-frozen;
+// they are stripped from desired so no op is emitted. Callers with none pass nothing.
+func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode, excludeWriteOnly ...string) (json.RawMessage, json.RawMessage, error) {
+	return generatePatch(document, patch, properties, schema, mode, excludeWriteOnly...)
 }
 
 func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {
@@ -63,7 +66,7 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode, excludeWriteOnly ...string) (json.RawMessage, json.RawMessage, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, properties)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to flatten and resolve refs: %w", err)
@@ -90,6 +93,16 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, writeOnlyCreateOnly)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
+		}
+	}
+
+	// Also drop unchanged/setOnce-frozen writeOnly paths from desired. createPatchDocument
+	// strips writeOnly from the document, so otherwise they re-emit as an "add"; removing
+	// from both sides emits no op. Changed paths stay and re-add their cleartext.
+	if len(excludeWriteOnly) > 0 {
+		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, excludeWriteOnly)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to strip excluded writeOnly fields from desired state: %w", err)
 		}
 	}
 

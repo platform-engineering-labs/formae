@@ -41,6 +41,90 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource)
 	return !equal, filteredRawProps, nil
 }
 
+// WriteOnlyPathsToExclude returns the writeOnly paths to drop from the patch:
+// setOnce-frozen (a value already exists) or unchanged (hash of desired == stored
+// hash). Reads the wrapped {$strategy,$visibility,$value} form, so call it before
+// ConvertToPluginFormat unwraps the values.
+func WriteOnlyPathsToExclude(existing, desired json.RawMessage, writeOnlyPaths []string) []string {
+	if len(writeOnlyPaths) == 0 {
+		return nil
+	}
+
+	existingResult := gjson.ParseBytes(existing)
+	desiredResult := gjson.ParseBytes(desired)
+
+	var exclude []string
+	for _, path := range writeOnlyPaths {
+		existingNode := existingResult.Get(path)
+		desiredNode := desiredResult.Get(path)
+
+		storedVal, storedExists := leafValue(existingNode)
+		if !storedExists {
+			continue // not yet stored: first set, keep it
+		}
+
+		// setOnce with a stored value is frozen; never re-send. Strategy comes from
+		// desired, falling back to existing (filterSetOnceProps keeps the marker).
+		strategy := nodeStrategy(desiredNode)
+		if strategy == "" {
+			strategy = nodeStrategy(existingNode)
+		}
+		if strategy == pkgmodel.StrategySetOnce {
+			exclude = append(exclude, path)
+			continue
+		}
+
+		// unchanged: hash of desired cleartext == stored value (Opaque stores the hash)
+		desiredVal, desiredHasVal := leafValue(desiredNode)
+		if !desiredHasVal {
+			exclude = append(exclude, path)
+			continue
+		}
+		if pkgmodel.ComputeValueHash(valueToString(desiredVal)) == valueToString(storedVal) {
+			exclude = append(exclude, path)
+		}
+	}
+
+	return exclude
+}
+
+// leafValue returns the comparable leaf value for a property node and whether a
+// value is present. A wrapped Value object ({"$value": ...}) yields its $value;
+// a plain scalar yields itself.
+func leafValue(node gjson.Result) (gjson.Result, bool) {
+	if !node.Exists() {
+		return gjson.Result{}, false
+	}
+	if node.IsObject() {
+		v := node.Get("$value")
+		if !v.Exists() || v.Value() == nil {
+			return gjson.Result{}, false
+		}
+		return v, true
+	}
+	if node.Value() == nil {
+		return gjson.Result{}, false
+	}
+	return node, true
+}
+
+// nodeStrategy returns the $strategy of a wrapped Value node, or "" otherwise.
+func nodeStrategy(node gjson.Result) string {
+	if node.Exists() && node.IsObject() {
+		return node.Get("$strategy").String()
+	}
+	return ""
+}
+
+// valueToString renders a gjson leaf the same way Value.GetStringValue does, so
+// the hash comparison matches what PersistValueTransformer stored.
+func valueToString(v gjson.Result) string {
+	if v.Type == gjson.String {
+		return v.Str
+	}
+	return v.String()
+}
+
 // filterSetOnceProps recursively removes SetOnce properties with existing values
 func filterSetOnceProps(existing, new json.RawMessage, label string) (json.RawMessage, error) {
 	if len(existing) == 0 || len(new) == 0 {

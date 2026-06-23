@@ -59,6 +59,10 @@ func NewResourceUpdateForExisting(
 	var createOnlyPatch json.RawMessage
 
 	if hasChanges {
+		// Compute writeOnly exclusions before ConvertToPluginFormat unwraps the
+		// wrapped values (the check needs $strategy and the stored hash).
+		excludeWriteOnly := WriteOnlyPathsToExclude(existingResource.Properties, filteredProps, newResource.Schema.WriteOnly())
+
 		existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
@@ -75,6 +79,7 @@ func NewResourceUpdateForExisting(
 			resolvableProperties,
 			newResource.Schema,
 			mode,
+			excludeWriteOnly...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
