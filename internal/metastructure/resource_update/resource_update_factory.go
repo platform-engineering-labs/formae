@@ -59,12 +59,23 @@ func NewResourceUpdateForExisting(
 	var createOnlyPatch json.RawMessage
 
 	if hasChanges {
-		existingPluginProps, err := resolver.ConvertToPluginFormat(existingResource.Properties)
+		// Drop opaque values that are unchanged from what is stored so a sibling
+		// edit does not churn (re-emit cleartext) or corrupt (re-emit the stored
+		// hash, for setOnce) the opaque field. Genuinely changed opaque values
+		// stay, so rotation still produces a patch op. filteredProps is left
+		// untouched for DesiredState.Properties below — only the patch inputs are
+		// stripped.
+		existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(existingResource.Properties, filteredProps)
+		if err != nil {
+			return nil, fmt.Errorf("failed to suppress unchanged opaque values for resource %s: %w", existingResource.Label, err)
+		}
+
+		existingPluginProps, err := resolver.ConvertToPluginFormat(existingForPatch)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
 		}
 
-		newPluginProps, err := resolver.ConvertToPluginFormat(filteredProps)
+		newPluginProps, err := resolver.ConvertToPluginFormat(desiredForPatch)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
 		}

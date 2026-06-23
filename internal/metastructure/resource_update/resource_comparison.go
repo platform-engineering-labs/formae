@@ -41,6 +41,100 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource)
 	return !equal, filteredRawProps, nil
 }
 
+// SuppressUnchangedOpaqueValues removes opaque leaf properties whose desired
+// value is unchanged from what is stored, from BOTH the existing (document) and
+// desired (patch) property sets that feed patch generation.
+//
+// A surfaced opaque field is force-re-added by patch generation when it is
+// writeOnly (the provider never returns it on Read, so it is absent from the
+// document and jsonpatch emits an "add"), and re-diffed against its stored hash
+// when it is not. Either way, an unrelated sibling edit re-emits the opaque
+// field: as cleartext (churn — a needless new value/version) or, for a
+// setOnce-frozen value, as its own stored hash (corruption). Dropping the
+// unchanged opaque leaf from both sides makes it invisible to the diff, so no
+// op is produced. Genuinely changed opaque values are left in place, so a real
+// rotation still produces a patch op.
+//
+// "Unchanged" is decided exactly as the update gate decides whole-resource
+// change: hash the desired (wrapped) properties with PersistValueTransformer and
+// compare the resulting opaque $value to the stored $value. Keyed on
+// $visibility == Opaque, so it covers opaque fields whether or not they are also
+// writeOnly or createOnly, and never touches non-opaque fields. Inputs are the
+// wrapped {$strategy,$visibility,$value} forms, so call this before
+// ConvertToPluginFormat unwraps them. Inputs are not mutated; stripped copies
+// are returned.
+func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage) (json.RawMessage, json.RawMessage, error) {
+	if len(existing) == 0 || len(desired) == 0 {
+		return existing, desired, nil
+	}
+
+	// Hash the desired opaque values the same way the gate and persistence do,
+	// so the comparison cannot drift from the gate's decision.
+	transformer := transformations.NewPersistValueTransformer()
+	hashed, err := transformer.ApplyToResource(&pkgmodel.Resource{Properties: desired})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to hash desired properties for opaque comparison: %w", err)
+	}
+
+	hashedResult := gjson.ParseBytes(hashed.Properties)
+	existingResult := gjson.ParseBytes(existing)
+	desiredResult := gjson.ParseBytes(desired)
+
+	// Collect dotted paths of opaque leaves anywhere in the desired props,
+	// recursing through both objects and arrays (PersistValueTransformer and
+	// filterSetOnceProps hash/freeze opaque values nested under arrays too, so
+	// they are equally subject to the churn this guards against).
+	var opaquePaths []string
+	var walk func(prefix string, node gjson.Result)
+	walk = func(prefix string, node gjson.Result) {
+		switch {
+		case node.IsObject():
+			if node.Get("$visibility").String() == "Opaque" {
+				opaquePaths = append(opaquePaths, prefix)
+				return
+			}
+			node.ForEach(func(key, val gjson.Result) bool {
+				walk(buildPath(prefix, key.String()), val)
+				return true
+			})
+		case node.IsArray():
+			node.ForEach(func(idx, val gjson.Result) bool {
+				walk(buildPath(prefix, idx.String()), val)
+				return true
+			})
+		}
+	}
+	desiredResult.ForEach(func(key, val gjson.Result) bool {
+		walk(key.String(), val)
+		return true
+	})
+
+	strippedExisting := string(existing)
+	strippedDesired := string(desired)
+	for _, path := range opaquePaths {
+		storedVal := existingResult.Get(path + ".$value")
+		if !storedVal.Exists() {
+			continue // first set: keep so the create op is emitted
+		}
+		if hashedResult.Get(path+".$value").String() != storedVal.String() {
+			continue // changed: keep so the rotation emits an op
+		}
+		// Unchanged: drop from both sides so no add/replace/remove is produced.
+		strippedDesired, err = sjson.Delete(strippedDesired, path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to drop unchanged opaque path %q from desired: %w", path, err)
+		}
+		if existingResult.Get(path).Exists() {
+			strippedExisting, err = sjson.Delete(strippedExisting, path)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to drop unchanged opaque path %q from existing: %w", path, err)
+			}
+		}
+	}
+
+	return json.RawMessage(strippedExisting), json.RawMessage(strippedDesired), nil
+}
+
 // filterSetOnceProps recursively removes SetOnce properties with existing values
 func filterSetOnceProps(existing, new json.RawMessage, label string) (json.RawMessage, error) {
 	if len(existing) == 0 || len(new) == 0 {
