@@ -25,18 +25,26 @@ CHANNEL := $(shell echo "$(RAW_VERSION)" | grep -q -- '-' && echo dev || echo st
 # Override per-build with HELM_READER_VERSION=<ver>.
 HELM_READER_VERSION ?= 0.1.2
 
+# Pinned atlas CLI version. Required at runtime by plugins that wrap
+# atlas's CLI surface (today: formae-plugin-atlas via the atlas-go-sdk).
+# Currently "latest" because release.ariga.io only serves a `latest`
+# URL; switch to a real semver pin once Ariga exposes versioned paths.
+# Override per-build with ATLAS_VERSION=<ver>.
+ATLAS_VERSION ?= latest
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
 	rm -rf fcfg
 	rm -rf pkl-reader-helm
+	rm -rf atlas
 	rm -rf version.semver
 
 clean-pel:
 	rm -rf ~/.pel/*
 
-build: helm-reader
+build: helm-reader atlas-cli
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
 	go build -o fcfg cmd/formae-config/main.go
 
@@ -57,6 +65,14 @@ dev-install: build
 	@echo "Staged at $(CURDIR)/dist/dev/bin/formae"
 	@echo "Run: $(CURDIR)/dist/dev/bin/formae agent start"
 
+## atlas-cli: Download the pinned atlas CLI binary into the repo root
+## so `build` ships it next to the formae binary and `pkg-bin` includes
+## it in dist/pel/bin/. Required at runtime by plugins that wrap atlas
+## (today: formae-plugin-atlas, which uses ariga.io/atlas-go-sdk/atlasexec
+## and discovers the binary via exec.LookPath).
+atlas-cli:
+	@ATLAS_VERSION=$(ATLAS_VERSION) ./scripts/install-atlas.sh
+
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
@@ -71,6 +87,7 @@ pkg-bin: clean build
 	cp -Rp ./formae ./dist/pel/bin
 	cp -Rp ./fcfg ./dist/pel/bin
 	cp -Rp ./pkl-reader-helm ./dist/pel/bin
+	cp -Rp ./atlas ./dist/pel/bin
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
