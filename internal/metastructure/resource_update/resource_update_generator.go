@@ -2081,5 +2081,134 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 		}
 	}
 
+	// Second pass: translate $res envelopes framed inside $embed.$template strings.
+	// FindResolvablesFromProperties does not scan string contents, so embedded spans
+	// are invisible to the flat-list pass above. We walk the tree explicitly here.
+	result, err = translateEmbedSpans(result, tripletToKsuid, ds, externalLabels)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return json.RawMessage(result), externalLabels, nil
+}
+
+// translateEmbedSpans walks the JSON tree for objects with $embed==true and
+// rewrites any framed RS<base64>US $res envelopes in $template to $ref+KSUID form.
+func translateEmbedSpans(jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
+	return translateEmbedSpansAtPath("", gjson.Parse(jsonStr), jsonStr, tripletToKsuid, ds, externalLabels)
+}
+
+func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
+	var err error
+	if value.IsObject() {
+		if value.Get("$embed").Bool() {
+			tmplResult := value.Get("$template")
+			if tmplResult.Exists() && tmplResult.Type == gjson.String {
+				tmpl := tmplResult.String()
+				tmpl, err = translateEmbedSpansInTemplate(tmpl, tripletToKsuid, ds, externalLabels)
+				if err != nil {
+					return jsonStr, err
+				}
+				templatePath := basePath
+				if templatePath == "" {
+					templatePath = "$template"
+				} else {
+					templatePath = templatePath + ".$template"
+				}
+				jsonStr, err = sjson.Set(jsonStr, templatePath, tmpl)
+				if err != nil {
+					return jsonStr, fmt.Errorf("failed to update $embed.$template at path %s: %w", templatePath, err)
+				}
+			}
+			return jsonStr, nil
+		}
+		// Recurse into child fields
+		var walkErr error
+		value.ForEach(func(key, val gjson.Result) bool {
+			var childPath string
+			if basePath == "" {
+				childPath = key.String()
+			} else {
+				childPath = basePath + "." + key.String()
+			}
+			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, ds, externalLabels)
+			return walkErr == nil
+		})
+		if walkErr != nil {
+			return jsonStr, walkErr
+		}
+	} else if value.IsArray() {
+		var walkErr error
+		value.ForEach(func(key, val gjson.Result) bool {
+			var childPath string
+			if basePath == "" {
+				childPath = key.String()
+			} else {
+				childPath = basePath + "." + key.String()
+			}
+			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, ds, externalLabels)
+			return walkErr == nil
+		})
+		if walkErr != nil {
+			return jsonStr, walkErr
+		}
+	}
+	return jsonStr, nil
+}
+
+// translateEmbedSpansInTemplate rewrites every framed $res envelope in a $template
+// string to its $ref+KSUID equivalent using the same lookup logic as the flat pass.
+func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil || len(spans) == 0 {
+		return tmpl, err
+	}
+
+	// Process in reverse offset order so earlier offsets stay valid.
+	for i := len(spans) - 1; i >= 0; i-- {
+		span := spans[i]
+		parsed := gjson.Parse(span.EnvelopeJSON)
+		if !pkgmodel.IsResolvableObject(parsed) {
+			// Not a $res envelope — leave span unchanged.
+			continue
+		}
+		resolvable := pkgmodel.ResolvableObject{
+			Label:    parsed.Get("$label").String(),
+			Type:     parsed.Get("$type").String(),
+			Stack:    parsed.Get("$stack").String(),
+			Property: parsed.Get("$property").String(),
+		}
+
+		var formaeURI pkgmodel.FormaeURI
+		ksuid, ok := tripletToKsuid[resolvable.ToTripletKey()]
+		if ok {
+			formaeURI = resolvable.ToFormaeURI(ksuid)
+		} else {
+			if resolvable.Label == "" || resolvable.Type == "" || resolvable.Stack == "" {
+				return tmpl, fmt.Errorf("embed span has incomplete triplet (label=%q type=%q stack=%q)", resolvable.Label, resolvable.Type, resolvable.Stack)
+			}
+			ksuid, err = ds.GetKSUIDByTriplet(resolvable.Stack, resolvable.Label, resolvable.Type)
+			if err != nil || ksuid == "" {
+				ksuid, err = ds.GetKSUIDByTriplet(constants.UnmanagedStack, resolvable.Label, resolvable.Type)
+				if err != nil || ksuid == "" {
+					return tmpl, fmt.Errorf("embed span references unknown resource (label=%q type=%q stack=%q)", resolvable.Label, resolvable.Type, resolvable.Stack)
+				}
+			}
+			formaeURI = resolvable.ToFormaeURI(ksuid)
+		}
+
+		refEnv := map[string]string{"$ref": string(formaeURI)}
+		refJSON, marshalErr := json.Marshal(refEnv)
+		if marshalErr != nil {
+			return tmpl, fmt.Errorf("embed span: failed to marshal $ref envelope: %w", marshalErr)
+		}
+
+		framed := pkgmodel.FrameEnvelope(string(refJSON))
+		tmpl = tmpl[:span.Start] + framed + tmpl[span.End:]
+
+		if resolvable.Label != "" && externalLabels != nil {
+			externalLabels[formaeURI.KSUID()] = resolvable.Label
+		}
+	}
+	return tmpl, nil
 }

@@ -2057,6 +2057,19 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 					}
 				}
 			}
+			// Rewrite framed envelopes inside $embed.$template spans
+			if isEmbed, _ := v["$embed"].(bool); isEmbed {
+				if tmpl, ok := v["$template"].(string); ok {
+					result := make(map[string]any, len(v))
+					for key, val := range v {
+						result[key] = replace(val)
+					}
+					result["$template"] = rewriteEmbedSpans(tmpl, func(env map[string]any) map[string]any {
+						return replace(env).(map[string]any)
+					})
+					return result
+				}
+			}
 			// Recursively process all values in the map
 			result := make(map[string]any, len(v))
 			for key, val := range v {
@@ -2086,4 +2099,32 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 		return jsonStr
 	}
 	return string(result)
+}
+
+// rewriteEmbedSpans scans a $embed.$template string for framed RS<base64>US spans,
+// applies fn to each decoded envelope (as a map), re-encodes, and splices back.
+// Spans are replaced in reverse offset order so earlier offsets remain valid.
+// On scan error the original template is returned unchanged.
+func rewriteEmbedSpans(tmpl string, fn func(map[string]any) map[string]any) string {
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil || len(spans) == 0 {
+		return tmpl
+	}
+
+	// Work backwards so byte offsets of earlier spans stay valid.
+	for i := len(spans) - 1; i >= 0; i-- {
+		span := spans[i]
+		var env map[string]any
+		if jsonErr := json.Unmarshal([]byte(span.EnvelopeJSON), &env); jsonErr != nil {
+			continue
+		}
+		rewritten := fn(env)
+		rewrittenJSON, marshalErr := json.Marshal(rewritten)
+		if marshalErr != nil {
+			continue
+		}
+		framed := pkgmodel.FrameEnvelope(string(rewrittenJSON))
+		tmpl = tmpl[:span.Start] + framed + tmpl[span.End:]
+	}
+	return tmpl
 }
