@@ -7,6 +7,7 @@
 module Formae
 
 import "pkl:reflect"
+import "pkl:json"
 
 open class Description {
     hidden text: String
@@ -320,6 +321,21 @@ open class Resolvable {
 
     $res: Boolean = true
     $visibility: String = visibility
+
+    // Rendered when this Resolvable is interpolated inside a string via \(…).
+    // Emits the full $res envelope, base64-encoded, framed by RS (U+001E) … US (U+001F),
+    // so the agent can locate and parse it back out of arbitrary string content.
+    // Whole-value rendering (assigning the Resolvable directly) is unaffected.
+    function toString(): String =
+        let (env = new Dynamic {
+                ["$res"] = true
+                ["$label"] = label
+                ["$type"] = type
+                ["$stack"] = stack
+                ["$property"] = property
+                ["$visibility"] = visibility
+            })
+        "\u{1e}" + new JsonRenderer { indent = "" }.renderValue(env).base64 + "\u{1f}"
 }
 
 /// Resolvable that resolves to a Mapping. Supports key-based access via at().
@@ -488,6 +504,17 @@ function mode(): String = read?("prop:$mode") ?? "replace"
 function value(val: String) = new Value {
     value = val
 }
+
+/// A String-typed field value carrying one or more embedded resolvables,
+/// produced by `embed(...)`. Renders to an `{$embed, $template}` envelope that
+/// the agent substitutes at resolve time, shipping a plain String to the plugin.
+open class Embedded {
+    hidden template: String
+    $embed: Boolean = true
+    $template: String = template
+}
+
+function embed(s: String): Embedded = new Embedded { template = s }
 
 // Fq Formae query functions can be used globally
 class Fq {
