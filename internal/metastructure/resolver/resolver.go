@@ -125,6 +125,7 @@ const (
 	typeReference propertyType = iota // Object with $ref (with or without $value)
 	typeValue                         // Object with only $value (no $ref)
 	typePlain                         // Regular property (no $ref or $value)
+	typeEmbed                         // Object with $embed: true — template with framed spans
 )
 
 func (pp *propertyParser) Parse(result gjson.Result) propertyType {
@@ -137,6 +138,10 @@ func (pp *propertyParser) Parse(result gjson.Result) propertyType {
 			pp.Value = result.Get("$value").Value()
 		}
 		return typeReference
+	}
+
+	if result.Get("$embed").Exists() {
+		return typeEmbed
 	}
 
 	if pp.HasValue {
@@ -258,6 +263,29 @@ func (pr *propertyResolver) extractFromJson(result gjson.Result, currentPath str
 		case typeValue:
 			value := parser.CreateValue(result)
 			pr.values[currentPath] = *value
+			return
+		case typeEmbed:
+			tmpl := result.Get("$template").String()
+			spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+			if err != nil {
+				slog.Warn("embed: failed to scan spans in $template, skipping extraction",
+					"path", currentPath,
+					"error", err)
+				return
+			}
+			for _, sp := range spans {
+				env := gjson.Parse(sp.EnvelopeJSON)
+				spanParser := &propertyParser{}
+				spanParser.Parse(env)
+				if !spanParser.HasRef {
+					continue
+				}
+				ref := spanParser.CreateRef(currentPath, env)
+				ref.Embedded = true
+				ref.EmbedFieldPath = currentPath
+				uri := pkgmodel.FormaeURI(ref.PropertyURI)
+				pr.refs[uri] = append(pr.refs[uri], ref)
+			}
 			return
 		case typePlain:
 			result.ForEach(func(key, val gjson.Result) bool {

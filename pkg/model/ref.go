@@ -16,6 +16,13 @@ type Ref struct {
 	// Path in consuming resource. e.g. "NetworkConfig.VpcId"
 	TargetPath string
 
+	// Embedded marks a ref that lives inside a $embed field's $template string
+	// (a framed span) rather than as a whole-value $ref object.
+	Embedded bool
+	// EmbedFieldPath is the dot-path of the enclosing $embed field (== TargetPath
+	// for embedded refs); used at resolution to assemble the $template in place.
+	EmbedFieldPath string
+
 	// Resolved data
 	ResolvedValue Value
 }

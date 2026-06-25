@@ -1409,6 +1409,28 @@ func TestConvertToPluginFormat_TargetConfig(t *testing.T) {
 	})
 }
 
+func TestExtractResolvableRefs_EmbedField(t *testing.T) {
+	// Build a $embed field whose $template contains one framed span.
+	// The span envelope is a post-translation $ref (KSUID-based) so
+	// ExtractResolvableRefs can construct the URI exactly as for whole-value refs.
+	kvsKsuid := util.NewID()
+	envJSON := fmt.Sprintf(`{"$ref":"formae://%s#/id"}`, kvsKsuid)
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(envJSON) + "')"
+	props, _ := json.Marshal(map[string]any{
+		"functionCode": map[string]any{"$embed": true, "$template": tmpl},
+	})
+	res := pkgmodel.Resource{Properties: props}
+
+	refs := ExtractResolvableRefs(res)
+
+	if len(refs) != 1 {
+		t.Fatalf("want 1 embedded ref, got %d", len(refs))
+	}
+	if refs[0].TargetPath != "functionCode" {
+		t.Errorf("TargetPath: got %q want functionCode", refs[0].TargetPath)
+	}
+}
+
 // newTestRef creates a test reference with a real KSUID for the given property
 func newTestRef(property string) string {
 	ksuid := util.NewID()
