@@ -1559,6 +1559,21 @@ func TestEmbed_DuplicateIdenticalSpans(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, gjson.GetBytes(resolved, "code.$embed").Bool())
 
+	// After resolve, BOTH span envelopes in the $template must carry $value="VAL-42".
+	// A regression that only updated one span would leave the other without $value.
+	resolvedTmpl := gjson.GetBytes(resolved, "code.$template").String()
+	resolvedSpans, scanErr := pkgmodel.ScanEmbedSpans(resolvedTmpl)
+	require.NoError(t, scanErr)
+	require.Len(t, resolvedSpans, 2, "expected two span sites in resolved $template")
+	resolvedCount := 0
+	for _, sp := range resolvedSpans {
+		if gjson.Get(sp.EnvelopeJSON, "$value").String() == "VAL-42" {
+			resolvedCount++
+		}
+	}
+	assert.Equal(t, 2, resolvedCount,
+		"expected $value='VAL-42' to appear in both span envelopes of the resolved $template")
+
 	plugin, err := resolver.toPluginFormat(resolved)
 	require.NoError(t, err)
 	assert.Equal(t, "cf.fn('VAL-42', 'VAL-42')", gjson.GetBytes(plugin, "code").String())

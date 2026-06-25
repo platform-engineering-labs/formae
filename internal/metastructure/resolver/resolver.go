@@ -373,19 +373,23 @@ func assembleEmbedTemplate(tmpl string, valueForEnvelope func(envJSON string) (s
 		return tmpl, len(spans) == 0 && err == nil
 	}
 
-	allResolved := true
-	// Work in reverse order so earlier offsets are unaffected by later splices.
+	// Verify all spans are resolved before doing any work; short-circuit on the
+	// first unresolved span so no partial string is produced.
+	vals := make([]string, len(spans))
+	for i, sp := range spans {
+		val, ok := valueForEnvelope(sp.EnvelopeJSON)
+		if !ok {
+			return "", false
+		}
+		vals[i] = val
+	}
+	// All spans resolved — splice in reverse order so earlier offsets stay valid.
 	result := tmpl
 	for i := len(spans) - 1; i >= 0; i-- {
 		sp := spans[i]
-		val, ok := valueForEnvelope(sp.EnvelopeJSON)
-		if !ok {
-			allResolved = false
-			continue
-		}
-		result = result[:sp.Start] + val + result[sp.End:]
+		result = result[:sp.Start] + vals[i] + result[sp.End:]
 	}
-	return result, allResolved
+	return result, true
 }
 
 // resolveEmbedRef writes the resolved $value for ref inside the matching span
