@@ -42,6 +42,7 @@ func TestMerge_PreservesEmbedEnvelope_PluginReturnsObject(t *testing.T) {
 	plugin := json.RawMessage(`{"functionCode":{"$embed":false,"$template":"stale"}}`)
 	out, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{})
 	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(out, "functionCode").IsObject())
 	assert.True(t, gjson.GetBytes(out, "functionCode.$embed").Bool(),
 		"merge must keep user's $embed:true even when plugin returns an object at the same path")
 	assert.Equal(t, "cf.kvs('X')", gjson.GetBytes(out, "functionCode.$template").String(),

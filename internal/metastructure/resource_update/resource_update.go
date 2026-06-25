@@ -498,7 +498,7 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 	// Check if this is a $embed object — preserve the user's envelope wholesale.
 	// The plugin value is always the assembled result of the template; we never
 	// let the plugin overwrite the user's $embed declaration.
-	if userVal.Get("$embed").Exists() {
+	if userVal.Get("$embed").Bool() {
 		cleanPath := m.cleanPath(path)
 		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, userVal.Raw)
 		return
