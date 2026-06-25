@@ -310,3 +310,50 @@ func TestReplaceKSUIDs_RewritesEmbeddedSpan_Idempotent(t *testing.T) {
 	out2 := replaceKSUIDs(out1, ksuidToTriplet)
 	assert.Equal(t, out1, out2, "replaceKSUIDs should be idempotent")
 }
+
+func TestReplaceKSUIDs_RewritesMultipleEmbeddedSpans(t *testing.T) {
+	// Two distinct KSUIDs appear as framed $ref spans inside a single $template.
+	// Literal text separates and surrounds the spans.
+	// After replaceKSUIDs both spans must be rewritten to $res+triplet form
+	// and all surrounding/between literal text must be intact and in order.
+	ksuid1 := "aaaa1111"
+	ksuid2 := "bbbb2222"
+
+	refEnv1 := `{"$ref":"formae://` + ksuid1 + `#/arn","$value":"v1"}`
+	refEnv2 := `{"$ref":"formae://` + ksuid2 + `#/id","$value":"v2"}`
+
+	tmpl := "prefix(" + pkgmodel.FrameEnvelope(refEnv1) + ",between," + pkgmodel.FrameEnvelope(refEnv2) + ")suffix"
+
+	in, err := json.Marshal(map[string]any{
+		"code": map[string]any{"$embed": true, "$template": tmpl},
+	})
+	require.NoError(t, err)
+
+	out := replaceKSUIDs(string(in), map[string]pkgmodel.TripletKey{
+		ksuid1: {Stack: "default", Label: "bucket", Type: "AWS::S3::Bucket"},
+		ksuid2: {Stack: "default", Label: "queue", Type: "AWS::SQS::Queue"},
+	})
+
+	tmplOut := gjson.Get(out, "code.$template").String()
+	spans, err := pkgmodel.ScanEmbedSpans(tmplOut)
+	require.NoError(t, err)
+	require.Len(t, spans, 2, "expected exactly two spans in $template output")
+
+	// Both spans must have been rewritten to $res form.
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, `"$res":true`),
+		"first span should contain $res:true, got: %s", spans[0].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, `"$label":"bucket"`),
+		"first span should contain $label:bucket, got: %s", spans[0].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[1].EnvelopeJSON, `"$res":true`),
+		"second span should contain $res:true, got: %s", spans[1].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[1].EnvelopeJSON, `"$label":"queue"`),
+		"second span should contain $label:queue, got: %s", spans[1].EnvelopeJSON)
+
+	// Surrounding and between literal text must be intact.
+	assert.True(t, strings.HasPrefix(tmplOut, "prefix("),
+		"template should start with 'prefix(', got: %s", tmplOut)
+	assert.True(t, strings.HasSuffix(tmplOut, ")suffix"),
+		"template should end with ')suffix', got: %s", tmplOut)
+	assert.True(t, strings.Contains(tmplOut, ",between,"),
+		"template should contain ',between,' between spans, got: %s", tmplOut)
+}

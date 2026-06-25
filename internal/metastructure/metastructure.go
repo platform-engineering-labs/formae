@@ -2065,7 +2065,12 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 						result[key] = replace(val)
 					}
 					result["$template"] = rewriteEmbedSpans(tmpl, func(env map[string]any) map[string]any {
-						return replace(env).(map[string]any)
+						rewritten, ok := replace(env).(map[string]any)
+						if !ok {
+							// defensive: replace returned a non-map; leave the span unchanged
+							return env
+						}
+						return rewritten
 					})
 					return result
 				}
