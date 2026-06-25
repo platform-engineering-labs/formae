@@ -1429,6 +1429,29 @@ func TestExtractResolvableRefs_EmbedField(t *testing.T) {
 	if refs[0].TargetPath != "functionCode" {
 		t.Errorf("TargetPath: got %q want functionCode", refs[0].TargetPath)
 	}
+
+	// Assert the Embedded flag and EmbedFieldPath are set on the internal Ref —
+	// these are the primary output of Task 3 and must survive refactoring.
+	pr := newPropertyResolverFromResource(res)
+	var embedRef pkgmodel.Ref
+	found := false
+	for _, bucket := range pr.refs {
+		for _, r := range bucket {
+			if r.Embedded {
+				embedRef = r
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no Ref with Embedded==true found in propertyResolver.refs")
+	}
+	if !embedRef.Embedded {
+		t.Errorf("Ref.Embedded: got false, want true")
+	}
+	if embedRef.EmbedFieldPath != "functionCode" {
+		t.Errorf("Ref.EmbedFieldPath: got %q, want functionCode", embedRef.EmbedFieldPath)
+	}
 }
 
 // newTestRef creates a test reference with a real KSUID for the given property

@@ -266,6 +266,10 @@ func (pr *propertyResolver) extractFromJson(result gjson.Result, currentPath str
 			return
 		case typeEmbed:
 			tmpl := result.Get("$template").String()
+			if tmpl == "" {
+				slog.Debug("embed: $template absent or empty, skipping extraction", "path", currentPath)
+				return
+			}
 			spans, err := pkgmodel.ScanEmbedSpans(tmpl)
 			if err != nil {
 				slog.Warn("embed: failed to scan spans in $template, skipping extraction",
@@ -278,6 +282,7 @@ func (pr *propertyResolver) extractFromJson(result gjson.Result, currentPath str
 				spanParser := &propertyParser{}
 				spanParser.Parse(env)
 				if !spanParser.HasRef {
+					slog.Debug("embed: span has no $ref, skipping", "path", currentPath)
 					continue
 				}
 				ref := spanParser.CreateRef(currentPath, env)
