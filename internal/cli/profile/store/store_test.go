@@ -203,3 +203,179 @@ func TestList_EmptyWhenNoProfilesDir(t *testing.T) {
 		t.Errorf("List on clean store = %v, want empty slice", got)
 	}
 }
+
+// Migration is driven by Resolve() (the config-load path). Active() is a pure
+// read and never bootstraps, so these tests call Resolve().
+
+func activeName(t *testing.T, root string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "active"))
+	if err != nil {
+		t.Fatalf("read active: %v", err)
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func TestEnsure_Step1_ValidActiveNoOp(t *testing.T) {
+	root := t.TempDir()
+	writeActive(t, root, "default", "content")
+	s := store.New(root)
+	path, err := s.Resolve()
+	if err != nil || path != s.ProfilePath("default") {
+		t.Fatalf("Resolve = %q, %v; want %q, nil", path, err, s.ProfilePath("default"))
+	}
+	if _, err := os.Lstat(filepath.Join(root, "formae.conf.pkl")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("formae.conf.pkl should not exist")
+	}
+}
+
+func TestEnsure_Step2_StaleActiveErrors(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "active", "ghost") // valid name, profile missing
+	_, err := store.New(root).Resolve()
+	if !errors.Is(err, store.ErrNotInitialized) {
+		t.Errorf("stale active: %v, want ErrNotInitialized", err)
+	}
+	if activeName(t, root) != "ghost" {
+		t.Errorf("stale active was rewritten")
+	}
+}
+
+func TestEnsure_MalformedActiveIsInvalidName(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "active", "../escape")
+	_, err := store.New(root).Resolve()
+	if !errors.Is(err, store.ErrInvalidName) {
+		t.Errorf("malformed active: %v, want ErrInvalidName", err)
+	}
+	if activeName(t, root) != "../escape" {
+		t.Errorf("malformed active was rewritten")
+	}
+}
+
+func TestEnsure_Step3_ValidSymlinkAdoptsAndRemoves(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, filepath.Join("profiles", "prod.pkl"), "prod-content")
+	// formae.conf.pkl -> profiles/prod.pkl (relative symlink).
+	if err := os.Symlink(filepath.Join("profiles", "prod.pkl"), filepath.Join(root, "formae.conf.pkl")); err != nil {
+		t.Fatal(err)
+	}
+	s := store.New(root)
+	path, err := s.Resolve()
+	if err != nil || path != s.ProfilePath("prod") {
+		t.Fatalf("Resolve = %q, %v; want prod path", path, err)
+	}
+	if activeName(t, root) != "prod" {
+		t.Errorf("active = %q, want prod", activeName(t, root))
+	}
+	if _, err := os.Lstat(filepath.Join(root, "formae.conf.pkl")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("symlink should have been removed")
+	}
+}
+
+func TestEnsure_Step4_BrokenSymlinkLeftThenBootstrap(t *testing.T) {
+	root := t.TempDir()
+	// Dangling symlink to a nonexistent target.
+	if err := os.Symlink(filepath.Join("profiles", "ghost.pkl"), filepath.Join(root, "formae.conf.pkl")); err != nil {
+		t.Fatal(err)
+	}
+	s := store.New(root)
+	path, err := s.Resolve()
+	if err != nil || path != s.ProfilePath("default") {
+		t.Fatalf("Resolve = %q, %v; want default (bootstrap)", path, err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "formae.conf.pkl")); err != nil {
+		t.Errorf("broken symlink should be left in place: %v", err)
+	}
+}
+
+func TestEnsure_Step5a_BareFileMoved(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "real-config")
+	s := store.New(root)
+	if _, err := s.Resolve(); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	moved, err := os.ReadFile(s.ProfilePath("default"))
+	if err != nil || string(moved) != "real-config" {
+		t.Fatalf("profiles/default.pkl = %q, %v; want real-config", string(moved), err)
+	}
+	if activeName(t, root) != "default" {
+		t.Errorf("active = %q, want default", activeName(t, root))
+	}
+	if _, err := os.Lstat(filepath.Join(root, "formae.conf.pkl")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("formae.conf.pkl should have been moved away")
+	}
+}
+
+func TestEnsure_Step5b_BareFileCollisionAdoptsAndKeeps(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "formae.conf.pkl", "bare")
+	writeFile(t, root, filepath.Join("profiles", "default.pkl"), "existing-default")
+	s := store.New(root)
+	if _, err := s.Resolve(); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if activeName(t, root) != "default" {
+		t.Errorf("active = %q, want default", activeName(t, root))
+	}
+	d, _ := os.ReadFile(s.ProfilePath("default"))
+	if string(d) != "existing-default" {
+		t.Errorf("default overwritten: %q", string(d))
+	}
+	if _, err := os.Lstat(filepath.Join(root, "formae.conf.pkl")); err != nil {
+		t.Errorf("bare formae.conf.pkl should be left: %v", err)
+	}
+}
+
+func TestEnsure_Step6_OrphanedDefaultRecovered(t *testing.T) {
+	root := t.TempDir()
+	// Simulate crash after move but before active write.
+	writeFile(t, root, filepath.Join("profiles", "default.pkl"), "recovered")
+	s := store.New(root)
+	path, err := s.Resolve()
+	if err != nil || path != s.ProfilePath("default") {
+		t.Fatalf("Resolve = %q, %v; want default (recovery)", path, err)
+	}
+	if activeName(t, root) != "default" {
+		t.Errorf("active = %q, want default", activeName(t, root))
+	}
+}
+
+func TestEnsure_Step7_OrphanedProfilesNoDefaultErrors(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, filepath.Join("profiles", "prod.pkl"), "x")
+	_, err := store.New(root).Resolve()
+	if !errors.Is(err, store.ErrNotInitialized) {
+		t.Errorf("orphaned profiles: %v, want ErrNotInitialized", err)
+	}
+}
+
+func TestEnsure_Step8_CleanInstallBootstraps(t *testing.T) {
+	root := t.TempDir()
+	s := store.New(root)
+	path, err := s.Resolve()
+	if err != nil || path != s.ProfilePath("default") {
+		t.Fatalf("Resolve = %q, %v; want default", path, err)
+	}
+	stub, err := os.ReadFile(s.ProfilePath("default"))
+	if err != nil || !strings.Contains(string(stub), `amends "formae:/Config.pkl"`) {
+		t.Fatalf("default not bootstrapped from stub: %q, %v", string(stub), err)
+	}
+}
+
+func TestEnsure_Idempotent(t *testing.T) {
+	root := t.TempDir()
+	s := store.New(root)
+	if _, err := s.Resolve(); err != nil { // bootstrap
+		t.Fatal(err)
+	}
+	first, _ := os.ReadFile(s.ProfilePath("default"))
+	if _, err := s.Resolve(); err != nil { // run again
+		t.Fatal(err)
+	}
+	second, _ := os.ReadFile(s.ProfilePath("default"))
+	if string(first) != string(second) {
+		t.Errorf("not idempotent: default changed between runs")
+	}
+}

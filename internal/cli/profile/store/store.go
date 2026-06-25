@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -269,5 +270,103 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
-// ensureInitialized is implemented in Task 3. Temporary no-op.
-func (s *Store) ensureInitialized() error { return nil }
+// ensureInitialized establishes a usable active profile if one does not already
+// exist. It is a totally-defined ordered decision (see design RFC-27): every
+// reachable state maps to exactly one outcome. It never deletes a profile file
+// and never overwrites an existing one; its two mutations (rename of the legacy
+// file, write of the active pointer) are atomic. Returns ErrNotInitialized for
+// the two states that need user action (stale active; orphaned profiles with no
+// default).
+func (s *Store) ensureInitialized() error {
+	// Step 1/2: an active pointer already exists.
+	if data, err := os.ReadFile(s.activePath()); err == nil {
+		name := strings.TrimSpace(string(data))
+		if err := ValidateName(name); err != nil {
+			return err // malformed/corrupt active pointer — never auto-rewrite (ErrInvalidName).
+		}
+		if _, statErr := os.Stat(s.ProfilePath(name)); statErr == nil {
+			return nil // Step 1: valid active.
+		}
+		// Step 2: valid name, profile file missing — recoverable.
+		return fmt.Errorf("%w: active profile %q not found — run `formae profile use <name>` or `formae profile list`", ErrNotInitialized, name)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read active: %w", err)
+	}
+
+	cfg := s.ConfigPath()
+	info, lerr := os.Lstat(cfg)
+	switch {
+	case lerr == nil && info.Mode()&os.ModeSymlink != 0:
+		// Steps 3/4: legacy symlink.
+		if name, ok := s.validSymlinkTarget(); ok {
+			if err := s.writeActive(name); err != nil {
+				return err
+			}
+			return os.Remove(cfg) // Step 3.
+		}
+		// Step 4: broken/invalid symlink — leave it, warn, fall through.
+		slog.Warn("ignoring broken legacy config symlink", "path", cfg)
+	case lerr == nil:
+		// Step 5: bare regular file.
+		dst := s.ProfilePath("default")
+		if _, err := os.Lstat(dst); errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+				return fmt.Errorf("mkdir profiles: %w", err)
+			}
+			if err := os.Rename(cfg, dst); err != nil { // Step 5a.
+				return fmt.Errorf("move legacy config: %w", err)
+			}
+			return s.writeActive("default")
+		} else if err != nil {
+			return fmt.Errorf("stat default profile: %w", err)
+		}
+		// Step 5b: collision — adopt existing default, keep bare file, warn.
+		slog.Warn("formae.conf.pkl left untouched; profiles/default.pkl already exists — reconcile manually", "path", cfg)
+		return s.writeActive("default")
+	case !errors.Is(lerr, os.ErrNotExist):
+		return fmt.Errorf("stat legacy config: %w", lerr)
+	}
+
+	// No usable formae.conf.pkl beyond this point.
+	if _, err := os.Stat(s.ProfilePath("default")); err == nil {
+		return s.writeActive("default") // Step 6: orphaned default (crash recovery).
+	}
+	if names, err := s.List(); err == nil && len(names) > 0 {
+		// Step 7: other orphaned profiles, no default.
+		return fmt.Errorf("%w: no active profile — run `formae profile use <name>` (available: %s)", ErrNotInitialized, strings.Join(names, ", "))
+	}
+	// Step 8: clean install — bootstrap from the stub.
+	if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+		return fmt.Errorf("mkdir profiles: %w", err)
+	}
+	if err := os.WriteFile(s.ProfilePath("default"), []byte(StubTemplate), 0o644); err != nil {
+		return fmt.Errorf("write default profile: %w", err)
+	}
+	return s.writeActive("default")
+}
+
+// validSymlinkTarget returns the profile name a valid legacy symlink points at.
+// A target is valid only if it resolves to an existing profiles/<name>.pkl with
+// a valid name.
+func (s *Store) validSymlinkTarget() (string, bool) {
+	target, err := os.Readlink(s.ConfigPath())
+	if err != nil {
+		return "", false
+	}
+	base := filepath.Base(target)
+	if !strings.HasSuffix(base, profileExt) {
+		return "", false
+	}
+	name := strings.TrimSuffix(base, profileExt)
+	if ValidateName(name) != nil {
+		return "", false
+	}
+	// Confirm the target is under profiles/ and exists.
+	if filepath.Dir(target) != profilesSubdir && filepath.Dir(target) != s.profilesDir() {
+		return "", false
+	}
+	if _, err := os.Stat(s.ProfilePath(name)); err != nil {
+		return "", false
+	}
+	return name, true
+}
