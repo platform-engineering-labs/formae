@@ -585,7 +585,7 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 		err = m.ForceSync()
 		require.NoError(t, err)
 
-		// Wait for the sync command to complete.
+		// Wait for the sync command to complete successfully.
 		require.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
 			if err != nil {
@@ -594,8 +594,7 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 			for _, fc := range fas {
 				if fc.Command == pkgmodel.CommandSync {
 					for _, ru := range fc.ResourceUpdates {
-						if ru.State != resource_update.ResourceUpdateStateSuccess &&
-							ru.State != resource_update.ResourceUpdateStateFailed {
+						if ru.State != resource_update.ResourceUpdateStateSuccess {
 							return false
 						}
 					}
@@ -603,7 +602,7 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 				}
 			}
 			return false
-		}, 5*time.Second, 100*time.Millisecond, "sync must complete")
+		}, 5*time.Second, 100*time.Millisecond, "sync must complete successfully")
 
 		// After sync, load the consumer from the datastore and verify the $embed is preserved.
 		resources, err := m.Datastore.LoadResourcesByStack("embed-stack")

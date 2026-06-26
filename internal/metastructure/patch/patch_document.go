@@ -889,6 +889,7 @@ func flattenRefs(m map[string]any) {
 							if assembled, err := assembleEmbedTemplate(tmplStr); err == nil {
 								m[k] = assembled
 							}
+							// on scan error: leave node as-is; flattenRefs has no error path (corrupt templates are rejected at plan time)
 							continue
 						}
 					}

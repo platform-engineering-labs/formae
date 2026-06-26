@@ -140,7 +140,7 @@ func (pp *propertyParser) Parse(result gjson.Result) propertyType {
 		return typeReference
 	}
 
-	if result.Get("$embed").Exists() {
+	if result.Get("$embed").Bool() {
 		return typeEmbed
 	}
 
