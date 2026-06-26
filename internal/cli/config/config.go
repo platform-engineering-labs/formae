@@ -16,9 +16,7 @@ import (
 )
 
 const (
-	ConfigFileNamePrefix = "formae.conf"
-	ConfigDirectory      = ".config/formae"
-	DataDirectory        = ".pel/formae"
+	DataDirectory = ".pel/formae"
 )
 
 var Config = cliconfig{}

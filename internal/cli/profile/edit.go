@@ -8,10 +8,22 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/spf13/cobra"
 )
+
+// editorCommand splits the EDITOR env-var into a command name and its
+// arguments, then appends path as the final argument. If editor is empty or
+// all-whitespace it falls back to "vi".
+func editorCommand(editor, path string) (name string, args []string) {
+	fields := strings.Fields(editor)
+	if len(fields) == 0 {
+		fields = []string{"vi"}
+	}
+	return fields[0], append(fields[1:], path)
+}
 
 func newEditCmd() *cobra.Command {
 	return &cobra.Command{
@@ -43,11 +55,8 @@ func newEditCmd() *cobra.Command {
 				}
 				path = s.ProfilePath(active)
 			}
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vi"
-			}
-			c := exec.Command(editor, path)
+			name, args := editorCommand(os.Getenv("EDITOR"), path)
+			c := exec.Command(name, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
 			return c.Run()
 		},
